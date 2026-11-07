@@ -3,6 +3,7 @@ package backend
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -320,20 +321,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 // seeds the initial database always creates an admin user, so this should
 // never fail to find one in practice.
 func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, error) {
-	users, err := d.store.GetAllUsers(ctx, tx)
+	adminID, err := d.store.FindDefaultAdminUserID(ctx, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errors.New("no admin user found to own anonymous repository")
+	}
 	if err != nil {
 		return 0, err
-	}
-
-	var adminID int64
-	for _, u := range users {
-		if u.Admin && (adminID == 0 || u.ID < adminID) {
-			adminID = u.ID
-		}
-	}
-
-	if adminID == 0 {
-		return 0, errors.New("no admin user found to own anonymous repository")
 	}
 
 	return adminID, nil
