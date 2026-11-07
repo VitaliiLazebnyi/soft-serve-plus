@@ -81,9 +81,12 @@ func (e *lfsScanError) Unwrap() error { return e.err }
 // StoreRepoMissingLFSObjects stores missing LFS objects for a repository. It
 // scans the whole history of the repository.
 //
-// Objects the remote can't provide are logged and skipped, and counted in an
-// error wrapping ErrLFSObjectsUnavailable once every other object is stored.
-// Any other error stops the sync.
+// Objects the remote can't provide (an error for the object in the batch
+// response, a download that answers 404 or a redirect, content that doesn't
+// match) are logged and skipped, and counted in an error wrapping
+// ErrLFSObjectsUnavailable once every other object is stored. Any other
+// error stops the sync, including a download that fails or breaks off for a
+// reason that may pass on a later try, such as a dropped connection or a 5xx.
 func StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, dbx *db.DB, store store.Store, lfsClient lfs.Client) error {
 	return storeRepoLFSObjects(ctx, repo, dbx, store, lfsClient, false)
 }

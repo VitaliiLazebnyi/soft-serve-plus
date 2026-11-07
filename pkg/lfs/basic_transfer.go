@@ -101,11 +101,21 @@ func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return res, handleErrorResponse(res)
+		return res, &statusError{code: res.StatusCode, err: handleErrorResponse(res)}
 	}
 
 	return res, nil
 }
+
+// statusError is the error of a transfer request the server answered with a
+// status other than 200 OK. It reads as err, the error the server sent.
+type statusError struct {
+	code int
+	err  error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
 
 func handleErrorResponse(resp *http.Response) error {
 	defer resp.Body.Close() //nolint: errcheck
