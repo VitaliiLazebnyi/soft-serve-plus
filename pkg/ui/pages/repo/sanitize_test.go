@@ -99,3 +99,25 @@ func TestCodeSanitisesContent(t *testing.T) {
 		assertClean(t, cd.View(), tc.want)
 	}
 }
+
+// A stray 8-bit byte from a legacy-encoded file, or an unterminated string
+// sequence, must not hide the lines after it.
+func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 120, 40)
+	for _, content := range []string{
+		"line1 na\x9eve\nline2 VISIBLE_AFTER_C1\n",
+		"line1 \x90\nline2 VISIBLE_AFTER_C1\n",
+		"line1\nhidden \x1bP start\nline3 MALICIOUS_CODE\n",
+		"line1\nhidden \x1b]0;title\nline3 MALICIOUS_CODE\n",
+	} {
+		cd := code.New(c, "", "")
+		cd.SetSize(120, 40)
+		cd.SetContent(content, "file.txt")
+		want := "MALICIOUS_CODE"
+		if strings.Contains(content, "VISIBLE_AFTER_C1") {
+			want = "VISIBLE_AFTER_C1"
+		}
+		assertClean(t, cd.View(), want)
+	}
+}
