@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"  // postgres driver
+	"github.com/lib/pq"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -24,10 +25,18 @@ type DB struct {
 
 // Open opens a database connection.
 func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
-	if driverName == "sqlite" {
-		dsn = sqliteImmediateTx(dsn)
+	var (
+		db  *sqlx.DB
+		err error
+	)
+	switch driverName {
+	case "sqlite":
+		db, err = sqlx.ConnectContext(ctx, driverName, sqliteImmediateTx(dsn))
+	case "postgres":
+		db, err = connectPostgres(ctx, dsn)
+	default:
+		db, err = sqlx.ConnectContext(ctx, driverName, dsn)
 	}
-	db, err := sqlx.ConnectContext(ctx, driverName, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +51,57 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 	}
 
 	return d, nil
+}
+
+// defaultPostgresConnectTimeout bounds connecting to Postgres when the data
+// source and PGCONNECT_TIMEOUT set no connect_timeout. Without it, lib/pq
+// waits for as long as the operating system does, so an unreachable database
+// can hang startup for minutes.
+// It is a variable so tests can shorten it.
+var defaultPostgresConnectTimeout = 10 * time.Second
+
+// connectPostgres connects to Postgres and checks the connection, applying
+// defaultPostgresConnectTimeout unless the data source or the environment
+// already sets a connect_timeout (0 among them, which waits forever).
+func connectPostgres(ctx context.Context, dsn string) (*sqlx.DB, error) {
+	cfg, err := postgresConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	connector, err := pq.NewConnectorConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	db := sqlx.NewDb(sql.OpenDB(connector), "postgres")
+	if err := db.PingContext(ctx); err != nil {
+		db.Close() //nolint:errcheck
+		return nil, err
+	}
+	return db, nil
+}
+
+// postgresConfig parses dsn the way lib/pq does, environment included, and
+// applies defaultPostgresConnectTimeout when no connect_timeout is set.
+func postgresConfig(dsn string) (pq.Config, error) {
+	cfg, err := pq.NewConfig(dsn)
+	if err != nil {
+		return cfg, err
+	}
+	if !postgresConnectTimeoutSet(dsn) {
+		cfg.ConnectTimeout = defaultPostgresConnectTimeout
+	}
+	return cfg, nil
+}
+
+// postgresConnectTimeoutSet reports whether the data source or the
+// environment names a connect_timeout. A data source in URL form names it as
+// a query parameter, a key/value one as a key; either way the word appears in
+// it, and lib/pq rejects a parameter it does not know.
+func postgresConnectTimeoutSet(dsn string) bool {
+	if _, ok := os.LookupEnv("PGCONNECT_TIMEOUT"); ok {
+		return true
+	}
+	return strings.Contains(dsn, "connect_timeout")
 }
 
 // sqliteImmediateTx makes write transactions on SQLite start with BEGIN

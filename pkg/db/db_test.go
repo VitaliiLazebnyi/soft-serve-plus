@@ -2,8 +2,11 @@ package db
 
 import (
 	"context"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -96,5 +99,91 @@ func TestSqliteReadThenWriteWaitsForWriter(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0] != 1 || rows[1] != 2 {
 		t.Errorf("rows = %v, want [1 2]", rows)
+	}
+}
+
+func TestPostgresConfigConnectTimeout(t *testing.T) {
+	t.Setenv("PGCONNECT_TIMEOUT", "")
+	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
+	for dsn, want := range map[string]time.Duration{
+		"postgres://user@localhost:5432/soft_serve?sslmode=disable":                    defaultPostgresConnectTimeout,
+		"postgres://user@localhost:5432/soft_serve?sslmode=disable&connect_timeout=3":  3 * time.Second,
+		"postgres://user@localhost:5432/soft_serve?connect_timeout=0":                  0,
+		"host=localhost port=5432 user=soft dbname=soft_serve sslmode=disable":         defaultPostgresConnectTimeout,
+		"host=localhost user=soft dbname=soft_serve connect_timeout=7 sslmode=disable": 7 * time.Second,
+	} {
+		cfg, err := postgresConfig(dsn)
+		if err != nil {
+			t.Fatalf("postgresConfig(%q): %v", dsn, err)
+		}
+		if cfg.ConnectTimeout != want {
+			t.Errorf("postgresConfig(%q).ConnectTimeout = %v, want %v", dsn, cfg.ConnectTimeout, want)
+		}
+	}
+
+	// PGCONNECT_TIMEOUT is honoured as lib/pq honours it.
+	t.Setenv("PGCONNECT_TIMEOUT", "4")
+	cfg, err := postgresConfig("postgres://user@localhost/soft_serve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnectTimeout != 4*time.Second {
+		t.Errorf("ConnectTimeout with PGCONNECT_TIMEOUT=4 = %v, want 4s", cfg.ConnectTimeout)
+	}
+}
+
+// Open gives up on a Postgres server that accepts the connection but never
+// answers, instead of hanging startup, when the data source sets no timeout.
+func TestOpenPostgresSilentServer(t *testing.T) {
+	t.Setenv("PGCONNECT_TIMEOUT", "")
+	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
+	old := defaultPostgresConnectTimeout
+	defaultPostgresConnectTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { defaultPostgresConnectTimeout = old })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		ln.Close() //nolint:errcheck
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close() //nolint:errcheck
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Open() on a silent server => nil error, want an error")
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("Open() took %v, want about the connect timeout", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Open() on a silent server did not return")
 	}
 }
