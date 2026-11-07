@@ -169,7 +169,7 @@ func (r *Readme) updateReadmeCmd() tea.Msg {
 	if r.repo == nil {
 		return common.ErrorMsg(common.ErrMissingRepo)
 	}
-	rm, rp, _ := backend.Readme(r.repo, r.ref)
+	rm, rp, _ := backend.Readme(r.repo, r.ref, r.common.Config().BlobSizeLimit())
 	m.Content = rm
 	m.Path = rp
 	return m

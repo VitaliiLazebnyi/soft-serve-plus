@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
@@ -455,23 +456,22 @@ func (f *Files) selectFileCmd() tea.Msg {
 			}
 		}
 
-		if !bin {
-			bin, err = fi.IsBinary()
-			if err != nil {
-				f.path = path.Dir(f.path)
-				return common.ErrorMsg(err)
-			}
-		}
-
 		if bin {
 			f.path = path.Dir(f.path)
 			return common.ErrorMsg(errBinaryFile)
 		}
 
-		c, err := fi.Bytes()
+		// Read the file once, capped by the size limit, and sniff the
+		// bytes in hand rather than piping the blob a second time.
+		c, err := fi.ContentsLimit(f.common.Config().BlobSizeLimit())
 		if err != nil {
 			f.path = path.Dir(f.path)
 			return common.ErrorMsg(err)
+		}
+
+		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
+			f.path = path.Dir(f.path)
+			return common.ErrorMsg(errBinaryFile)
 		}
 
 		f.lastSelected = append(f.lastSelected, f.selector.Index())
