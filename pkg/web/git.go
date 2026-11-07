@@ -460,6 +460,17 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			return
 		}
 
+		// A mirror sync would undo any ref a push changes, so refuse the
+		// push, ref advertisement included, before git asks for the pack.
+		// Only a caller allowed to write gets here, so the answer tells
+		// them nothing they could not read from the repository already.
+		if service == git.ReceivePackService && repo != nil && repo.IsMirror() {
+			logger.Info("refusing push to a mirror", "repo", repoName)
+			// git shows a text/plain error body to the user.
+			http.Error(w, proto.ErrMirrorReadOnly.Error(), http.StatusForbidden)
+			return
+		}
+
 		ctx, done := pending.begin(ctx, repoName)
 		if done != nil {
 			defer done()

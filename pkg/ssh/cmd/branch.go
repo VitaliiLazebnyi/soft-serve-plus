@@ -148,6 +148,9 @@ func branchDeleteCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if rr.IsMirror() {
+				return proto.ErrMirrorReadOnly
+			}
 
 			r, err := rr.Open()
 			if err != nil {
