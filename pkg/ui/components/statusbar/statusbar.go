@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -31,7 +32,13 @@ func (s *Model) SetSize(width, height int) {
 }
 
 // SetStatus sets the status bar status.
+//
+// The values come from the repository (ref names, commit authors, paths), so
+// they are stripped of escape sequences and control characters here, whatever
+// pane they come from.
 func (s *Model) SetStatus(key, value, info, extra string) {
+	key, value = utils.Sanitize(key), utils.Sanitize(value)
+	info, extra = utils.Sanitize(info), utils.Sanitize(extra)
 	if key != "" {
 		s.key = key
 	}

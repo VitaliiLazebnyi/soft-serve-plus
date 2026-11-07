@@ -31,7 +31,7 @@ func (i RefItem) ID() string {
 
 // Title implements list.DefaultItem.
 func (i RefItem) Title() string {
-	return i.Reference.Name().Short()
+	return utils.Sanitize(i.Reference.Name().Short())
 }
 
 // Description implements list.DefaultItem.
@@ -128,7 +128,9 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 		sha = c.ID.String()[:7]
 	}
 
-	ref := i.Short()
+	// A ref name cannot hold C0 controls, but it can hold C1 ones encoded
+	// as UTF-8.
+	ref := utils.Sanitize(i.Short())
 
 	var desc string
 	if isTag {

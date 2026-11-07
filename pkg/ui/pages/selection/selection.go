@@ -181,6 +181,12 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
+// setReadme shows the server README. It comes from the .soft-serve
+// repository, and glamour passes escape sequences through to the terminal.
+func (s *Selection) setReadme(readme, path string) tea.Cmd {
+	return s.readme.SetContent(utils.Sanitize(readme), path)
+}
+
 // Init implements tea.Model.
 func (s *Selection) Init() tea.Cmd {
 	var readmeCmd tea.Cmd
@@ -208,9 +214,7 @@ func (s *Selection) Init() tea.Cmd {
 				continue
 			}
 
-			// The README comes from the repository; glamour passes
-			// escape sequences through to the terminal.
-			readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
+			readmeCmd = s.setReadme(readme, path)
 		}
 
 		if r.IsHidden() {

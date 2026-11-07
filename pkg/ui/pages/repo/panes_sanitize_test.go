@@ -1,0 +1,223 @@
+package repo
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+)
+
+// hostile holds the string sequences the bubbletea renderer passes through to
+// the terminal: a DCS (DECRQSS, which makes the terminal answer), an APC
+// (kitty graphics), an OSC 8 hyperlink with a hidden target, an OSC 52
+// clipboard write, a C1 CSI encoded as UTF-8 and a BEL. It has no slash, so
+// it can be part of a file name.
+const hostile = "\x1bP1$qm\x1b\\" +
+	"\x1b_Gf=100;AAAA\x1b\\" +
+	"\x1b]8;;https:evil.example\x1b\\link\x1b]8;;\x1b\\" +
+	"\x1b]52;c;Zm9v\x07" +
+	"\u009b2J" +
+	"\x07"
+
+// escapedRepo is a repository whose metadata and git data all carry hostile.
+type escapedRepo struct {
+	fakeRepo
+	path string
+}
+
+func (r escapedRepo) Open() (*git.Repository, error) { return git.Open(r.path) }
+
+// newEscapedRepo makes a repository where everything the TUI shows from git
+// carries hostile: commit subjects and bodies, author names, a file name, a
+// source file, a README, a tag message, a branch name and a stash message.
+func newEscapedRepo(t *testing.T) escapedRepo {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	files := map[string]string{
+		"README.md":                  "# Readme" + hostile + "\n\nreadme-text" + hostile + "\n",
+		"main.go":                    "package main\n\n// go-comment" + hostile + "\nfunc main() {}\n",
+		"name" + hostile + "end.txt": "plain-text\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "-c", "user.name=eve-author"+hostile,
+		"commit", "-q", "--author", "eve-author"+hostile+" <eve@example.com>",
+		"-m", "commit-subject"+hostile+"\n\ncommit-body"+hostile)
+	gitRun(t, dir, "tag", "-a", "v1", "-m", "tag-message"+hostile)
+	gitRun(t, dir, "branch", "branch\u009b2Jname")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "stash", "push", "-q", "-m", "stash-message"+hostile)
+	return escapedRepo{
+		fakeRepo: fakeRepo{
+			projectName: "project-name" + hostile,
+			description: "description" + hostile,
+		},
+		path: dir,
+	}
+}
+
+// driver feeds messages to a model and runs the commands it returns, the way
+// the bubbletea runtime would, until no more messages come.
+type driver struct {
+	t *testing.T
+	m common.Model
+}
+
+// cmdType lets send unpack the unexported message tea.Sequence returns, a
+// slice of commands like tea.BatchMsg.
+var cmdType = reflect.TypeOf((*tea.Cmd)(nil)).Elem()
+
+func (d *driver) send(msg tea.Msg) {
+	d.t.Helper()
+	queue := []tea.Msg{msg}
+	for steps := 0; len(queue) > 0; steps++ {
+		if steps > 10000 {
+			d.t.Fatal("model never settles")
+		}
+		msg, queue = queue[0], queue[1:]
+		switch msg := msg.(type) {
+		case nil, spinner.TickMsg:
+			// Spinners tick forever; nothing a test checks depends on them.
+			continue
+		case common.ErrorMsg:
+			d.t.Fatalf("model reported an error: %v", msg)
+		case tea.BatchMsg:
+			for _, cmd := range msg {
+				queue = append(queue, run(cmd))
+			}
+			continue
+		}
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == cmdType {
+			for i := range v.Len() {
+				queue = append(queue, run(v.Index(i).Interface().(tea.Cmd)))
+			}
+			continue
+		}
+		m, cmd := d.m.Update(msg)
+		d.m = m
+		queue = append(queue, run(cmd))
+	}
+}
+
+// run runs cmd and returns its message, or nil if it has none or only
+// produces one later (a timer).
+func run(cmd tea.Cmd) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	select {
+	case msg := <-ch:
+		return msg
+	case <-time.After(500 * time.Millisecond):
+		return nil
+	}
+}
+
+// Every pane of the repository page, and the header and status bar around
+// it, shows data from the repository. Whatever a repository carries, none of
+// it may reach the terminal as an escape sequence or control character, while
+// the text around the sequences stays visible.
+func TestEveryPaneSanitisesRepositoryData(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 200, 60)
+	rr := newEscapedRepo(t)
+
+	readme := NewReadme(c)
+	files := NewFiles(c)
+	log := NewLog(c)
+	branches := NewRefs(c, git.RefsHeads)
+	tags := NewRefs(c, git.RefsTags)
+	stash := NewStash(c)
+	r := New(c, readme, files, log, branches, tags, stash)
+	r.SetSize(200, 60)
+	d := &driver{t: t, m: r}
+
+	d.send(RepoMsg(rr))
+	d.send(UpdateRefCmd(rr)())
+
+	check := func(name string, want ...string) {
+		t.Helper()
+		out := d.m.View()
+		assertClean(t, out, append([]string{"project-name", "description"}, want...)...)
+		if t.Failed() {
+			t.Fatalf("%s: view is not clean", name)
+		}
+	}
+	tab := func(p common.TabComponent) {
+		t.Helper()
+		for i, q := range r.panes {
+			if q == p {
+				d.send(tabs.SelectTabMsg(i))
+				return
+			}
+		}
+		t.Fatalf("no tab %s", p.TabName())
+	}
+
+	tab(readme)
+	check("readme", "readme-text")
+
+	tab(files)
+	check("file list", "name\\x1bP1$qm")
+	for _, it := range files.selector.Items() {
+		fi := it.(FileItem)
+		if strings.HasPrefix(fi.entry.Name(), "name") {
+			// ls-tree quotes a name that holds control characters, and the
+			// Files pane passes the quoted name back to git, which cannot
+			// find it; the name is covered by the list above.
+			continue
+		}
+		d.send(selector.SelectMsg{IdentifiableItem: fi})
+		switch fi.entry.Name() {
+		case "main.go":
+			check("source file", "go-comment")
+		case "README.md":
+			check("markdown file", "readme-text")
+		}
+		d.send(tea.KeyPressMsg{Code: 'b', Text: "b"})
+		check("blame "+fi.entry.Name(), "commit-subject", "eve-author")
+		d.send(tea.KeyPressMsg{Code: 'b', Text: "b"})
+		d.send(GoBackMsg{})
+	}
+
+	tab(log)
+	check("commit list", "commit-subject", "eve-author")
+	d.send(selector.SelectMsg{IdentifiableItem: log.selector.SelectedItem()})
+	check("commit", "commit-subject", "commit-body", "eve-author", "plain-text", "go-comment")
+	d.send(GoBackMsg{})
+
+	tab(branches)
+	for i := range branches.selector.Items() {
+		branches.selector.Select(i)
+		d.send(selector.ActiveMsg{IdentifiableItem: branches.selector.SelectedItem()})
+		check("branches", "branch")
+	}
+
+	tab(tags)
+	check("tags", "tag-message", "v1")
+
+	tab(stash)
+	check("stash list", "stash-message")
+	d.send(selector.SelectMsg{IdentifiableItem: stash.list.SelectedItem()})
+	check("stash patch", "stash-message", "go-comment")
+}
