@@ -180,7 +180,7 @@ var createTables = Migration{
 			query = tx.Rebind(query)
 			ak := sshutils.MarshalAuthorizedKey(k)
 			if _, err := tx.ExecContext(ctx, query, adminID, ak); err != nil {
-				if errors.Is(db.WrapError(err), db.ErrDuplicateKey) {
+				if errors.Is(err, db.ErrDuplicateKey) {
 					continue
 				}
 				return err
