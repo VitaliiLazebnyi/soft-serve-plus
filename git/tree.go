@@ -213,8 +213,19 @@ func (f *File) Contents() ([]byte, error) {
 	if f.Entry == nil || f.Entry.repo == nil {
 		return f.Blob.Bytes()
 	}
+	if err := f.Entry.repo.Context().Err(); err != nil {
+		return nil, err
+	}
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
+	// Preallocate the buffer, as git-module's Blob.Bytes does, so that a big
+	// file is not read through repeated doubling. Size runs a short
+	// `cat-file -s` without a context (git-module caches the size per entry
+	// and this version does not take it from ls-tree), which is why the
+	// context is checked first.
+	if size := f.Blob.Size(); size > 0 {
+		stdout.Grow(int(size))
+	}
 	if err := f.Pipeline(stdout, stderr); err != nil {
 		if stderr.Len() > 0 {
 			return nil, fmt.Errorf("%w - %s", err, stderr.String())
