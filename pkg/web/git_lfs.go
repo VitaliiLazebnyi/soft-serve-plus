@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -20,6 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 )
 
@@ -33,6 +35,57 @@ const (
 	maxLfsBatchBodySize = 1 << 20  // 1 MiB
 	maxLfsJSONBodySize  = 64 << 10 // 64 KiB
 )
+
+// lfsActionAuth is the Authorization header a batch response puts on its
+// actions, and how long it stays valid.
+type lfsActionAuth struct {
+	header    string
+	expiresIn *int64
+}
+
+// lfsActionAuthFor picks the credential to forward to the batch actions. Only
+// a bearer JWT is forwarded: it is short-lived, scoped to the repository, and
+// is how a client that authenticated with git-lfs-authenticate over SSH
+// reaches the object URLs. Its remaining lifetime goes into expires_in so the
+// client asks for a new batch before it runs out. A Basic password or an
+// access token is not echoed back in the response body; git-lfs sends the
+// credentials it used for the batch to the object URLs on the same server.
+func lfsActionAuthFor(r *http.Request, now time.Time) lfsActionAuth {
+	scheme, credential, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "bearer") || credential == "" {
+		return lfsActionAuth{}
+	}
+
+	// The request was authenticated before it got here, so only the expiry
+	// is read from the token.
+	var claims jwt.RegisteredClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(credential, &claims); err != nil {
+		return lfsActionAuth{}
+	}
+	auth := lfsActionAuth{header: "Bearer " + credential}
+	if claims.ExpiresAt != nil {
+		left := int64(claims.ExpiresAt.Sub(now) / time.Second)
+		if left <= 0 {
+			return lfsActionAuth{}
+		}
+		auth.expiresIn = &left
+	}
+	return auth
+}
+
+// link returns an action for href with header, adding the forwarded
+// credential and its lifetime.
+func (a lfsActionAuth) link(href string, header map[string]string) *lfs.Link {
+	l := &lfs.Link{Href: href, Header: header}
+	if a.header != "" {
+		if l.Header == nil {
+			l.Header = map[string]string{}
+		}
+		l.Header["Authorization"] = a.header
+		l.ExpiresIn = a.expiresIn
+	}
+	return l
+}
 
 // lfsBodyTooLarge answers 413 when err comes from a body limited with
 // http.MaxBytesReader, and reports whether it did.
@@ -130,6 +183,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	batchResponse.Transfer = lfs.TransferBasic
 	batchResponse.HashAlgo = lfs.HashAlgorithmSHA256
 
+	actionAuth := lfsActionAuthFor(r, time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
 	// XXX: We don't support objects TTL for now, probably implement that with
 	// S3 using object "expires_at" & "expires_in"
@@ -185,14 +239,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 					},
 				})
 			} else {
-				download := &lfs.Link{
-					Href: fmt.Sprintf("%s/%s", baseHref, o.Oid),
-				}
-				if auth := r.Header.Get("Authorization"); auth != "" {
-					download.Header = map[string]string{
-						"Authorization": auth,
-					}
-				}
+				download := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), nil)
 
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -232,23 +279,12 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 					},
 				})
 			} else {
-				upload := &lfs.Link{
-					Href: fmt.Sprintf("%s/%s", baseHref, o.Oid),
-					Header: map[string]string{
-						// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
-						// This ensures that the client always uses the designated value for the header.
-						"Content-Type": "application/octet-stream",
-					},
-				}
-				verify := &lfs.Link{
-					Href: fmt.Sprintf("%s/verify", baseHref),
-				}
-				if auth := r.Header.Get("Authorization"); auth != "" {
-					upload.Header["Authorization"] = auth
-					verify.Header = map[string]string{
-						"Authorization": auth,
-					}
-				}
+				upload := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), map[string]string{
+					// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
+					// This ensures that the client always uses the designated value for the header.
+					"Content-Type": "application/octet-stream",
+				})
+				verify := actionAuth.link(fmt.Sprintf("%s/verify", baseHref), nil)
 
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
