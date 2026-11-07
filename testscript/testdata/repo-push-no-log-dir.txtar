@@ -1,0 +1,33 @@
+# vi: set ft=conf
+
+# A hook process that cannot open its log file logs to stderr instead of
+# panicking, so pushes still go through.
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+# the hooks log to $DATA_PATH/log/hooks.log; take its directory away
+exists $DATA_PATH/log
+rm $DATA_PATH/log
+
+# create a repo
+soft repo create repo1
+
+# push a commit
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md '# Hello'
+git -C repo1 add README.md
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+stderr 'failed to open log file'
+! stderr 'panic'
+
+# the push landed
+soft repo tree repo1
+stdout 'README.md'
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .

@@ -113,7 +113,8 @@ func main() {
 	ctx = config.WithContext(ctx, cfg)
 	logger, f, err := logr.NewLogger(cfg)
 	if err != nil {
-		log.Errorf("failed to create logger: %v", err)
+		// logger still writes to stderr.
+		logger.Warn("failed to open log file, logging to stderr", "err", err)
 	}
 
 	ctx = log.WithContext(ctx, logger)
