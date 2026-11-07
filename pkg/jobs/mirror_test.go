@@ -1,11 +1,16 @@
 package jobs
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
@@ -153,5 +158,83 @@ func TestValidateMirrorRemotesNoRemote(t *testing.T) {
 	r := newRepoWithRemotes(t, nil)
 	if _, err := validateMirrorRemotes(r, ssrf.GitRemotePolicy{}); err == nil {
 		t.Error("validateMirrorRemotes() accepted a repo with no remote")
+	}
+}
+
+// TestRunMirrorGitStalledRemote covers a remote that answers and then stalls.
+// git sets no read timeout of its own, so before the per-command timeout the
+// sync never returned, and the scheduler skipped every later mirror run. The
+// http helper git starts outlives the killed git and holds its stderr, so
+// this also covers not waiting on it.
+func TestRunMirrorGitStalledRemote(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+			// Answer with headers, then send nothing more.
+			go func() {
+				buf := make([]byte, 4096)
+				_, _ = c.Read(buf)
+				_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\n"+
+					"Content-Type: application/x-git-upload-pack-advertisement\r\n"+
+					"Content-Length: 1000\r\n\r\n")
+			}()
+		}
+	}()
+
+	r := newRepoWithRemotes(t, map[string]string{
+		"origin": "http://" + ln.Addr().String() + "/x.git",
+	})
+
+	old := mirrorGitTimeout
+	mirrorGitTimeout = time.Second
+	t.Cleanup(func() { mirrorGitTimeout = old })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMirrorGit(t.Context(), r.Path, nil, "fetch", "--prune")
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("runMirrorGit = %v, want a deadline error", err)
+		}
+	case <-time.After(mirrorGitTimeout + mirrorGitWaitDelay + 30*time.Second):
+		t.Fatal("runMirrorGit did not return for a stalled remote")
+	}
+}
+
+func TestLimitedBuffer(t *testing.T) {
+	b := limitedBuffer{limit: 4}
+	for _, s := range []string{"ab", "cdef", "gh"} {
+		if n, err := b.Write([]byte(s)); n != len(s) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", s, n, err)
+		}
+	}
+	if got := b.String(); got != "abcd" {
+		t.Errorf("buffer = %q, want %q", got, "abcd")
 	}
 }

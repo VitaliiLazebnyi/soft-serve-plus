@@ -1,11 +1,15 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -131,17 +135,13 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 					syncEnv := backend.RemoteGitEnv(cfg, remotes...)
 
-					cmds := []string{
-						"fetch --prune",         // fetch prune before updating remote
-						"remote update --prune", // update remote and prune remote refs
+					cmds := [][]string{
+						{"fetch", "--prune"},            // fetch prune before updating remote
+						{"remote", "update", "--prune"}, // update remote and prune remote refs
 					}
 
-					for _, c := range cmds {
-						args := strings.Split(c, " ")
-						cmd := git.NewCommand(args...).WithContext(ctx).WithTimeout(-1)
-						cmd.AddEnvs(syncEnv...)
-
-						if _, err := cmd.RunInDir(r.Path); err != nil {
+					for _, args := range cmds {
+						if err := runMirrorGit(ctx, r.Path, syncEnv, args...); err != nil {
 							logger.Error("error running git remote update", "repo", name, "err", err)
 						}
 					}
@@ -195,4 +195,66 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		wq.Run()
 	}
+}
+
+// mirrorGitTimeout bounds a single git command of a mirror sync.
+//
+// The job waits for every repository before it finishes, and the scheduler
+// skips its runs while one is still going, so a command that never returns
+// stops every mirror on the server from syncing. Stalls are caught much
+// sooner by the low-speed and keepalive settings in RemoteGitEnv; this is the
+// backstop for what those miss, such as git:// remotes, which git dials itself
+// with no read timeout, and remotes that trickle data just fast enough.
+var mirrorGitTimeout = time.Hour
+
+// mirrorGitWaitDelay is how long, once git is killed, the sync waits for the
+// helpers git started (git-remote-http, ssh) to let go of its output.
+// They inherit git's stderr and outlive it when killed; past this the output
+// is closed and the sync moves on.
+const mirrorGitWaitDelay = 5 * time.Second
+
+// mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
+// The remote can write to it (remote: lines), so it is not kept in full.
+const mirrorGitStderrLimit = 4 << 10
+
+// runMirrorGit runs one git command of a mirror sync in dir with env applied,
+// killing it after mirrorGitTimeout or when ctx is done.
+func runMirrorGit(ctx context.Context, dir string, env []string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, mirrorGitTimeout)
+	defer cancel()
+
+	var stderr limitedBuffer
+	stderr.limit = mirrorGitStderrLimit
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = mirrorGitWaitDelay
+
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			err = fmt.Errorf("%w: %s", err, msg)
+		}
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// limitedBuffer keeps the first limit bytes written to it and discards the
+// rest, reporting every write as complete so the writer is not cut off.
+type limitedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+// Write implements io.Writer.
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.Len(); room > 0 {
+		b.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }

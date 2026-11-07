@@ -61,14 +61,22 @@ type ValidatedGitRemote struct {
 // Validation alone is not sufficient for a subprocess: git resolves hostnames
 // again itself, and follows the first HTTP redirect by default. Both walk
 // straight through a validate-then-exec check, so this environment disables
-// redirects and pins each validated address. Callers MUST apply it to every
+// redirects and pins each validated address. It also bounds how long a
+// stalled http remote can hold the subprocess. Callers MUST apply it to every
 // git command that touches the remote, or the validation means nothing.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
 	// git follows the first HTTP redirect by default, which lets a public URL
 	// hand off to an internal one after validation has already passed. This
 	// costs imports of moved repositories, which is the right trade for a
 	// user-supplied remote.
-	entries := []GitConfigEntry{{Key: "http.followRedirects", Value: "false"}}
+	entries := []GitConfigEntry{
+		{Key: "http.followRedirects", Value: "false"},
+		// libcurl sets no read timeout of its own, so a remote that sends
+		// headers and then stalls holds git forever. Give up on one that
+		// stays under 1 KB/s for a minute.
+		{Key: "http.lowSpeedLimit", Value: "1000"},
+		{Key: "http.lowSpeedTime", Value: "60"},
+	}
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
 	}
