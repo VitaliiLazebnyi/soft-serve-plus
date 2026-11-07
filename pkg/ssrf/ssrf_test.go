@@ -116,6 +116,23 @@ func TestNewSecureClientBlocksRedirects(t *testing.T) {
 	}
 }
 
+// Every secure client bounds the wait for response headers on its transport,
+// with or without an allowlist.
+func TestNewSecureClientBoundsResponseHeaders(t *testing.T) {
+	for name, c := range map[string]*http.Client{
+		"plain":    NewSecureClient(),
+		"allowing": NewSecureClientAllowing(mustAllowedHosts(t, "10.0.0.0/8")),
+	} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("%s: transport is %T, want *http.Transport", name, c.Transport)
+		}
+		if tr.ResponseHeaderTimeout != ResponseHeaderTimeout {
+			t.Errorf("%s: ResponseHeaderTimeout = %v, want %v", name, tr.ResponseHeaderTimeout, ResponseHeaderTimeout)
+		}
+	}
+}
+
 func TestIsPrivateOrInternal(t *testing.T) {
 	tests := []struct {
 		ip   string

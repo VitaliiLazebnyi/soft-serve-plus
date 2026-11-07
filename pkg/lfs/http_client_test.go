@@ -385,6 +385,22 @@ func TestSecureHTTPClientHasStallTimeout(t *testing.T) {
 	}
 }
 
+// Dropping the whole-request timeout for transfers keeps the transport's
+// bound on the wait for response headers, so a server that takes the request
+// and never answers is still given up on.
+func TestSecureHTTPClientBoundsResponseHeaders(t *testing.T) {
+	tr, ok := secureHTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("shared transport is %T, want *http.Transport", secureHTTPClient.Transport)
+	}
+	if secureHTTPClient.Timeout != 0 {
+		t.Fatalf("shared client Timeout = %v, want 0", secureHTTPClient.Timeout)
+	}
+	if tr.ResponseHeaderTimeout != ssrf.ResponseHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, ssrf.ResponseHeaderTimeout)
+	}
+}
+
 // setTransferTimeouts must refuse a transport it cannot add the stall limit
 // to, rather than leave transfers with no bound at all.
 func TestSetTransferTimeoutsPanicsOnUnknownTransport(t *testing.T) {

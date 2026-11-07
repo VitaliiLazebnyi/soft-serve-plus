@@ -26,6 +26,12 @@ var (
 // including reading the response body.
 const ClientTimeout = 30 * time.Second
 
+// ResponseHeaderTimeout bounds the wait for a response's headers once the
+// request has been written, on every client from NewSecureClient. It is set
+// on the transport, so it still holds for a caller that drops the client's
+// whole-request timeout to let long transfers run, as the LFS client does.
+const ResponseHeaderTimeout = ClientTimeout
+
 // dialTimeout bounds one dial made by the secure client, from DNS resolution
 // through the last connection attempt. It is a fixed budget: net/http dials
 // with a context detached from the request (context.WithoutCancel), so the
@@ -77,6 +83,7 @@ func NewSecureClientAllowing(allowed AllowedHosts) *http.Client {
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: ResponseHeaderTimeout,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
