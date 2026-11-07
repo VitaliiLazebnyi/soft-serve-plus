@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -154,5 +155,37 @@ func TestSelectionSetItemsKeepsHighlight(t *testing.T) {
 	s.setItems(items("p", "q"))
 	if got := s.selector.SelectedItem(); got == nil {
 		t.Error("nothing highlighted after the highlighted repository went away")
+	}
+}
+
+func hasBinding(kb []key.Binding, want key.Binding) bool {
+	for _, b := range kb {
+		if slices.Equal(b.Keys(), want.Keys()) && b.Help() == want.Help() {
+			return true
+		}
+	}
+	return false
+}
+
+// The refresh key is listed in the short help of the repository list, and
+// not while the filter is typed, when r goes into the filter text.
+func TestSelectionShortHelpRefreshKey(t *testing.T) {
+	c := common.NewCommon(context.Background(), 80, 40)
+	s := New(c)
+	s.SetSize(80, 40)
+	it, err := NewItem(c, fakeRepo{name: "bravo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.setItems([]selector.IdentifiableItem{it})
+	if !hasBinding(s.ShortHelp(), refreshKey) {
+		t.Error("short help does not list the refresh key")
+	}
+	press(s, '/')
+	if !s.IsFiltering() {
+		t.Fatal("/ did not start filtering")
+	}
+	if hasBinding(s.ShortHelp(), refreshKey) {
+		t.Error("short help lists the refresh key while filtering")
 	}
 }

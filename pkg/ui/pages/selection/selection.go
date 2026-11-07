@@ -130,6 +130,11 @@ func (s *Selection) ShortHelp() []key.Binding {
 			k.ClearFilter,
 			copyKey,
 		)
+		// While the filter is typed, r goes into the filter text, so the
+		// refresh key is only offered outside of filtering.
+		if !s.IsFiltering() {
+			kb = append(kb, refreshKey)
+		}
 	}
 	return kb
 }
