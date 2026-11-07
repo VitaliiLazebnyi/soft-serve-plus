@@ -196,7 +196,7 @@ func (l *Log) Init() tea.Cmd {
 	l.activeCommit = nil
 	l.selectedCommit = nil
 	return tea.Batch(
-		l.countCommitsCmd,
+		l.countCommitsCmd(),
 		// start loading on init
 		l.startLoading(),
 	)
@@ -216,7 +216,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		l.count = int64(msg)
 		l.selector.SetTotalPages(int(msg))
 		l.selector.SetItems(make([]selector.IdentifiableItem, l.count))
-		cmds = append(cmds, l.updateCommitsCmd)
+		cmds = append(cmds, l.updateCommitsCmd())
 	case LogItemsMsg:
 		// stop loading after receiving items
 		l.activeView = logViewCommits
@@ -247,7 +247,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				l.nextPage = m.Page()
 				l.selector.SetPage(curPage)
 				cmds = append(cmds,
-					l.updateCommitsCmd,
+					l.updateCommitsCmd(),
 					l.startLoading(),
 				)
 			}
@@ -282,8 +282,13 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case LogCommitMsg:
 		l.selectedCommit = msg
-		cmds = append(cmds, l.loadDiffCmd)
+		cmds = append(cmds, l.loadDiffCmd())
 	case LogDiffMsg:
+		if l.selectedCommit == nil {
+			// The commit was deselected, or the ref changed, while the diff
+			// was loading.
+			break
+		}
 		l.currentDiff = msg
 		l.vp.SetContent(
 			lipgloss.JoinVertical(lipgloss.Left,
@@ -295,7 +300,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		l.vp.GotoTop()
 		l.activeView = logViewDiff
 	case footer.ToggleFooterMsg:
-		cmds = append(cmds, l.updateCommitsCmd)
+		cmds = append(cmds, l.updateCommitsCmd())
 	case tea.WindowSizeMsg:
 		l.SetSize(msg.Width, msg.Height)
 		if l.selectedCommit != nil && l.currentDiff != nil {
@@ -309,7 +314,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 		if l.repo != nil && l.ref != nil {
 			cmds = append(cmds,
-				l.updateCommitsCmd,
+				l.updateCommitsCmd(),
 				// start loading on resize since the number of commits per page
 				// might change and we'd need to load more commits.
 				l.startLoading(),
@@ -421,55 +426,62 @@ func (l *Log) goBack() {
 	}
 }
 
-func (l *Log) countCommitsCmd() tea.Msg {
-	if l.ref == nil {
-		return nil
+// countCommitsCmd returns a command that counts the commits of the current
+// ref. Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (l *Log) countCommitsCmd() tea.Cmd {
+	repo, ref, logger := l.repo, l.ref, l.common.Logger
+	return func() tea.Msg {
+		if repo == nil || ref == nil {
+			return nil
+		}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		count, err := r.CountCommits(ref)
+		if err != nil {
+			logger.Debugf("ui: error counting commits: %v", err)
+			return common.ErrorMsg(err)
+		}
+		return LogCountMsg(count)
 	}
-	r, err := l.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-	count, err := r.CountCommits(l.ref)
-	if err != nil {
-		l.common.Logger.Debugf("ui: error counting commits: %v", err)
-		return common.ErrorMsg(err)
-	}
-	return LogCountMsg(count)
 }
 
-func (l *Log) updateCommitsCmd() tea.Msg {
-	if l.ref == nil {
-		return nil
-	}
-	r, err := l.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-
-	count := l.count
-	if count == 0 {
-		return LogItemsMsg([]selector.IdentifiableItem{})
-	}
-
-	page := l.nextPage
-	limit := l.selector.PerPage()
-	skip := page * limit
-	ref := l.ref
-	items := make([]selector.IdentifiableItem, count)
-	// CommitsByPage pages start at 1
-	cc, err := r.CommitsByPage(ref, page+1, limit)
-	if err != nil {
-		l.common.Logger.Debugf("ui: error loading commits: %v", err)
-		return common.ErrorMsg(err)
-	}
-	for i, c := range cc {
-		idx := i + skip
-		if int64(idx) >= count {
-			break
+// updateCommitsCmd returns a command that loads the commits of the next page.
+func (l *Log) updateCommitsCmd() tea.Cmd {
+	repo, ref, logger := l.repo, l.ref, l.common.Logger
+	count, page, limit := l.count, l.nextPage, l.selector.PerPage()
+	return func() tea.Msg {
+		if repo == nil || ref == nil {
+			return nil
 		}
-		items[idx] = LogItem{Commit: c}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+
+		if count == 0 {
+			return LogItemsMsg([]selector.IdentifiableItem{})
+		}
+
+		skip := page * limit
+		items := make([]selector.IdentifiableItem, count)
+		// CommitsByPage pages start at 1
+		cc, err := r.CommitsByPage(ref, page+1, limit)
+		if err != nil {
+			logger.Debugf("ui: error loading commits: %v", err)
+			return common.ErrorMsg(err)
+		}
+		for i, c := range cc {
+			idx := i + skip
+			if int64(idx) >= count {
+				break
+			}
+			items[idx] = LogItem{Commit: c}
+		}
+		return LogItemsMsg(items)
 	}
-	return LogItemsMsg(items)
 }
 
 func (l *Log) selectCommitCmd(commit *git.Commit) tea.Cmd {
@@ -478,21 +490,25 @@ func (l *Log) selectCommitCmd(commit *git.Commit) tea.Cmd {
 	}
 }
 
-func (l *Log) loadDiffCmd() tea.Msg {
-	if l.selectedCommit == nil {
-		return nil
+// loadDiffCmd returns a command that loads the diff of the selected commit.
+func (l *Log) loadDiffCmd() tea.Cmd {
+	repo, commit, logger := l.repo, l.selectedCommit, l.common.Logger
+	return func() tea.Msg {
+		if repo == nil || commit == nil {
+			return nil
+		}
+		r, err := repo.Open()
+		if err != nil {
+			logger.Debugf("ui: error loading diff repository: %v", err)
+			return common.ErrorMsg(err)
+		}
+		diff, err := r.Diff(commit)
+		if err != nil {
+			logger.Debugf("ui: error loading diff: %v", err)
+			return common.ErrorMsg(err)
+		}
+		return LogDiffMsg(diff)
 	}
-	r, err := l.repo.Open()
-	if err != nil {
-		l.common.Logger.Debugf("ui: error loading diff repository: %v", err)
-		return common.ErrorMsg(err)
-	}
-	diff, err := r.Diff(l.selectedCommit)
-	if err != nil {
-		l.common.Logger.Debugf("ui: error loading diff: %v", err)
-		return common.ErrorMsg(err)
-	}
-	return LogDiffMsg(diff)
 }
 
 func (l *Log) renderCommit(c *git.Commit) string {
