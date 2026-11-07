@@ -105,3 +105,51 @@ func TestStoreObjectRenameFailure(t *testing.T) {
 		})
 	}
 }
+
+// HasObject counts an object as stored only if its file is a regular file of
+// the pointer's size. A short file, such as one a failed write left behind,
+// must not be reported present, or it is never uploaded again.
+func TestHasObject(t *testing.T) {
+	const content = "hello lfs"
+	sum := sha256.Sum256([]byte(content))
+	p := Pointer{Oid: hex.EncodeToString(sum[:]), Size: int64(len(content))}
+	root := t.TempDir()
+	strg := storage.NewLocalStorage(root)
+	objPath := filepath.Join(root, "objects", p.Oid[0:2], p.Oid[2:4], p.Oid)
+
+	check := func(name string, want bool) {
+		t.Helper()
+		got, err := HasObject(strg, p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got != want {
+			t.Errorf("%s: got %v, want %v", name, got, want)
+		}
+	}
+
+	check("missing", false)
+
+	if err := os.MkdirAll(objPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check("directory", false)
+	if err := os.Remove(objPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(objPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("empty", false)
+
+	if err := os.WriteFile(objPath, []byte(content[:4]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("truncated", false)
+
+	if err := os.WriteFile(objPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("complete", true)
+}

@@ -552,3 +552,53 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 		}
 	}
 }
+
+// A download batch offers an object only if its file has the requested size.
+// A short file, such as one a failed write left behind, used to be offered
+// because it existed and its row had the right size, and was served short.
+func TestLFSBatchDownloadShortObjectIsNotFound(t *testing.T) {
+	is := is.New(t)
+	ctx, be, datastore := newLFSTestContext(t)
+	dbx := db.FromContext(ctx)
+
+	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
+	is.NoErr(err)
+	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	content := "payload"
+	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(content)
+	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), oid, int64(len(content))))
+	cfg := config.FromContext(ctx)
+	objPath := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10), "objects", oid[0:2], oid[2:4], oid)
+	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
+
+	router := lfsTestRouter(ctx)
+	batch := func() lfs.ObjectResponse {
+		t.Helper()
+		body := fmt.Sprintf(`{"operation":"download","objects":[{"oid":%q,"size":%d}]}`, oid, len(content))
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost,
+			"/repo.git/info/lfs/objects/batch", strings.NewReader(body))
+		req.Header.Set("Content-Type", lfs.MediaType)
+		req.Header.Set("Accept", lfs.MediaType)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		is.Equal(w.Code, http.StatusOK)
+		var resp lfs.BatchResponse
+		is.NoErr(json.Unmarshal(w.Body.Bytes(), &resp))
+		is.Equal(len(resp.Objects), 1)
+		return *resp.Objects[0]
+	}
+
+	is.NoErr(os.WriteFile(objPath, []byte(content[:3]), 0o600))
+	got := batch()
+	if got.Error == nil || got.Error.Code != http.StatusNotFound {
+		t.Fatalf("short object: got error %+v, actions %v; want 404", got.Error, got.Actions)
+	}
+
+	is.NoErr(os.WriteFile(objPath, []byte(content), 0o600))
+	got = batch()
+	if got.Error != nil || got.Actions[lfs.ActionDownload] == nil {
+		t.Fatalf("complete object: got error %+v, actions %v; want a download", got.Error, got.Actions)
+	}
+}

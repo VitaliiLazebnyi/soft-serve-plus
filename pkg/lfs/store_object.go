@@ -91,6 +91,22 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 	return nil
 }
 
+// HasObject reports whether strg holds the object of pointer: a regular file
+// of pointer.Size bytes under objects/. A file of another size, such as one a
+// failed write left behind, does not count, so the object is uploaded again
+// instead of being served short. An error other than the file not existing is
+// returned.
+func HasObject(strg storage.Storage, pointer Pointer) (bool, error) {
+	fi, err := strg.Stat(path.Join("objects", pointer.RelativePath()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return fi.Mode().IsRegular() && fi.Size() == pointer.Size, nil
+}
+
 // isObject reports whether objPath is a regular file of size bytes whose
 // SHA-256 is oid.
 func isObject(strg storage.Storage, objPath, oid string, size int64) bool {

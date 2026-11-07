@@ -118,7 +118,7 @@ func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.
 			return pointers, db.WrapError(err)
 		}
 
-		pointers[i].Present, err = t.storage.Exists(path.Join("objects", pointers[i].RelativePath()))
+		pointers[i].Present, err = lfs.HasObject(t.storage, lfs.Pointer{Oid: pointers[i].Oid, Size: pointers[i].Size})
 		if err != nil {
 			return pointers, err
 		}
