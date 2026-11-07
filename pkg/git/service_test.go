@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -150,6 +151,111 @@ func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+// setOutputIdleTimeout sets outputIdleTimeout to d for the test.
+func setOutputIdleTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := outputIdleTimeout
+	outputIdleTimeout = d
+	t.Cleanup(func() { outputIdleTimeout = prev })
+}
+
+// TestServiceBackgroundProcessHoldsOutputOpen covers a process started by
+// git, such as one a hook leaves running in the background, that keeps
+// git's output open after git exited normally. The handler must return
+// with git's output once that output stopped coming, instead of waiting for
+// the process.
+func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	setOutputIdleTimeout(t, 100*time.Millisecond)
+
+	var stdout, stderr syncBuffer
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdout: &stdout,
+			Stderr: &stderr,
+			Dir:    t.TempDir(),
+			// Stand in for git: start a child that inherits stdout and
+			// stderr and outlives the shell, print its pid, and exit.
+			CmdFunc: func(c *exec.Cmd) {
+				c.Path = sh
+				c.Args = []string{"sh", "-c", "sleep 60 & echo $!; echo done >&2"}
+			},
+		})
+	}()
+
+	err = waitErr(t, errc)
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(stdout.Bytes())))
+	if perr == nil {
+		if p, err := os.FindProcess(pid); err == nil {
+			p.Kill() //nolint: errcheck
+		}
+	}
+	if err != nil {
+		t.Fatalf("expected the service to succeed, got %v", err)
+	}
+	if perr != nil {
+		t.Fatalf("expected the child pid on stdout, got %q", stdout.Bytes())
+	}
+	if got := string(stderr.Bytes()); got != "done\n" {
+		t.Fatalf("expected stderr %q, got %q", "done\n", got)
+	}
+}
+
+// slowWriter is a client that takes delay for every write.
+type slowWriter struct {
+	delay time.Duration
+	n     atomic.Int64
+}
+
+func (w *slowWriter) Write(p []byte) (int, error) {
+	time.Sleep(w.delay)
+	w.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+// TestServiceSlowClientGetsAllOutput covers a client that reads git's
+// output slower than outputIdleTimeout per write: the handler must not
+// take it for a process holding the output open, and must copy all of the
+// output after git exited.
+func TestServiceSlowClientGetsAllOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	setOutputIdleTimeout(t, 20*time.Millisecond)
+
+	const size = 256 << 10
+	w := &slowWriter{delay: 50 * time.Millisecond}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdout: w,
+			Dir:    t.TempDir(),
+			CmdFunc: func(c *exec.Cmd) {
+				c.Path = sh
+				c.Args = []string{"sh", "-c", "head -c " + strconv.Itoa(size) + " /dev/zero"}
+			},
+		})
+	}()
+
+	if err := waitErr(t, errc); err != nil {
+		t.Fatalf("expected the service to succeed, got %v", err)
+	}
+	if got := w.n.Load(); got != size {
+		t.Fatalf("expected %d bytes of output, got %d", size, got)
 	}
 }
 
