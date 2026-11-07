@@ -2,7 +2,9 @@ package migrate
 
 import (
 	"context"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -20,6 +22,55 @@ func TestMigrate(t *testing.T) {
 	}
 	if err := Migrate(ctx, dbx); err != nil {
 		t.Errorf("Migrate() => %v, want nil error", err)
+	}
+}
+
+// Servers starting at the same time on a shared Postgres database must not
+// run the same migrations at once: all but one would fail on duplicate
+// objects. SQLite write transactions are already serialised by BEGIN
+// IMMEDIATE, but the test database has no busy_timeout to wait with.
+func TestMigrateConcurrent(t *testing.T) {
+	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
+		t.Skip("needs Postgres (SOFT_SERVE_DB_DRIVER=postgres)")
+	}
+	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	dbx, err := test.Open(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 4
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = Migrate(ctx, dbx)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Migrate() #%d => %v, want nil error", i, err)
+		}
+	}
+
+	var count, version int64
+	if err := dbx.Get(&count, "SELECT COUNT(*) FROM migrations"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbx.Get(&version, "SELECT MAX(version) FROM migrations"); err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(len(migrations)); count != want {
+		t.Errorf("migrations recorded = %d, want %d", count, want)
+	}
+	if want := migrations[len(migrations)-1].Version; version != want {
+		t.Errorf("migration version = %d, want %d", version, want)
 	}
 }
 
