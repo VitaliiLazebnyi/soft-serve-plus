@@ -3,6 +3,7 @@ package ssh
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -124,6 +125,10 @@ func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be
 	}
 }
 
+// maxSuggestionArgLength is the longest argument, in bytes, for which the
+// command handler still suggests a command name for an unknown command.
+const maxSuggestionArgLength = 64
+
 var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "soft_serve",
 	Subsystem: "cli",
@@ -151,6 +156,13 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			SilenceUsage: true,
 		}
 		rootCmd.CompletionOptions.DisableDefaultCmd = true
+		// "Did you mean" suggestions compare an unknown command with every
+		// command name by edit distance, which costs milliseconds for a
+		// word near MaxCommandLength. No typo of a command name is that
+		// long, so leave suggestions out for long arguments.
+		rootCmd.DisableSuggestions = slices.ContainsFunc(args, func(a string) bool {
+			return len(a) > maxSuggestionArgLength
+		})
 
 		rootCmd.SetUsageTemplate(cmd.UsageTemplate)
 		rootCmd.SetUsageFunc(cmd.UsageFunc)
