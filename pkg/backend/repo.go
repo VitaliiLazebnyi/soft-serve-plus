@@ -747,7 +747,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) {
 	repos := make([]proto.Repository, 0)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		ms, err := d.store.GetAllRepos(ctx, tx)
 		if err != nil {
 			return err
@@ -787,7 +787,7 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 		return nil, proto.ErrRepoNotFound
 	}
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetRepoByName(ctx, tx, name)
 		return err
@@ -826,7 +826,7 @@ func wrapRepoError(err error) error {
 func (d *Backend) Description(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var desc string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		desc, err = d.store.GetRepoDescriptionByName(ctx, tx, name)
 		return err
@@ -843,7 +843,7 @@ func (d *Backend) Description(ctx context.Context, name string) (string, error) 
 func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var mirror bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		mirror, err = d.store.GetRepoIsMirrorByName(ctx, tx, name)
 		return err
@@ -859,7 +859,7 @@ func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var private bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		private, err = d.store.GetRepoIsPrivateByName(ctx, tx, name)
 		return err
@@ -876,7 +876,7 @@ func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var hidden bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		hidden, err = d.store.GetRepoIsHiddenByName(ctx, tx, name)
 		return err
@@ -893,7 +893,7 @@ func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var pname string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		pname, err = d.store.GetRepoProjectNameByName(ctx, tx, name)
 		return err

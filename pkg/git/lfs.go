@@ -318,7 +318,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 		return nil, err
 	}
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockForUserByID(l.ctx, tx, l.repo.ID(), l.user.ID(), iid)
 		if err != nil {
@@ -344,7 +344,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 	var lock LFSLock
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockForUserPath(l.ctx, tx, l.repo.ID(), l.user.ID(), path)
 		if err != nil {
@@ -381,7 +381,7 @@ func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) 
 	}
 	limit = lfs.ClampLocksLimit(limit)
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		l.logger.Debug("getting locks", "limit", limit, "page", page)
 		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), page, limit)
 		if err != nil {
