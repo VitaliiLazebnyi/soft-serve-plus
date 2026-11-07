@@ -2,13 +2,17 @@ package web
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/matryer/is"
 )
 
@@ -158,5 +162,41 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 				t.Errorf("failed login logged at error level by the router:\n%s", out)
 			}
 		})
+	}
+}
+
+// A host key that goes missing after startup leaves the server unable to
+// verify any token. A bearer request then fails as bad credentials, not as
+// an anonymous request, and the server logs the fault at error level.
+// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
+// and must not run in parallel.
+func TestBearerWithoutHostKey(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	logger.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	f := newOracleFixture(t)
+	ctx := log.WithContext(f.ctx, logger)
+	stranger, err := f.be.User(ctx, "stranger")
+	is.NoErr(err)
+	bearer := "Bearer " + mintJWT(ctx, t, stranger, "secret")
+
+	is.NoErr(os.Remove(config.FromContext(ctx).SSH.KeyPath))
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", bearer)
+	_, err = authenticate(req, "secret")
+	is.True(errors.Is(err, ErrInvalidToken))
+	is.True(errors.Is(err, fs.ErrNotExist))
+
+	logs.Reset()
+	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", bearer)
+	is.Equal(w.Code, http.StatusForbidden) // anonymous would get 401
+	if out := logs.String(); !strings.Contains(out, "ERRO") || !strings.Contains(out, "host key") {
+		t.Errorf("missing host key not logged at error level:\n%s", out)
 	}
 }

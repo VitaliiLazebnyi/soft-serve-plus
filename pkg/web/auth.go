@@ -158,7 +158,11 @@ func parseJWT(ctx context.Context, bearer, repo string) (*jwt.RegisteredClaims, 
 	logger := log.FromContext(ctx).WithPrefix("http.auth")
 	kp, err := config.KeyPair(cfg)
 	if err != nil {
-		return nil, err
+		// The server cannot verify any token without its host key. That
+		// is a server fault, so log it as one; the caller still sent a
+		// token, so answer as for a bad one rather than as anonymous.
+		logger.Error("cannot verify jwt: no usable host key", "err", err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 
 	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {

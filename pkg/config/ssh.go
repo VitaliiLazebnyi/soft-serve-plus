@@ -1,13 +1,16 @@
 package config
 
 import (
+	"crypto"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/keygen"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 var (
@@ -18,10 +21,29 @@ var (
 	ErrEmptySSHKeyPath = errors.New("empty SSH key path")
 )
 
-// keyPairCache holds the last host key pair loaded per path, so callers on a
-// hot path (every bearer-authenticated HTTP request) do not read and parse the
-// key file each time. An entry is reused only while the file's size and
-// modification time are unchanged, so a replaced key is picked up.
+// HostKey is the server's Ed25519 SSH host key, used to sign and verify
+// tokens.
+type HostKey struct {
+	priv ed25519.PrivateKey
+}
+
+// PrivateKey returns the private key.
+func (k *HostKey) PrivateKey() crypto.PrivateKey {
+	return k.priv
+}
+
+// CryptoPublicKey returns the public key.
+func (k *HostKey) CryptoPublicKey() crypto.PublicKey {
+	return k.priv.Public()
+}
+
+// keyPairCache holds the last host key loaded per path, so callers on a hot
+// path (every bearer-authenticated HTTP request) do not read and parse the
+// key file each time. An entry is reused while the file's size and
+// modification time are unchanged. That is a cheap check, not a content
+// one: a key replaced with the same size and mtime (a restore that keeps
+// timestamps, or a coarse-mtime filesystem) is not noticed until restart,
+// which is also when the SSH server reloads its host key.
 var keyPairCache = struct {
 	sync.Mutex
 	entries map[string]keyPairCacheEntry
@@ -30,14 +52,15 @@ var keyPairCache = struct {
 type keyPairCacheEntry struct {
 	modTime time.Time
 	size    int64
-	kp      *keygen.SSHKeyPair
+	key     *HostKey
 }
 
-// KeyPair returns the server's SSH key pair, read from ssh.key_path. The file
-// must exist: the SSH server writes it on first start, and a key generated in
-// memory here would differ on every call, so tokens signed with it could
-// never be verified.
-func KeyPair(cfg *Config) (*keygen.SSHKeyPair, error) {
+// KeyPair returns the server's SSH host key, read from ssh.key_path. The
+// file must exist and hold an unencrypted Ed25519 key: the SSH server
+// writes it on first start, and a key generated in memory here would differ
+// on every call, so tokens signed with it could never be verified. The path
+// is used as is, without expanding "~" or environment variables.
+func KeyPair(cfg *Config) (*HostKey, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig
 	}
@@ -47,7 +70,15 @@ func KeyPair(cfg *Config) (*keygen.SSHKeyPair, error) {
 		return nil, ErrEmptySSHKeyPath
 	}
 
-	fi, err := os.Stat(path)
+	// Stat and read the same open file, so the cached key always matches
+	// the size and mtime it is stored under.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("ssh host key: %w", err)
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("ssh host key: %w", err)
 	}
@@ -56,14 +87,29 @@ func KeyPair(cfg *Config) (*keygen.SSHKeyPair, error) {
 	defer keyPairCache.Unlock()
 
 	if e, ok := keyPairCache.entries[path]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
-		return e.kp, nil
+		return e.key, nil
 	}
 
-	kp, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519))
+	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil, fmt.Errorf("ssh host key: %w", err)
+		return nil, fmt.Errorf("ssh host key %s: %w", path, err)
+	}
+	raw, err := gossh.ParseRawPrivateKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("ssh host key %s: %w", path, err)
 	}
 
-	keyPairCache.entries[path] = keyPairCacheEntry{modTime: fi.ModTime(), size: fi.Size(), kp: kp}
-	return kp, nil
+	var priv ed25519.PrivateKey
+	switch k := raw.(type) {
+	case *ed25519.PrivateKey:
+		priv = *k
+	case ed25519.PrivateKey:
+		priv = k
+	default:
+		return nil, fmt.Errorf("ssh host key %s: unsupported key type %T, want ed25519", path, raw)
+	}
+
+	key := &HostKey{priv: priv}
+	keyPairCache.entries[path] = keyPairCacheEntry{modTime: fi.ModTime(), size: fi.Size(), key: key}
+	return key, nil
 }
