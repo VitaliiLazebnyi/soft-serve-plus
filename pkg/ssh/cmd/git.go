@@ -297,10 +297,6 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 	switch service {
 	case git.ReceivePackService:
-		receivePackCounter.WithLabelValues(name).Inc()
-		defer func() {
-			receivePackSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
-		}()
 		// A missing name is created for a caller who may write; anything
 		// else goes through the same check as every other service.
 		created := repo == nil && accessLevel >= access.ReadWriteAccess
@@ -320,6 +316,13 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		} else if err := gitAccess(user, repo, accessLevel, access.ReadWriteAccess); err != nil {
 			return err
 		}
+
+		// Count only pushes that passed the access check, so a refused
+		// name never becomes a metric label.
+		receivePackCounter.WithLabelValues(name).Inc()
+		defer func() {
+			receivePackSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
+		}()
 
 		if err := service.Handler(ctx, scmd); err != nil {
 			if created {

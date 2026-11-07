@@ -137,3 +137,24 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(strings.TrimSpace(string(out)), "refs/heads/trunk") // HEAD points at the pushed branch
 }
+
+// A push the caller may not make must not add a metric series for the name it
+// asked for: anyone can ask for any name, so labelling refused requests would
+// let clients grow the metrics without limit.
+func TestRefusedPushAddsNoMetricLabel(t *testing.T) {
+	is := is.New(t)
+	ctx, _ := newAuthTestContext(t)
+
+	const name = "refused-push-metric-label"
+	c := GitReceivePackCommand()
+	c.SilenceUsage = true
+	c.SilenceErrors = true
+	c.SetIn(strings.NewReader(""))
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	c.SetArgs([]string{name})
+	is.True(c.ExecuteContext(ctx) != nil) // anonymous callers may not push
+
+	is.True(!receivePackCounter.DeleteLabelValues(name)) // no push counter series
+	is.True(!receivePackSeconds.DeleteLabelValues(name)) // no push duration series
+}
