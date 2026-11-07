@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 
 	"charm.land/log/v2"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 // authenticate authenticates the user from the request. repo is the
@@ -38,14 +40,15 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 	be := backend.FromContext(ctx)
 
 	if username != "" && password != "" {
-		user, err := be.User(ctx, username)
-		if err == nil && user != nil && backend.VerifyPassword(password, user.Password()) {
+		// Try to authenticate using access token as the password first:
+		// the lookup is a cheap hash that does not depend on the username,
+		// and token clients then never pay for bcrypt.
+		user, err := be.UserByAccessToken(ctx, password)
+		if err == nil {
 			return user, nil
 		}
 
-		// Try to authenticate using access token as the password
-		user, err = be.UserByAccessToken(ctx, password)
-		if err == nil {
+		if user := checkPassword(ctx, username, password); user != nil {
 			return user, nil
 		}
 
@@ -72,6 +75,38 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 	}
 
 	return nil, proto.ErrUserNotFound
+}
+
+// passwordChecks bounds the bcrypt comparisons running at once, so failed
+// HTTP Basic logins cannot occupy every CPU. Half the processors leaves the
+// rest to serving everything else.
+var passwordChecks = semaphore.NewWeighted(int64(max(1, runtime.GOMAXPROCS(0)/2)))
+
+// verifyPassword is backend.VerifyPassword; tests replace it to count calls.
+var verifyPassword = backend.VerifyPassword
+
+// checkPassword returns the user named username if password is their
+// password, or nil. It does the same bcrypt work whether or not the user
+// exists or has a password, so the response time does not reveal which
+// accounts do. It waits for a free slot in passwordChecks and fails if ctx
+// ends first.
+func checkPassword(ctx context.Context, username, password string) proto.User {
+	var hash string
+	user, err := backend.FromContext(ctx).User(ctx, username)
+	if err == nil && user != nil {
+		hash = user.Password()
+	}
+
+	if err := passwordChecks.Acquire(ctx, 1); err != nil {
+		return nil
+	}
+	defer passwordChecks.Release(1)
+
+	// An empty hash never verifies, so user is set when this succeeds.
+	if !verifyPassword(password, hash) {
+		return nil
+	}
+	return user
 }
 
 // ErrInvalidHeader is returned when the authorization header is invalid.
