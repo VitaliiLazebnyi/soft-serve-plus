@@ -438,7 +438,10 @@ setting: OpenSSH before 6.5, libssh2 1.8 (Ubuntu 18.04 and 20.04, used by
 libgit2 based tools there), and the original JCraft JSch up to 0.1.55. With
 an RSA host key (`ssh.key_path`), libssh2 1.8 and JSch 0.1.55 do connect
 with the defaults, using `diffie-hellman-group-exchange-sha256` (or ECDH for
-JSch), `aes128-ctr` and `hmac-sha2-256`.
+JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
+from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
+and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
+type. Replacing the host key invalidates tokens issued before.
 
 A client limited to SHA-1 key exchange or MACs is refused. To let one in,
 copy the default list above and append the legacy algorithm. Listing only a
