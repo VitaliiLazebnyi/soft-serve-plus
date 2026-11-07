@@ -157,6 +157,8 @@ func TestOpenLocal(t *testing.T) {
 		{"linked worktree subdirectory", filepath.Join(wt, "dot_config"), wt, false},
 		{"bare", bare, bare, true},
 		{"bare subdirectory", filepath.Join(bare, "refs"), bare, true},
+		{"git directory", filepath.Join(repo.Path, ".git"), filepath.Join(repo.Path, ".git"), true},
+		{"git directory subdirectory", filepath.Join(repo.Path, ".git", "refs"), filepath.Join(repo.Path, ".git"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := OpenLocal(tc.path)
@@ -179,6 +181,17 @@ func TestOpenLocal(t *testing.T) {
 		_, err := OpenLocal(t.TempDir())
 		if !errors.Is(err, ErrNotAGitRepository) {
 			t.Fatalf("OpenLocal error = %v, want ErrNotAGitRepository", err)
+		}
+	})
+
+	t.Run("file", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(f, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := OpenLocal(f)
+		if !errors.Is(err, ErrNotAGitRepository) || !strings.Contains(err.Error(), "is not a directory") {
+			t.Fatalf("OpenLocal error = %v, want ErrNotAGitRepository: ... is not a directory", err)
 		}
 	})
 }
