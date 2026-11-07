@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,7 +23,9 @@ import (
 // the terminal: a DCS (DECRQSS, which makes the terminal answer), an APC
 // (kitty graphics), an OSC 8 hyperlink with a hidden target, an OSC 52
 // clipboard write, a C1 CSI encoded as UTF-8 and a BEL. It has no slash, so
-// it can be part of a file name.
+// it can be part of a path in a git tree, but it holds control characters,
+// ':' and '\', which Windows does not allow in a file name, so it never
+// goes on disk.
 const hostile = "\x1bP1$qm\x1b\\" +
 	"\x1b_Gf=100;AAAA\x1b\\" +
 	"\x1b]8;;https:evil.example\x1b\\link\x1b]8;;\x1b\\" +
@@ -46,9 +49,8 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	files := map[string]string{
-		"README.md":                  "# Readme" + hostile + "\n\nreadme-text" + hostile + "\n",
-		"main.go":                    "package main\n\n// go-comment" + hostile + "\nfunc main() {}\n",
-		"name" + hostile + "end.txt": "plain-text\n",
+		"README.md": "# Readme" + hostile + "\n\nreadme-text" + hostile + "\n",
+		"main.go":   "package main\n\n// go-comment" + hostile + "\nfunc main() {}\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
@@ -56,6 +58,15 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 		}
 	}
 	gitRun(t, dir, "add", "-A")
+	// The hostile file name goes straight into the index, so no file of that
+	// name is made; core.protectNTFS would reject the '\' in it on Windows.
+	// Marking it skip-worktree keeps the stash below from recording it as
+	// deleted, and git from checking it out when the stash resets the tree.
+	hostileName := "name" + hostile + "end.txt"
+	blob := gitStdin(t, dir, "plain-text\n", "hash-object", "-w", "--stdin")
+	gitRun(t, dir, "-c", "core.protectNTFS=false", "update-index", "--add",
+		"--cacheinfo", "100644,"+blob+","+hostileName)
+	gitRun(t, dir, "-c", "core.protectNTFS=false", "update-index", "--skip-worktree", "--", hostileName)
 	gitRun(t, dir, "-c", "user.name=eve-author"+hostile,
 		"commit", "-q", "--author", "eve-author"+hostile+" <eve@example.com>",
 		"-m", "commit-subject"+hostile+"\n\ncommit-body"+hostile)
@@ -65,6 +76,9 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 		t.Fatal(err)
 	}
 	gitRun(t, dir, "stash", "push", "-q", "-m", "stash-message"+hostile)
+	if _, err := os.Lstat(filepath.Join(dir, hostileName)); !os.IsNotExist(err) {
+		t.Fatalf("hostile file name reached the disk: %v", err)
+	}
 	return escapedRepo{
 		fakeRepo: fakeRepo{
 			projectName: "project-name" + hostile,
@@ -72,6 +86,19 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 		},
 		path: dir,
 	}
+}
+
+// gitStdin runs git in dir with stdin as its input and returns its output.
+func gitStdin(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Env = append(cmd.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // driver feeds messages to a model and runs the commands it returns, the way

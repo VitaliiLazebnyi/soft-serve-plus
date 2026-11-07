@@ -83,7 +83,9 @@ func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
 }
 
 // hostile adds an OSC 8 hyperlink with a hidden target and a C1 CSI to
-// escapes; it has no slash, so it can be part of a file name.
+// escapes. It has no slash, so it can be part of a path in a git tree, but
+// it holds control characters, ':', '|' and '\', which Windows does not
+// allow in a file name, so it never goes on disk.
 const hostile = escapes + "\x1b]8;;https:evil.example\x1b\\link\x1b]8;;\x1b\\" + "\u009b2J"
 
 // pushHostileRepo pushes to repository "hooks" a commit, an annotated tag
@@ -93,30 +95,32 @@ func pushHostileRepo(t *testing.T, ctx context.Context) {
 	t.Helper()
 	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git")
 	work := t.TempDir()
-	git := func(args ...string) {
+	git := func(stdin string, args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-c", "user.name=eve" + hostile, "-c", "user.email=t@example.com"}, args...)...) //nolint:noctx
 		cmd.Dir = work
+		cmd.Stdin = strings.NewReader(stdin)
 		// Ignore the user's git config, which may sign or annotate tags.
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
-		if out, err := cmd.CombinedOutput(); err != nil {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
+		return strings.TrimSpace(string(out))
 	}
-	git("init", "-q", "-b", "main")
-	for name, content := range map[string]string{
-		"main.go":                    "package main\n\n// go-comment" + hostile + "\n",
-		"name" + hostile + "end.txt": "plain\n",
-	} {
-		if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	git("", "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\n\n// go-comment"+hostile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	git("add", "-A")
-	git("commit", "-q", "-m", "subject"+hostile+"\n\nbody"+hostile)
-	git("tag", "-a", "v1", "-m", "tag"+hostile)
-	git("tag", "tag\u009b2Jname")
-	git("push", "-q", bare, "main", "main:branch\u009b2Jname", "v1", "tag\u009b2Jname")
+	git("", "add", "main.go")
+	// The hostile file name goes straight into the index, so no file of that
+	// name is made; core.protectNTFS would reject the '\' in it on Windows.
+	blob := git("plain\n", "hash-object", "-w", "--stdin")
+	git("", "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", "100644,"+blob+",name"+hostile+"end.txt")
+	git("", "commit", "-q", "-m", "subject"+hostile+"\n\nbody"+hostile)
+	git("", "tag", "-a", "v1", "-m", "tag"+hostile)
+	git("", "tag", "tag\u009b2Jname")
+	git("", "push", "-q", bare, "main", "main:branch\u009b2Jname", "v1", "tag\u009b2Jname")
 	is.New(t).NoErr(exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run()) //nolint:noctx
 }
 
