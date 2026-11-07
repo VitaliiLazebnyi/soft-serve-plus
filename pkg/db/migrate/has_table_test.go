@@ -28,7 +28,7 @@ func TestHasTable(t *testing.T) {
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		hasTable := func(name string) bool {
 			t.Helper()
-			ok, err := tableExists(tx, name)
+			ok, err := tableExists(ctx, tx, name)
 			if err != nil {
 				t.Fatalf("tableExists(%s): %v", name, err)
 			}
@@ -79,7 +79,7 @@ func TestHasTableMySQLQuery(t *testing.T) {
 	}
 	defer txx.Rollback() //nolint:errcheck
 
-	if ok, err := tableExists(&db.Tx{Tx: txx}, "widgets"); err != nil || ok {
+	if ok, err := tableExists(context.TODO(), &db.Tx{Tx: txx}, "widgets"); err != nil || ok {
 		t.Errorf("tableExists(widgets) = %v, %v with no rows, want false, nil", ok, err)
 	}
 

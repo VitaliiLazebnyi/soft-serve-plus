@@ -23,6 +23,9 @@ var createTables = Migration{
 	Name:    createTablesName,
 	Migrate: func(ctx context.Context, tx *db.Tx) error {
 		cfg := config.FromContext(ctx)
+		if cfg == nil {
+			return errNoConfig
+		}
 
 		insert := "INSERT "
 
@@ -32,7 +35,7 @@ var createTables = Migration{
 		case "sqlite3", "sqlite":
 			insert += "OR IGNORE "
 
-			if ok, err := tableExists(tx, "user"); err != nil {
+			if ok, err := tableExists(ctx, tx, "user"); err != nil {
 				return err
 			} else if ok {
 				if _, err := tx.ExecContext(ctx, "ALTER TABLE user RENAME TO user_old"); err != nil {
@@ -40,7 +43,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "public_key"); err != nil {
+			if ok, err := tableExists(ctx, tx, "public_key"); err != nil {
 				return err
 			} else if ok {
 				if _, err := tx.ExecContext(ctx, "ALTER TABLE public_key RENAME TO public_key_old"); err != nil {
@@ -48,7 +51,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "collab"); err != nil {
+			if ok, err := tableExists(ctx, tx, "collab"); err != nil {
 				return err
 			} else if ok {
 				if _, err := tx.ExecContext(ctx, "ALTER TABLE collab RENAME TO collab_old"); err != nil {
@@ -56,7 +59,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "repo"); err != nil {
+			if ok, err := tableExists(ctx, tx, "repo"); err != nil {
 				return err
 			} else if ok {
 				if _, err := tx.ExecContext(ctx, "ALTER TABLE repo RENAME TO repo_old"); err != nil {
@@ -76,7 +79,7 @@ var createTables = Migration{
 				return err
 			}
 
-			if ok, err := tableExists(tx, "user_old"); err != nil {
+			if ok, err := tableExists(ctx, tx, "user_old"); err != nil {
 				return err
 			} else if ok {
 				sqlm := `
@@ -88,7 +91,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "public_key_old"); err != nil {
+			if ok, err := tableExists(ctx, tx, "public_key_old"); err != nil {
 				return err
 			} else if ok {
 				// Check duplicate keys
@@ -117,7 +120,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "repo_old"); err != nil {
+			if ok, err := tableExists(ctx, tx, "repo_old"); err != nil {
 				return err
 			} else if ok {
 				sqlm := `
@@ -131,7 +134,7 @@ var createTables = Migration{
 				}
 			}
 
-			if ok, err := tableExists(tx, "collab_old"); err != nil {
+			if ok, err := tableExists(ctx, tx, "collab_old"); err != nil {
 				return err
 			} else if ok {
 				sqlm := `

@@ -59,11 +59,16 @@ func (Migrations) schema(driverName string) string {
 	}
 }
 
-// Migrate runs the migrations.
+// errNoConfig is returned by migrations that need the server configuration
+// when ctx carries none.
+var errNoConfig = errors.New("migrate: no config in context")
+
+// Migrate runs the migrations. ctx must carry the server configuration
+// (config.WithContext).
 func Migrate(ctx context.Context, dbx *db.DB) error {
 	logger := log.FromContext(ctx).WithPrefix("migrate")
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		ok, err := tableExists(tx, "migrations")
+		ok, err := tableExists(ctx, tx, "migrations")
 		if err != nil {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
@@ -74,7 +79,7 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 		}
 
 		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
+		if err := tx.GetContext(ctx, &migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
@@ -109,7 +114,7 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 func Rollback(ctx context.Context, dbx *db.DB) error {
 	logger := log.FromContext(ctx).WithPrefix("migrate")
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		ok, err := tableExists(tx, "migrations")
+		ok, err := tableExists(ctx, tx, "migrations")
 		if err != nil {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
@@ -118,7 +123,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 		}
 
 		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
+		if err := tx.GetContext(ctx, &migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("get latest migration: %w", err)
 			}
@@ -159,7 +164,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 
 // tableExists reports whether the table exists, returning any error from the
 // lookup other than the table not being found.
-func tableExists(tx *db.Tx, tableName string) (bool, error) {
+func tableExists(ctx context.Context, tx *db.Tx, tableName string) (bool, error) {
 	var query string
 	switch tx.DriverName() {
 	case "sqlite3", "sqlite":
@@ -175,7 +180,7 @@ func tableExists(tx *db.Tx, tableName string) (bool, error) {
 
 	query = tx.Rebind(query)
 	var name string
-	if err := tx.Get(&name, query, tableName); err != nil {
+	if err := tx.GetContext(ctx, &name, query, tableName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
