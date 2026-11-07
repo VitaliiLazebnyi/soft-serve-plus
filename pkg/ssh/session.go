@@ -85,6 +85,15 @@ func SessionHandler(s ssh.Session) *tea.Program {
 func TUIMiddleware(next ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		var start time.Time
+		stop := func() {
+			if !start.IsZero() {
+				tuiSessionDuration.Add(time.Since(start).Seconds())
+				start = time.Time{}
+			}
+		}
+		// The program runs without catching panics (see SessionHandler), so
+		// a panic skips the handler below; count that session's time too.
+		defer stop()
 		bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
 			p := SessionHandler(s)
 			if p != nil {
@@ -94,9 +103,7 @@ func TUIMiddleware(next ssh.Handler) ssh.Handler {
 		})(func(s ssh.Session) {
 			// The program has exited: stop the clock before handing the
 			// session on.
-			if !start.IsZero() {
-				tuiSessionDuration.Add(time.Since(start).Seconds())
-			}
+			stop()
 			next(s)
 		})(s)
 	}
