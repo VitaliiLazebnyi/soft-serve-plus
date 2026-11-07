@@ -150,8 +150,8 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			exist, err := strg.Exists(path.Join("objects", o.RelativePath()))
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			exist, err := lfs.HasObject(strg, o)
+			if err != nil {
 				logger.Error("error getting object stat", "oid", o.Oid, "repo", name, "err", err)
 				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
