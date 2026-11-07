@@ -166,7 +166,7 @@ func newLFSTestWith(t *testing.T, objects int, extra func(work string, pointers 
 
 // store runs StoreRepoMissingLFSObjects with the test's client.
 func (lt *lfsTest) store() error {
-	return StoreRepoMissingLFSObjects(lt.ctx, lt.repo, lt.be.db, lt.be.store, lt.client)
+	return lt.be.StoreRepoMissingLFSObjects(lt.ctx, lt.repo, lt.client)
 }
 
 // path returns where the object of p is stored.

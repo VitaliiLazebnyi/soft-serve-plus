@@ -542,7 +542,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // fetches them again, so they stay missing until someone pushes them. Any
 // other failure fails the import.
 func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
-	err := StoreRepoMissingLFSObjects(ctx, r, d.db, d.store, client)
+	err := d.StoreRepoMissingLFSObjects(ctx, r, client)
 	var unavailable *lfsObjectsUnavailableError
 	if errors.As(err, &unavailable) {
 		if r.IsMirror() {

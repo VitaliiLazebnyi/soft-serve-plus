@@ -23,8 +23,8 @@ import (
 
 // CreateWebhook creates a webhook for a repository.
 func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 	url = utils.Sanitize(url)
 	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
@@ -69,8 +69,8 @@ func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 
 // Webhook returns a webhook for a repository.
 func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	var wh webhook.Hook
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
@@ -102,8 +102,8 @@ func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 
 // ListWebhooks lists webhooks for a repository.
 func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	var webhooks []models.Webhook
 	webhookEvents := map[int64][]models.WebhookEvent{}
@@ -146,8 +146,8 @@ func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 // UpdateWebhook updates a webhook.
 func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	url = utils.Sanitize(url)
 	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
@@ -216,8 +216,8 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 
 // DeleteWebhook deletes a webhook for a repository.
 func (b *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
@@ -262,8 +262,8 @@ func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID i
 // The webhook is resolved scoped to the repository, so a caller authorized
 // only for repo A cannot read deliveries of a webhook owned by repo B.
 func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	var deliveries []models.WebhookDelivery
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
@@ -300,8 +300,8 @@ func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 // a receiver that was turned off is not sent to by mistake. Activate the
 // webhook first to redeliver.
 func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	var delivery models.WebhookDelivery
 	var wh models.Webhook
@@ -394,8 +394,8 @@ func storedContentType(headers string) (webhook.ContentType, bool, error) {
 // Deliveries expose the full request URL, headers, and body, so this scoping
 // is what keeps them from leaking across repositories.
 func (b *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := b.db
+	datastore := b.store
 
 	var delivery webhook.Delivery
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
