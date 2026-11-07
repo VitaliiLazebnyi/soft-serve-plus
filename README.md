@@ -121,12 +121,16 @@ since, stay in the database when you remove them from the config: remove those
 with `user remove-pubkey`. To keep an attached key after dropping it from the
 config, run `user remove-pubkey` and then `user add-pubkey` for it first.
 
-Blank lines and lines starting with `#` are ignored, and so is an entry that is
-neither a key nor a file path (a warning counts them). But while an entry names
+Blank lines and lines starting with `#` are ignored. An entry that is not a
+valid key is read as a key file path if it has no spaces in it, and is ignored
+otherwise (a warning counts the ignored entries). So a single word, such as
+`admin_key`, a bare base64 key blob, or a key pasted without the space after
+its type (`ssh-ed25519AAAA...`), is taken for a file name. While an entry names
 a key file that cannot be read or holds no key (for example a secret that is
-not mounted yet, or a stale path), no key is removed, since the file may hold
-a key that is still wanted: an error names the file and every key kept because
-of it. Fix or remove the entry to let the removal happen. Every instance that
+not mounted yet, a stale path, or such a mistyped key with no file of that
+name), no key is removed, since the file may hold a key that is still wanted:
+removed admin keys stay in place, and an error names the file and every key
+kept because of it. Fix or remove the entry to let the removal happen. Every instance that
 shares a database must use the same `initial_admin_keys`: a run with a
 different list attaches and removes keys to match its own list.
 
