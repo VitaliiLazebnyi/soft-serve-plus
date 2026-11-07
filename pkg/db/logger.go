@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"charm.land/log/v2"
@@ -18,18 +19,32 @@ func trace(l *log.Logger, query string, args ...interface{}) {
 	}
 }
 
+// mapError maps err with WrapError. A mapped constraint violation reads as
+// ErrDuplicateKey's generic message, so the driver error, which names the
+// constraint that failed, is logged here at debug level. l is the handler's
+// error logger, which unlike the query trace is set outside verbose mode too;
+// a nil l skips the log.
+func mapError(l *log.Logger, err error) error {
+	err = WrapError(err)
+	var me *mappedError
+	if l != nil && errors.As(err, &me) {
+		l.Debug("constraint violation", "err", me.driver)
+	}
+	return err
+}
+
 // SelectContext wraps sqlx.SelectContext: it logs the query and
 // arguments and maps the error with WrapError.
 func (d *DB) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return WrapError(d.DB.SelectContext(ctx, dest, query, args...))
+	return mapError(d.errLog, d.DB.SelectContext(ctx, dest, query, args...))
 }
 
 // GetContext wraps sqlx.GetContext: it logs the query and
 // arguments and maps the error with WrapError.
 func (d *DB) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return WrapError(d.DB.GetContext(ctx, dest, query, args...))
+	return mapError(d.errLog, d.DB.GetContext(ctx, dest, query, args...))
 }
 
 // QueryxContext wraps sqlx.QueryxContext: it logs the query and
@@ -37,7 +52,7 @@ func (d *DB) GetContext(ctx context.Context, dest interface{}, query string, arg
 func (d *DB) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
 	trace(d.logger, query, args...)
 	rows, err := d.DB.QueryxContext(ctx, query, args...)
-	return rows, WrapError(err)
+	return rows, mapError(d.errLog, err)
 }
 
 // QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
@@ -52,21 +67,21 @@ func (d *DB) QueryRowxContext(ctx context.Context, query string, args ...interfa
 func (d *DB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(d.logger, query, args...)
 	res, err := d.DB.ExecContext(ctx, query, args...)
-	return res, WrapError(err)
+	return res, mapError(d.errLog, err)
 }
 
 // SelectContext wraps sqlx.SelectContext: it logs the query and
 // arguments and maps the error with WrapError.
 func (t *Tx) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return WrapError(t.Tx.SelectContext(ctx, dest, query, args...))
+	return mapError(t.errLog, t.Tx.SelectContext(ctx, dest, query, args...))
 }
 
 // GetContext wraps sqlx.GetContext: it logs the query and
 // arguments and maps the error with WrapError.
 func (t *Tx) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return WrapError(t.Tx.GetContext(ctx, dest, query, args...))
+	return mapError(t.errLog, t.Tx.GetContext(ctx, dest, query, args...))
 }
 
 // QueryxContext wraps sqlx.QueryxContext: it logs the query and
@@ -74,7 +89,7 @@ func (t *Tx) GetContext(ctx context.Context, dest interface{}, query string, arg
 func (t *Tx) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
 	trace(t.logger, query, args...)
 	rows, err := t.Tx.QueryxContext(ctx, query, args...)
-	return rows, WrapError(err)
+	return rows, mapError(t.errLog, err)
 }
 
 // QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
@@ -89,5 +104,5 @@ func (t *Tx) QueryRowxContext(ctx context.Context, query string, args ...interfa
 func (t *Tx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(t.logger, query, args...)
 	res, err := t.Tx.ExecContext(ctx, query, args...)
-	return res, WrapError(err)
+	return res, mapError(t.errLog, err)
 }

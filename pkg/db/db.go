@@ -19,7 +19,8 @@ import (
 // DB is the interface for a Soft Serve database.
 type DB struct {
 	*sqlx.DB
-	logger *log.Logger
+	logger *log.Logger // query trace, set only in verbose mode
+	errLog *log.Logger // constraint violation detail, see mapError
 }
 
 // Open opens a database connection.
@@ -33,7 +34,8 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 	}
 
 	d := &DB{
-		DB: db,
+		DB:     db,
+		errLog: log.FromContext(ctx).WithPrefix("db"),
 	}
 
 	if config.IsVerbose() {
@@ -93,6 +95,7 @@ func (d *DB) Close() error {
 type Tx struct {
 	*sqlx.Tx
 	logger *log.Logger
+	errLog *log.Logger
 }
 
 // Transaction implements db.DB.
@@ -107,7 +110,7 @@ func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) erro
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	tx := &Tx{txx, d.logger}
+	tx := &Tx{txx, d.logger, d.errLog}
 	if err := fn(tx); err != nil {
 		return rollback(tx, err)
 	}

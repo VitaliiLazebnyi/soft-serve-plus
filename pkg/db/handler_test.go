@@ -1,10 +1,14 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"charm.land/log/v2"
 )
 
 // TestHandlerMapsErrors checks that DB and Tx map driver errors with
@@ -55,4 +59,33 @@ func TestHandlerMapsErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// TestHandlerLogsConstraintDetail checks that a mapped constraint violation,
+// whose message is ErrDuplicateKey's generic one, still has the driver error,
+// naming the failed constraint, written to the debug log.
+func TestHandlerLogsConstraintDetail(t *testing.T) {
+	var buf bytes.Buffer
+	l := log.New(&buf)
+	l.SetLevel(log.DebugLevel)
+	ctx := log.WithContext(context.Background(), l)
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	_, err = d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)")
+	if !errors.Is(err, ErrDuplicateKey) || err.Error() != ErrDuplicateKey.Error() {
+		t.Fatalf("duplicate insert: err = %v, want ErrDuplicateKey's message", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "constraint violation") || !strings.Contains(out, "t.n") {
+		t.Errorf("debug log = %q, want the driver error naming t.n", out)
+	}
 }
