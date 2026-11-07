@@ -350,18 +350,16 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
-	// Refuse at the limit before cloning anything. registerRepository
-	// checks again when it records the repository.
-	limited := d.repoLimited(ctx, user)
-	if limited {
-		n, err := d.countRepos(ctx, d.db, user)
-		if err != nil {
-			return nil, err
-		}
-		if n >= int64(d.cfg.MaxReposPerUser) {
-			return nil, d.errRepoLimit(user)
-		}
+	// Refuse at the limit before cloning anything, counting the user's
+	// imports still in flight, which have not registered their repository
+	// yet. registerRepository checks again when it records the repository.
+	admin := d.isServerAdmin(ctx, user)
+	limited := d.cfg.MaxReposPerUser > 0 && !admin
+	release, err := d.reserveImport(ctx, user, admin, limited)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
 	if reason := d.ImportsDisabledReason(); reason != "" {
 		d.logger.Warn("refusing import", "name", name, "reason", reason)
@@ -429,9 +427,13 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
 
-	// The import runs on the backend's context rather than the caller's so a
-	// dropped session does not leave a half-cloned repository behind.
-	importCtx := proto.WithUserContext(d.ctx, user)
+	// The import runs on the backend's context, for its values, but stops
+	// when the caller goes away, when the server shuts down, or after
+	// importTimeout, whichever comes first. A stopped import removes what it
+	// had created.
+	importCtx, cancel := context.WithTimeout(proto.WithUserContext(d.imports.ctx, user), importTimeout)
+	defer cancel()
+	defer context.AfterFunc(ctx, cancel)()
 	r, err := d.importRepository(importCtx, user, imp)
 	if err != nil {
 		// A concurrent create can take the last slot while the clone runs.
@@ -465,18 +467,7 @@ type importSpec struct {
 // the repository, and fetches LFS objects if asked. On failure nothing is
 // left behind.
 func (d *Backend) importRepository(ctx context.Context, user proto.User, imp importSpec) (_ proto.Repository, err error) {
-	copts := git.CloneOptions{
-		Bare:   true,
-		Mirror: imp.opts.Mirror,
-		Quiet:  true,
-		CommandOptions: git.CommandOptions{
-			Timeout: -1,
-			Context: ctx,
-			Envs:    imp.env,
-		},
-	}
-
-	if err := git.Clone(imp.remote, imp.path, copts); err != nil {
+	if err := cloneImport(ctx, imp); err != nil {
 		d.logger.Error("failed to clone repository", "err", err, "mirror", imp.opts.Mirror, "remote", imp.logRemote, "path", imp.path)
 		if rerr := os.RemoveAll(imp.path); rerr != nil {
 			err = errors.Join(err, rerr)
@@ -492,7 +483,9 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 
 	defer func() {
 		if err != nil {
-			if rerr := d.DeleteRepository(ctx, imp.name); rerr != nil {
+			// ctx may be what stopped the import, so the cleanup must
+			// not depend on it.
+			if rerr := d.DeleteRepository(context.WithoutCancel(ctx), imp.name); rerr != nil {
 				d.logger.Error("failed to delete repository", "err", rerr, "name", imp.name)
 			}
 		}

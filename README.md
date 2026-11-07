@@ -372,7 +372,8 @@ stats:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:
@@ -860,6 +861,8 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 ```
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
+
+An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted. The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 

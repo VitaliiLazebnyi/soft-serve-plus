@@ -32,6 +32,9 @@ type Backend struct {
 	// tracks them so shutdown can wait for them.
 	deliveries *deliveryQueue
 
+	// imports counts the imports in flight and cancels them at shutdown.
+	imports *importTracker
+
 	// adminKeys caches the parsed initial_admin_keys; see adminKeyList.
 	adminKeysMu  sync.Mutex
 	adminKeysSrc []string
@@ -55,6 +58,7 @@ func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Ba
 		logger: logger,
 
 		deliveries: newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
+		imports:    newImportTracker(ctx),
 	}
 	b.importGate = sync.OnceValue(b.checkGitVersion)
 
