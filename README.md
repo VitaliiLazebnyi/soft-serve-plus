@@ -579,6 +579,18 @@ Use the `lfs` config section to customize your Git LFS server.
 
 > **Note**: The pure-SSH transfer is disabled by default.
 
+#### Maintenance Commands
+
+`soft admin` runs maintenance against the data directory and database from
+the same configuration as `soft serve`:
+
+- `soft admin migrate`: Apply pending database migrations. `soft serve` also
+  does this on start.
+- `soft admin rollback`: Roll the database back by one migration.
+- `soft admin sync-hooks`: Write the generated git hooks of every repository
+  again, for example after moving the `soft` binary or the data directory.
+  `soft serve --sync-hooks` does the same before starting the server.
+
 ## Server Access
 
 Soft Serve Plus at its core manages your server authentication and authorization. Authentication verifies the identity of a user, while authorization determines their access rights to a repository.
