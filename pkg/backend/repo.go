@@ -376,12 +376,8 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 	// checks again when it records the repository.
 	limited := d.repoLimited(ctx, user)
 	if limited {
-		n, err := d.countRepos(ctx, d.db, user)
-		if err != nil {
+		if err := d.checkRepoLimit(ctx, user); err != nil {
 			return nil, err
-		}
-		if n >= int64(d.cfg.MaxReposPerUser) {
-			return nil, d.errRepoLimit(user)
 		}
 	}
 
