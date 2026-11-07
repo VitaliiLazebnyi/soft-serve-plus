@@ -77,14 +77,12 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	// Advertise capabilities.
 	for _, cap := range transfer.Capabilities {
 		if err := handler.WritePacketText(cap); err != nil {
-			logger.Errorf("error sending capability: %s: %v", cap, err)
-			return err
+			return lfsTransferError(ctx, fmt.Errorf("sending capability %s: %w", cap, err))
 		}
 	}
 
 	if err := handler.WriteFlush(); err != nil {
-		logger.Error("error sending flush", "err", err)
-		return err
+		return lfsTransferError(ctx, fmt.Errorf("sending flush: %w", err))
 	}
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
@@ -100,7 +98,21 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		op:      op,
 	}, &lfsLogger{logger})
 
-	return processor.ProcessCommands(op)
+	return lfsTransferError(ctx, processor.ProcessCommands(op))
+}
+
+// lfsTransferError returns err, a failure of an LFS transfer, marked as a
+// cancellation when it comes from the client going away mid-transfer, as a
+// git service run for a client that went away is. That is not a server
+// failure, and the caller logs it as such.
+func lfsTransferError(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	if ctx.Err() != nil || clientGone(err) {
+		return fmt.Errorf("%w: client went away: %w", context.Canceled, err)
+	}
+	return err
 }
 
 // Batch implements transfer.Backend.
