@@ -167,8 +167,15 @@ self-explanatory and will look like this:
 # This is the name that will be displayed in the UI.
 name: "Soft Serve Plus"
 
-# Log format to use. Valid values are "json", "logfmt", and "text".
-log_format: "text"
+# Logging configuration.
+log:
+  # Log format to use. Valid values are "json", "logfmt", and "text".
+  format: "text"
+  # Time format for the log "timestamp" field.
+  # Should be described in Golang's time format.
+  time_format: "2006-01-02 15:04:05"
+  # Path to the log file. Leave empty to write to stderr.
+  #path: ""
 
 # The SSH server configuration.
 ssh:
@@ -389,6 +396,10 @@ stats:
 # Leave empty to disable.
 #default_repo: ""
 ```
+
+Keys the server does not know, such as a misspelt `admin_only_creat`, are
+ignored. `soft serve` logs a warning naming each one and its line, so check the
+log after editing `config.yaml`.
 
 You can also use environment variables, to override these settings. All server
 settings environment variables start with `SOFT_SERVE_` followed by the setting
