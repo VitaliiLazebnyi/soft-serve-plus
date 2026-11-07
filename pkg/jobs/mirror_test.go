@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,5 +237,58 @@ func TestLimitedBuffer(t *testing.T) {
 	}
 	if got := b.String(); got != "abcd" {
 		t.Errorf("buffer = %q, want %q", got, "abcd")
+	}
+}
+
+// git keeps the query of a remote URL in its messages, and the query can hold
+// a token, so the error that gets logged must not carry it.
+func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
+	// A port nothing listens on, so the fetch fails at once.
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	r := newRepoWithRemotes(t, map[string]string{
+		"origin": "http://user:secret@" + addr + "/x.git?token=abc",
+	})
+
+	err = runMirrorGit(t.Context(), r.Path, nil, "fetch", "--prune")
+	if err == nil {
+		t.Fatal("runMirrorGit succeeded against a closed port")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, addr) {
+		t.Errorf("error %q does not include git's message about the remote", msg)
+	}
+	for _, secret := range []string{"secret", "token=abc"} {
+		if strings.Contains(msg, secret) {
+			t.Errorf("error %q leaks %q", msg, secret)
+		}
+	}
+}
+
+func TestRedactURLs(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ in, want string }{
+		{
+			in:   "fatal: unable to access 'http://127.0.0.1:9/x.git?token=abc/': Failed to connect",
+			want: "fatal: unable to access 'http://127.0.0.1:9/x.git': Failed to connect",
+		},
+		{
+			in:   "remote: see https://u:p@example.com/a?k=v and git://h/r.git",
+			want: "remote: see https://example.com/a and git://h/r.git",
+		},
+		{
+			in:   "fatal: could not read from remote repository",
+			want: "fatal: could not read from remote repository",
+		},
+	} {
+		if got := redactURLs(tt.in); got != tt.want {
+			t.Errorf("redactURLs(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }

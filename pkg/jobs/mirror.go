@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -236,12 +237,23 @@ func runMirrorGit(ctx context.Context, dir string, env []string, args ...string)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = fmt.Errorf("%w: %w", ctxErr, err)
 		}
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		if msg := redactURLs(strings.TrimSpace(stderr.String())); msg != "" {
 			err = fmt.Errorf("%w: %s", err, msg)
 		}
 		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// urlPattern matches a URL as git and remotes print it in messages: a scheme
+// and everything up to the next space or quote.
+var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
+
+// redactURLs strips the user info and query from every URL in msg. git leaves
+// out the user info of the remote URLs it prints but keeps their query, which
+// can hold a token, and the remote's own lines can hold any URL.
+func redactURLs(msg string) string {
+	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
 }
 
 // limitedBuffer keeps the first limit bytes written to it and discards the
