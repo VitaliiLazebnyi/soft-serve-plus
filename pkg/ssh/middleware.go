@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -87,11 +88,12 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 }
 
 // ContextMiddleware adds the config, backend, and logger to the session context.
+// The session context is shared by every session on the connection, so the
+// session itself is added per session by sessionContext instead.
 func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be *backend.Backend, logger *log.Logger) func(ssh.Handler) ssh.Handler {
 	return func(sh ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
 			ctx := s.Context()
-			ctx.SetValue(sshutils.ContextKeySession, s)
 			ctx.SetValue(config.ContextKey, cfg)
 			ctx.SetValue(db.ContextKey, dbx)
 			ctx.SetValue(store.ContextKey, datastore)
@@ -119,7 +121,7 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 
-		ctx := s.Context()
+		ctx := sessionContext(s)
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
@@ -173,6 +175,15 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 	}
+}
+
+// sessionContext returns a context derived from the session's context that
+// carries the session itself. The session's context belongs to the
+// connection, and a client multiplexing sessions over one connection (such as
+// OpenSSH with ControlMaster) would otherwise have each session read another
+// session's environment, e.g. its GIT_PROTOCOL.
+func sessionContext(s ssh.Session) context.Context {
+	return context.WithValue(s.Context(), sshutils.ContextKeySession, s)
 }
 
 // LoggingMiddleware logs the ssh connection and command.
