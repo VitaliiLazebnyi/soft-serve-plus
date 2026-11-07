@@ -211,7 +211,7 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if cfg := r.common.Config(); cfg != nil {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
-		r.statusbar.SetStatus("", msg.Message, "", "")
+		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
 	case FileItemsMsg, FileContentMsg:

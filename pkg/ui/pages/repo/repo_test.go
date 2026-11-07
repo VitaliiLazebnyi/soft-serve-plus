@@ -52,3 +52,32 @@ func TestHeaderVisibilityMarker(t *testing.T) {
 		}
 	}
 }
+
+// Switching to a tab with nothing to show, such as an empty Tags tab, must
+// not keep the previous tab's status value, and a copy notice must go away
+// once the status is refreshed.
+func TestStatusBarDoesNotKeepStaleValues(t *testing.T) {
+	c := common.NewCommon(context.Background(), 120, 24)
+	r := New(c, NewLog(c), NewRefs(c, git.RefsTags))
+	r.selectedRepo = fakeRepo{}
+	r.state = readyState
+
+	r.statusbar.SetStatus("repo", "abc1234 by Alice", "p. 2/3", "*")
+	r.activeTab = 1
+	r.setStatusBarInfo()
+	view := r.statusbar.View()
+	for _, stale := range []string{"abc1234", "p. 2/3"} {
+		if strings.Contains(view, stale) {
+			t.Errorf("status bar still shows %q:\n%s", stale, view)
+		}
+	}
+
+	r.Update(CopyMsg{Text: "x", Message: "Reference copied to clipboard"})
+	if view := r.statusbar.View(); !strings.Contains(view, "Reference copied to clipboard") {
+		t.Errorf("status bar lacks the copy notice:\n%s", view)
+	}
+	r.setStatusBarInfo()
+	if view := r.statusbar.View(); strings.Contains(view, "copied") {
+		t.Errorf("copy notice stuck in the status bar:\n%s", view)
+	}
+}
