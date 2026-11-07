@@ -36,6 +36,9 @@ type GitRoute struct {
 	// pending tracks repositories created by push-to-create; see
 	// pushCreates. GitController sets it.
 	pending *pushCreates
+	// limits bounds the requests the git routes serve; see requestLimits.
+	// GitController sets it.
+	limits *requestLimits
 }
 
 var _ http.Handler = GitRoute{}
@@ -57,7 +60,7 @@ func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	withAccess(g.pending, g.handler)(w, r)
+	g.limits.serve(w, r, withAccess(g.pending, g.handler))
 }
 
 var (
@@ -107,11 +110,13 @@ func withParams(next http.Handler) http.Handler {
 }
 
 // GitController is a router for git services.
-func GitController(_ context.Context, r *mux.Router) {
+func GitController(ctx context.Context, r *mux.Router) {
 	basePrefix := "/{repo:.*}"
 	pending := newPushCreates()
+	limits := newRequestLimits(config.FromContext(ctx).HTTP)
 	for _, route := range gitRoutes {
 		route.pending = pending
+		route.limits = limits
 		// NOTE: withParam must always be the outermost wrapper, otherwise the
 		// request vars will not be set.
 		r.Handle(basePrefix+route.path, withParams(route))
