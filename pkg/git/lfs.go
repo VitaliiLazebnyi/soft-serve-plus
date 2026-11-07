@@ -159,6 +159,11 @@ func (t *lfsTransfer) Download(oid string, _ transfer.Args) (io.ReadCloser, int6
 func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Args) error {
 	p := transfer.Pointer{Oid: oid}
 	if !p.IsValid() {
+		// Consume the object data so the next command is read from the
+		// right place in the stream.
+		if r != nil {
+			_, _ = io.Copy(io.Discard, r)
+		}
 		return errInvalidOid
 	}
 
