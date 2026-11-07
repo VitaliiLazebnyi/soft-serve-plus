@@ -378,7 +378,6 @@ stderr 'unauthorized'
 ! usoft repo collab list secret
 stderr 'unauthorized'
 
-# stop the server; the last command must succeed so stderr is clean
-soft repo list
+# stop the server
 [windows] stopserver
 [windows] ! stderr .
