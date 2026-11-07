@@ -3,7 +3,9 @@ package ssh
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -175,6 +177,68 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
+// redacted replaces a secret in a logged command line.
+const redacted = "[redacted]"
+
+// redactCommand returns a copy of args that is safe to log: the value of a
+// --secret (-s) flag is replaced, and any URL is reduced to its scheme and
+// host. Webhook secrets are passed with --secret, and import and webhook URLs
+// can carry a token as user info, in the path (Slack, Discord and the like)
+// or in the query.
+func redactCommand(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, len(args))
+	secretNext := false
+	for i, arg := range args {
+		switch {
+		case secretNext:
+			out[i] = redacted
+			secretNext = false
+		case arg == "--secret" || arg == "-s":
+			out[i] = arg
+			secretNext = true
+		case strings.HasPrefix(arg, "--secret="):
+			out[i] = "--secret=" + redacted
+		case strings.HasPrefix(arg, "-s") && !strings.HasPrefix(arg, "--"):
+			// -sVALUE or -s=VALUE.
+			out[i] = "-s" + redacted
+		default:
+			out[i] = redactURLArg(arg)
+		}
+	}
+	return out
+}
+
+// redactURLArg redacts a URL given as a positional argument or as a flag
+// value (--url=URL, -uURL, -u=URL). Any other argument is returned unchanged.
+func redactURLArg(arg string) string {
+	prefix, value := "", arg
+	if strings.HasPrefix(arg, "--") {
+		if k, v, ok := strings.Cut(arg, "="); ok {
+			prefix, value = k+"=", v
+		}
+	} else if strings.HasPrefix(arg, "-") && len(arg) > 2 {
+		prefix, value = arg[:2], arg[2:]
+		if strings.HasPrefix(value, "=") {
+			prefix, value = prefix+"=", value[1:]
+		}
+	}
+	if !strings.Contains(value, "://") {
+		return arg
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return prefix + redacted
+	}
+	r := u.Scheme + "://" + u.Host
+	if u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		r += "/" + redacted
+	}
+	return prefix + r
+}
+
 // LoggingMiddleware logs the ssh connection and command.
 func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
@@ -189,7 +253,7 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 			"addr",
 			addr,
 			"cmd",
-			s.Command(),
+			redactCommand(s.Command()),
 		}
 
 		if user != nil {
