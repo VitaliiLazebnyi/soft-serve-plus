@@ -316,6 +316,17 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				}
 			}
 		}
+	case common.ErrorMsg:
+		// A listing or blame that failed to load never sends its result, so
+		// leave the loading view rather than spin until the next reload.
+		if f.activeView == filesViewLoading {
+			if f.blameView {
+				f.blameView = false
+				f.activeView = filesViewContent
+			} else {
+				f.activeView = filesViewFiles
+			}
+		}
 	case EmptyRepoMsg:
 		f.ref = nil
 		f.path = ""
