@@ -20,5 +20,19 @@ git -C repo-empty add README.md
 git -C repo-empty commit -m 'first'
 git -C repo-empty push origin HEAD
 
+# a push that leaves no branch succeeds: a tag-only push that creates a repo
+git -C repo-empty tag v1
+git -C repo-empty push ssh://localhost:$SSH_PORT/repo-tags v1
+soft repo tag list repo-tags
+stdout 'v1'
+soft repo branch list repo-tags
+! stdout .
+
+# and another tag-only push to the repo that still has no branch
+git -C repo-empty tag v2
+git -C repo-empty push ssh://localhost:$SSH_PORT/repo-tags v2
+soft repo tag list repo-tags
+stdout 'v2'
+
 # stop the server
 [windows] stopserver

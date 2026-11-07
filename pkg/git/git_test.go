@@ -3,7 +3,6 @@ package git
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -91,7 +90,7 @@ func TestEnsureDefaultBranchEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := EnsureDefaultBranch(context.TODO(), r.Path); !errors.Is(err, ErrNoBranches) {
-		t.Errorf("EnsureDefaultBranch(%q) => %v, want ErrNoBranches", tmp, err)
+	if err := EnsureDefaultBranch(context.TODO(), r.Path); err != nil {
+		t.Errorf("EnsureDefaultBranch(%q) => %v, want nil error", tmp, err)
 	}
 }
