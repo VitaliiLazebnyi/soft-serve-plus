@@ -138,6 +138,7 @@ git:
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
+  # Independently of it, a client has 10 seconds to send its request.
   idle_timeout: {{ .Git.IdleTimeout }}
 
   # The maximum number of concurrent connections.

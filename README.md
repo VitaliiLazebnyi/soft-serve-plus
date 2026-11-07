@@ -240,6 +240,7 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # Independently of it, a client has 10 seconds to send its request.
   idle_timeout: 3
 
   # The maximum number of concurrent connections.
