@@ -65,6 +65,19 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
+	// MaxConnections is the maximum number of SSH connections open at once.
+	// Zero means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
+	// MaxConnectionsPerIP is the maximum number of SSH connections open at
+	// once from one client address (one IPv4 address, or one IPv6 /64).
+	// Zero means no limit.
+	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
+
+	// MaxSessions is the maximum number of sessions open at once on one SSH
+	// connection, like OpenSSH's MaxSessions. Zero means no limit.
+	MaxSessions int `env:"MAX_SESSIONS" yaml:"max_sessions"`
+
 	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
 	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
 	KexAlgorithms []string `env:"KEX_ALGORITHMS" yaml:"kex_algorithms"`
@@ -350,6 +363,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS=%d", c.SSH.MaxConnections),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=%d", c.SSH.MaxConnectionsPerIP),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_SESSIONS=%d", c.SSH.MaxSessions),
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
@@ -555,6 +571,9 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
+			MaxConnections:              256,
+			MaxConnectionsPerIP:         32,
+			MaxSessions:                 10,
 		},
 		Git: GitConfig{
 			Enabled:        true,
@@ -666,6 +685,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ssh.client_allowed_hosts: %w", err)
 	}
 	c.SSH.allowedHosts = allowed
+
+	if c.SSH.MaxConnections < 0 || c.SSH.MaxConnectionsPerIP < 0 || c.SSH.MaxSessions < 0 {
+		return fmt.Errorf("ssh max_connections, max_connections_per_ip and max_sessions must not be negative")
+	}
 
 	if err := c.SSH.validateAlgorithms(); err != nil {
 		return err

@@ -221,6 +221,17 @@ ssh:
   # The number of seconds a connection can be idle before it is closed.
   idle_timeout: 120
 
+  # The maximum number of SSH connections open at once, in total and from
+  # one client address (one IPv4 address or one IPv6 /64). Connections over
+  # a limit are closed straight away. A value of 0 means no limit.
+  max_connections: 256
+  max_connections_per_ip: 32
+
+  # The maximum number of sessions open at once on one SSH connection, like
+  # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
+  # value of 0 means no limit.
+  max_sessions: 10
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the

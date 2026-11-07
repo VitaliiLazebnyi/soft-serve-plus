@@ -112,6 +112,13 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
 	}
 
+	// Limit the connections open at once, in total and per client address,
+	// and the session channels each connection may hold.
+	s.srv.ConnCallback = connCallback(newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP), logger)
+	s.srv.ChannelHandlers = map[string]ssh.ChannelHandler{
+		"session": limitSessions(ssh.DefaultSessionHandler, cfg.SSH.MaxSessions),
+	}
+
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); err != nil && os.IsNotExist(err) {
 		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
