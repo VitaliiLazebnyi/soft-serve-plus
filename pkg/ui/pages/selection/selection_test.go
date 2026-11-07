@@ -62,6 +62,12 @@ func press(s *Selection, k rune) tea.Cmd {
 // The refresh key reloads the repository list, so a repository created
 // after the page opened shows up, and the highlighted repository stays
 // highlighted.
+//
+// These tests rely on Init and the refresh key loading the list synchronously.
+// If the load moves into a tea.Cmd (as the listing fan-out change does with
+// loadReposCmd/ReposMsg), the highlight-keeping setItems call moves into the
+// ReposMsg handler, and the tests must run the returned command and feed its
+// ReposMsg back to Update before checking the list.
 func TestSelectionRefreshKey(t *testing.T) {
 	ctx, be := newTestBackend(t)
 	for _, name := range []string{"bravo", "delta"} {
