@@ -3,10 +3,12 @@ package repo
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
 // openRepo is a proto.Repository that only opens a repository on disk.
@@ -70,5 +72,65 @@ func TestDefaultRef(t *testing.T) {
 	ref, err = defaultRef(r)
 	if err != nil || ref == nil || ref.Name().Short() != "main" {
 		t.Fatalf("defaultRef with a dangling HEAD and a main branch = %v, %v; want main", ref, err)
+	}
+}
+
+// The Tags pane lists tags with their commits and tag subjects, and does not
+// list them again when the user switches branches.
+func TestRefsLoadsOncePerRepo(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "-a", "-m", "release notes", "v1")
+	gitRun(t, dir, "tag", "v0")
+
+	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	repo := openRepo{path: dir}
+	r.Update(RepoMsg(repo))
+
+	ref, ok := UpdateRefCmd(repo)().(RefMsg)
+	if !ok {
+		t.Fatal("UpdateRefCmd did not return a RefMsg")
+	}
+	r.Update(ref)
+	if !r.isLoading || !r.loaded {
+		t.Fatal("the first RefMsg did not load the tags")
+	}
+	msg, ok := r.updateItemsCmd().(RefItemsMsg)
+	if !ok {
+		t.Fatal("updateItemsCmd did not return RefItemsMsg")
+	}
+	if len(msg.items) != 2 {
+		t.Fatalf("updateItemsCmd listed %d tags; want 2", len(msg.items))
+	}
+	for _, it := range msg.items {
+		item := it.(RefItem)
+		if item.CommitID != ref.ID {
+			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.ID)
+		}
+		if want := map[string]string{"v1": "release notes", "v0": ""}[item.Short()]; item.TagSubject != want {
+			t.Errorf("tag %s has subject %q; want %q", item.Short(), item.TagSubject, want)
+		}
+	}
+	r.SetSize(80, 10)
+	r.Update(msg)
+	if r.isLoading {
+		t.Fatal("the tags are still loading after RefItemsMsg")
+	}
+	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.ID[:7]) {
+		t.Errorf("the Tags pane %q lacks the tag subject or the commit", view)
+	}
+
+	// Switching branches leaves the listed tags alone.
+	r.Update(ref)
+	if r.isLoading {
+		t.Fatal("a branch switch listed the tags again")
+	}
+
+	// Opening the repository again lists them again.
+	r.Update(RepoMsg(repo))
+	r.Update(ref)
+	if !r.isLoading {
+		t.Fatal("reopening the repository did not list the tags again")
 	}
 }
