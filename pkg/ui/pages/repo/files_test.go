@@ -16,6 +16,13 @@ import (
 // A file with a non-ASCII name, which git C-quotes in ls-tree output, must be
 // listed, shown and blamed under its real name.
 func TestFilesNonASCIIName(t *testing.T) {
+	// Pin core.quotePath=true, git's default, for every git process the test
+	// starts, including the ls-tree that git-module runs, so the name is
+	// C-quoted even on a machine whose config sets core.quotePath=false.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.quotePath")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+
 	const dirName, fileName = "dossier é", "café.txt"
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)

@@ -10,20 +10,29 @@ import (
 	"testing"
 )
 
+// pinQuotePath sets core.quotePath=true, git's default, for every git process
+// the test starts, including the ls-tree that git-module runs, so names are
+// C-quoted even on a machine whose config sets core.quotePath=false. It uses
+// t.Setenv, so the calling test must not be parallel.
+func pinQuotePath(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.quotePath")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+}
+
 // setupQuotedNamesRepo creates a repository whose file names git C-quotes in
 // ls-tree output. The tree is built with plumbing so that names which are
 // not valid on every file system (quotes, backslashes, tabs) still work,
 // except on Windows, where git refuses such paths (core.protectNTFS).
 func setupQuotedNamesRepo(t *testing.T, paths ...string) (*Repository, *Reference) {
 	t.Helper()
+	pinQuotePath(t)
 	ctx := context.Background()
 	repoPath := filepath.Join(t.TempDir(), "repo")
 
 	run := func(stdin string, args ...string) string {
 		t.Helper()
-		// core.quotePath is pinned so the test sees git's default quoting
-		// whatever the machine's config says.
-		args = append([]string{"-c", "core.quotePath=true"}, args...)
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = repoPath
 		cmd.Stdin = strings.NewReader(stdin)
