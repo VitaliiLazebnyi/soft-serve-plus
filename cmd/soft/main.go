@@ -114,6 +114,9 @@ func main() {
 	logger, f, err := logr.NewLogger(cfg)
 	if err != nil {
 		log.Errorf("failed to create logger: %v", err)
+		// NewLogger returns a nil logger on error; keep logging to
+		// stderr instead of installing a nil default logger.
+		logger = log.Default()
 	}
 
 	ctx = log.WithContext(ctx, logger)
