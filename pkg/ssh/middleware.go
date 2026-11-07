@@ -3,7 +3,6 @@ package ssh
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"charm.land/log/v2"
@@ -57,7 +56,6 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 		}
 
 		ac := be.AllowKeyless(ctx)
-		publicKeyCounter.WithLabelValues(strconv.FormatBool(ac || pk != nil)).Inc()
 		if !ac && pk == nil {
 			wish.Fatalln(s, ErrPermissionDenied)
 			return

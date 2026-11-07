@@ -482,9 +482,9 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if service == git.ReceivePackService {
-		gitHttpReceiveCounter.WithLabelValues(repoName)
-	}
+	// Fetches and pushes are counted on their ref advertisement, in
+	// getInfoRefs, not here: one fetch may send several upload-pack RPCs, and
+	// one push may send a probe RPC before the real one.
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Connection", "Keep-Alive")
@@ -565,11 +565,9 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cfg := config.FromContext(ctx)
-	dir, repoName, file := mux.Vars(r)["dir"], mux.Vars(r)["repo"], mux.Vars(r)["file"]
+	dir, repoName := mux.Vars(r)["dir"], mux.Vars(r)["repo"]
 	service := git.Service(mux.Vars(r)["service"])
 	protocol := r.Header.Get("Git-Protocol")
-
-	gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
 
 	if service != "" && (service == git.UploadPackService || service == git.ReceivePackService) {
 		// Smart HTTP
@@ -608,6 +606,20 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 		if err := service.Handler(ctx, cmd); err != nil {
 			renderNotFound(w, r)
 			return
+		}
+
+		// A fetch or push asks for its advertisement once, so count it here
+		// rather than per RPC. A fetch may send several upload-pack RPCs
+		// (ls-refs and fetch in protocol v2, one per negotiation round). A
+		// push whose pack is larger than http.postBuffer first sends a probe
+		// receive-pack RPC holding only a flush packet, then the real one.
+		// A push with nothing to send sends no RPC, and is still counted,
+		// as over SSH.
+		switch service {
+		case git.UploadPackService:
+			gitHttpUploadCounter.WithLabelValues(repoName, mux.Vars(r)["file"]).Inc()
+		case git.ReceivePackService:
+			gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
 		}
 
 		hdrNocache(w)
