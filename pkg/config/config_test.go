@@ -219,7 +219,8 @@ func TestValidateDoesNotDuplicatePublicURLOrigin(t *testing.T) {
 
 // The public URL is allowed as an origin wherever it was set last: an
 // environment override of it does not leave the config file's URL, or the
-// default one, allowed too. An empty public URL allows no empty origin.
+// default one, allowed too. An empty public URL adds no empty origin; the
+// web server then rejects every origin (see TestCORSHandlerOrigins).
 func TestCORSAllowedOriginsFollowPublicURL(t *testing.T) {
 	is := is.New(t)
 	t.Setenv("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS", "")

@@ -31,10 +31,25 @@ func NewRouter(ctx context.Context) http.Handler {
 
 	cfg := config.FromContext(ctx)
 
-	h = handlers.CORS(handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
-		handlers.AllowedOrigins(cfg.CORSAllowedOrigins()),
-		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
-	)(h)
+	h = corsHandler(cfg)(h)
 
 	return h
+}
+
+// corsHandler returns the CORS middleware for cfg's allowed headers, origins
+// and methods.
+func corsHandler(cfg *config.Config) func(http.Handler) http.Handler {
+	opts := []handlers.CORSOption{
+		handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
+		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
+	}
+	if origins := cfg.CORSAllowedOrigins(); len(origins) > 0 {
+		opts = append(opts, handlers.AllowedOrigins(origins))
+	} else {
+		// gorilla/handlers allows every origin when the list is empty, so
+		// with no public URL and no allowed origins, reject them all
+		// explicitly. Use "*" in allowed_origins to allow every origin.
+		opts = append(opts, handlers.AllowedOriginValidator(func(string) bool { return false }))
+	}
+	return handlers.CORS(opts...)
 }

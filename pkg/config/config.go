@@ -721,7 +721,8 @@ func (c *Config) Validate() error {
 
 // CORSAllowedOrigins returns the origins allowed to make cross-origin
 // requests: the HTTP public URL, which is always allowed, followed by the
-// configured allowed origins.
+// configured allowed origins. The list is empty when neither is set, which
+// means no origin is allowed, not every one.
 func (c *Config) CORSAllowedOrigins() []string {
 	origins := slices.Clone(c.HTTP.CORS.AllowedOrigins)
 	if c.HTTP.PublicURL != "" && !slices.Contains(origins, c.HTTP.PublicURL) {
