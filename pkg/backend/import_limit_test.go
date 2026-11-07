@@ -276,3 +276,41 @@ func TestReserveImportRepoLimitConcurrent(t *testing.T) {
 	is.Equal(ok, 1)
 	is.Equal(be.imports.perUser[alice.ID()], 1)
 }
+
+// An import stopped just after its repository was committed must not report
+// failure while leaving that repository behind: registering runs to the
+// end, and the import either succeeds or removes what it created.
+func TestImportStoppedDuringRegister(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
+	defer cancel()
+	admin, err := be.User(ctx, "admin")
+	is.NoErr(err)
+
+	src := t.TempDir()
+	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+
+	name := "registered"
+	imp := importSpec{
+		name:      name,
+		path:      be.repoPath(name),
+		remote:    src,
+		logRemote: src,
+	}
+	is.NoErr(claimRepoPath(imp.path))
+	be.afterRegister = cancel
+	defer func() { be.afterRegister = nil }()
+
+	_, err = be.importRepository(ctx, admin, imp)
+	if err != nil {
+		assertNothingLeft(t, be, name)
+		return
+	}
+	_, err = be.Repository(context.Background(), name)
+	is.NoErr(err)
+	_, err = os.Stat(imp.path)
+	is.NoErr(err)
+}

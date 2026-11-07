@@ -35,6 +35,10 @@ type Backend struct {
 	// imports counts the imports in flight and cancels them at shutdown.
 	imports *importTracker
 
+	// afterRegister, when a test sets it, runs once registerRepository has
+	// committed a new repository.
+	afterRegister func()
+
 	// adminKeys caches the parsed initial_admin_keys; see adminKeyList.
 	adminKeysMu  sync.Mutex
 	adminKeysSrc []string

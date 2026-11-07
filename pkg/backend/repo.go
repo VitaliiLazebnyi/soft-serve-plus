@@ -311,6 +311,10 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 		return nil, err
 	}
 
+	if d.afterRegister != nil {
+		d.afterRegister()
+	}
+
 	return d.Repository(ctx, name)
 }
 
@@ -475,7 +479,21 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 		return nil, err
 	}
 
-	r, err := d.registerRepository(ctx, imp.name, user, imp.opts, imp.limited)
+	// An import stopped while the clone finished is not registered.
+	if err := ctx.Err(); err != nil {
+		d.logger.Error("import stopped after clone", "err", err, "name", imp.name)
+		if rerr := os.RemoveAll(imp.path); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+		return nil, err
+	}
+
+	// Registering is a short database and filesystem step, run to the end
+	// even if ctx is cancelled meanwhile: stopping it once the row is
+	// committed would leave a registered repository behind with no cleanup
+	// to remove it. A stopped import still ends at the LFS fetch below,
+	// whose failure removes the repository.
+	r, err := d.registerRepository(context.WithoutCancel(ctx), imp.name, user, imp.opts, imp.limited)
 	if err != nil {
 		d.logger.Error("failed to create repository", "err", err, "name", imp.name)
 		return nil, err
