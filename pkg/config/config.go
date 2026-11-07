@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -200,6 +203,9 @@ type LFSConfig struct {
 
 // JobsConfig is the configuration for cron jobs.
 type JobsConfig struct {
+	// MirrorPull is the cron spec for syncing pull mirrors. An empty value
+	// in the config file disables mirror syncing. An empty environment
+	// variable leaves the config file's value in place.
 	MirrorPull string `env:"MIRROR_PULL" yaml:"mirror_pull"`
 }
 
@@ -688,13 +694,17 @@ func (c *Config) Validate() error {
 		c.HTTP.TLSCertPath = filepath.Join(c.DataPath, c.HTTP.TLSCertPath)
 	}
 
-	if strings.HasPrefix(c.DB.Driver, "sqlite") && !filepath.IsAbs(c.DB.DataSource) {
-		c.DB.DataSource = filepath.Join(c.DataPath, c.DB.DataSource)
+	if strings.HasPrefix(c.DB.Driver, "sqlite") {
+		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
+	}
+
+	if c.Log.Path != "" && !filepath.IsAbs(c.Log.Path) {
+		c.Log.Path = filepath.Join(c.DataPath, c.Log.Path)
 	}
 
 	// Validate keys
 	pks := make([]string, 0)
-	keys := parseAuthKeys(c.InitialAdminKeys)
+	keys := parseAuthKeys(c.InitialAdminKeys, c.DataPath)
 	for _, key := range keys.pks {
 		ak := sshutils.MarshalAuthorizedKey(key)
 		pks = append(pks, ak)
@@ -725,8 +735,10 @@ type authKeys struct {
 
 // parseAuthKeys parses authorized keys from either file paths or string
 // authorized_keys. Blank entries and entries starting with "#" are comments
-// and are skipped.
-func parseAuthKeys(aks []string) authKeys {
+// and are skipped. A relative key file path is read from dataPath, like the
+// other relative paths in the config; when no file of that name is there,
+// it is read from the working directory as before.
+func parseAuthKeys(aks []string, dataPath string) authKeys {
 	var r authKeys
 	exist := make(map[string]struct{}, 0)
 	r.pks = make([]ssh.PublicKey, 0)
@@ -735,7 +747,7 @@ func parseAuthKeys(aks []string) authKeys {
 		if key == "" || strings.HasPrefix(key, "#") {
 			continue
 		}
-		if bts, err := os.ReadFile(key); err == nil {
+		if bts, err := readKeyFile(key, dataPath); err == nil {
 			// key is a file in authorized_keys format: one key per line.
 			var found bool
 			var bad []string
@@ -847,6 +859,59 @@ func looksLikePath(s string) bool {
 	return strings.ContainsAny(s, `/\`) || filepath.Ext(s) != ""
 }
 
+// readKeyFile reads the admin key file named by path. A relative path is
+// looked up in dataPath first, then, if no such file exists there, in the
+// working directory, which is where earlier versions looked.
+func readKeyFile(path, dataPath string) ([]byte, error) {
+	if dataPath != "" && !filepath.IsAbs(path) {
+		bts, err := os.ReadFile(filepath.Join(dataPath, path))
+		if !errors.Is(err, fs.ErrNotExist) {
+			return bts, err
+		}
+	}
+	return os.ReadFile(path)
+}
+
+// resolveSQLiteDataSource makes a relative SQLite database path in dsn
+// relative to dataPath. An in-memory database (":memory:", or a "file:" URI
+// naming ":memory:" or using mode=memory) is left alone, as is a "file:" URI
+// that already holds an absolute path or an authority ("file://..."). A
+// relative "file:" URI keeps its form and query, with the data path put in
+// front of its path.
+func resolveSQLiteDataSource(dataPath, dsn string) string {
+	name, query, hasQuery := strings.Cut(dsn, "?")
+	rest, isURI := strings.CutPrefix(name, "file:")
+	if !isURI {
+		if name == ":memory:" || filepath.IsAbs(dsn) {
+			return dsn
+		}
+		return filepath.Join(dataPath, dsn)
+	}
+
+	if rest == "" || rest == ":memory:" || strings.HasPrefix(rest, "/") || filepath.IsAbs(rest) {
+		return dsn
+	}
+	if hasQuery {
+		if q, err := url.ParseQuery(query); err == nil && q.Get("mode") == "memory" {
+			return dsn
+		}
+	}
+
+	// The data path goes into a URI, so escape the characters SQLite would
+	// read as the start of the query or fragment, or as an escape. The
+	// path from the URI is already in URI form and is kept as written.
+	base := (&url.URL{Path: filepath.ToSlash(dataPath)}).EscapedPath()
+	if !strings.HasPrefix(base, "/") {
+		// A Windows path such as C:/data: SQLite wants file:///C:/data.
+		base = "///" + base
+	}
+	out := "file:" + strings.TrimSuffix(base, "/") + "/" + rest
+	if hasQuery {
+		out += "?" + query
+	}
+	return out
+}
+
 // addToSet adds items to set, creating it if needed.
 func addToSet(set map[string]struct{}, items []string) map[string]struct{} {
 	if len(items) == 0 {
@@ -863,7 +928,7 @@ func addToSet(set map[string]struct{}, items []string) map[string]struct{} {
 
 // AdminKeys returns the server admin keys.
 func (c *Config) AdminKeys() []ssh.PublicKey {
-	return parseAuthKeys(c.InitialAdminKeys).pks
+	return parseAuthKeys(c.InitialAdminKeys, c.DataPath).pks
 }
 
 // UnreadableAdminKeyFiles returns, sorted and without duplicates, the
@@ -871,7 +936,7 @@ func (c *Config) AdminKeys() []ssh.PublicKey {
 // holds no key, such as a secret that is not mounted yet. Such an entry may
 // stand for a key that is still wanted. Paths are not key material.
 func (c *Config) UnreadableAdminKeyFiles() []string {
-	set := addToSet(maps.Clone(c.unreadableAdminKeyFiles), parseAuthKeys(c.InitialAdminKeys).unreadable)
+	set := addToSet(maps.Clone(c.unreadableAdminKeyFiles), parseAuthKeys(c.InitialAdminKeys, c.DataPath).unreadable)
 	return slices.Sorted(maps.Keys(set))
 }
 
@@ -879,7 +944,7 @@ func (c *Config) UnreadableAdminKeyFiles() []string {
 // ignored because they are neither a key nor a file path, such as a mistyped
 // key. The entries are not returned, as they may hold key material.
 func (c *Config) IgnoredAdminKeys() int {
-	return len(addToSet(maps.Clone(c.ignoredAdminKeys), parseAuthKeys(c.InitialAdminKeys).ignored))
+	return len(addToSet(maps.Clone(c.ignoredAdminKeys), parseAuthKeys(c.InitialAdminKeys, c.DataPath).ignored))
 }
 
 func init() {

@@ -60,13 +60,10 @@ func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ss
 	return remotes, nil
 }
 
-// Spec derives the spec used for pull mirrors and implements Runner.
+// Spec derives the spec used for pull mirrors and implements Runner. An
+// empty jobs.mirror_pull disables mirror syncing.
 func (m mirrorPull) Spec(ctx context.Context) string {
-	cfg := config.FromContext(ctx)
-	if cfg.Jobs.MirrorPull != "" {
-		return cfg.Jobs.MirrorPull
-	}
-	return "@every 10m"
+	return config.FromContext(ctx).Jobs.MirrorPull
 }
 
 // Func runs the (pull) mirror job task and implements Runner.

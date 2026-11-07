@@ -297,6 +297,9 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # Make sure foreign key support is enabled when using SQLite.
+  # A relative SQLite path, including the path in a relative "file:" URI, is
+  # relative to the data directory. ":memory:" and in-memory "file:" URIs
+  # are used as written.
   data_source: "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
@@ -319,6 +322,9 @@ lfs:
 
 # Cron job configuration
 jobs:
+  # How often to sync pull mirrors, as a cron spec such as "@every 10m" or
+  # "0 * * * *". Set to "" to disable mirror syncing. An empty
+  # SOFT_SERVE_JOBS_MIRROR_PULL does not disable it; it keeps this value.
   mirror_pull: "@every 10m"
 
 # Repository webhook configuration.
@@ -348,6 +354,8 @@ stats:
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
 # or get an HTTP LFS token (git-lfs-authenticate): both need an account.
+# An entry may also be the path to a file in authorized_keys format; a
+# relative path is relative to the data directory.
 #initial_admin_keys:
 #  - "ssh-rsa AAAAB3NzaC1yc2..."
 

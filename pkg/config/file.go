@@ -21,7 +21,8 @@ log:
   # Time format for the log "timestamp" field.
   # Should be described in Golang's time format.
   time_format: {{ q .Log.TimeFormat }}
-  # Path to the log file. Leave empty to write to stderr.
+  # Path to the log file. Leave empty to write to stderr. A relative path
+  # is relative to the data directory.
   #path: {{ q .Log.Path }}
 
 # The SSH server configuration.
@@ -204,6 +205,9 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # Make sure foreign key support is enabled when using SQLite.
+  # A relative SQLite path, including the path in a relative "file:" URI, is
+  # relative to the data directory. ":memory:" and in-memory "file:" URIs
+  # are used as written.
   data_source: {{ q .DB.DataSource }}
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
@@ -226,6 +230,9 @@ lfs:
 
 # Cron job configuration
 jobs:
+  # How often to sync pull mirrors, as a cron spec such as "@every 10m" or
+  # "0 * * * *". Set to "" to disable mirror syncing. An empty
+  # SOFT_SERVE_JOBS_MIRROR_PULL does not disable it; it keeps this value.
   mirror_pull: {{ q .Jobs.MirrorPull }}
 
 # Repository webhook configuration.
@@ -252,9 +259,22 @@ webhook:
     # - "127.0.0.1:8080"
 {{- end }}
 
-# Additional admin keys.
+# Additional admin keys. An entry may also be the path to a file in
+# authorized_keys format; a relative path is relative to the data directory.
 #initial_admin_keys:
 #  - "ssh-rsa AAAAB3NzaC1yc2..."
+
+# Override the anon-access and allow-keyless settings (normally managed at
+# runtime via the "settings" command and stored in the database). If set,
+# these always take precedence over the database, for as long as they remain
+# set -- not just on first run. This is intended for scripted, non-production
+# bootstrapping (e.g. spinning up a throwaway server for local dev tooling),
+# not for production use. "admin-access" with allow_keyless: true gives
+# anyone who can reach the server full admin access.
+# Valid anon_access values are "no-access", "read-only", "read-write" and
+# "admin-access".
+#anon_access: "read-only"
+#allow_keyless: true
 
 # Only server admins (admin accounts or initial_admin_keys) may create
 # repositories. Registered non-admins and anonymous users cannot create or

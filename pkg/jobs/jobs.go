@@ -13,6 +13,7 @@ type Job struct {
 
 // Runner is a job runner.
 type Runner interface {
+	// Spec returns the job's cron spec. An empty spec disables the job.
 	Spec(context.Context) string
 	Func(context.Context) func()
 }
