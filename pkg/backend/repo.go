@@ -1230,6 +1230,21 @@ func (d *Backend) repoPathExists(name string) bool {
 	return err == nil
 }
 
+// repoRowExists reports whether the database holds a row for the
+// repository. It fails closed: an error other than not-found counts as a
+// row, so a lookup failure never makes a taken name look free.
+func (d *Backend) repoRowExists(ctx context.Context, name string) bool {
+	_, err := d.store.GetRepoByName(ctx, d.db, name)
+	if err == nil {
+		return true
+	}
+	if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		return false
+	}
+	d.logger.Error("failed to look up repository row", "repo", name, "err", err)
+	return true
+}
+
 var _ proto.Repository = (*repo)(nil)
 
 // repo is a Git repository with metadata stored in a SQLite database.
