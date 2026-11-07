@@ -50,6 +50,9 @@ type lfsActionAuth struct {
 // client asks for a new batch before it runs out. A Basic password or an
 // access token is not echoed back in the response body; git-lfs sends the
 // credentials it used for the batch to the object URLs on the same server.
+// When the client reached the server under a different host than the one in
+// the HTTP public URL, git-lfs has to find credentials for the public-URL
+// host itself (for example from a credential helper, or by prompting).
 func lfsActionAuthFor(r *http.Request, now time.Time) lfsActionAuth {
 	scheme, credential, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "bearer") || credential == "" {
