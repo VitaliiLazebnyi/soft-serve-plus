@@ -152,3 +152,46 @@ func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
 		t.Error("the handler returned while the client's input was still being read")
 	}
 }
+
+// resettingStallingReader is a deadlineStallingReader that, like the git
+// daemon's connection, sets its own deadline before a read: the first
+// deadline in the past is replaced before it ends the read.
+type resettingStallingReader struct {
+	*stallingReader
+	deadlines atomic.Int32
+}
+
+func (r *resettingStallingReader) SetReadDeadline(t time.Time) error {
+	if !t.After(time.Now()) && r.deadlines.Add(1) > 1 {
+		r.stopped.Store(true)
+		r.close()
+	}
+	return nil
+}
+
+// A read deadline that the input replaces with its own before the read
+// blocks again must not leave the handler waiting: the deadline is set
+// again until the copy ends.
+func TestGitServiceRearmsStdinDeadline(t *testing.T) {
+	r := &resettingStallingReader{stallingReader: newStallingReader()}
+	t.Cleanup(r.close)
+
+	dir := initBare(t)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdin: r,
+			Dir:   dir,
+		})
+	}()
+	if err := waitErr(t, errc); err == nil {
+		t.Fatal("upload-pack accepted garbage input")
+	}
+
+	if !r.stopped.Load() {
+		t.Error("the read of the client's input was not ended by a read deadline")
+	}
+	if r.reading.Load() {
+		t.Error("the handler returned while the client's input was still being read")
+	}
+}

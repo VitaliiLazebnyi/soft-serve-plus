@@ -222,6 +222,10 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	return nil
 }
 
+// stdinInterruptInterval is how often joinStdin sets a read deadline in the
+// past on the client's input until the copy of it ends.
+const stdinInterruptInterval = 10 * time.Millisecond
+
 // readDeadliner is an input whose blocked reads can be ended by a read
 // deadline, such as a network connection.
 type readDeadliner interface {
@@ -235,7 +239,8 @@ type readDeadliner interface {
 //
 // An input that takes a read deadline, such as the git daemon's connection,
 // is given one in the past to end the read now, and the copy is waited for.
-// The input can no longer be read after that, which does not matter as git
+// The deadline is set again until the copy ends, in case the input set its
+// own deadline for the read in the meantime. The input can no longer be read after that, which does not matter as git
 // is gone and the caller only closes it.
 //
 // An input that cannot be interrupted is waited for only when the command
@@ -257,11 +262,22 @@ func joinStdin(scmd ServiceCommand, done <-chan struct{}, interrupted *atomic.Bo
 	}
 	if d, ok := scmd.Stdin.(readDeadliner); ok {
 		interrupted.Store(true)
-		if err := d.SetReadDeadline(time.Now()); err != nil {
-			return
+		// The input can set its own deadline before each read, as the git
+		// daemon's connection does for its idle timeout. One that does so
+		// right after this deadline was set replaces it, and the read
+		// blocks again, so the deadline is set again until the copy ends.
+		ticker := time.NewTicker(stdinInterruptInterval)
+		defer ticker.Stop()
+		for {
+			if err := d.SetReadDeadline(time.Now()); err != nil {
+				return
+			}
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
 		}
-		<-done
-		return
 	}
 	if !scmd.JoinStdin {
 		return
