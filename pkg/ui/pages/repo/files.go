@@ -406,7 +406,7 @@ func (f *Files) updateFilesCmd() tea.Msg {
 	if err != nil {
 		return common.ErrorCmd(err)
 	}
-	ents, err := t.Entries()
+	ents, err := t.EntriesWithSizes()
 	if err != nil {
 		return common.ErrorCmd(err)
 	}
