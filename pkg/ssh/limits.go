@@ -8,6 +8,8 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -64,17 +66,32 @@ func clientKey(addr net.Addr) (netip.Prefix, bool) {
 	return p, true
 }
 
+// Reasons a connection is refused, used as the label of
+// refusedConnectionCounter. The label only ever takes these fixed values,
+// never anything the client sends.
+const (
+	refusedTotal = "max_connections"
+	refusedPerIP = "max_connections_per_ip"
+)
+
+var refusedConnectionCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "soft_serve",
+	Subsystem: "ssh",
+	Name:      "refused_connections_total",
+	Help:      "The total number of SSH connections refused by a connection limit",
+}, []string{"limit"})
+
 // acquire reserves a place for a connection from addr. It returns a release
-// function, or nil when a limit is reached.
-func (l *connLimiter) acquire(addr net.Addr) func() {
+// function, or nil and the limit that was reached.
+func (l *connLimiter) acquire(addr net.Addr) (func(), string) {
 	key, hasKey := clientKey(addr)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.max > 0 && l.total >= l.max {
-		return nil
+		return nil, refusedTotal
 	}
 	if hasKey && l.maxPerIP > 0 && l.perIP[key] >= l.maxPerIP {
-		return nil
+		return nil, refusedPerIP
 	}
 	l.total++
 	if hasKey {
@@ -94,7 +111,7 @@ func (l *connLimiter) acquire(addr net.Addr) func() {
 				}
 			}
 		})
-	}
+	}, ""
 }
 
 // limitedConn releases its place in the connection limiter when closed.
@@ -117,9 +134,13 @@ type sessionCounterKey struct{}
 // limits and sets up the per-connection session counter.
 func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 	return func(ctx ssh.Context, conn net.Conn) net.Conn {
-		release := l.acquire(conn.RemoteAddr())
+		release, limit := l.acquire(conn.RemoteAddr())
 		if release == nil {
-			logger.Info("refusing connection: too many connections", "remote-addr", conn.RemoteAddr())
+			// A flood of connections is what these limits stop, so a
+			// refusal is counted, and logged only at debug level, to keep
+			// the flood out of the log.
+			refusedConnectionCounter.WithLabelValues(limit).Inc()
+			logger.Debug("refusing connection: too many connections", "limit", limit, "remote-addr", conn.RemoteAddr())
 			return nil
 		}
 		ctx.SetValue(sessionCounterKey{}, new(atomic.Int64))

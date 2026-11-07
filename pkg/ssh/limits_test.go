@@ -16,29 +16,51 @@ func tcpAddr(s string) net.Addr {
 	return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s))
 }
 
+// acquire calls l.acquire and drops the reason.
+func acquire(l *connLimiter, addr net.Addr) func() {
+	release, _ := l.acquire(addr)
+	return release
+}
+
+func TestConnLimiterReason(t *testing.T) {
+	l := newConnLimiter(2, 1)
+	if r, _ := l.acquire(tcpAddr("192.0.2.1:1")); r == nil {
+		t.Fatal("first connection refused")
+	}
+	if r, why := l.acquire(tcpAddr("192.0.2.1:2")); r != nil || why != refusedPerIP {
+		t.Fatalf("second connection from one address: reason %q, want %q", why, refusedPerIP)
+	}
+	if r, _ := l.acquire(tcpAddr("192.0.2.2:1")); r == nil {
+		t.Fatal("connection from another address refused")
+	}
+	if r, why := l.acquire(tcpAddr("192.0.2.3:1")); r != nil || why != refusedTotal {
+		t.Fatalf("third connection: reason %q, want %q", why, refusedTotal)
+	}
+}
+
 func TestConnLimiter(t *testing.T) {
 	l := newConnLimiter(3, 2)
-	a1 := l.acquire(tcpAddr("192.0.2.1:1000"))
-	a2 := l.acquire(tcpAddr("192.0.2.1:1001"))
+	a1 := acquire(l, tcpAddr("192.0.2.1:1000"))
+	a2 := acquire(l, tcpAddr("192.0.2.1:1001"))
 	if a1 == nil || a2 == nil {
 		t.Fatal("first two connections from one address refused")
 	}
-	if l.acquire(tcpAddr("192.0.2.1:1002")) != nil {
+	if acquire(l, tcpAddr("192.0.2.1:1002")) != nil {
 		t.Fatal("third connection from one address accepted, want refused by per-ip limit")
 	}
-	b := l.acquire(tcpAddr("192.0.2.2:1000"))
+	b := acquire(l, tcpAddr("192.0.2.2:1000"))
 	if b == nil {
 		t.Fatal("connection from another address refused")
 	}
-	if l.acquire(tcpAddr("192.0.2.3:1000")) != nil {
+	if acquire(l, tcpAddr("192.0.2.3:1000")) != nil {
 		t.Fatal("fourth connection accepted, want refused by total limit")
 	}
 	a1()
 	a1() // releasing twice must not free a second place
-	if l.acquire(tcpAddr("192.0.2.1:1003")) == nil {
+	if acquire(l, tcpAddr("192.0.2.1:1003")) == nil {
 		t.Fatal("connection refused after one from the same address closed")
 	}
-	if l.acquire(tcpAddr("192.0.2.3:1000")) != nil {
+	if acquire(l, tcpAddr("192.0.2.3:1000")) != nil {
 		t.Fatal("double release freed an extra place")
 	}
 	a2()
@@ -50,20 +72,20 @@ func TestConnLimiter(t *testing.T) {
 
 func TestConnLimiterGroupsIPv6By64(t *testing.T) {
 	l := newConnLimiter(0, 1)
-	if l.acquire(tcpAddr("[2001:db8:1:2::1]:22")) == nil {
+	if acquire(l, tcpAddr("[2001:db8:1:2::1]:22")) == nil {
 		t.Fatal("first IPv6 connection refused")
 	}
-	if l.acquire(tcpAddr("[2001:db8:1:2::ffff]:22")) != nil {
+	if acquire(l, tcpAddr("[2001:db8:1:2::ffff]:22")) != nil {
 		t.Fatal("second connection from the same /64 accepted")
 	}
-	if l.acquire(tcpAddr("[2001:db8:1:3::1]:22")) == nil {
+	if acquire(l, tcpAddr("[2001:db8:1:3::1]:22")) == nil {
 		t.Fatal("connection from another /64 refused")
 	}
 	// An IPv4-mapped address counts as its IPv4 address.
-	if l.acquire(tcpAddr("192.0.2.9:22")) == nil {
+	if acquire(l, tcpAddr("192.0.2.9:22")) == nil {
 		t.Fatal("IPv4 connection refused")
 	}
-	if l.acquire(tcpAddr("[::ffff:192.0.2.9]:22")) != nil {
+	if acquire(l, tcpAddr("[::ffff:192.0.2.9]:22")) != nil {
 		t.Fatal("IPv4-mapped connection not counted with its IPv4 address")
 	}
 }
@@ -71,7 +93,7 @@ func TestConnLimiterGroupsIPv6By64(t *testing.T) {
 func TestConnLimiterUnlimited(t *testing.T) {
 	l := newConnLimiter(0, 0)
 	for i := 0; i < 100; i++ {
-		if l.acquire(tcpAddr("192.0.2.1:1000")) == nil {
+		if acquire(l, tcpAddr("192.0.2.1:1000")) == nil {
 			t.Fatal("connection refused with limits off")
 		}
 	}
