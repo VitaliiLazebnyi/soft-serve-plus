@@ -188,3 +188,81 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 		t.Fatal("the diff of the selected commit was not shown")
 	}
 }
+
+// Repo hands a FileContentMsg to the Files pane twice, once as the pane the
+// message belongs to and once as the active tab. Opening a file must still
+// push its position only once, so that going back returns the cursor to the
+// directory the user opened.
+func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	for _, name := range []string{"a/f", "b/f", "sub/x", "sub/y", "sub/z"} {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-q", "-m", "first")
+	gr, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := gr.HEAD()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewFiles(cmdTestCommon())
+	r := New(cmdTestCommon(), f)
+	update := func(msg tea.Msg) tea.Cmd {
+		t.Helper()
+		_, cmd := r.Update(msg)
+		return cmd
+	}
+	// Give the pane its repository and ref directly: Repo itself only needs
+	// them for the status bar.
+	f.Update(RepoMsg(openRepo{path: dir}))
+	_, cmd := f.Update(RefMsg(ref))
+	update(findMsg[FileItemsMsg](t, runCmd(cmd)))
+
+	// Open "sub", the third directory of the root.
+	items := f.selector.Items()
+	if len(items) != 3 {
+		t.Fatalf("got %d root entries, want 3", len(items))
+	}
+	f.selector.Select(2)
+	cmd = update(selector.SelectMsg{IdentifiableItem: items[2].(selector.IdentifiableItem)})
+	update(findMsg[FileItemsMsg](t, runCmd(cmd)))
+	if got := f.Path(); got != "sub" {
+		t.Fatalf("path = %q, want sub", got)
+	}
+
+	// Open "y", the second file of "sub", through Repo.
+	items = f.selector.Items()
+	f.selector.Select(1)
+	cmd = update(selector.SelectMsg{IdentifiableItem: items[1].(selector.IdentifiableItem)})
+	update(findMsg[FileContentMsg](t, runCmd(cmd)))
+	if got := f.Path(); got != "sub/y" {
+		t.Fatalf("path = %q, want sub/y", got)
+	}
+
+	// Going back returns to "y" in "sub", then to "sub" in the root.
+	for _, want := range []struct {
+		path  string
+		index int
+	}{{"sub", 1}, {"", 2}} {
+		cmd = update(GoBackMsg{})
+		update(findMsg[FileItemsMsg](t, runCmd(cmd)))
+		if got := f.Path(); got != want.path {
+			t.Fatalf("path = %q, want %q", got, want.path)
+		}
+		if got := f.selector.Index(); got != want.index {
+			t.Fatalf("in %q the cursor is on entry %d, want %d", want.path, got, want.index)
+		}
+	}
+}

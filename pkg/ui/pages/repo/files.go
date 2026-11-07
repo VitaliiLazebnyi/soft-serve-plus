@@ -257,6 +257,11 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if msg.load != f.load {
 			break
 		}
+		// Repo hands a FileContentMsg to the Files pane twice: once as the
+		// pane the message belongs to and once as the active tab. Start a
+		// new load so that the second delivery is dropped and the file's
+		// position is pushed only once.
+		f.load++
 		f.path = msg.path
 		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
