@@ -25,7 +25,8 @@ func authenticate(r *http.Request, repo string) (proto.User, error) {
 	// Prefer the Authorization header
 	user, err := parseAuthHdr(r, repo)
 	if err != nil || user == nil {
-		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) {
+		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) ||
+			errors.Is(err, ErrPasswordCheckBusy) {
 			return nil, err
 		}
 		return nil, proto.ErrUserNotFound
@@ -36,6 +37,13 @@ func authenticate(r *http.Request, repo string) (proto.User, error) {
 
 // ErrInvalidPassword is returned when the password is invalid.
 var ErrInvalidPassword = errors.New("invalid password")
+
+// ErrPasswordCheckBusy is returned when a password could not be checked
+// because the client has too many checks running or waiting, or the request
+// ended while it waited. The password was not found wrong, so callers must
+// not answer it as bad credentials: git would then erase a correct stored
+// password from the user's credential helper.
+var ErrPasswordCheckBusy = errors.New("too many password checks, try again later")
 
 func parseUsernamePassword(ctx context.Context, client, username, password string) (proto.User, error) {
 	logger := log.FromContext(ctx)
@@ -50,7 +58,12 @@ func parseUsernamePassword(ctx context.Context, client, username, password strin
 			return user, nil
 		}
 
-		if user := checkPassword(ctx, client, username, password); user != nil {
+		user, cerr := checkPassword(ctx, client, username, password)
+		if cerr != nil {
+			logger.Info("password check throttled", "err", cerr)
+			return nil, cerr
+		}
+		if user != nil {
 			return user, nil
 		}
 
@@ -102,11 +115,12 @@ var verifyPassword = backend.VerifyPassword
 // exists or has a password, so the response time does not reveal which
 // accounts do; a name that is not a valid username cannot be an account, so
 // it is refused without bcrypt. The check runs one at a time per client
-// address, then waits for a free slot in passwordChecks, and fails if ctx
-// ends first.
-func checkPassword(ctx context.Context, client, username, password string) proto.User {
+// address, then waits for a free slot in passwordChecks. If the client has
+// too many checks pending, or ctx ends first, it returns an error wrapping
+// ErrPasswordCheckBusy without checking the password.
+func checkPassword(ctx context.Context, client, username, password string) (proto.User, error) {
 	if utils.ValidateUsername(username) != nil {
-		return nil
+		return nil, nil
 	}
 
 	var hash string
@@ -117,20 +131,20 @@ func checkPassword(ctx context.Context, client, username, password string) proto
 
 	release, err := clientChecks.acquire(ctx, client)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: %w", ErrPasswordCheckBusy, err)
 	}
 	defer release()
 
 	if err := passwordChecks.Acquire(ctx, 1); err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: %w", ErrPasswordCheckBusy, err)
 	}
 	defer passwordChecks.Release(1)
 
 	// An empty hash never verifies, so user is set when this succeeds.
 	if !verifyPassword(password, hash) {
-		return nil
+		return nil, nil
 	}
-	return user
+	return user, nil
 }
 
 // errClientBusy is returned when a client has too many password checks

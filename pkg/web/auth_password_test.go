@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +63,8 @@ func TestBasicAuthPasswordCheckIsUniform(t *testing.T) {
 }
 
 // Password checks wait for a free slot, and a request that ends while
-// waiting fails without running bcrypt.
+// waiting fails without running bcrypt. It fails as busy, not as a wrong
+// password, since the password was never checked.
 func TestBasicAuthPasswordCheckIsBounded(t *testing.T) {
 	f := newOracleFixture(t)
 	is := is.New(t)
@@ -78,7 +82,49 @@ func TestBasicAuthPasswordCheckIsBounded(t *testing.T) {
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	req.SetBasicAuth("stranger", "hunter2-password")
 	_, err := authenticate(req, "")
-	is.Equal(err, ErrInvalidPassword)
+	is.True(errors.Is(err, ErrPasswordCheckBusy))
+	is.True(!badCredentials(err))
+	is.Equal(*n, 0)
+}
+
+// A client with too many password checks pending is refused without
+// bcrypt, and a correct password is not answered as bad credentials: the
+// reply is 429 with no credentials challenge, so git keeps the password in
+// its credential helper instead of erasing it.
+func TestBasicAuthBusyClientIsNotBadCredentials(t *testing.T) {
+	f := newOracleFixture(t)
+	is := is.New(t)
+	is.NoErr(f.be.SetPassword(f.ctx, "stranger", "hunter2-password"))
+	n := countVerifies(t)
+
+	prev := clientChecks
+	clientChecks = newClientLimiter(1)
+	t.Cleanup(func() { clientChecks = prev })
+	// httptest requests come from 192.0.2.1.
+	release, err := clientChecks.acquire(f.ctx, "192.0.2.1")
+	is.NoErr(err)
+	t.Cleanup(release)
+
+	req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+	req.SetBasicAuth("stranger", "hunter2-password")
+	user, err := authenticate(req, "")
+	is.Equal(user, nil)
+	is.True(errors.Is(err, ErrPasswordCheckBusy))
+	is.True(!errors.Is(err, ErrInvalidPassword))
+	is.True(!badCredentials(err))
+
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("stranger:hunter2-password"))
+	for _, tc := range []struct{ method, path, contentType string }{
+		{http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "text/plain"},
+		{http.MethodPost, "/secret.git/info/lfs/objects/batch", "application/vnd.git-lfs+json"},
+	} {
+		w := f.do(tc.method, tc.path, auth)
+		is.Equal(w.Code, http.StatusTooManyRequests)
+		is.Equal(w.Header().Get("WWW-Authenticate"), "")
+		is.Equal(w.Header().Get("LFS-Authenticate"), "")
+		is.Equal(w.Header().Get("Retry-After"), "1")
+		is.True(strings.HasPrefix(w.Header().Get("Content-Type"), tc.contentType))
+	}
 	is.Equal(*n, 0)
 }
 
