@@ -56,6 +56,11 @@ func (h *repoDirHolds) hold(name string) (release func()) {
 // row names it, and its name on disk is name exactly. Otherwise it leaves the
 // directory alone and returns proto.ErrRepoNotFound.
 //
+// Each delete holds the name before it looks for the row, so when two deletes
+// of the same orphan overlap, each sees the other's hold and both return
+// proto.ErrRepoNotFound. The orphan then stays until a later delete, which
+// removes it.
+//
 // The check and the removal run under the holds' lock, which a create or
 // import takes (through hold) before claiming the directory, a rename before
 // its transaction and a delete before looking for its row, so none of them
