@@ -77,6 +77,11 @@ type SSHConfig struct {
 	// order of preference. When empty, DefaultSSHMACs is used.
 	MACs []string `env:"MACS" yaml:"macs"`
 
+	// PublicKeyAuthAlgorithms lists the signature algorithms the SSH server
+	// accepts for client public key authentication. When empty,
+	// DefaultSSHPublicKeyAuthAlgorithms is used.
+	PublicKeyAuthAlgorithms []string `env:"PUBLIC_KEY_AUTH_ALGORITHMS" yaml:"public_key_auth_algorithms"`
+
 	// allowedHosts is ClientAllowedHosts parsed by Validate.
 	allowedHosts ssrf.AllowedHosts
 }
@@ -353,6 +358,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
+		fmt.Sprintf("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=%s", strings.Join(c.SSH.PublicKeyAuthAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_GIT_ENABLED=%t", c.Git.Enabled),
 		fmt.Sprintf("SOFT_SERVE_GIT_LISTEN_ADDR=%s", c.Git.ListenAddr),
 		fmt.Sprintf("SOFT_SERVE_GIT_PUBLIC_URL=%s", c.Git.PublicURL),
