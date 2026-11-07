@@ -139,7 +139,7 @@ func TestHarnessCommands(t *testing.T) {
 	}{
 		{"readfile without a file", "readfile\n", false},
 		{"readfile with extra arguments", "readfile cmd.txtar 'expected'\n", false},
-		{"negated ensureserverrunning", "! ensureserverrunning DOWN_PORT\n", false},
+		{"negated ensureserverrunning", "! ensureserverrunning UP_PORT\n", false},
 		{"negated ensureservernotrunning", "! ensureservernotrunning DOWN_PORT\n", false},
 		{"ensureservernotrunning on a closed port", "ensureservernotrunning DOWN_PORT\n", true},
 		{"ensureservernotrunning on a listening port", "ensureservernotrunning UP_PORT\n", false},
