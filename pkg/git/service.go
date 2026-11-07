@@ -240,8 +240,9 @@ type readDeadliner interface {
 // An input that takes a read deadline, such as the git daemon's connection,
 // is given one in the past to end the read now, and the copy is waited for.
 // The deadline is set again until the copy ends, in case the input set its
-// own deadline for the read in the meantime. The input can no longer be read after that, which does not matter as git
-// is gone and the caller only closes it.
+// own deadline for the read in the meantime. The input can no longer be
+// read after that, which does not matter as git is gone and the caller only
+// closes it.
 //
 // An input that cannot be interrupted is waited for only when the command
 // asks for it with JoinStdin, as an HTTP request body must not be read after
