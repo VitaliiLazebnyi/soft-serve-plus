@@ -57,7 +57,6 @@ func SessionHandler(s ssh.Session) *tea.Program {
 
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
-		tea.WithoutCatchPanics(),
 		tea.WithContext(ctx),
 		tea.WithColorProfile(common.DefaultColorProfile),
 	)
