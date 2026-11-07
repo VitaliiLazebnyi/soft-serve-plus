@@ -35,7 +35,10 @@ func SettingsCommand() *cobra.Command {
 				case 0:
 					cmd.Println(be.AllowKeyless(ctx))
 				case 1:
-					v, _ := strconv.ParseBool(args[0])
+					v, err := strconv.ParseBool(args[0])
+					if err != nil {
+						return fmt.Errorf("invalid allow-keyless value %q: want true or false", args[0])
+					}
 					if err := be.SetAllowKeyless(ctx, v); err != nil {
 						return err
 					}

@@ -17,6 +17,12 @@ stdout true
 soft repo private repo1
 stdout true
 ! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
+
+# a visibility that is not a boolean is refused and changes nothing
+! soft repo private repo1 maybe
+stderr 'invalid syntax'
+soft repo private repo1
+stdout true
 soft repo description repo1
 stdout 'description'
 readfile $DATA_PATH/repos/repo1.git/description 'description'
