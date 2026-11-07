@@ -368,27 +368,28 @@ func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 
 // Range implements transfer.LockBackend.
 //
-// The cursor is a page number handed out as next-cursor; empty means the
-// first page. Any other cursor is refused with transfer.ErrParseError, which
-// the processor sends back to the client as a 400 status.
+// The cursor is the ID of the last lock of the previous page, handed out as
+// next-cursor; empty means the first page. Any other cursor is refused with
+// transfer.ErrParseError, which the processor sends back to the client as a
+// 400 status.
 func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) error) (string, error) {
 	var nextCursor string
 	var locks []*LFSLock
 
-	page, err := lfs.ParseLocksCursor(cursor)
+	afterID, err := lfs.ParseLocksCursor(cursor)
 	if err != nil {
 		return "", fmt.Errorf("%w: invalid cursor %q", transfer.ErrParseError, cursor)
 	}
 	limit = lfs.ClampLocksLimit(limit)
 
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
-		l.logger.Debug("getting locks", "limit", limit, "page", page)
-		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), page, limit)
+		l.logger.Debug("getting locks", "limit", limit, "after", afterID)
+		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), afterID, limit)
 		if err != nil {
 			return db.WrapError(err)
 		}
 
-		nextCursor = lfs.NextLocksCursor(page, limit, len(mlocks))
+		nextCursor = lfs.NextLocksCursor(limit, mlocks)
 
 		users := make(map[int64]models.User, 0)
 		for _, mlock := range mlocks {
