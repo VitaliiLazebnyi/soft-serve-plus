@@ -72,11 +72,32 @@ func SessionHandler(s ssh.Session) *tea.Program {
 
 	tuiSessionCounter.Inc()
 
-	start := time.Now()
-	go func() {
-		<-ctx.Done()
-		tuiSessionDuration.Add(time.Since(start).Seconds())
-	}()
-
 	return p
+}
+
+// TUIMiddleware runs the TUI for sessions with a pty, and counts the time
+// each one spends in it.
+// This middleware must be run after the ContextMiddleware.
+//
+// The time runs until the program exits, which ends the session. The
+// connection may outlive it, for example when a client multiplexes several
+// sessions over one connection, so its close is not the TUI's end.
+func TUIMiddleware(next ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		var start time.Time
+		bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
+			p := SessionHandler(s)
+			if p != nil {
+				start = time.Now()
+			}
+			return p
+		})(func(s ssh.Session) {
+			// The program has exited: stop the clock before handing the
+			// session on.
+			if !start.IsZero() {
+				tuiSessionDuration.Add(time.Since(start).Seconds())
+			}
+			next(s)
+		})(s)
+	}
 }

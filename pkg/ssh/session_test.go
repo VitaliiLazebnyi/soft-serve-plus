@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
-	bm "charm.land/wish/v2/bubbletea"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/matryer/is"
+	dto "github.com/prometheus/client_model/go"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
@@ -50,6 +51,14 @@ func TestSession(t *testing.T) {
 
 func setup(tb testing.TB) (*gossh.Session, func() error) {
 	tb.Helper()
+	srv, closeDB := newTestTUIServer(tb)
+	return testsession.New(tb, srv, nil), closeDB
+}
+
+// newTestTUIServer returns a server that runs the TUI for every session, and
+// a function closing its database.
+func newTestTUIServer(tb testing.TB) (*ssh.Server, func() error) {
+	tb.Helper()
 	is := is.New(tb)
 	dp := tb.TempDir()
 	is.NoErr(os.Setenv("SOFT_SERVE_DATA_PATH", dp))
@@ -77,15 +86,73 @@ func setup(tb testing.TB) (*gossh.Session, func() error) {
 	dbstore := database.New(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
-	return testsession.New(tb, &ssh.Server{
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(bm.MiddlewareWithProgramHandler(SessionHandler)(func(s ssh.Session) {
+	return &ssh.Server{
+		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(TUIMiddleware(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
 				os.Exit(1)
 			}
-			s.Exit(0)
+			s.Exit(0) //nolint: errcheck
 		})),
-	}, nil), dbx.Close
+	}, dbx.Close
+}
+
+// The time spent in the TUI is counted when the TUI session ends, not when
+// the connection it ran on closes.
+func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
+	srv, closeDB := newTestTUIServer(t)
+	t.Cleanup(func() { _ = closeDB() })
+	addr := testsession.Listen(t, srv)
+
+	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		User:            "test",
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := tuiSeconds(t)
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	// Quit the TUI, retrying until the program reads the key.
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(10 * time.Second)
+wait:
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("session: %v", err)
+			}
+			break wait
+		case <-tick.C:
+			_, _ = io.WriteString(stdin, "q")
+		case <-timeout:
+			t.Fatal("TUI did not quit")
+		}
+	}
+
+	// The connection is still open.
+	if after := tuiSeconds(t); after <= before {
+		t.Fatalf("tui_session_seconds_total = %v after the session ended, want more than %v", after, before)
+	}
 }
 
 // TestSetupListensOnLoopback checks that setup configures the SSH server to
@@ -103,4 +170,13 @@ func TestSetupListensOnLoopback(t *testing.T) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		t.Fatalf("SSH listens on %q, want a loopback address", addr)
 	}
+}
+
+func tuiSeconds(t *testing.T) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := tuiSessionDuration.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetCounter().GetValue()
 }

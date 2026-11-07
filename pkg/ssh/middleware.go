@@ -113,8 +113,11 @@ var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 // This middleware must be run after the ContextMiddleware.
 func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		_, _, ptyReq := s.Pty()
-		if ptyReq {
+		// A session with a pty opens the TUI, deep-linked to a repository
+		// when the command is a single word. Anything longer cannot be a
+		// repository name, so it is a CLI command (e.g. `ssh -t host repo
+		// list`) and runs as one instead of being silently ignored.
+		if _, _, ptyReq := s.Pty(); ptyReq && len(s.Command()) <= 1 {
 			sh(s)
 			return
 		}

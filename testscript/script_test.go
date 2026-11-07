@@ -345,12 +345,9 @@ func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []stri
 
 		err = sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{})
 		check(ts, err, neg)
-		// An optional repository name opens the TUI on that repository.
-		initialRepo := ""
-		if len(args) > 1 {
-			initialRepo = args[1]
-		}
-		check(ts, sess.Start(initialRepo), neg)
+		// An optional repository name opens the TUI on that repository;
+		// more words make a command to run with the pty instead.
+		check(ts, sess.Start(strings.Join(args[1:], " ")), neg)
 
 		in, err := strconv.Unquote(args[0])
 		check(ts, err, neg)

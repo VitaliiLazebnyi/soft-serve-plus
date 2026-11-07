@@ -148,7 +148,9 @@ func (ui *UI) Init() tea.Cmd {
 		ui.pages[repoPage].Init(),
 	)
 	if ui.initialRepo != "" {
-		cmds = append(cmds, ui.initialRepoCmd(ui.initialRepo))
+		// A deep link to a repository that is missing, or that the caller
+		// cannot read, shows the same error as picking one from the list.
+		cmds = append(cmds, ui.setRepoCmd(ui.initialRepo))
 	}
 	ui.state = readyState
 	ui.SetSize(ui.common.Width, ui.common.Height)
@@ -317,16 +319,6 @@ func (ui *UI) setRepoCmd(rn string) tea.Cmd {
 		r, err := ui.openRepo(rn)
 		if err != nil {
 			return common.ErrorMsg(err)
-		}
-		return repo.RepoMsg(r)
-	}
-}
-
-func (ui *UI) initialRepoCmd(rn string) tea.Cmd {
-	return func() tea.Msg {
-		r, err := ui.openRepo(rn)
-		if err != nil {
-			return nil
 		}
 		return repo.RepoMsg(r)
 	}

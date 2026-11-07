@@ -1,0 +1,29 @@
+# vi: set ft=conf
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo1 -d '"first repo"'
+
+# a command run with a pty (ssh -t host repo list) runs instead of opening
+# the TUI
+ui '""' repo list
+stdout 'repo1'
+! stdout 'Repositories'
+
+# a single word is still a repository to open the TUI on
+ui '"    q"' repo1
+cp stdout tui-repo1.txt
+grep 'first repo' tui-repo1.txt
+! grep 'missing repo' tui-repo1.txt
+
+# a deep link to a missing repository says so
+ui '"    q"' nope
+cp stdout tui-nope.txt
+grep 'missing repo' tui-nope.txt
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .
