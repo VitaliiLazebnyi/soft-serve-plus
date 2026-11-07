@@ -1100,6 +1100,9 @@ You can find per-repository hooks under the repository `hooks` directory.
 
 Globs hooks can be found in your `SOFT_SERVE_DATA_PATH` directory under
 `hooks`. Defining global hooks is useful if you want to run CI/CD for example.
+Global hooks run only when they are executable. Windows has no execute bit,
+so there every global hook file is run with `sh`, the one that comes with Git
+for Windows, the way git runs its own hooks.
 
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
