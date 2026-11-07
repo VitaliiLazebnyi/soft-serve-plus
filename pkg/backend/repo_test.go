@@ -515,6 +515,39 @@ func TestImportRepositoryDisabled(t *testing.T) {
 	}
 }
 
+// TestImportGateRetriesUnreadableVersion verifies that a failure to read
+// git's version closes the gate only until the next check, while a version
+// that was read is cached.
+func TestImportGateRetriesUnreadableVersion(t *testing.T) {
+	is := is.New(t)
+	var calls int
+	var err error
+	version := git.Version{Major: 2, Minor: 45}
+	orig := binVersion
+	binVersion = func() (git.Version, error) {
+		calls++
+		return version, err
+	}
+	t.Cleanup(func() { binVersion = orig })
+
+	be, _ := newTestBackend(t)
+
+	err = errors.New("fork/exec git: resource temporarily unavailable")
+	is.True(be.ImportsDisabledReason() != "")
+	is.True(be.ImportsDisabledReason() != "")
+	is.Equal(calls, 2) // a failed read is not cached
+
+	err = nil
+	is.Equal(be.ImportsDisabledReason(), "")
+	is.Equal(be.ImportsDisabledReason(), "")
+	is.Equal(calls, 3) // a successful read is
+
+	// Once read, a later failure to run git does not matter.
+	err = errors.New("exec: git: not found")
+	is.Equal(be.ImportsDisabledReason(), "")
+	is.Equal(calls, 3)
+}
+
 // TestImportUnsupportedLFSEndpointRedacted verifies that an import whose LFS
 // endpoint has no client (ssh) logs that endpoint without its credentials.
 func TestImportUnsupportedLFSEndpointRedacted(t *testing.T) {

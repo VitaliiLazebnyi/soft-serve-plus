@@ -26,7 +26,7 @@ type Backend struct {
 	// they are allowed. It runs the git version check on first use, so
 	// nothing has to happen in a particular order at startup for the gate
 	// to be in place.
-	importGate func() string
+	importGate importGate
 
 	// deliveries runs the webhook deliveries in the background, bounded, and
 	// tracks them so shutdown can wait for them.
@@ -60,8 +60,6 @@ func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Ba
 
 		deliveries: newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
 	}
-	b.importGate = sync.OnceValue(b.checkGitVersion)
-
 	return b
 }
 
@@ -69,7 +67,31 @@ func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Ba
 // off, or "" when they are allowed. The reason is for the server log; users
 // get proto.ErrImportsDisabled.
 func (d *Backend) ImportsDisabledReason() string {
-	return d.importGate()
+	return d.importGate.reason()
+}
+
+// importGate caches the outcome of the git version check once git's version
+// has been read. A failure to read it (git missing, or a transient exec
+// error such as EAGAIN under load) closes the gate only for that call, so
+// the check runs again next time rather than leaving imports and mirror
+// syncs off until restart.
+type importGate struct {
+	mu     sync.Mutex
+	done   bool
+	cached string
+}
+
+func (g *importGate) reason() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.done {
+		return g.cached
+	}
+	reason, ok := checkGitVersion()
+	if ok {
+		g.done, g.cached = true, reason
+	}
+	return reason
 }
 
 // minImportGitVersion is the oldest git that honours the settings the import
@@ -83,16 +105,16 @@ var minImportGitVersion = git.Version{Major: 2, Minor: 33}
 var binVersion = git.BinVersion
 
 // checkGitVersion returns why imports must stay off, or "" if the installed
-// git is new enough. Running a clone under a git that ignores the guards
-// would be worse than refusing it, so an unreadable version also closes
-// the gate.
-func (d *Backend) checkGitVersion() string {
+// git is new enough, and whether git's version was read. Running a clone
+// under a git that ignores the guards would be worse than refusing it, so an
+// unreadable version also closes the gate, but only until the next check.
+func checkGitVersion() (reason string, ok bool) {
 	v, err := binVersion()
 	if err != nil {
-		return fmt.Sprintf("cannot determine git version: %v", err)
+		return fmt.Sprintf("cannot determine git version: %v", err), false
 	}
 	if v.Less(minImportGitVersion) {
-		return fmt.Sprintf("git %s is older than %s, which imports and mirror syncs need to be safe", v, minImportGitVersion)
+		return fmt.Sprintf("git %s is older than %s, which imports and mirror syncs need to be safe", v, minImportGitVersion), true
 	}
-	return ""
+	return "", true
 }
