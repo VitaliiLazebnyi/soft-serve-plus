@@ -214,7 +214,8 @@ func gitServiceError(logger *log.Logger, service git.Service, repo string, err e
 // must not be the cancelled one.
 func deleteFailedPushRepo(ctx context.Context, be *backend.Backend, logger *log.Logger, name, dir string) {
 	removeFailedPushRepo(ctx, logger, name, dir, failedPushRepoOps{
-		del: be.DeleteRepository,
+		del:       be.DeleteRepository,
+		removeDir: be.RemoveRepositoryDir,
 		rowExists: func(ctx context.Context, name string) (bool, error) {
 			_, err := be.Repository(ctx, name)
 			if errors.Is(err, proto.ErrRepoNotFound) {
@@ -231,6 +232,9 @@ type failedPushRepoOps struct {
 	del func(ctx context.Context, name string) error
 	// rowExists reports whether a repository with the name is listed.
 	rowExists func(ctx context.Context, name string) (bool, error)
+	// removeDir removes the leftover directory of a deleted repository and
+	// the group directories it leaves empty.
+	removeDir func(dir string) error
 }
 
 // failedPushRetry is how removeFailedPushRepo retries: a first wait of 100ms,
@@ -313,7 +317,7 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
 				return
 			default:
-				err = os.RemoveAll(dir)
+				err = ops.removeDir(dir)
 			}
 		}
 

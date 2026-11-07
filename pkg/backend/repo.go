@@ -257,6 +257,15 @@ func (d *Backend) removeRepoDir(rp string) error {
 	return nil
 }
 
+// RemoveRepositoryDir removes the leftover directory dir of a repository
+// whose row is already gone, and then the group directories it leaves empty,
+// as deleting the repository does. It is for a caller that retries removing a
+// directory the delete could not remove, such as one still held open by a
+// git process on Windows.
+func (d *Backend) RemoveRepositoryDir(dir string) error {
+	return d.removeRepoDir(dir)
+}
+
 // removeEmptyRepoParents removes the directories between the repository path
 // rp and the repos directory that are empty, deepest first, so deleting or
 // renaming away a nested repository such as "a/b" does not leave an empty
