@@ -113,9 +113,34 @@ func (r *Repository) References() ([]*Reference, error) {
 	return rrefs, nil
 }
 
+// treeID resolves ref to the ID of the tree it points to. The ref is passed
+// after --end-of-options so it cannot be read as an option, and --verify
+// makes git reject anything that is not a single revision. git still prints
+// a negated revision such as "^HEAD" with its leading caret, so the output is
+// parsed strictly: a ref git cannot resolve, or one that does not resolve to
+// a single object ID, is an ErrRevisionNotExist.
+func (r *Repository) treeID(ref string) (string, error) {
+	out, err := git.NewCommand("rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
+	if err != nil {
+		if strings.Contains(err.Error(), "exit status 128") {
+			return "", ErrRevisionNotExist
+		}
+		return "", err
+	}
+	id, err := git.NewIDFromString(string(out))
+	if err != nil {
+		return "", ErrRevisionNotExist
+	}
+	return id.String(), nil
+}
+
 // LsTree returns the tree for the given reference.
 func (r *Repository) LsTree(ref string) (*Tree, error) {
-	tree, err := r.Repository.LsTree(ref)
+	id, err := r.treeID(ref)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := r.Repository.LsTree(id)
 	if err != nil {
 		return nil, err
 	}
