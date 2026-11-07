@@ -33,11 +33,8 @@ func (b *Backend) CreateAccessToken(ctx context.Context, user proto.User, name s
 // DeleteAccessToken deletes an access token for a user.
 func (b *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int64) error {
 	err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		_, err := b.store.GetAccessToken(ctx, tx, id)
-		if err != nil {
-			return db.WrapError(err)
-		}
-
+		// Report another user's token exactly like a missing one so the
+		// command cannot be used to tell which token IDs exist.
 		if err := b.store.DeleteAccessTokenForUser(ctx, tx, user.ID(), id); err != nil {
 			return db.WrapError(err)
 		}
