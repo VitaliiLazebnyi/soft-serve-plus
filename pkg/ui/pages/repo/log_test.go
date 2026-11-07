@@ -1,0 +1,83 @@
+package repo
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+)
+
+// Resizing the terminal, or toggling the footer, while a commit's diff is
+// loading or shown reloads the commit list behind it but keeps the diff.
+func TestLogResizeKeepsDiff(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "second")
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := r.HEAD()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	l := NewLog(common.NewCommon(ctx, 80, 40))
+	l.SetSize(80, 40)
+	l.Update(RepoMsg(openRepo{path: dir}))
+	l.Update(RefMsg(ref))
+	l.Update(l.countCommitsCmd())
+	l.Update(l.updateCommitsCmd())
+	if l.activeView != logViewCommits {
+		t.Fatalf("after loading commits, view = %v; want commits", l.activeView)
+	}
+
+	l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
+	// A resize while the diff loads must not show the commit list.
+	l.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	l.Update(l.updateCommitsCmd())
+	if l.activeView != logViewLoading {
+		t.Fatalf("after a resize while loading a diff, view = %v; want loading", l.activeView)
+	}
+	l.Update(l.selectCommitCmd(l.selectedCommit)())
+	l.Update(l.loadDiffCmd())
+	if l.activeView != logViewDiff {
+		t.Fatalf("after loading the diff, view = %v; want diff", l.activeView)
+	}
+
+	for _, msg := range []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 20},
+		tea.WindowSizeMsg{Width: 60, Height: 50},
+	} {
+		l.Update(msg)
+		if l.activeView != logViewDiff {
+			t.Fatalf("after %T, view = %v; want diff", msg, l.activeView)
+		}
+		l.Update(l.updateCommitsCmd())
+		if l.activeView != logViewDiff {
+			t.Fatalf("after reloading commits on %T, view = %v; want diff", msg, l.activeView)
+		}
+	}
+
+	l.Update(GoBackMsg{})
+	if l.activeView != logViewCommits {
+		t.Fatalf("after going back, view = %v; want commits", l.activeView)
+	}
+	// In the commits view a resize still shows the spinner until the
+	// reloaded page arrives.
+	l.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	if l.activeView != logViewLoading {
+		t.Fatalf("after a resize in the commits view, view = %v; want loading", l.activeView)
+	}
+	l.Update(l.updateCommitsCmd())
+	if l.activeView != logViewCommits {
+		t.Fatalf("after reloading commits, view = %v; want commits", l.activeView)
+	}
+}

@@ -218,8 +218,12 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		l.selector.SetItems(make([]selector.IdentifiableItem, l.count))
 		cmds = append(cmds, l.updateCommitsCmd)
 	case LogItemsMsg:
-		// stop loading after receiving items
-		l.activeView = logViewCommits
+		// Stop loading after receiving items, unless a commit's diff is
+		// loading or shown: a reload on resize or footer toggle refreshes the
+		// list behind it without leaving the diff.
+		if l.selectedCommit == nil {
+			l.activeView = logViewCommits
+		}
 		cmds = append(cmds, l.selector.SetItems(msg))
 		l.selector.SetPage(l.nextPage)
 		l.SetSize(l.common.Width, l.common.Height)
@@ -275,6 +279,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case selector.SelectMsg:
 		switch sel := msg.IdentifiableItem.(type) {
 		case LogItem:
+			l.selectedCommit = sel.Commit
 			cmds = append(cmds,
 				l.selectCommitCmd(sel.Commit),
 				l.startLoading(),
@@ -308,12 +313,13 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			)
 		}
 		if l.repo != nil && l.ref != nil {
-			cmds = append(cmds,
-				l.updateCommitsCmd,
-				// start loading on resize since the number of commits per page
-				// might change and we'd need to load more commits.
-				l.startLoading(),
-			)
+			// Reload on resize since the number of commits per page might
+			// change and we'd need to load more commits. Only show the
+			// spinner in the commits view, so a diff stays on screen.
+			cmds = append(cmds, l.updateCommitsCmd)
+			if l.activeView == logViewCommits {
+				cmds = append(cmds, l.startLoading())
+			}
 		}
 	case EmptyRepoMsg:
 		l.ref = nil
