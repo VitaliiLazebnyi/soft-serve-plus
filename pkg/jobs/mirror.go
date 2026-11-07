@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -32,8 +31,9 @@ type mirrorPull struct{}
 //
 // `git remote update` fetches from all remotes, not just origin, so every one
 // of them has to pass. Any failure to read or validate skips the sync: a
-// remote that cannot be checked is not one to fetch from.
-func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
+// remote that cannot be checked is not one to fetch from. ctx bounds the
+// hostname lookups.
+func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
 	cfg, err := r.Config()
 	if err != nil {
 		return nil, fmt.Errorf("reading git config: %w", err)
@@ -46,7 +46,7 @@ func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ss
 			continue
 		}
 
-		v, err := ssrf.ValidateGitRemote(url, policy)
+		v, err := ssrf.ValidateGitRemoteContext(ctx, url, policy)
 		if err != nil {
 			return nil, fmt.Errorf("remote %q: %w", sub.Name, err)
 		}
@@ -106,8 +106,6 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 				name := repo.Name()
 				wq.Add(name, func() {
-					repo := repo
-
 					// Re-validate every configured remote before syncing.
 					// `remote update` touches all of them, and a remote may
 					// predate the import-time guard or have been written out
@@ -123,7 +121,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					}
 					policy := backend.RemotePolicy(cfg, owner)
 
-					remotes, err := validateMirrorRemotes(r, policy)
+					remotes, err := validateMirrorRemotes(ctx, r, policy)
 					if err != nil {
 						logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
 						return
@@ -131,19 +129,15 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 					syncEnv := backend.RemoteGitEnv(cfg, remotes...)
 
-					cmds := []string{
-						"fetch --prune",         // fetch prune before updating remote
-						"remote update --prune", // update remote and prune remote refs
-					}
-
-					for _, c := range cmds {
-						args := strings.Split(c, " ")
-						cmd := git.NewCommand(args...).WithContext(ctx).WithTimeout(-1)
-						cmd.AddEnvs(syncEnv...)
-
-						if _, err := cmd.RunInDir(r.Path); err != nil {
-							logger.Error("error running git remote update", "repo", name, "err", err)
-						}
+					// `remote update` fetches every remote, origin
+					// included, and prunes what each one no longer has.
+					// When it fails the LFS sync is skipped too; the next
+					// run tries both again.
+					cmd := git.NewCommand("remote", "update", "--prune").WithContext(ctx).WithTimeout(-1)
+					cmd.AddEnvs(syncEnv...)
+					if _, err := cmd.RunInDir(r.Path); err != nil {
+						logger.Error("error running git remote update", "repo", name, "err", err)
+						return
 					}
 
 					if cfg.LFS.Enabled {
@@ -162,7 +156,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 						// The endpoint is stored in the repo config and may
 						// predate validation, so check it before dialing.
-						if _, err := ssrf.ValidateGitRemote(lfsEndpoint, policy); err != nil {
+						if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
 							logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
 							return
 						}

@@ -27,8 +27,8 @@ func WithWorkPoolLogger(logger func(string, ...interface{})) WorkPoolOption {
 }
 
 // NewWorkPool creates a new work pool. The workers argument specifies the
-// number of concurrent workers to run the work.
-// The queue will chunk the work into batches of workers size.
+// number of concurrent workers to run the work: at most that many jobs run at
+// once, and the next one starts as soon as one finishes.
 func NewWorkPool(ctx context.Context, workers int, opts ...WorkPoolOption) *WorkPool {
 	wq := &WorkPool{
 		workers: workers,
@@ -48,7 +48,8 @@ func NewWorkPool(ctx context.Context, workers int, opts ...WorkPoolOption) *Work
 	return wq
 }
 
-// Run starts the workers and waits for them to finish.
+// Run starts the workers and waits for them to finish. It may be called again
+// to run work added since.
 func (wq *WorkPool) Run() {
 	wq.work.Range(func(key, value any) bool {
 		id := key.(string)
@@ -67,9 +68,13 @@ func (wq *WorkPool) Run() {
 		return true
 	})
 
+	// Taking every slot waits for the last job; hand them back so a later
+	// Run can start work again.
 	if err := wq.sem.Acquire(wq.ctx, int64(wq.workers)); err != nil {
 		wq.logf("workpool: %v", err)
+		return
 	}
+	wq.sem.Release(int64(wq.workers))
 }
 
 // Add adds a new job to the pool.

@@ -11,6 +11,7 @@ import (
 // Scheduler is a cron-like job scheduler.
 type Scheduler struct {
 	*cron.Cron
+	logger cronLogger
 }
 
 // cronLogger is a wrapper around the logger to make it compatible with the
@@ -31,7 +32,8 @@ func (l cronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
 
 // skipLogger logs the runs skipped by cron.SkipIfStillRunning. Unlike
 // cronLogger it logs them at Info: a skipped run means a job is taking longer
-// than its interval, which an operator should be able to see.
+// than its interval, which an operator should be able to see. Its logger
+// names the job, which cron does not pass along.
 type skipLogger struct {
 	cronLogger
 }
@@ -48,10 +50,8 @@ func (l skipLogger) Info(_ string, keysAndValues ...interface{}) {
 func NewScheduler(ctx context.Context) *Scheduler {
 	logger := cronLogger{log.FromContext(ctx).WithPrefix("cron")}
 	return &Scheduler{
-		Cron: cron.New(
-			cron.WithLogger(logger),
-			cron.WithChain(cron.SkipIfStillRunning(skipLogger{logger})),
-		),
+		Cron:   cron.New(cron.WithLogger(logger)),
+		logger: logger,
 	}
 }
 
@@ -67,9 +67,11 @@ func (s *Scheduler) Start() {
 	s.Cron.Start()
 }
 
-// AddFunc adds a job to the Scheduler.
-func (s *Scheduler) AddFunc(spec string, fn func()) (int, error) {
-	id, err := s.Cron.AddFunc(spec, fn)
+// AddFunc adds a job to the Scheduler. name identifies the job in the log.
+func (s *Scheduler) AddFunc(name, spec string, fn func()) (int, error) {
+	skip := skipLogger{cronLogger{s.logger.logger.With("job", name)}}
+	job := cron.NewChain(cron.SkipIfStillRunning(skip)).Then(cron.FuncJob(fn))
+	id, err := s.Cron.AddJob(spec, job)
 	return int(id), err
 }
 

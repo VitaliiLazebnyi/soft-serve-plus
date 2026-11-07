@@ -126,7 +126,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRepoWithRemotes(t, tt.remotes)
-			remotes, err := validateMirrorRemotes(r, tt.policy)
+			remotes, err := validateMirrorRemotes(t.Context(), r, tt.policy)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -151,7 +151,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 // skipped rather than treated as valid.
 func TestValidateMirrorRemotesNoRemote(t *testing.T) {
 	r := newRepoWithRemotes(t, nil)
-	if _, err := validateMirrorRemotes(r, ssrf.GitRemotePolicy{}); err == nil {
+	if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); err == nil {
 		t.Error("validateMirrorRemotes() accepted a repo with no remote")
 	}
 }

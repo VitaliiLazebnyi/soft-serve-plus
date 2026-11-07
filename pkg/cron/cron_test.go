@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestCronLogger(t *testing.T) {
 
 func TestSchedularAddRemove(t *testing.T) {
 	s := NewScheduler(context.TODO())
-	id, err := s.AddFunc("* * * * *", func() {})
+	id, err := s.AddFunc("test", "* * * * *", func() {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,12 +35,13 @@ func TestSchedularAddRemove(t *testing.T) {
 }
 
 func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
-	s := NewScheduler(context.TODO())
+	var logs bytes.Buffer
+	s := NewScheduler(log.WithContext(context.TODO(), log.New(&logs)))
 
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var runs atomic.Int32
-	id, err := s.AddFunc("* * * * *", func() {
+	id, err := s.AddFunc("mirror-pull", "* * * * *", func() {
 		runs.Add(1)
 		started <- struct{}{}
 		<-release
@@ -77,5 +79,10 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 
 	if n := runs.Load(); n != 1 {
 		t.Errorf("expected 1 run, got %d", n)
+	}
+
+	// The skip is logged with the job it skipped.
+	if out := logs.String(); !strings.Contains(out, "skipping job run") || !strings.Contains(out, "job=mirror-pull") {
+		t.Errorf("skip not logged with the job name: %q", out)
 	}
 }
