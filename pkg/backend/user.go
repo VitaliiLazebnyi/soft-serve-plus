@@ -141,6 +141,25 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 	return d.Readable(ctx, name, user)
 }
 
+// ReadableForUser is ReadableByPublicKey for a caller whose user is already
+// resolved, such as the user an SSH session stored in its context, so the
+// key is not looked up again. An admin key on ctx still sees every
+// repository with admin access, as in ReadableByPublicKey.
+//
+// The session user is the one resolved when the session authenticated, as
+// for the account commands and BaseAccessLevelForUser: a key removed from
+// that account mid-session keeps the session's user until it reconnects.
+// Collaborator rows, the repository's privacy and ownership are still read
+// fresh on every call.
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+	if d.isAdminKey(sshutils.PublicKeyFromContext(ctx)) {
+		r, _ := d.Repository(ctx, name)
+		return r, access.AdminAccess
+	}
+
+	return d.Readable(ctx, name, user)
+}
+
 // baseAccessLevel is the level user holds for a repository that does not
 // exist.
 //

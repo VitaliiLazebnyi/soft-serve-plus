@@ -304,8 +304,11 @@ func (ui *UI) openRepo(rn string) (proto.Repository, error) {
 	be := ui.common.Backend()
 
 	// A repository the caller cannot read is reported as missing, so a
-	// private repository and a missing one behave the same.
-	r, _ := be.ReadableByPublicKey(ctx, rn, ui.common.PublicKey())
+	// private repository and a missing one behave the same. The user is
+	// the one AuthenticationMiddleware put on the session context, so
+	// opening a repository does not look the key up again; an admin key
+	// on the context still gets admin access.
+	r, _ := be.ReadableForUser(ctx, rn, proto.UserFromContext(ctx))
 	if r == nil {
 		return nil, common.ErrMissingRepo
 	}
