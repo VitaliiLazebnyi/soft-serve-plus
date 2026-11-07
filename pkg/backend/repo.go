@@ -202,7 +202,7 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 			// openRepoError logs the other case.
 			d.logger.Debug("failed to create repository", "err", err)
 		}
-		os.RemoveAll(rp) //nolint:errcheck
+		d.removeRepoDir(rp) //nolint:errcheck
 		return nil, openRepoError(d.logger, err, rp)
 	}
 
@@ -213,16 +213,77 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 // occupies it. The filesystem decides what "already" means, which is what
 // makes this safe on case- and normalization-insensitive volumes.
 func claimRepoPath(rp string) error {
-	if err := os.MkdirAll(filepath.Dir(rp), os.ModePerm); err != nil {
-		return err
-	}
-	if err := os.Mkdir(rp, os.ModePerm); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return proto.ErrRepoExist
+	return withRepoParent(rp, func() error {
+		if err := os.Mkdir(rp, os.ModePerm); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return proto.ErrRepoExist
+			}
+			return err
 		}
+		return nil
+	})
+}
+
+// repoParentAttempts bounds how often withRepoParent recreates a parent
+// directory that a concurrent delete or rename removed.
+const repoParentAttempts = 5
+
+// withRepoParent creates the parent directories of the repository path p and
+// then runs place, which puts something at p. A delete or rename of another
+// repository in the same group removes parents it leaves empty (see
+// removeEmptyRepoParents), so a parent can vanish between its creation and
+// place; place then fails with fs.ErrNotExist and is tried again with the
+// parents recreated.
+func withRepoParent(p string, place func() error) error {
+	var err error
+	for range repoParentAttempts {
+		if err = os.MkdirAll(filepath.Dir(p), os.ModePerm); err != nil {
+			return err
+		}
+		if err = place(); !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return err
+}
+
+// removeRepoDir removes the repository directory rp and then the parent
+// directories it leaves empty.
+func (d *Backend) removeRepoDir(rp string) error {
+	if err := os.RemoveAll(rp); err != nil {
 		return err
 	}
+	d.removeEmptyRepoParents(rp)
 	return nil
+}
+
+// removeEmptyRepoParents removes the directories between the repository path
+// rp and the repos directory that are empty, deepest first, so deleting or
+// renaming away a nested repository such as "a/b" does not leave an empty
+// repos/a behind. It stops at the first directory that is not empty or cannot
+// be removed, and never touches the repos directory itself. Only real
+// directories are removed: a symlink an administrator put in the tree is
+// left alone even when what it points to is empty. Failures are not errors:
+// an empty directory left behind is harmless.
+func (d *Backend) removeEmptyRepoParents(rp string) {
+	root := filepath.Join(d.cfg.DataPath, "repos")
+	for dir := filepath.Dir(rp); ; dir = filepath.Dir(dir) {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return
+		}
+		fi, err := os.Lstat(dir)
+		if err != nil || !fi.IsDir() {
+			return
+		}
+		// Remove fails on a directory that is not empty, which is what
+		// keeps the other repositories of the group, and anything else in
+		// the directory, in place.
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
 }
 
 // registerRepository records a bare repository that already exists at the
@@ -302,7 +363,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 		return hooks.GenerateHooks(ctx, d.cfg, name)
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
-		os.RemoveAll(rp) //nolint:errcheck
+		d.removeRepoDir(rp) //nolint:errcheck
 		err = db.WrapError(err)
 		if errors.Is(err, db.ErrDuplicateKey) {
 			return nil, proto.ErrRepoExist
@@ -478,7 +539,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 
 	if err := git.Clone(imp.remote, imp.path, copts); err != nil {
 		d.logger.Error("failed to clone repository", "err", err, "mirror", imp.opts.Mirror, "remote", imp.logRemote, "path", imp.path)
-		if rerr := os.RemoveAll(imp.path); rerr != nil {
+		if rerr := d.removeRepoDir(imp.path); rerr != nil {
 			err = errors.Join(err, rerr)
 		}
 		return nil, err
@@ -629,7 +690,7 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		if dberr != nil {
 			// A directory with no row is an orphan; remove it.
 			if keep == nil && d.repoPathExists(name) {
-				return os.RemoveAll(rp)
+				return d.removeRepoDir(rp)
 			}
 			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
 				return proto.ErrRepoNotFound
@@ -672,7 +733,7 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// directory has no row: it cannot be created, imported or renamed over,
 	// and deleting the repository again removes it.
 	if rowDeleted {
-		if err := os.RemoveAll(rp); err != nil {
+		if err := d.removeRepoDir(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}
 	}
@@ -742,13 +803,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 			return err
 		}
 
-		// Make sure the new repository parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(np), os.ModePerm); err != nil {
-			d.logger.Error("failed to create repository parent directory", "repo", newName, "err", err)
-			return errRepoUpdate
-		}
-
-		if err := os.Rename(op, np); err != nil {
+		// Make sure the new repository parent directory exists, and
+		// recreate it if a concurrent delete or rename removes it first.
+		if err := withRepoParent(np, func() error { return os.Rename(op, np) }); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
 		}
@@ -757,6 +814,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	}); err != nil {
 		return wrapRepoError(err)
 	}
+
+	// The old name's group directories may now be empty.
+	d.removeEmptyRepoParents(op)
 
 	// The rename is committed, so an event problem is logged, not returned.
 	user := proto.UserFromContext(ctx)
