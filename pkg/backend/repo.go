@@ -135,6 +135,22 @@ func (d *Backend) countRepos(ctx context.Context, h db.Handler, user proto.User)
 	return d.store.CountUserRepos(ctx, h, user.ID())
 }
 
+// checkRepoLimit refuses user, already at max_repos_per_user, before
+// anything is created for a new repository: no directory, git init or
+// hooks to undo. It is an early answer only: the count is not locked, so
+// registerRepository checks again in the transaction that records the
+// repository, which is what keeps concurrent creates within the limit.
+func (d *Backend) checkRepoLimit(ctx context.Context, user proto.User) error {
+	n, err := d.countRepos(ctx, d.db, user)
+	if err != nil {
+		return err
+	}
+	if n >= int64(d.cfg.MaxReposPerUser) {
+		return d.errRepoLimit(user)
+	}
+	return nil
+}
+
 // errRepoLimit is the error for user being at max_repos_per_user.
 func (d *Backend) errRepoLimit(user proto.User) error {
 	if user == nil || user.ID() == 0 {
@@ -173,7 +189,13 @@ func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.
 	if err := d.checkCanCreate(ctx, user); err != nil {
 		return nil, err
 	}
-	return d.createRepository(ctx, name, user, opts, d.repoLimited(ctx, user))
+	limited := d.repoLimited(ctx, user)
+	if limited {
+		if err := d.checkRepoLimit(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+	return d.createRepository(ctx, name, user, opts, limited)
 }
 
 // CreateSystemRepository creates a repository on the server's own behalf,
