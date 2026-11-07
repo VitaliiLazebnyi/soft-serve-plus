@@ -19,7 +19,7 @@ func (b *Backend) CreateAccessToken(ctx context.Context, user proto.User, name s
 	if err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := b.store.CreateAccessToken(ctx, tx, name, user.ID(), tokenHash, expiresAt)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
@@ -35,11 +35,11 @@ func (b *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int
 	err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := b.store.GetAccessToken(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := b.store.DeleteAccessTokenForUser(ctx, tx, user.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		return nil
 	})
@@ -57,7 +57,7 @@ func (b *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int
 func (b *Backend) ListAccessTokens(ctx context.Context, user proto.User) ([]proto.AccessToken, error) {
 	accessTokens, err := b.store.GetAccessTokensByUserID(ctx, b.db, user.ID())
 	if err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	var tokens []proto.AccessToken

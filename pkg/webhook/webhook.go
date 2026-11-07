@@ -362,7 +362,7 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 		log.FromContext(ctx).Warn("pruning webhook deliveries", "webhook", w.ID, "err", pruneErr)
 		err = create(dbx)
 	}
-	return db.WrapError(err)
+	return err
 }
 
 // maxDeliveries is how many deliveries are kept per webhook. Every recorded
@@ -409,7 +409,7 @@ func Subscribers(ctx context.Context, payload EventPayload) ([]models.Webhook, e
 	datastore := store.FromContext(ctx)
 	webhooks, err := datastore.GetWebhooksByRepoIDWhereEvent(ctx, dbx, payload.RepositoryID(), []int{int(payload.Event())})
 	if err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 	return webhooks, nil
 }
@@ -503,7 +503,7 @@ func lookupSubscribers(ctx context.Context, repoID int64, event Event) ([]models
 	defer cancel()
 	hooks, err := store.FromContext(ctx).GetWebhooksByRepoIDWhereEvent(lctx, db.FromContext(ctx), repoID, []int{int(event)})
 	if err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 	return hooks, nil
 }

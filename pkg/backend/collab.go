@@ -29,11 +29,9 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		return err
 	}
 
-	if err := db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
-		}),
-	); err != nil {
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
+	}); err != nil {
 		// A repository deleted meanwhile fails the insert on a
 		// constraint too; report it as gone, not as a duplicate.
 		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
@@ -100,7 +98,7 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
 		return err
 	}); err != nil {
-		return -1, false, db.WrapError(err)
+		return -1, false, err
 	}
 
 	return m.AccessLevel, m.ID > 0, nil
@@ -119,17 +117,15 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 	wh, err := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
 	if err != nil {
 		// The event looks up the collaborator row, so a missing row shows up here.
-		if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		if errors.Is(err, db.ErrRecordNotFound) {
 			return proto.ErrCollaboratorNotFound
 		}
 		return err
 	}
 
-	if err := db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.RemoveCollabByUsernameAndRepo(ctx, tx, username, repo)
-		}),
-	); err != nil {
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.RemoveCollabByUsernameAndRepo(ctx, tx, username, repo)
+	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return proto.ErrCollaboratorNotFound
 		}

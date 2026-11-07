@@ -68,7 +68,7 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 	datastore := store.FromContext(ctx)
 	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
 	if err != nil {
-		return RepositoryEvent{}, db.WrapError(err)
+		return RepositoryEvent{}, err
 	}
 
 	payload.Repository.Owner.ID = owner.ID

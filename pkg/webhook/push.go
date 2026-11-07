@@ -59,7 +59,7 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 	datastore := store.FromContext(ctx)
 	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
 	if err != nil {
-		return PushEvent{}, db.WrapError(err)
+		return PushEvent{}, err
 	}
 
 	payload.Repository.Owner.ID = owner.ID

@@ -17,8 +17,14 @@ var (
 	ErrRecordNotFound = sql.ErrNoRows
 )
 
-// WrapError is a convenient function that unite various database driver
-// errors to consistent errors.
+// WrapError maps database driver errors to the errors of this package. A
+// constraint violation becomes an error that errors.Is reports as
+// ErrDuplicateKey and whose message is ErrDuplicateKey's; the driver error
+// stays in its chain, so errors.As still finds it. sql.ErrNoRows becomes
+// ErrRecordNotFound. Other errors are returned unchanged.
+//
+// The methods of DB and Tx already apply WrapError, so errors from a Handler
+// need no further mapping.
 func WrapError(err error) error {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -31,7 +37,7 @@ func WrapError(err error) error {
 			if code == sqlitelib.SQLITE_CONSTRAINT_PRIMARYKEY ||
 				code == sqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY ||
 				code == sqlitelib.SQLITE_CONSTRAINT_UNIQUE {
-				return ErrDuplicateKey
+				return &mappedError{ErrDuplicateKey, err}
 			}
 		}
 
@@ -40,9 +46,19 @@ func WrapError(err error) error {
 			if pgErr.Code == "23505" ||
 				pgErr.Code == "23503" ||
 				pgErr.Code == "23514" {
-				return ErrDuplicateKey
+				return &mappedError{ErrDuplicateKey, err}
 			}
 		}
 	}
 	return err
 }
+
+// mappedError is a driver error mapped to one of this package's errors.
+type mappedError struct {
+	mapped error
+	driver error
+}
+
+func (e *mappedError) Error() string { return e.mapped.Error() }
+
+func (e *mappedError) Unwrap() []error { return []error{e.mapped, e.driver} }

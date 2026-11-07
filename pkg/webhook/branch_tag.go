@@ -69,7 +69,7 @@ func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Reposito
 	datastore := store.FromContext(ctx)
 	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
 	if err != nil {
-		return BranchTagEvent{}, db.WrapError(err)
+		return BranchTagEvent{}, err
 	}
 
 	payload.Repository.Owner.ID = owner.ID

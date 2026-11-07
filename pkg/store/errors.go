@@ -23,7 +23,7 @@ func RepoGoneError(ctx context.Context, s RepositoryStore, h db.Handler, repoID 
 	if err == nil {
 		return nil
 	}
-	if _, gerr := s.GetRepoByID(ctx, h, repoID); errors.Is(db.WrapError(gerr), db.ErrRecordNotFound) {
+	if _, gerr := s.GetRepoByID(ctx, h, repoID); errors.Is(gerr, db.ErrRecordNotFound) {
 		return proto.ErrRepoNotFound
 	}
 	return err

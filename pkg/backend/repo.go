@@ -303,7 +303,6 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
 		os.RemoveAll(rp) //nolint:errcheck
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrDuplicateKey) {
 			return nil, proto.ErrRepoExist
 		}
@@ -631,10 +630,10 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 			if keep == nil && d.repoPathExists(name) {
 				return os.RemoveAll(rp)
 			}
-			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
+			if errors.Is(dberr, db.ErrRecordNotFound) {
 				return proto.ErrRepoNotFound
 			}
-			return db.WrapError(dberr)
+			return dberr
 		}
 		if keep != nil {
 			kept, err := keep(tx, repom)
@@ -651,11 +650,11 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		// Remove the webhooks and their rows explicitly, so none are left
 		// behind whether or not the connection enforces foreign keys.
 		if err := d.deleteRepoWebhookRows(ctx, tx, repom.ID); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := d.store.DeleteRepoByName(ctx, tx, name); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		rowDeleted = true
@@ -801,7 +800,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return repos, nil
@@ -848,7 +847,6 @@ var errRepoUpdate = errors.New("failed to update repository")
 // callers never see the raw driver error for a repository that does not
 // exist.
 func wrapRepoError(err error) error {
-	err = db.WrapError(err)
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrRepoNotFound
 	}
@@ -1090,7 +1088,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 		um, err := d.store.GetUserByID(ctx, d.db, m.UserID.Int64)
 		if err == nil {
 			owner = &user{user: um}
-		} else if !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		} else if !errors.Is(err, db.ErrRecordNotFound) {
 			return err
 		}
 	}

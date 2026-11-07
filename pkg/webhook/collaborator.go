@@ -57,7 +57,7 @@ func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repos
 	datastore := store.FromContext(ctx)
 	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
 	if err != nil {
-		return CollaboratorEvent{}, db.WrapError(err)
+		return CollaboratorEvent{}, err
 	}
 
 	payload.Repository.Owner.ID = owner.ID
