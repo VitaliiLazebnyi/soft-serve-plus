@@ -127,12 +127,7 @@ func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 
 // Download implements Client.
 func (c *httpClient) Download(ctx context.Context, objects []Pointer, callback DownloadCallback) error {
-	return c.performOperation(ctx, objects, callback, nil)
-}
-
-// Upload implements Client.
-func (c *httpClient) Upload(ctx context.Context, objects []Pointer, callback UploadCallback) error {
-	return c.performOperation(ctx, objects, nil, callback)
+	return c.performOperation(ctx, objects, callback)
 }
 
 func (c *httpClient) transferNames() []string {
@@ -202,18 +197,13 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	return &response, nil
 }
 
-func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback, uc UploadCallback) error {
+func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	if len(objects) == 0 {
 		return nil
 	}
 
-	operation := OperationDownload
-	if uc != nil {
-		operation = OperationUpload
-	}
-
-	result, err := c.batch(ctx, operation, objects)
+	result, err := c.batch(ctx, OperationDownload, objects)
 	if err != nil {
 		return err
 	}
@@ -227,64 +217,25 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		if object.Error != nil {
 			objectError := errors.New(object.Error.Message)
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
-			if uc != nil {
-				if _, err := uc(object.Pointer, objectError); err != nil {
-					return err
-				}
-			} else {
-				if err := dc(object.Pointer, nil, objectError); err != nil {
-					return err
-				}
+			if err := dc(object.Pointer, nil, objectError); err != nil {
+				return err
 			}
 			continue
 		}
 
-		if uc != nil {
-			if len(object.Actions) == 0 {
-				logger.Debugf("%v already present on server", object.Pointer)
-				continue
-			}
+		link, ok := object.Actions[ActionDownload]
+		if !ok {
+			logger.Debugf("%v has no usable action", object.Pointer)
+			return errors.New("missing action 'download'")
+		}
 
-			link, ok := object.Actions[ActionUpload]
-			if !ok {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'upload'")
-			}
+		content, err := transferAdapter.Download(ctx, object.Pointer, link)
+		if err != nil {
+			return err
+		}
 
-			content, err := uc(object.Pointer, nil)
-			if err != nil {
-				return err
-			}
-
-			err = transferAdapter.Upload(ctx, object.Pointer, content, link)
-
-			content.Close() //nolint: errcheck
-
-			if err != nil {
-				return err
-			}
-
-			link, ok = object.Actions[ActionVerify]
-			if ok {
-				if err := transferAdapter.Verify(ctx, object.Pointer, link); err != nil {
-					return err
-				}
-			}
-		} else {
-			link, ok := object.Actions[ActionDownload]
-			if !ok {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'download'")
-			}
-
-			content, err := transferAdapter.Download(ctx, object.Pointer, link)
-			if err != nil {
-				return err
-			}
-
-			if err := dc(object.Pointer, content, nil); err != nil {
-				return err
-			}
+		if err := dc(object.Pointer, content, nil); err != nil {
+			return err
 		}
 	}
 

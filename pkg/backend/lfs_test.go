@@ -71,10 +71,6 @@ func (c *fakeLFSClient) Download(_ context.Context, pointers []lfs.Pointer, cb l
 	return nil
 }
 
-func (c *fakeLFSClient) Upload(context.Context, []lfs.Pointer, lfs.UploadCallback) error {
-	return nil
-}
-
 // hookReader calls hook before the first Read.
 type hookReader struct {
 	r    io.Reader

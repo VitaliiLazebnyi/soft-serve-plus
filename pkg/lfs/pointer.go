@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	// blobSizeCutoff is the largest blob size, in bytes, that is read to
+	// check whether it is an LFS pointer. Real pointers are much smaller.
 	blobSizeCutoff = 1024
 
 	// HashAlgorithmSHA256 is the hash algorithm used for Git LFS.
@@ -36,18 +38,6 @@ var (
 	// ErrInvalidOIDFormat occurs if the oid has an invalid format
 	ErrInvalidOIDFormat = errors.New("OID has an invalid format")
 )
-
-// ReadPointer tries to read LFS pointer data from the reader
-func ReadPointer(reader io.Reader) (Pointer, error) {
-	buf := make([]byte, blobSizeCutoff)
-	n, err := io.ReadFull(reader, buf)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return Pointer{}, err
-	}
-	buf = buf[:n]
-
-	return ReadPointerFromBuffer(buf)
-}
 
 var oidPattern = regexp.MustCompile(`^[a-f\d]{64}$`)
 
