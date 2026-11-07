@@ -1200,8 +1200,10 @@ func (d *Backend) repoPath(name string) string {
 
 // isOrphanRepoPath reports whether the directory of the repository named name,
 // which has no row, exists and is not the directory of any repository with a
-// row. On a case-insensitive filesystem the path of a name that differs only
-// in case from a repository's name leads to that repository's directory.
+// row. A filesystem can lead the path of a different name to a repository's
+// directory: one that ignores case (macOS, Windows) or Unicode normalization
+// (APFS). Which names match depends on the filesystem, so every repository's
+// directory is compared, not only those of names that look alike.
 func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
 	fi, err := os.Lstat(d.repoPath(name))
 	if err != nil {
@@ -1212,9 +1214,6 @@ func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) 
 		return false, db.WrapError(err)
 	}
 	for _, r := range repos {
-		if !strings.EqualFold(r.Name, name) {
-			continue
-		}
 		rfi, err := os.Lstat(d.repoPath(r.Name))
 		if err == nil && os.SameFile(fi, rfi) {
 			return false, nil

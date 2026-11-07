@@ -112,3 +112,36 @@ func TestDeleteRepositoryRemovesOrphanDirectory(t *testing.T) {
 	is.True(os.IsNotExist(err))
 	is.True(errors.Is(be.DeleteRepository(ctx, "orphan"), proto.ErrRepoNotFound))
 }
+
+// APFS ignores Unicode normalization as well as case, so the decomposed form
+// of a repository's name leads to the directory of the precomposed one. Names
+// like these are not case variants of each other, so the delete must compare
+// the directory against every repository, not only names that fold alike.
+func TestDeleteRepositoryNormalizationVariantKeepsRepository(t *testing.T) {
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	const (
+		precomposed = "\uD55C"             // 한
+		decomposed  = "\u1112\u1161\u11AB" // 한 as jamo
+	)
+	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := be.CreateRepository(ctx, precomposed, owner, proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !be.repoPathExists(decomposed) {
+		t.Skip("filesystem keeps Unicode normalization forms apart")
+	}
+
+	if err := be.DeleteRepository(ctx, decomposed); !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Errorf("DeleteRepository(decomposed) => %v, want ErrRepoNotFound", err)
+	}
+	if _, err := be.Repository(ctx, precomposed); err != nil {
+		t.Fatalf("repository row gone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(be.repoPath(precomposed), "HEAD")); err != nil {
+		t.Errorf("repository directory damaged: %v", err)
+	}
+}
