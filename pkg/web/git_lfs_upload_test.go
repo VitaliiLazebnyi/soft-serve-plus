@@ -1,9 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -263,4 +265,75 @@ func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 		t.Fatalf("got 200 for an object whose repository was deleted")
 	}
 	e.assertNoTempFiles(t)
+}
+
+// batchUpload asks the batch endpoint to upload the given objects and returns
+// the decoded response.
+func (e *lfsUploadEnv) batchUpload(t *testing.T, objects ...lfs.Pointer) lfs.BatchResponse {
+	t.Helper()
+	body, err := json.Marshal(lfs.BatchRequest{Operation: lfs.OperationUpload, Objects: objects})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(e.ctx, http.MethodPost,
+		"/repo.git/info/lfs/objects/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", lfs.MediaType)
+	req.Header.Set("Accept", lfs.MediaType)
+	req.Header.Set("Authorization", "token "+e.token)
+	w := httptest.NewRecorder()
+	e.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch: got status %d: %s", w.Code, w.Body.String())
+	}
+	var resp lfs.BatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Objects) != len(objects) {
+		t.Fatalf("batch: got %d objects, want %d", len(resp.Objects), len(objects))
+	}
+	return resp
+}
+
+// TestLFSBatchUploadOmitsActionsForPresentObjects checks that an upload batch
+// leaves out actions for objects the server already stores, as the batch API
+// asks, so the client does not send them again. Objects that are missing, or
+// whose row or file is incomplete, still get upload and verify actions.
+func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
+	e := newLFSUploadEnv(t)
+
+	stored := "stored object"
+	storedOid := sha256Hex(stored)
+	if w := e.upload(storedOid, int64(len(stored)), strings.NewReader(stored)); w.Code != http.StatusOK {
+		t.Fatalf("upload: got status %d: %s", w.Code, w.Body.String())
+	}
+
+	// A row without its file, as left by a lost or deleted file.
+	noFile := "row only"
+	noFileOid := sha256Hex(noFile)
+	if err := e.datastore.CreateLFSObject(e.ctx, db.FromContext(e.ctx), e.repo.ID(), noFileOid, int64(len(noFile))); err != nil {
+		t.Fatal(err)
+	}
+
+	missingOid := sha256Hex("not uploaded")
+
+	resp := e.batchUpload(t,
+		lfs.Pointer{Oid: storedOid, Size: int64(len(stored))},
+		lfs.Pointer{Oid: storedOid, Size: int64(len(stored)) + 1},
+		lfs.Pointer{Oid: noFileOid, Size: int64(len(noFile))},
+		lfs.Pointer{Oid: missingOid, Size: 12},
+	)
+
+	wantActions := []bool{false, true, true, true}
+	for i, o := range resp.Objects {
+		if o.Error != nil {
+			t.Errorf("object %d: unexpected error %+v", i, o.Error)
+		}
+		_, hasUpload := o.Actions[lfs.ActionUpload]
+		_, hasVerify := o.Actions[lfs.ActionVerify]
+		if hasUpload != wantActions[i] || hasVerify != wantActions[i] {
+			t.Errorf("object %d (%s, size %d): upload=%v verify=%v, want %v",
+				i, o.Oid, o.Size, hasUpload, hasVerify, wantActions[i])
+		}
+	}
 }
