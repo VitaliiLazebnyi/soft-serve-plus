@@ -15,14 +15,15 @@ import (
 )
 
 type fakeRepo struct {
-	name    string
-	private bool
+	name        string
+	projectName string
+	description string
+	private     bool
 }
 
 func (r fakeRepo) ID() int64                      { return 1 }
 func (r fakeRepo) Name() string                   { return r.name }
-func (r fakeRepo) ProjectName() string            { return "" }
-func (r fakeRepo) Description() string            { return "a description" }
+func (r fakeRepo) ProjectName() string            { return r.projectName }
 func (r fakeRepo) IsPrivate() bool                { return r.private }
 func (r fakeRepo) IsMirror() bool                 { return false }
 func (r fakeRepo) IsHidden() bool                 { return false }
@@ -30,6 +31,13 @@ func (r fakeRepo) UserID() int64                  { return 1 }
 func (r fakeRepo) CreatedAt() time.Time           { return time.Time{} }
 func (r fakeRepo) UpdatedAt() time.Time           { return time.Time{} }
 func (r fakeRepo) Open() (*git.Repository, error) { return nil, nil }
+
+func (r fakeRepo) Description() string {
+	if r.description == "" {
+		return "a description"
+	}
+	return r.description
+}
 
 var _ proto.Repository = fakeRepo{}
 
@@ -82,5 +90,27 @@ func TestItemVisibilityMarkerLongName(t *testing.T) {
 		if got, want := lipgloss.Width(long), lipgloss.Width(short); got != want {
 			t.Errorf("private=%v: long name renders %d wide, short name %d", private, got, want)
 		}
+	}
+}
+
+// A project name or description with line breaks still renders on one line
+// each, so the item keeps the height the list reserves for it.
+func TestItemMultiLineFields(t *testing.T) {
+	t.Parallel()
+	const width = 80
+	plain := renderItem(t, fakeRepo{name: "repo"}, width)
+	out := renderItem(t, fakeRepo{
+		name:        "repo",
+		projectName: "My\nProject",
+		description: "first line\r\nsecond\tline\n\nthird line\n",
+	}, width)
+	if got, want := lipgloss.Height(out), lipgloss.Height(plain); got != want {
+		t.Fatalf("item renders %d lines, want %d:\n%s", got, want, out)
+	}
+	if !strings.Contains(out, "My Project") {
+		t.Errorf("item %q lacks the joined project name", out)
+	}
+	if !strings.Contains(out, "first line second line third line") {
+		t.Errorf("item %q lacks the joined description", out)
 	}
 }
