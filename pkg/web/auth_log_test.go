@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
 
@@ -121,6 +122,10 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 	is.NoErr(err)
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
 	is.NoErr(err)
+	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
+	is.NoErr(err)
+	goneJWT := mintJWT(ctx, t, gone, "secret")
+	is.NoErr(f.be.DeleteUser(ctx, "gone"))
 
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
@@ -130,6 +135,7 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 
 	for name, header := range map[string]string{
 		"bad token":                   "token ss_bad-token",
+		"deleted user bearer":         "Bearer " + goneJWT,
 		"expired token":               "token " + expired,
 		"bad bearer":                  "Bearer ss_bad-token",
 		"basic bad password":          basic("stranger", "bad-password"),
