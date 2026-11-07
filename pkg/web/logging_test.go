@@ -129,6 +129,9 @@ func TestLoggingMiddlewareServeContent(t *testing.T) {
 		t.Fatalf("ranged GET: status %d, %d bytes; want 206, %d bytes", resp.StatusCode, len(body), len(content)-50000)
 	}
 
+	// Close waits for the handlers to return, so both "response" lines
+	// have been written before the log buffer is read.
+	srv.Close()
 	out := logs.String()
 	if !strings.Contains(out, `bytes="100 kB"`) || !strings.Contains(out, `bytes="50 kB"`) {
 		t.Fatalf("response log does not count the served bytes:\n%s", out)
