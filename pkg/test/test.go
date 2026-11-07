@@ -59,8 +59,9 @@ const (
 //
 // Reservations are never released, so one process gets at most
 // maxPort-minPort (12,000) ports in total, fewer when other processes hold
-// some. A full testscript pass takes about 160, so a single process can run
-// it about 70 times (for example with -count) before RandomPort panics.
+// some. A full testscript pass takes four per script (228 for 57 scripts), so
+// a single process can run it about 50 times (for example with -count) before
+// RandomPort panics.
 // This is mainly used for testing.
 func RandomPort() int {
 	hasIPv6Once.Do(func() { hasIPv6 = canListen("::1", 0) == nil })

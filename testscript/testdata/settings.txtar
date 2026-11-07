@@ -6,7 +6,6 @@ exec soft serve &
 ensureserverrunning SSH_PORT
 
 # check default allow-keyless
-soft settings allow-keyless true
 soft settings allow-keyless
 stdout 'true.*'
 

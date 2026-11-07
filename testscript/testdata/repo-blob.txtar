@@ -29,16 +29,16 @@ git -C repo1 push origin HEAD
 soft repo blob repo1 README.md
 cmp stdout blob1.txt
 
-# print file blob with revision with line numbers and colors
+# print file blob with revision with line numbers; the tests set
+# SOFT_SERVE_NO_COLOR=1, so -c is accepted but prints no colors
 soft repo blob repo1 master main.go -l -c
 cmp stdout blob2.txt
-
 
 # print file blob with revision within folder with lineno
 soft repo blob repo1 master folder/lib.c -l
 cmp stdout blob3.txt
 
-# print blob of folder that does not exist
+# print blob of file that does not exist
 ! soft repo blob repo1 folder/nope.txt
 ! stdout .
 stderr 'revision does not exist'
