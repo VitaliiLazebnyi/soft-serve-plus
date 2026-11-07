@@ -1081,6 +1081,14 @@ It's also possible to “link” to a specific repo:
 ssh -p 23231 localhost -t soft-serve-plus
 ```
 
+The TUI's About tab shows the `README.md` of the `.soft-serve` repository.
+Only a server admin can create that repository or rename one to it, and the
+About tab shows its README only while a server admin owns it, and only to
+users who can read it: make it private to show it to collaborators only. A
+`.soft-serve` that an anonymous user created (possible before the name was
+reserved, with `anon-access` set to `read-write`) is not shown; delete it and
+create it again as an admin.
+
 You can copy text to your clipboard over SSH. For instance, you can press
 <kbd>c</kbd> on the highlighted repo in the menu to copy the clone command
 [^osc52].

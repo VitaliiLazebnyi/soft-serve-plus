@@ -430,7 +430,16 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			if cerr == nil {
 				repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 			}
-			if errors.Is(cerr, proto.ErrRepoLimitReached) {
+			if errors.Is(cerr, proto.ErrUnauthorized) && user == nil {
+				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+				// As above: git sends credentials only after a 401, so ask
+				// for them. A signed-in admin then creates the repository; an
+				// anonymous client sees this body.
+				askCredentials(w, r)
+				http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
+				return
+			}
+			if errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized) {
 				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
 				// git shows a text/plain error body to the user.
 				http.Error(w, cerr.Error(), http.StatusForbidden)
