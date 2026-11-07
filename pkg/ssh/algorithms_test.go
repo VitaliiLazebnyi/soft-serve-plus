@@ -78,6 +78,14 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 // cfg and returns its address.
 func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	t.Helper()
+	addr, _ := startServer(t, cfg)
+	return addr
+}
+
+// startServer starts an SSH server with cfg on a local port and returns its
+// address and the server.
+func startServer(t *testing.T, cfg *config.Config) (string, *SSHServer) {
+	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +115,7 @@ func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	}
 	go s.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = s.Close() })
-	return l.Addr().String()
+	return l.Addr().String(), s
 }
 
 // dialWith connects to addr with a client limited to the given algorithms

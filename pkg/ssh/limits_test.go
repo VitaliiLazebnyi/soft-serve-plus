@@ -234,7 +234,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 			cfg.SSH.MaxConnectionsPerIP = 0
 			cfg.SSH.IdleTimeout = 0 // the handshake timeout alone must free the place
 			cfg.SSH.HandshakeTimeout = 1
-			addr := startAlgorithmsServer(t, cfg)
+			addr, srv := startServer(t, cfg)
 
 			raw, err := net.Dial("tcp", addr)
 			if err != nil {
@@ -247,9 +247,13 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 				}
 			}
 
-			// Give the server time to accept the raw connection, so it holds
+			// Wait for the server to accept the raw connection, so it holds
 			// the only place before the client below dials.
-			time.Sleep(200 * time.Millisecond)
+			waitFor(t, "the raw connection to hold the only place", func() bool {
+				srv.limiter.mu.Lock()
+				defer srv.limiter.mu.Unlock()
+				return srv.limiter.total == 1
+			})
 			if c, err := dialClient(t, addr); err == nil {
 				_ = c.Close()
 				t.Fatal("connection accepted while an unauthenticated one holds the only place")
@@ -304,4 +308,16 @@ func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
 		t.Fatalf("authenticated connection closed by the handshake timeout: %v", err)
 	}
 	_ = s.Close()
+}
+
+// waitFor polls cond until it holds, failing the test after ten seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

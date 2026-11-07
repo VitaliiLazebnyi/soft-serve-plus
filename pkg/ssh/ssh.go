@@ -46,6 +46,8 @@ type SSHServer struct { //nolint: revive
 	be     *backend.Backend
 	ctx    context.Context
 	logger *log.Logger
+
+	limiter *connLimiter
 }
 
 // NewSSHServer returns a new SSHServer.
@@ -123,7 +125,8 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 
 	// Limit the connections open at once, in total and per client address,
 	// and the session channels each connection may hold.
-	s.srv.ConnCallback = connCallback(newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP), logger)
+	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
+	s.srv.ConnCallback = connCallback(s.limiter, logger)
 	s.srv.ChannelHandlers = map[string]ssh.ChannelHandler{
 		"session": limitSessions(ssh.DefaultSessionHandler, cfg.SSH.MaxSessions),
 	}
