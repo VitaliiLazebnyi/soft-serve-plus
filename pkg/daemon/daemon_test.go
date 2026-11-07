@@ -21,6 +21,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -211,4 +213,43 @@ func TestListensOnLoopback(t *testing.T) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		t.Fatalf("daemon listens on %q, want a loopback address", testDaemon.addr)
 	}
+}
+
+// TestUploadPackCounted checks that the daemon counts each upload-pack
+// request it serves once, under its own metric name, and does not count a
+// request it refuses.
+func TestUploadPackCounted(t *testing.T) {
+	ctx := context.Background()
+	if _, err := testBackend.CreateRepository(ctx, "counted", nil, proto.RepositoryOptions{}); err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	if _, err := testBackend.CreateRepository(ctx, "counted-private", nil, proto.RepositoryOptions{Private: true}); err != nil {
+		t.Fatalf("failed to create private repo: %v", err)
+	}
+
+	for range 2 {
+		if got := requestUploadPack(t, "counted"); got == git.ErrNotAuthed.Error() {
+			t.Fatalf("public repo was refused: %q", got)
+		}
+	}
+	requestUploadPack(t, "counted-private")
+
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted")); got != 2 {
+		t.Errorf("upload-pack counter for a served repo = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private")); got != 0 {
+		t.Errorf("upload-pack counter for a refused repo = %v, want 0", got)
+	}
+
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "soft_serve_daemon_git_upload_pack_total"
+	for _, mf := range mfs {
+		if mf.GetName() == want {
+			return
+		}
+	}
+	t.Errorf("metric %s is not registered", want)
 }

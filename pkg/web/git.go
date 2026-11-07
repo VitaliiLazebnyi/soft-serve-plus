@@ -482,8 +482,11 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if service == git.ReceivePackService {
-		gitHttpReceiveCounter.WithLabelValues(repoName)
+	switch service {
+	case git.ReceivePackService:
+		gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
+	case git.UploadPackService:
+		gitHttpUploadCounter.WithLabelValues(repoName, mux.Vars(r)["file"]).Inc()
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
@@ -565,11 +568,9 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cfg := config.FromContext(ctx)
-	dir, repoName, file := mux.Vars(r)["dir"], mux.Vars(r)["repo"], mux.Vars(r)["file"]
+	dir, repoName := mux.Vars(r)["dir"], mux.Vars(r)["repo"]
 	service := git.Service(mux.Vars(r)["service"])
 	protocol := r.Header.Get("Git-Protocol")
-
-	gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
 
 	if service != "" && (service == git.UploadPackService || service == git.ReceivePackService) {
 		// Smart HTTP

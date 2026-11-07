@@ -177,6 +177,10 @@ func initializePermissions(ctx ssh.Context) {
 
 // PublicKeyHandler handles public key authentication.
 func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed bool) {
+	defer func() {
+		publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
+	}()
+
 	if pk == nil {
 		return false
 	}

@@ -420,7 +420,6 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 	switch service {
 	case git.ReceivePackService:
-		receivePackCounter.WithLabelValues(name).Inc()
 		defer func() {
 			receivePackSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
 		}()
@@ -469,6 +468,8 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			return gitAccess(user, repo, accessLevel, access.ReadWriteAccess)
 		}
 
+		receivePackCounter.WithLabelValues(name).Inc()
+
 		if err := service.Handler(ctx, scmd); err != nil {
 			if created {
 				deleteFailedPushRepo(context.WithoutCancel(ctx), be, logger, name, repoPath)
@@ -481,8 +482,6 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			logger.Error("failed to ensure default branch", "err", err, "repo", name)
 			return git.ErrSystemMalfunction
 		}
-
-		receivePackCounter.WithLabelValues(name).Inc()
 
 		return nil
 	case git.UploadPackService, git.UploadArchiveService:
