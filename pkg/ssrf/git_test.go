@@ -229,6 +229,57 @@ func TestGitEnvDisablesProxy(t *testing.T) {
 	}
 }
 
+// TestURLProxyOverride checks the key that clears a proxy set for the
+// remote's own URL: the full URL with the user name, never the password.
+func TestURLProxyOverride(t *testing.T) {
+	for _, tc := range []struct{ url, want string }{
+		{"https://example.com/org/x.git", "http.https://example.com/org/x.git.proxy"},
+		{"http://example.com:8080/x.git", "http.http://example.com:8080/x.git.proxy"},
+		{"https://alice@example.com/x.git", "http.https://alice@example.com/x.git.proxy"},
+		{"https://alice:secret@example.com/x.git", "http.https://alice@example.com/x.git.proxy"},
+	} {
+		u, err := url.Parse(tc.url)
+		if err != nil {
+			t.Fatalf("bad test url: %v", err)
+		}
+		got := urlProxyOverride(u)
+		if got.Key != tc.want || got.Value != "" {
+			t.Errorf("urlProxyOverride(%q) = %+v, want key %q with empty value", tc.url, got, tc.want)
+		}
+		if u.String() != tc.url {
+			t.Errorf("urlProxyOverride modified its URL: %q", u)
+		}
+	}
+}
+
+// TestValidatedRemoteProxyOverrides checks that an http remote clears a
+// proxy set for its URL, and Named and ForClone one set for its name.
+func TestValidatedRemoteProxyOverrides(t *testing.T) {
+	u, _ := url.Parse("https://example.com/x.git")
+	v := validatedHTTPRemote(u, netip.MustParseAddr("1.1.1.1"))
+	env := GitEnv(v)
+	if !hasGitConfig(env, "http.https://example.com/x.git.proxy", "") {
+		t.Errorf("http remote did not clear its URL's proxy: %v", env)
+	}
+
+	if env := GitEnv(v.Named("up")); !hasGitConfig(env, "remote.up.proxy", "") {
+		t.Errorf("Named did not clear remote.up.proxy: %v", env)
+	}
+	env = GitEnv(v.ForClone())
+	if !hasGitConfig(env, "remote.origin.proxy", "") || !hasGitConfig(env, "clone.defaultRemoteName", "origin") {
+		t.Errorf("ForClone did not fix the remote name and clear its proxy: %v", env)
+	}
+	if len(v.Config) != 2 {
+		t.Errorf("Named or ForClone modified the remote: %v", v.Config)
+	}
+
+	// Other transports never go through an http proxy.
+	ssh := ValidatedGitRemote{Transport: GitTransportSSH}
+	if c := ssh.Named("up").ForClone().Config; len(c) != 0 {
+		t.Errorf("ssh remote got proxy overrides: %v", c)
+	}
+}
+
 // TestCurlResolvePin covers DNS rebinding: git re-resolves the hostname
 // itself, so the validated address has to be pinned for the check to survive
 // into the subprocess.

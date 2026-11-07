@@ -50,7 +50,9 @@ func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ss
 		if err != nil {
 			return nil, fmt.Errorf("remote %q: %w", sub.Name, err)
 		}
-		remotes = append(remotes, v)
+		// fetch and remote update reach each remote by name, so a
+		// remote.<name>.proxy must be cleared too.
+		remotes = append(remotes, v.Named(sub.Name))
 	}
 
 	if len(remotes) == 0 {

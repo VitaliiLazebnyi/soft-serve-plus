@@ -391,7 +391,7 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		path:      d.repoPath(name),
 		remote:    remote,
 		logRemote: redactRemote(remote),
-		env:       RemoteGitEnv(d.cfg, v),
+		env:       RemoteGitEnv(d.cfg, v.ForClone()),
 		opts:      opts,
 		limited:   limited,
 	}
