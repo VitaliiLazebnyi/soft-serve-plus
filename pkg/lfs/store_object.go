@@ -37,8 +37,7 @@ var (
 // rename fails, as it can on Windows, a file already in place is taken to be
 // the object if it is size bytes long and hashes to oid. If the object is
 // already recorded, by an earlier or concurrent upload, that counts as
-// success, but only once the row reads back: db.WrapError maps foreign key
-// violations to db.ErrDuplicateKey too. The temporary file is always removed.
+// success. The temporary file is always removed.
 //
 // A mismatch is reported as ErrObjectSizeMismatch or ErrObjectOidMismatch;
 // any other error is a storage or database failure. size must not be
@@ -79,13 +78,8 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 		}
 	}
 
-	if err := datastore.CreateLFSObject(ctx, dbx, repoID, oid, size); err != nil {
-		if !errors.Is(err, db.ErrDuplicateKey) {
-			return fmt.Errorf("record object: %w", err)
-		}
-		if _, gerr := datastore.GetLFSObjectByOid(ctx, dbx, repoID, oid); gerr != nil {
-			return fmt.Errorf("record object: %w (lookup: %v)", err, gerr)
-		}
+	if err := datastore.CreateLFSObject(ctx, dbx, repoID, oid, size); err != nil && !errors.Is(err, db.ErrDuplicateKey) {
+		return fmt.Errorf("record object: %w", err)
 	}
 
 	return nil
