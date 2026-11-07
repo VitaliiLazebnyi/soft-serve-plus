@@ -12,9 +12,8 @@ import (
 )
 
 // TestDiffIgnoresOutputConfig checks that config which changes git's diff
-// output, an external diff driver and forced color, does not reach the diff
-// parser, whether it comes from the repository's own config or from the
-// system config.
+// output does not reach the diff parser, whether it comes from the system
+// config or from the repository's own config.
 func TestDiffIgnoresOutputConfig(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the external diff driver is a shell script")
@@ -26,10 +25,14 @@ func TestDiffIgnoresOutputConfig(t *testing.T) {
 	if err := os.WriteFile(ext, []byte("#!/bin/sh\necho GARBAGE\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// A system config that forces color, which GIT_CONFIG_NOSYSTEM must
-	// keep out. GIT_CONFIG_SYSTEM points git at it for this test only.
+	// A system config that GIT_CONFIG_NOSYSTEM must keep out.
+	// GIT_CONFIG_SYSTEM points git at it for this test only. diff.noprefix
+	// drops the a/ and b/ prefixes the parser needs (it panics without
+	// them), and no command-line flag we pass undoes it, so only
+	// GIT_CONFIG_NOSYSTEM keeps the system subtest passing. Forced color is
+	// there too, although --no-color also covers it.
 	sysConfig := filepath.Join(dir, "gitconfig")
-	if err := os.WriteFile(sysConfig, []byte("[color]\n\tui = always\n\tdiff = always\n"), 0o600); err != nil {
+	if err := os.WriteFile(sysConfig, []byte("[diff]\n\tnoprefix = true\n[color]\n\tui = always\n\tdiff = always\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_SYSTEM", sysConfig)
@@ -61,7 +64,6 @@ func TestDiffIgnoresOutputConfig(t *testing.T) {
 	run(append(commit, "second")...)
 	write("three\n")
 	run("-c", "user.email=test@example.com", "-c", "user.name=Test", "stash", "-q")
-	run("config", "diff.external", ext)
 
 	repo, err := Open(repoPath)
 	if err != nil {
@@ -112,9 +114,11 @@ func TestDiffIgnoresOutputConfig(t *testing.T) {
 		})
 	}
 
-	// Color forced by the system config only.
+	// diff.noprefix and color from the system config only.
 	t.Run("system", checkAll)
-	// Color forced by the repository's config, which is always read.
+	// An external diff driver and forced color from the repository's config,
+	// which is always read and so is covered by the command-line flags.
+	run("config", "diff.external", ext)
 	run("config", "color.ui", "always")
 	t.Run("repository", checkAll)
 }
