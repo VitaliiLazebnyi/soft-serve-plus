@@ -134,10 +134,10 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.model.Init(),
 		m.footer.Init(),
+		// The repository page loads the ref to show itself.
 		func() tea.Msg {
 			return repo.RepoMsg(m.repo)
 		},
-		repo.UpdateRefCmd(m.repo),
 	)
 }
 

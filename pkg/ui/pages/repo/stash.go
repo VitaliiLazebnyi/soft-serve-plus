@@ -24,16 +24,27 @@ const (
 )
 
 // StashListMsg is a message sent when the stash list is loaded.
-type StashListMsg []*gitm.Stash
+type StashListMsg struct {
+	stashes []*gitm.Stash
+	gen     uint64
+}
+
+func (m StashListMsg) generation() uint64 { return m.gen }
 
 // StashPatchMsg is a message sent when the stash patch is loaded.
-type StashPatchMsg struct{ *git.Diff }
+type StashPatchMsg struct {
+	*git.Diff
+	gen uint64
+}
+
+func (m StashPatchMsg) generation() uint64 { return m.gen }
 
 // Stash is the stash component page.
 type Stash struct {
 	common       common.Common
 	code         *code.Code
-	ref          RefMsg
+	ref          *git.Reference
+	gen          uint64
 	repo         proto.Repository
 	spinner      spinner.Model
 	list         *selector.Selector
@@ -142,7 +153,7 @@ func (s *Stash) SpinnerID() int {
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
-	return tea.Batch(s.spinner.Tick, s.fetchStash)
+	return tea.Batch(s.spinner.Tick, s.fetchStash())
 }
 
 // Update updates the model.
@@ -152,7 +163,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		s.repo = msg
 	case RefMsg:
-		s.ref = msg
+		s.ref = msg.Ref
+		s.gen = msg.gen
 		s.list.Select(0)
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
@@ -187,8 +199,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case StashListMsg:
 		s.state = stashStateList
-		items := make([]selector.IdentifiableItem, len(msg))
-		for i, stash := range msg {
+		items := make([]selector.IdentifiableItem, len(msg.stashes))
+		for i, stash := range msg.stashes {
 			items[i] = StashItem{stash}
 		}
 		cmds = append(cmds, s.list.SetItems(items))
@@ -209,7 +221,7 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case StashItem:
-			cmds = append(cmds, s.fetchStashPatch)
+			cmds = append(cmds, s.fetchStashPatch())
 		}
 	case GoBackMsg:
 		if s.state == stashStateList {
@@ -247,38 +259,44 @@ func (s *Stash) View() string {
 	return ""
 }
 
-func (s *Stash) fetchStash() tea.Msg {
-	if s.repo == nil {
-		return StashListMsg(nil)
-	}
+func (s *Stash) fetchStash() tea.Cmd {
+	repo, gen := s.repo, s.gen
+	return func() tea.Msg {
+		if repo == nil {
+			return StashListMsg{gen: gen}
+		}
 
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	stash, err := r.StashList()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		stash, err := r.StashList()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return StashListMsg(stash)
+		return StashListMsg{stashes: stash, gen: gen}
+	}
 }
 
-func (s *Stash) fetchStashPatch() tea.Msg {
-	if s.repo == nil {
-		return StashPatchMsg{nil}
-	}
+func (s *Stash) fetchStashPatch() tea.Cmd {
+	repo, index, gen := s.repo, s.list.Index(), s.gen
+	return func() tea.Msg {
+		if repo == nil {
+			return StashPatchMsg{gen: gen}
+		}
 
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	diff, err := r.StashDiff(s.list.Index())
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		diff, err := r.StashDiff(index)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return StashPatchMsg{diff}
+		return StashPatchMsg{Diff: diff, gen: gen}
+	}
 }

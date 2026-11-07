@@ -6,6 +6,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -16,17 +17,21 @@ import (
 type ReadmeMsg struct {
 	Content string
 	Path    string
+	gen     uint64
 }
+
+func (m ReadmeMsg) generation() uint64 { return m.gen }
 
 // Readme is the readme component page.
 type Readme struct {
 	common     common.Common
 	code       *code.Code
-	ref        RefMsg
+	ref        *git.Reference
 	repo       proto.Repository
 	readmePath string
 	spinner    spinner.Model
 	isLoading  bool
+	gen        uint64
 }
 
 // NewReadme creates a new readme model.
@@ -91,7 +96,7 @@ func (r *Readme) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Readme) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd)
+	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd())
 }
 
 // Update implements tea.Model.
@@ -101,13 +106,15 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.repo = msg
 	case RefMsg:
-		r.ref = msg
+		r.ref = msg.Ref
+		r.gen = msg.gen
 		cmds = append(cmds, r.Init())
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.
+		r.gen = msg.gen
 		r.isLoading = false
 		r.readmePath = ""
 		r.code.GotoTop()
@@ -164,13 +171,13 @@ func (r *Readme) StatusBarInfo() string {
 	return common.ScrollPercent(r.code.ScrollPosition())
 }
 
-func (r *Readme) updateReadmeCmd() tea.Msg {
-	m := ReadmeMsg{}
-	if r.repo == nil {
-		return common.ErrorMsg(common.ErrMissingRepo)
+func (r *Readme) updateReadmeCmd() tea.Cmd {
+	repo, ref, gen := r.repo, r.ref, r.gen
+	return func() tea.Msg {
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
+		}
+		rm, rp, _ := backend.Readme(repo, ref)
+		return ReadmeMsg{Content: rm, Path: rp, gen: gen}
 	}
-	rm, rp, _ := backend.Readme(r.repo, r.ref)
-	m.Content = rm
-	m.Path = rp
-	return m
 }

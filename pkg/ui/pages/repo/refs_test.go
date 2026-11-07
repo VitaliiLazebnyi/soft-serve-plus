@@ -50,13 +50,13 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		if ref := (*git.Reference)(msg); ref == nil || ref.Name().Short() != "dev" {
-			t.Fatalf("UpdateRefCmd with a dangling HEAD = %v; want dev", msg)
+		if ref := msg.Ref; ref == nil || ref.Name().Short() != "dev" {
+			t.Fatalf("updateRefCmd with a dangling HEAD = %v; want dev", msg)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
 	}
 	ref, err = defaultRef(r)
 	if err != nil || ref == nil || ref.Name().Short() != "dev" {

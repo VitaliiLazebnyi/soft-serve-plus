@@ -47,16 +47,29 @@ var (
 )
 
 // FileItemsMsg is a message that contains a list of files.
-type FileItemsMsg []selector.IdentifiableItem
+type FileItemsMsg struct {
+	items []selector.IdentifiableItem
+	gen   uint64
+}
+
+func (m FileItemsMsg) generation() uint64 { return m.gen }
 
 // FileContentMsg is a message that contains the content of a file.
 type FileContentMsg struct {
 	content string
 	ext     string
+	gen     uint64
 }
 
+func (m FileContentMsg) generation() uint64 { return m.gen }
+
 // FileBlameMsg is a message that contains the blame of a file.
-type FileBlameMsg *gitm.Blame
+type FileBlameMsg struct {
+	blame *gitm.Blame
+	gen   uint64
+}
+
+func (m FileBlameMsg) generation() uint64 { return m.gen }
 
 // Files is the model for the files view.
 type Files struct {
@@ -69,12 +82,13 @@ type Files struct {
 	path           string
 	currentItem    *FileItem
 	currentContent FileContentMsg
-	currentBlame   FileBlameMsg
+	currentBlame   *gitm.Blame
 	lastSelected   []int
 	lineNumber     bool
 	spinner        spinner.Model
 	cursor         int
 	blameView      bool
+	gen            uint64
 }
 
 // NewFiles creates a new files model.
@@ -216,7 +230,7 @@ func (f *Files) Init() tea.Cmd {
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false
-	return tea.Batch(f.spinner.Tick, f.updateFilesCmd)
+	return tea.Batch(f.spinner.Tick, f.updateFilesCmd())
 }
 
 // Update implements tea.Model.
@@ -226,12 +240,13 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		f.repo = msg
 	case RefMsg:
-		f.ref = msg
+		f.ref = msg.Ref
+		f.gen = msg.gen
 		f.selector.Select(0)
 		cmds = append(cmds, f.Init())
 	case FileItemsMsg:
 		cmds = append(cmds,
-			f.selector.SetItems(msg),
+			f.selector.SetItems(msg.items),
 		)
 		f.activeView = filesViewFiles
 		if f.cursor >= 0 {
@@ -245,19 +260,19 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
 		f.code.GotoTop()
 	case FileBlameMsg:
-		f.currentBlame = msg
+		f.currentBlame = msg.blame
 		f.activeView = filesViewContent
 		f.code.UseGlamour = false
-		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg))
+		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg.blame))
 	case selector.SelectMsg:
 		switch sel := msg.IdentifiableItem.(type) {
 		case FileItem:
 			f.currentItem = &sel
 			f.path = path.Join(f.path, sel.entry.Name())
 			if sel.entry.IsTree() {
-				cmds = append(cmds, f.selectTreeCmd)
+				cmds = append(cmds, f.selectTreeCmd())
 			} else {
-				cmds = append(cmds, f.selectFileCmd)
+				cmds = append(cmds, f.selectFileCmd())
 			}
 		}
 	case GoBackMsg:
@@ -288,7 +303,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
 				if f.blameView {
-					cmds = append(cmds, f.fetchBlame)
+					cmds = append(cmds, f.fetchBlame())
 				} else {
 					f.activeView = filesViewContent
 					cmds = append(cmds, f.code.SetSideNote(""))
@@ -305,7 +320,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		switch f.activeView {
 		case filesViewFiles:
 			if f.repo != nil {
-				cmds = append(cmds, f.updateFilesCmd)
+				cmds = append(cmds, f.updateFilesCmd())
 			}
 		case filesViewContent:
 			if f.currentContent.content != "" {
@@ -318,6 +333,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case EmptyRepoMsg:
 		f.ref = nil
+		f.gen = msg.gen
 		f.path = ""
 		f.currentItem = nil
 		f.activeView = filesViewFiles
@@ -390,19 +406,24 @@ func (f *Files) StatusBarInfo() string {
 	}
 }
 
-func (f *Files) updateFilesCmd() tea.Msg {
+func (f *Files) updateFilesCmd() tea.Cmd {
+	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
+	return func() tea.Msg {
+		return loadFiles(repo, ref, path, gen)
+	}
+}
+
+func loadFiles(repo proto.Repository, ref *git.Reference, dir string, gen uint64) tea.Msg {
 	files := make([]selector.IdentifiableItem, 0)
 	dirs := make([]selector.IdentifiableItem, 0)
-	if f.ref == nil {
+	if ref == nil {
 		return nil
 	}
-	r, err := f.repo.Open()
+	r, err := repo.Open()
 	if err != nil {
 		return common.ErrorCmd(err)
 	}
-	path := f.path
-	ref := f.ref
-	t, err := r.TreePath(ref, path)
+	t, err := r.TreePath(ref, dir)
 	if err != nil {
 		return common.ErrorCmd(err)
 	}
@@ -418,19 +439,26 @@ func (f *Files) updateFilesCmd() tea.Msg {
 			files = append(files, FileItem{entry: e})
 		}
 	}
-	return FileItemsMsg(append(dirs, files...))
+	return FileItemsMsg{items: append(dirs, files...), gen: gen}
 }
 
-func (f *Files) selectTreeCmd() tea.Msg {
+func (f *Files) selectTreeCmd() tea.Cmd {
 	if f.currentItem != nil && f.currentItem.entry.IsTree() {
 		f.lastSelected = append(f.lastSelected, f.selector.Index())
 		f.cursor = 0
 		return f.updateFilesCmd()
 	}
-	return common.ErrorMsg(errNoFileSelected)
+	return common.ErrorCmd(errNoFileSelected)
 }
 
-func (f *Files) selectFileCmd() tea.Msg {
+func (f *Files) selectFileCmd() tea.Cmd {
+	gen := f.gen
+	return func() tea.Msg {
+		return f.selectFile(gen)
+	}
+}
+
+func (f *Files) selectFile(gen uint64) tea.Msg {
 	i := f.currentItem
 	if i != nil && !i.entry.IsTree() {
 		fi := i.entry.File()
@@ -475,24 +503,27 @@ func (f *Files) selectFileCmd() tea.Msg {
 		}
 
 		f.lastSelected = append(f.lastSelected, f.selector.Index())
-		return FileContentMsg{string(c), i.entry.Name()}
+		return FileContentMsg{content: string(c), ext: i.entry.Name(), gen: gen}
 	}
 
 	return common.ErrorMsg(errNoFileSelected)
 }
 
-func (f *Files) fetchBlame() tea.Msg {
-	r, err := f.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+func (f *Files) fetchBlame() tea.Cmd {
+	repo, ref, item, gen := f.repo, f.ref, f.currentItem, f.gen
+	return func() tea.Msg {
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	b, err := r.BlameFile(f.ref.ID, f.currentItem.entry.File().Path())
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		b, err := r.BlameFile(ref.ID, item.entry.File().Path())
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return FileBlameMsg(b)
+		return FileBlameMsg{blame: b, gen: gen}
+	}
 }
 
 func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
@@ -539,11 +570,12 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false
-	return f.updateFilesCmd
+	return f.updateFilesCmd()
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	gen := f.gen
 	return func() tea.Msg {
-		return FileItemsMsg(items)
+		return FileItemsMsg{items: items, gen: gen}
 	}
 }

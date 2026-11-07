@@ -26,7 +26,22 @@ const (
 )
 
 // EmptyRepoMsg is a message to indicate that the repository is empty.
-type EmptyRepoMsg struct{}
+type EmptyRepoMsg struct {
+	gen uint64
+}
+
+func (m EmptyRepoMsg) generation() uint64 { return m.gen }
+
+// genMsg is a message with something loaded for one repository and ref. Its
+// generation is the one the repository page was in when the load started.
+//
+// The repository page starts a new generation whenever it is given another
+// repository or ref, and drops a message from an older one: it was loaded
+// for a repository or ref the user has left since, and must not be shown in
+// place of the current one.
+type genMsg interface {
+	generation() uint64
+}
 
 // CopyURLMsg is a message to copy the URL of the current repository.
 type CopyURLMsg struct{}
@@ -58,6 +73,8 @@ type Repo struct {
 	state        state
 	spinner      spinner.Model
 	panesReady   []bool
+	// gen is the generation of the repository and ref shown; see genMsg.
+	gen uint64
 }
 
 // New returns a new Repo.
@@ -148,18 +165,39 @@ func (r *Repo) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+	if m, ok := msg.(genMsg); ok {
+		if m.generation() != r.gen {
+			return r, nil
+		}
+		// A new ref, or none, is shown: what was loaded for the previous
+		// one is out of date from here on. The panes tag their loads with
+		// the generation they get here.
+		switch m := msg.(type) {
+		case RefMsg:
+			r.gen++
+			m.gen = r.gen
+			msg = m
+		case EmptyRepoMsg:
+			r.gen++
+			m.gen = r.gen
+			msg = m
+		}
+	}
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
 		// Set the state to loading when we get a new repository.
+		r.gen++
 		r.selectedRepo = msg
+		r.ref = nil
 		cmds = append(cmds,
 			r.Init(),
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
+			updateRefCmd(msg, r.gen),
 		)
 	case RefMsg:
-		r.ref = msg
+		r.ref = msg.Ref
 		cmds = append(cmds, r.updateModels(msg))
 		r.state = readyState
 	case tabs.SelectTabMsg:
