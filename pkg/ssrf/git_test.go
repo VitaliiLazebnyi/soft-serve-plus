@@ -216,6 +216,16 @@ func TestGitEnvDisablesRedirects(t *testing.T) {
 	}
 }
 
+// TestGitEnvBoundsStalledHTTP covers a remote that sends headers and then
+// stops: libcurl has no read timeout, so without a low-speed limit git waits
+// on it forever, and with it every mirror sync behind it.
+func TestGitEnvBoundsStalledHTTP(t *testing.T) {
+	env := GitEnv(ValidatedGitRemote{Transport: GitTransportHTTP})
+	if !hasGitConfig(env, "http.lowSpeedLimit", "1000") || !hasGitConfig(env, "http.lowSpeedTime", "60") {
+		t.Errorf("GitEnv did not set a low-speed limit: %v", env)
+	}
+}
+
 // TestCurlResolvePin covers DNS rebinding: git re-resolves the hostname
 // itself, so the validated address has to be pinned for the check to survive
 // into the subprocess.

@@ -18,7 +18,7 @@ func RemoteGitEnv(cfg *config.Config, remotes ...ssrf.ValidatedGitRemote) []stri
 
 // gitSSHCommandEnv is the GIT_SSH_COMMAND entry for the server's ssh client:
 // its own known_hosts under the data path, the configured host key policy,
-// no prompting, and the client key.
+// no prompting, timeouts for unresponsive hosts, and the client key.
 func gitSSHCommandEnv(cfg *config.Config) string {
 	knownHosts := filepath.Join(cfg.DataPath, "ssh", "known_hosts")
 
@@ -33,6 +33,12 @@ func gitSSHCommandEnv(cfg *config.Config) string {
 		" -o " + shellQuote(knownHostsOpt) +
 		" -o StrictHostKeyChecking=" + cfg.SSH.ClientStrictHostKeyChecking +
 		" -o BatchMode=yes" +
+		// ssh sets no timeouts of its own, so a host that stops answering
+		// holds git forever. Give up on a connect after 30s, and on an
+		// established connection after a minute of unanswered keepalives.
+		" -o ConnectTimeout=30" +
+		" -o ServerAliveInterval=15" +
+		" -o ServerAliveCountMax=4" +
 		" -i " + shellQuote(sshEscape(cfg.SSH.ClientKeyPath))
 }
 
