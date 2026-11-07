@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
-	bm "charm.land/wish/v2/bubbletea"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -50,6 +51,14 @@ func TestSession(t *testing.T) {
 
 func setup(tb testing.TB) (*gossh.Session, func() error) {
 	tb.Helper()
+	srv, closeDB := setupServer(tb)
+	return testsession.New(tb, srv, nil), closeDB
+}
+
+// setupServer returns an SSH server running the TUI middleware, and a func
+// that closes its database.
+func setupServer(tb testing.TB) (*ssh.Server, func() error) {
+	tb.Helper()
 	is := is.New(tb)
 	dp := tb.TempDir()
 	is.NoErr(os.Setenv("SOFT_SERVE_DATA_PATH", dp))
@@ -77,15 +86,15 @@ func setup(tb testing.TB) (*gossh.Session, func() error) {
 	dbstore := database.New(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
-	return testsession.New(tb, &ssh.Server{
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(bm.MiddlewareWithProgramHandler(SessionHandler)(func(s ssh.Session) {
+	return &ssh.Server{
+		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(BubbleTeaMiddleware(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
 				os.Exit(1)
 			}
 			s.Exit(0)
 		})),
-	}, nil), dbx.Close
+	}, dbx.Close
 }
 
 // TestSetupListensOnLoopback checks that setup configures the SSH server to
@@ -103,4 +112,104 @@ func TestSetupListensOnLoopback(t *testing.T) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		t.Fatalf("SSH listens on %q, want a loopback address", addr)
 	}
+}
+
+// TestBubbleTeaMiddlewareClosesZoneManager checks that a TUI session that
+// ends without the quit key, here by the client dropping the connection,
+// still stops its zone manager's worker goroutine.
+//
+// Workers are tracked by goroutine ID, so a worker left by an earlier test
+// that is still shutting down cannot be mistaken for this session's.
+func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
+	before := zoneWorkers()
+	srv, closeDB := setupServer(t)
+	t.Cleanup(func() { _ = closeDB() })
+	addr := testsession.Listen(t, srv)
+
+	var d net.Dialer
+	conn, err := d.DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc, chans, reqs, err := gossh.NewClientConn(conn, addr, &gossh.ClientConfig{
+		User:            "testuser",
+		Auth:            []gossh.AuthMethod{gossh.Password("testpass")},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := gossh.NewClient(cc, chans, reqs)
+	t.Cleanup(func() { _ = client.Close() })
+	s, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequestPty("xterm", 80, 40, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start("test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var ours map[string]bool
+	waitZoneWorkers(t, "the TUI to start", func(running map[string]bool) bool {
+		ours = map[string]bool{}
+		for id := range running {
+			if !before[id] {
+				ours[id] = true
+			}
+		}
+		return len(ours) > 0
+	})
+	_ = client.Close()
+	waitZoneWorkers(t, "the session's zone manager to stop", func(running map[string]bool) bool {
+		for id := range ours {
+			if running[id] {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// waitZoneWorkers waits until ok returns true for the set of running
+// bubblezone worker goroutine IDs.
+func waitZoneWorkers(t *testing.T, what string, ok func(map[string]bool) bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		running := zoneWorkers()
+		if ok(running) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s: %d zone manager workers running", what, len(running))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// zoneWorkers returns the IDs of the running bubblezone worker goroutines.
+func zoneWorkers() map[string]bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	ids := map[string]bool{}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if !strings.Contains(g, "bubblezone/v2.(*Manager).zoneWorker") {
+			continue
+		}
+		// The first line is "goroutine <id> [<state>]:".
+		if f := strings.Fields(g); len(f) > 1 && f[0] == "goroutine" {
+			ids[f[1]] = true
+		}
+	}
+	return ids
 }
