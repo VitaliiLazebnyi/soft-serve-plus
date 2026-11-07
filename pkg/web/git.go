@@ -139,7 +139,7 @@ var gitRoutes = []GitRoute{
 	{
 		method:  []string{http.MethodGet},
 		handler: getTextFile,
-		path:    "/{_:(?:HEAD|objects/info/alternates|objects/info/http-alternates|objects/info/[^/]*)$}",
+		path:    "/{_:(?:HEAD|objects/info/alternates|objects/info/http-alternates)$}",
 	},
 	{
 		method:  []string{http.MethodGet},
@@ -149,17 +149,17 @@ var gitRoutes = []GitRoute{
 	{
 		method:  []string{http.MethodGet},
 		handler: getLooseObject,
-		path:    "/objects/{_:[0-9a-f]{2}/[0-9a-f]{38}$}",
+		path:    "/objects/{_:[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62})$}",
 	},
 	{
 		method:  []string{http.MethodGet},
 		handler: getPackFile,
-		path:    "/objects/pack/{_:pack-[0-9a-f]{40}\\.pack$}",
+		path:    "/objects/pack/{_:pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.pack$}",
 	},
 	{
 		method:  []string{http.MethodGet},
 		handler: getIdxFile,
-		path:    "/objects/pack/{_:pack-[0-9a-f]{40}\\.idx$}",
+		path:    "/objects/pack/{_:pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.idx$}",
 	},
 	// Git LFS
 	{
@@ -626,22 +626,23 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func getInfoPacks(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w)
+	// info/packs changes on every repack, so it must not be cached.
+	hdrNocache(w)
 	sendFile("text/plain; charset=utf-8", w, r)
 }
 
 func getLooseObject(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w)
+	hdrCacheForever(w, r)
 	sendFile("application/x-git-loose-object", w, r)
 }
 
 func getPackFile(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w)
+	hdrCacheForever(w, r)
 	sendFile("application/x-git-packed-objects", w, r)
 }
 
 func getIdxFile(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w)
+	hdrCacheForever(w, r)
 	sendFile("application/x-git-packed-objects-toc", w, r)
 }
 
@@ -650,20 +651,27 @@ func getTextFile(w http.ResponseWriter, r *http.Request) {
 	sendFile("text/plain", w, r)
 }
 
+// sendFile serves the requested repository file. Anything that is not a
+// readable regular file, whatever the reason, is not found.
 func sendFile(contentType string, w http.ResponseWriter, r *http.Request) {
 	dir, file := mux.Vars(r)["dir"], mux.Vars(r)["file"]
 	reqFile := filepath.Join(dir, file)
 
-	f, err := os.Stat(reqFile)
-	if os.IsNotExist(err) {
+	f, err := os.Open(reqFile)
+	if err != nil {
+		renderNotFound(w, r)
+		return
+	}
+	defer f.Close() //nolint: errcheck
+
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
 		renderNotFound(w, r)
 		return
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", f.Size()))
-	w.Header().Set("Last-Modified", f.ModTime().Format(http.TimeFormat))
-	http.ServeFile(w, r, reqFile)
+	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
 
 func getServiceType(r *http.Request) git.Service {
@@ -722,10 +730,17 @@ func hdrNocache(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache, max-age=0, must-revalidate")
 }
 
-func hdrCacheForever(w http.ResponseWriter) {
-	now := time.Now().Unix()
-	expires := now + 31536000
-	w.Header().Set("Date", fmt.Sprintf("%d", now))
-	w.Header().Set("Expires", fmt.Sprintf("%d", expires))
-	w.Header().Set("Cache-Control", "public, max-age=31536000")
+// hdrCacheForever marks an immutable object as cacheable for a year. Shared
+// caches may only store it when the repository is public and the request
+// carries no credentials; otherwise it is private to the caller.
+func hdrCacheForever(w http.ResponseWriter, r *http.Request) {
+	const maxAge = 365 * 24 * time.Hour
+	scope := "public"
+	ctx := r.Context()
+	if repo := proto.RepositoryFromContext(ctx); repo == nil || repo.IsPrivate() ||
+		proto.UserFromContext(ctx) != nil || r.Header.Get("Authorization") != "" {
+		scope = "private"
+	}
+	w.Header().Set("Expires", time.Now().Add(maxAge).UTC().Format(http.TimeFormat))
+	w.Header().Set("Cache-Control", fmt.Sprintf("%s, max-age=%d", scope, int(maxAge.Seconds())))
 }
