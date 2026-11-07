@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,9 @@ var (
 
 // ErrServerClosed indicates that the server has been closed.
 var ErrServerClosed = fmt.Errorf("git: %w", net.ErrClosed)
+
+// ErrPushNotSupported is returned to clients that try to push over git://.
+var ErrPushNotSupported = errors.New("pushing over git:// is not supported, use ssh or http")
 
 // GitDaemon represents a Git daemon.
 type GitDaemon struct {
@@ -166,151 +170,120 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		d.conns.Close(c) //nolint: errcheck
 	}()
 
-	errc := make(chan error, 1)
-
 	s := pktline.NewScanner(c)
-	go func() {
-		if !s.Scan() {
-			if err := s.Err(); err != nil {
-				errc <- err
-			}
-		}
-		errc <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			d.logger.Debugf("git: connection context error: %v", err)
+	if !s.Scan() {
+		err := s.Err()
+		var nerr net.Error
+		switch {
+		case err == nil:
+			// The client hung up without sending a request.
+		case errors.As(err, &nerr) && nerr.Timeout():
 			d.fatal(c, git.ErrTimeout)
+		case errors.Is(err, pktline.ErrInvalidPktLen), isErrorLine(err):
+			d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
+			d.fatal(c, git.ErrInvalidRequest)
+		default:
+			// The connection was reset, cut short, or closed by the server:
+			// there is no one to answer.
+			d.logger.Debugf("git: error reading request from %s: %v", c.RemoteAddr(), err)
 		}
 		return
-	case err := <-errc:
-		if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-			d.fatal(c, git.ErrTimeout)
-			return
-		} else if err != nil {
-			d.logger.Debugf("git: error scanning pktline: %v", err)
-			d.fatal(c, git.ErrSystemMalfunction)
-			return
-		}
-
-		line := s.Bytes()
-		split := bytes.SplitN(line, []byte{' '}, 2)
-		if len(split) != 2 {
-			d.fatal(c, git.ErrInvalidRequest)
-			return
-		}
-
-		var counter *prometheus.CounterVec
-		service := git.Service(split[0])
-		switch service {
-		case git.UploadPackService:
-			counter = uploadPackGitCounter
-		case git.UploadArchiveService:
-			counter = uploadArchiveGitCounter
-		default:
-			d.fatal(c, git.ErrInvalidRequest)
-			return
-		}
-
-		opts := bytes.SplitN(split[1], []byte{0}, 3)
-		if len(opts) < 2 {
-			d.fatal(c, git.ErrInvalidRequest) //nolint: errcheck
-			return
-		}
-
-		host := strings.TrimPrefix(string(opts[1]), "host=")
-		extraParams := map[string]string{}
-
-		if len(opts) > 2 {
-			buf := bytes.TrimPrefix(opts[2], []byte{0})
-			for _, o := range bytes.Split(buf, []byte{0}) {
-				opt := string(o)
-				if opt == "" {
-					continue
-				}
-
-				kv := strings.SplitN(opt, "=", 2)
-				if len(kv) != 2 {
-					d.logger.Errorf("git: invalid option %q", opt)
-					continue
-				}
-
-				extraParams[kv[0]] = kv[1]
-			}
-
-			version := extraParams["version"]
-			if version != "" {
-				d.logger.Debugf("git: protocol version %s", version)
-			}
-		}
-
-		be := d.be
-		if !be.AllowKeyless(ctx) {
-			d.fatal(c, git.ErrNotAuthed)
-			return
-		}
-
-		name := utils.SanitizeRepo(string(opts[0]))
-		d.logger.Debugf("git: connect %s %s %s", c.RemoteAddr(), service, name)
-		defer d.logger.Debugf("git: disconnect %s %s %s", c.RemoteAddr(), service, name)
-
-		// git bare repositories should end in ".git"
-		// https://git-scm.com/docs/gitrepository-layout
-		repo := name + ".git"
-		reposDir := filepath.Join(d.cfg.DataPath, "repos")
-		if err := git.EnsureWithin(reposDir, repo); err != nil {
-			d.logger.Debugf("git: error ensuring repo path: %v", err)
-			d.fatal(c, git.ErrNotAuthed)
-			return
-		}
-
-		// The daemon is always anonymous, so a repository it cannot read
-		// gets the anonymous answer whether it is private or missing.
-		if r, _ := be.Readable(ctx, name, nil); r == nil {
-			d.fatal(c, git.ErrNotAuthed)
-			return
-		}
-
-		// Environment variables to pass down to git hooks.
-		envs := []string{
-			"SOFT_SERVE_REPO_NAME=" + name,
-			"SOFT_SERVE_REPO_PATH=" + filepath.Join(reposDir, repo),
-			"SOFT_SERVE_HOST=" + host,
-			"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
-		}
-
-		// Add git protocol environment variable.
-		if len(extraParams) > 0 {
-			var gitProto string
-			for k, v := range extraParams {
-				if len(gitProto) > 0 {
-					gitProto += ":"
-				}
-				gitProto += k + "=" + v
-			}
-			envs = append(envs, "GIT_PROTOCOL="+gitProto)
-		}
-
-		envs = append(envs, d.cfg.Environ()...)
-
-		cmd := git.ServiceCommand{
-			Stdin:  c,
-			Stdout: c,
-			Stderr: c,
-			Env:    envs,
-			Dir:    filepath.Join(reposDir, repo),
-		}
-
-		if err := service.Handler(ctx, cmd); err != nil {
-			d.logger.Debugf("git: error handling request: %v", err)
-			d.fatal(c, err)
-			return
-		}
-
-		counter.WithLabelValues(name)
 	}
+
+	line := s.Bytes()
+	split := bytes.SplitN(line, []byte{' '}, 2)
+	if len(split) != 2 {
+		d.fatal(c, git.ErrInvalidRequest)
+		return
+	}
+
+	var counter *prometheus.CounterVec
+	service := git.Service(split[0])
+	switch service {
+	case git.UploadPackService:
+		counter = uploadPackGitCounter
+	case git.UploadArchiveService:
+		counter = uploadArchiveGitCounter
+	case git.ReceivePackService:
+		d.fatal(c, ErrPushNotSupported)
+		return
+	default:
+		d.fatal(c, git.ErrInvalidRequest)
+		return
+	}
+
+	opts := bytes.SplitN(split[1], []byte{0}, 3)
+	if len(opts) < 2 {
+		d.fatal(c, git.ErrInvalidRequest)
+		return
+	}
+
+	host := strings.TrimPrefix(string(opts[1]), "host=")
+	var version string
+	if len(opts) > 2 {
+		version = protocolVersion(opts[2])
+		if version != "" {
+			d.logger.Debugf("git: protocol version %s", version)
+		}
+	}
+
+	be := d.be
+	if !be.AllowKeyless(ctx) {
+		d.fatal(c, git.ErrNotAuthed)
+		return
+	}
+
+	name := utils.SanitizeRepo(string(opts[0]))
+	d.logger.Debugf("git: connect %s %s %s", c.RemoteAddr(), service, name)
+	defer d.logger.Debugf("git: disconnect %s %s %s", c.RemoteAddr(), service, name)
+
+	// git bare repositories should end in ".git"
+	// https://git-scm.com/docs/gitrepository-layout
+	repo := name + ".git"
+	reposDir := filepath.Join(d.cfg.DataPath, "repos")
+	if err := git.EnsureWithin(reposDir, repo); err != nil {
+		d.logger.Debugf("git: error ensuring repo path: %v", err)
+		d.fatal(c, git.ErrNotAuthed)
+		return
+	}
+
+	// The daemon is always anonymous, so a repository it cannot read
+	// gets the anonymous answer whether it is private or missing.
+	if r, _ := be.Readable(ctx, name, nil); r == nil {
+		d.fatal(c, git.ErrNotAuthed)
+		return
+	}
+
+	// Environment variables to pass down to git hooks.
+	envs := []string{
+		"SOFT_SERVE_REPO_NAME=" + name,
+		"SOFT_SERVE_REPO_PATH=" + filepath.Join(reposDir, repo),
+		"SOFT_SERVE_HOST=" + host,
+		"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
+	}
+
+	// Pass the requested protocol version down to git.
+	if version != "" {
+		envs = append(envs, "GIT_PROTOCOL=version="+version)
+	}
+
+	envs = append(envs, d.cfg.Environ()...)
+
+	cmd := git.ServiceCommand{
+		Stdin:  c,
+		Stdout: c,
+		Stderr: c,
+		Env:    envs,
+		Dir:    filepath.Join(reposDir, repo),
+	}
+
+	if err := service.Handler(ctx, cmd); err != nil {
+		d.logger.Debugf("git: error handling request: %v", err)
+		d.fatal(c, err)
+		return
+	}
+
+	counter.WithLabelValues(name)
 }
 
 // Close closes the underlying listener.
@@ -361,4 +334,33 @@ func (d *GitDaemon) Shutdown(ctx context.Context) error {
 	case <-finished:
 		return err
 	}
+}
+
+// isErrorLine reports whether err is an ERR packet the client sent.
+func isErrorLine(err error) bool {
+	var el *pktline.ErrorLine
+	return errors.As(err, &el)
+}
+
+// protocolVersion returns the protocol version the client asked for in the
+// extra parameters of its request, or "" if it asked for none. Like git, it
+// takes the highest "version=N" and ignores every other parameter, so nothing
+// else the client sends reaches GIT_PROTOCOL.
+func protocolVersion(params []byte) string {
+	version := -1
+	for p := range bytes.SplitSeq(params, []byte{0}) {
+		v, ok := bytes.CutPrefix(p, []byte("version="))
+		if !ok || len(v) == 0 || len(v) > 3 {
+			continue
+		}
+		n, err := strconv.Atoi(string(v))
+		if err != nil || n < 0 {
+			continue
+		}
+		version = max(version, n)
+	}
+	if version < 0 {
+		return ""
+	}
+	return strconv.Itoa(version)
 }

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -97,8 +98,61 @@ func TestIdleTimeout(t *testing.T) {
 	}
 	time.Sleep(2 * time.Second)
 	_, err = readPktline(c)
-	if err == nil {
-		t.Errorf("expected error, got nil")
+	if err == nil || err.Error() != git.ErrTimeout.Error() {
+		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
+	}
+}
+
+// TestBadRequests verifies the daemon answers malformed requests and pushes
+// with a reply that says what is wrong.
+func TestBadRequests(t *testing.T) {
+	pkt := func(s string) []byte {
+		var b bytes.Buffer
+		if err := pktline.NewEncoder(&b).EncodeString(s); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	cases := []struct {
+		name string
+		raw  []byte
+		want error
+	}{
+		{"invalid pkt-len", []byte("zzzzgit-upload-pack /repo.git\x00"), git.ErrInvalidRequest},
+		{"client error packet", pkt("ERR boom\n"), git.ErrInvalidRequest},
+		{"unknown service", pkt("git-frobnicate /repo.git\x00"), git.ErrInvalidRequest},
+		{"push", pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported},
+	}
+	for _, tc := range cases {
+		if got := request(t, tc.raw); got != tc.want.Error() {
+			t.Errorf("%s: expected %q, got %q", tc.name, tc.want, got)
+		}
+	}
+}
+
+func TestProtocolVersion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		params string
+		want   string
+	}{
+		{"", ""},
+		{"\x00", ""},
+		{"\x00version=2\x00", "2"},
+		{"\x00version=1\x00version=2\x00", "2"},
+		{"\x00version=2\x00version=1\x00", "2"},
+		{"\x00bare-key\x00version=1\x00other=x\x00", "1"},
+		{"\x00version=\x00", ""},
+		{"\x00version=two\x00", ""},
+		{"\x00version=-1\x00", ""},
+		{"\x00version=2:evil=1\x00", ""},
+		{"\x00version=99999\x00", ""},
+		{"\x00foo=bar\x00", ""},
+	}
+	for _, tc := range cases {
+		if got := protocolVersion([]byte(tc.params)); got != tc.want {
+			t.Errorf("protocolVersion(%q) = %q, want %q", tc.params, got, tc.want)
+		}
 	}
 }
 
@@ -106,13 +160,24 @@ func TestIdleTimeout(t *testing.T) {
 // line it answers with.
 func requestUploadPack(t *testing.T, repo string) string {
 	t.Helper()
+	var b bytes.Buffer
+	if err := pktline.NewEncoder(&b).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
+		t.Fatalf("expected nil, got error: %v", err)
+	}
+	return request(t, b.Bytes())
+}
+
+// request sends raw bytes to the daemon and returns the first line it
+// answers with.
+func request(t *testing.T, raw []byte) string {
+	t.Helper()
 	c, err := net.Dial("tcp", testDaemon.addr) //nolint:noctx
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	if err := pktline.NewEncoder(c).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
-		t.Fatalf("expected nil, got error: %v", err)
+	if _, err := c.Write(raw); err != nil {
+		t.Fatalf("failed to write request: %v", err)
 	}
 	// The scanner reports an ERR packet as an error carrying its message.
 	line, err := readPktline(c)
