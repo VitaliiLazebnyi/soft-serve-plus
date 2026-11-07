@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -45,6 +44,13 @@ func (l *requestLimits) serve(w http.ResponseWriter, r *http.Request, next http.
 			defer func() { <-l.slots }()
 		default:
 			w.Header().Set("Retry-After", "1")
+			if r.ProtoMajor == 1 {
+				// Without this, the HTTP/1 server reads the body
+				// the request announced before it sends the reply,
+				// and waits with no deadline for a client that
+				// stalls.
+				w.Header().Set("Connection", "close")
+			}
 			http.Error(w, git.ErrMaxConnections.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -71,21 +77,23 @@ func (l *requestLimits) serve(w http.ResponseWriter, r *http.Request, next http.
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = &deadlineBody{ReadCloser: r.Body, d: d}
 	}
-	// The deadlines cover the rest of the request too: discarding a body
-	// the handler did not read, and flushing what it wrote. The server
-	// resets them before reading the next request on the connection.
+	// The server resets the deadlines before reading the next request on
+	// the connection.
 	defer d.extend()
 	next.ServeHTTP(&deadlineWriter{ResponseWriter: w, d: d}, r)
 }
 
-// deadlines moves the connection's read and write deadlines forward as a
-// request makes progress, so a client that stops sending its body or stops
-// reading the response is cut off after the idle timeout, and no request
-// outlives max.
+// deadlines bounds each read of the request body and each write of the
+// response, so a client that stops sending its body or stops reading the
+// response is cut off after the idle timeout, and no request outlives max.
 //
-// Only a read or write in progress is bound by a deadline, so the time git
-// spends working between reads and writes is not limited by the idle
-// timeout; max still applies.
+// Only a read or write in progress is bound by the idle timeout: when one
+// returns, its deadline goes back to max (or none). The time git spends
+// working between reads and writes is therefore not limited by the idle
+// timeout; max still applies. Leaving the idle deadline armed would not do:
+// HTTP/2 resets the stream when a deadline passes even with no read or write
+// in progress, and the HTTP/1 server keeps reading the connection once the
+// body is read.
 type deadlines struct {
 	rc   *http.ResponseController
 	idle time.Duration
@@ -105,51 +113,57 @@ func (d *deadlines) next() time.Time {
 	return t
 }
 
-// extend sets both deadlines for a read or write starting now.
+// extend sets both deadlines for the reads and writes the server does after
+// the handler returns: discarding a body the handler did not read, and
+// flushing what it wrote.
 func (d *deadlines) extend() {
 	t := d.next()
 	_ = d.rc.SetReadDeadline(t)
 	_ = d.rc.SetWriteDeadline(t)
 }
 
-// deadlineBody is a request body that extends the read deadline before each
-// read.
+// read runs a read of the body bound by the idle deadline.
+func (d *deadlines) read(f func()) {
+	_ = d.rc.SetReadDeadline(d.next())
+	f()
+	_ = d.rc.SetReadDeadline(d.max)
+}
+
+// write runs a write of the response bound by the idle deadline.
+func (d *deadlines) write(f func()) {
+	_ = d.rc.SetWriteDeadline(d.next())
+	f()
+	_ = d.rc.SetWriteDeadline(d.max)
+}
+
+// deadlineBody is a request body whose reads are bound by the idle deadline.
 type deadlineBody struct {
 	io.ReadCloser
 	d *deadlines
 }
 
 // Read implements io.Reader.
-func (b *deadlineBody) Read(p []byte) (int, error) {
-	_ = b.d.rc.SetReadDeadline(b.d.next())
-	n, err := b.ReadCloser.Read(p)
-	if errors.Is(err, io.EOF) {
-		// Once the body is read, the HTTP/1 server keeps reading the
-		// connection to notice the client going away, and a deadline
-		// passing there would cancel the request while git is still
-		// working. Only max applies from here on.
-		_ = b.d.rc.SetReadDeadline(b.d.max)
-	}
+func (b *deadlineBody) Read(p []byte) (n int, err error) {
+	b.d.read(func() { n, err = b.ReadCloser.Read(p) })
 	return n, err
 }
 
-// deadlineWriter is a response writer that extends the write deadline before
-// each write.
+// deadlineWriter is a response writer whose writes are bound by the idle
+// deadline.
 type deadlineWriter struct {
 	http.ResponseWriter
 	d *deadlines
 }
 
 // Write implements http.ResponseWriter.
-func (w *deadlineWriter) Write(p []byte) (int, error) {
-	_ = w.d.rc.SetWriteDeadline(w.d.next())
-	return w.ResponseWriter.Write(p)
+func (w *deadlineWriter) Write(p []byte) (n int, err error) {
+	w.d.write(func() { n, err = w.ResponseWriter.Write(p) })
+	return n, err
 }
 
 // Flush implements http.Flusher.
 func (w *deadlineWriter) Flush() {
-	_ = w.d.rc.SetWriteDeadline(w.d.next())
-	_ = w.d.rc.Flush()
+	w.d.write(func() { _ = w.d.rc.Flush() })
 }
 
 // Unwrap returns the underlying http.ResponseWriter, for

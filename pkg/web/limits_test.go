@@ -16,8 +16,10 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
-// newLimitsServer serves the real git router, built with the HTTP limits
-// configure sets, over a real connection, so deadlines apply.
+// newLimitsServer serves the production router, with all its middleware,
+// built with the HTTP limits configure sets, over a real connection, so
+// deadlines apply. The limits rely on http.ResponseController reaching the
+// connection through every middleware's response writer.
 func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 	t.Helper()
 	ctx, be, _ := newLFSTestContext(t)
@@ -25,7 +27,7 @@ func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 		t.Fatal(err)
 	}
 	configure(&config.FromContext(ctx).HTTP)
-	srv := httptest.NewUnstartedServer(lfsTestRouter(ctx))
+	srv := httptest.NewUnstartedServer(NewRouter(ctx))
 	srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -106,23 +108,25 @@ func TestHTTPMaxConnections(t *testing.T) {
 		c.MaxConnections = 1
 	})
 
+	// Probe over a kept-alive connection: opening a connection per probe
+	// makes macOS drop loopback connects now and then, which takes seconds.
+	client := &http.Client{Transport: &http.Transport{}, Timeout: 10 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
 	status := func() int {
 		t.Helper()
-		conn := dial(t, addr, 10*time.Second)
-		defer conn.Close() //nolint:errcheck
-		if _, err := io.WriteString(conn, "GET /repo.git/info/refs?service=git-upload-pack HTTP/1.1\r\n"+
-			"Host: localhost\r\nConnection: close\r\n\r\n"); err != nil {
-			t.Fatal(err)
-		}
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+			"http://"+addr+"/repo.git/info/refs?service=git-upload-pack", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatal(err)
+		}
 		return resp.StatusCode
 	}
 
@@ -130,14 +134,61 @@ func TestHTTPMaxConnections(t *testing.T) {
 		t.Fatalf("status before the slot is taken = %d, want %d", got, http.StatusOK)
 	}
 
+	// The handler of the last probe may still hold the slot when the
+	// stalled request arrives, which then gets the 503 itself. Send it
+	// again until it is the one holding the slot.
 	stalled := dial(t, addr, 30*time.Second)
 	sendStalled(t, stalled)
-	waitFor(t, func() bool { return status() == http.StatusServiceUnavailable },
-		"a request over max_connections was not turned away")
+	waitFor(t, func() bool {
+		if status() == http.StatusServiceUnavailable {
+			return true
+		}
+		if answered(t, stalled) {
+			_ = stalled.Close()
+			stalled = dial(t, addr, 30*time.Second)
+			sendStalled(t, stalled)
+		}
+		return false
+	}, "a request over max_connections was not turned away")
+
+	// A request over the limit that stalls its body is answered at once,
+	// rather than once the server has read the body it announced.
+	over := dial(t, addr, 10*time.Second)
+	sendStalled(t, over)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(over), req)
+	if err != nil {
+		t.Fatalf("reading the answer to a stalled request over the limit: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("stalled request over the limit: status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
 
 	_ = stalled.Close()
 	waitFor(t, func() bool { return status() == http.StatusOK },
 		"the slot was not freed once the stalled request ended")
+}
+
+// answered reports whether the server has answered or closed conn, which
+// must otherwise stay open with nothing to read.
+func answered(t *testing.T, conn net.Conn) bool {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := conn.Read(make([]byte, 1))
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		return false
+	}
+	return true
 }
 
 func waitFor(t *testing.T, cond func() bool, msg string) {
@@ -217,6 +268,128 @@ func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("second request: %v", err)
+	}
+}
+
+// Time the server spends working between reads of the body and between
+// writes of the response is not limited by the idle timeout, over HTTP/1 and
+// HTTP/2 alike. HTTP/2 resets a stream when a deadline passes even with no
+// read or write in progress, so a deadline must not stay armed between them.
+func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
+	t.Parallel()
+	for _, h2 := range []bool{false, true} {
+		name := "HTTP1"
+		if h2 {
+			name = "HTTP2"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			l := &requestLimits{idle: 200 * time.Millisecond}
+			errc := make(chan error, 1)
+			work := func(r *http.Request) error {
+				select {
+				case <-time.After(4 * l.idle):
+					return nil
+				case <-r.Context().Done():
+					return r.Context().Err()
+				}
+			}
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					errc <- func() error {
+						if _, err := io.ReadFull(r.Body, make([]byte, 1)); err != nil {
+							return err
+						}
+						if err := work(r); err != nil {
+							return err
+						}
+						if _, err := io.ReadAll(r.Body); err != nil {
+							return err
+						}
+						if _, err := io.WriteString(w, "a"); err != nil {
+							return err
+						}
+						w.(http.Flusher).Flush()
+						if err := work(r); err != nil {
+							return err
+						}
+						_, err := io.WriteString(w, "b")
+						return err
+					}()
+				}))
+			}))
+			if h2 {
+				srv.EnableHTTP2 = true
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			t.Cleanup(srv.Close)
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("body"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close() //nolint:errcheck
+			if want := map[bool]int{false: 1, true: 2}[h2]; resp.ProtoMajor != want {
+				t.Fatalf("protocol = %s, want HTTP/%d", resp.Proto, want)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("reading the response: %v", err)
+			}
+			if err := <-errc; err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			if string(body) != "ab" {
+				t.Fatalf("body = %q, want %q", body, "ab")
+			}
+		})
+	}
+}
+
+// Over HTTP/2 too, a client that stops reading the response is cut off
+// after the idle timeout.
+func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
+	t.Parallel()
+	l := &requestLimits{idle: 200 * time.Millisecond}
+	errc := make(chan error, 1)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			buf := make([]byte, 32*1024)
+			for {
+				if _, err := w.Write(buf); err != nil {
+					errc <- err
+					return
+				}
+				w.(http.Flusher).Flush()
+			}
+		}))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+	}
+	select {
+	case <-errc:
+	case <-time.After(10 * time.Second):
+		t.Fatal("writing to a client that does not read was not cut off")
 	}
 }
 
