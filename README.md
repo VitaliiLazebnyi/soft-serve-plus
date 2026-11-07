@@ -981,7 +981,7 @@ Use `--raw` to print raw file contents. This is useful for dumping binary data.
 
 Soft Serve Plus supports repository webhooks using the `repo webhook` command. You
 can create and manage webhooks for different repository events such as _push_,
-_collaborators_, and _branch_tag_create_ events.
+_collaborator_, and _branch_tag_create_ events.
 
 ```
 Manage repository webhooks

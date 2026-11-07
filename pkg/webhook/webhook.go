@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	neturl "net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -119,8 +121,8 @@ const redactedURLPart = "[redacted]"
 
 // redactURL returns rawURL reduced to its scheme and host. Many receivers
 // (Slack, Discord, Teams and the like) put a token in the path or query, so
-// those parts, the fragment and any user info are replaced with
-// redactedURLPart. A URL that cannot be parsed is replaced entirely.
+// those parts and the fragment are replaced with redactedURLPart, and any
+// user info is dropped. A URL that cannot be parsed is replaced entirely.
 //
 // The host is kept on purpose, so an operator can tell which receiver failed.
 // A receiver that puts a token in the host name (a per-hook subdomain such as
@@ -264,9 +266,7 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 
 	if res != nil {
 		resStatus = res.StatusCode
-		for k, v := range res.Header {
-			resHeaders += k + ": " + v[0] + "\n"
-		}
+		resHeaders = formatHeaders(res.Header)
 
 		if res.Body != nil {
 			defer res.Body.Close() //nolint: errcheck
@@ -293,6 +293,19 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 	}
 
 	return recordDelivery(ctx, w, event, req, reqErr, resStatus, resHeaders, resBody)
+}
+
+// formatHeaders renders h for a delivery record, one "Key: value" line per
+// value, sorted by key so the stored text is stable. Every value of a
+// repeated header is kept, in the order it was sent.
+func formatHeaders(h http.Header) string {
+	var b strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(h)) {
+		for _, v := range h[k] {
+			b.WriteString(k + ": " + v + "\n")
+		}
+	}
+	return b.String()
 }
 
 // maxResponseBody is how much of a receiver's response body is read and
@@ -323,10 +336,7 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
-	var reqHeaders string
-	for k, v := range req.headers {
-		reqHeaders += k + ": " + v[0] + "\n"
-	}
+	reqHeaders := formatHeaders(req.headers)
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
@@ -519,6 +529,18 @@ func SendEvent(ctx context.Context, payload EventPayload) error {
 
 func repoURL(publicURL string, repo string) string {
 	return fmt.Sprintf("%s/%s.git", publicURL, utils.SanitizeRepo(repo))
+}
+
+// defaultBranch returns repo's default branch for an event payload. An error
+// is logged and leaves the branch empty: the event is still worth sending
+// without it.
+func defaultBranch(ctx context.Context, repo proto.Repository) string {
+	branch, err := getDefaultBranch(repo)
+	if err != nil {
+		log.FromContext(ctx).WithPrefix("webhook").Warn("cannot read the default branch for the webhook payload",
+			"repo", repo.Name(), "err", err)
+	}
+	return branch
 }
 
 func getDefaultBranch(repo proto.Repository) (string, error) {

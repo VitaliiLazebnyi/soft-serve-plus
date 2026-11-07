@@ -26,7 +26,7 @@ type PushEvent struct {
 	Commits []Commit `json:"commits" url:"commits"`
 }
 
-// NewPushEvent sends a push event.
+// NewPushEvent builds the payload for a push event.
 func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
 	event := EventPush
 
@@ -71,7 +71,7 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 		return PushEvent{}, err
 	}
 
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	payload.Repository.DefaultBranch = defaultBranch(ctx, repo)
 
 	rev := after
 	if !git.IsZeroHash(before) {

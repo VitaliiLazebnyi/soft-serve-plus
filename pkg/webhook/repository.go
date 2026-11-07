@@ -31,7 +31,7 @@ const (
 	RepositoryEventActionDefaultBranchChange RepositoryEventAction = "default_branch_change"
 )
 
-// NewRepositoryEvent sends a repository event.
+// NewRepositoryEvent builds the payload for a repository event.
 func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Repository, action RepositoryEventAction) (RepositoryEvent, error) {
 	var event Event
 	switch action {
@@ -73,7 +73,7 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 
 	payload.Repository.Owner.ID = owner.ID
 	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	payload.Repository.DefaultBranch = defaultBranch(ctx, repo)
 
 	return payload, nil
 }

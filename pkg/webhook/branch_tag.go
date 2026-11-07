@@ -27,7 +27,7 @@ type BranchTagEvent struct {
 	Deleted bool `json:"deleted" url:"deleted"`
 }
 
-// NewBranchTagEvent sends a branch or tag event.
+// NewBranchTagEvent builds the payload for a branch or tag event.
 func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (BranchTagEvent, error) {
 	var event Event
 	if git.IsZeroHash(before) {
@@ -74,7 +74,7 @@ func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Reposito
 
 	payload.Repository.Owner.ID = owner.ID
 	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	payload.Repository.DefaultBranch = defaultBranch(ctx, repo)
 
 	return payload, nil
 }

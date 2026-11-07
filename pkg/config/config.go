@@ -616,6 +616,7 @@ func (c *Config) Validate() error {
 	}
 
 	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimSuffix(c.Git.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
 
 	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {

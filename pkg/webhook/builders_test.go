@@ -1,10 +1,13 @@
 package webhook
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/matryer/is"
 )
@@ -220,6 +223,27 @@ func TestGetDefaultBranchEmptyRepository(t *testing.T) {
 	branch, err := getDefaultBranch(fakeRepo{path: empty})
 	is.NoErr(err)
 	is.Equal(branch, "")
+}
+
+// A default branch that cannot be read leaves the payload's field empty but
+// is logged, not dropped silently.
+func TestDefaultBranchLogsError(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(&logs))
+
+	branch := defaultBranch(ctx, fakeRepo{name: "repo1", openErr: errors.New("boom")})
+	is.Equal(branch, "")
+	is.True(strings.Contains(logs.String(), "default branch"))
+	is.True(strings.Contains(logs.String(), "repo1"))
+	is.True(strings.Contains(logs.String(), "boom"))
+
+	// An empty repository has no default branch yet: nothing to log.
+	logs.Reset()
+	empty := t.TempDir() + "/empty.git"
+	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
+	is.Equal(defaultBranch(ctx, fakeRepo{path: empty}), "")
+	is.Equal(logs.String(), "")
 }
 
 func TestGetDefaultBranchOpenErrorReturned(t *testing.T) {

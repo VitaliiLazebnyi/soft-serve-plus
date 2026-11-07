@@ -31,7 +31,7 @@ const (
 	CollaboratorEventRemoved CollaboratorEventAction = "removed"
 )
 
-// NewCollaboratorEvent sends a collaborator event.
+// NewCollaboratorEvent builds the payload for a collaborator event.
 func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repository, collabUsername string, action CollaboratorEventAction) (CollaboratorEvent, error) {
 	event := EventCollaborator
 
@@ -62,7 +62,7 @@ func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repos
 
 	payload.Repository.Owner.ID = owner.ID
 	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	payload.Repository.DefaultBranch = defaultBranch(ctx, repo)
 
 	collab, err := datastore.GetCollabByUsernameAndRepo(ctx, dbx, collabUsername, repo.Name())
 	if err != nil {
