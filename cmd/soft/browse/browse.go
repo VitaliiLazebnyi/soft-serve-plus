@@ -41,6 +41,9 @@ var Command = &cobra.Command{
 		// thing here.
 		ctx := cmd.Context()
 		c := common.NewCommon(ctx, 0, 0)
+		// Stop the bubblezone worker once the program has exited, and not
+		// on quit: the program renders once more after the model quits.
+		defer c.Zone.Close()
 		c.HideCloneCmd = true
 		comps := []common.TabComponent{
 			repo.NewReadme(c),
@@ -158,8 +161,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.common.KeyMap.Help):
 			cmds = append(cmds, footer.ToggleFooterCmd)
 		case key.Matches(msg, m.common.KeyMap.Quit):
-			// Stop bubblezone background workers.
-			m.common.Zone.Close()
 			return m, tea.Quit
 		}
 	case tea.MouseClickMsg:
