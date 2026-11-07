@@ -304,19 +304,22 @@ func runGit(t *testing.T, dir string, args ...string) string {
 func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 	dir := t.TempDir()
 
-	// Each upstream holds one branch, named after it, so the mirror's refs
-	// show which upstreams were fetched.
-	upstream := func(name string) string {
-		path := filepath.Join(dir, name+".git")
+	// Each upstream holds one commit of its own on main, which its HEAD
+	// points at, so a bare fetch of the upstream and the legacy branches/
+	// refspec (refs/heads/main) both find something to fetch. Whether the
+	// mirror then has that commit shows whether the upstream was fetched.
+	upstream := func(name string) (path, commit string) {
+		path = filepath.Join(dir, name+".git")
 		runGit(t, dir, "init", "--bare", path)
+		runGit(t, path, "symbolic-ref", "HEAD", "refs/heads/main")
 		tree := runGit(t, path, "mktree")
-		commit := runGit(t, path, "commit-tree", "-m", name, tree)
-		runGit(t, path, "update-ref", "refs/heads/"+name, commit)
-		return path
+		commit = runGit(t, path, "commit-tree", "-m", name, tree)
+		runGit(t, path, "update-ref", "refs/heads/main", commit)
+		return path, commit
 	}
-	origin := upstream("origin")
-	viaBranch := upstream("viabranch")
-	viaGroup := upstream("viagroup")
+	origin, originCommit := upstream("origin")
+	viaBranch, viaBranchCommit := upstream("viabranch")
+	viaGroup, viaGroupCommit := upstream("viagroup")
 
 	mirror := filepath.Join(dir, "mirror.git")
 	runGit(t, dir, "init", "--bare", mirror)
@@ -327,7 +330,7 @@ func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(mirror, "branches"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(mirror, "branches", "foo"), []byte(viaGroup+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(mirror, "branches", "foo"), []byte(viaGroup+"#main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -335,13 +338,28 @@ func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 		t.Fatalf("syncMirror() error = %v", err)
 	}
 
-	refs := runGit(t, mirror, "for-each-ref", "--format=%(refname)")
-	if !strings.Contains(refs, "refs/heads/origin") {
-		t.Errorf("origin was not fetched; refs:\n%s", refs)
+	hasObject := func(commit string) bool {
+		cmd := exec.CommandContext(t.Context(), "git", "cat-file", "-e", commit+"^{commit}")
+		cmd.Dir = mirror
+		return cmd.Run() == nil
 	}
-	for _, other := range []string{"viabranch", "viagroup"} {
-		if strings.Contains(refs, other) {
-			t.Errorf("fetched %s, which was not named; refs:\n%s", other, refs)
+	if !hasObject(originCommit) {
+		t.Errorf("origin commit %s was not fetched", originCommit)
+	}
+
+	fetchHead, err := os.ReadFile(filepath.Join(mirror, "FETCH_HEAD"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, other := range []struct{ name, path, commit string }{
+		{"viabranch", viaBranch, viaBranchCommit},
+		{"viagroup", viaGroup, viaGroupCommit},
+	} {
+		if hasObject(other.commit) {
+			t.Errorf("%s commit %s is in the mirror, though %s was not named", other.name, other.commit, other.name)
+		}
+		if strings.Contains(string(fetchHead), other.commit) || strings.Contains(string(fetchHead), filepath.Base(other.path)) {
+			t.Errorf("FETCH_HEAD mentions %s, which was not named:\n%s", other.name, fetchHead)
 		}
 	}
 }
