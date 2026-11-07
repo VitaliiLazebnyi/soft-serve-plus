@@ -174,13 +174,24 @@ const migrationLockID int64 = 0x736f667473657276 // "softserv"
 // database run one after another. Without it, servers starting at the same
 // time on a shared Postgres database each see the same schema version and run
 // the same migrations, and all but one fail on duplicate objects. The lock is
-// held until tx ends. Each statement after it sees what the previous holder
-// committed, since Postgres transactions default to READ COMMITTED. SQLite
-// write transactions are already serialised: they start with BEGIN IMMEDIATE
-// (see db.Open).
+// held until tx ends. It must be the first statement in tx.
+//
+// A run that waited must see what the previous holder committed. Under READ
+// COMMITTED each statement takes a new snapshot, so the statements after the
+// lock see it. Under REPEATABLE READ or SERIALIZABLE the snapshot is taken
+// when the lock statement starts, before it waits, so the run would read the
+// old schema version and apply every migration again. The server, database,
+// role or DSN can make either of those the default, so tx is set to READ
+// COMMITTED explicitly before taking the lock.
+//
+// SQLite write transactions are already serialised: they start with BEGIN
+// IMMEDIATE (see db.Open).
 func lockMigrations(ctx context.Context, tx *db.Tx) error {
 	if tx.DriverName() != "postgres" {
 		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
+		return fmt.Errorf("set migration isolation level: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLockID); err != nil {
 		return fmt.Errorf("lock migrations: %w", err)

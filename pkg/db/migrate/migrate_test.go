@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -33,10 +34,29 @@ func TestMigrateConcurrent(t *testing.T) {
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("needs Postgres (SOFT_SERVE_DB_DRIVER=postgres)")
 	}
+	// The database default isolation level must not matter: under
+	// REPEATABLE READ or SERIALIZABLE a run that waited for the lock would
+	// otherwise read the schema version from before it waited.
+	for _, isolation := range []string{"", "repeatable read", "serializable"} {
+		name := isolation
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			testMigrateConcurrent(t, isolation)
+		})
+	}
+}
+
+func testMigrateConcurrent(t *testing.T, isolation string) {
+	t.Helper()
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if isolation != "" {
+		setDefaultIsolation(ctx, t, dbx, isolation)
 	}
 
 	const n = 4
@@ -60,10 +80,10 @@ func TestMigrateConcurrent(t *testing.T) {
 	}
 
 	var count, version int64
-	if err := dbx.Get(&count, "SELECT COUNT(*) FROM migrations"); err != nil {
+	if err := dbx.GetContext(ctx, &count, "SELECT COUNT(*) FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
-	if err := dbx.Get(&version, "SELECT MAX(version) FROM migrations"); err != nil {
+	if err := dbx.GetContext(ctx, &version, "SELECT MAX(version) FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
 	if want := int64(len(migrations)); count != want {
@@ -71,6 +91,35 @@ func TestMigrateConcurrent(t *testing.T) {
 	}
 	if want := migrations[len(migrations)-1].Version; version != want {
 		t.Errorf("migration version = %d, want %d", version, want)
+	}
+}
+
+// setDefaultIsolation makes isolation the default transaction isolation level
+// of the Postgres database dbx is connected to, for every connection dbx
+// opens from now on.
+func setDefaultIsolation(ctx context.Context, t *testing.T, dbx *db.DB, isolation string) {
+	t.Helper()
+	var name string
+	if err := dbx.GetContext(ctx, &name, "SELECT current_database()"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbx.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE %q SET default_transaction_isolation = '%s'", name, isolation)); err != nil {
+		t.Fatal(err)
+	}
+	// The setting applies to new sessions only: drop the pooled ones.
+	dbx.SetMaxIdleConns(0)
+	dbx.SetMaxIdleConns(2)
+
+	var got string
+	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+		return tx.GetContext(ctx, &got, "SHOW transaction_isolation")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got != isolation {
+		// Options in SOFT_SERVE_DB_DATA_SOURCE take precedence over the
+		// database default.
+		t.Skipf("the connection overrides the database default isolation level: got %q, want %q", got, isolation)
 	}
 }
 
