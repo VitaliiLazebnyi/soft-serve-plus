@@ -134,6 +134,63 @@ func TestSendWebhookFormDelivered(t *testing.T) {
 	is.Equal(ds[0].ResponseStatus, http.StatusNoContent)
 }
 
+// A form-encoded push event gives each commit field its own key, in the same
+// bracket notation as the other nested fields, rather than a Go struct dump.
+func TestSendWebhookFormPushCommits(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusNoContent, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventPush)
+
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	payload := PushEvent{
+		Ref:    "refs/heads/main",
+		Before: "0000000000000000000000000000000000000000",
+		After:  "2222222222222222222222222222222222222222",
+		Common: Common{
+			EventType:  EventPush,
+			Repository: Repository{ID: 1, Name: "repo"},
+			Sender:     User{ID: 1, Username: "alice"},
+		},
+		Commits: []Commit{
+			{
+				ID:        "1111111111111111111111111111111111111111",
+				Message:   "first&x=1\n",
+				Title:     "first&x=1",
+				Author:    Author{Name: "Alice", Email: "alice@example.com", Date: when},
+				Committer: Author{Name: "Bob", Email: "bob@example.com", Date: when},
+				Timestamp: when,
+			},
+			{
+				ID:        "2222222222222222222222222222222222222222",
+				Message:   "second",
+				Title:     "second",
+				Author:    Author{Name: "Carol", Email: "carol@example.com", Date: when},
+				Committer: Author{Name: "Carol", Email: "carol@example.com", Date: when},
+				Timestamp: when,
+			},
+		},
+	}
+	is.NoErr(SendWebhook(e.ctx, w, EventPush, payload))
+
+	form, err := url.ParseQuery(rec.body)
+	is.NoErr(err)
+	is.Equal(form["commits"], nil) // no struct dump under the bare key
+	is.Equal(form.Get("ref"), "refs/heads/main")
+	is.Equal(form.Get("sender[username]"), "alice")
+	is.Equal(form.Get("commits[0][id]"), "1111111111111111111111111111111111111111")
+	is.Equal(form.Get("commits[0][message]"), "first&x=1\n")
+	is.Equal(form.Get("commits[0][title]"), "first&x=1")
+	is.Equal(form.Get("commits[0][author][name]"), "Alice")
+	is.Equal(form.Get("commits[0][author][email]"), "alice@example.com")
+	is.Equal(form.Get("commits[0][author][date]"), "2026-01-02T03:04:05Z")
+	is.Equal(form.Get("commits[0][committer][name]"), "Bob")
+	is.Equal(form.Get("commits[0][timestamp]"), "2026-01-02T03:04:05Z")
+	is.Equal(form.Get("commits[1][id]"), "2222222222222222222222222222222222222222")
+	is.Equal(form.Get("commits[1][author][name]"), "Carol")
+}
+
 func TestSendWebhookInvalidContentTypeRejected(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
