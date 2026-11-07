@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,5 +78,22 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 
 	if n := runs.Load(); n != 1 {
 		t.Errorf("expected 1 run, got %d", n)
+	}
+}
+
+func TestSchedulerRecoversPanic(t *testing.T) {
+	var buf bytes.Buffer
+	logger := log.New(&buf)
+	s := NewScheduler(log.WithContext(context.TODO(), logger))
+	id, err := s.AddFunc("* * * * *", func() { panic("boom") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Remove(id)
+
+	s.Cron.Entry(cron.EntryID(id)).WrappedJob.Run()
+
+	if !strings.Contains(buf.String(), "boom") {
+		t.Errorf("expected the panic to be logged, got %q", buf.String())
 	}
 }

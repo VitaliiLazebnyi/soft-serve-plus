@@ -43,14 +43,19 @@ func (l skipLogger) Info(_ string, keysAndValues ...interface{}) {
 
 // NewScheduler returns a new Cron.
 //
-// A job run is skipped while the previous run of the same job is still going,
-// so a job that takes longer than its interval does not pile up runs.
+// A job that panics is recovered and the panic logged, so it does not take
+// the server down. A job run is skipped while the previous run of the same job
+// is still going, so a job that takes longer than its interval does not pile
+// up runs.
 func NewScheduler(ctx context.Context) *Scheduler {
 	logger := cronLogger{log.FromContext(ctx).WithPrefix("cron")}
 	return &Scheduler{
 		Cron: cron.New(
 			cron.WithLogger(logger),
-			cron.WithChain(cron.SkipIfStillRunning(skipLogger{logger})),
+			cron.WithChain(
+				cron.Recover(logger),
+				cron.SkipIfStillRunning(skipLogger{logger}),
+			),
 		),
 	}
 }
