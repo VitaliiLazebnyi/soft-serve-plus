@@ -16,7 +16,8 @@ import (
 // the HTTP status code and bytes written to the response.
 type logWriter struct {
 	http.ResponseWriter
-	code, bytes int
+	code  int
+	bytes int64
 }
 
 var (
@@ -30,7 +31,7 @@ var (
 // Write implements http.ResponseWriter.
 func (r *logWriter) Write(p []byte) (int, error) {
 	written, err := r.ResponseWriter.Write(p)
-	r.bytes += written
+	r.bytes += int64(written)
 	return written, err
 }
 
@@ -46,7 +47,7 @@ func (r *logWriter) ReadFrom(src io.Reader) (int64, error) {
 		// Hide our own ReadFrom from io.Copy so it does not recurse.
 		n, err = io.Copy(struct{ io.Writer }{r.ResponseWriter}, src)
 	}
-	r.bytes += int(n)
+	r.bytes += n
 	return n, err
 }
 
