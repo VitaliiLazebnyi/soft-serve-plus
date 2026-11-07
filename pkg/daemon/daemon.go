@@ -111,15 +111,16 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			default:
 				d.logger.Debugf("git: error accepting connection: %v", err)
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			// Accept errors such as EMFILE are the case Temporary is still
+			// meant for; net/http's accept loop backs off on it the same way.
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
 					tempDelay *= 2
 				}
-				if max := 1 * time.Second; tempDelay > max { //nolint:revive
-					tempDelay = max
-				}
+				tempDelay = min(tempDelay, time.Second)
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -186,7 +187,8 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		}
 		return
 	case err := <-errc:
-		if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+		var nerr net.Error
+		if errors.As(err, &nerr) && nerr.Timeout() {
 			d.fatal(c, git.ErrTimeout)
 			return
 		} else if err != nil {

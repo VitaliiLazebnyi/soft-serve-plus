@@ -364,8 +364,7 @@ func makeCommit(t *testing.T, path string) string {
 		return strings.TrimSpace(string(out))
 	}
 	blob := git("hello\n", "hash-object", "-w", "--stdin")
-	tree := git("", "mktree")
-	tree = git("100644 blob "+blob+"\tREADME.md\n", "mktree")
+	tree := git("100644 blob "+blob+"\tREADME.md\n", "mktree")
 	commit := git("", "commit-tree", tree, "-m", "first")
 	git("", "update-ref", "refs/heads/main", commit)
 	return commit

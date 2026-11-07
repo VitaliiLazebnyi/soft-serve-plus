@@ -117,7 +117,7 @@ func count(t *testing.T, dbx *db.DB, query string) int {
 
 func mustExec(t *testing.T, dbx *db.DB, query string, args ...any) {
 	t.Helper()
-	if _, err := dbx.Exec(dbx.Rebind(query), args...); err != nil {
+	if _, err := dbx.ExecContext(t.Context(), dbx.Rebind(query), args...); err != nil {
 		t.Fatal(err)
 	}
 }
