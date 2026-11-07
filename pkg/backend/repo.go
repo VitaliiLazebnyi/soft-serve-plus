@@ -816,6 +816,11 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		// recreate it if a concurrent delete or rename removes it first.
 		if err := withRepoParent(np, func() error { return os.Rename(op, np) }); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
+			// withRepoParent may have created the new name's group
+			// directories; do not leave them behind empty. Only empty
+			// directories are removed, and a concurrent create or rename
+			// into the group recreates them through withRepoParent.
+			d.removeEmptyRepoParents(np)
 			return errRepoUpdate
 		}
 

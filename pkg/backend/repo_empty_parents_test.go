@@ -198,3 +198,33 @@ func TestWithRepoParentRecreatesRemovedParent(t *testing.T) {
 	}
 	assertDir(t, p)
 }
+
+// A rename whose move fails removes the group directories it made for the new
+// name. The move is made to fail by taking write permission away from the old
+// name's group directory, which os.Rename needs to unlink the old entry.
+func TestFailedRenameRemovesEmptyParents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block a rename on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	be, create, root := nestedReposFixture(t)
+	ctx := backendTestContext(be, be.cfg)
+	create("p/a")
+
+	group := filepath.Join(root, "p")
+	if err := os.Chmod(group, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(group, 0o755) })
+
+	if err := be.RenameRepository(ctx, "p/a", "x/y/z"); !errors.Is(err, errRepoUpdate) {
+		t.Fatalf("rename error = %v, want errRepoUpdate", err)
+	}
+	assertGone(t, filepath.Join(root, "x"))
+	assertDir(t, be.repoPath("p/a"))
+	if _, err := be.Repository(ctx, "p/a"); err != nil {
+		t.Errorf("old name lost after failed rename: %v", err)
+	}
+}
