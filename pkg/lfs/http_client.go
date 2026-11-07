@@ -195,11 +195,31 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 		return nil, err
 	}
 
+	for _, object := range response.Objects {
+		if object == nil {
+			return nil, errors.New("invalid batch response: null object")
+		}
+	}
+
 	if len(response.Transfer) == 0 {
 		response.Transfer = TransferBasic
 	}
 
 	return &response, nil
+}
+
+// actionLink returns the link of the named action of an object. ok is false
+// when the server left the action out; a link that is null or has no href is
+// an error, as there is nothing to transfer to or from.
+func actionLink(object *ObjectResponse, action string) (link *Link, ok bool, err error) {
+	link, ok = object.Actions[action]
+	if !ok {
+		return nil, false, nil
+	}
+	if link == nil || link.Href == "" {
+		return nil, false, fmt.Errorf("invalid action '%s': no href", action)
+	}
+	return link, true, nil
 }
 
 func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback, uc UploadCallback) error {
@@ -245,7 +265,10 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 				continue
 			}
 
-			link, ok := object.Actions[ActionUpload]
+			link, ok, err := actionLink(object, ActionUpload)
+			if err != nil {
+				return err
+			}
 			if !ok {
 				logger.Debugf("%v has no usable action", object.Pointer)
 				return errors.New("missing action 'upload'")
@@ -264,14 +287,20 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 				return err
 			}
 
-			link, ok = object.Actions[ActionVerify]
+			link, ok, err = actionLink(object, ActionVerify)
+			if err != nil {
+				return err
+			}
 			if ok {
 				if err := transferAdapter.Verify(ctx, object.Pointer, link); err != nil {
 					return err
 				}
 			}
 		} else {
-			link, ok := object.Actions[ActionDownload]
+			link, ok, err := actionLink(object, ActionDownload)
+			if err != nil {
+				return err
+			}
 			if !ok {
 				logger.Debugf("%v has no usable action", object.Pointer)
 				return errors.New("missing action 'download'")
