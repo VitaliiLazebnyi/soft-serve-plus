@@ -79,6 +79,11 @@ func TestMethodNotAllowed(t *testing.T) {
 
 	is.Equal(f.do(http.MethodHead, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusOK)
 	is.Equal(f.do(http.MethodHead, "/secret.git/HEAD", auth).Code, http.StatusOK)
+
+	// HEAD on the push advertisement of a missing repository does not
+	// create it, though GET would for a caller who may push.
+	is.Equal(f.do(http.MethodHead, "/fresh.git/info/refs?service=git-receive-pack", "Token "+f.token).Code, http.StatusNotFound)
+	is.True(!f.exists("fresh"))
 }
 
 // The RPC endpoints answer 415 to any body but the service's request type,

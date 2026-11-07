@@ -352,7 +352,9 @@ func authorize(service git.Service, file, method string, readable bool, level ac
 		switch {
 		case badCreds:
 			return forbid
-		case !readable && level >= access.ReadWriteAccess && isPushEndpoint(file):
+		case !readable && level >= access.ReadWriteAccess && isPushEndpoint(file) && method != http.MethodHead:
+			// HEAD is answered like GET, but only to check the
+			// route, so it does not create the repository.
 			return createThenServe
 		case !readable:
 			return denyUnreadable
