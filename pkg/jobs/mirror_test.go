@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
@@ -139,7 +140,10 @@ func TestValidateMirrorRemotes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("validateMirrorRemotes() unexpected error: %v", err)
 			}
-			env := ssrf.GitEnv(remotes...)
+			if len(remotes.names) != len(tt.remotes) {
+				t.Errorf("validateMirrorRemotes() names = %v, want one per remote in %v", remotes.names, tt.remotes)
+			}
+			env := ssrf.GitEnv(remotes.validated...)
 			if !slices.Contains(env, "GIT_CONFIG_KEY_0=http.followRedirects") ||
 				!slices.Contains(env, "GIT_CONFIG_VALUE_0=false") {
 				t.Errorf("sync env did not disable redirects: %v", env)
@@ -200,20 +204,144 @@ func TestValidateMirrorRemotesReadsLikeGit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRepoWithRemotes(t, nil)
-			f, err := os.OpenFile(filepath.Join(r.Path, "config"), os.O_APPEND|os.O_WRONLY, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := f.WriteString(tt.config); err != nil {
-				t.Fatal(err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatal(err)
-			}
+			appendConfig(t, r, tt.config)
 
 			if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); !errors.Is(err, ssrf.ErrPrivateIP) {
 				t.Fatalf("validateMirrorRemotes() error = %v, want %v", err, ssrf.ErrPrivateIP)
 			}
 		})
+	}
+}
+
+// appendConfig appends raw text to the repository's config file.
+func appendConfig(t *testing.T, r *git.Repository, config string) {
+	t.Helper()
+
+	f, err := os.OpenFile(filepath.Join(r.Path, "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestValidateMirrorRemotesRefusesUnlistedFetchSources verifies a mirror is
+// refused when git could be led to fetch from something validation does not
+// see, and that a remote git would fetch from as a local path fails.
+func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr error
+	}{
+		{
+			// `git remote update` fetches the remotes.default group, which
+			// can name a legacy branches/ file remote `git remote` does not
+			// list.
+			name: "remotes.default group",
+			config: `[remotes]
+	default = foo
+`,
+			wantErr: errRemoteGroup,
+		},
+		{
+			// A group named like a remote is fetched in its place even when
+			// the remote is fetched by name.
+			name: "group named like a remote",
+			config: `[remotes]
+	origin = foo bar
+`,
+			wantErr: errRemoteGroup,
+		},
+		{
+			// git reports a remote without a url by its name and would
+			// fetch from that name as a local path.
+			name: "remote without url",
+			config: `[remote "x"]
+	fetch = +refs/heads/*:refs/remotes/x/*
+`,
+			wantErr: ssrf.ErrUnsupportedRemoteScheme,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepoWithRemotes(t, map[string]string{"origin": "https://1.1.1.1/x.git"})
+			appendConfig(t, r, tt.config)
+
+			if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("validateMirrorRemotes() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// runGit runs git in dir with a fixed identity and fails the test on error.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestSyncMirrorFetchesOnlyNamedRemotes verifies the sync fetches the named
+// remotes and nothing git would pick on its own: neither the url in
+// branch.<HEAD>.remote, which a bare `git fetch` uses, nor the legacy file
+// remote in the remotes.default group, which `git remote update` uses.
+func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
+	dir := t.TempDir()
+
+	// Each upstream holds one branch, named after it, so the mirror's refs
+	// show which upstreams were fetched.
+	upstream := func(name string) string {
+		path := filepath.Join(dir, name+".git")
+		runGit(t, dir, "init", "--bare", path)
+		tree := runGit(t, path, "mktree")
+		commit := runGit(t, path, "commit-tree", "-m", name, tree)
+		runGit(t, path, "update-ref", "refs/heads/"+name, commit)
+		return path
+	}
+	origin := upstream("origin")
+	viaBranch := upstream("viabranch")
+	viaGroup := upstream("viagroup")
+
+	mirror := filepath.Join(dir, "mirror.git")
+	runGit(t, dir, "init", "--bare", mirror)
+	runGit(t, mirror, "symbolic-ref", "HEAD", "refs/heads/main")
+	runGit(t, mirror, "remote", "add", "--mirror=fetch", "origin", origin)
+	runGit(t, mirror, "config", "branch.main.remote", viaBranch)
+	runGit(t, mirror, "config", "remotes.default", "foo")
+	if err := os.MkdirAll(filepath.Join(mirror, "branches"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mirror, "branches", "foo"), []byte(viaGroup+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := syncMirror(t.Context(), mirror, []string{"origin"}, nil); err != nil {
+		t.Fatalf("syncMirror() error = %v", err)
+	}
+
+	refs := runGit(t, mirror, "for-each-ref", "--format=%(refname)")
+	if !strings.Contains(refs, "refs/heads/origin") {
+		t.Errorf("origin was not fetched; refs:\n%s", refs)
+	}
+	for _, other := range []string{"viabranch", "viagroup"} {
+		if strings.Contains(refs, other) {
+			t.Errorf("fetched %s, which was not named; refs:\n%s", other, refs)
+		}
 	}
 }
