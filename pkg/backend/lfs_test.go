@@ -33,7 +33,10 @@ type fakeLFSClient struct {
 	omit map[string]bool
 	// extra holds objects the remote sends without being asked for them,
 	// with their content.
-	extra     map[lfs.Pointer][]byte
+	extra map[lfs.Pointer][]byte
+	// readErrs holds objects whose content fails with the error part way
+	// through, like a download that breaks off.
+	readErrs  map[string]error
 	requested []string
 	// onRead, if set, runs when an object's content is first read, standing
 	// in for the time spent receiving it from the network.
@@ -58,6 +61,9 @@ func (c *fakeLFSClient) Download(_ context.Context, pointers []lfs.Pointer, cb l
 		var r io.Reader = bytes.NewReader(c.objects[p.Oid])
 		if c.onRead != nil {
 			r = &hookReader{r: r, hook: c.onRead}
+		}
+		if err := c.readErrs[p.Oid]; err != nil {
+			r = io.MultiReader(io.LimitReader(r, 1), &failReader{err})
 		}
 		if err := cb(p, io.NopCloser(r), nil); err != nil {
 			return err
@@ -89,6 +95,11 @@ func (h *hookReader) Read(p []byte) (int, error) {
 	}
 	return h.r.Read(p)
 }
+
+// failReader fails every Read with err.
+type failReader struct{ err error }
+
+func (f *failReader) Read([]byte) (int, error) { return 0, f.err }
 
 // lfsTest is a repository whose history holds LFS pointers, and a client
 // that serves their content.
@@ -277,6 +288,26 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 	is.NoErr(err) // and stored
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), missing.Oid)
 	is.True(err != nil) // the missing object is not recorded
+}
+
+// TestStoreRepoMissingLFSObjectsReadError verifies that a download that
+// breaks off part way only fails its own object: the other objects are
+// still stored and the sync reports ErrLFSObjectsUnavailable.
+func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
+	is := is.New(t)
+	lt := newLFSTest(t, 2)
+	broken, ok := lt.pointers[0], lt.pointers[1]
+	lt.client.readErrs = map[string]error{broken.Oid: errors.New("connection reset")}
+
+	err := lt.store()
+	is.True(errors.Is(err, ErrLFSObjectsUnavailable))            // the broken object is reported
+	is.Equal(err.Error(), "some lfs objects are unavailable: 1") // and only it
+	_, err = os.Stat(lt.path(ok))
+	is.NoErr(err) // the other object is stored
+	_, err = os.Stat(lt.path(broken))
+	is.True(os.IsNotExist(err)) // the broken one is not
+	tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(lt.path(broken)), "..", "..", "..", "incomplete"))
+	is.Equal(len(tmp), 0) // and leaves no temporary file behind
 }
 
 // TestFetchImportLFSObjects verifies that an import succeeds when the remote

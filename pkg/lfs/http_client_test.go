@@ -286,7 +286,17 @@ func TestTransferRedactsHref(t *testing.T) {
 			ctx, logs := debugContext(t)
 			c := plainClient(t, srv.URL+"/x.git")
 
-			err := c.Download(ctx, []Pointer{testPointer}, discard)
+			// A failed transfer is reported for its object, not returned.
+			var err error
+			if derr := c.Download(ctx, []Pointer{testPointer}, func(_ Pointer, content io.ReadCloser, objectError error) error {
+				if content != nil {
+					content.Close() //nolint: errcheck,gosec
+				}
+				err = objectError
+				return nil
+			}); derr != nil {
+				t.Fatalf("Download: %v", derr)
+			}
 			if err == nil {
 				t.Fatal("expected the download to fail")
 			}
@@ -420,5 +430,188 @@ func TestSecureHTTPClientIsSSRFProtected(t *testing.T) {
 
 	if cr := secureHTTPClient.CheckRedirect; cr == nil || !errors.Is(cr(req, []*http.Request{req}), http.ErrUseLastResponse) {
 		t.Fatal("shared client follows redirects; want it to return the redirect response")
+	}
+}
+
+// objectServer serves batch responses built by respond, with base the URL
+// object hrefs can point to, and objects at base+"/obj/<oid>" with serve.
+// It counts the object requests per oid.
+func objectServer(t *testing.T, respond func(req BatchRequest, base string) BatchResponse, serve func(w http.ResponseWriter, r *http.Request, oid string)) (*httptest.Server, func(oid string) int) {
+	t.Helper()
+	var mu sync.Mutex
+	hits := map[string]int{}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if oid, ok := strings.CutPrefix(r.URL.Path, "/obj/"); ok {
+			mu.Lock()
+			hits[oid]++
+			mu.Unlock()
+			serve(w, r, oid)
+			return
+		}
+		var req BatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", MediaType)
+		json.NewEncoder(w).Encode(respond(req, srv.URL)) //nolint: errcheck,gosec
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func(oid string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return hits[oid]
+	}
+}
+
+// downloadLink returns the download actions for p on an objectServer.
+func downloadLink(base string, p Pointer) map[string]*Link {
+	return map[string]*Link{ActionDownload: {Href: base + "/obj/" + p.Oid}}
+}
+
+// downloadResult is what a DownloadCallback was given for one object.
+type downloadResult struct {
+	content string
+	err     error
+}
+
+// collect returns a DownloadCallback that records what it is given in
+// results, keyed by oid, and fails the test on an oid it gets twice.
+func collect(t *testing.T, results map[string]downloadResult) DownloadCallback {
+	t.Helper()
+	return func(p Pointer, content io.ReadCloser, objectError error) error {
+		if _, ok := results[p.Oid]; ok {
+			t.Errorf("callback called twice for %s", p.Oid)
+		}
+		var r downloadResult
+		r.err = objectError
+		if content != nil {
+			b, err := io.ReadAll(content)
+			content.Close() //nolint: errcheck,gosec
+			if err != nil {
+				t.Errorf("reading %s: %v", p.Oid, err)
+			}
+			r.content = string(b)
+		}
+		results[p.Oid] = r
+		return nil
+	}
+}
+
+// TestDownloadTransferErrorIsPerObject checks that an object whose transfer
+// fails, or that has no download action, is reported to the callback as a
+// per-object error, and the objects after it are still downloaded.
+func TestDownloadTransferErrorIsPerObject(t *testing.T) {
+	t.Parallel()
+	notFound := Pointer{Oid: strings.Repeat("1", 64), Size: 1}
+	redirected := Pointer{Oid: strings.Repeat("2", 64), Size: 1}
+	noAction := Pointer{Oid: strings.Repeat("3", 64), Size: 1}
+	ok := Pointer{Oid: strings.Repeat("4", 64), Size: 2}
+
+	srv, _ := objectServer(t, func(req BatchRequest, base string) BatchResponse {
+		res := BatchResponse{Transfer: TransferBasic}
+		for _, p := range req.Objects {
+			o := &ObjectResponse{Pointer: p, Actions: downloadLink(base, p)}
+			if p == noAction {
+				o.Actions = nil
+			}
+			res.Objects = append(res.Objects, o)
+		}
+		return res
+	}, func(w http.ResponseWriter, r *http.Request, oid string) {
+		switch oid {
+		case notFound.Oid:
+			http.NotFound(w, r)
+		case redirected.Oid:
+			http.Redirect(w, r, "/obj/"+ok.Oid, http.StatusFound)
+		default:
+			_, _ = io.WriteString(w, "ok")
+		}
+	})
+	c := plainClient(t, srv.URL+"/x.git")
+	// Redirects are refused, as by secureHTTPClient.
+	c.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	results := map[string]downloadResult{}
+	if err := c.Download(t.Context(), []Pointer{notFound, redirected, noAction, ok}, collect(t, results)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	for _, p := range []Pointer{notFound, redirected, noAction} {
+		if r, found := results[p.Oid]; !found || r.err == nil {
+			t.Errorf("object %s: got %+v, want a per-object error", p.Oid[:1], r)
+		}
+	}
+	if r := results[ok.Oid]; r.err != nil || r.content != "ok" {
+		t.Errorf("object after the failures: got %+v, want its content", r)
+	}
+}
+
+// TestDownloadIgnoresUnrequestedObjects checks that objects in the batch
+// response that were not requested, or are listed again, are neither
+// downloaded nor passed to the callback.
+func TestDownloadIgnoresUnrequestedObjects(t *testing.T) {
+	t.Parallel()
+	requested := Pointer{Oid: strings.Repeat("1", 64), Size: 2}
+	unrequested := Pointer{Oid: strings.Repeat("2", 64), Size: 2}
+
+	srv, hits := objectServer(t, func(_ BatchRequest, base string) BatchResponse {
+		return BatchResponse{Transfer: TransferBasic, Objects: []*ObjectResponse{
+			{Pointer: unrequested, Actions: downloadLink(base, unrequested)},
+			{Pointer: requested, Actions: downloadLink(base, requested)},
+			{Pointer: requested, Actions: downloadLink(base, requested)},
+		}}
+	}, func(w http.ResponseWriter, _ *http.Request, _ string) {
+		_, _ = io.WriteString(w, "ok")
+	})
+	c := plainClient(t, srv.URL+"/x.git")
+
+	results := map[string]downloadResult{}
+	if err := c.Download(t.Context(), []Pointer{requested}, collect(t, results)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if n := hits(unrequested.Oid); n != 0 {
+		t.Errorf("unrequested object downloaded %d times", n)
+	}
+	if n := hits(requested.Oid); n != 1 {
+		t.Errorf("requested object downloaded %d times, want 1", n)
+	}
+	if _, found := results[unrequested.Oid]; found {
+		t.Error("unrequested object passed to the callback")
+	}
+	if r := results[requested.Oid]; r.err != nil || r.content != "ok" {
+		t.Errorf("requested object: got %+v, want its content", r)
+	}
+}
+
+// TestDownloadCancelled checks that a transfer that fails because the
+// context was cancelled stops the download instead of being reported as a
+// per-object error.
+func TestDownloadCancelled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv, _ := objectServer(t, func(req BatchRequest, base string) BatchResponse {
+		res := BatchResponse{Transfer: TransferBasic}
+		for _, p := range req.Objects {
+			res.Objects = append(res.Objects, &ObjectResponse{Pointer: p, Actions: downloadLink(base, p)})
+		}
+		return res
+	}, func(_ http.ResponseWriter, r *http.Request, _ string) {
+		cancel()
+		<-r.Context().Done()
+	})
+	c := plainClient(t, srv.URL+"/x.git")
+
+	called := false
+	err := c.Download(ctx, []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Download = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Error("callback called for an object the cancellation stopped")
 	}
 }

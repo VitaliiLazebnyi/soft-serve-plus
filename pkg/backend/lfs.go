@@ -334,9 +334,16 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			// Read one byte past the expected size, enough to tell that
 			// the content is too long without storing all of it.
 			hash := sha256.New()
-			written, err := strg.Put(tempName, io.TeeReader(io.LimitReader(content, p.Size+1), hash))
+			src := &readErrReader{r: content}
+			written, err := strg.Put(tempName, io.TeeReader(io.LimitReader(src, p.Size+1), hash))
 			if err != nil {
 				_ = strg.Delete(tempName)
+				// A download that breaks off only fails its own object; an
+				// error storing it fails the sync.
+				if src.err != nil && ctx.Err() == nil {
+					objectFailed(p, src.err)
+					return nil
+				}
 				return err
 			}
 
@@ -524,6 +531,22 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 	}
 
 	return nil
+}
+
+// readErrReader is a reader that remembers the error, other than io.EOF,
+// its underlying reader returned, telling a failed download apart from a
+// failure to store it.
+type readErrReader struct {
+	r   io.Reader
+	err error
+}
+
+func (r *readErrReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
 }
 
 // recordLFSObject records an LFS object of a repository. An object someone

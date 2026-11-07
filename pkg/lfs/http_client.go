@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -223,7 +224,20 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		return fmt.Errorf("TransferAdapter not found: %s", result.Transfer)
 	}
 
+	// Only act on objects that were asked for, once each, so a response
+	// listing other objects or the same one twice transfers nothing more.
+	requested := make(map[string]bool, len(objects))
+	for _, p := range objects {
+		requested[p.Oid] = true
+	}
+
 	for _, object := range result.Objects {
+		if !requested[object.Oid] {
+			logger.Debugf("Ignoring %v, which was not requested or was already handled", object.Pointer)
+			continue
+		}
+		delete(requested, object.Oid)
+
 		if object.Error != nil {
 			objectError := errors.New(object.Error.Message)
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
@@ -271,15 +285,25 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 				}
 			}
 		} else {
+			// A failed transfer only fails its own object, like an error
+			// the server reports for it in the batch response.
+			var content io.ReadCloser
 			link, ok := object.Actions[ActionDownload]
-			if !ok {
+			if ok {
+				content, err = transferAdapter.Download(ctx, object.Pointer, link)
+			} else {
 				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'download'")
+				err = errors.New("missing action 'download'")
 			}
-
-			content, err := transferAdapter.Download(ctx, object.Pointer, link)
 			if err != nil {
-				return err
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				logger.Debugf("Error on object %v: %v", object.Pointer, err)
+				if err := dc(object.Pointer, nil, err); err != nil {
+					return err
+				}
+				continue
 			}
 
 			if err := dc(object.Pointer, content, nil); err != nil {
