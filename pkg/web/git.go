@@ -539,7 +539,12 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		defer reader.Close() //nolint: errcheck
 	}
 
+	// The service waits for its read of the body to end, so the body is not
+	// read after this handler returns or while the gzip reader is closed.
+	// The read is not cut short with a read deadline on the connection,
+	// which could cancel the context of this and later requests on it.
 	cmd.Stdin = reader
+	cmd.JoinStdin = true
 	cmd.Stdout = w
 
 	if err := service.Handler(ctx, cmd); err != nil {

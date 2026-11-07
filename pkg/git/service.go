@@ -144,11 +144,17 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	wg := &sync.WaitGroup{}
 
 	// stdin
+	var (
+		stdinDone   chan struct{}
+		interrupted atomic.Bool
+	)
 	if scmd.Stdin != nil {
+		stdinDone = make(chan struct{})
 		go func() {
+			defer close(stdinDone)
 			defer stdin.Close() //nolint: errcheck
 			if _, err := io.Copy(stdin, scmd.Stdin); err != nil {
-				logCopyError(ctx, "stdin", err, gitGone(err))
+				logCopyError(ctx, "stdin", err, gitGone(err) || interrupted.Load())
 			}
 		}()
 	}
@@ -176,8 +182,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	}
 
 	// Ensure all the output is written before waiting for the command to
-	// finish.
-	// Stdin is handled by the client side.
+	// finish. Stdin is joined after git exits, see joinStdin.
 	copied := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -195,6 +200,9 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 
 	err = cmd.Wait()
 	<-copied
+	if stdinDone != nil {
+		joinStdin(scmd, stdinDone, &interrupted)
+	}
 	if err != nil && stoppedByContext(ctx, err, killed.Load()) {
 		// The context was cancelled, usually because the client went away,
 		// and git was killed for it. Report the cancellation rather than
@@ -212,6 +220,73 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	}
 
 	return nil
+}
+
+// stdinInterruptInterval is how often joinStdin sets a read deadline in the
+// past on the client's input until the copy of it ends.
+const stdinInterruptInterval = 10 * time.Millisecond
+
+// readDeadliner is an input whose blocked reads can be ended by a read
+// deadline, such as a network connection.
+type readDeadliner interface {
+	SetReadDeadline(t time.Time) error
+}
+
+// joinStdin waits for the copy of the client's input to git, which done
+// reports, to finish. Git has exited and Wait closed its input, so the copy
+// ends at its next read, but that read can wait on the client for as long
+// as the client likes.
+//
+// An input that takes a read deadline, such as the git daemon's connection,
+// is given one in the past to end the read now, and the copy is waited for.
+// The deadline is set again until the copy ends, in case the input set its
+// own deadline for the read in the meantime. The input can no longer be
+// read after that, which does not matter as git is gone and the caller only
+// closes it.
+//
+// An input that cannot be interrupted is waited for only when the command
+// asks for it with JoinStdin, as an HTTP request body must not be read after
+// the handler returns. Its output is flushed first, so the client has the
+// whole response while the handler waits for it to finish sending. A read
+// deadline is not used there: on an HTTP/1 connection a deadline can also
+// end the server's own background read once the body is done, which
+// cancels the context of this and every later request on the connection.
+//
+// Any other input, such as an SSH channel, is left to its owner: the read
+// ends when the owner closes it after the handler returns. Waiting there
+// could deadlock, as the client waits for the exit status first.
+func joinStdin(scmd ServiceCommand, done <-chan struct{}, interrupted *atomic.Bool) {
+	select {
+	case <-done:
+		return
+	default:
+	}
+	if d, ok := scmd.Stdin.(readDeadliner); ok {
+		interrupted.Store(true)
+		// The input can set its own deadline before each read, as the git
+		// daemon's connection does for its idle timeout. One that does so
+		// right after this deadline was set replaces it, and the read
+		// blocks again, so the deadline is set again until the copy ends.
+		ticker := time.NewTicker(stdinInterruptInterval)
+		defer ticker.Stop()
+		for {
+			if err := d.SetReadDeadline(time.Now()); err != nil {
+				return
+			}
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+		}
+	}
+	if !scmd.JoinStdin {
+		return
+	}
+	if f, ok := scmd.Stdout.(interface{ Flush() }); ok {
+		f.Flush()
+	}
+	<-done
 }
 
 // logCopyError logs a failure to copy between git and the client. A client
@@ -322,6 +397,13 @@ type ServiceCommand struct {
 	Dir    string
 	Env    []string
 	Args   []string
+
+	// JoinStdin makes the handler wait, once git has exited, for the copy
+	// of Stdin to git to end even when Stdin takes no read deadline that
+	// could end it. Set it when Stdin must not be read after the handler
+	// returns, as for an HTTP request body; the copy then ends when the
+	// client finishes sending or goes away. See joinStdin.
+	JoinStdin bool
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
