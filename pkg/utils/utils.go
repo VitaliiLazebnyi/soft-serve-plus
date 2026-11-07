@@ -45,7 +45,11 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	if first, _ := utf8.DecodeRuneInString(username); !unicode.IsLetter(first) {
+	// Lookups accept a name whose first byte, read as Latin-1, is a letter,
+	// as older versions did, so that accounts they created stay reachable,
+	// and a name whose first character is a letter, as ValidateNewUsername
+	// requires.
+	if first, _ := utf8.DecodeRuneInString(username); !unicode.IsLetter(first) && !unicode.IsLetter(rune(username[0])) {
 		return fmt.Errorf("username must start with a letter")
 	}
 
@@ -59,13 +63,17 @@ func ValidateUsername(username string) error {
 }
 
 // ValidateNewUsername returns an error if username is not valid for a new
-// account or a rename. On top of ValidateUsername, it rejects letters from
+// account or a rename. On top of ValidateUsername, it requires the first
+// character, not just its first byte, to be a letter, and it rejects letters from
 // scripts that are not normally mixed, such as a Cyrillic "а" in "аdmin",
 // which would make the name look like another one. Existing accounts are
 // looked up with ValidateUsername, so they stay reachable.
 func ValidateNewUsername(username string) error {
 	if err := ValidateUsername(username); err != nil {
 		return err
+	}
+	if first, _ := utf8.DecodeRuneInString(username); !unicode.IsLetter(first) {
+		return fmt.Errorf("username must start with a letter")
 	}
 	if mixedScripts(username) {
 		return fmt.Errorf("username cannot mix letters from different scripts")

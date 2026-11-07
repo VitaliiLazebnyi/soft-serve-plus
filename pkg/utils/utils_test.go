@@ -177,8 +177,20 @@ func TestValidateNewUsername(t *testing.T) {
 			t.Errorf("ValidateNewUsername(%q) = nil, want an error", name)
 		}
 	}
-	// Existing accounts are still looked up.
-	if err := ValidateUsername("\u0430dmin"); err != nil {
-		t.Errorf("ValidateUsername(%q) = %v, want nil", "\u0430dmin", err)
+	// Existing accounts are still looked up: mixed scripts, a first byte
+	// that older versions took for a Latin-1 letter (0xD9), and a first
+	// letter whose first byte is not one (Hebrew, 0xD7).
+	for _, name := range []string{"\u0430dmin", "\u0663abc", "\u05d0\u05d1\u05d2"} {
+		if err := ValidateUsername(name); err != nil {
+			t.Errorf("ValidateUsername(%q) = %v, want nil", name, err)
+		}
+	}
+	if err := ValidateNewUsername("\u05d0\u05d1\u05d2"); err != nil {
+		t.Errorf("ValidateNewUsername(%q) = %v, want nil", "\u05d0\u05d1\u05d2", err)
+	}
+	for _, name := range []string{"1abc", "-abc", "\u05c0abc"} { // U+05C0 is Hebrew punctuation, lead byte 0xD7
+		if err := ValidateUsername(name); err == nil {
+			t.Errorf("ValidateUsername(%q) = nil, want an error", name)
+		}
 	}
 }
