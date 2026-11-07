@@ -109,7 +109,8 @@ func (t *Tree) Entries() (Entries, error) {
 	return ret, nil
 }
 
-// TreeEntry returns the TreeEntry for the file path.
+// TreeEntry returns the TreeEntry for the file path, which is relative to
+// the tree and may name a file in a subdirectory.
 func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
 	entry, err := t.Tree.TreeEntry(path)
 	if err != nil {
@@ -117,7 +118,7 @@ func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
 	}
 	return &TreeEntry{
 		TreeEntry: entry,
-		path:      gopath.Join(t.Path, entry.Name()),
+		path:      gopath.Join(t.Path, path),
 	}, nil
 }
 
@@ -159,14 +160,22 @@ func (f *File) IsBinary() (bool, error) {
 	return IsBinary(r)
 }
 
-// Mode returns the mode of the file in fs.FileMode format.
+// Mode returns the mode of the file in fs.FileMode format. Git modes are not
+// fs.FileMode bits, so each kind of entry is mapped to its equivalent: a
+// symlink is fs.ModeSymlink, and a submodule, which has no equivalent, is
+// fs.ModeIrregular.
 func (e *TreeEntry) Mode() fs.FileMode {
-	m := e.Blob().Mode()
-	switch m {
+	switch e.TreeEntry.Mode() {
 	case git.EntryTree:
 		return fs.ModeDir | fs.ModePerm
+	case git.EntryBlob:
+		return 0o644
+	case git.EntryExec:
+		return 0o755
+	case git.EntrySymlink:
+		return fs.ModeSymlink | fs.ModePerm
 	default:
-		return fs.FileMode(m) //nolint:gosec
+		return fs.ModeIrregular
 	}
 }
 

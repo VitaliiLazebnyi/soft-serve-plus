@@ -174,7 +174,7 @@ func (r *Repository) Patch(commit *Commit) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return diff.Patch(), err
+	return diff.Patch(), nil
 }
 
 // CountCommits returns the number of commits in the repository.

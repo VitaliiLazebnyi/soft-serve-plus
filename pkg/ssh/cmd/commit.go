@@ -43,15 +43,11 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 
-			patch, err := r.Patch(commit)
-			if err != nil {
-				return err
-			}
-
 			diff, err := r.Diff(commit)
 			if err != nil {
 				return err
 			}
+			patch := diff.Patch()
 
 			commonStyle := styles.DefaultStyles()
 			style := commonStyle.Log
