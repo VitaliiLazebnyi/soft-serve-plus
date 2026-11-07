@@ -415,6 +415,13 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 			Message: "object content does not match oid",
 		})
 		return
+	case errors.Is(err, lfs.ErrObjectRead):
+		// The client aborted or truncated the upload.
+		logger.Info("error reading object", "oid", oid, "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
+			Message: "error reading object",
+		})
+		return
 	case err != nil:
 		logger.Error("error storing object", "oid", oid, "err", err)
 		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
