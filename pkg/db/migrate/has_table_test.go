@@ -65,10 +65,9 @@ func TestHasTable(t *testing.T) {
 	}
 }
 
-// No MySQL driver is linked in, so check the query tableExists sends with a
-// driver that records it. MySQL keeps tables in databases, not in a "public"
-// schema, so the lookup must be limited to the current database.
-func TestHasTableMySQLQuery(t *testing.T) {
+// Only the drivers db.Open links in are supported. Any other driver name is
+// an error, sent before any query, rather than an empty query.
+func TestHasTableUnsupportedDriver(t *testing.T) {
 	conn := &recordingConn{}
 	dbx := sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "mysql")
 	t.Cleanup(func() { dbx.Close() })
@@ -79,16 +78,11 @@ func TestHasTableMySQLQuery(t *testing.T) {
 	}
 	defer txx.Rollback() //nolint:errcheck
 
-	if ok, err := tableExists(context.TODO(), &db.Tx{Tx: txx}, "widgets"); err != nil || ok {
-		t.Errorf("tableExists(widgets) = %v, %v with no rows, want false, nil", ok, err)
+	if ok, err := tableExists(context.TODO(), &db.Tx{Tx: txx}, "widgets"); err == nil || ok {
+		t.Errorf("tableExists(widgets) on mysql = %v, %v, want false and an error", ok, err)
 	}
-
-	want := "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
-	if len(conn.queries) != 1 || conn.queries[0] != want {
-		t.Errorf("queries = %q, want [%q]", conn.queries, want)
-	}
-	if len(conn.args) != 1 || conn.args[0] != "widgets" {
-		t.Errorf("args = %v, want [widgets]", conn.args)
+	if len(conn.queries) != 0 {
+		t.Errorf("queries = %q, want none", conn.queries)
 	}
 }
 

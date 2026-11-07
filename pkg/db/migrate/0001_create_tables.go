@@ -32,7 +32,7 @@ var createTables = Migration{
 		// Alter old tables (if exist)
 		// This is to support prior versions of Soft Serve v0.6
 		switch tx.DriverName() {
-		case "sqlite3", "sqlite":
+		case "sqlite":
 			insert += "OR IGNORE "
 
 			if ok, err := tableExists(ctx, tx, "user"); err != nil {
@@ -73,7 +73,7 @@ var createTables = Migration{
 		}
 
 		switch tx.DriverName() {
-		case "sqlite3", "sqlite":
+		case "sqlite":
 
 			if _, err := tx.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
 				return err

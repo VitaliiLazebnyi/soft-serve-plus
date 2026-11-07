@@ -79,7 +79,7 @@ func (*repoStore) LockUserRepos(ctx context.Context, h db.Handler, userID int64)
 	case "postgres":
 		_, err := h.ExecContext(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE;`, userID)
 		return db.WrapError(err)
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		return nil
 	default:
 		return fmt.Errorf("lock user repos: unsupported database driver %q", driver)
@@ -114,7 +114,7 @@ func (*repoStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name
 	switch driver := d.DriverName(); driver {
 	case "postgres":
 		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		query = "SELECT * FROM repos WHERE name = ?;"
 	default:
 		return models.Repo{}, fmt.Errorf("get repo for update: unsupported database driver %q", driver)

@@ -52,7 +52,7 @@ func newWebhookTestDB(t *testing.T) (context.Context, *db.DB) {
 
 func isSqlite(dbx *db.DB) bool {
 	d := dbx.DriverName()
-	return d == "sqlite" || d == "sqlite3"
+	return d == "sqlite"
 }
 
 func TestWebhookStoreRoundTrip(t *testing.T) {

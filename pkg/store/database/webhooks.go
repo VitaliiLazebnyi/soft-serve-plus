@@ -248,7 +248,7 @@ func (*webhookStore) LockAndCountWebhooks(ctx context.Context, h db.Handler, rep
 		if _, err := h.ExecContext(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR NO KEY UPDATE;`, repoID); err != nil {
 			return 0, err
 		}
-	case "sqlite", "sqlite3":
+	case "sqlite":
 	default:
 		return 0, fmt.Errorf("lock and count webhooks: unsupported database driver %q", driver)
 	}

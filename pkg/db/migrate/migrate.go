@@ -29,33 +29,26 @@ type Migrations struct {
 	Version int64  `db:"version"`
 }
 
-func (Migrations) schema(driverName string) string {
+// schema returns the statement that creates the migrations table. Only the
+// drivers db.Open links in are supported.
+func (Migrations) schema(driverName string) (string, error) {
 	switch driverName {
-	case "sqlite3", "sqlite":
+	case "sqlite":
 		return `CREATE TABLE IF NOT EXISTS migrations (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				name TEXT NOT NULL,
 				version INTEGER NOT NULL UNIQUE
 			);
-		`
+		`, nil
 	case "postgres":
 		return `CREATE TABLE IF NOT EXISTS migrations (
 			id SERIAL PRIMARY KEY,
 			name TEXT NOT NULL,
 			version INTEGER NOT NULL UNIQUE
 		);
-	`
-	case "mysql":
-		return `CREATE TABLE IF NOT EXISTS migrations (
-			id INT NOT NULL AUTO_INCREMENT,
-			name TEXT NOT NULL,
-			version INT NOT NULL,
-			UNIQUE (version),
-			PRIMARY KEY (id)
-		);
-	`
+	`, nil
 	default:
-		panic("unknown driver")
+		return "", fmt.Errorf("migrate: unsupported database driver %q", driverName)
 	}
 }
 
@@ -73,7 +66,11 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
 		if !ok {
-			if _, err := tx.ExecContext(ctx, Migrations{}.schema(tx.DriverName())); err != nil {
+			schema, err := Migrations{}.schema(tx.DriverName())
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, schema); err != nil {
 				return err
 			}
 		}
@@ -166,16 +163,15 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 // lookup other than the table not being found.
 func tableExists(ctx context.Context, tx *db.Tx, tableName string) (bool, error) {
 	var query string
-	switch tx.DriverName() {
-	case "sqlite3", "sqlite":
+	switch driver := tx.DriverName(); driver {
+	case "sqlite":
 		query = "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
 	case "postgres":
 		// Look in the schema unqualified CREATE TABLE statements write to,
 		// which follows search_path and is not necessarily "public".
 		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?"
-	case "mysql":
-		// A MySQL schema is a database; look in the connection's current one.
-		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+	default:
+		return false, fmt.Errorf("migrate: unsupported database driver %q", driver)
 	}
 
 	query = tx.Rebind(query)
