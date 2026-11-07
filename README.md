@@ -242,7 +242,8 @@ git:
   # The number of seconds a connection can be idle before it is closed.
   idle_timeout: 3
 
-  # The maximum number of concurrent connections.
+  # The maximum number of concurrent connections; at least 1. Connections
+  # beyond it are refused with "too many connections".
   max_connections: 32
 
 # The HTTP server configuration.
@@ -399,7 +400,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_SSH_KEY_PATH`: SSH host key-pair path
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
-- `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The number of simultaneous connections to git daemon
+- `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The maximum number of simultaneous connections to git daemon (at least 1)
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.
