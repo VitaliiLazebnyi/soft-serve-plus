@@ -78,11 +78,18 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 // cfg and returns its address.
 func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	t.Helper()
+	return startSSHServer(t, cfg, log.Default())
+}
+
+// startSSHServer starts a full SSH server built by NewSSHServer with cfg and
+// logger and returns its address.
+func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) string {
+	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.Default())
+	ctx = log.WithContext(ctx, logger)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
 	if err != nil {
 		t.Fatal(err)
