@@ -2,9 +2,12 @@ package backend
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -47,7 +50,41 @@ func TestWebhooksBareContext(t *testing.T) {
 	hooks, err = e.be.ListWebhooks(ctx, e.repo)
 	is.NoErr(err)
 	is.Equal(len(hooks), 0)
+}
 
+// TestRedeliverBareContext redelivers a stored delivery under a context that
+// carries no config, database or store. The send must still reach a receiver
+// that only webhook.allowed_hosts permits, and the new attempt must be
+// recorded; recording from the bare context used to panic.
+func TestRedeliverBareContext(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	url := srv.URL + "/hook"
+
+	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
+	id := e.createHook(t, url, webhook.EventPush)
+	delID := e.seedDelivery(t, id, url, `{"ref":"main"}`)
+
+	is.NoErr(e.be.RedeliverWebhookDelivery(context.Background(), e.repo, id, delID))
+	is.Equal(hits.Load(), int32(1))
+
+	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	is.Equal(len(list), 2)
+	for _, d := range list {
+		if d.ID == delID {
+			continue
+		}
+		is.Equal(d.ResponseStatus, http.StatusOK)
+		is.True(!d.RequestError.Valid)
+	}
 }
 
 // TestStoreRepoMissingLFSObjectsBackendConfig verifies that LFS objects are
