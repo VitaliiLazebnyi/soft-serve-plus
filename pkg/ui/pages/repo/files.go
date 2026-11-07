@@ -324,7 +324,11 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				f.blameView = false
 				f.activeView = filesViewContent
 			} else {
+				// The selector still holds the previous listing, maybe of
+				// another ref or repository. Clear it now, not through a
+				// FileItemsMsg that could land after a later good listing.
 				f.activeView = filesViewFiles
+				cmds = append(cmds, f.selector.SetItems(nil))
 			}
 		}
 	case EmptyRepoMsg:

@@ -2,6 +2,7 @@ package repo
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -85,5 +86,49 @@ func TestRepoErrorReachesInactiveFilesPane(t *testing.T) {
 	r.Update(common.ErrorMsg(errors.New("listing failed")))
 	if files.activeView == filesViewLoading {
 		t.Error("inactive Files pane still loading after the error")
+	}
+}
+
+// The Files pane is reused across repositories and refs. When a reload fails,
+// the pane must not show, or let the user open, the previous listing.
+func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "README")
+	gitRun(t, dir, "commit", "-q", "-m", "first")
+
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := r.HEAD()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := config.WithContext(t.Context(), config.DefaultConfig())
+	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(RefMsg(ref))
+	f.Update(f.updateFilesCmd())
+	if n := len(f.selector.Items()); n != 1 {
+		t.Fatalf("after the first listing items = %d; want 1", n)
+	}
+
+	f.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
+	f.Update(RefMsg(ref))
+	msg := f.updateFilesCmd()
+	if _, ok := msg.(common.ErrorMsg); !ok {
+		t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
+	}
+	f.Update(msg)
+	if f.activeView != filesViewFiles {
+		t.Errorf("activeView = %v; want filesViewFiles", f.activeView)
+	}
+	if n := len(f.selector.Items()); n != 0 {
+		t.Errorf("after the failed reload items = %d; want 0", n)
 	}
 }
