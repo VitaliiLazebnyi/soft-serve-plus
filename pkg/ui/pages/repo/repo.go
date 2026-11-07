@@ -216,7 +216,7 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
-	case LogItemsMsg, LogDiffMsg, LogCountMsg:
+	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))

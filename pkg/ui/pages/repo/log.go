@@ -42,6 +42,9 @@ type LogCommitMsg *git.Commit
 // LogDiffMsg is a message that contains a git diff.
 type LogDiffMsg *git.Diff
 
+// LogDiffErrorMsg reports that a selected commit's diff failed to load.
+type LogDiffErrorMsg struct{ err error }
+
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
 	common         common.Common
@@ -299,6 +302,16 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		)
 		l.vp.GotoTop()
 		l.activeView = logViewDiff
+	case LogDiffErrorMsg:
+		// Leave the loading view for the commit list, so the spinner does not
+		// stay on screen once the error is dismissed, then show the error.
+		// Repo can deliver this message twice; only the first one acts.
+		if l.activeView == logViewLoading && l.selectedCommit != nil {
+			l.selectedCommit = nil
+			l.activeView = logViewCommits
+			err := msg.err
+			cmds = append(cmds, func() tea.Msg { return common.ErrorMsg(err) })
+		}
 	case footer.ToggleFooterMsg:
 		cmds = append(cmds, l.updateCommitsCmd)
 	case tea.WindowSizeMsg:
@@ -491,12 +504,12 @@ func (l *Log) loadDiffCmd() tea.Msg {
 	r, err := l.repo.Open()
 	if err != nil {
 		l.common.Logger.Debugf("ui: error loading diff repository: %v", err)
-		return common.ErrorMsg(err)
+		return LogDiffErrorMsg{err}
 	}
 	diff, err := r.Diff(l.selectedCommit)
 	if err != nil {
 		l.common.Logger.Debugf("ui: error loading diff: %v", err)
-		return common.ErrorMsg(err)
+		return LogDiffErrorMsg{err}
 	}
 	return LogDiffMsg(diff)
 }
