@@ -1,7 +1,8 @@
 # vi: set ft=conf
 
-# A hook process that cannot open its log file logs to stderr instead of
-# panicking, so pushes still go through.
+# A hook process that cannot open its log file drops its logs instead of
+# panicking, so pushes still go through and no server paths or logs reach the
+# client.
 
 # start soft serve
 exec soft serve &
@@ -21,7 +22,8 @@ mkfile ./repo1/README.md '# Hello'
 git -C repo1 add README.md
 git -C repo1 commit -m 'first'
 git -C repo1 push origin HEAD
-stderr 'failed to open log file'
+! stderr 'failed to open log file'
+! stderr 'hooks.log'
 ! stderr 'panic'
 
 # the push landed

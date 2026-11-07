@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -113,8 +114,15 @@ func main() {
 	ctx = config.WithContext(ctx, cfg)
 	logger, f, err := logr.NewLogger(cfg)
 	if err != nil {
-		// logger still writes to stderr.
-		logger.Warn("failed to open log file, logging to stderr", "err", err)
+		if isHookCommand(os.Args[1:]) {
+			// A hook's stderr is relayed to the git client as "remote:"
+			// lines. Don't send it server paths or server logs; drop the
+			// hook logs instead.
+			logger.SetOutput(io.Discard)
+		} else {
+			// logger still writes to stderr.
+			logger.Warn("failed to open log file, logging to stderr", "err", err)
+		}
 	}
 
 	ctx = log.WithContext(ctx, logger)
@@ -139,4 +147,19 @@ func main() {
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
+}
+
+// isHookCommand reports whether args run the hook command or one of its
+// subcommands.
+func isHookCommand(args []string) bool {
+	c, _, err := rootCmd.Find(args)
+	if err != nil {
+		return false
+	}
+	for ; c != nil; c = c.Parent() {
+		if c == hook.Command {
+			return true
+		}
+	}
+	return false
 }
