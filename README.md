@@ -221,9 +221,18 @@ ssh:
   # The number of seconds a connection can be idle before it is closed.
   idle_timeout: 120
 
+  # The number of seconds a client has to finish the SSH handshake and
+  # authenticate before the connection is closed, like OpenSSH's
+  # LoginGraceTime. A value of 0 means no limit.
+  handshake_timeout: 120
+
   # The maximum number of SSH connections open at once, in total and from
   # one client address (one IPv4 address or one IPv6 /64). Connections over
-  # a limit are closed straight away. A value of 0 means no limit.
+  # a limit are closed straight away. A connection holds its place from the
+  # moment it is accepted, so handshake_timeout bounds how long a client
+  # that never authenticates can keep one. A value of 0 means no limit.
+  # Many clients behind one NAT or CI egress address share the per-address
+  # limit; raise max_connections_per_ip, or set it to 0, for such setups.
   max_connections: 256
   max_connections_per_ip: 32
 

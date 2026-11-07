@@ -191,3 +191,95 @@ func TestSSHServerMaxSessions(t *testing.T) {
 	}
 	_ = s2.Close()
 }
+
+// TestSSHServerHandshakeTimeoutFreesPlace checks that a client which opens a
+// TCP connection and never finishes the handshake loses its place under the
+// connection limits once handshake_timeout passes, so it cannot lock others
+// out by holding idle sockets.
+func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		send string
+	}{
+		{"silent", ""},
+		{"partial banner", "SSH-2.0-"},
+		{"banner only", "SSH-2.0-test\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			cfg.SSH.MaxConnections = 1
+			cfg.SSH.MaxConnectionsPerIP = 0
+			cfg.SSH.IdleTimeout = 0 // the handshake timeout alone must free the place
+			cfg.SSH.HandshakeTimeout = 1
+			addr := startAlgorithmsServer(t, cfg)
+
+			raw, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer raw.Close() //nolint: errcheck
+			if tc.send != "" {
+				if _, err := raw.Write([]byte(tc.send)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Give the server time to accept the raw connection, so it holds
+			// the only place before the client below dials.
+			time.Sleep(200 * time.Millisecond)
+			if c, err := dialClient(t, addr); err == nil {
+				_ = c.Close()
+				t.Fatal("connection accepted while an unauthenticated one holds the only place")
+			}
+
+			// The server closes the raw connection once the handshake
+			// timeout passes.
+			_ = raw.SetReadDeadline(time.Now().Add(10 * time.Second))
+			buf := make([]byte, 512)
+			for {
+				if _, err := raw.Read(buf); err != nil {
+					if ne, ok := err.(net.Error); ok && ne.Timeout() {
+						t.Fatal("server kept the unauthenticated connection open past the handshake timeout")
+					}
+					break
+				}
+			}
+
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				c, err := dialClient(t, addr)
+				if err == nil {
+					_ = c.Close()
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("connection still refused after the handshake timeout: %v", err)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		})
+	}
+}
+
+// TestSSHServerHandshakeTimeoutKeepsAuthenticated checks that the handshake
+// timeout stops applying once a client has authenticated.
+func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.IdleTimeout = 0
+	cfg.SSH.HandshakeTimeout = 1
+	addr := startAlgorithmsServer(t, cfg)
+
+	c, err := dialClient(t, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+	time.Sleep(2 * time.Second)
+	s, err := c.NewSession()
+	if err != nil {
+		t.Fatalf("authenticated connection closed by the handshake timeout: %v", err)
+	}
+	_ = s.Close()
+}

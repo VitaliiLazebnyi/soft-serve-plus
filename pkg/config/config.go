@@ -65,6 +65,13 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
+	// HandshakeTimeout is the number of seconds a client has to finish the
+	// SSH handshake and authenticate, like OpenSSH's LoginGraceTime. Until
+	// then the connection holds a place under MaxConnections and
+	// MaxConnectionsPerIP, so this bounds how long an idle, unauthenticated
+	// client can keep one. Zero means no limit.
+	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
+
 	// MaxConnections is the maximum number of SSH connections open at once.
 	// Zero means no limit.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
@@ -363,6 +370,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS=%d", c.SSH.MaxConnections),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=%d", c.SSH.MaxConnectionsPerIP),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_SESSIONS=%d", c.SSH.MaxSessions),
@@ -571,6 +579,7 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
+			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
 			MaxConnections:              256,
 			MaxConnectionsPerIP:         32,
 			MaxSessions:                 10,
@@ -686,8 +695,8 @@ func (c *Config) Validate() error {
 	}
 	c.SSH.allowedHosts = allowed
 
-	if c.SSH.MaxConnections < 0 || c.SSH.MaxConnectionsPerIP < 0 || c.SSH.MaxSessions < 0 {
-		return fmt.Errorf("ssh max_connections, max_connections_per_ip and max_sessions must not be negative")
+	if c.SSH.HandshakeTimeout < 0 || c.SSH.MaxConnections < 0 || c.SSH.MaxConnectionsPerIP < 0 || c.SSH.MaxSessions < 0 {
+		return fmt.Errorf("ssh handshake_timeout, max_connections, max_connections_per_ip and max_sessions must not be negative")
 	}
 
 	if err := c.SSH.validateAlgorithms(); err != nil {

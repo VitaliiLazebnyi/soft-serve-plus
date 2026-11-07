@@ -112,6 +112,15 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
 	}
 
+	// Close connections that have not finished the handshake and
+	// authenticated in time. A connection holds its place under the
+	// connection limits from the moment it is accepted, so without this an
+	// unauthenticated client could hold places for the whole idle timeout,
+	// or for ever by sending a byte now and then.
+	if cfg.SSH.HandshakeTimeout > 0 {
+		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
+	}
+
 	// Limit the connections open at once, in total and per client address,
 	// and the session channels each connection may hold.
 	s.srv.ConnCallback = connCallback(newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP), logger)
