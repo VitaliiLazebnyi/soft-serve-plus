@@ -326,9 +326,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			// Stream the object to a temporary file outside of any database
 			// transaction, so a slow download doesn't hold the write lock.
 			randBytes := make([]byte, 12)
-			if _, err := rand.Read(randBytes); err != nil {
-				return err
-			}
+			_, _ = rand.Read(randBytes) // crypto/rand.Read never fails.
 
 			tempName := path.Join("incomplete", fmt.Sprintf("%s%x", p.Oid, randBytes))
 			// Read one byte past the expected size, enough to tell that

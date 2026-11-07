@@ -46,9 +46,7 @@ var (
 // is up to the caller.
 func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, datastore store.LFSStore, repoID int64, oid string, size int64, r io.Reader) error {
 	randBytes := make([]byte, 12)
-	if _, err := rand.Read(randBytes); err != nil {
-		return fmt.Errorf("generate temp name: %w", err)
-	}
+	_, _ = rand.Read(randBytes) // crypto/rand.Read never fails.
 	tempName := path.Join("incomplete", fmt.Sprintf("%s%x", oid, randBytes))
 	defer strg.Delete(tempName) //nolint: errcheck
 
