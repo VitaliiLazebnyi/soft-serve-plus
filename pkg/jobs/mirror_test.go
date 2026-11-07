@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -126,7 +127,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRepoWithRemotes(t, tt.remotes)
-			remotes, err := validateMirrorRemotes(r, tt.policy)
+			remotes, err := validateMirrorRemotes(t.Context(), r, tt.policy)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -151,7 +152,68 @@ func TestValidateMirrorRemotes(t *testing.T) {
 // skipped rather than treated as valid.
 func TestValidateMirrorRemotesNoRemote(t *testing.T) {
 	r := newRepoWithRemotes(t, nil)
-	if _, err := validateMirrorRemotes(r, ssrf.GitRemotePolicy{}); err == nil {
+	if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); err == nil {
 		t.Error("validateMirrorRemotes() accepted a repo with no remote")
+	}
+}
+
+// TestValidateMirrorRemotesReadsLikeGit verifies remotes are read the way git
+// fetch reads them, not the way a config parser does: the first of several
+// urls, urls rewritten by insteadOf, and the legacy [remote.name] section all
+// reach validation.
+func TestValidateMirrorRemotesReadsLikeGit(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{
+			// git fetches from the first url; a parser that keeps the
+			// last one validates a different remote.
+			name: "first of several urls",
+			config: `[remote "origin"]
+	url = http://10.0.0.1/x.git
+	url = https://1.1.1.1/x.git
+`,
+		},
+		{
+			// The rewrite applies when git fetches, after the stored url
+			// was validated.
+			name: "insteadOf rewrite",
+			config: `[url "http://169.254.169.254/"]
+	insteadOf = https://1.1.1.1/
+[remote "origin"]
+	url = https://1.1.1.1/x.git
+`,
+		},
+		{
+			// The legacy section syntax is a remote to git, but not a
+			// subsection to a config parser.
+			name: "legacy section syntax",
+			config: `[remote "origin"]
+	url = https://1.1.1.1/x.git
+[remote.backup]
+	url = http://127.0.0.1/x.git
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepoWithRemotes(t, nil)
+			f, err := os.OpenFile(filepath.Join(r.Path, "config"), os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tt.config); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); !errors.Is(err, ssrf.ErrPrivateIP) {
+				t.Fatalf("validateMirrorRemotes() error = %v, want %v", err, ssrf.ErrPrivateIP)
+			}
+		})
 	}
 }

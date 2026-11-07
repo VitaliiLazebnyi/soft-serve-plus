@@ -33,24 +33,35 @@ type mirrorPull struct{}
 // `git remote update` fetches from all remotes, not just origin, so every one
 // of them has to pass. Any failure to read or validate skips the sync: a
 // remote that cannot be checked is not one to fetch from.
-func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
-	cfg, err := r.Config()
+//
+// The remotes and their URLs come from git itself rather than from parsing
+// the config: only git knows which of several `url` entries it fetches from,
+// how `url.<base>.insteadOf` rewrites them, and which spellings of a remote
+// section it accepts. Every URL of a remote is checked, not only the one
+// fetched from.
+func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
+	out, err := git.NewCommand("remote").WithContext(ctx).RunInDir(r.Path)
 	if err != nil {
-		return nil, fmt.Errorf("reading git config: %w", err)
+		return nil, fmt.Errorf("listing remotes: %w", err)
 	}
 
 	var remotes []ssrf.ValidatedGitRemote
-	for _, sub := range cfg.Section("remote").Subsections {
-		url := sub.Option("url")
-		if url == "" {
-			continue
+	for _, name := range strings.Fields(string(out)) {
+		// A remote without a url is printed as its own name, which git
+		// would fetch from as a local path. That fails validation, as it
+		// should.
+		out, err := git.NewCommand("remote", "get-url", "--all", "--", name).WithContext(ctx).RunInDir(r.Path)
+		if err != nil {
+			return nil, fmt.Errorf("remote %q: reading url: %w", name, err)
 		}
 
-		v, err := ssrf.ValidateGitRemote(url, policy)
-		if err != nil {
-			return nil, fmt.Errorf("remote %q: %w", sub.Name, err)
+		for _, url := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+			v, err := ssrf.ValidateGitRemoteContext(ctx, url, policy)
+			if err != nil {
+				return nil, fmt.Errorf("remote %q: %w", name, err)
+			}
+			remotes = append(remotes, v)
 		}
-		remotes = append(remotes, v)
 	}
 
 	if len(remotes) == 0 {
@@ -123,7 +134,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					}
 					policy := backend.RemotePolicy(cfg, owner)
 
-					remotes, err := validateMirrorRemotes(r, policy)
+					remotes, err := validateMirrorRemotes(ctx, r, policy)
 					if err != nil {
 						logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
 						return
