@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -84,8 +85,7 @@ func (*userStore) DeleteUserByUsername(ctx context.Context, tx db.Handler, usern
 	}
 
 	query := tx.Rebind(`DELETE FROM users WHERE username = ?;`)
-	_, err := tx.ExecContext(ctx, query, username)
-	return err
+	return affected(tx.ExecContext(ctx, query, username))
 }
 
 // GetUserByID implements store.UserStore.
@@ -202,13 +202,9 @@ func (*userStore) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, 
 			WHERE user_id = (SELECT id FROM users WHERE username = ?)
 			AND public_key = ?;`)
 	ak := sshutils.MarshalAuthorizedKey(pk)
-	res, err := tx.ExecContext(ctx, query, username, ak)
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		// Nothing was removed, so the record (if any) still describes the
-		// key where it is.
+	// Nothing removed means the user does not have the key, and the sync
+	// record (if any) still describes the key where it is.
+	if err := affected(tx.ExecContext(ctx, query, username, ak)); err != nil {
 		return err
 	}
 	return forgetSyncedAdminKey(ctx, tx, ak)
@@ -222,8 +218,7 @@ func (*userStore) SetAdminByUsername(ctx context.Context, tx db.Handler, usernam
 	}
 
 	query := tx.Rebind(`UPDATE users SET admin = ? WHERE username = ?;`)
-	_, err := tx.ExecContext(ctx, query, isAdmin, username)
-	return err
+	return affected(tx.ExecContext(ctx, query, isAdmin, username))
 }
 
 // SetUsernameByUsername implements store.UserStore.
@@ -239,15 +234,13 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 	}
 
 	query := tx.Rebind(`UPDATE users SET username = ? WHERE username = ?;`)
-	_, err := tx.ExecContext(ctx, query, newUsername, username)
-	return err
+	return affected(tx.ExecContext(ctx, query, newUsername, username))
 }
 
 // SetUserPassword implements store.UserStore.
 func (*userStore) SetUserPassword(ctx context.Context, tx db.Handler, userID int64, password string) error {
 	query := tx.Rebind(`UPDATE users SET password = ? WHERE id = ?;`)
-	_, err := tx.ExecContext(ctx, query, password, userID)
-	return err
+	return affected(tx.ExecContext(ctx, query, password, userID))
 }
 
 // SetUserPasswordByUsername implements store.UserStore.
@@ -258,6 +251,22 @@ func (*userStore) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, 
 	}
 
 	query := tx.Rebind(`UPDATE users SET password = ? WHERE username = ?;`)
-	_, err := tx.ExecContext(ctx, query, password, username)
-	return err
+	return affected(tx.ExecContext(ctx, query, password, username))
+}
+
+// affected returns the error of an UPDATE or DELETE, or db.ErrRecordNotFound
+// when it matched no row, so a change to a missing record is not reported as
+// done.
+func affected(res sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return db.ErrRecordNotFound
+	}
+	return nil
 }

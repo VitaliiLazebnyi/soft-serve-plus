@@ -420,7 +420,7 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 		return err
 	}
 
-	return db.WrapError(
+	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.AddPublicKeyByUsername(ctx, tx, username, pk)
 		}),
@@ -488,9 +488,21 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 //
 // It implements backend.Backend.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
 	return db.WrapError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+			if _, err := d.store.FindUserByUsername(ctx, tx, username); err != nil {
+				return userNotFound(err)
+			}
+			err := d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+			if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+				return proto.ErrPublicKeyNotFound
+			}
+			return err
 		}),
 	)
 }
@@ -523,7 +535,7 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 		return err
 	}
 
-	return db.WrapError(
+	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
 		}),
@@ -539,7 +551,7 @@ func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) err
 		return err
 	}
 
-	return db.WrapError(
+	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.SetAdminByUsername(ctx, tx, username, admin)
 		}),
@@ -558,7 +570,7 @@ func (d *Backend) SetPassword(ctx context.Context, username string, rawPassword 
 		return err
 	}
 
-	return db.WrapError(
+	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
 		}),
@@ -599,4 +611,15 @@ func (u *user) Password() string {
 	}
 
 	return ""
+}
+
+// userNotFound wraps err, reporting a missing row as proto.ErrUserNotFound.
+// It is for changes made by username, where the user is the only row that
+// can be missing.
+func userNotFound(err error) error {
+	err = db.WrapError(err)
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrUserNotFound
+	}
+	return err
 }

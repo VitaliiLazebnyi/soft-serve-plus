@@ -31,6 +31,10 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 
 	if err := db.WrapError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			// Without the user, the insert fails on a NOT NULL constraint.
+			if _, err := d.store.FindUserByUsername(ctx, tx, username); err != nil {
+				return userNotFound(err)
+			}
 			return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
 		}),
 	); err != nil {

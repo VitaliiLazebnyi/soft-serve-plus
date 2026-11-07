@@ -36,6 +36,8 @@ var (
 	// ErrUserOwnsRepos is returned when deleting a user who still owns
 	// repositories.
 	ErrUserOwnsRepos = errors.New("user still owns repositories; delete them first")
+	// ErrPublicKeyNotFound is returned when a user does not have a public key.
+	ErrPublicKeyNotFound = errors.New("public key not found")
 	// ErrTokenNotFound is returned when a token is not found.
 	ErrTokenNotFound = errors.New("token not found")
 	// ErrTokenExpired is returned when a token is expired.
