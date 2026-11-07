@@ -101,25 +101,32 @@ func (d *driver) send(msg tea.Msg) {
 			d.t.Fatalf("model reported an error: %v", msg)
 		case tea.BatchMsg:
 			for _, cmd := range msg {
-				queue = append(queue, run(cmd))
+				queue = append(queue, d.run(cmd))
 			}
 			continue
 		}
 		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == cmdType {
 			for i := range v.Len() {
-				queue = append(queue, run(v.Index(i).Interface().(tea.Cmd)))
+				queue = append(queue, d.run(v.Index(i).Interface().(tea.Cmd)))
 			}
 			continue
 		}
 		m, cmd := d.m.Update(msg)
 		d.m = m
-		queue = append(queue, run(cmd))
+		queue = append(queue, d.run(cmd))
 	}
 }
 
-// run runs cmd and returns its message, or nil if it has none or only
-// produces one later (a timer).
-func run(cmd tea.Cmd) tea.Msg {
+// cmdTimeout bounds how long run waits for one command. Every command the
+// panes return loads git data and finishes; a command still running after
+// this long is a hang, not a timer to skip.
+const cmdTimeout = 30 * time.Second
+
+// run runs cmd and returns its message, or nil if it has none. It waits for
+// the command however slow the runner is, so no message is lost; the only
+// timers the panes start are spinner ticks, which send drops by type.
+func (d *driver) run(cmd tea.Cmd) tea.Msg {
+	d.t.Helper()
 	if cmd == nil {
 		return nil
 	}
@@ -128,7 +135,8 @@ func run(cmd tea.Cmd) tea.Msg {
 	select {
 	case msg := <-ch:
 		return msg
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(cmdTimeout):
+		d.t.Fatalf("command did not finish within %v", cmdTimeout)
 		return nil
 	}
 }
