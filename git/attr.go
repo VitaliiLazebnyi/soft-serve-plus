@@ -16,6 +16,11 @@ type Attribute struct {
 }
 
 // CheckAttributes checks the attributes of the given ref and path.
+//
+// Every git command it runs, including any variant for newer git such as
+// `check-attr --source` (git >= 2.40), must be built with
+// NewCommandWithContext(r.Context(), ...) so that it stops when the SSH
+// session that asked for it disconnects.
 func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, error) {
 	rnd := rand.NewSource(time.Now().UnixNano())
 	fn := "soft-serve-index-" + strconv.Itoa(rand.New(rnd).Int()) //nolint: gosec
