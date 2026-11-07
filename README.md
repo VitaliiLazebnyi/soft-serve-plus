@@ -871,10 +871,12 @@ Use "ssh -p 23231 localhost repo [command] --help" for more information about a 
 
 Each `repo` command needs a level of access to the repository (see
 [Authorization](#authorization)): commands that only read it, such as `info`,
-`tree` and `blob`, need `read-only`; `create` and `import`, and changing its
-branches, tags, metadata or collaborators, need `read-write`; and deleting or
-renaming it, changing whether it is private, and managing its webhooks need
-`admin-access`.
+`tree` and `blob`, need `read-only`; `create` and `import`, changing its
+branches, tags or metadata, and listing or changing its collaborators need
+`read-write`; and deleting or renaming it, changing whether it is private, and
+managing its webhooks need `admin-access`. Unless you are a server admin, you
+can only give a collaborator an access level up to your own, and you can't
+remove or change a collaborator whose level is higher than yours.
 
 ### Creating Repositories
 
