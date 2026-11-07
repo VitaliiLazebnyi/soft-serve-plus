@@ -56,6 +56,7 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 	}{
 		{tea.WindowSizeMsg{Width: 100, Height: 50}, map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{RepoMsg(fakeRepo{}), map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{RefMsg(nil), map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{EmptyRepoMsg{}, map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{ReadmeMsg{}, map[*countingPane]int{readme: 1}},
 		{FileContentMsg{}, map[*countingPane]int{files: 1}},
@@ -78,5 +79,20 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A resize reaches the code view of the Files tab once while a file is open.
+func TestFilesDeliversResizeToContentOnce(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	f.activeView = filesViewContent
+	f.currentContent = FileContentMsg{content: "hello", ext: ".txt"}
+	f.code.SetContent("hello", ".txt")
+
+	before := f.code.Resizes()
+	f.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	if got := f.code.Resizes() - before; got != 1 {
+		t.Errorf("code view got the resize %d times, want 1", got)
 	}
 }
