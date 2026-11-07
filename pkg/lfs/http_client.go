@@ -285,19 +285,23 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 				}
 			}
 		} else {
-			// A failed transfer only fails its own object, like an error
-			// the server reports for it in the batch response.
+			// A download that fails because of the object, not the
+			// connection or the server, only fails its own object, like an
+			// error the server reports for it in the batch response.
 			var content io.ReadCloser
 			link, ok := object.Actions[ActionDownload]
 			if ok {
 				content, err = transferAdapter.Download(ctx, object.Pointer, link)
 			} else {
 				logger.Debugf("%v has no usable action", object.Pointer)
-				err = errors.New("missing action 'download'")
+				err = errMissingDownload
 			}
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
+				}
+				if !isObjectError(err) {
+					return err
 				}
 				logger.Debugf("Error on object %v: %v", object.Pointer, err)
 				if err := dc(object.Pointer, nil, err); err != nil {
@@ -313,4 +317,34 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 	}
 
 	return nil
+}
+
+// errMissingDownload is the error of an object the batch response gives no
+// download action for.
+var errMissingDownload = errors.New("missing action 'download'")
+
+// isObjectError reports whether err, the error of downloading one object,
+// is about that object rather than the connection or the server: the object
+// has no download action or an href that doesn't parse, or its href answers
+// 404 Not Found, 410 Gone or a redirect, which is refused. Trying again
+// won't change the outcome of those, so they only fail their own object.
+// Any other error, such as a connection that fails or times out, a 5xx, or
+// a 401 or 403 from an expired href, may well pass on a later try, so it
+// stops the download: a plain import that is told an object is unavailable
+// never fetches it again.
+func isObjectError(err error) bool {
+	if errors.Is(err, errMissingDownload) || errors.Is(err, errInvalidURL) {
+		return true
+	}
+	var serr *statusError
+	if !errors.As(err, &serr) {
+		return false
+	}
+	switch {
+	case serr.code == http.StatusNotFound, serr.code == http.StatusGone:
+		return true
+	case serr.code >= 300 && serr.code < 400:
+		return true
+	}
+	return false
 }

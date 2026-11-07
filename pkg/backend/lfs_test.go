@@ -185,6 +185,17 @@ func (lt *lfsTest) path(p lfs.Pointer) string {
 	return filepath.Join(lt.be.cfg.DataPath, "lfs", strconv.FormatInt(lt.repo.ID(), 10), "objects", p.RelativePath())
 }
 
+// incompleteFiles returns how many temporary files are in the repository's
+// incomplete directory, which storing an object creates.
+func (lt *lfsTest) incompleteFiles(t *testing.T) int {
+	t.Helper()
+	files, err := os.ReadDir(filepath.Join(lt.be.cfg.DataPath, "lfs", strconv.FormatInt(lt.repo.ID(), 10), "incomplete"))
+	if err != nil {
+		t.Fatalf("reading the incomplete directory: %v", err)
+	}
+	return len(files)
+}
+
 // TestStoreRepoMissingLFSObjects verifies that every LFS object is downloaded
 // and recorded, including the final partial batch, and that a later sync only
 // fetches objects that are missing on disk.
@@ -291,23 +302,22 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 }
 
 // TestStoreRepoMissingLFSObjectsReadError verifies that a download that
-// breaks off part way only fails its own object: the other objects are
-// still stored and the sync reports ErrLFSObjectsUnavailable.
+// breaks off part way, which a later try may get past, stops the sync
+// instead of being counted as an unavailable object, and leaves neither the
+// object nor a temporary file behind.
 func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
 	is := is.New(t)
-	lt := newLFSTest(t, 2)
-	broken, ok := lt.pointers[0], lt.pointers[1]
+	lt := newLFSTest(t, 1)
+	broken := lt.pointers[0]
 	lt.client.readErrs = map[string]error{broken.Oid: errors.New("connection reset")}
 
 	err := lt.store()
-	is.True(errors.Is(err, ErrLFSObjectsUnavailable))            // the broken object is reported
-	is.Equal(err.Error(), "some lfs objects are unavailable: 1") // and only it
-	_, err = os.Stat(lt.path(ok))
-	is.NoErr(err) // the other object is stored
+	is.True(err != nil)                                        // the sync fails
+	is.True(!errors.Is(err, ErrLFSObjectsUnavailable))         // rather than skipping the object
+	is.True(strings.Contains(err.Error(), "connection reset")) // with the download's error
 	_, err = os.Stat(lt.path(broken))
-	is.True(os.IsNotExist(err)) // the broken one is not
-	tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(lt.path(broken)), "..", "..", "..", "incomplete"))
-	is.Equal(len(tmp), 0) // and leaves no temporary file behind
+	is.True(os.IsNotExist(err))        // the object is not stored
+	is.Equal(lt.incompleteFiles(t), 0) // and no temporary file is left behind
 }
 
 // TestFetchImportLFSObjects verifies that an import succeeds when the remote
@@ -325,6 +335,10 @@ func TestFetchImportLFSObjects(t *testing.T) {
 
 	lt.client.err = errors.New("batch request failed")
 	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // other errors fail the import
+
+	lt.client.err, lt.client.errs = nil, nil
+	lt.client.readErrs = map[string]error{lt.pointers[0].Oid: errors.New("connection reset")}
+	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // as does a download that breaks off
 }
 
 // TestStoreRepoMissingLFSObjectsBadContent verifies that content which
@@ -345,9 +359,8 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 			_, err := os.Stat(lt.path(p))
 			is.True(os.IsNotExist(err)) // the content is not stored
 			_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.True(err != nil) // nor recorded
-			tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(lt.path(p)), "..", "..", "..", "incomplete"))
-			is.Equal(len(tmp), 0) // no temporary file is left behind
+			is.True(err != nil)                // nor recorded
+			is.Equal(lt.incompleteFiles(t), 0) // no temporary file is left behind
 		})
 	}
 }
