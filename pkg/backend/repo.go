@@ -124,6 +124,22 @@ func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
 // TUI shows it only while a server admin owns it.
 const AboutRepo = ".soft-serve"
 
+// AboutRepoOwnedByAdmin reports whether r, the AboutRepo, is owned by a
+// server admin who created it. The TUI shows its README only then. A
+// repository an anonymous caller created is recorded with the default admin
+// as owner (see registerRepository), so it is refused here: one created
+// before the name was reserved for admins, while anon-access allowed
+// creating repositories, would otherwise still be shown. So is one whose
+// owner is no longer an admin.
+func (d *Backend) AboutRepoOwnedByAdmin(ctx context.Context, r proto.Repository) bool {
+	rr, ok := r.(*repo)
+	if !ok || rr.repo.Anonymous || r.UserID() == 0 {
+		return false
+	}
+	owner, err := d.UserByID(ctx, r.UserID())
+	return err == nil && owner.IsAdmin()
+}
+
 // errAboutRepoReserved refuses a non-admin's claim on AboutRepo.
 var errAboutRepoReserved = fmt.Errorf("%w: only an admin can create the %s repository", proto.ErrUnauthorized, AboutRepo)
 

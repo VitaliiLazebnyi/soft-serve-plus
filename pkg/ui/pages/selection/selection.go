@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -203,7 +202,7 @@ func (s *Selection) Init() tea.Cmd {
 	sortedItems := make(Items, 0)
 	for _, r := range repos {
 		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
-		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && s.ownedByAdmin(r) {
+		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && be.AboutRepoOwnedByAdmin(ctx, r) {
 			readme, path, err := backend.Readme(r, nil)
 			if err != nil {
 				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
@@ -234,18 +233,6 @@ func (s *Selection) Init() tea.Cmd {
 		s.selector.SetItems(items),
 		readmeCmd,
 	)
-}
-
-// ownedByAdmin reports whether a server admin owns r. The About tab shows
-// the README of backend.AboutRepo only then, since it speaks for the server
-// to every user: a repository by that name from before the name was reserved
-// for admins, or whose owner is no longer an admin, is not shown.
-func (s *Selection) ownedByAdmin(r proto.Repository) bool {
-	if r.UserID() == 0 {
-		return false
-	}
-	owner, err := s.common.Backend().UserByID(s.common.Context(), r.UserID())
-	return err == nil && owner.IsAdmin()
 }
 
 // Update implements tea.Model.

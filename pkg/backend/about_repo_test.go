@@ -72,3 +72,46 @@ func TestAboutRepoAllowedForAdmins(t *testing.T) {
 	_, err = be.Repository(ctx, AboutRepo)
 	is.NoErr(err)
 }
+
+// AboutRepoOwnedByAdmin holds only for an AboutRepo an admin created and
+// still owns. One an anonymous caller created, which is recorded with the
+// default admin as owner, is refused: such a repository can predate the
+// reservation of the name for admins.
+func TestAboutRepoOwnedByAdmin(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+
+	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true})
+	is.NoErr(err)
+	adminCtx := proto.WithUserContext(ctx, admin)
+
+	aboutRepo := func() proto.Repository {
+		t.Helper()
+		repos, err := be.Repositories(ctx)
+		is.NoErr(err)
+		for _, r := range repos {
+			if r.Name() == AboutRepo {
+				return r
+			}
+		}
+		t.Fatalf("%s not found", AboutRepo)
+		return nil
+	}
+
+	// Created by an admin: shown, until the owner is no longer an admin.
+	_, err = be.CreateRepository(adminCtx, AboutRepo, admin, proto.RepositoryOptions{})
+	is.NoErr(err)
+	is.True(be.AboutRepoOwnedByAdmin(ctx, aboutRepo()))
+	is.NoErr(be.SetAdmin(ctx, "root", false))
+	is.True(!be.AboutRepoOwnedByAdmin(ctx, aboutRepo()))
+	is.NoErr(be.SetAdmin(ctx, "root", true))
+	is.NoErr(be.DeleteRepository(adminCtx, AboutRepo))
+
+	// Created anonymously before the name was reserved: the row names an
+	// admin as owner, but it is not shown.
+	is.NoErr(be.store.CreateRepo(ctx, be.db, AboutRepo, admin.ID(), "", "", false, false, false, true))
+	r := aboutRepo()
+	is.Equal(r.UserID(), admin.ID())
+	is.True(!be.AboutRepoOwnedByAdmin(ctx, r))
+}
