@@ -72,8 +72,8 @@ curl -v -XPOST http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/info/lfs/objects/fo
 stderr '^> 404 '
 curl -v -XGET http://localhost:$HTTP_PORT/repo2.git/info/lfs/objects/batch
 stderr '^> 405 '
-curl -XPOST http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/info/lfs/objects/batch
-stdout '.*Not Acceptable.*'
+curl -v -XPOST http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/info/lfs/objects/batch
+stderr '^> 406 '
 curl -XPOST -H 'Accept: application/vnd.git-lfs+json' -H 'Content-Type: application/vnd.git-lfs+json' http://$TOKEN@localhost:$HTTP_PORT/repo2.git/info/lfs/objects/batch
 stdout '.*validation error.*'
 curl -XPOST -H 'Accept: application/vnd.git-lfs+json' -H 'Content-Type: application/vnd.git-lfs+json' -d '{}' http://$TOKEN@localhost:$HTTP_PORT/repo2.git/info/lfs/objects/batch
