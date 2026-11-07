@@ -199,17 +199,17 @@ func TestReserveImportCaps(t *testing.T) {
 
 	var releases []func()
 	for range maxUserConcurrentImports {
-		release, err := be.reserveImport(ctx, alice, false, false)
+		slot, err := be.reserveImport(ctx, alice, false, false)
 		is.NoErr(err)
-		releases = append(releases, release)
+		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, alice, false, false)
 	is.True(errors.Is(err, proto.ErrTooManyImports))
 	// Callers without an account count together, apart from alice.
 	for range maxUserConcurrentImports {
-		release, err := be.reserveImport(ctx, nil, false, false)
+		slot, err := be.reserveImport(ctx, nil, false, false)
 		is.NoErr(err)
-		releases = append(releases, release)
+		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, nil, false, false)
 	is.True(errors.Is(err, proto.ErrTooManyImports))
@@ -217,17 +217,17 @@ func TestReserveImportCaps(t *testing.T) {
 	// Releasing twice frees one slot.
 	releases[0]()
 	releases[0]()
-	release, err := be.reserveImport(ctx, alice, false, false)
+	slot, err := be.reserveImport(ctx, alice, false, false)
 	is.NoErr(err)
-	releases[0] = release
+	releases[0] = slot.release
 	_, err = be.reserveImport(ctx, alice, false, false)
 	is.True(errors.Is(err, proto.ErrTooManyImports))
 
 	// Admins are not capped per user, but the server cap holds for them.
 	for len(releases) < maxConcurrentImports {
-		release, err := be.reserveImport(ctx, alice, true, false)
+		slot, err := be.reserveImport(ctx, alice, true, false)
 		is.NoErr(err)
-		releases = append(releases, release)
+		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, alice, true, false)
 	is.True(errors.Is(err, proto.ErrTooManyImports))
@@ -238,6 +238,7 @@ func TestReserveImportCaps(t *testing.T) {
 	be.imports.mu.Lock()
 	is.Equal(be.imports.total, 0)
 	is.Equal(len(be.imports.perUser), 0)
+	is.Equal(len(be.imports.pending), 0)
 	be.imports.mu.Unlock()
 }
 
@@ -275,6 +276,87 @@ func TestReserveImportRepoLimitConcurrent(t *testing.T) {
 	}
 	is.Equal(ok, 1)
 	is.Equal(be.imports.perUser[alice.ID()], 1)
+}
+
+// An import that has registered its repository counts against
+// max_repos_per_user through that repository only, not also as an import
+// in flight, while it still runs (an LFS fetch, say). It keeps holding its
+// concurrency slot until it returns.
+func TestRegisteredImportCountsOnce(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	cfg.MaxReposPerUser = 2
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+
+	src := t.TempDir()
+	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+
+	// Hold the first import right after it has registered its repository,
+	// as a long LFS fetch would.
+	registered := make(chan struct{})
+	resume := make(chan struct{})
+	var once sync.Once
+	be.afterRegister = func() {
+		once.Do(func() {
+			close(registered)
+			<-resume
+		})
+	}
+	defer func() { be.afterRegister = nil }()
+
+	slot, err := be.reserveImport(ctx, alice, false, true)
+	is.NoErr(err)
+	name := "a"
+	imp := importSpec{
+		name:      name,
+		path:      be.repoPath(name),
+		remote:    src,
+		logRemote: src,
+		limited:   true,
+		committed: slot.markRegistered,
+	}
+	is.NoErr(claimRepoPath(imp.path))
+	errc := make(chan error, 1)
+	go func() {
+		defer slot.release()
+		_, err := be.importRepository(ctx, alice, imp)
+		errc <- err
+	}()
+	select {
+	case <-registered:
+	case <-time.After(30 * time.Second):
+		close(resume)
+		t.Fatal("the import never registered its repository")
+	}
+
+	// alice owns one repository, so a second import is within the limit,
+	// and it takes her second concurrency slot.
+	second, err := be.reserveImport(ctx, alice, false, true)
+	is.NoErr(err)
+	// The limit is reached now, and so is the per-user cap.
+	_, err = be.reserveImport(ctx, alice, true, true)
+	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	_, err = be.reserveImport(ctx, alice, false, false)
+	is.True(errors.Is(err, proto.ErrTooManyImports))
+	second.release()
+
+	close(resume)
+	select {
+	case err := <-errc:
+		is.NoErr(err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the import did not finish")
+	}
+	// Releasing after registering leaves no count behind.
+	be.imports.mu.Lock()
+	is.Equal(be.imports.total, 0)
+	is.Equal(len(be.imports.perUser), 0)
+	is.Equal(len(be.imports.pending), 0)
+	be.imports.mu.Unlock()
 }
 
 // An import stopped just after its repository was committed must not report
