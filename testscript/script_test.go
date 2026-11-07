@@ -34,7 +34,8 @@ import (
 )
 
 var (
-	update  = flag.Bool("update", false, "update script files")
+	update = flag.Bool("update", false, "update script files")
+	// binPath is the soft binary under test; see buildSoft.
 	binPath string
 )
 
@@ -56,31 +57,56 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	tmp, err := os.MkdirTemp("", "soft-serve*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temporary directory: %s", err)
-		os.Exit(1)
+	code := m.Run()
+	if binDir != "" {
+		_ = os.RemoveAll(binDir)
 	}
-	defer os.RemoveAll(tmp)
+	os.Exit(code)
+}
 
-	binPath = filepath.Join(tmp, "soft")
-	if runtime.GOOS == "windows" {
-		binPath += ".exe"
+var (
+	buildOnce sync.Once
+	buildErr  error
+	// binDir is the temporary directory that holds binPath, once built.
+	binDir string
+)
+
+// buildSoft builds the soft binary under test the first time it is called and
+// returns its path. Only TestScript runs the binary, so running just the unit
+// tests in this package (go test -run TestWaitExit, say) does not pay for a
+// -race build of the whole server.
+func buildSoft(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		tmp, err := os.MkdirTemp("", "soft-serve*")
+		if err != nil {
+			buildErr = fmt.Errorf("failed to create temporary directory: %w", err)
+			return
+		}
+		binDir = tmp
+
+		path := filepath.Join(tmp, "soft")
+		if runtime.GOOS == "windows" {
+			path += ".exe"
+		}
+
+		// Build the soft binary with -cover flag.
+		cmd := PrepareBuildCommand(path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("failed to build soft-serve binary: %w\n%s", err, out)
+			return
+		}
+		binPath = path
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-
-	// Build the soft binary with -cover flag.
-	cmd := PrepareBuildCommand(binPath)
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build soft-serve binary: %s", err)
-		os.Exit(1)
-	}
-
-	// Run tests
-	os.Exit(m.Run())
+	return binPath
 }
 
 func TestScript(t *testing.T) {
 	flag.Parse()
+	bin := buildSoft(t)
 
 	mkkey := func(name string) (string, *keygen.SSHKeyPair) {
 		path := filepath.Join(t.TempDir(), name)
@@ -129,8 +155,8 @@ func TestScript(t *testing.T) {
 			"uui":                    cmdUI(user1.Signer()),
 		},
 		Setup: func(e *testscript.Env) error {
-			// Add binPath to PATH
-			e.Setenv("PATH", fmt.Sprintf("%s%c%s", filepath.Dir(binPath), os.PathListSeparator, e.Getenv("PATH")))
+			// Put the soft binary under test first in PATH
+			e.Setenv("PATH", fmt.Sprintf("%s%c%s", filepath.Dir(bin), os.PathListSeparator, e.Getenv("PATH")))
 			// The soft binary is built with -cover. When SOFT_SERVE_TEST_COVDIR
 			// is set, pass it to the server and hook processes as GOCOVERDIR so
 			// their counters are written there. A separate variable is used
