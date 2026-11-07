@@ -66,6 +66,8 @@ func UnquoteFilename(s string) string {
 		name = n
 	}
 
+	// Strip only the surrounding quotes: trimming every quote would also eat
+	// the last character of an escaped quote at the end of the name.
 	name = strconv.Quote(name)
-	return strings.Trim(name, `"`)
+	return name[1 : len(name)-1]
 }

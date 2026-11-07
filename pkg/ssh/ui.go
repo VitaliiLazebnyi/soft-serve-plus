@@ -216,7 +216,6 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ui.showFooter = !ui.showFooter
 		}
 	case repo.RepoMsg:
-		ui.common.SetValue(common.RepoKey, msg)
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()

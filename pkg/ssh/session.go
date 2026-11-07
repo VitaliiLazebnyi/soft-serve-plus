@@ -9,7 +9,6 @@ import (
 	bm "charm.land/wish/v2/bubbletea"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/prometheus/client_golang/prometheus"
@@ -40,7 +39,6 @@ func SessionHandler(s ssh.Session) *tea.Program {
 
 	ctx := s.Context()
 	be := backend.FromContext(ctx)
-	cfg := config.FromContext(ctx)
 	cmd := s.Command()
 	initialRepo := ""
 	if len(cmd) == 1 {
@@ -63,7 +61,6 @@ func SessionHandler(s ssh.Session) *tea.Program {
 	)
 
 	c := common.NewCommon(ctx, pty.Window.Width, pty.Window.Height)
-	c.SetValue(common.ConfigKey, cfg)
 	m := NewUI(c, initialRepo)
 	p := tea.NewProgram(m, opts...)
 

@@ -3,7 +3,6 @@ package code
 import (
 	"math"
 	"strings"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -27,7 +26,6 @@ type Code struct {
 	content       string
 	extension     string
 	renderContext gansi.RenderContext
-	renderMutex   sync.Mutex
 	styleConfig   gansi.StyleConfig
 
 	SideNotePercent float64
@@ -147,17 +145,17 @@ func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	return r, tea.Batch(cmds...)
 }
 
-// View implements tea.View.
+// View implements tea.Model.
 func (r *Code) View() string {
 	return r.Viewport.View()
 }
 
-// GotoTop moves the viewport to the top of the log.
+// GotoTop moves the viewport to the top of the content.
 func (r *Code) GotoTop() {
 	r.Viewport.GotoTop()
 }
 
-// GotoBottom moves the viewport to the bottom of the log.
+// GotoBottom moves the viewport to the bottom of the content.
 func (r *Code) GotoBottom() {
 	r.Viewport.GotoBottom()
 }
@@ -177,18 +175,7 @@ func (r *Code) ScrollPercent() float64 {
 	return r.Viewport.ScrollPercent()
 }
 
-// ScrollPosition returns the viewport's scroll position.
-func (r *Code) ScrollPosition() int {
-	scroll := r.ScrollPercent() * 100
-	if scroll < 0 || math.IsNaN(scroll) {
-		scroll = 0
-	}
-	return int(scroll)
-}
-
 func (r *Code) glamourize(w int, md string) (string, error) {
-	r.renderMutex.Lock()
-	defer r.renderMutex.Unlock()
 	if w > 120 {
 		w = 120
 	}

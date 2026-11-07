@@ -1,7 +1,6 @@
 package selection
 
 import (
-	"fmt"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
@@ -215,15 +214,10 @@ func (s *Selection) Init() tea.Cmd {
 		}
 		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
 		if al >= access.ReadOnlyAccess {
-			item, err := NewItem(s.common, r)
-			if err != nil {
-				s.common.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
-				continue
-			}
-			sortedItems = append(sortedItems, item)
+			sortedItems = append(sortedItems, NewItem(s.common, r))
 		}
 	}
-	sort.Sort(sortedItems)
+	sort.Stable(sortedItems)
 	items := make([]selector.IdentifiableItem, len(sortedItems))
 	for i, it := range sortedItems {
 		items[i] = it
@@ -296,7 +290,7 @@ func (s *Selection) View() string {
 	case readmePane:
 		rs := lipgloss.NewStyle().
 			Height(s.common.Height - hm)
-		status := fmt.Sprintf("☰ %.f%%", s.readme.ScrollPercent()*100)
+		status := common.ScrollPercent(s.readme.ScrollPosition())
 		readmeStatus := lipgloss.NewStyle().
 			Align(lipgloss.Right).
 			Width(s.common.Width - wm).

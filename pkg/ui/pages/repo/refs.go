@@ -217,7 +217,7 @@ func (r *Refs) updateItemsCmd() tea.Msg {
 	}
 	refs, err := rr.References()
 	if err != nil {
-		r.common.Logger.Debugf("ui: error getting references: %v", err)
+		r.common.Logger.Debugf("error getting references: %v", err)
 		return common.ErrorMsg(err)
 	}
 	for _, ref := range refs {
@@ -237,7 +237,7 @@ func (r *Refs) updateItemsCmd() tea.Msg {
 			its = append(its, refItem)
 		}
 	}
-	sort.Sort(its)
+	sort.Stable(its)
 	items := make([]selector.IdentifiableItem, len(its))
 	for i, it := range its {
 		items[i] = it

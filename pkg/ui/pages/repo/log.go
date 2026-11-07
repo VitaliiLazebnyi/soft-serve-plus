@@ -408,7 +408,7 @@ func (l *Log) StatusBarInfo() string {
 		// of the paginator hack above.
 		return fmt.Sprintf("p. %d/%d", l.nextPage+1, l.selector.TotalPages())
 	case logViewDiff:
-		return fmt.Sprintf("☰ %.f%%", l.vp.ScrollPercent()*100)
+		return common.ScrollPercent(l.vp.ScrollPosition())
 	default:
 		return ""
 	}
@@ -431,7 +431,7 @@ func (l *Log) countCommitsCmd() tea.Msg {
 	}
 	count, err := r.CountCommits(l.ref)
 	if err != nil {
-		l.common.Logger.Debugf("ui: error counting commits: %v", err)
+		l.common.Logger.Debugf("error counting commits: %v", err)
 		return common.ErrorMsg(err)
 	}
 	return LogCountMsg(count)
@@ -459,7 +459,7 @@ func (l *Log) updateCommitsCmd() tea.Msg {
 	// CommitsByPage pages start at 1
 	cc, err := r.CommitsByPage(ref, page+1, limit)
 	if err != nil {
-		l.common.Logger.Debugf("ui: error loading commits: %v", err)
+		l.common.Logger.Debugf("error loading commits: %v", err)
 		return common.ErrorMsg(err)
 	}
 	for i, c := range cc {
@@ -484,12 +484,12 @@ func (l *Log) loadDiffCmd() tea.Msg {
 	}
 	r, err := l.repo.Open()
 	if err != nil {
-		l.common.Logger.Debugf("ui: error loading diff repository: %v", err)
+		l.common.Logger.Debugf("error loading diff repository: %v", err)
 		return common.ErrorMsg(err)
 	}
 	diff, err := r.Diff(l.selectedCommit)
 	if err != nil {
-		l.common.Logger.Debugf("ui: error loading diff: %v", err)
+		l.common.Logger.Debugf("error loading diff: %v", err)
 		return common.ErrorMsg(err)
 	}
 	return LogDiffMsg(diff)
@@ -503,7 +503,7 @@ func (l *Log) renderCommit(c *git.Commit) string {
 	s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
 		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
 		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", c.Author.Name, c.Author.Email)),
-		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Committer.When.Format(time.UnixDate)),
+		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
 	))
 	return wrap.String(s.String(), l.common.Width-2)

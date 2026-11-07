@@ -2,7 +2,9 @@ package common
 
 import (
 	"fmt"
+	"net"
 	"net/url"
+	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/muesli/reflow/truncate"
@@ -19,16 +21,29 @@ func TruncateString(s string, max int) string { //nolint:revive
 // RepoURL returns the URL of the repository.
 func RepoURL(publicURL, name string) string {
 	name = utils.SanitizeRepo(name) + ".git"
-	url, err := url.Parse(publicURL)
-	if err == nil {
-		switch url.Scheme {
-		case "ssh":
-			port := url.Port()
-			if port == "" || port == "22" {
-				return fmt.Sprintf("git@%s:%s", url.Hostname(), name)
-			}
-			return fmt.Sprintf("ssh://%s:%s/%s", url.Hostname(), url.Port(), name)
+	u, err := url.Parse(publicURL)
+	if err == nil && u.Scheme == "ssh" {
+		host := u.Hostname()
+		port := u.Port()
+		var user string
+		if u.User != nil {
+			user = u.User.Username()
 		}
+		if port == "" || port == "22" {
+			if user == "" {
+				user = "git"
+			}
+			// An IPv6 address needs brackets so its colons are not read
+			// as the host and path separator of the scp-like syntax.
+			if strings.Contains(host, ":") {
+				host = "[" + host + "]"
+			}
+			return fmt.Sprintf("%s@%s:%s", user, host, name)
+		}
+		if user != "" {
+			user += "@"
+		}
+		return fmt.Sprintf("ssh://%s%s/%s", user, net.JoinHostPort(host, port), name)
 	}
 
 	return fmt.Sprintf("%s/%s", publicURL, name)
