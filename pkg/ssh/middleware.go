@@ -86,6 +86,28 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
+// MaxCommandLength is the longest exec command, in bytes, the SSH server
+// accepts. Every Soft Serve command fits well within it. Splitting a command
+// into arguments costs time quadratic in its length, and any client with any
+// key reaches the middleware chain, so longer commands are refused before
+// anything parses them.
+const MaxCommandLength = 4 << 10
+
+// ErrCommandTooLong is returned when an exec command exceeds MaxCommandLength.
+var ErrCommandTooLong = fmt.Errorf("command too long: exceeds %d bytes", MaxCommandLength)
+
+// CommandLengthMiddleware refuses sessions whose exec command is longer than
+// MaxCommandLength, before any middleware or handler parses it.
+func CommandLengthMiddleware(sh ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		if len(s.RawCommand()) > MaxCommandLength {
+			wish.Fatalln(s, ErrCommandTooLong)
+			return
+		}
+		sh(s)
+	}
+}
+
 // ContextMiddleware adds the config, backend, and logger to the session context.
 func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be *backend.Backend, logger *log.Logger) func(ssh.Handler) ssh.Handler {
 	return func(sh ssh.Handler) ssh.Handler {
@@ -180,6 +202,12 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		ctx := s.Context()
 		logger := log.FromContext(ctx).WithPrefix("ssh")
+		if logger.GetLevel() > log.DebugLevel {
+			// Nothing below is logged, so skip parsing the command.
+			sh(s)
+			return
+		}
+
 		ct := time.Now()
 		hpk := sshutils.MarshalAuthorizedKey(s.PublicKey())
 		ptyReq, _, isPty := s.Pty()
