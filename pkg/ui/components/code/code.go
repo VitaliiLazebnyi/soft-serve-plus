@@ -29,6 +29,10 @@ type Code struct {
 	renderContext gansi.RenderContext
 	renderMutex   sync.Mutex
 	styleConfig   gansi.StyleConfig
+	// renderedWidth is the width the content was last rendered at, and
+	// rendered tells whether it has been rendered at all.
+	renderedWidth int
+	rendered      bool
 
 	SideNotePercent float64
 	TabWidth        int
@@ -76,6 +80,7 @@ func (r *Code) SetSideNote(s string) tea.Cmd {
 
 // Init implements tea.Model.
 func (r *Code) Init() tea.Cmd {
+	r.rendered = false
 	// XXX: We probably won't need the GetHorizontalFrameSize margin
 	// subtraction if we get the new viewport soft wrapping to play nicely with
 	// Glamour. This also introduces a bug where when it soft wraps, the
@@ -127,6 +132,8 @@ func (r *Code) Init() tea.Cmd {
 	content = lipgloss.NewStyle().Width(w).Render(content)
 
 	r.Viewport.Model.SetContent(content)
+	r.renderedWidth = r.common.Width
+	r.rendered = true
 
 	return nil
 }
@@ -136,8 +143,11 @@ func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg.(type) {
 	case tea.WindowSizeMsg:
-		// Recalculate content width and line wrap.
-		cmds = append(cmds, r.Init())
+		// Recalculate content width and line wrap. A resize that keeps the
+		// width, such as a height-only change, needs no new render.
+		if !r.rendered || r.renderedWidth != r.common.Width {
+			cmds = append(cmds, r.Init())
+		}
 	}
 	v, cmd := r.Viewport.Update(msg)
 	r.Viewport = v.(*vp.Viewport)

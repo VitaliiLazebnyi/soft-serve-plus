@@ -302,19 +302,9 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		f.SetSize(msg.Width, msg.Height)
-		switch f.activeView {
-		case filesViewFiles:
-			if f.repo != nil {
-				cmds = append(cmds, f.updateFilesCmd)
-			}
-		case filesViewContent:
-			if f.currentContent.content != "" {
-				m, cmd := f.code.Update(msg)
-				f.code = m.(*code.Code)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
+		// The content view re-renders through f.code.Update below.
+		if f.activeView == filesViewFiles && f.repo != nil {
+			cmds = append(cmds, f.updateFilesCmd)
 		}
 	case EmptyRepoMsg:
 		f.ref = nil
