@@ -46,6 +46,11 @@ type Backend struct {
 	// pushGates orders pushes against the removal of repositories created
 	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.
 	pushGates pushGates
+
+	// repoDirs records the repository directories that a create, import,
+	// rename or delete in progress owns without a database row, so a delete
+	// does not take them for orphans.
+	repoDirs repoDirHolds
 }
 
 // New returns a new Soft Serve backend.
