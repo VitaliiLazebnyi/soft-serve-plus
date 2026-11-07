@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -99,6 +100,16 @@ type deadlines struct {
 	idle time.Duration
 	// max is when the request must be done, or zero for no limit.
 	max time.Time
+
+	// mu guards done and every deadline set through rc.
+	mu sync.Mutex
+	// done is set once the handler has returned. The connection then
+	// belongs to the server again: over HTTP/2 the stream's state is
+	// gone, and setting a deadline through rc panics; over HTTP/1 it
+	// would undo the deadline the server set for the next request. A
+	// goroutine the handler left reading the body (git's stdin copy
+	// is not waited for) may still return from a read after that.
+	done bool
 }
 
 // next returns the deadline for a read or write starting now.
@@ -116,24 +127,53 @@ func (d *deadlines) next() time.Time {
 // extend sets both deadlines for the reads and writes the server does after
 // the handler returns: discarding a body the handler did not read, and
 // flushing what it wrote.
+//
+// It must be called before the handler returns; after it, no deadline is set
+// through rc any more.
 func (d *deadlines) extend() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.done = true
 	t := d.next()
 	_ = d.rc.SetReadDeadline(t)
 	_ = d.rc.SetWriteDeadline(t)
 }
 
+// setRead sets the read deadline to the one when returns, unless the handler
+// has returned. The lock is held across the call, so the handler cannot
+// return while it runs.
+func (d *deadlines) setRead(when func() time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.done {
+		_ = d.rc.SetReadDeadline(when())
+	}
+}
+
+// setWrite is setRead for the write deadline.
+func (d *deadlines) setWrite(when func() time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.done {
+		_ = d.rc.SetWriteDeadline(when())
+	}
+}
+
+// maxDeadline returns max, for setRead and setWrite.
+func (d *deadlines) maxDeadline() time.Time { return d.max }
+
 // read runs a read of the body bound by the idle deadline.
 func (d *deadlines) read(f func()) {
-	_ = d.rc.SetReadDeadline(d.next())
+	d.setRead(d.next)
 	f()
-	_ = d.rc.SetReadDeadline(d.max)
+	d.setRead(d.maxDeadline)
 }
 
 // write runs a write of the response bound by the idle deadline.
 func (d *deadlines) write(f func()) {
-	_ = d.rc.SetWriteDeadline(d.next())
+	d.setWrite(d.next)
 	f()
-	_ = d.rc.SetWriteDeadline(d.max)
+	d.setWrite(d.maxDeadline)
 }
 
 // deadlineBody is a request body whose reads are bound by the idle deadline.

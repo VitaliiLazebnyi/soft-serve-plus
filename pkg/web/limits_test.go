@@ -393,6 +393,75 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	}
 }
 
+// releasedBody is a request body whose Read blocks until release is closed.
+type releasedBody struct {
+	io.ReadCloser
+	release <-chan struct{}
+	done    chan<- struct{}
+}
+
+func (b *releasedBody) Read([]byte) (int, error) {
+	<-b.release
+	defer close(b.done)
+	return 0, io.EOF
+}
+
+// A read of the body that returns after the handler has returned, as git's
+// stdin copy may, must not touch the connection's deadlines: over HTTP/2 the
+// stream's state is gone by then, and setting a deadline panics outside the
+// handler, killing the server.
+func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
+	t.Parallel()
+	l := &requestLimits{idle: time.Minute}
+	release := make(chan struct{})
+	readDone := make(chan struct{})
+	reading := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &releasedBody{ReadCloser: r.Body, release: release, done: readDone}
+		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			go func() {
+				close(reading)
+				_, _ = r.Body.Read(make([]byte, 1))
+			}()
+			<-reading
+			_, _ = io.WriteString(w, "ok")
+		}))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+	}
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("reading the response: %v", err)
+	}
+	// Give the server time to finish with the stream after the handler
+	// returned, then let the read return.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	select {
+	case <-readDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not return")
+	}
+	// A panic in the reading goroutine would kill the test binary before
+	// this point; give it the time to happen.
+	time.Sleep(100 * time.Millisecond)
+}
+
 // A client that stops reading the response is cut off after the idle
 // timeout, and the request is cancelled.
 func TestRequestLimitsIdleStalledReader(t *testing.T) {
