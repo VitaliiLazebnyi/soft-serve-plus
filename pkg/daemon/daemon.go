@@ -295,17 +295,33 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 
 		envs = append(envs, d.cfg.Environ()...)
 
+		// git's stderr goes to the log, as git-daemon does: the daemon has
+		// no side channel for it, and written to the connection it would
+		// corrupt the protocol stream and could show server details to
+		// anonymous clients.
+		stderr := d.logger.With("addr", c.RemoteAddr(), "service", service, "repo", name).
+			StandardLog(log.StandardLogOptions{ForceLevel: log.WarnLevel}).Writer()
+		stdout := &startedWriter{w: c}
 		cmd := git.ServiceCommand{
 			Stdin:  c,
-			Stdout: c,
-			Stderr: c,
+			Stdout: stdout,
+			Stderr: stderr,
 			Env:    envs,
 			Dir:    filepath.Join(reposDir, repo),
 		}
 
 		if err := service.Handler(ctx, cmd); err != nil {
 			d.logger.Debugf("git: error handling request: %v", err)
-			d.fatal(c, err)
+			// Once git has answered, an ERR packet would land in the middle
+			// of its stream, so the connection is just closed. Before that,
+			// the client gets a fixed message rather than the error itself.
+			if !stdout.started.Load() {
+				if errors.Is(err, git.ErrInvalidRepo) {
+					d.fatal(c, git.ErrInvalidRepo)
+				} else {
+					d.fatal(c, git.ErrSystemMalfunction)
+				}
+			}
 			return
 		}
 

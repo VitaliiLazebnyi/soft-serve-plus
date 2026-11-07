@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -102,4 +104,18 @@ func (c *serverConn) updateDeadline() {
 		}
 	}
 	c.Conn.SetDeadline(c.maxDeadline) //nolint: errcheck
+}
+
+// startedWriter records whether anything was written through it, so that the
+// daemon knows whether git has started answering the client.
+type startedWriter struct {
+	w       io.Writer
+	started atomic.Bool
+}
+
+func (w *startedWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		w.started.Store(true)
+	}
+	return w.w.Write(p)
 }
