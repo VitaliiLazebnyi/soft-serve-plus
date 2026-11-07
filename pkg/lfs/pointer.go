@@ -101,7 +101,13 @@ func (p Pointer) RelativePath() string {
 	return path.Join(p.Oid[0:2], p.Oid[2:4], p.Oid)
 }
 
-// GeneratePointer generates a pointer for arbitrary content
+// GeneratePointer generates a pointer for arbitrary content.
+//
+// No production code calls it: tests in this package and in pkg/backend use
+// it to build pointers for fixture objects. It stays exported here, rather
+// than in a _test.go file, because tests in other packages cannot import a
+// _test.go helper, and a separate helper package could not be imported by
+// this package's own internal tests without an import cycle.
 func GeneratePointer(content io.Reader) (Pointer, error) {
 	h := sha256.New()
 	c, err := io.Copy(h, content)
