@@ -65,16 +65,6 @@ func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions)
 	return r.Repository.CatFileCommit(rev, opt)
 }
 
-// BlameFile returns the blame of a file at the given revision.
-func (r *Repository) BlameFile(rev, file string, opts ...git.BlameOptions) (*git.Blame, error) {
-	var opt git.BlameOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	opt.CommandOptions = r.withCtx(opt.CommandOptions)
-	return r.Repository.BlameFile(rev, file, opt)
-}
-
 // StashList returns the repository's stashes. It must run in a work tree.
 func (r *Repository) StashList(opts ...git.StashListOptions) ([]*git.Stash, error) {
 	var opt git.StashListOptions

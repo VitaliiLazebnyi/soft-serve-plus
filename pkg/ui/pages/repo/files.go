@@ -9,7 +9,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -56,7 +55,7 @@ type FileContentMsg struct {
 }
 
 // FileBlameMsg is a message that contains the blame of a file.
-type FileBlameMsg *gitm.Blame
+type FileBlameMsg *git.Blame
 
 // Files is the model for the files view.
 type Files struct {
@@ -495,7 +494,7 @@ func (f *Files) fetchBlame() tea.Msg {
 	return FileBlameMsg(b)
 }
 
-func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
+func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
 	if f == nil || f.entry.IsTree() || b == nil {
 		return ""
 	}
