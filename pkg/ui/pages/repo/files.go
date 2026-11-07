@@ -293,16 +293,6 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				// "b" toggles blame and "l" toggles line numbers in the content view, so
-				// they must not also page up or scroll right in the viewport.
-				f.code.KeyMap.PageUp = key.NewBinding(
-					key.WithKeys("pgup"),
-					key.WithHelp("pgup", "page up"),
-				)
-				f.code.KeyMap.Right = key.NewBinding(
-					key.WithKeys("right"),
-					key.WithHelp("→", "move right"),
-				)
 				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
