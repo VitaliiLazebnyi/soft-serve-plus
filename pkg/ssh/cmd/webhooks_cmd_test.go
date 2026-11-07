@@ -828,3 +828,27 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 	run("branch", "delete", "hooks", "main")
 	is.Equal(events(), []string{"branch_tag_delete", "branch_tag_delete", "repository"})
 }
+
+// A default branch change says which branch was the default before.
+func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	whPushRefs(t, ownerCtx)
+	id := whCreate(t, ownerCtx, be, "-e", "repository")
+	whPointAtLoopback(t, ownerCtx, "hooks", id)
+
+	is.NoErr(runRepo(t, ownerCtx, "branch", "default", "hooks", "feature"))
+	be.WaitForDeliveries(context.Background())
+
+	r, err := be.Repository(ownerCtx, "hooks")
+	is.NoErr(err)
+	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
+	is.NoErr(err)
+	is.Equal(len(ds), 1)
+	d, err := be.WebhookDelivery(ownerCtx, r, id, ds[0].ID)
+	is.NoErr(err)
+	is.True(strings.Contains(d.RequestBody, `"action":"default_branch_change"`))
+	is.True(strings.Contains(d.RequestBody, `"default_branch":"feature"`))
+	is.True(strings.Contains(d.RequestBody, `"changes":{"default_branch":{"from":"main"}}`))
+}

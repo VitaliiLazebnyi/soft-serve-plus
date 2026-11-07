@@ -183,6 +183,15 @@ func TestRenameRepositorySendsRepositoryEvent(t *testing.T) {
 	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))
 
 	e.awaitDeliveries(t, id, webhook.EventRepository)
+
+	// The event names the repository by its new name and says what it was
+	// called before.
+	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	d, err := e.be.WebhookDelivery(e.ctx, e.repo, id, list[0].ID)
+	is.NoErr(err)
+	is.True(strings.Contains(d.RequestBody, `"name":"renamed"`))
+	is.True(strings.Contains(d.RequestBody, `"changes":{"name":{"from":"repo"}}`))
 }
 
 // A failed event does not undo a committed rename, and the caller sees success.

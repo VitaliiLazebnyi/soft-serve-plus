@@ -1016,6 +1016,36 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+#### Delivery headers and signatures
+
+Every webhook request carries these headers:
+
+- `X-SoftServe-Event`: the event, such as `push` or `repository`.
+- `X-SoftServe-Delivery`: a GUID for the event. A redelivery sends the GUID
+  of the delivery it repeats, so a receiver can skip an event it has already
+  handled.
+- `X-SoftServe-Timestamp`: when the request was signed, in seconds since the
+  Unix epoch. A redelivery gets a new timestamp.
+
+A webhook with a secret also signs each request with HMAC-SHA256, keyed with
+the secret:
+
+- `X-SoftServe-Signature-V2`: `sha256=` and the hex HMAC of the timestamp, a
+  `.`, the delivery GUID, a `.` and the request body. Check this one, reject
+  timestamps too far from your clock (five minutes, say) and remember the
+  GUIDs seen within that window to refuse replayed requests.
+- `X-SoftServe-Signature`: `sha256=` and the hex HMAC of the body alone. It
+  is kept for existing receivers; it does not stop a captured request from
+  being replayed.
+
+Compare signatures in constant time, for example with `hmac.Equal` in Go.
+
+Repository events for a rename or a default branch change carry the old
+value in `changes`, as `changes.name.from` or `changes.default_branch.from`.
+Push events say whether the push was `forced` (the ref moved to a commit that
+does not contain its old one) and who the `pusher` was; a push that creates a
+branch or tag lists only the commits no other branch or tag already had.
+
 #### Webhooks to internal services
 
 Webhooks are protected against server-side request forgery: by default a
