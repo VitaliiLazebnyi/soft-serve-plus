@@ -17,6 +17,15 @@ purge | upgrade | failed-upgrade | abort-* | disappear) ;;
 0) removing=1 ;;
 esac
 
+# On deb, preremove keeps the service's enablement across "remove" so a
+# reinstall restores it; drop the enablement symlinks on "purge". The unit
+# file is gone by now, so fall back to removing the symlinks directly if
+# systemctl refuses.
+if [ "$1" = purge ]; then
+	systemctl disable soft-serve.service >/dev/null 2>&1 ||
+		rm -f /etc/systemd/system/*.wants/soft-serve.service
+fi
+
 if [ -d /run/systemd/system ]; then
 	systemctl daemon-reload
 	if [ -n "$removing" ]; then
