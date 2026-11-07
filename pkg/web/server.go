@@ -32,7 +32,7 @@ func NewRouter(ctx context.Context) http.Handler {
 	cfg := config.FromContext(ctx)
 
 	h = handlers.CORS(handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
-		handlers.AllowedOrigins(cfg.HTTP.CORS.AllowedOrigins),
+		handlers.AllowedOrigins(cfg.CORSAllowedOrigins()),
 		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
 	)(h)
 

@@ -553,7 +553,7 @@ func TestAdminKeyRemovedDespiteCommentsAndBadEntries(t *testing.T) {
 	// The leaked key is dropped from a list that also has a comment line, a
 	// blank line and a mistyped key. None of them can stand for a wanted
 	// key, so they do not keep the leaked one.
-	cfg.InitialAdminKeys = []string{"# ops keys", "", kept, "ssh-ed25519 AAAAnot-base64", "abc"}
+	cfg.InitialAdminKeys = []string{"# ops keys", "", kept, "ssh-ed25519 AAAAnot-base64", "not a key"}
 	logs := bootLogs(t, ctx, cfg, dbx)
 	if o, ok := ownerOf(t, dbx, leaked); ok {
 		t.Errorf("leaked key owner = %+v; want it removed", o)

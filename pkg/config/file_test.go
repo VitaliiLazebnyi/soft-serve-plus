@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -8,13 +9,21 @@ import (
 
 func TestNewConfigFile(t *testing.T) {
 	for _, cfg := range []*Config{
-		nil,
 		DefaultConfig(),
 		{},
 	} {
-		if s := newConfigFile(cfg); s == "" {
-			t.Errorf("newConfigFile(nil) => %q, want non-empty string", s)
+		if s, err := newConfigFile(cfg); err != nil || s == "" {
+			t.Errorf("newConfigFile(%+v) => %q, %v, want non-empty string", cfg, s, err)
 		}
+	}
+
+	// A template error is returned rather than a file cut short where the
+	// template stopped.
+	if s, err := newConfigFile(nil); err == nil {
+		t.Errorf("newConfigFile(nil) => %q, nil, want an error", s)
+	}
+	if err := writeConfig(nil, filepath.Join(t.TempDir(), "config.yaml")); err == nil {
+		t.Error("writeConfig(nil) => nil, want an error")
 	}
 }
 
@@ -51,8 +60,14 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.Jobs.MirrorPull = odd
 	cfg.Webhook.AllowedHosts = []string{odd, `C:\y`}
 
+	cfg.HTTP.CORS.AllowedOrigins = []string{odd, "https://example.com"}
+
+	file, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got Config
-	if err := yaml.Unmarshal([]byte(newConfigFile(cfg)), &got); err != nil {
+	if err := yaml.Unmarshal([]byte(file), &got); err != nil {
 		t.Fatalf("decode written config: %v", err)
 	}
 
@@ -89,7 +104,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"ssh.kex_algorithms", got.SSH.KexAlgorithms, cfg.SSH.KexAlgorithms},
 		{"ssh.ciphers", got.SSH.Ciphers, cfg.SSH.Ciphers},
 		{"ssh.macs", got.SSH.MACs, cfg.SSH.MACs},
-		{"http.cors.allowed_origins", got.HTTP.CORS.AllowedOrigins, []string{cfg.HTTP.PublicURL}},
+		{"http.cors.allowed_origins", got.HTTP.CORS.AllowedOrigins, cfg.HTTP.CORS.AllowedOrigins},
 	} {
 		if len(c.got) != len(c.want) {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)

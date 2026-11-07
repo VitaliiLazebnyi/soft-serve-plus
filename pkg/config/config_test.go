@@ -49,7 +49,7 @@ func TestValidateInitAdminKeys(t *testing.T) {
 		DataPath: t.TempDir(),
 		InitialAdminKeys: []string{
 			"testdata/k1.pub",
-			"abc",
+			"not a key",
 			"",
 		},
 	}
@@ -58,8 +58,8 @@ func TestValidateInitAdminKeys(t *testing.T) {
 	is.Equal(cfg.InitialAdminKeys, []string{
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
 	})
-	// "abc" was dropped as neither a key nor a path; the blank entry is not
-	// counted.
+	// "not a key" was dropped as neither a key nor a path; the blank entry
+	// is not counted.
 	is.Equal(cfg.IgnoredAdminKeys(), 1)
 	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
 }
@@ -78,11 +78,14 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 			missing,
 			notAKey,
 			"keys/admin",
+			// A file name without a directory or an extension is
+			// still a path.
+			"admin_key",
 			"ssh-ed25519 AAAAnot-base64",
-			"abc",
+			"not a key",
 		},
 	}
-	want := []string{"keys/admin", missing, notAKey}
+	want := []string{"admin_key", "keys/admin", missing, notAKey}
 	slices.Sort(want)
 	// Before Validate the entries are checked as they are.
 	is.Equal(cfg.UnreadableAdminKeyFiles(), want)
@@ -101,15 +104,16 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	is.Equal(ok.IgnoredAdminKeys(), 0)
 }
 
-// main runs Parse (file, then environment) and then ParseEnv again, so
-// Validate sees the same entries several times. They are recorded once.
+// Parse runs Validate after the file and again after the environment, and a
+// caller may parse again, so Validate sees the same entries several times.
+// They are recorded once.
 func TestUnreadableAdminKeyFilesNotDuplicated(t *testing.T) {
 	is := is.New(t)
 	missing := filepath.Join(t.TempDir(), "not-mounted-yet.pub")
-	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", missing+"\nabc")
+	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", missing+"\nnot a key")
 	cfg := &Config{
 		DataPath:         t.TempDir(),
-		InitialAdminKeys: []string{missing, "abc"},
+		InitialAdminKeys: []string{missing, "not a key"},
 	}
 	is.NoErr(cfg.WriteConfig())
 	is.NoErr(cfg.Parse())
@@ -188,6 +192,10 @@ func TestParseMultipleOrigins(t *testing.T) {
 	cfg := DefaultConfig()
 	is.NoErr(cfg.ParseEnv())
 	is.Equal(cfg.HTTP.CORS.AllowedOrigins, []string{
+		"http://example.com",
+		"https://example.com",
+	})
+	is.Equal(cfg.CORSAllowedOrigins(), []string{
 		"http://localhost:23232",
 		"http://example.com",
 		"https://example.com",
@@ -204,8 +212,34 @@ func TestValidateDoesNotDuplicatePublicURLOrigin(t *testing.T) {
 	is.NoErr(cfg.Parse())
 	is.NoErr(cfg.ParseEnv())
 	is.NoErr(cfg.Validate())
-	is.Equal(cfg.HTTP.CORS.AllowedOrigins, []string{"http://localhost:23232"})
-	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=http://localhost:23232"))
+	is.Equal(len(cfg.HTTP.CORS.AllowedOrigins), 0)
+	is.Equal(cfg.CORSAllowedOrigins(), []string{"http://localhost:23232"})
+	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS="))
+}
+
+// The public URL is allowed as an origin wherever it was set last: an
+// environment override of it does not leave the config file's URL, or the
+// default one, allowed too. An empty public URL allows no empty origin.
+func TestCORSAllowedOriginsFollowPublicURL(t *testing.T) {
+	is := is.New(t)
+	t.Setenv("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS", "")
+	is.NoErr(os.Unsetenv("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS"))
+	file := DefaultConfig()
+	file.DataPath = t.TempDir()
+	file.HTTP.PublicURL = "https://file.example.com"
+	path := filepath.Join(file.DataPath, "config.yaml")
+	is.NoErr(writeConfig(file, path))
+
+	t.Setenv("SOFT_SERVE_HTTP_PUBLIC_URL", "https://env.example.com//")
+	cfg := DefaultConfig()
+	is.NoErr(parseFile(cfg, path))
+	is.NoErr(parseEnv(cfg))
+	is.Equal(cfg.HTTP.PublicURL, "https://env.example.com")
+	is.Equal(cfg.CORSAllowedOrigins(), []string{"https://env.example.com"})
+
+	cfg.HTTP.PublicURL = ""
+	is.NoErr(cfg.Validate())
+	is.Equal(len(cfg.CORSAllowedOrigins()), 0)
 }
 
 func TestParseMultipleMethods(t *testing.T) {
@@ -613,6 +647,20 @@ func TestOuterQuotedInitAdminKeys(t *testing.T) {
 		is.NoErr(cfg.ParseEnv())
 		is.Equal(cfg.InitialAdminKeys, []string{k1, k2})
 		is.Equal(cfg.IgnoredAdminKeys(), 0)
+	})
+
+	// A variable that is set but blank, as in the Docker image, leaves the
+	// config file's keys in place, and their quotes are not stripped as if
+	// they were the environment's.
+	t.Run("blank variable with config file keys", func(t *testing.T) {
+		is := is.New(t)
+		t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "")
+		t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+		cfg := DefaultConfig()
+		cfg.InitialAdminKeys = []string{"'" + k1, k2 + "'"}
+		is.NoErr(cfg.ParseEnv())
+		is.Equal(len(cfg.InitialAdminKeys), 0)
+		is.Equal(cfg.IgnoredAdminKeys(), 2)
 	})
 
 	// Mismatched outer quotes are not stripped.

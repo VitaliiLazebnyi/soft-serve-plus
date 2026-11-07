@@ -219,6 +219,7 @@ ssh:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # A value of 0 means no timeout.
   idle_timeout: 120
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
@@ -240,6 +241,7 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # A value of 0 means no timeout.
   idle_timeout: 3
 
   # The maximum number of concurrent connections.
@@ -276,9 +278,8 @@ http:
       - "Access-Control-Request-Method"
       - "Access-Control-Allow-Origin"
 
-    # The allowed cross-origin URLs
-    allowed_origins:
-      - "http://localhost:23232" # always allowed
+    # The allowed cross-origin URLs. The public URL is always allowed.
+    allowed_origins: []
       # - "https://example.com"
 
     # The allowed cross-origin methods
@@ -314,7 +315,7 @@ db:
 lfs:
   # Enable Git LFS.
   enabled: true
-  # Enable Git SSH transfer.
+  # Enable Git LFS over SSH (the git-lfs-transfer protocol).
   ssh_enabled: false
 
 # Cron job configuration
