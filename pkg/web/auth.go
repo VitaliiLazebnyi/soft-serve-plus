@@ -15,11 +15,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// authenticate authenticates the user from the request. repo is the
-// requested repository name, used to check bearer token audiences.
-func authenticate(r *http.Request, repo string) (proto.User, error) {
+// authenticate authenticates the user from the request. A bearer token must
+// name one of repos in its audience. The error is ErrInvalidToken or
+// ErrInvalidPassword for bad credentials, and proto.ErrUserNotFound otherwise.
+func authenticate(r *http.Request, repos ...string) (proto.User, error) {
 	// Prefer the Authorization header
-	user, err := parseAuthHdr(r, repo)
+	user, err := parseAuthHdr(r, repos)
 	if err != nil || user == nil {
 		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) {
 			return nil, err
@@ -77,7 +78,7 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 // ErrInvalidHeader is returned when the authorization header is invalid.
 var ErrInvalidHeader = errors.New("invalid authorization header")
 
-func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
+func parseAuthHdr(r *http.Request, repos []string) (proto.User, error) {
 	// Check for auth header
 	header := r.Header.Get("Authorization")
 	if header == "" {
@@ -90,7 +91,7 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 {
-		return nil, errors.New("invalid authorization header")
+		return nil, ErrInvalidHeader
 	}
 
 	// Log only a known scheme: the rest of the header is a credential, and
@@ -113,7 +114,7 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 
 		return user, nil
 	case "bearer":
-		claims, err := parseJWT(ctx, parts[1], repo)
+		claims, err := parseJWT(ctx, parts[1], repos)
 		if err != nil {
 			return nil, err
 		}
@@ -151,11 +152,15 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 // ErrInvalidToken is returned when a token is invalid.
 var ErrInvalidToken = errors.New("invalid token")
 
-// parseJWT validates a bearer token whose audience must name the requested
-// repository, so the answer does not depend on whether it exists.
-func parseJWT(ctx context.Context, bearer, repo string) (*jwt.RegisteredClaims, error) {
+// parseJWT validates a bearer token whose audience must name one of repos,
+// so the answer does not depend on whether they exist. The token must expire.
+func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.auth")
+	if len(repos) == 0 {
+		// jwt.WithAudience checks nothing without an audience.
+		return nil, ErrInvalidToken
+	}
 	kp, err := config.KeyPair(cfg)
 	if err != nil {
 		return nil, err
@@ -170,7 +175,8 @@ func parseJWT(ctx context.Context, bearer, repo string) (*jwt.RegisteredClaims, 
 	},
 		jwt.WithIssuer(cfg.HTTP.PublicURL),
 		jwt.WithIssuedAt(),
-		jwt.WithAudience(repo),
+		jwt.WithExpirationRequired(),
+		jwt.WithAudience(repos...),
 	)
 	if err != nil {
 		logger.Info("failed to parse jwt", "err", err)

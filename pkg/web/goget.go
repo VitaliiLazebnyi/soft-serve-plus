@@ -28,11 +28,11 @@ var repoIndexHTMLTpl = template.Must(template.New("index").Parse(`<!DOCTYPE html
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-    <meta http-equiv="refresh" content="0; url=https://godoc.org/{{ .ImportRoot }}/{{.Repo}}">
+    <meta http-equiv="refresh" content="0; url=https://pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}">
     <meta name="go-import" content="{{ .ImportRoot }}/{{ .Repo }} git {{ .Config.HTTP.PublicURL }}/{{ .Repo }}.git">
 </head>
 <body>
-Redirecting to docs at <a href="https://godoc.org/{{ .ImportRoot }}/{{ .Repo }}">godoc.org/{{ .ImportRoot }}/{{ .Repo }}</a>...
+Redirecting to docs at <a href="https://pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}">pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}</a>...
 </body>
 </html>
 `))
