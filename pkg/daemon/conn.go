@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// connections is a synchronizes access to to a net.Conn pool.
+// connections is a net.Conn pool that is safe for concurrent use.
 type connections struct {
 	m  map[net.Conn]struct{}
 	mu sync.Mutex
@@ -47,7 +47,7 @@ func (m *connections) CloseAll() error {
 }
 
 // serverConn is a wrapper around a net.Conn that closes the connection when
-// the one of the timeouts is reached.
+// one of its timeouts is reached.
 type serverConn struct {
 	net.Conn
 
@@ -90,13 +90,13 @@ func (c *serverConn) updateDeadline() {
 	case c.initTimeout > 0:
 		initTimeout := time.Now().Add(c.initTimeout)
 		c.initTimeout = 0
-		if initTimeout.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
+		if initTimeout.Before(c.maxDeadline) || c.maxDeadline.IsZero() {
 			c.Conn.SetDeadline(initTimeout) //nolint: errcheck
 			return
 		}
 	case c.idleTimeout > 0:
 		idleDeadline := time.Now().Add(c.idleTimeout)
-		if idleDeadline.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
+		if idleDeadline.Before(c.maxDeadline) || c.maxDeadline.IsZero() {
 			c.Conn.SetDeadline(idleDeadline) //nolint: errcheck
 			return
 		}

@@ -86,7 +86,7 @@ func (d *GitDaemon) ListenAndServe() error {
 	return d.Serve(listener)
 }
 
-// Serve listens on the TCP network address and serves Git requests.
+// Serve accepts connections on the listener and serves Git requests.
 func (d *GitDaemon) Serve(listener net.Listener) error {
 	// Register under liMu, which closeListener holds while it marks the
 	// daemon done, so that Serve either sees it done or is counted before
@@ -216,7 +216,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 
 		opts := bytes.SplitN(split[1], []byte{0}, 3)
 		if len(opts) < 2 {
-			d.fatal(c, git.ErrInvalidRequest) //nolint: errcheck
+			d.fatal(c, git.ErrInvalidRequest)
 			return
 		}
 
@@ -313,7 +313,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	}
 }
 
-// Close closes the underlying listener.
+// Close closes the listeners and all open connections.
 func (d *GitDaemon) Close() error {
 	err := d.closeListener()
 	d.conns.CloseAll() //nolint: errcheck
