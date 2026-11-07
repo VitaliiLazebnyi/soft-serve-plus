@@ -57,12 +57,20 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 	return nil
 }
 
-// Collaborators returns a list of collaborators for a repository.
+// Collaborator is a repository collaborator and their access level.
+type Collaborator struct {
+	Username    string
+	AccessLevel access.AccessLevel
+}
+
+// Collaborators returns the collaborators of a repository with their access
+// levels.
 //
 // It implements backend.Backend.
-func (d *Backend) Collaborators(ctx context.Context, repo string) ([]string, error) {
+func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborator, error) {
 	repo = utils.SanitizeRepo(repo)
 	var users []models.User
+	var collabs []models.Collab
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The join returns an empty list for a missing repository, so
 		// look it up first.
@@ -72,17 +80,33 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]string, err
 
 		var err error
 		users, err = d.store.ListCollabsByRepoAsUsers(ctx, tx, repo)
+		if err != nil {
+			return err
+		}
+
+		collabs, err = d.store.ListCollabsByRepo(ctx, tx, repo)
 		return err
 	}); err != nil {
 		return nil, wrapRepoError(err)
 	}
 
-	var usernames []string
-	for _, u := range users {
-		usernames = append(usernames, u.Username)
+	levels := make(map[int64]access.AccessLevel, len(collabs))
+	for _, c := range collabs {
+		levels[c.UserID] = c.AccessLevel
 	}
 
-	return usernames, nil
+	list := make([]Collaborator, 0, len(users))
+	for _, u := range users {
+		// The two reads can see different rows when another transaction
+		// commits in between; list only collaborators whose level is known.
+		level, ok := levels[u.ID]
+		if !ok {
+			continue
+		}
+		list = append(list, Collaborator{Username: u.Username, AccessLevel: level})
+	}
+
+	return list, nil
 }
 
 // IsCollaborator returns the access level and true if the user is a collaborator of the repository.
