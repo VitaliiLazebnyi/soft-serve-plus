@@ -315,19 +315,28 @@ func TestMaxConnectionsBurst(t *testing.T) {
 			results <- result{c: c, refused: err != nil && err.Error() == git.ErrMaxConnections.Error()}
 		}()
 	}
-	var kept int
+	// A burst of loopback dials can time out on macOS when the listen
+	// backlog drops SYNs, without the daemon being involved. Such a dial
+	// never reaches the daemon, so skip it and check the limit over the
+	// connections that did get through.
+	var kept, connected int
 	for range dials {
 		r := <-results
 		if r.err != nil {
-			t.Fatalf("dial: %v", r.err)
+			t.Logf("dial: %v", r.err)
+			continue
 		}
+		connected++
 		t.Cleanup(func() { _ = r.c.Close() })
 		if !r.refused {
 			kept++
 		}
 	}
+	if connected <= limit {
+		t.Skipf("only %d of %d dials connected, need more than %d", connected, dials, limit)
+	}
 	if kept != limit {
-		t.Errorf("%d of %d connections kept, want %d", kept, dials, limit)
+		t.Errorf("%d of %d connections kept, want %d", kept, connected, limit)
 	}
 	if got := d.conns.Size(); got != limit {
 		t.Errorf("%d connections open, want %d", got, limit)
