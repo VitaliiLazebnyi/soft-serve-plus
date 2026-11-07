@@ -42,6 +42,10 @@ func (*webhookStore) CreateWebhook(ctx context.Context, h db.Handler, repoID int
 // deleted between the existence check and the insert, which a concurrent
 // transaction can do on Postgres and which shows up as a foreign key
 // violation.
+//
+// On Postgres any error aborts the transaction it happens in, so inside a
+// transaction the insert runs under a savepoint and a foreign key violation
+// rolls back to it. The transaction can then go on, for example to prune.
 func (*webhookStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error {
 	query := h.Rebind(`INSERT INTO webhook_deliveries (id, webhook_id, event, request_url, request_method, request_error, request_headers, request_body, response_status, response_headers, response_body)
 			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -51,10 +55,30 @@ func (*webhookStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id
 	if requestError != nil {
 		reqErr = sql.NullString{String: requestError.Error(), Valid: true}
 	}
-	_, err := h.ExecContext(ctx, query, id, webhookID, event, url, method, reqErr, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody, webhookID)
-	if isForeignKeyViolation(err) {
+	insert := func() error {
+		_, err := h.ExecContext(ctx, query, id, webhookID, event, url, method, reqErr, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody, webhookID)
+		return err
+	}
+
+	tx, ok := h.(*db.Tx)
+	if !ok || tx.DriverName() != "postgres" {
+		if err := insert(); !isForeignKeyViolation(err) {
+			return err
+		}
 		return nil
 	}
+
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT webhook_delivery;`); err != nil {
+		return err
+	}
+	err := insert()
+	if isForeignKeyViolation(err) {
+		_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT webhook_delivery;`)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT webhook_delivery;`)
 	return err
 }
 
@@ -85,13 +109,6 @@ func (*webhookStore) CreateWebhookEvents(ctx context.Context, h db.Handler, webh
 	return nil
 }
 
-// DeleteWebhookByID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookByID(ctx context.Context, h db.Handler, id int64) error {
-	query := h.Rebind(`DELETE FROM webhooks WHERE id = ?;`)
-	_, err := h.ExecContext(ctx, query, id)
-	return err
-}
-
 // DeleteWebhookForRepoByID implements store.WebhookStore.
 func (*webhookStore) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = ?;`)
@@ -110,13 +127,6 @@ func (*webhookStore) DeleteWebhookEventsByWebhookID(ctx context.Context, h db.Ha
 func (*webhookStore) DeleteWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
 	query := h.Rebind(`DELETE FROM webhook_deliveries WHERE webhook_id = ?;`)
 	_, err := h.ExecContext(ctx, query, webhookID)
-	return err
-}
-
-// DeleteWebhookDeliveryByID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) error {
-	query := h.Rebind(`DELETE FROM webhook_deliveries WHERE webhook_id = ? AND id = ?;`)
-	_, err := h.ExecContext(ctx, query, webhookID, id)
 	return err
 }
 
@@ -198,14 +208,6 @@ func (*webhookStore) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, w
 	return whd, err
 }
 
-// GetWebhookEventByID implements store.WebhookStore.
-func (*webhookStore) GetWebhookEventByID(ctx context.Context, h db.Handler, id int64) (models.WebhookEvent, error) {
-	query := h.Rebind(`SELECT * FROM webhook_events WHERE id = ?;`)
-	var whe models.WebhookEvent
-	err := h.GetContext(ctx, &whe, query, id)
-	return whe, err
-}
-
 // GetWebhookEventsByWebhookID implements store.WebhookStore.
 func (*webhookStore) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error) {
 	query := h.Rebind(`SELECT * FROM webhook_events WHERE webhook_id = ? ORDER BY id;`)
@@ -233,9 +235,9 @@ func (*webhookStore) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repo
 // tables referencing the repository take, including the caller's own insert
 // in another transaction.
 //
-// SQLite has no row locks and needs none here: a transaction that has
-// already written holds the database's write lock until it ends, so callers
-// that insert before they count take turns.
+// SQLite has no row locks and needs none here: a write transaction holds the
+// database's write lock until it ends, from BEGIN IMMEDIATE (see db.Open) or
+// from its first write, so callers that insert before they count take turns.
 func (*webhookStore) LockAndCountWebhooks(ctx context.Context, h db.Handler, repoID int64) (int, error) {
 	d, ok := h.(interface{ DriverName() string })
 	if !ok {
@@ -267,10 +269,15 @@ func (*webhookStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Han
 	for _, e := range events {
 		args = append(args, e)
 	}
+	// EXISTS rather than a join, so a webhook subscribed to several of the
+	// events is returned once.
 	query := h.Rebind(`SELECT webhooks.*
 			FROM webhooks
-			INNER JOIN webhook_events ON webhooks.id = webhook_events.webhook_id
-			WHERE webhooks.repo_id = ? AND webhooks.active = ? AND webhook_events.event IN (` + placeholders(len(events)) + `)
+			WHERE webhooks.repo_id = ? AND webhooks.active = ? AND EXISTS (
+				SELECT 1 FROM webhook_events
+				WHERE webhook_events.webhook_id = webhooks.id
+				AND webhook_events.event IN (` + placeholders(len(events)) + `)
+			)
 			ORDER BY webhooks.id;`)
 	var whs []models.Webhook
 	err := h.SelectContext(ctx, &whs, query, args...)

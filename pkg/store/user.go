@@ -23,6 +23,5 @@ type UserStore interface {
 	RemovePublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error
 	ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64) ([]ssh.PublicKey, error)
 	ListPublicKeysByUsername(ctx context.Context, h db.Handler, username string) ([]ssh.PublicKey, error)
-	SetUserPassword(ctx context.Context, h db.Handler, userID int64, password string) error
 	SetUserPasswordByUsername(ctx context.Context, h db.Handler, username string, password string) error
 }

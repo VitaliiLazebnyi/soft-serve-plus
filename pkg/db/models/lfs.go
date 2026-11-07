@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 // LFSObject is a Git LFS object.
 type LFSObject struct {
@@ -14,11 +17,11 @@ type LFSObject struct {
 
 // LFSLock is a Git LFS lock.
 type LFSLock struct {
-	ID        int64     `db:"id"`
-	Path      string    `db:"path"`
-	UserID    int64     `db:"user_id"`
-	RepoID    int64     `db:"repo_id"`
-	Refname   string    `db:"refname"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	ID        int64          `db:"id"`
+	Path      string         `db:"path"`
+	UserID    int64          `db:"user_id"`
+	RepoID    int64          `db:"repo_id"`
+	Refname   sql.NullString `db:"refname"`
+	CreatedAt time.Time      `db:"created_at"`
+	UpdatedAt time.Time      `db:"updated_at"`
 }
