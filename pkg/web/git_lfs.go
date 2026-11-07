@@ -150,7 +150,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			exist, err := strg.Exists(path.Join("objects", o.RelativePath()))
+			stat, err := strg.Stat(path.Join("objects", o.RelativePath()))
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				logger.Error("error getting object stat", "oid", o.Oid, "repo", name, "err", err)
 				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
@@ -158,6 +158,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			exist := err == nil && stat.Mode().IsRegular()
 
 			obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), o.Oid)
 			if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
@@ -168,6 +169,10 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// A download is read-only: the client's size is checked against
+			// the file and its record, never recorded. A file without a
+			// record (an upload that has not recorded it yet) is offered at
+			// the size it has on disk.
 			if !exist {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -176,7 +181,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "object not found",
 					},
 				})
-			} else if obj.Size != o.Size {
+			} else if stat.Size() != o.Size || (obj.ID != 0 && obj.Size != o.Size) {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
 					Error: &lfs.ObjectError{
@@ -200,17 +205,6 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						lfs.ActionDownload: download,
 					},
 				})
-
-				// If the object doesn't exist in the database, create it
-				if exist && obj.ID == 0 {
-					if err := datastore.CreateLFSObject(ctx, dbx, repo.ID(), o.Oid, o.Size); err != nil {
-						logger.Error("error creating object in datastore", "oid", o.Oid, "repo", name, "err", err)
-						renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
-							Message: "internal server error",
-						})
-						return
-					}
-				}
 			}
 		}
 	case lfs.OperationUpload:
@@ -294,19 +288,8 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	datastore := store.FromContext(ctx)
-	dbx := db.FromContext(ctx)
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
-
-	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid)
-	if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-		logger.Error("error getting object from database", "oid", oid, "repo", repo.Name(), "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
 
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
@@ -317,10 +300,21 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	defer f.Close() //nolint: errcheck
+
+	// Send the length of the file being sent, which an object not recorded
+	// yet has too.
+	stat, err := f.Stat()
+	if err != nil {
+		logger.Error("error getting object stat", "oid", oid, "err", err)
+		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			Message: "internal server error",
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
-	defer f.Close() //nolint: errcheck
+	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	if _, err := io.Copy(w, f); err != nil {
 		logger.Error("error copying object to response", "oid", oid, "err", err)
 		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
