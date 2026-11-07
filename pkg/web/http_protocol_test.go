@@ -149,6 +149,22 @@ func TestGoGetBearerTokenForParentRepository(t *testing.T) {
 	}
 	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+mintJWT(f.ctx, t, f.owner, "other")).Code, http.StatusForbidden)
 	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+mintJWT(f.ctx, t, f.owner, "secret/sub/pkg")).Code, http.StatusForbidden)
+
+	// A token for "secret" does not reveal the nested repository
+	// "secret/sub", even to a caller who may read it: the walk skips it
+	// and answers for "secret".
+	_, err := f.be.CreateRepository(f.ctx, "secret/sub", f.owner, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	for _, path := range []string{"/secret/sub?go-get=1", "/secret/sub/pkg?go-get=1"} {
+		w := f.do(http.MethodGet, path, "Bearer "+mintJWT(f.ctx, t, f.owner, "secret"))
+		is.Equal(w.Code, http.StatusOK)
+		is.True(strings.Contains(w.Body.String(), "/secret.git"))
+		is.True(!strings.Contains(w.Body.String(), "secret/sub"))
+
+		w = f.do(http.MethodGet, path, "Bearer "+mintJWT(f.ctx, t, f.owner, "secret/sub"))
+		is.Equal(w.Code, http.StatusOK)
+		is.True(strings.Contains(w.Body.String(), "/secret/sub.git"))
+	}
 }
 
 func TestPathAncestors(t *testing.T) {

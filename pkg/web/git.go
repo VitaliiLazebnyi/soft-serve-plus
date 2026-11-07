@@ -205,19 +205,43 @@ func askCredentials(w http.ResponseWriter, _ *http.Request) {
 
 // identify stores the authenticated caller in the request context and
 // returns the authentication error, if any. A bearer token must name one of
-// repos in its audience.
+// repos in its audience; its audience is stored too, see tokenAudience.
 func identify(r *http.Request, repos ...string) (*http.Request, error) {
 	ctx := r.Context()
 	logger := log.FromContext(ctx)
 
 	// authenticate logs why credentials failed, and returns only bad
 	// credentials or proto.ErrUserNotFound.
-	user, err := authenticate(r, repos...)
+	user, audience, err := authenticate(r, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
 	}
 
-	return r.WithContext(proto.WithUserContext(ctx, user)), err
+	ctx = proto.WithUserContext(ctx, user)
+	if audience != nil {
+		ctx = context.WithValue(ctx, tokenAudienceKey{}, audience)
+	}
+	return r.WithContext(ctx), err
+}
+
+type tokenAudienceKey struct{}
+
+// tokenAudience returns the repositories the caller's bearer token names,
+// and false when the caller did not authenticate with a bearer token, so is
+// not limited to particular repositories.
+func tokenAudience(ctx context.Context) ([]string, bool) {
+	audience, ok := ctx.Value(tokenAudienceKey{}).([]string)
+	return audience, ok
+}
+
+// callerFor returns the caller to authorize for repo: the authenticated
+// user, or nil (anonymous) when the user authenticated with a bearer token
+// that does not name repo.
+func callerFor(ctx context.Context, repo string) proto.User {
+	if audience, ok := tokenAudience(ctx); ok && !slices.Contains(audience, utils.SanitizeRepo(repo)) {
+		return nil
+	}
+	return proto.UserFromContext(ctx)
 }
 
 // badCredentials reports whether the caller sent credentials that failed.
@@ -360,9 +384,10 @@ func requireCaller(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // withCaller authenticates the caller without authorizing a repository.
-// Handlers behind it must check access to any repository they reveal.
-// The request is for a path inside a repository, so a bearer token may
-// name the repository or any directory above the path.
+// Handlers behind it must check access to any repository they reveal, as
+// callerFor the repository: the request is for a path inside a repository,
+// so a bearer token is accepted when it names the path or any directory
+// above it, but it only stands for the caller on the repositories it names.
 func withCaller(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r, err := identify(r, pathAncestors(mux.Vars(r)["repo"])...)
