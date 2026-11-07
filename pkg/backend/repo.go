@@ -759,6 +759,8 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	}
 
 	// The rename is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	user := proto.UserFromContext(ctx)
 	repo, err := d.Repository(ctx, newName)
 	if err != nil {
@@ -1183,6 +1185,8 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 	}
 
 	// The change is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	repo, err := d.Repository(ctx, name)
 	if err != nil {
 		d.logger.Error("visibility change committed but webhook event skipped", "repo", name, "err", err)
