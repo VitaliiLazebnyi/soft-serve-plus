@@ -69,7 +69,14 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 	testDaemon = d
-	go d.ListenAndServe() //nolint:errcheck
+	// Bind before running the tests so the first dial cannot race the
+	// listener and be refused.
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", cfg.Git.ListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
 	code := m.Run()
 	os.Unsetenv("SOFT_SERVE_DATA_PATH")
 	os.Unsetenv("SOFT_SERVE_GIT_MAX_CONNECTIONS")
