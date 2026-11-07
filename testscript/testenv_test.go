@@ -1,7 +1,9 @@
 package testscript
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -48,5 +50,28 @@ func TestApplyTestEnv(t *testing.T) {
 	}
 	if cfg.DB.Driver != "postgres" || cfg.DB.DataSource != "postgres://postgres@db.example/postgres" {
 		t.Errorf("db = %q %q, want the environment's", cfg.DB.Driver, cfg.DB.DataSource)
+	}
+}
+
+func TestTestEnviron(t *testing.T) {
+	data := t.TempDir()
+	devConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(devConfig, []byte("anon_access: admin-access\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", devConfig)
+
+	cfg := config.DefaultConfig()
+	cfg.DataPath = data
+
+	want := filepath.Join(data, "config.yaml")
+	var got []string
+	for _, env := range testEnviron(cfg) {
+		if v, ok := strings.CutPrefix(env, "SOFT_SERVE_CONFIG_LOCATION="); ok {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("SOFT_SERVE_CONFIG_LOCATION = %q, want only %q", got, want)
 	}
 }

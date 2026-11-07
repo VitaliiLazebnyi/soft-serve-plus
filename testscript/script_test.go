@@ -232,7 +232,7 @@ func TestScript(t *testing.T) {
 				}
 			}
 
-			for _, env := range cfg.Environ() {
+			for _, env := range testEnviron(cfg) {
 				parts := strings.SplitN(env, "=", 2)
 				if len(parts) != 2 {
 					e.T().Fatal("invalid environment variable", env)
@@ -250,7 +250,8 @@ func TestScript(t *testing.T) {
 // Every other SOFT_SERVE_* variable of the developer's environment is
 // ignored: the data path, listen addresses and admin keys belong to the
 // test, and the scripts would otherwise create, change and delete users
-// and repositories wherever SOFT_SERVE_DATA_PATH points.
+// and repositories wherever SOFT_SERVE_DATA_PATH points. testEnviron keeps
+// SOFT_SERVE_CONFIG_LOCATION out as well.
 func applyTestEnv(cfg *config.Config) error {
 	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DRIVER"); ok {
 		cfg.DB.Driver = v
@@ -259,6 +260,30 @@ func applyTestEnv(cfg *config.Config) error {
 		cfg.DB.DataSource = v
 	}
 	return cfg.Validate()
+}
+
+// testEnviron returns the environment the scripts run with: cfg.Environ,
+// with SOFT_SERVE_CONFIG_LOCATION pointing into the test's data path.
+// cfg.Environ takes the config location from the developer's
+// SOFT_SERVE_CONFIG_LOCATION when that file exists, and the `soft serve`
+// started by a script would then read the developer's config file, taking
+// anon access, keyless access, extra admin keys and every other setting
+// cfg.Environ does not export from it.
+func testEnviron(cfg *config.Config) []string {
+	const key = "SOFT_SERVE_CONFIG_LOCATION="
+	location := key + filepath.Join(cfg.DataPath, "config.yaml")
+	envs := cfg.Environ()
+	found := false
+	for i, env := range envs {
+		if strings.HasPrefix(env, key) {
+			envs[i] = location
+			found = true
+		}
+	}
+	if !found {
+		envs = append(envs, location)
+	}
+	return envs
 }
 
 func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
