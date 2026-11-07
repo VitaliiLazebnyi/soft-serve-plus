@@ -398,17 +398,17 @@ func (f *Files) updateFilesCmd() tea.Msg {
 	}
 	r, err := f.repo.Open()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	path := f.path
 	ref := f.ref
 	t, err := r.TreePath(ref, path)
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents, err := t.Entries()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents.Sort()
 	for _, e := range ents {
