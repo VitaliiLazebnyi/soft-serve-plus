@@ -43,7 +43,9 @@ func (r escapedRepo) Open() (*git.Repository, error) { return git.Open(r.path) }
 
 // newEscapedRepo makes a repository where everything the TUI shows from git
 // carries hostile: commit subjects and bodies, author names, a file name, a
-// source file, a README, a tag message, a branch name and a stash message.
+// source file, a README, a tag message, a branch name, a tag name and a
+// stash message. Git allows no ESC in a ref name, so the branch and tag
+// names carry a C1 CSI, the only control git lets through.
 func newEscapedRepo(t *testing.T) escapedRepo {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "repo")
@@ -72,6 +74,7 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 		"-m", "commit-subject"+hostile+"\n\ncommit-body"+hostile)
 	gitRun(t, dir, "tag", "-a", "v1", "-m", "tag-message"+hostile)
 	gitRun(t, dir, "branch", "branch\u009b2Jname")
+	gitRun(t, dir, "tag", "tag\u009b2Jname")
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -245,11 +248,11 @@ func TestEveryPaneSanitisesRepositoryData(t *testing.T) {
 	for i := range branches.selector.Items() {
 		branches.selector.Select(i)
 		d.send(selector.ActiveMsg{IdentifiableItem: branches.selector.SelectedItem()})
-		check("branches", "branch")
+		check("branches", "branch2Jname")
 	}
 
 	tab(tags)
-	check("tags", "tag-message", "v1")
+	check("tags", "tag-message", "v1", "tag2Jname")
 
 	tab(stash)
 	check("stash list", "stash-message")
