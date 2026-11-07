@@ -216,6 +216,19 @@ func TestGitEnvDisablesRedirects(t *testing.T) {
 	}
 }
 
+// TestGitEnvDisablesProxy checks the settings that keep git from handing the
+// connection to a proxy, which would resolve the hostname past the pin. See
+// TestGitEnvBypassesProxy for the same against a real git.
+func TestGitEnvDisablesProxy(t *testing.T) {
+	env := GitEnv()
+	if !hasGitConfig(env, "http.proxy", "") {
+		t.Errorf("GitEnv did not clear http.proxy: %v", env)
+	}
+	if !slices.Contains(env, "GIT_PROXY_COMMAND=") {
+		t.Errorf("GitEnv did not clear GIT_PROXY_COMMAND: %v", env)
+	}
+}
+
 // TestCurlResolvePin covers DNS rebinding: git re-resolves the hostname
 // itself, so the validated address has to be pinned for the check to survive
 // into the subprocess.

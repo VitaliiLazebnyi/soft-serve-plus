@@ -61,14 +61,25 @@ type ValidatedGitRemote struct {
 // Validation alone is not sufficient for a subprocess: git resolves hostnames
 // again itself, and follows the first HTTP redirect by default. Both walk
 // straight through a validate-then-exec check, so this environment disables
-// redirects and pins each validated address. Callers MUST apply it to every
-// git command that touches the remote, or the validation means nothing.
+// redirects, turns off any proxy, and pins each validated address. Callers
+// MUST apply it to every git command that touches the remote, after the
+// server's own environment so that it wins, or the validation means nothing.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
-	// git follows the first HTTP redirect by default, which lets a public URL
-	// hand off to an internal one after validation has already passed. This
-	// costs imports of moved repositories, which is the right trade for a
-	// user-supplied remote.
-	entries := []GitConfigEntry{{Key: "http.followRedirects", Value: "false"}}
+	entries := []GitConfigEntry{
+		// git follows the first HTTP redirect by default, which lets a public
+		// URL hand off to an internal one after validation has already
+		// passed. This costs imports of moved repositories, which is the
+		// right trade for a user-supplied remote.
+		{Key: "http.followRedirects", Value: "false"},
+		// A proxy resolves the remote's hostname itself (curl sends CONNECT
+		// host:443), so the pin below never applies, and a proxy usually
+		// reaches the very internal networks validation keeps out. An empty
+		// http.proxy makes git set CURLOPT_PROXY to "", which overrides
+		// http.proxy from any gitconfig and the http_proxy, https_proxy and
+		// all_proxy variables curl would otherwise read. The server's own
+		// Go clients (webhooks, LFS) never use a proxy either.
+		{Key: "http.proxy", Value: ""},
+	}
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
 	}
@@ -80,7 +91,11 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, e.Value),
 		)
 	}
-	return env
+	// git:// remotes go through GIT_PROXY_COMMAND or core.gitProxy when one
+	// is set, which likewise resolves and connects on its own. An empty
+	// GIT_PROXY_COMMAND disables both, since git reads core.gitProxy only
+	// when the variable is unset.
+	return append(env, "GIT_PROXY_COMMAND=")
 }
 
 // ValidateGitRemote validates a git remote URL against private, internal, and

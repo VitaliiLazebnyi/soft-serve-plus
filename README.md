@@ -873,6 +873,13 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
 
+Imports and mirror syncs over http, https and `git://` connect to the remote
+directly. They ignore any proxy set for the server, whether through
+`http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
+and `core.gitProxy` in its git configuration, since a proxy would resolve the
+remote's host name itself and could reach internal addresses the import check
+refuses. Webhooks and Git LFS transfers never use a proxy either.
+
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
 ### Deleting Repositories
