@@ -43,10 +43,11 @@ var (
 			return nil
 		},
 		PersistentPostRunE: func(c *cobra.Command, args []string) error {
-			logger := log.FromContext(c.Context())
+			// The hook has done its work by now, so a failure to close the
+			// database is only logged: failing here would make git reject a
+			// push that pre-receive or update accepted.
 			if err := cmd.CloseDBContext(c, args); err != nil {
-				logger.Error("failed to close backend", "err", err)
-				return ErrInternalServerError
+				log.FromContext(c.Context()).Error("failed to close backend", "err", err)
 			}
 
 			return nil
@@ -57,8 +58,8 @@ var (
 	// $SOFT_SERVE_DATA_PATH. We already parse the config when the binary
 	// starts, so we don't need to do it again.
 	// The --config flag is now deprecated.
-	hooksRunE = cmd.CloseDBOnError(func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
+	hooksRunE = cmd.CloseDBOnError(func(c *cobra.Command, args []string) error {
+		ctx := c.Context()
 		hks := backend.FromContext(ctx)
 		cfg := config.FromContext(ctx)
 
@@ -67,11 +68,11 @@ var (
 
 		logger := log.FromContext(ctx).With("repo", repoName)
 
-		stdin := cmd.InOrStdin()
-		stdout := cmd.OutOrStdout()
-		stderr := cmd.ErrOrStderr()
+		stdin := c.InOrStdin()
+		stdout := c.OutOrStdout()
+		stderr := c.ErrOrStderr()
 
-		cmdName := cmd.Name()
+		cmdName := c.Name()
 		customHookPath := filepath.Join(cfg.DataPath, "hooks", cmdName)
 
 		var buf bytes.Buffer
@@ -102,11 +103,7 @@ var (
 				hks.PostReceive(ctx, stdout, stderr, repoName, opts)
 			}
 		case hooks.UpdateHook:
-			if len(args) != 3 {
-				logger.Error("invalid update hook input", "input", args)
-				break
-			}
-
+			// updateCmd takes exactly three arguments.
 			hks.Update(ctx, stdout, stderr, repoName, hooks.HookArg{
 				RefName: args[0],
 				OldSha:  args[1],
@@ -153,6 +150,7 @@ var (
 
 func init() {
 	Command.PersistentFlags().StringVar(&configPath, "config", "", "path to config file (deprecated)")
+	_ = Command.PersistentFlags().MarkDeprecated("config", "it is ignored; run \"soft admin sync-hooks\" to regenerate the hooks without it")
 	Command.AddCommand(
 		preReceiveCmd,
 		updateCmd,

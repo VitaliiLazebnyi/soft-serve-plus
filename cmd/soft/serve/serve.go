@@ -53,7 +53,7 @@ var (
 				// Generate update hook example without executable permissions
 				hookPath := filepath.Join(customHooksPath, "update.sample")
 				//nolint: gosec
-				if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o744); err != nil {
+				if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil {
 					return fmt.Errorf("failed to generate update hook example: %w", err)
 				}
 			}
@@ -92,7 +92,7 @@ var (
 			done := make(chan os.Signal, 1)
 			testStop := make(chan struct{})
 
-			signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+			signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 			// This endpoint is added for testing purposes
 			// It allows us to stop the server from the test suite.

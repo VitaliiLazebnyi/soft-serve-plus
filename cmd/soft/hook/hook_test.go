@@ -113,3 +113,15 @@ func TestHookErrorClosesDB(t *testing.T) {
 		t.Fatalf("database ping returned %v, want it closed", err)
 	}
 }
+
+// The ignored --config flag is marked deprecated, so cobra hides it and says
+// so when it is used.
+func TestConfigFlagDeprecated(t *testing.T) {
+	f := Command.PersistentFlags().Lookup("config")
+	if f == nil {
+		t.Fatal("no --config flag")
+	}
+	if f.Deprecated == "" {
+		t.Error("--config is not marked deprecated")
+	}
+}
