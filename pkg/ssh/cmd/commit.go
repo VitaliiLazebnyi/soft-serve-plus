@@ -72,25 +72,25 @@ func commitCommand() *cobra.Command {
 			}
 
 			if color {
-				s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+				fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 					style.CommitHash.Render(commitLine),
 					style.CommitAuthor.Render(authorLine),
 					style.CommitDate.Render(dateLine),
 					style.CommitBody.Render(msgLine),
-				))
+				)
 			} else {
-				s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+				fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 					commitLine,
 					authorLine,
 					dateLine,
 					msgLine,
-				))
+				)
 			}
 
-			s.WriteString(fmt.Sprintf("\n%s\n%s",
+			fmt.Fprintf(&s, "\n%s\n%s",
 				statsLine,
 				diffLine,
-			))
+			)
 
 			cmd.Println(
 				s.String(),
@@ -121,9 +121,9 @@ func renderDiff(patch string, color bool) string {
 		err := diffChroma.Render(&pr, common.StyleRenderer())
 
 		if err != nil {
-			s.WriteString(fmt.Sprintf("\n%s", err.Error()))
+			s.WriteString("\n" + err.Error())
 		} else {
-			s.WriteString(fmt.Sprintf("\n%s", pr.String()))
+			s.WriteString("\n" + pr.String())
 		}
 
 		c = s.String()

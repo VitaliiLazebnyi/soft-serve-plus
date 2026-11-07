@@ -41,7 +41,7 @@ func TestSSRFProtection(t *testing.T) {
 
 			resp, err := secureHTTPClient.Do(req)
 			if resp != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 
 			if tt.shouldBlock {

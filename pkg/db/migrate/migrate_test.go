@@ -127,7 +127,7 @@ func TestRollbackByVersion(t *testing.T) {
 
 	// A recorded version this binary has no migration for is an error, not a
 	// rollback of some other migration.
-	if _, err := dbx.Exec(dbx.Rebind("INSERT INTO migrations (name, version) VALUES (?, ?)"), "two", 2); err != nil {
+	if _, err := dbx.ExecContext(t.Context(), dbx.Rebind("INSERT INTO migrations (name, version) VALUES (?, ?)"), "two", 2); err != nil {
 		t.Fatal(err)
 	}
 	rolledBack = nil
@@ -155,7 +155,7 @@ func TestRollbackReportsQueryError(t *testing.T) {
 	}
 
 	// A migrations table the query cannot read: it has no version column.
-	if _, err := dbx.Exec("CREATE TABLE migrations (id INTEGER, name TEXT)"); err != nil {
+	if _, err := dbx.ExecContext(t.Context(), "CREATE TABLE migrations (id INTEGER, name TEXT)"); err != nil {
 		t.Fatal(err)
 	}
 	err = Rollback(ctx, dbx)

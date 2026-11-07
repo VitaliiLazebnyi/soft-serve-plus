@@ -34,7 +34,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(tmp)
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
@@ -53,7 +52,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer dbx.Close() //nolint: errcheck
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		log.Fatal(err)
 	}
@@ -69,13 +67,10 @@ func TestMain(m *testing.M) {
 	testDaemon = d
 	go d.ListenAndServe() //nolint:errcheck
 	code := m.Run()
-	os.Unsetenv("SOFT_SERVE_DATA_PATH")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_CONNECTIONS")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_IDLE_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_LISTEN_ADDR")
 	_ = d.Close()
 	_ = dbx.Close()
+	// os.Exit skips deferred calls, so clean up here.
+	_ = os.RemoveAll(tmp)
 	os.Exit(code)
 }
 

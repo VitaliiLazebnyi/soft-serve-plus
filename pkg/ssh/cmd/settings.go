@@ -89,7 +89,7 @@ func warnIfAllowKeylessOverridden(cmd *cobra.Command, cfg *config.Config) {
 		return
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 		"Warning: allow-keyless is set to %t by server config and takes precedence over this change. "+
 			"The database was updated, but it will have no effect until the config override is removed.\n",
 		*cfg.AllowKeyless)
@@ -104,7 +104,7 @@ func warnIfAnonAccessOverridden(cmd *cobra.Command, cfg *config.Config) {
 		return
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 		"Warning: anon-access is set to %q by server config and takes precedence over this change. "+
 			"The database was updated, but it will have no effect until the config override is removed.\n",
 		cfg.AnonAccess.String())

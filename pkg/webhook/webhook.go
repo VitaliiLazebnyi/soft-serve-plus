@@ -210,14 +210,14 @@ func newRequest(w models.Webhook, event Event, payload interface{}) (request, er
 		// Redeliveries pass the stored form body as url.Values, which is
 		// already encoded; query.Values only accepts structs.
 		if v, ok := payload.(neturl.Values); ok {
-			buf.WriteString(v.Encode()) //nolint: errcheck
+			buf.WriteString(v.Encode())
 			break
 		}
 		v, err := query.Values(payload)
 		if err != nil {
 			return request{}, err
 		}
-		buf.WriteString(v.Encode()) //nolint: errcheck
+		buf.WriteString(v.Encode())
 	default:
 		return request{}, ErrInvalidContentType
 	}
@@ -237,7 +237,7 @@ func newRequest(w models.Webhook, event Event, payload interface{}) (request, er
 	body := buf.String()
 	if w.Secret != "" {
 		sig := hmac.New(sha256.New, []byte(w.Secret))
-		sig.Write([]byte(body)) //nolint: errcheck
+		sig.Write([]byte(body))
 		headers.Add("X-SoftServe-Signature", "sha256="+hex.EncodeToString(sig.Sum(nil)))
 	}
 

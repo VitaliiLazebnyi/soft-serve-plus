@@ -71,7 +71,7 @@ func TestHasTable(t *testing.T) {
 func TestHasTableMySQLQuery(t *testing.T) {
 	conn := &recordingConn{}
 	dbx := sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "mysql")
-	t.Cleanup(func() { dbx.Close() })
+	t.Cleanup(func() { _ = dbx.Close() })
 
 	txx, err := dbx.Beginx()
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRollbackReportsTableLookupError(t *testing.T) {
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
 	dbx := &db.DB{DB: sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")}
-	t.Cleanup(func() { dbx.Close() })
+	t.Cleanup(func() { _ = dbx.Close() })
 
 	err := Rollback(context.TODO(), dbx)
 	if !errors.Is(err, lookupErr) {
@@ -112,7 +112,7 @@ func TestMigrateReportsTableLookupError(t *testing.T) {
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
 	dbx := &db.DB{DB: sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")}
-	t.Cleanup(func() { dbx.Close() })
+	t.Cleanup(func() { _ = dbx.Close() })
 
 	err := Migrate(context.TODO(), dbx)
 	if !errors.Is(err, lookupErr) {
@@ -126,7 +126,7 @@ func TestCreateTablesReportsTableLookupError(t *testing.T) {
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
 	dbx := sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")
-	t.Cleanup(func() { dbx.Close() })
+	t.Cleanup(func() { _ = dbx.Close() })
 
 	txx, err := dbx.Beginx()
 	if err != nil {

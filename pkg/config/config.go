@@ -497,7 +497,7 @@ func writeConfig(cfg *Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint: errcheck, gosec
+	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint:gosec
 }
 
 // WriteConfig writes the configuration to the default file.

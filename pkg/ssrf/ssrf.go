@@ -200,15 +200,10 @@ func plural(n int, one, many string) string {
 // net.DefaultResolver; tests replace it to run without DNS.
 var dialLookup lookupFunc
 
-// resolveDialTargets returns the addresses secureDial may dial for host, in
-// the order the resolver returned them. Every address the name resolves to
-// is checked, and any private or internal one refuses the host as a whole.
-func resolveDialTargets(ctx context.Context, network, host string) ([]net.IPAddr, error) {
-	return resolveDialTargetsAllowing(ctx, network, host, "", nil)
-}
-
-// resolveDialTargetsAllowing is resolveDialTargets with the addresses allowed
-// permits for host and port let through.
+// resolveDialTargetsAllowing returns the addresses secureDial may dial for
+// host, in the order the resolver returned them. Every address the name
+// resolves to is checked, and any private or internal one that allowed does
+// not permit for host and port refuses the host as a whole.
 func resolveDialTargetsAllowing(ctx context.Context, network, host, port string, allowed AllowedHosts) ([]net.IPAddr, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		if !allowed.permitsHTTP(host, port, ip) {

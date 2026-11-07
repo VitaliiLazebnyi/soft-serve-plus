@@ -83,7 +83,7 @@ func setup(tb testing.TB) (*gossh.Session, func() error) {
 			if !active {
 				os.Exit(1)
 			}
-			s.Exit(0)
+			_ = s.Exit(0)
 		})),
 	}, nil), dbx.Close
 }

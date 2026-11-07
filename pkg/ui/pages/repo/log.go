@@ -500,12 +500,12 @@ func (l *Log) renderCommit(c *git.Commit) string {
 	// FIXME: lipgloss prints empty lines when CRLF is used
 	// sanitize commit message from CRLF
 	msg := strings.ReplaceAll(c.Message, "\r\n", "\n")
-	s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
 		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", c.Author.Name, c.Author.Email)),
 		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Committer.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
-	))
+	)
 	return wrap.String(s.String(), l.common.Width-2)
 }
 
@@ -532,9 +532,9 @@ func renderDiff(diff *git.Diff, width int) string {
 	}
 	err := diffChroma.Render(&pr, common.StyleRenderer())
 	if err != nil {
-		s.WriteString(fmt.Sprintf("\n%s", err.Error()))
+		s.WriteString("\n" + err.Error())
 	} else {
-		s.WriteString(fmt.Sprintf("\n%s", pr.String()))
+		s.WriteString("\n" + pr.String())
 	}
 	return wrap.String(s.String(), width)
 }

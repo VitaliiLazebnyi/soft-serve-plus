@@ -46,7 +46,7 @@ func TestAuthenticationBypass(t *testing.T) {
 	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
 	is.NoErr(err)
-	defer dbx.Close()
+	defer dbx.Close() //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx))
 	dbstore := database.New(ctx, dbx)
