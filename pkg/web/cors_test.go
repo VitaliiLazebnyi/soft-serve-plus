@@ -35,7 +35,7 @@ func TestCORSHandlerOrigins(t *testing.T) {
 			cfg.HTTP.CORS.AllowedOrigins = tc.origins
 			h := corsHandler(cfg)(ok)
 			for _, method := range []string{http.MethodGet, http.MethodOptions} {
-				req := httptest.NewRequest(method, "/", nil)
+				req := httptest.NewRequestWithContext(t.Context(), method, "/", nil)
 				req.Header.Set("Origin", tc.origin)
 				if method == http.MethodOptions {
 					req.Header.Set("Access-Control-Request-Method", http.MethodGet)
