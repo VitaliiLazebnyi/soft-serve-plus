@@ -18,126 +18,76 @@ func trace(l *log.Logger, query string, args ...interface{}) {
 	}
 }
 
-// Select is a wrapper around sqlx.Select that logs the query and arguments.
-func (d *DB) Select(dest interface{}, query string, args ...interface{}) error {
-	trace(d.logger, query, args...)
-	return d.DB.Select(dest, query, args...)
-}
-
-// Get is a wrapper around sqlx.Get that logs the query and arguments.
-func (d *DB) Get(dest interface{}, query string, args ...interface{}) error {
-	trace(d.logger, query, args...)
-	return d.DB.Get(dest, query, args...)
-}
-
-// Queryx is a wrapper around sqlx.Queryx that logs the query and arguments.
-func (d *DB) Queryx(query string, args ...interface{}) (*sqlx.Rows, error) {
-	trace(d.logger, query, args...)
-	return d.DB.Queryx(query, args...)
-}
-
-// QueryRowx is a wrapper around sqlx.QueryRowx that logs the query and arguments.
-func (d *DB) QueryRowx(query string, args ...interface{}) *sqlx.Row {
-	trace(d.logger, query, args...)
-	return d.DB.QueryRowx(query, args...)
-}
-
-// Exec is a wrapper around sqlx.Exec that logs the query and arguments.
-//
-// Deprecated: Use [DB.ExecContext] instead.
-func (d *DB) Exec(query string, args ...interface{}) (sql.Result, error) {
-	trace(d.logger, query, args...)
-	return d.DB.Exec(query, args...) //nolint:noctx
-}
-
-// SelectContext is a wrapper around sqlx.SelectContext that logs the query and arguments.
+// SelectContext wraps sqlx.SelectContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (d *DB) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return d.DB.SelectContext(ctx, dest, query, args...)
+	return WrapError(d.DB.SelectContext(ctx, dest, query, args...))
 }
 
-// GetContext is a wrapper around sqlx.GetContext that logs the query and arguments.
+// GetContext wraps sqlx.GetContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (d *DB) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return d.DB.GetContext(ctx, dest, query, args...)
+	return WrapError(d.DB.GetContext(ctx, dest, query, args...))
 }
 
-// QueryxContext is a wrapper around sqlx.QueryxContext that logs the query and arguments.
+// QueryxContext wraps sqlx.QueryxContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (d *DB) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
 	trace(d.logger, query, args...)
-	return d.DB.QueryxContext(ctx, query, args...)
+	rows, err := d.DB.QueryxContext(ctx, query, args...)
+	return rows, WrapError(err)
 }
 
-// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the query and arguments.
+// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
+// query and arguments. The error from scanning the row is not mapped.
 func (d *DB) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row {
 	trace(d.logger, query, args...)
 	return d.DB.QueryRowxContext(ctx, query, args...)
 }
 
-// ExecContext is a wrapper around sqlx.ExecContext that logs the query and arguments.
+// ExecContext wraps sqlx.ExecContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (d *DB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(d.logger, query, args...)
-	return d.DB.ExecContext(ctx, query, args...)
+	res, err := d.DB.ExecContext(ctx, query, args...)
+	return res, WrapError(err)
 }
 
-// Select is a wrapper around sqlx.Select that logs the query and arguments.
-func (t *Tx) Select(dest interface{}, query string, args ...interface{}) error {
-	trace(t.logger, query, args...)
-	return t.Tx.Select(dest, query, args...)
-}
-
-// Get is a wrapper around sqlx.Get that logs the query and arguments.
-func (t *Tx) Get(dest interface{}, query string, args ...interface{}) error {
-	trace(t.logger, query, args...)
-	return t.Tx.Get(dest, query, args...)
-}
-
-// Queryx is a wrapper around sqlx.Queryx that logs the query and arguments.
-func (t *Tx) Queryx(query string, args ...interface{}) (*sqlx.Rows, error) {
-	trace(t.logger, query, args...)
-	return t.Tx.Queryx(query, args...)
-}
-
-// QueryRowx is a wrapper around sqlx.QueryRowx that logs the query and arguments.
-func (t *Tx) QueryRowx(query string, args ...interface{}) *sqlx.Row {
-	trace(t.logger, query, args...)
-	return t.Tx.QueryRowx(query, args...)
-}
-
-// Exec is a wrapper around sqlx.Exec that logs the query and arguments.
-//
-// Deprecated: Use [Tx.ExecContext] instead.
-func (t *Tx) Exec(query string, args ...interface{}) (sql.Result, error) {
-	trace(t.logger, query, args...)
-	return t.Tx.Exec(query, args...) //nolint:noctx
-}
-
-// SelectContext is a wrapper around sqlx.SelectContext that logs the query and arguments.
+// SelectContext wraps sqlx.SelectContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (t *Tx) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return t.Tx.SelectContext(ctx, dest, query, args...)
+	return WrapError(t.Tx.SelectContext(ctx, dest, query, args...))
 }
 
-// GetContext is a wrapper around sqlx.GetContext that logs the query and arguments.
+// GetContext wraps sqlx.GetContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (t *Tx) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return t.Tx.GetContext(ctx, dest, query, args...)
+	return WrapError(t.Tx.GetContext(ctx, dest, query, args...))
 }
 
-// QueryxContext is a wrapper around sqlx.QueryxContext that logs the query and arguments.
+// QueryxContext wraps sqlx.QueryxContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (t *Tx) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
 	trace(t.logger, query, args...)
-	return t.Tx.QueryxContext(ctx, query, args...)
+	rows, err := t.Tx.QueryxContext(ctx, query, args...)
+	return rows, WrapError(err)
 }
 
-// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the query and arguments.
+// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
+// query and arguments. The error from scanning the row is not mapped.
 func (t *Tx) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row {
 	trace(t.logger, query, args...)
 	return t.Tx.QueryRowxContext(ctx, query, args...)
 }
 
-// ExecContext is a wrapper around sqlx.ExecContext that logs the query and arguments.
+// ExecContext wraps sqlx.ExecContext: it logs the query and
+// arguments and maps the error with WrapError.
 func (t *Tx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(t.logger, query, args...)
-	return t.Tx.ExecContext(ctx, query, args...)
+	res, err := t.Tx.ExecContext(ctx, query, args...)
+	return res, WrapError(err)
 }

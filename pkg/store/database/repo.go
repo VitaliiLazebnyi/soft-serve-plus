@@ -77,11 +77,7 @@ func (*repoStore) CountAnonymousRepos(ctx context.Context, tx db.Handler) (int64
 // for why FOR NO KEY UPDATE: it does not block the key-share lock that
 // inserting a repository owned by the user takes.
 func (*repoStore) LockUserRepos(ctx context.Context, h db.Handler, userID int64) error {
-	d, ok := h.(interface{ DriverName() string })
-	if !ok {
-		return fmt.Errorf("lock user repos: handler %T does not report its driver", h)
-	}
-	switch driver := d.DriverName(); driver {
+	switch driver := h.DriverName(); driver {
 	case "postgres":
 		_, err := h.ExecContext(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE;`, userID)
 		return db.WrapError(err)
@@ -112,12 +108,8 @@ func (*repoStore) GetRepoByID(ctx context.Context, h db.Handler, id int64) (mode
 // GetRepoByNameForUpdate implements store.RepositoryStore. See LockUserRepos
 // for the driver switch.
 func (*repoStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
-	d, ok := h.(interface{ DriverName() string })
-	if !ok {
-		return models.Repo{}, fmt.Errorf("get repo for update: handler %T does not report its driver", h)
-	}
 	var query string
-	switch driver := d.DriverName(); driver {
+	switch driver := h.DriverName(); driver {
 	case "postgres":
 		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
 	case "sqlite", "sqlite3":
