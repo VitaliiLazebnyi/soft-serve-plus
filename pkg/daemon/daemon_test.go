@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -79,51 +81,79 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestIdleTimeout(t *testing.T) {
-	var err error
-	var c net.Conn
-	var tries int
-	var dialer net.Dialer
-	for {
-		c, err = dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
-		if err != nil && tries >= 3 {
-			t.Fatalf("failed to connect to daemon after %d tries: %v", tries, err)
-		}
-		tries++
-		if testDaemon.conns.Size() != 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(2 * time.Second)
-	_, err = readPktline(c)
-	if err == nil {
-		t.Errorf("expected error, got nil")
-	}
-}
-
-// requestUploadPack asks the daemon for a repository and returns the first
-// line it answers with.
-func requestUploadPack(t *testing.T, repo string) string {
+// dialDaemon connects to the test daemon. The connection is closed when the
+// test ends, and reads give up after a deadline so a daemon that never
+// answers fails the test instead of hanging it.
+func dialDaemon(t *testing.T) net.Conn {
 	t.Helper()
-	c, err := net.Dial("tcp", testDaemon.addr) //nolint:noctx
+	var dialer net.Dialer
+	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
-	defer c.Close() //nolint:errcheck
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
+	return c
+}
+
+// readPktline reads one pkt-line. An ERR packet is returned as a
+// *pktline.ErrorLine carrying the daemon's message.
+func readPktline(c net.Conn) (string, error) {
+	pktout := pktline.NewScanner(c)
+	if !pktout.Scan() {
+		if err := pktout.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}
+	return strings.TrimSpace(string(pktout.Bytes())), nil
+}
+
+// wantErrLine fails the test unless err is an ERR packet carrying want.
+func wantErrLine(t *testing.T, what string, err error, want error) {
+	t.Helper()
+	var errLine *pktline.ErrorLine
+	if !errors.As(err, &errLine) {
+		t.Errorf("%s: expected ERR %q, got %v", what, want, err)
+		return
+	}
+	if errLine.Text != want.Error() {
+		t.Errorf("%s: expected ERR %q, got ERR %q", what, want, errLine.Text)
+	}
+}
+
+// TestIdleTimeout verifies a client that connects and never sends a request
+// is told it timed out once the idle timeout passes.
+func TestIdleTimeout(t *testing.T) {
+	c := dialDaemon(t)
+	line, err := readPktline(c)
+	if err == nil {
+		t.Fatalf("expected a timeout, got line %q", line)
+	}
+	wantErrLine(t, "idle connection", err, git.ErrTimeout)
+}
+
+// requestUploadPack asks the daemon for a repository and returns the first
+// line it answers with, or the error it answers with.
+func requestUploadPack(t *testing.T, repo string) (string, error) {
+	t.Helper()
+	c := dialDaemon(t)
 	if err := pktline.NewEncoder(c).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
 		t.Fatalf("expected nil, got error: %v", err)
 	}
-	// The scanner reports an ERR packet as an error carrying its message.
-	line, err := readPktline(c)
-	if err != nil {
-		return err.Error()
-	}
-	return line
+	return readPktline(c)
 }
 
+// refAdvertisement matches the first line of an upload-pack reference
+// advertisement: an object id, a space, and a ref name (or capabilities^{}
+// for an empty repository).
+var refAdvertisement = regexp.MustCompile(`^[0-9a-f]{40} \S+\x00`)
+
 // TestInvalidRepo verifies the daemon, which is always anonymous, answers a
-// missing repository and a private one identically so neither is revealed.
+// missing repository and a private one identically so neither is revealed,
+// and serves a public one.
 func TestInvalidRepo(t *testing.T) {
 	ctx := context.Background()
 	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil {
@@ -134,34 +164,37 @@ func TestInvalidRepo(t *testing.T) {
 		t.Fatalf("failed to create public repo: %v", err)
 	}
 
-	want := git.ErrNotAuthed.Error()
-	missing := requestUploadPack(t, "test")
-	private := requestUploadPack(t, "private")
-	if missing != want {
-		t.Errorf("missing repo: expected %q, got %q", want, missing)
-	}
-	if private != want {
-		t.Errorf("private repo: expected %q, got %q", want, private)
+	for _, tc := range []struct {
+		what, repo string
+	}{
+		{"missing repo", "test"},
+		{"private repo", "private"},
+		// Dot-dot segments are resolved inside the repositories
+		// directory, so this names the missing repository "escape".
+		{"dot-dot path", "../escape"},
+		// ... and this one names "private".
+		{"dot-dot path to a private repo", "x/../../private"},
+	} {
+		line, err := requestUploadPack(t, tc.repo)
+		if err == nil {
+			t.Errorf("%s: expected ERR %q, got line %q", tc.what, git.ErrNotAuthed, line)
+			continue
+		}
+		wantErrLine(t, tc.what, err, git.ErrNotAuthed)
 	}
 
-	// A path that escapes the repositories directory gets the same answer.
-	if got := requestUploadPack(t, "../escape"); got != want {
-		t.Errorf("escaping path: expected %q, got %q", want, got)
+	// A public repository is served: the daemon advertises its references,
+	// also when the path reaches it through dot-dot segments.
+	for _, repo := range []string{"public", "../public", "x/../../public"} {
+		line, err := requestUploadPack(t, repo)
+		if err != nil {
+			t.Errorf("public repo %q was refused: %v", repo, err)
+			continue
+		}
+		if !refAdvertisement.MatchString(line) {
+			t.Errorf("public repo %q: expected a reference advertisement, got %q", repo, line)
+		}
 	}
-
-	// A public repository is served: the first line is not a refusal.
-	public := requestUploadPack(t, "public")
-	if public == want || public == git.ErrInvalidRepo.Error() {
-		t.Errorf("public repo was refused: %q", public)
-	}
-}
-
-func readPktline(c net.Conn) (string, error) {
-	pktout := pktline.NewScanner(c)
-	if !pktout.Scan() {
-		return "", pktout.Err()
-	}
-	return strings.TrimSpace(string(pktout.Bytes())), nil
 }
 
 // Serve and Shutdown can run at the same time: Serve either sees the daemon
