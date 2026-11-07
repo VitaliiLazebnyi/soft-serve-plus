@@ -781,7 +781,11 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 
 	rp := d.repoPath(name)
 	if _, err := os.Stat(rp); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case isInvalidName(err):
+			d.logger.Debug("invalid repository name", "err", err)
+		default:
 			d.logger.Errorf("failed to stat repository path: %v", err)
 		}
 		return nil, proto.ErrRepoNotFound
