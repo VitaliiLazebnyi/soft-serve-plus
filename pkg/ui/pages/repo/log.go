@@ -461,11 +461,14 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 func (l *Log) updateCommitsCmd() tea.Cmd {
 	repo, ref, count, gen := l.repo, l.ref, l.count, l.gen
 	page := l.nextPage
-	limit := l.selector.PerPage()
 	return func() tea.Msg {
 		if ref == nil {
 			return nil
 		}
+		// Read the page size when the load runs, not when it is built: on
+		// footer.ToggleFooterMsg the page is resized only after this
+		// command is built, and the load must fill the resized page.
+		limit := l.selector.PerPage()
 		r, err := repo.Open()
 		if err != nil {
 			return common.ErrorMsg(err)
