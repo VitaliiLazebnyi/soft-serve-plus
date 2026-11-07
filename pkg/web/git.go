@@ -666,8 +666,12 @@ func sendFile(contentType string, w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, reqFile)
 }
 
+// getServiceType returns the service named by the ?service= query parameter.
+// It never reads the request body: this runs before the method check and
+// authentication, and parsing a form would let any caller spool a multipart
+// body of any size to a temp file that is never removed.
 func getServiceType(r *http.Request) git.Service {
-	service := r.FormValue("service")
+	service := r.URL.Query().Get("service")
 	if !strings.HasPrefix(service, "git-") {
 		return ""
 	}
