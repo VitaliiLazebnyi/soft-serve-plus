@@ -141,10 +141,57 @@ func TestLFSCommandLimitReader(t *testing.T) {
 		t.Errorf("read %q before the error, want %q", got, want)
 	}
 
-	// A broken header is passed through for the pktline reader to report.
-	got, err = io.ReadAll(newLFSCommandLimitReader(strings.NewReader("zzzzrest"), 4))
-	if err != nil || string(got) != "zzzzrest" {
+	// A header the pktline reader would refuse ends the stream, and every
+	// later read fails too.
+	for _, hdr := range []string{"zzzz", "0002", "0003", "-001", "-00e"} {
+		l := newLFSCommandLimitReader(strings.NewReader(hdr+"rest0000"), 1<<20)
+		got, err := io.ReadAll(l)
+		if !errors.Is(err, errLFSInvalidPacket) || len(got) != 0 {
+			t.Errorf("%s: ReadAll = %q, %v; want errLFSInvalidPacket", hdr, got, err)
+		}
+		if _, err := l.Read(make([]byte, 1)); !errors.Is(err, errLFSInvalidPacket) {
+			t.Errorf("%s: later Read: got %v, want errLFSInvalidPacket", hdr, err)
+		}
+	}
+
+	// A signed length is one the pktline reader accepts, so it counts.
+	signed := "+00eversion 1\n" + "0000"
+	got, err = io.ReadAll(newLFSCommandLimitReader(strings.NewReader(signed), 14))
+	if err != nil || string(got) != signed {
 		t.Errorf("ReadAll = %q, %v; want the input unchanged", got, err)
+	}
+	if _, err := io.ReadAll(newLFSCommandLimitReader(strings.NewReader(signed), 13)); !errors.Is(err, errLFSCommandTooLarge) {
+		t.Errorf("ReadAll: got %v, want errLFSCommandTooLarge", err)
+	}
+}
+
+// A malformed packet inside a command, which the processor answers with a 400
+// and reads past, ends the session instead of turning the limit off; so does a
+// signed header the limiter once refused while the processor read it.
+func TestLFSTransferMalformedPacketKeepsLimit(t *testing.T) {
+	// A 3 MiB batch: refused with a 400 if read whole, before any store or
+	// database lookup.
+	var b strings.Builder
+	b.WriteString(pkt("batch\n") + pkt("transfer=basic\n") + "0001")
+	for i := 0; b.Len() < 3*lfs.MaxBatchRequestSize; i++ {
+		b.WriteString(pkt(fmt.Sprintf("%064x %d\n", i, i+1)))
+	}
+	big := b.String() + "0000"
+	for name, tc := range map[string]struct {
+		in   string
+		want error
+	}{
+		"bad length in batch": {pkt("version 1\n") + "0000" + pkt("batch\n") + "0003" + "0000" + big, errLFSInvalidPacket},
+		"bad hex in batch":    {pkt("version 1\n") + "0000" + pkt("batch\n") + "zzzz" + "0000" + big, errLFSInvalidPacket},
+		"signed version":      {"+00eversion 1\n" + "0000" + big, errLFSCommandTooLarge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, ctx := newLFSUploadTransfer(t)
+			_, err := runLFSTransfer(t, ctx, tc.in+pkt("quit\n")+"0000")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("LFSTransfer: got %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

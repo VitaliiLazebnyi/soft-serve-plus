@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -11,6 +12,10 @@ import (
 // errLFSCommandTooLarge is returned by lfsCommandLimitReader once a command
 // goes over lfs.MaxBatchRequestSize.
 var errLFSCommandTooLarge = fmt.Errorf("lfs: command larger than %d bytes", lfs.MaxBatchRequestSize)
+
+// errLFSInvalidPacket is returned by lfsCommandLimitReader for a packet
+// header the pktline reader would refuse.
+var errLFSInvalidPacket = errors.New("lfs: invalid packet length")
 
 // lfsCommandLimitReader bounds the bytes of each command a git-lfs-transfer
 // client sends. The transfer processor reads every packet of a command up to
@@ -30,13 +35,15 @@ var errLFSCommandTooLarge = fmt.Errorf("lfs: command larger than %d bytes", lfs.
 // is counted, or not, by what the processor is doing when it reads it. Once a
 // command goes over the limit, that packet and every later read fail with
 // errLFSCommandTooLarge, which ends the session: the stream can no longer be
-// read from a command boundary.
+// read from a command boundary. A header the pktline reader would refuse
+// fails the same way, with errLFSInvalidPacket: the processor answers such a
+// header inside a command with a 400 and goes on reading, so passing the
+// bytes through unchecked would let a client turn the limit off.
 type lfsCommandLimitReader struct {
 	r     io.Reader
 	limit int
 	n     int    // bytes of the current command read so far
 	data  bool   // the backend is reading object data
-	raw   bool   // framing broken, passing bytes through
 	buf   []byte // the rest of the packet being passed through
 	err   error  // returned once buf is drained
 }
@@ -59,9 +66,6 @@ func (l *lfsCommandLimitReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if l.raw && len(l.buf) == 0 && l.err == nil {
-		return l.r.Read(p)
-	}
 	if len(l.buf) == 0 && l.err == nil {
 		l.next()
 	}
@@ -81,11 +85,11 @@ func (l *lfsCommandLimitReader) next() {
 		l.buf, l.err = hdr[:n], err
 		return
 	}
-	size, err := strconv.ParseUint(string(hdr), 16, 16)
-	if err != nil || (size > 2 && size < 4) {
-		// Not a packet the processor can read. Pass the bytes on and let
-		// it fail the session.
-		l.buf, l.raw = hdr, true
+	// Parse the length as the pktline reader does, so both agree on where
+	// every packet ends: ParseInt accepts a sign, as in "+00e".
+	size, err := strconv.ParseInt(string(hdr), 16, 0)
+	if err != nil || size < 0 || size == 2 || size == 3 {
+		l.err = errLFSInvalidPacket
 		return
 	}
 	if size == 0 { // flush
