@@ -130,8 +130,11 @@ var errAboutRepoReserved = fmt.Errorf("%w: only an admin can create the %s repos
 // checkCanClaim refuses user taking the new repository name: the
 // AdminOnlyCreate check (see checkCanCreate), and AboutRepo, which only a
 // server admin (see isServerAdmin) may take whatever that setting says.
+// AboutRepo is matched ignoring case: on a case-insensitive filesystem
+// (default macOS and Windows) a variant such as ".Soft-Serve" claims the
+// same directory, which would lock the admin out of the real name.
 func (d *Backend) checkCanClaim(ctx context.Context, user proto.User, name string) error {
-	if name == AboutRepo && !d.isServerAdmin(ctx, user) {
+	if strings.EqualFold(name, AboutRepo) && !d.isServerAdmin(ctx, user) {
 		return errAboutRepoReserved
 	}
 	return d.checkCanCreate(ctx, user)

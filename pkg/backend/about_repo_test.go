@@ -30,12 +30,21 @@ func TestAboutRepoReservedForAdmins(t *testing.T) {
 	is.True(errors.Is(err, proto.ErrUnauthorized))
 	_, err = be.CreateRepository(ctx, AboutRepo, nil, proto.RepositoryOptions{})
 	is.True(errors.Is(err, proto.ErrUnauthorized))
+	// A case variant takes the same directory on a case-insensitive
+	// filesystem, so it is reserved too.
+	_, err = be.CreateRepository(userCtx, ".Soft-Serve", user, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
+	_, err = be.CreateRepository(ctx, ".SOFT-SERVE", nil, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
+	_, err = be.ImportRepository(userCtx, ".Soft-Serve", user, offlineRemote, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
 	_, err = be.ImportRepository(userCtx, AboutRepo, user, offlineRemote, proto.RepositoryOptions{})
 	is.True(errors.Is(err, proto.ErrUnauthorized))
 
 	_, err = be.CreateRepository(userCtx, "mine", user, proto.RepositoryOptions{})
 	is.NoErr(err)
 	is.True(errors.Is(be.RenameRepository(userCtx, "mine", AboutRepo), proto.ErrUnauthorized))
+	is.True(errors.Is(be.RenameRepository(userCtx, "mine", ".Soft-Serve"), proto.ErrUnauthorized))
 
 	_, err = be.Repository(ctx, AboutRepo)
 	is.True(err != nil)
