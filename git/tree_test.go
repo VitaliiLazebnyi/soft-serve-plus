@@ -5,13 +5,15 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 // setupQuotedNamesRepo creates a repository whose file names git C-quotes in
 // ls-tree output. The tree is built with plumbing so that names which are
-// not valid on every file system (quotes, backslashes, tabs) still work.
+// not valid on every file system (quotes, backslashes, tabs) still work,
+// except on Windows, where git refuses such paths (core.protectNTFS).
 func setupQuotedNamesRepo(t *testing.T, paths ...string) (*Repository, *Reference) {
 	t.Helper()
 	ctx := context.Background()
@@ -65,7 +67,19 @@ func TestTreeQuotedNames(t *testing.T) {
 		unicode = "café.bin"
 		special = "a\\b\"c\td.txt"
 	)
-	repo, ref := setupQuotedNamesRepo(t, ".gitattributes", dir+"/"+unicode, special, "plain.txt")
+	paths := []string{".gitattributes", dir + "/" + unicode, "plain.txt"}
+	rootNames := []string{dir, "plain.txt"}
+	fp := dir + "/" + unicode
+	lookups := []string{fp}
+	// Git for Windows rejects backslashes, double quotes and control
+	// characters in paths and reads a backslash in a pathspec as a
+	// directory separator, so the special-character name is left out there.
+	if runtime.GOOS != "windows" {
+		paths = append(paths, special)
+		rootNames = append(rootNames, special)
+		lookups = append(lookups, special)
+	}
+	repo, ref := setupQuotedNamesRepo(t, paths...)
 
 	root, err := repo.Tree(ref)
 	if err != nil {
@@ -79,7 +93,7 @@ func TestTreeQuotedNames(t *testing.T) {
 	for _, e := range ents {
 		names = append(names, e.Name())
 	}
-	for _, want := range []string{dir, special, "plain.txt"} {
+	for _, want := range rootNames {
 		found := false
 		for _, n := range names {
 			if n == want {
@@ -102,7 +116,6 @@ func TestTreeQuotedNames(t *testing.T) {
 	if len(ents) != 1 {
 		t.Fatalf("got %d entries, want 1", len(ents))
 	}
-	fp := dir + "/" + unicode
 	if got := ents[0].Name(); got != unicode {
 		t.Errorf("Name() = %q, want %q", got, unicode)
 	}
@@ -110,7 +123,7 @@ func TestTreeQuotedNames(t *testing.T) {
 		t.Errorf("Path() = %q, want %q", got, fp)
 	}
 
-	for _, p := range []string{fp, special} {
+	for _, p := range lookups {
 		te, err := root.TreeEntry(p)
 		if err != nil {
 			t.Fatalf("TreeEntry(%q) failed: %v", p, err)
