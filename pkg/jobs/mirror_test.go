@@ -1,10 +1,12 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -237,6 +239,38 @@ func TestLimitedBuffer(t *testing.T) {
 	}
 	if got := b.String(); got != "abcd" {
 		t.Errorf("buffer = %q, want %q", got, "abcd")
+	}
+}
+
+// os/exec copies git's stderr pipe into the buffer with io.Copy, which
+// prefers the writer's ReadFrom, so the cap must hold on that path too.
+func TestLimitedBufferCopyFromPipe(t *testing.T) {
+	if _, ok := any(&limitedBuffer{}).(io.ReaderFrom); ok {
+		t.Fatal("limitedBuffer implements io.ReaderFrom, which bypasses its limit")
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	const total = 1 << 20
+	go func() {
+		defer w.Close()
+		_, _ = w.Write(bytes.Repeat([]byte("x"), total))
+	}()
+
+	b := limitedBuffer{limit: 4096}
+	n, err := io.Copy(&b, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != total {
+		t.Errorf("io.Copy copied %d bytes, want %d", n, total)
+	}
+	if got := len(b.String()); got != 4096 {
+		t.Errorf("buffer holds %d bytes, want 4096", got)
 	}
 }
 

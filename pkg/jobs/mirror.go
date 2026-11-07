@@ -258,15 +258,24 @@ func redactURLs(msg string) string {
 
 // limitedBuffer keeps the first limit bytes written to it and discards the
 // rest, reporting every write as complete so the writer is not cut off.
+//
+// The buffer is a named field rather than embedded so that limitedBuffer has
+// no ReadFrom: os/exec copies a pipe into a non-file Stderr with io.Copy,
+// which would call an embedded bytes.Buffer.ReadFrom and bypass the cap.
 type limitedBuffer struct {
-	bytes.Buffer
+	buf   bytes.Buffer
 	limit int
 }
 
 // Write implements io.Writer.
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if room := b.limit - b.Len(); room > 0 {
-		b.Buffer.Write(p[:min(len(p), room)])
+	if room := b.limit - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
 	}
 	return len(p), nil
+}
+
+// String returns the bytes kept so far.
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
 }
