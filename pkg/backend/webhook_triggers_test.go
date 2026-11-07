@@ -402,6 +402,23 @@ func TestUpdateHookSendsBranchTagThenPush(t *testing.T) {
 	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
 }
 
+// A push that deletes a branch sends branch_tag_delete and then a push event
+// with no commits, without logging an error.
+func TestUpdateHookDeleteSendsBranchTagThenPush(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	t.Setenv("SOFT_SERVE_USERNAME", "admin")
+	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.be.Update(e.ctx, io.Discard, io.Discard, "repo", hooks.HookArg{
+		OldSha: commit, NewSha: zeroSha, RefName: "refs/heads/main",
+	})
+
+	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagDelete, webhook.EventPush})
+	is.True(!strings.Contains(e.logs.String(), "error creating push webhook"))
+}
+
 // A failed push event send is logged and does not stop the hook.
 func TestUpdateHookSurvivesPushSendFailure(t *testing.T) {
 	is := is.New(t)

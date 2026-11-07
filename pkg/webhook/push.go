@@ -22,7 +22,12 @@ type PushEvent struct {
 	Before string `json:"before" url:"before"`
 	// After is the current commit SHA.
 	After string `json:"after" url:"after"`
-	// Commits is the list of commits.
+	// Created is whether the push created the branch or tag.
+	Created bool `json:"created" url:"created"`
+	// Deleted is whether the push deleted the branch or tag.
+	Deleted bool `json:"deleted" url:"deleted"`
+	// Commits is the list of commits. It is empty when the push deleted the
+	// branch or tag.
 	Commits []Commit `json:"commits" url:"commits"`
 }
 
@@ -31,9 +36,11 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 	event := EventPush
 
 	payload := PushEvent{
-		Ref:    ref,
-		Before: before,
-		After:  after,
+		Ref:     ref,
+		Before:  before,
+		After:   after,
+		Created: git.IsZeroHash(before),
+		Deleted: git.IsZeroHash(after),
 		Common: Common{
 			EventType: event,
 			Repository: Repository{
@@ -72,6 +79,13 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 	}
 
 	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+
+	// A deleted branch or tag has no new commits, and "before..0000" is not
+	// a revision git can list.
+	if payload.Deleted {
+		payload.Commits = []Commit{}
+		return payload, nil
+	}
 
 	rev := after
 	if !git.IsZeroHash(before) {
