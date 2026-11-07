@@ -14,6 +14,12 @@ stderr 'Created repository repo1.*'
 stdout ssh://localhost:$SSH_PORT/repo1.git
 soft repo hidden repo1
 stdout true
+
+# a hidden value that is not a boolean is refused and does not unhide it
+! soft repo hidden repo1 yes
+stderr 'invalid hidden value "yes"'
+soft repo hidden repo1
+stdout true
 soft repo private repo1
 stdout true
 ! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
