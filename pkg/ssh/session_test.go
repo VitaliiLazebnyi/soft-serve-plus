@@ -117,6 +117,9 @@ func TestSetupListensOnLoopback(t *testing.T) {
 // TestBubbleTeaMiddlewareClosesZoneManager checks that a TUI session that
 // ends without the quit key, here by the client dropping the connection,
 // still stops its zone manager's worker goroutine.
+//
+// Workers are tracked by goroutine ID, so a worker left by an earlier test
+// that is still shutting down cannot be mistaken for this session's.
 func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
 	before := zoneWorkers()
 	srv, closeDB := setupServer(t)
@@ -149,36 +152,64 @@ func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitZoneWorkers(t, "the TUI to start", func(n int) bool { return n > before })
+	var ours map[string]bool
+	waitZoneWorkers(t, "the TUI to start", func(running map[string]bool) bool {
+		ours = map[string]bool{}
+		for id := range running {
+			if !before[id] {
+				ours[id] = true
+			}
+		}
+		return len(ours) > 0
+	})
 	_ = client.Close()
-	waitZoneWorkers(t, "the session's zone manager to stop", func(n int) bool { return n <= before })
+	waitZoneWorkers(t, "the session's zone manager to stop", func(running map[string]bool) bool {
+		for id := range ours {
+			if running[id] {
+				return false
+			}
+		}
+		return true
+	})
 }
 
-// waitZoneWorkers waits until ok returns true for the number of running
-// bubblezone worker goroutines.
-func waitZoneWorkers(t *testing.T, what string, ok func(int) bool) {
+// waitZoneWorkers waits until ok returns true for the set of running
+// bubblezone worker goroutine IDs.
+func waitZoneWorkers(t *testing.T, what string, ok func(map[string]bool) bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		n := zoneWorkers()
-		if ok(n) {
+		running := zoneWorkers()
+		if ok(running) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s: %d zone manager workers running", what, n)
+			t.Fatalf("timed out waiting for %s: %d zone manager workers running", what, len(running))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
-// zoneWorkers returns the number of running bubblezone worker goroutines.
-func zoneWorkers() int {
+// zoneWorkers returns the IDs of the running bubblezone worker goroutines.
+func zoneWorkers() map[string]bool {
 	buf := make([]byte, 1<<20)
 	for {
 		n := runtime.Stack(buf, true)
 		if n < len(buf) {
-			return strings.Count(string(buf[:n]), "bubblezone/v2.(*Manager).zoneWorker")
+			buf = buf[:n]
+			break
 		}
 		buf = make([]byte, 2*len(buf))
 	}
+	ids := map[string]bool{}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if !strings.Contains(g, "bubblezone/v2.(*Manager).zoneWorker") {
+			continue
+		}
+		// The first line is "goroutine <id> [<state>]:".
+		if f := strings.Fields(g); len(f) > 1 && f[0] == "goroutine" {
+			ids[f[1]] = true
+		}
+	}
+	return ids
 }
