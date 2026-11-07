@@ -38,11 +38,17 @@ EXPOSE 9418/tcp
 # warn) when the container is started with --init and tini is not PID 1.
 ENTRYPOINT [ "/sbin/tini", "-s", "--", "/usr/local/bin/soft", "serve" ]
 
-# Healthy once the HTTP server answers and the database is reachable. Override
-# it (--health-cmd) or turn it off (--no-healthcheck) if you move or disable
-# the HTTP server.
+# Healthy once the HTTP server answers and the database is reachable. The
+# server may serve HTTPS on the same port (http.tls_key_path/tls_cert_path), so
+# try https first, then plain http. https goes first because the TLS server logs
+# an error for every plain request, while the plain server ignores a failed TLS
+# handshake quietly. The certificate is not checked, since it is issued for the
+# public host name, not 127.0.0.1. Override the check (--health-cmd) or turn it
+# off (--no-healthcheck) if you move or disable the HTTP server.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1:23232/readyz || exit 1
+  CMD wget -q --no-check-certificate -O /dev/null https://127.0.0.1:23232/readyz 2>/dev/null \
+    || wget -q -O /dev/null http://127.0.0.1:23232/readyz \
+    || exit 1
 
 USER soft:soft
 

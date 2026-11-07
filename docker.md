@@ -73,9 +73,21 @@ docker-compose).
 
 The image declares a Docker health check that requests `/readyz` from the HTTP
 server on `127.0.0.1:23232`, which answers once the server is up and its
-database is reachable. If you move the HTTP server to another port or turn it
-off, override the check with `--health-cmd` (`healthcheck:` in docker-compose)
-or disable it with `--no-healthcheck`.
+database is reachable. It tries HTTPS first and then plain HTTP, so it also
+works when you turn on TLS for the HTTP server (`SOFT_SERVE_HTTP_TLS_KEY_PATH`
+and `SOFT_SERVE_HTTP_TLS_CERT_PATH`). Over HTTPS it does not check the
+certificate, which is issued for your public host name rather than `127.0.0.1`.
+
+If you move the HTTP server to another port or turn it off, override the check
+with `--health-cmd` (`healthcheck:` in docker-compose) or disable it with
+`--no-healthcheck`. For example, with the HTTP server on port 8080:
+
+```sh
+docker run ... \
+  -e SOFT_SERVE_HTTP_LISTEN_ADDR=":8080" \
+  --health-cmd 'wget -q -O /dev/null http://127.0.0.1:8080/readyz || exit 1' \
+  ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
+```
 
 ## Metrics
 
