@@ -63,9 +63,10 @@ func TestReceivePackCountedOnce(t *testing.T) {
 		return c.ExecuteContext(ctx)
 	}
 
+	before := testutil.ToFloat64(receivePackCounter.WithLabelValues(name))
 	is.NoErr(push(adminCtx, "main"))
 	is.NoErr(push(adminCtx, "other"))
 	is.True(push(readerCtx, "denied") != nil) // a user who may not write is refused
 
-	is.Equal(testutil.ToFloat64(receivePackCounter.WithLabelValues(name)), 2.0)
+	is.Equal(testutil.ToFloat64(receivePackCounter.WithLabelValues(name))-before, 2.0)
 }

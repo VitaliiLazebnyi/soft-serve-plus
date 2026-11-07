@@ -482,11 +482,11 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch service {
-	case git.ReceivePackService:
+	// A fetch is counted on its ref advertisement, in getInfoRefs: a fetch
+	// over smart HTTP may send several upload-pack RPCs (ls-refs and fetch in
+	// protocol v2, one per negotiation round), but only one advertisement.
+	if service == git.ReceivePackService {
 		gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
-	case git.UploadPackService:
-		gitHttpUploadCounter.WithLabelValues(repoName, mux.Vars(r)["file"]).Inc()
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
@@ -609,6 +609,12 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 		if err := service.Handler(ctx, cmd); err != nil {
 			renderNotFound(w, r)
 			return
+		}
+
+		// Each fetch asks for the upload-pack advertisement once, whatever
+		// the protocol version, so count fetches here rather than per RPC.
+		if service == git.UploadPackService {
+			gitHttpUploadCounter.WithLabelValues(repoName, mux.Vars(r)["file"]).Inc()
 		}
 
 		hdrNocache(w)

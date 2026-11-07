@@ -3,17 +3,27 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// Each fetch and push RPC over HTTP is counted once, under its own service;
-// ref advertisements and refused requests are not counted.
+// httpGitCounts returns the HTTP fetch and push counters for repo.
+func httpGitCounts(repo string) (fetches, pushes float64) {
+	return testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(repo, "info/refs")),
+		testutil.ToFloat64(gitHttpReceiveCounter.WithLabelValues(repo))
+}
+
+// Each push RPC over HTTP is counted once, and fetches are counted on their
+// upload-pack advertisement only: neither push advertisements nor refused
+// requests are counted.
 func TestGitHTTPCounters(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
@@ -36,18 +46,64 @@ func TestGitHTTPCounters(t *testing.T) {
 		return w.Code
 	}
 
-	// Advertisements, for a fetch and for a push, are not RPCs.
+	fetches, pushes := httpGitCounts(name)
+	secretFetches, _ := httpGitCounts("secret")
+
+	// A fetch advertisement counts; a push advertisement does not.
 	is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
 	is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-
+	// The fetch RPC that follows its advertisement is the same fetch.
 	is.Equal(rpc(name, "git-upload-pack", ""), http.StatusOK)
 	is.Equal(rpc(name, "git-receive-pack", auth), http.StatusOK)
 	// Refused: an anonymous push, and a fetch of a private repository.
 	is.True(rpc(name, "git-receive-pack", "") != http.StatusOK)
+	is.True(f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "").Code != http.StatusOK)
 	is.True(rpc("secret", "git-upload-pack", "") != http.StatusOK)
 
-	is.Equal(testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(name, "info/refs")), 0.0)
-	is.Equal(testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(name, "git-upload-pack")), 1.0)
-	is.Equal(testutil.ToFloat64(gitHttpReceiveCounter.WithLabelValues(name)), 1.0)
-	is.Equal(testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues("secret", "git-upload-pack")), 0.0)
+	gotFetches, gotPushes := httpGitCounts(name)
+	is.Equal(gotFetches-fetches, 1.0)
+	is.Equal(gotPushes-pushes, 1.0)
+	gotSecret, _ := httpGitCounts("secret")
+	is.Equal(gotSecret-secretFetches, 0.0)
+}
+
+// A clone or fetch by a real git client is counted once, whichever protocol
+// version it speaks, although it sends more than one RPC.
+func TestGitHTTPFetchCountedOnce(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	is := is.New(t)
+	f := newOracleFixture(t)
+	const name = "http-fetch-counted"
+	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	// Give the repository a commit, so a clone fetches a pack. Its hooks run
+	// the server binary, which is the test binary here; push with no hooks.
+	work := t.TempDir()
+	gitRun(t, "init", "-q", work)
+	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
+	bare := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", name+".git")
+	gitRun(t, "-C", work, "-c", "core.hooksPath="+t.TempDir(), "push", "-q", bare, "HEAD:refs/heads/main")
+
+	srv := httptest.NewServer(f.handler)
+	t.Cleanup(srv.Close)
+	url := srv.URL + "/" + name + ".git"
+
+	// counted runs git and returns how much it added to the fetch counter.
+	counted := func(args ...string) float64 {
+		t.Helper()
+		before, _ := httpGitCounts(name)
+		gitRun(t, args...)
+		after, _ := httpGitCounts(name)
+		return after - before
+	}
+	for _, version := range []string{"2", "0"} {
+		dst := filepath.Join(t.TempDir(), "clone")
+		// A clone sends ls-refs and fetch in protocol v2.
+		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", url, dst), 1.0)
+		// A fetch with nothing new sends no RPC in v0, and ls-refs in v2.
+		is.Equal(counted("-C", dst, "-c", "protocol.version="+version, "fetch", "-q", "origin"), 1.0)
+	}
 }

@@ -220,13 +220,18 @@ func TestListensOnLoopback(t *testing.T) {
 // request it refuses.
 func TestUploadPackCounted(t *testing.T) {
 	ctx := context.Background()
-	if _, err := testBackend.CreateRepository(ctx, "counted", nil, proto.RepositoryOptions{}); err != nil {
+	// The daemon and its backend are shared by every run of the test, so
+	// the repositories may exist already, and counters are compared with
+	// their values before the requests.
+	if _, err := testBackend.CreateRepository(ctx, "counted", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	if _, err := testBackend.CreateRepository(ctx, "counted-private", nil, proto.RepositoryOptions{Private: true}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, "counted-private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create private repo: %v", err)
 	}
 
+	served := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted"))
+	refused := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private"))
 	for range 2 {
 		if got := requestUploadPack(t, "counted"); got == git.ErrNotAuthed.Error() {
 			t.Fatalf("public repo was refused: %q", got)
@@ -234,10 +239,10 @@ func TestUploadPackCounted(t *testing.T) {
 	}
 	requestUploadPack(t, "counted-private")
 
-	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted")); got != 2 {
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted")) - served; got != 2 {
 		t.Errorf("upload-pack counter for a served repo = %v, want 2", got)
 	}
-	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private")); got != 0 {
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private")) - refused; got != 0 {
 		t.Errorf("upload-pack counter for a refused repo = %v, want 0", got)
 	}
 
