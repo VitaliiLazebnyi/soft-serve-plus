@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -423,7 +425,9 @@ func parseFile(cfg *Config, path string) error {
 	}
 
 	defer f.Close() //nolint: errcheck
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+	// An empty or comment-only file has no YAML document and decodes to
+	// io.EOF. Treat it like an empty document and keep the defaults.
+	if err := yaml.NewDecoder(f).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
