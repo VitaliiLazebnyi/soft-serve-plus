@@ -34,6 +34,10 @@ type lfsTransfer struct {
 	// authorizes only the operation, and the transfer processor accepts
 	// put-object and lock in either, so write commands check it here.
 	op string
+	// stdin bounds the bytes of each command the client sends. Upload
+	// tells it while it reads object data, which does not count. Nil in
+	// tests that call the backend directly.
+	stdin *lfsCommandLimitReader
 }
 
 var _ transfer.Backend = &lfsTransfer{}
@@ -67,7 +71,8 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	logger := log.FromContext(ctx).WithPrefix("lfs-transfer")
-	handler := transfer.NewPktline(cmd.Stdin, cmd.Stdout, &lfsLogger{logger})
+	stdin := newLFSCommandLimitReader(cmd.Stdin, lfs.MaxBatchRequestSize)
+	handler := transfer.NewPktline(stdin, cmd.Stdout, &lfsLogger{logger})
 	repo := proto.RepositoryFromContext(ctx)
 	if repo == nil {
 		logger.Error("no repository in context")
@@ -98,13 +103,27 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		storage: storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID)),
 		repo:    repo,
 		op:      op,
+		stdin:   stdin,
 	}, &lfsLogger{logger})
 
-	return processor.ProcessCommands(op)
+	err := processor.ProcessCommands(op)
+	if errors.Is(err, errLFSCommandTooLarge) {
+		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
+	}
+	return err
 }
 
 // Batch implements transfer.Backend.
+//
+// Each object costs a storage stat and database lookups, so a batch holds at
+// most lfs.MaxBatchObjects objects, as over HTTP.
 func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.Args) ([]transfer.BatchItem, error) {
+	if len(pointers) > lfs.MaxBatchObjects {
+		t.logger.Warn("too many objects in batch request", "objects", len(pointers))
+		return nil, fmt.Errorf("%w: too many objects in batch request: %d, the maximum is %d",
+			transfer.ErrParseError, len(pointers), lfs.MaxBatchObjects)
+	}
+
 	for i := range pointers {
 		p := transfer.Pointer{Oid: pointers[i].Oid, Size: pointers[i].Size}
 		if !p.IsValid() {
@@ -161,6 +180,13 @@ func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Arg
 	if !p.IsValid() {
 		return errInvalidOid
 	}
+
+	// From here on the object data is read, or drained, up to its flush,
+	// so its packets are not a command's arguments. Every return that
+	// leaves data unread happens before this point, and the processor
+	// then reads it as the next command, which does count.
+	t.stdin.streamData(true)
+	defer t.stdin.streamData(false)
 
 	if t.op == lfs.OperationDownload {
 		// Consume the object data so the next command is read from the
