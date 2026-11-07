@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"charm.land/log/v2"
 )
 
 func generateTestCert(t *testing.T, certPath, keyPath, cn string) {
@@ -68,9 +66,7 @@ func TestCertReloader(t *testing.T) {
 	// Initial cert
 	generateTestCert(t, certPath, keyPath, "cert-v1")
 
-	logger := log.New(os.Stderr)
-
-	certReloader, err := NewCertReloader(certPath, keyPath, logger)
+	certReloader, err := NewCertReloader(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("failed to create reloader: %v", err)
 	}
@@ -79,11 +75,8 @@ func TestCertReloader(t *testing.T) {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGHUP)
 		for range sigCh {
-			if err := certReloader.Reload(); err != nil {
-				logger.Error("failed to reload certificate", "err", err)
-			} else {
-				logger.Info("certificate reloaded successfully")
-			}
+			// The test checks below that the certificate changed.
+			_ = certReloader.Reload()
 		}
 	}()
 

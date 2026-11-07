@@ -37,8 +37,6 @@ var Command = &cobra.Command{
 			return fmt.Errorf("failed to open repository: %w", err)
 		}
 
-		// Bubble Tea uses Termenv default output so we have to use the same
-		// thing here.
 		ctx := cmd.Context()
 		c := common.NewCommon(ctx, 0, 0)
 		c.HideCloneCmd = true
