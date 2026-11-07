@@ -230,13 +230,15 @@ func (s *Selector) Init() tea.Cmd {
 func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case tea.MouseClickMsg:
-		m := msg.Mouse()
-		switch m.Button {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
 		case tea.MouseWheelUp:
 			s.CursorUp()
 		case tea.MouseWheelDown:
 			s.CursorDown()
+		}
+	case tea.MouseClickMsg:
+		switch msg.Button {
 		case tea.MouseLeft:
 			curIdx := s.Index()
 			for i, item := range s.Items() {
