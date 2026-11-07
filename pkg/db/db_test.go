@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,45 @@ func TestTransactionPanicRollsBack(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0] != 2 {
 		t.Errorf("rows = %v, want [2]", rows)
+	}
+}
+
+// A transaction whose fn calls runtime.Goexit, as t.FailNow does, is rolled
+// back too: recover sees nothing in that case.
+func TestTransactionGoexitRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			runtime.Goexit()
+			return nil
+		})
+	}()
+	<-done
+
+	if n := d.Stats().InUse; n != 0 {
+		t.Errorf("connections in use after Goexit = %d, want 0", n)
+	}
+	var rows []int
+	if err := d.SelectContext(ctx, &rows, "SELECT n FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows = %v, want none", rows)
 	}
 }
 

@@ -96,24 +96,27 @@ type Tx struct {
 }
 
 // TransactionContext runs fn in a transaction. The transaction is committed
-// if fn returns nil and rolled back otherwise. If fn panics, the transaction
-// is rolled back and the panic continues.
-func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) (err error) {
+// if fn returns nil and rolled back otherwise. If fn does not return, because
+// it panics or calls runtime.Goexit (such as t.FailNow in a test), the
+// transaction is rolled back and the panic or exit continues.
+func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) error {
 	txx, err := d.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
 	tx := &Tx{txx, d.logger}
+	returned := false
 	defer func() {
-		if p := recover(); p != nil {
-			// Release the connection, and SQLite's write lock, before
-			// the panic unwinds further.
+		if !returned {
+			// Release the connection, and SQLite's write lock, while the
+			// goroutine unwinds.
 			_ = tx.Rollback()
-			panic(p)
 		}
 	}()
-	if err := fn(tx); err != nil {
+	err = fn(tx)
+	returned = true
+	if err != nil {
 		return rollback(tx, err)
 	}
 
