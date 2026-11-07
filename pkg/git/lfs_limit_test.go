@@ -122,8 +122,7 @@ func TestLFSTransferPutObjectLargerThanCommandLimit(t *testing.T) {
 // limit add up to more than it, and the bytes pass through unchanged.
 func TestLFSCommandLimitReader(t *testing.T) {
 	cmd := pkt("verify-object x\n") + pkt("size=1\n") + "0000"
-	put := pkt("put-object x\n") + pkt("size=100\n") + "0001" + pkt(strings.Repeat("d", 100)) + "0000"
-	in := strings.Repeat(cmd+put, 10)
+	in := strings.Repeat(cmd, 10)
 
 	got, err := io.ReadAll(newLFSCommandLimitReader(strings.NewReader(in), len(cmd)))
 	if err != nil {
@@ -146,6 +145,71 @@ func TestLFSCommandLimitReader(t *testing.T) {
 	got, err = io.ReadAll(newLFSCommandLimitReader(strings.NewReader("zzzzrest"), 4))
 	if err != nil || string(got) != "zzzzrest" {
 		t.Errorf("ReadAll = %q, %v; want the input unchanged", got, err)
+	}
+}
+
+// Packets read while the backend streams object data don't count; the same
+// packets read as a command do.
+func TestLFSCommandLimitReaderStreamData(t *testing.T) {
+	args := pkt("put-object x\n") + pkt("size=100\n") + "0001"
+	data := pkt(strings.Repeat("d", 100)) + "0000"
+	in := strings.Repeat(args+data, 3)
+	limit := len(args)
+
+	l := newLFSCommandLimitReader(strings.NewReader(in), limit)
+	var got bytes.Buffer
+	for range 3 {
+		if _, err := io.CopyN(&got, l, int64(len(args))); err != nil {
+			t.Fatalf("reading arguments: %v", err)
+		}
+		l.streamData(true)
+		if _, err := io.CopyN(&got, l, int64(len(data))); err != nil {
+			t.Fatalf("reading data: %v", err)
+		}
+		l.streamData(false)
+	}
+	if got.String() != in {
+		t.Errorf("read %q, want %q", got.String(), in)
+	}
+
+	// Without streamData the data is the command's arguments.
+	if _, err := io.ReadAll(newLFSCommandLimitReader(strings.NewReader(in), limit)); !errors.Is(err, errLFSCommandTooLarge) {
+		t.Errorf("ReadAll: got %v, want errLFSCommandTooLarge", err)
+	}
+
+	// A nil reader ignores streamData, for backends built without one.
+	var nl *lfsCommandLimitReader
+	nl.streamData(true)
+}
+
+// A put-object the processor refuses before its data leaves that data in the
+// stream, and the processor reads it as the next command. Those packets count:
+// a client can't hide an oversized command behind a failed put-object.
+func TestLFSTransferFailedPutObjectDataCounts(t *testing.T) {
+	// No flush after the delimiter: everything from the batch on is either
+	// put-object data or, once put-object fails, one oversized command.
+	var b strings.Builder
+	b.WriteString(pkt("batch\n") + pkt("transfer=basic\n") + "0001")
+	for i := 0; b.Len() < 3*lfs.MaxBatchRequestSize; i++ {
+		b.WriteString(pkt(fmt.Sprintf("%064x %d\n", i, i+1)))
+	}
+	oversized := b.String()
+	validOid := strings.Repeat("a", 64)
+
+	for name, put := range map[string]string{
+		"missing size": pkt("put-object "+validOid+"\n") + "0001",
+		"invalid size": pkt("put-object "+validOid+"\n") + pkt("size=abc\n") + "0001",
+		"invalid oid":  pkt("put-object ../../etc\n") + pkt(fmt.Sprintf("size=%d\n", len(oversized))) + "0001",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, ctx := newLFSUploadTransfer(t)
+			in := pkt("version 1\n") + "0000" + put + oversized + "0000" + pkt("quit\n") + "0000"
+
+			_, err := runLFSTransfer(t, ctx, in)
+			if !errors.Is(err, errLFSCommandTooLarge) {
+				t.Fatalf("LFSTransfer: got %v, want errLFSCommandTooLarge", err)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,10 @@ type lfsTransfer struct {
 	// authorizes only the operation, and the transfer processor accepts
 	// put-object and lock in either, so write commands check it here.
 	op string
+	// stdin bounds the bytes of each command the client sends. Upload
+	// tells it while it reads object data, which does not count. Nil in
+	// tests that call the backend directly.
+	stdin *lfsCommandLimitReader
 }
 
 var _ transfer.Backend = &lfsTransfer{}
@@ -99,6 +103,7 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		storage: storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID)),
 		repo:    repo,
 		op:      op,
+		stdin:   stdin,
 	}, &lfsLogger{logger})
 
 	err := processor.ProcessCommands(op)
@@ -175,6 +180,13 @@ func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Arg
 	if !p.IsValid() {
 		return errInvalidOid
 	}
+
+	// From here on the object data is read, or drained, up to its flush,
+	// so its packets are not a command's arguments. Every return that
+	// leaves data unread happens before this point, and the processor
+	// then reads it as the next command, which does count.
+	t.stdin.streamData(true)
+	defer t.stdin.streamData(false)
 
 	if t.op == lfs.OperationDownload {
 		// Consume the object data so the next command is read from the

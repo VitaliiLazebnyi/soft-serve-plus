@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -13,32 +12,31 @@ import (
 // goes over lfs.MaxBatchRequestSize.
 var errLFSCommandTooLarge = fmt.Errorf("lfs: command larger than %d bytes", lfs.MaxBatchRequestSize)
 
-// lfsCommandState is where an lfsCommandLimitReader is in the command stream.
-type lfsCommandState int
-
-const (
-	lfsCommandStart   lfsCommandState = iota // next packet starts a command
-	lfsCommandArgs                           // in a command, up to its flush
-	lfsCommandPutArgs                        // in put-object's arguments, up to the delimiter
-	lfsCommandPutData                        // in put-object's object data, up to the flush
-	lfsCommandRaw                            // framing broken, passing bytes through
-)
-
 // lfsCommandLimitReader bounds the bytes of each command a git-lfs-transfer
 // client sends. The transfer processor reads every packet of a command up to
 // its flush into memory, so without a bound a client can stream a batch, or
-// any command's arguments, until the server runs out of memory. Object data
-// sent with put-object is streamed to storage and is not counted.
+// any command's arguments, until the server runs out of memory.
+//
+// Object data sent with put-object is streamed to storage and must not count,
+// but where it starts and ends can't be told from the framing alone: the
+// processor stops before the data when put-object's arguments or object ID
+// are invalid, and then reads the data packets as the next command. So every
+// packet counts unless the backend says it is reading object data, with
+// streamData, which lfsTransfer.Upload does while it reads the object.
 //
 // It reads the stream one packet at a time and passes the bytes through
-// unchanged. Once a command goes over the limit, that packet and every later
-// read fail with errLFSCommandTooLarge, which ends the session: the stream
-// can no longer be read from a command boundary.
+// unchanged. Each Read returns bytes of at most one packet, so a buffered
+// reader on top of it reads a packet only once it needs it, and each packet
+// is counted, or not, by what the processor is doing when it reads it. Once a
+// command goes over the limit, that packet and every later read fail with
+// errLFSCommandTooLarge, which ends the session: the stream can no longer be
+// read from a command boundary.
 type lfsCommandLimitReader struct {
 	r     io.Reader
 	limit int
-	n     int // bytes of the current command read so far
-	state lfsCommandState
+	n     int    // bytes of the current command read so far
+	data  bool   // the backend is reading object data
+	raw   bool   // framing broken, passing bytes through
 	buf   []byte // the rest of the packet being passed through
 	err   error  // returned once buf is drained
 }
@@ -47,12 +45,21 @@ func newLFSCommandLimitReader(r io.Reader, limit int) *lfsCommandLimitReader {
 	return &lfsCommandLimitReader{r: r, limit: limit}
 }
 
+// streamData marks whether the packets read from now on are object data the
+// backend is streaming to storage, which do not count toward the limit. It is
+// a no-op on a nil reader.
+func (l *lfsCommandLimitReader) streamData(on bool) {
+	if l != nil {
+		l.data = on
+	}
+}
+
 // Read implements io.Reader.
 func (l *lfsCommandLimitReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if l.state == lfsCommandRaw && len(l.buf) == 0 && l.err == nil {
+	if l.raw && len(l.buf) == 0 && l.err == nil {
 		return l.r.Read(p)
 	}
 	if len(l.buf) == 0 && l.err == nil {
@@ -78,18 +85,12 @@ func (l *lfsCommandLimitReader) next() {
 	if err != nil || (size > 2 && size < 4) {
 		// Not a packet the processor can read. Pass the bytes on and let
 		// it fail the session.
-		l.buf, l.state = hdr, lfsCommandRaw
+		l.buf, l.raw = hdr, true
 		return
 	}
-
-	switch size {
-	case 0: // flush
-		l.buf, l.n, l.state = hdr, 0, lfsCommandStart
+	if size == 0 { // flush
+		l.buf, l.n = hdr, 0
 		return
-	case 1: // delimiter
-		if l.state == lfsCommandPutArgs {
-			l.state = lfsCommandPutData
-		}
 	}
 
 	pkt := make([]byte, max(int(size), len(hdr)))
@@ -99,21 +100,12 @@ func (l *lfsCommandLimitReader) next() {
 		return
 	}
 
-	switch l.state {
-	case lfsCommandPutData:
-		l.buf = pkt
-		return
-	case lfsCommandStart:
-		l.state = lfsCommandArgs
-		if bytes.HasPrefix(pkt[len(hdr):], []byte("put-object ")) {
-			l.state = lfsCommandPutArgs
+	if !l.data {
+		l.n += len(pkt)
+		if l.n > l.limit {
+			l.err = errLFSCommandTooLarge
+			return
 		}
-	}
-
-	l.n += len(pkt)
-	if l.n > l.limit {
-		l.err = errLFSCommandTooLarge
-		return
 	}
 	l.buf = pkt
 }
