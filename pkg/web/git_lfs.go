@@ -23,14 +23,12 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Limits on LFS JSON request bodies. A batch request costs a storage stat and
-// a database lookup per object, so the number of objects is capped. git-lfs
-// sends 100 objects per batch by default (lfs.transfer.batchSize); the batch
-// body limit leaves room for 1000 objects with long ref names. Verify and lock
-// requests carry a single object or path.
+// Limits on LFS JSON request bodies. The batch limits are shared with the
+// SSH transfer protocol. Verify and lock requests carry a single object or
+// path.
 const (
-	maxLfsBatchObjects  = 1000
-	maxLfsBatchBodySize = 1 << 20  // 1 MiB
+	maxLfsBatchObjects  = lfs.MaxBatchObjects
+	maxLfsBatchBodySize = lfs.MaxBatchRequestSize
 	maxLfsJSONBodySize  = 64 << 10 // 64 KiB
 )
 

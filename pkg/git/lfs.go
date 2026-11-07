@@ -67,7 +67,8 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	logger := log.FromContext(ctx).WithPrefix("lfs-transfer")
-	handler := transfer.NewPktline(cmd.Stdin, cmd.Stdout, &lfsLogger{logger})
+	stdin := newLFSCommandLimitReader(cmd.Stdin, lfs.MaxBatchRequestSize)
+	handler := transfer.NewPktline(stdin, cmd.Stdout, &lfsLogger{logger})
 	repo := proto.RepositoryFromContext(ctx)
 	if repo == nil {
 		logger.Error("no repository in context")
@@ -100,11 +101,24 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		op:      op,
 	}, &lfsLogger{logger})
 
-	return processor.ProcessCommands(op)
+	err := processor.ProcessCommands(op)
+	if errors.Is(err, errLFSCommandTooLarge) {
+		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
+	}
+	return err
 }
 
 // Batch implements transfer.Backend.
+//
+// Each object costs a storage stat and database lookups, so a batch holds at
+// most lfs.MaxBatchObjects objects, as over HTTP.
 func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.Args) ([]transfer.BatchItem, error) {
+	if len(pointers) > lfs.MaxBatchObjects {
+		t.logger.Warn("too many objects in batch request", "objects", len(pointers))
+		return nil, fmt.Errorf("%w: too many objects in batch request: %d, the maximum is %d",
+			transfer.ErrParseError, len(pointers), lfs.MaxBatchObjects)
+	}
+
 	for i := range pointers {
 		p := transfer.Pointer{Oid: pointers[i].Oid, Size: pointers[i].Size}
 		if !p.IsValid() {
