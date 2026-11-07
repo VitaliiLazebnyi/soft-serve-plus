@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -306,14 +307,31 @@ const maxResponseBody = 64 << 10
 const truncatedMarker = "\n[response body truncated by Soft Serve]"
 
 // readResponseBody reads at most maxResponseBody bytes of body. A longer body
-// is cut off and marked with truncatedMarker. On a read error it returns what
-// was read so far with the error.
+// is cut off and marked with truncatedMarker; the cut is moved back to the
+// start of a character it would split, so valid UTF-8 stays valid. On a read
+// error it returns what was read so far with the error.
 func readResponseBody(body io.Reader) (string, error) {
 	b, err := io.ReadAll(io.LimitReader(body, maxResponseBody+1))
 	if len(b) > maxResponseBody {
-		return string(b[:maxResponseBody]) + truncatedMarker, err
+		cut := maxResponseBody
+		for i := cut; i > 0 && i > maxResponseBody-utf8.UTFMax; i-- {
+			if utf8.RuneStart(b[i]) {
+				cut = i
+				break
+			}
+		}
+		return string(b[:cut]) + truncatedMarker, err
 	}
 	return string(b), err
+}
+
+// storableText returns s as text every database accepts. Postgres refuses
+// invalid UTF-8 and NUL in TEXT columns, which would lose the whole delivery
+// row, so invalid bytes are replaced with U+FFFD and NULs are dropped. Use it
+// for text that comes from the receiver: its headers and body, and errors
+// that may quote them.
+func storableText(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
 }
 
 // recordDelivery writes one delivery row. It uses a fresh, short context that
@@ -326,6 +344,19 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	var reqHeaders string
 	for k, v := range req.headers {
 		reqHeaders += k + ": " + v[0] + "\n"
+	}
+
+	// The response and the request error can carry any bytes the receiver
+	// sent. The request body is JSON or form-encoded, so always valid UTF-8
+	// without NULs, and is stored as sent: a redelivery signs and sends the
+	// same bytes.
+	reqHeaders = storableText(reqHeaders)
+	resHeaders = storableText(resHeaders)
+	resBody = storableText(resBody)
+	if reqErr != nil {
+		if msg := storableText(reqErr.Error()); msg != reqErr.Error() {
+			reqErr = errors.New(msg)
+		}
 	}
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
