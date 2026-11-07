@@ -1,7 +1,10 @@
 package git
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	gopath "path"
 	"path/filepath"
 	"strings"
@@ -204,4 +207,20 @@ func (r *Repository) SymbolicRef(name string, ref string, opts ...git.SymbolicRe
 	opt.Name = name
 	opt.Ref = ref
 	return r.Repository.SymbolicRef(opt)
+}
+
+// WriteBlob streams the blob with the given ID to w without holding it in
+// memory. It runs until ctx is done instead of git's default timeout, so a
+// slow reader does not cut a large blob short.
+func (r *Repository) WriteBlob(ctx context.Context, id *git.SHA1, w io.Writer) error {
+	cmd := git.NewCommandWithContext(ctx, "cat-file", "blob", id.String())
+	cmd.SetTimeout(-1)
+	stderr := new(bytes.Buffer)
+	if err := cmd.RunInDirPipeline(w, stderr, r.Path); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w - %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
