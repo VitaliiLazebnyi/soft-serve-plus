@@ -601,14 +601,21 @@ func (d *Backend) DeleteRepository(ctx context.Context, name string) error {
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		repom, dberr := d.store.GetRepoByName(ctx, tx, name)
 		if dberr != nil {
-			// A directory with no row is an orphan; remove it.
-			if d.repoPathExists(name) {
+			if !errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
+				return db.WrapError(dberr)
+			}
+			// A directory with no row is an orphan; remove it. On a
+			// case-insensitive filesystem the directory found may belong
+			// to a repository whose name differs only in case, so it is an
+			// orphan only when no repository's directory is the same one.
+			orphan, err := d.isOrphanRepoPath(ctx, tx, name)
+			if err != nil {
+				return err
+			}
+			if orphan {
 				return os.RemoveAll(rp)
 			}
-			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
-				return proto.ErrRepoNotFound
-			}
-			return db.WrapError(dberr)
+			return proto.ErrRepoNotFound
 		}
 
 		repoID = repom.ID
@@ -703,6 +710,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	}
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The directory checks above find a repository whose name differs
+		// only in case on a case-insensitive filesystem, so the row decides:
+		// with no row named oldName this fails before the directory moves.
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
@@ -1186,6 +1196,31 @@ func (d *Backend) repoPath(name string) string {
 	name = utils.SanitizeRepo(name)
 	rn := strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
+}
+
+// isOrphanRepoPath reports whether the directory of the repository named name,
+// which has no row, exists and is not the directory of any repository with a
+// row. On a case-insensitive filesystem the path of a name that differs only
+// in case from a repository's name leads to that repository's directory.
+func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
+	fi, err := os.Lstat(d.repoPath(name))
+	if err != nil {
+		return false, nil //nolint:nilerr // no directory, nothing to remove
+	}
+	repos, err := d.store.GetAllRepos(ctx, tx)
+	if err != nil {
+		return false, db.WrapError(err)
+	}
+	for _, r := range repos {
+		if !strings.EqualFold(r.Name, name) {
+			continue
+		}
+		rfi, err := os.Lstat(d.repoPath(r.Name))
+		if err == nil && os.SameFile(fi, rfi) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // repoPathExists reports whether anything occupies the repository's directory,
