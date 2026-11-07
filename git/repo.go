@@ -97,6 +97,24 @@ func (r *Repository) HEAD() (*Reference, error) {
 	}, nil
 }
 
+// DetachedHEAD returns a reference named "HEAD" to the commit HEAD points
+// at. It is for a detached HEAD, which holds a commit rather than naming a
+// branch, so HEAD returns an error for it. It returns ErrRevisionNotExist
+// when HEAD does not resolve to a commit.
+func (r *Repository) DetachedHEAD() (*Reference, error) {
+	hash, err := r.RevParse(HEAD + "^{commit}")
+	if err != nil {
+		return nil, err
+	}
+	return &Reference{
+		Reference: &git.Reference{
+			ID:      hash,
+			Refspec: HEAD,
+		},
+		path: r.Path,
+	}, nil
+}
+
 // References returns the references for a repository.
 func (r *Repository) References() ([]*Reference, error) {
 	refs, err := r.ShowRef()
