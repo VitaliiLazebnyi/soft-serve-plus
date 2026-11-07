@@ -134,7 +134,12 @@ func TestGoGetImportRoot(t *testing.T) {
 
 	// A public URL is configuration, but it is still not markup.
 	cfg.HTTP.PublicURL = `https://example.com/a"><script>x</script>`
-	body = goGet(t, f.handler, "/pub").Body.String()
+	w = goGet(t, f.handler, "/pub")
+	body = w.Body.String()
+	// The page still renders, with the value escaped rather than dropped.
+	is.Equal(w.Code, http.StatusOK)
+	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git">`))
+	is.True(strings.Contains(body, `href="https://godoc.org/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`))
 	is.True(!strings.Contains(body, "<script>"))
 	is.True(!strings.Contains(body, `a">`))
 	is.True(!strings.Contains(body, "ZgotmplZ"))
