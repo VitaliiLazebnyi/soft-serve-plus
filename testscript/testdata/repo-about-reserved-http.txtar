@@ -18,17 +18,42 @@ stdout 'ss_*'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
-curl http://$UTOKEN@localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
+soft token create 'admin push'
+stdout 'ss_*'
+cp stdout atokenfile
+envfile ATOKEN=atokenfile
+
+# a signed-in non-admin is refused outright
+curl -v http://$UTOKEN@localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
+stderr '> 403 Forbidden'
 stdout 'only an admin can create the .soft-serve repository'
 
+# an anonymous caller with read-write access is asked to sign in: git sends
+# credentials only after a 401, never after a 403
 soft settings anon-access read-write
-curl http://localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
-stdout 'only an admin can create the .soft-serve repository'
+curl -v http://localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
+stderr '> 401 Unauthorized'
+stderr '> Www-Authenticate: Basic'
+stdout 'only an admin can create the .soft-serve repository; authenticate'
+
+# so a non-admin git push fails, and an admin git push with credentials in
+# the URL creates the repository after that 401
+mkdir work
+mkfile ./work/README.md '# Admin Banner'
+git -c init.defaultBranch=main -C work init
+git -C work add -A
+git -C work commit -m 'first'
+! ugit -C work push http://user1:$UTOKEN@localhost:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
+stderr 'only an admin can create the .soft-serve repository'
+soft repo list
+! stdout '.soft-serve'
+git -C work push http://admin:$ATOKEN@localhost:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
+soft repo info .soft-serve
+stdout 'Owner: admin'
 
 # a user may still push-to-create any other name
 curl http://$UTOKEN@localhost:$HTTP_PORT/other.git/info/refs?service=git-receive-pack
 stdout '.*git-receive-pack.*'
 
 soft repo list
-! stdout '.soft-serve'
 stdout 'other'
