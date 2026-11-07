@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
 )
 
@@ -208,6 +209,21 @@ func TestValidateDoesNotDuplicatePublicURLOrigin(t *testing.T) {
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=http://localhost:23232"))
 }
 
+// A trailing slash on any public URL is dropped, so URLs built from it, such
+// as the clone URLs in webhook payloads, have no "//".
+func TestValidateTrimsPublicURLs(t *testing.T) {
+	is := is.New(t)
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.PublicURL = "ssh://soft.example:23231/"
+	cfg.Git.PublicURL = "git://soft.example/"
+	cfg.HTTP.PublicURL = "https://soft.example/"
+	is.NoErr(cfg.Validate())
+	is.Equal(cfg.SSH.PublicURL, "ssh://soft.example:23231")
+	is.Equal(cfg.Git.PublicURL, "git://soft.example")
+	is.Equal(cfg.HTTP.PublicURL, "https://soft.example")
+}
+
 func TestParseMultipleMethods(t *testing.T) {
 	is := is.New(t)
 	is.NoErr(os.Setenv("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS", "GET,POST,PUT"))
@@ -399,7 +415,8 @@ func TestValidateParsesAllowedHosts(t *testing.T) {
 	if got := cfg.SSH.AllowedHosts(); len(got) != 2 {
 		t.Errorf("parsed %d entries, want 2", len(got))
 	}
-	if err := cfg.SSH.AllowedHosts().Match("git.internal.example", ""); err != nil {
+	policy := ssrf.GitRemotePolicy{AllowedSSHHosts: cfg.SSH.AllowedHosts()}
+	if _, err := ssrf.ValidateGitRemote("ssh://git@git.internal.example/x.git", policy); err != nil {
 		t.Errorf("parsed allowlist does not match its own entry: %v", err)
 	}
 
