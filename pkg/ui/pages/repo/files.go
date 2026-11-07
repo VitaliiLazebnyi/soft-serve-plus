@@ -1,7 +1,6 @@
 package repo
 
 import (
-	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -26,9 +25,9 @@ const (
 )
 
 var (
-	errNoFileSelected = errors.New("no file selected")
-	errBinaryFile     = errors.New("binary file")
-	errInvalidFile    = errors.New("invalid file")
+	errNoFileSelected = common.NewUserError("no file selected")
+	errBinaryFile     = common.NewUserError("binary file")
+	errInvalidFile    = common.NewUserError("invalid file")
 )
 
 var (
