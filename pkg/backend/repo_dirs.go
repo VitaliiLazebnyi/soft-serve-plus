@@ -14,11 +14,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
-// repoDirHolds records the repository names whose directory a create, import
-// or delete in progress owns while it has no database row: a create or
-// import claims the directory before it records the row, and a delete removes
-// the directory after the row is gone. Such a directory looks like an orphan
-// but is not one, so DeleteRepository must leave it alone.
+// repoDirHolds records the repository names whose directory a create, import,
+// rename or delete in progress owns while it has no database row: a create or
+// import claims the directory before it records the row, a rename moves the
+// directory to the new name before the renamed row is committed, and a delete
+// removes the directory after the row is gone. Such a directory looks like an
+// orphan but is not one, so DeleteRepository must leave it alone.
 //
 // Names are held case-insensitively, so a hold also covers the names that
 // share its directory on a case-insensitive filesystem.
@@ -56,8 +57,9 @@ func (h *repoDirHolds) hold(name string) (release func()) {
 // directory alone and returns proto.ErrRepoNotFound.
 //
 // The check and the removal run under the holds' lock, which a create or
-// import takes (through hold) before claiming the directory and a delete
-// before looking for its row, so neither can start or finish in between.
+// import takes (through hold) before claiming the directory, a rename before
+// its transaction and a delete before looking for its row, so none of them
+// can start or finish in between.
 // Nothing takes that lock while it has a database connection open, so the
 // lookup here cannot wait on a connection held by someone waiting on the
 // lock.
@@ -110,3 +112,9 @@ func (d *Backend) repoPathExact(name string) bool {
 	}
 	return true
 }
+
+// testHookRepoDirUnrecorded, when set, runs while name's directory exists
+// with no committed row for name: in a create or import right after the
+// directory is claimed, and in a rename right after the directory is moved to
+// its new name, inside the transaction.
+var testHookRepoDirUnrecorded func(name string)

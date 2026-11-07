@@ -90,24 +90,119 @@ func TestDeleteRepositoryConcurrentDeleteNotFound(t *testing.T) {
 	}
 }
 
-// A create or import claims its directory before recording the row; a
-// delete in that window must not remove the directory being filled.
+// repoDirHeld reports whether an operation in progress holds name's
+// directory.
+func repoDirHeld(be *Backend, name string) bool {
+	be.repoDirs.mu.Lock()
+	defer be.repoDirs.mu.Unlock()
+	return be.repoDirs.n[repoDirKey(name)] > 0
+}
+
+// onRepoDirUnrecorded sets testHookRepoDirUnrecorded to run fn for name
+// until the test ends, and returns a function reporting whether it ran.
+func onRepoDirUnrecorded(t *testing.T, name string, fn func()) (ran func() bool) {
+	t.Helper()
+	var called atomic.Bool
+	testHookRepoDirUnrecorded = func(n string) {
+		if n == name {
+			called.Store(true)
+			fn()
+		}
+	}
+	t.Cleanup(func() { testHookRepoDirUnrecorded = nil })
+	return called.Load
+}
+
+// deleteKeepsDir deletes name, which has a directory but no committed row,
+// and fails the test unless the delete reports it as not found and leaves
+// the directory.
+func deleteKeepsDir(t *testing.T, be *Backend, ctx context.Context, name string) {
+	t.Helper()
+	if err := be.DeleteRepository(ctx, name); !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Errorf("DeleteRepository => %v, want ErrRepoNotFound", err)
+	}
+	if _, err := os.Stat(be.repoPath(name)); err != nil {
+		t.Errorf("directory of a repository in progress removed: %v", err)
+	}
+}
+
+// A create claims its directory before recording the row; a delete in that
+// window must not remove the directory being filled.
 func TestDeleteRepositoryKeepsDirectoryOfCreateInProgress(t *testing.T) {
 	be, _ := newTestBackend(t)
 	ctx := backendTestContext(be, be.cfg)
 
-	release := be.repoDirs.hold("pending")
-	defer release()
-	rp := be.repoPath("pending")
-	if err := claimRepoPath(rp); err != nil {
+	ran := onRepoDirUnrecorded(t, "pending", func() {
+		deleteKeepsDir(t, be, ctx, "pending")
+	})
+	if _, err := be.CreateRepository(ctx, "pending", nil, proto.RepositoryOptions{}); err != nil {
+		t.Fatalf("CreateRepository => %v", err)
+	}
+	if !ran() {
+		t.Fatal("hook did not run")
+	}
+	if _, err := os.Stat(filepath.Join(be.repoPath("pending"), "HEAD")); err != nil {
+		t.Errorf("created repository incomplete: %v", err)
+	}
+}
+
+// An import claims its directory before cloning into it and records the row
+// only after the clone; a delete in that window must not remove the
+// directory being cloned into.
+func TestDeleteRepositoryKeepsDirectoryOfImportInProgress(t *testing.T) {
+	be, _ := newTestBackend(t)
+	ctx := backendTestContext(be, be.cfg)
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := be.DeleteRepository(ctx, "pending"); !errors.Is(err, proto.ErrRepoNotFound) {
-		t.Fatalf("DeleteRepository => %v, want ErrRepoNotFound", err)
+	ran := onRepoDirUnrecorded(t, "pending", func() {
+		deleteKeepsDir(t, be, ctx, "pending")
+	})
+	// Nothing listens on port 1 of loopback, so the clone fails at once
+	// after the hook, without touching the network.
+	_, err = be.ImportRepository(ctx, "pending", admin, "ssh://127.0.0.1:1/x.git", proto.RepositoryOptions{})
+	if !errors.Is(err, proto.ErrImportFailed) {
+		t.Fatalf("ImportRepository => %v, want ErrImportFailed", err)
 	}
-	if _, err := os.Stat(rp); err != nil {
-		t.Fatalf("claimed directory removed: %v", err)
+	if !ran() {
+		t.Fatal("hook did not run")
+	}
+}
+
+// A rename moves the directory to the new name before the renamed row is
+// committed; the directory under the new name is not an orphan then.
+func TestDeleteRepositoryKeepsDirectoryOfRenameInProgress(t *testing.T) {
+	be, _ := newTestBackend(t)
+	createDeleteFixture(t, be)
+	ctx := backendTestContext(be, be.cfg)
+
+	ran := onRepoDirUnrecorded(t, "renamed", func() {
+		if !repoDirHeld(be, "renamed") {
+			t.Error("rename does not hold the new name's directory")
+		}
+		// The rename's transaction is open, so a delete here would wait
+		// for it on SQLite; check the orphan removal itself, which turns
+		// the directory down on the hold before looking for a row.
+		if err := be.removeOrphanRepoDir(ctx, "renamed", 0); !errors.Is(err, proto.ErrRepoNotFound) {
+			t.Errorf("removeOrphanRepoDir => %v, want ErrRepoNotFound", err)
+		}
+		if _, err := os.Stat(filepath.Join(be.repoPath("renamed"), "HEAD")); err != nil {
+			t.Errorf("directory of a rename in progress removed: %v", err)
+		}
+	})
+	if err := be.RenameRepository(ctx, "delrepo", "renamed"); err != nil {
+		t.Fatalf("RenameRepository => %v", err)
+	}
+	if !ran() {
+		t.Fatal("hook did not run")
+	}
+	if repoDirHeld(be, "renamed") {
+		t.Error("rename still holds the new name's directory")
+	}
+	if _, err := be.Repository(ctx, "renamed"); err != nil {
+		t.Errorf("renamed repository => %v", err)
 	}
 }
 

@@ -199,6 +199,9 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 	if err := claimRepoPath(rp); err != nil {
 		return nil, err
 	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
+	}
 
 	if _, err := git.Init(rp, true); err != nil {
 		if !errors.Is(err, git.ErrNotAGitRepository) {
@@ -432,6 +435,9 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 	// name: the second one fails here with ErrRepoExist.
 	if err := claimRepoPath(imp.path); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
@@ -743,6 +749,10 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return err
 	}
 
+	// The moved directory has the new name before the row does, which is
+	// only once the transaction commits.
+	defer d.repoDirs.hold(newName)()
+
 	op := d.repoPath(oldName)
 	np := d.repoPath(newName)
 	if !d.repoPathExists(oldName) {
@@ -767,6 +777,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		if err := os.Rename(op, np); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
+		}
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(newName)
 		}
 
 		return nil

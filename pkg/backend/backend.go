@@ -47,9 +47,9 @@ type Backend struct {
 	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.
 	pushGates pushGates
 
-	// repoDirs records the repository directories that a create, import or
-	// delete in progress owns without a database row, so a delete does not
-	// take them for orphans.
+	// repoDirs records the repository directories that a create, import,
+	// rename or delete in progress owns without a database row, so a delete
+	// does not take them for orphans.
 	repoDirs repoDirHolds
 }
 
