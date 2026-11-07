@@ -157,7 +157,7 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, r.common.KeyMap.SelectItem):
-			cmds = append(cmds, r.selector.SelectItemCmd)
+			cmds = append(cmds, r.selector.SelectItemCmd())
 		}
 	case EmptyRepoMsg:
 		r.ref = nil

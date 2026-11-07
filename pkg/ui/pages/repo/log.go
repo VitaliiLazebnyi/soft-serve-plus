@@ -39,8 +39,11 @@ type LogItemsMsg []selector.IdentifiableItem
 // LogCommitMsg is a message that contains a git commit.
 type LogCommitMsg *git.Commit
 
-// LogDiffMsg is a message that contains a git diff.
-type LogDiffMsg *git.Diff
+// LogDiffMsg is a message that contains the diff of a git commit.
+type LogDiffMsg struct {
+	commit *git.Commit
+	diff   *git.Diff
+}
 
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
@@ -234,7 +237,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case tea.KeyPressMsg:
 				switch {
 				case key.Matches(kmsg, l.common.KeyMap.SelectItem):
-					cmds = append(cmds, l.selector.SelectItemCmd)
+					cmds = append(cmds, l.selector.SelectItemCmd())
 				}
 			}
 			// XXX: This is a hack for loading commits on demand based on
@@ -284,17 +287,17 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		l.selectedCommit = msg
 		cmds = append(cmds, l.loadDiffCmd())
 	case LogDiffMsg:
-		if l.selectedCommit == nil {
-			// The commit was deselected, or the ref changed, while the diff
-			// was loading.
+		if l.selectedCommit == nil || l.selectedCommit != msg.commit || msg.diff == nil {
+			// The commit was deselected, another commit was opened, or the
+			// ref changed, while the diff was loading.
 			break
 		}
-		l.currentDiff = msg
+		l.currentDiff = msg.diff
 		l.vp.SetContent(
 			lipgloss.JoinVertical(lipgloss.Left,
 				l.renderCommit(l.selectedCommit),
-				renderSummary(msg, l.common.Styles, l.common.Width),
-				renderDiff(msg, l.common.Width),
+				renderSummary(msg.diff, l.common.Styles, l.common.Width),
+				renderDiff(msg.diff, l.common.Width),
 			),
 		)
 		l.vp.GotoTop()
@@ -507,7 +510,7 @@ func (l *Log) loadDiffCmd() tea.Cmd {
 			logger.Debugf("ui: error loading diff: %v", err)
 			return common.ErrorMsg(err)
 		}
-		return LogDiffMsg(diff)
+		return LogDiffMsg{commit: commit, diff: diff}
 	}
 }
 

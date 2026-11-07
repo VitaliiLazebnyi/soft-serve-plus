@@ -57,10 +57,16 @@ type FileContentMsg struct {
 	// its directory listing.
 	path  string
 	index int
+	// load is the Files load the content was requested in.
+	load int
 }
 
 // FileBlameMsg is a message that contains the blame of a file.
-type FileBlameMsg *gitm.Blame
+type FileBlameMsg struct {
+	blame *gitm.Blame
+	// load is the Files load the blame was requested in.
+	load int
+}
 
 // Files is the model for the files view.
 type Files struct {
@@ -73,12 +79,16 @@ type Files struct {
 	path           string
 	currentItem    *FileItem
 	currentContent FileContentMsg
-	currentBlame   FileBlameMsg
+	currentBlame   *gitm.Blame
 	lastSelected   []int
 	lineNumber     bool
 	spinner        spinner.Model
 	cursor         int
 	blameView      bool
+	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
+	// from an earlier load arrived after the user or a ref change moved on,
+	// and is dropped.
+	load int
 }
 
 // NewFiles creates a new files model.
@@ -220,6 +230,7 @@ func (f *Files) Init() tea.Cmd {
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false
+	f.load++
 	return tea.Batch(f.spinner.Tick, f.updateFilesCmd())
 }
 
@@ -243,6 +254,9 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			f.cursor = -1
 		}
 	case FileContentMsg:
+		if msg.load != f.load {
+			break
+		}
 		f.path = msg.path
 		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
@@ -251,13 +265,17 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
 		f.code.GotoTop()
 	case FileBlameMsg:
-		f.currentBlame = msg
+		if msg.load != f.load || !f.blameView {
+			break
+		}
+		f.currentBlame = msg.blame
 		f.activeView = filesViewContent
 		f.code.UseGlamour = false
-		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg))
+		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg.blame))
 	case selector.SelectMsg:
 		switch sel := msg.IdentifiableItem.(type) {
 		case FileItem:
+			f.load++
 			f.currentItem = &sel
 			p := path.Join(f.path, sel.entry.Name())
 			if sel.entry.IsTree() {
@@ -279,7 +297,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		case filesViewFiles:
 			switch {
 			case key.Matches(msg, f.common.KeyMap.SelectItem):
-				cmds = append(cmds, f.selector.SelectItemCmd)
+				cmds = append(cmds, f.selector.SelectItemCmd())
 			case key.Matches(msg, f.common.KeyMap.BackItem):
 				cmds = append(cmds, f.deselectItemCmd())
 			}
@@ -296,6 +314,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
+				f.load++
 				if f.blameView {
 					cmds = append(cmds, f.fetchBlameCmd())
 				} else {
@@ -327,6 +346,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case EmptyRepoMsg:
 		f.ref = nil
+		f.load++
 		f.path = ""
 		f.currentItem = nil
 		f.activeView = filesViewFiles
@@ -437,7 +457,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 // selectFileCmd returns a command that loads the content of item, which is at
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
-	repo, ref := f.repo, f.ref
+	repo, ref, load := f.repo, f.ref, f.load
 	return func() tea.Msg {
 		if item.entry.IsTree() || item.Mode().IsDir() {
 			return common.ErrorMsg(errInvalidFile)
@@ -483,13 +503,14 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			ext:     item.entry.Name(),
 			path:    filePath,
 			index:   index,
+			load:    load,
 		}
 	}
 }
 
 // fetchBlameCmd returns a command that loads the blame of the current file.
 func (f *Files) fetchBlameCmd() tea.Cmd {
-	repo, ref, item := f.repo, f.ref, f.currentItem
+	repo, ref, item, load := f.repo, f.ref, f.currentItem, f.load
 	return func() tea.Msg {
 		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
 			return common.ErrorMsg(errNoFileSelected)
@@ -504,7 +525,7 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 			return common.ErrorMsg(err)
 		}
 
-		return FileBlameMsg(b)
+		return FileBlameMsg{blame: b, load: load}
 	}
 }
 
@@ -540,6 +561,7 @@ func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
 }
 
 func (f *Files) deselectItemCmd() tea.Cmd {
+	f.load++
 	f.path = path.Dir(f.path)
 	index := 0
 	if len(f.lastSelected) > 0 {

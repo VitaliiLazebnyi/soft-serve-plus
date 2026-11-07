@@ -97,19 +97,40 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	if content.content != "hello\n" {
 		t.Fatalf("content = %q, want the file", content.content)
 	}
+	// The content of a file opened before the repository was emptied is
+	// dropped.
+	f.Update(content)
+	if f.activeView == filesViewContent || f.Path() != "" {
+		t.Fatalf("stale content opened %q", f.Path())
+	}
+
+	// Content requested before a ref change is dropped too.
+	f.Update(RefMsg(ref))
+	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
+	f.Update(RefMsg(ref))
+	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
+	if f.activeView == filesViewContent || f.Path() != "" {
+		t.Fatalf("stale content opened %q", f.Path())
+	}
 
 	// Open the file and toggle the blame view, then clear the model before
 	// the blame command runs.
-	f.Update(RefMsg(ref))
-	f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
-	f.Update(content)
+	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
+	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
 	if got := f.Path(); got != "file.txt" {
 		t.Fatalf("path = %q, want file.txt", got)
 	}
 	_, cmd = f.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
 	f.Update(EmptyRepoMsg{})
-	if blame := findMsg[FileBlameMsg](t, runCmd(cmd)); blame == nil {
+	blame := findMsg[FileBlameMsg](t, runCmd(cmd))
+	if blame.blame == nil {
 		t.Fatal("blame is nil")
+	}
+	// The blame of a file opened before the repository was emptied is
+	// dropped.
+	f.Update(blame)
+	if f.activeView == filesViewContent || f.currentBlame != nil {
+		t.Fatal("a stale blame opened the content view")
 	}
 }
 
@@ -136,8 +157,9 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	}
 
 	// Open a commit, then switch the ref before the diff command runs.
+	commit := commits[0].(LogItem).Commit
 	l.Update(RefMsg(ref))
-	_, cmd = l.Update(LogCommitMsg(commits[0].(LogItem).Commit))
+	_, cmd = l.Update(LogCommitMsg(commit))
 	l.Update(RefMsg(ref))
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
@@ -145,5 +167,24 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	l.Update(diff)
 	if l.activeView == logViewDiff {
 		t.Fatal("a stale diff opened the diff view")
+	}
+
+	// Open another commit before the diff of the first one arrives: only the
+	// diff of the selected commit is shown.
+	// Loading the commits again gives another *git.Commit.
+	_, cmd = l.Update(count)
+	other := findMsg[LogItemsMsg](t, runCmd(cmd))[0].(LogItem).Commit
+	if other == commit {
+		t.Fatal("reloading the commits returned the same commit")
+	}
+	_, cmd = l.Update(LogCommitMsg(commit))
+	_, otherCmd := l.Update(LogCommitMsg(other))
+	l.Update(findMsg[LogDiffMsg](t, runCmd(cmd)))
+	if l.activeView == logViewDiff {
+		t.Fatal("the diff of a commit that is no longer selected was shown")
+	}
+	l.Update(findMsg[LogDiffMsg](t, runCmd(otherCmd)))
+	if l.activeView != logViewDiff || l.currentDiff == nil {
+		t.Fatal("the diff of the selected commit was not shown")
 	}
 }
