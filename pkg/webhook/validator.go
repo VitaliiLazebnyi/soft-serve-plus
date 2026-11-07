@@ -1,6 +1,8 @@
 package webhook
 
 import (
+	"context"
+
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
 
@@ -18,8 +20,10 @@ func ValidateWebhookURL(rawURL string) error {
 
 // ValidateWebhookURLAllowing is ValidateWebhookURL with the private and
 // internal destinations allowed permits (webhook.allowed_hosts) let through.
-func ValidateWebhookURLAllowing(rawURL string, allowed ssrf.AllowedHosts) error {
-	return ssrf.ValidateURLAllowing(rawURL, allowed) //nolint:wrapcheck
+// The hostname lookup is bound to ctx, so a webhook create or update whose
+// caller goes away stops waiting for the resolver.
+func ValidateWebhookURLAllowing(ctx context.Context, rawURL string, allowed ssrf.AllowedHosts) error {
+	return ssrf.ValidateURLAllowingContext(ctx, rawURL, allowed) //nolint:wrapcheck
 }
 
 // ValidateIPBeforeDial validates an IP address before establishing a connection.

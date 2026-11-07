@@ -373,7 +373,13 @@ func isPrivateOrInternal(ip net.IP) bool {
 // It checks that the scheme is http/https, the hostname is not localhost,
 // and all resolved IPs are public.
 func ValidateURL(rawURL string) error {
-	return validateURL(rawURL, nil, nil)
+	return ValidateURLContext(context.Background(), rawURL)
+}
+
+// ValidateURLContext is ValidateURL with the hostname lookup bound to ctx, so
+// a caller that goes away stops waiting for the resolver.
+func ValidateURLContext(ctx context.Context, rawURL string) error {
+	return validateURL(ctx, rawURL, nil, nil)
 }
 
 // ValidateURLAllowing is ValidateURL with the private and internal
@@ -381,12 +387,18 @@ func ValidateURL(rawURL string) error {
 // AllowedHosts.permitsHTTP). With an empty allowed it is ValidateURL. Every
 // address the hostname resolves to must be public or permitted.
 func ValidateURLAllowing(rawURL string, allowed AllowedHosts) error {
-	return validateURL(rawURL, allowed, nil)
+	return ValidateURLAllowingContext(context.Background(), rawURL, allowed)
 }
 
-// validateURL is ValidateURLAllowing with the resolver used for hostnames;
-// nil means net.DefaultResolver.
-func validateURL(rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
+// ValidateURLAllowingContext is ValidateURLAllowing with the hostname lookup
+// bound to ctx, so a caller that goes away stops waiting for the resolver.
+func ValidateURLAllowingContext(ctx context.Context, rawURL string, allowed AllowedHosts) error {
+	return validateURL(ctx, rawURL, allowed, nil)
+}
+
+// validateURL is ValidateURLAllowingContext with the resolver used for
+// hostnames; nil means net.DefaultResolver.
+func validateURL(ctx context.Context, rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 	if rawURL == "" {
 		return ErrInvalidURL
 	}
@@ -425,8 +437,12 @@ func validateURL(rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 		return nil
 	}
 
-	ips, err := lookup.resolve(context.Background(), hostname)
+	ips, err := lookup.resolve(ctx, hostname)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Cancelled or out of time; say so rather than blame DNS.
+			return fmt.Errorf("resolve hostname: %w", ctxErr)
+		}
 		// See validateRemoteHost: the resolver error names the resolver.
 		return fmt.Errorf("%w: cannot resolve hostname", ErrInvalidURL)
 	}

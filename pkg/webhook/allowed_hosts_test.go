@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -72,7 +73,7 @@ func TestValidateWebhookURLAllowing(t *testing.T) {
 	is := is.New(t)
 	allowed, err := ssrf.ParseAllowedHosts([]string{"127.0.0.1"})
 	is.NoErr(err)
-	is.NoErr(ValidateWebhookURLAllowing("http://127.0.0.1:8080/hook", allowed))
-	is.True(errors.Is(ValidateWebhookURLAllowing("http://127.0.0.1:8080/hook", nil), ErrPrivateIP))
-	is.True(errors.Is(ValidateWebhookURLAllowing("http://169.254.169.254/", allowed), ErrPrivateIP))
+	is.NoErr(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", allowed))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", nil), ErrPrivateIP))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://169.254.169.254/", allowed), ErrPrivateIP))
 }
