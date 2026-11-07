@@ -466,8 +466,27 @@ func check(ts *testscript.TestScript, err error, neg bool) {
 	}
 }
 
+// cmdReadfile writes the content of a file to stdout. When an expected content
+// is given, it also checks that the file holds exactly that content (or, with
+// a "!" prefix, anything else).
 func cmdReadfile(ts *testscript.TestScript, neg bool, args []string) {
-	ts.Stdout().Write([]byte(ts.ReadFile(args[0])))
+	if len(args) < 1 || len(args) > 2 {
+		ts.Fatalf("usage: readfile path [content]")
+	}
+	got := ts.ReadFile(args[0])
+	ts.Stdout().Write([]byte(got))
+	if len(args) == 1 {
+		if neg {
+			ts.Fatalf("unsupported: ! readfile without content")
+		}
+		return
+	}
+	if want := args[1]; (got == want) == neg {
+		if neg {
+			ts.Fatalf("%s: unexpected content %q", args[0], got)
+		}
+		ts.Fatalf("%s: got %q, want %q", args[0], got, want)
+	}
 }
 
 func cmdEnvfile(ts *testscript.TestScript, neg bool, args []string) {
