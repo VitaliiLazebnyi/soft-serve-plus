@@ -1,6 +1,9 @@
 package selector
 
 import (
+	"fmt"
+	"io"
+	"strings"
 	"sync"
 
 	"charm.land/bubbles/v2/key"
@@ -13,6 +16,7 @@ import (
 type Selector struct {
 	*list.Model
 	common      common.Common
+	zonePrefix  string
 	active      int
 	filterState list.FilterState
 
@@ -35,6 +39,27 @@ type ItemDelegate interface {
 	list.ItemDelegate
 }
 
+// zoneDelegate marks each rendered item with a mouse zone ID that is unique
+// to its selector, so that item IDs (file names, repository names, …) cannot
+// collide with the zone IDs of other components.
+type zoneDelegate struct {
+	ItemDelegate
+	common common.Common
+	prefix string
+}
+
+// Render implements list.ItemDelegate.
+func (d zoneDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(IdentifiableItem)
+	if !ok {
+		d.ItemDelegate.Render(w, m, index, listItem)
+		return
+	}
+	var b strings.Builder
+	d.ItemDelegate.Render(&b, m, index, listItem)
+	fmt.Fprint(w, d.common.Zone.Mark(d.prefix+item.ID(), b.String())) //nolint:errcheck
+}
+
 // SelectMsg is a message that is sent when an item is selected.
 type SelectMsg struct{ IdentifiableItem }
 
@@ -47,11 +72,13 @@ func New(common common.Common, items []IdentifiableItem, delegate ItemDelegate) 
 	for i, item := range items {
 		itms[i] = item
 	}
-	l := list.New(itms, delegate, common.Width, common.Height)
+	prefix := common.Zone.NewPrefix()
+	l := list.New(itms, zoneDelegate{delegate, common, prefix}, common.Width, common.Height)
 	l.Styles.NoItems = common.Styles.NoContent
 	s := &Selector{
-		Model:  &l,
-		common: common,
+		Model:      &l,
+		common:     common,
+		zonePrefix: prefix,
 	}
 	s.SetSize(common.Width, common.Height)
 	return s
@@ -242,7 +269,7 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			for i, item := range s.Items() {
 				item, _ := item.(IdentifiableItem)
 				// Check each item to see if it's in bounds.
-				if item != nil && s.common.Zone.Get(item.ID()).InBounds(msg) {
+				if item != nil && s.common.Zone.Get(s.zonePrefix+item.ID()).InBounds(msg) {
 					if i == curIdx {
 						cmds = append(cmds, s.SelectItemCmd)
 					} else {

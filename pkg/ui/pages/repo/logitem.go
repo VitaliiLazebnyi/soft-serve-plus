@@ -131,16 +131,13 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	who += styles.Desc.Render("on ") + styles.Keyword.Render(date)
 	who = common.TruncateString(who, m.Width()-horizontalFrameSize)
 	fmt.Fprint(w, //nolint:errcheck
-		d.common.Zone.Mark(
-			i.ID(),
-			styles.Base.Render(
-				lipgloss.JoinVertical(lipgloss.Left,
-					truncate.String(fmt.Sprintf("%s%s",
-						title,
-						hash,
-					), uint(m.Width()-horizontalFrameSize)), //nolint:gosec
-					who,
-				),
+		styles.Base.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				truncate.String(fmt.Sprintf("%s%s",
+					title,
+					hash,
+				), uint(m.Width()-horizontalFrameSize)), //nolint:gosec
+				who,
 			),
 		),
 	)

@@ -49,6 +49,7 @@ type SwitchTabMsg common.TabComponent
 // Repo is a view for a git repository.
 type Repo struct {
 	common       common.Common
+	zonePrefix   string
 	selectedRepo proto.Repository
 	activeTab    int
 	tabs         *tabs.Tabs
@@ -74,6 +75,7 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 		spinner.WithStyle(c.Styles.Spinner))
 	r := &Repo{
 		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
 		tabs:       tb,
 		statusbar:  sb,
 		panes:      comps,
@@ -178,9 +180,8 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if r.selectedRepo != nil {
-			urlID := fmt.Sprintf("%s-url", r.selectedRepo.Name())
 			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
-			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(urlID).InBounds(msg) {
+			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
 				cmds = append(cmds, copyCmd(cmd, "Command copied to clipboard"))
 			}
 		}
@@ -189,12 +190,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch msg.Button {
 			case tea.MouseLeft:
 				switch {
-				case r.common.Zone.Get("repo-help").InBounds(msg):
+				case r.common.Zone.Get(r.statusbar.HelpZoneID()).InBounds(msg):
 					cmds = append(cmds, footer.ToggleFooterCmd)
 				}
 			case tea.MouseRight:
 				switch {
-				case r.common.Zone.Get("repo-main").InBounds(msg):
+				case r.common.Zone.Get(r.zonePrefix + "main").InBounds(msg):
 					cmds = append(cmds, goBackCmd)
 				}
 			}
@@ -307,7 +308,7 @@ func (r *Repo) View() string {
 		statusbar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
-		"repo-main",
+		r.zonePrefix+"main",
 		mainStyle.Render(main),
 	)
 	view := lipgloss.JoinVertical(lipgloss.Left,
@@ -346,7 +347,7 @@ func (r *Repo) headerView() string {
 	}
 	url = common.TruncateString(url, r.common.Width-lipgloss.Width(header)-1)
 	url = r.common.Zone.Mark(
-		fmt.Sprintf("%s-url", r.selectedRepo.Name()),
+		r.zonePrefix+"url",
 		urlStyle.Render(url),
 	)
 

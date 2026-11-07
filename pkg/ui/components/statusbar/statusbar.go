@@ -9,17 +9,19 @@ import (
 
 // Model is a status bar model.
 type Model struct {
-	common common.Common
-	key    string
-	value  string
-	info   string
-	extra  string
+	common     common.Common
+	zonePrefix string
+	key        string
+	value      string
+	info       string
+	extra      string
 }
 
 // New creates a new status bar component.
 func New(c common.Common) *Model {
 	s := &Model{
-		common: c,
+		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
 	}
 	return s
 }
@@ -60,12 +62,17 @@ func (s *Model) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	return s, nil
 }
 
+// HelpZoneID returns the mouse zone ID of the status bar's help button.
+func (s *Model) HelpZoneID() string {
+	return s.zonePrefix + "help"
+}
+
 // View implements tea.Model.
 func (s *Model) View() string {
 	st := s.common.Styles
 	w := lipgloss.Width
 	help := s.common.Zone.Mark(
-		"repo-help",
+		s.HelpZoneID(),
 		st.StatusBarHelp.Render("? Help"),
 	)
 	key := st.StatusBarKey.Render(s.key)
