@@ -78,6 +78,24 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 // cfg and returns its address.
 func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	t.Helper()
+	ctx := serverContext(t, cfg)
+	s, err := NewSSHServer(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve(l) //nolint: errcheck
+	t.Cleanup(func() { _ = s.Close() })
+	return l.Addr().String()
+}
+
+// serverContext validates cfg and returns a context with what NewSSHServer
+// needs: the config, a logger, and a migrated database, store and backend.
+func serverContext(t *testing.T, cfg *config.Config) context.Context {
+	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,19 +113,7 @@ func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	dbstore := database.New(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
-	ctx = backend.WithContext(ctx, be)
-
-	s, err := NewSSHServer(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Serve(l) //nolint: errcheck
-	t.Cleanup(func() { _ = s.Close() })
-	return l.Addr().String()
+	return backend.WithContext(ctx, be)
 }
 
 // dialWith connects to addr with a client limited to the given algorithms

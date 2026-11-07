@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/spf13/cobra"
@@ -16,12 +19,9 @@ func blobCommand() *cobra.Command {
 	var linenumber bool
 	var color bool
 	var raw bool
-	var noColor bool
-	if testrun, ok := os.LookupEnv("SOFT_SERVE_NO_COLOR"); ok && testrun == "1" {
-		noColor = true
-	}
+	noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR"))
 
-	styles := styles.DefaultStyles()
+	commonStyle := styles.DefaultStyles()
 	cmd := &cobra.Command{
 		Use:               "blob REPOSITORY [REFERENCE] [PATH]",
 		Aliases:           []string{"cat", "show"},
@@ -64,12 +64,15 @@ func blobCommand() *cobra.Command {
 			}
 
 			te, err := tree.TreeEntry(fp)
+			if errors.Is(err, git.ErrRevisionNotExist) {
+				return proto.ErrFileNotFound
+			}
 			if err != nil {
 				return err
 			}
 
 			if te.Type() != "blob" {
-				return git.ErrFileNotFound
+				return proto.ErrFileNotFound
 			}
 
 			bts, err := te.Contents()
@@ -81,7 +84,8 @@ func blobCommand() *cobra.Command {
 			isBin, _ := te.File().IsBinary()
 			if isBin {
 				if raw {
-					cmd.Println(c)
+					// Byte for byte: no newline is added.
+					cmd.Print(c)
 				} else {
 					return fmt.Errorf("binary file: use --raw to print")
 				}
@@ -94,7 +98,7 @@ func blobCommand() *cobra.Command {
 				}
 
 				if linenumber {
-					c, _ = common.FormatLineNumber(styles, c, color && !noColor)
+					c, _ = common.FormatLineNumber(commonStyle, c, color && !noColor)
 				}
 
 				cmd.Println(c)

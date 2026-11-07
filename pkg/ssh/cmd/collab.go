@@ -49,8 +49,10 @@ func checkCollabGrant(ctx context.Context, level access.AccessLevel) error {
 	return nil
 }
 
-// checkCollabDemote reports whether the caller may remove or overwrite an
-// existing collaborator on a repository.
+// checkCollabDemote reports whether the caller may remove an existing
+// collaborator on a repository. collab add checks it too, so a caller
+// cannot learn the level of a collaborator above them; adding never
+// overwrites an existing collaborator, it fails with ErrCollaboratorExist.
 //
 // Removal is a privileged change in the same way granting is: without this,
 // a read-write collaborator could remove an admin-access collaborator and

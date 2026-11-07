@@ -73,7 +73,7 @@ cmp stdout readme.md
 # cat blob that doesn't exist
 ! soft repo blob repo1 README.txt
 ! stdout .
-stderr '.*revision does not exist.*'
+stderr 'file not found'
 
 # check main branch
 soft repo branch default repo1

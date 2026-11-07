@@ -28,6 +28,10 @@ soft repo import basic1 ssh://git@127.0.0.1:$SSH_PORT/src
 soft repo commit basic1 5d88af6d7385fd069ff1464275f351146186b04a
 cmp stdout commit1.txt
 
+# a commit named by another revision prints its hash too
+soft repo commit basic1 HEAD
+cmp stdout commit1.txt
+
 # stop the server
 [windows] stopserver
 [windows] ! stderr .

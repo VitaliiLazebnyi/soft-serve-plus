@@ -129,6 +129,9 @@ func repoHead(r *git.Repository) (*git.Reference, error) {
 	if bs, _ := r.Branches(); len(bs) == 0 {
 		return nil, errRepoEmpty
 	}
-	name, _ := r.SymbolicRef(git.HEAD, "")
+	name, err := r.SymbolicRef(git.HEAD, "")
+	if err != nil {
+		return nil, fmt.Errorf("default branch does not exist: %w", err)
+	}
 	return nil, fmt.Errorf("default branch %q does not exist", git.ReferenceName(name).Short())
 }

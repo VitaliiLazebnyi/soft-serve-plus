@@ -9,6 +9,14 @@ ensureserverrunning SSH_PORT
 soft --help
 cmpenv stdout help.txt
 
+# usage lines and errors name the ssh invocation
+soft repo blob --help
+stdout 'Usage:\n  ssh -p '$SSH_PORT' localhost repo blob REPOSITORY'
+! soft nope
+! stdout .
+stderr 'unknown command "nope" for "ssh -p '$SSH_PORT' localhost"'
+stderr 'Run .ssh -p '$SSH_PORT' localhost --help. for usage'
+
 # stop the server
 [windows] stopserver
 [windows] ! stderr .

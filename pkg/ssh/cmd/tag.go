@@ -69,9 +69,10 @@ func tagDeleteCommand() *cobra.Command {
 				return err
 			}
 
+			logger := log.FromContext(ctx)
 			r, err := rr.Open()
 			if err != nil {
-				log.Errorf("failed to open repo: %s", err)
+				logger.Error("failed to open repo", "err", err, "repo", rr.Name())
 				return err
 			}
 
@@ -86,18 +87,17 @@ func tagDeleteCommand() *cobra.Command {
 			}
 
 			if !exists {
-				log.Errorf("failed to get tag: tag %s does not exist", tag)
 				return git.ErrReferenceNotExist
 			}
 
 			tagCommit, err := r.TagCommit(tag)
 			if err != nil {
-				log.Errorf("failed to get tag commit: %s", err)
+				logger.Error("failed to get tag commit", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
 			if err := r.DeleteTag(tag); err != nil {
-				log.Errorf("failed to delete tag: %s", err)
+				logger.Error("failed to delete tag", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
@@ -105,7 +105,7 @@ func tagDeleteCommand() *cobra.Command {
 			// than reported as a failed command.
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagCommit.ID.String(), git.ZeroID)
 			if err != nil {
-				log.Error("tag deleted but webhook event skipped", "err", err)
+				logger.Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil
 			}
 
