@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 )
 
 // escapes holds sequences the bubbletea renderer would pass to the terminal:
@@ -85,19 +84,20 @@ func TestStashItemSanitisesMessage(t *testing.T) {
 func TestCodeSanitisesContent(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
 	c := common.NewCommon(ctx, 120, 40)
-	for _, tc := range []struct {
-		ext, content, want string
-		glamour            bool
-	}{
-		{ext: "main.go", content: "package main\n\n// comment" + escapes + "\nfunc main() {}\n", want: "comment"},
-		{ext: "README.md", content: "# Title" + escapes + "\n\ntext" + escapes + "\n", want: "text", glamour: true},
-	} {
-		cd := code.New(c, "", "")
-		cd.UseGlamour = tc.glamour
-		cd.SetSize(120, 40)
-		cd.SetContent(tc.content, tc.ext)
-		assertClean(t, cd.View(), tc.want)
+
+	f := NewFiles(c)
+	f.SetSize(120, 40)
+	f.Update(FileContentMsg{"package main\n\n// comment" + escapes + "\nfunc main() {}\n", "main.go"})
+	assertClean(t, f.code.View(), "comment")
+	// The raw bytes are kept for copying to the clipboard.
+	if !strings.Contains(f.currentContent.content, escapes) {
+		t.Errorf("file content for copying was altered: %q", f.currentContent.content)
 	}
+
+	r := NewReadme(c)
+	r.SetSize(120, 40)
+	r.Update(ReadmeMsg{Content: "# Title" + escapes + "\n\ntext" + escapes + "\n", Path: "README.md"})
+	assertClean(t, r.code.View(), "text")
 }
 
 // A stray 8-bit byte from a legacy-encoded file, or an unterminated string
@@ -111,13 +111,57 @@ func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
 		"line1\nhidden \x1bP start\nline3 MALICIOUS_CODE\n",
 		"line1\nhidden \x1b]0;title\nline3 MALICIOUS_CODE\n",
 	} {
-		cd := code.New(c, "", "")
-		cd.SetSize(120, 40)
-		cd.SetContent(content, "file.txt")
+		f := NewFiles(c)
+		f.SetSize(120, 40)
+		f.Update(FileContentMsg{content, "file.txt"})
 		want := "MALICIOUS_CODE"
 		if strings.Contains(content, "VISIBLE_AFTER_C1") {
 			want = "VISIBLE_AFTER_C1"
 		}
-		assertClean(t, cd.View(), want)
+		assertClean(t, f.code.View(), want)
+	}
+}
+
+// The stash patch view is built from pieces the TUI has already styled
+// (and sanitised at their source); the code view must keep those styles.
+func TestStashPatchKeepsStyling(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 120, 40)
+
+	const raw = "diff --git a/a.txt b/a.txt\n" +
+		"index 0123456..789abcd 100644\n" +
+		"--- a/a.txt\n" +
+		"+++ b/a.txt\n" +
+		"@@ -1 +1 @@\n" +
+		"-old\n" +
+		"+new\n"
+	done := make(chan gitm.SteamParseDiffResult, 1)
+	gitm.StreamParseDiff(strings.NewReader(raw), done, 10, 100, 1000)
+	res := <-done
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	diff := &git.Diff{Diff: res.Diff}
+	for _, df := range res.Diff.Files {
+		sections := make([]*git.DiffSection, 0, len(df.Sections))
+		for _, ds := range df.Sections {
+			sections = append(sections, &git.DiffSection{DiffSection: ds})
+		}
+		diff.Files = append(diff.Files, &git.DiffFile{DiffFile: df, Sections: sections})
+	}
+
+	s := NewStash(c)
+	s.SetSize(120, 40)
+	s.Update(StashListMsg{&gitm.Stash{Message: "stash title"}})
+	s.Update(StashPatchMsg{diff})
+	out := s.code.View()
+	for _, want := range []string{
+		c.Styles.Stash.Title.Render("stash title"),
+		c.Styles.Log.CommitStatsAdd.Render("+"),
+		c.Styles.Log.CommitStatsDel.Render("-"),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stash patch view lacks styled %q: %q", want, out)
+		}
 	}
 }

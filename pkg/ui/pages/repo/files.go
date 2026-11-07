@@ -243,7 +243,10 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		f.activeView = filesViewContent
 		f.currentContent = msg
 		f.code.UseGlamour = common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext)
-		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
+		// File contents come from the repository and must not reach the
+		// terminal as escape sequences; chroma and glamour pass them
+		// through. currentContent keeps the raw bytes for copying.
+		cmds = append(cmds, f.code.SetContent(utils.Sanitize(msg.content), msg.ext))
 		f.code.GotoTop()
 	case FileBlameMsg:
 		f.currentBlame = msg
@@ -284,7 +287,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
@@ -298,7 +301,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, preview) &&
 				common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext))
 			}
 		}
 	case tea.WindowSizeMsg:

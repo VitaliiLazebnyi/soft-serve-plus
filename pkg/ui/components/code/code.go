@@ -12,7 +12,6 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	vp "github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
@@ -82,10 +81,7 @@ func (r *Code) Init() tea.Cmd {
 	// Glamour. This also introduces a bug where when it soft wraps, the
 	// viewport scrolls left/right for 2 columns on each side of the screen.
 	w := r.common.Width - r.common.Styles.App.GetHorizontalFrameSize()
-	// File contents, READMEs included, come from the repository and must
-	// not reach the terminal as escape sequences; glamour and chroma pass
-	// them through.
-	content := utils.Sanitize(r.content)
+	content := r.content
 	if content == "" {
 		r.Viewport.Model.SetContent(r.NoContentStyle.String())
 		return nil
