@@ -191,8 +191,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.AdminAccess
 	}
 
-	// If the user is a collaborator, they have return their access level.
-	// The anonymous floor only applies to public repositories.
+	// On a public repository the anonymous level is a floor for everyone:
+	// a registered user, collaborator or not, never gets less than an
+	// anonymous caller could. On a private repository it does not apply.
+	//
+	// If the user is a collaborator, they have their access level.
 	collabAccess, isCollab, _ := d.IsCollaborator(ctx, name, username)
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
@@ -206,8 +209,9 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.NoAccess
 	}
 
-	// Otherwise, the user has read-only access.
-	if user == nil {
+	// Otherwise, anonymous users have the anonymous level, and registered
+	// users read-only or the anonymous level, whichever is higher.
+	if user == nil || anon > access.ReadOnlyAccess {
 		return anon
 	}
 
