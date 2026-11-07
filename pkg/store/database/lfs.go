@@ -40,6 +40,11 @@ func (*lfsStore) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, p
 	if page <= 0 {
 		page = 1
 	}
+	// SQLite treats a negative LIMIT as no limit and Postgres rejects it, so
+	// a non-positive limit returns no locks on both, as LIMIT 0 would.
+	if limit <= 0 {
+		return []models.LFSLock{}, nil
+	}
 
 	var locks []models.LFSLock
 	query := tx.Rebind(`

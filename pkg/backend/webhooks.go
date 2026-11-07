@@ -187,7 +187,7 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 			}
 		}
 
-		if err := datastore.DeleteWebhookEventsByID(ctx, tx, toBeDeleted); err != nil {
+		if err := datastore.DeleteWebhookEventsByID(ctx, tx, id, toBeDeleted); err != nil {
 			return db.WrapError(err)
 		}
 

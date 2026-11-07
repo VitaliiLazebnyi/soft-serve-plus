@@ -148,18 +148,21 @@ const pruneWebhookDeliveriesQuery = `DELETE FROM webhook_deliveries
 	);`
 
 // DeleteWebhookEventsByID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, ids []int64) error {
+// Only events of webhookID are deleted, so a stray ID can never remove another
+// webhook's subscription.
+func (*webhookStore) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhookID int64, ids []int64) error {
 	// sqlx rejects an empty IN clause, and there is nothing to delete.
 	// Updating a webhook without changing its events reaches here with no IDs.
 	if len(ids) == 0 {
 		return nil
 	}
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, webhookID)
+	for _, id := range ids {
+		args = append(args, id)
 	}
-	query := h.Rebind(`DELETE FROM webhook_events WHERE id IN (` + placeholders(len(ids)) + `);`)
+	query := h.Rebind(`DELETE FROM webhook_events WHERE webhook_id = ? AND id IN (` + placeholders(len(ids)) + `);`)
 	_, err := h.ExecContext(ctx, query, args...)
 	return err
 }
