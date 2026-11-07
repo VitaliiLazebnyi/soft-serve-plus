@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -13,6 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 // authenticate authenticates the user from the request. repo is the
@@ -21,7 +25,8 @@ func authenticate(r *http.Request, repo string) (proto.User, error) {
 	// Prefer the Authorization header
 	user, err := parseAuthHdr(r, repo)
 	if err != nil || user == nil {
-		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) {
+		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) ||
+			errors.Is(err, ErrPasswordCheckBusy) {
 			return nil, err
 		}
 		return nil, proto.ErrUserNotFound
@@ -33,19 +38,32 @@ func authenticate(r *http.Request, repo string) (proto.User, error) {
 // ErrInvalidPassword is returned when the password is invalid.
 var ErrInvalidPassword = errors.New("invalid password")
 
-func parseUsernamePassword(ctx context.Context, username, password string) (proto.User, error) {
+// ErrPasswordCheckBusy is returned when a password could not be checked
+// because the client has too many checks running or waiting, or the request
+// ended while it waited. The password was not found wrong, so callers must
+// not answer it as bad credentials: git would then erase a correct stored
+// password from the user's credential helper.
+var ErrPasswordCheckBusy = errors.New("too many password checks, try again later")
+
+func parseUsernamePassword(ctx context.Context, client, username, password string) (proto.User, error) {
 	logger := log.FromContext(ctx)
 	be := backend.FromContext(ctx)
 
 	if username != "" && password != "" {
-		user, err := be.User(ctx, username)
-		if err == nil && user != nil && backend.VerifyPassword(password, user.Password()) {
+		// Try to authenticate using access token as the password first:
+		// the lookup is a cheap hash that does not depend on the username,
+		// and token clients then never pay for bcrypt.
+		user, err := be.UserByAccessToken(ctx, password)
+		if err == nil {
 			return user, nil
 		}
 
-		// Try to authenticate using access token as the password
-		user, err = be.UserByAccessToken(ctx, password)
-		if err == nil {
+		user, cerr := checkPassword(ctx, client, username, password)
+		if cerr != nil {
+			logger.Info("password check throttled", "err", cerr)
+			return nil, cerr
+		}
+		if user != nil {
 			return user, nil
 		}
 
@@ -72,6 +90,128 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 	}
 
 	return nil, proto.ErrUserNotFound
+}
+
+// passwordChecks bounds the bcrypt comparisons running at once, so failed
+// HTTP Basic logins cannot occupy every CPU. Half the processors leaves the
+// rest to serving everything else.
+var passwordChecks = semaphore.NewWeighted(int64(max(1, runtime.GOMAXPROCS(0)/2)))
+
+// clientChecks lets each client address run one password check at a time,
+// so one client cannot fill passwordChecks and keep other clients' logins
+// waiting, and guesses from one address go no faster than bcrypt allows.
+var clientChecks = newClientLimiter(maxClientPending)
+
+// maxClientPending is how many password checks one client address may have
+// running or waiting before more fail without bcrypt. Clients behind one
+// proxy share an address, so it leaves room for a few logins at once.
+const maxClientPending = 16
+
+// verifyPassword is backend.VerifyPassword; tests replace it to count calls.
+var verifyPassword = backend.VerifyPassword
+
+// checkPassword returns the user named username if password is their
+// password, or nil. It does the same bcrypt work whether or not the user
+// exists or has a password, so the response time does not reveal which
+// accounts do; a name that is not a valid username cannot be an account, so
+// it is refused without bcrypt. The check runs one at a time per client
+// address, then waits for a free slot in passwordChecks. If the client has
+// too many checks pending, or ctx ends first, it returns an error wrapping
+// ErrPasswordCheckBusy without checking the password.
+func checkPassword(ctx context.Context, client, username, password string) (proto.User, error) {
+	if utils.ValidateUsername(username) != nil {
+		return nil, nil
+	}
+
+	var hash string
+	user, err := backend.FromContext(ctx).User(ctx, username)
+	if err == nil && user != nil {
+		hash = user.Password()
+	}
+
+	release, err := clientChecks.acquire(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPasswordCheckBusy, err)
+	}
+	defer release()
+
+	if err := passwordChecks.Acquire(ctx, 1); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPasswordCheckBusy, err)
+	}
+	defer passwordChecks.Release(1)
+
+	// An empty hash never verifies, so user is set when this succeeds.
+	if !verifyPassword(password, hash) {
+		return nil, nil
+	}
+	return user, nil
+}
+
+// errClientBusy is returned when a client has too many password checks
+// running or waiting.
+var errClientBusy = errors.New("too many password checks from this client")
+
+// clientLimiter runs one task at a time per key and refuses a key that
+// already has maxPending tasks running or waiting. Keys are removed once
+// nothing holds them, so the map only grows with concurrent clients.
+type clientLimiter struct {
+	maxPending int
+	mu         sync.Mutex
+	keys       map[string]*clientSlot
+}
+
+type clientSlot struct {
+	sem     *semaphore.Weighted
+	pending int
+}
+
+func newClientLimiter(maxPending int) *clientLimiter {
+	return &clientLimiter{maxPending: maxPending, keys: map[string]*clientSlot{}}
+}
+
+// acquire waits until key has no other task running. It returns a release
+// function, or an error if key has too many tasks pending or ctx ends first.
+func (l *clientLimiter) acquire(ctx context.Context, key string) (func(), error) {
+	l.mu.Lock()
+	slot := l.keys[key]
+	if slot == nil {
+		slot = &clientSlot{sem: semaphore.NewWeighted(1)}
+		l.keys[key] = slot
+	}
+	if slot.pending >= l.maxPending {
+		l.mu.Unlock()
+		return nil, errClientBusy
+	}
+	slot.pending++
+	l.mu.Unlock()
+
+	done := func() {
+		l.mu.Lock()
+		slot.pending--
+		if slot.pending == 0 {
+			delete(l.keys, key)
+		}
+		l.mu.Unlock()
+	}
+
+	if err := slot.sem.Acquire(ctx, 1); err != nil {
+		done()
+		return nil, err
+	}
+	return func() {
+		slot.sem.Release(1)
+		done()
+	}, nil
+}
+
+// clientAddr returns the host part of the request's remote address, which
+// keys the per-client password check limit.
+func clientAddr(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // ErrInvalidHeader is returned when the authorization header is invalid.
@@ -144,7 +284,7 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 			return nil, ErrInvalidHeader
 		}
 
-		return parseUsernamePassword(ctx, username, password)
+		return parseUsernamePassword(ctx, clientAddr(r), username, password)
 	}
 }
 

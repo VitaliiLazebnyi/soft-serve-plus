@@ -211,6 +211,7 @@ func identify(r *http.Request) (*http.Request, error) {
 	if err != nil {
 		switch {
 		case badCredentials(err):
+		case errors.Is(err, ErrPasswordCheckBusy):
 		case errors.Is(err, proto.ErrUserNotFound):
 		default:
 			logger.Error("failed to authenticate", "err", err)
@@ -227,6 +228,23 @@ func identify(r *http.Request) (*http.Request, error) {
 // badCredentials reports whether the caller sent credentials that failed.
 func badCredentials(err error) bool {
 	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword)
+}
+
+// denyBusy answers 429 when the caller's password could not be checked
+// because too many checks were pending, and reports whether it did. There is
+// no credentials challenge: the password was not found wrong, and a 401
+// would make git erase it from the user's credential helper.
+func denyBusy(w http.ResponseWriter, r *http.Request, err error) bool {
+	if !errors.Is(err, ErrPasswordCheckBusy) {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	if strings.HasPrefix(mux.Vars(r)["file"], "info/lfs") {
+		renderJSON(w, http.StatusTooManyRequests, lfs.ErrorResponse{Message: ErrPasswordCheckBusy.Error()})
+		return true
+	}
+	http.Error(w, ErrPasswordCheckBusy.Error(), http.StatusTooManyRequests)
+	return true
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
@@ -368,6 +386,9 @@ func requireCaller(w http.ResponseWriter, r *http.Request) bool {
 func withCaller(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r, err := identify(r)
+		if denyBusy(w, r, err) {
+			return
+		}
 		if !requireCaller(w, r) {
 			return
 		}
@@ -387,6 +408,9 @@ func withCaller(next http.Handler) http.HandlerFunc {
 func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r, err := identify(r)
+		if denyBusy(w, r, err) {
+			return
+		}
 		if !requireCaller(w, r) {
 			return
 		}
