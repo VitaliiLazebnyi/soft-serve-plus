@@ -176,6 +176,7 @@ func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
 		t.Skip("sh not found")
 	}
 	setOutputIdleTimeout(t, 100*time.Millisecond)
+	levels := captureLog(t)
 
 	var stdout, stderr syncBuffer
 	errc := make(chan error, 1)
@@ -208,6 +209,24 @@ func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
 	}
 	if got := string(stderr.Bytes()); got != "done\n" {
 		t.Fatalf("expected stderr %q, got %q", "done\n", got)
+	}
+	// The handler closing the pipes under the copies is expected, and must
+	// not be logged as an error.
+	for _, stream := range []string{"stdout", "stderr"} {
+		prefix := "gitServiceHandler: failed to copy " + stream + ": "
+		var found bool
+		for msg, level := range levels() {
+			if !strings.HasPrefix(msg, prefix) {
+				continue
+			}
+			found = true
+			if level != "debug" {
+				t.Errorf("%q logged at %q, want %q", msg, level, "debug")
+			}
+		}
+		if !found {
+			t.Errorf("expected the %s copy to be stopped and logged", stream)
+		}
 	}
 }
 

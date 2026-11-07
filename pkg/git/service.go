@@ -152,12 +152,16 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 
 	// stdout and stderr
 	activity := &outputActivity{}
+	// stopped is set once the handler stops waiting for the copies and
+	// closes the pipes under them. Their reads then fail, which is
+	// expected.
+	var stopped atomic.Bool
 	for _, o := range outputs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if _, err := io.Copy(activity.writer(o.dst), o.r); err != nil {
-				logCopyError(ctx, o.name, err, false)
+				logCopyError(ctx, o.name, err, stopped.Load())
 			}
 		}()
 	}
@@ -171,7 +175,10 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	err = cmd.Wait()
 	// Ensure all of git's output is written before returning. Stdin is
 	// handled by the client side.
-	waitOutput(ctx, copied, activity, outputs.close)
+	waitOutput(ctx, copied, activity, func() {
+		stopped.Store(true)
+		outputs.close()
+	})
 	outputs.close()
 	if err != nil && stoppedByContext(ctx, err, killed.Load()) {
 		// The context was cancelled, usually because the client went away,
