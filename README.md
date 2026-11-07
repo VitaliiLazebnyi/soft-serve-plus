@@ -1016,6 +1016,12 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+A push event lists at most the 20 newest pushed commits. To keep its payload
+small, a commit message is cut to 4 KiB (ending in `[message truncated by Soft
+Serve]`), a title to 1 KiB and an author or committer name or email to 256
+bytes, and older commits are left out once the listed commits hold about 64 KiB
+of text. The newest commit is always listed.
+
 #### Webhooks to internal services
 
 Webhooks are protected against server-side request forgery: by default a
