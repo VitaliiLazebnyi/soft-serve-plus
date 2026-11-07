@@ -234,7 +234,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		f.activeView = filesViewContent
 		f.currentContent = msg
 		f.code.UseGlamour = msg.isMarkdown
-		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
+		cmds = append(cmds, f.code.SetMarkdownContent(msg.content, msg.ext, msg.isMarkdown))
 		f.code.GotoTop()
 	case FileBlameMsg:
 		f.currentBlame = msg
@@ -275,7 +275,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(f.currentContent.content, f.currentContent.ext, f.currentContent.isMarkdown))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
@@ -289,7 +289,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, preview) &&
 				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(f.currentContent.content, f.currentContent.ext, f.currentContent.isMarkdown))
 			}
 		}
 	case tea.WindowSizeMsg:

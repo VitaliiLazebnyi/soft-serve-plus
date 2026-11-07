@@ -74,6 +74,15 @@ func (r *Code) SetContent(c, ext string) tea.Cmd {
 	return r.Init()
 }
 
+// SetMarkdownContent is SetContent for callers that have already worked out
+// whether the content is markdown, so it is not worked out a second time.
+func (r *Code) SetMarkdownContent(c, ext string, isMarkdown bool) tea.Cmd {
+	r.content = c
+	r.extension = ext
+	r.isMarkdown = &isMarkdown
+	return r.Init()
+}
+
 // markdown reports whether the content is markdown, working it out only once
 // per SetContent.
 func (r *Code) markdown() bool {
