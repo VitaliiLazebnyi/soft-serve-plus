@@ -50,11 +50,13 @@ func (r *Repository) StashDiff(index int) (*Diff, error) {
 // parseDiff runs cmd and parses its patch output with the Diff* caps.
 //
 // The parser in git-module reads a whole line into memory before it checks
-// DiffMaxLineChars, so one huge line (a large file with no newlines) would be
-// held in memory several times over. The output therefore goes through a
-// lineCapWriter that drops the part of each content line past the cap. A
-// dropped line is still longer than DiffMaxLineChars, so the parser marks
-// the file incomplete exactly as it would for the full line.
+// DiffMaxLineChars, and checks DiffMaxFileLines only between hunks, so one
+// huge line, or one huge hunk (a large added file), would be held in memory
+// in full and several times over. The output therefore goes through a
+// lineCapWriter. It drops the part of each content line past the line cap,
+// and every line of a file past the line count cap. The parser still marks
+// such a file incomplete, exactly as it would for the full output: see
+// lineCapWriter.
 func (r *Repository) parseDiff(cmd *git.Command) (*Diff, error) {
 	stdout, pw := io.Pipe()
 	done := make(chan git.SteamParseDiffResult, 1)
@@ -66,8 +68,8 @@ func (r *Repository) parseDiff(cmd *git.Command) (*Diff, error) {
 	}()
 
 	var w io.Writer = pw
-	if DiffMaxLineChars > 0 {
-		w = newLineCapWriter(pw, DiffMaxLineChars+1)
+	if DiffMaxLineChars > 0 || DiffMaxFileLines > 0 {
+		w = newLineCapWriter(pw, DiffMaxLineChars, DiffMaxFileLines)
 	}
 
 	stderr := new(bytes.Buffer)
@@ -93,22 +95,72 @@ var errDiffParsed = errors.New("diff parser stopped reading")
 // slices the paths out of it, so it is never cut.
 var diffHeader = []byte("diff --git ")
 
-// lineCapWriter passes at most max bytes of each line to w and drops the
-// rest of the line, keeping the newline. Lines starting with diffHeader pass
-// through whole. It keeps no more than len(diffHeader) bytes of its own.
+// diffOverflowHunk is written in place of the lines of a file past the line
+// count cap. It is a hunk header, and the parser checks the line count of the
+// file on every hunk header, so the parser sees the file is over the cap and
+// marks it incomplete.
+var diffOverflowHunk = []byte("@@ -0,0 +0,0 @@\n")
+
+// lineCapWriter limits the patch passed to w, so that the parser behind w
+// never holds more of a file than its caps allow.
+//
+// Lines longer than maxChars are cut to maxChars+1 bytes, keeping the
+// newline. The cut line is still over maxChars, so the parser marks the file
+// incomplete. Lines starting with diffHeader pass through whole.
+//
+// Hunk lines of a file (hunk headers and the content lines after the first
+// one) are counted the way the parser counts them. Once maxLines+1 have
+// passed, so the parser's count is over maxLines, the writer passes
+// diffOverflowHunk and drops the rest of the file up to the next diffHeader.
+//
+// A cap of 0 means no limit. The writer keeps no more than len(diffHeader)
+// bytes of its own.
 type lineCapWriter struct {
-	w      io.Writer
-	max    int
+	w        io.Writer
+	maxChars int // bytes passed per line, 0 for no limit
+	maxLines int // hunk lines passed per file, 0 for no limit
+
 	n      int    // bytes of the current line seen so far
 	prefix []byte // first bytes of the current line
+
+	inHunk   bool // the current file has had a hunk header
+	lines    int  // hunk lines of the current file passed so far
+	skipFile bool // drop the rest of the current file
 }
 
-func newLineCapWriter(w io.Writer, maxLen int) *lineCapWriter {
-	return &lineCapWriter{
-		w:      w,
-		max:    max(maxLen, len(diffHeader)),
-		prefix: make([]byte, 0, len(diffHeader)),
+func newLineCapWriter(w io.Writer, maxChars, maxLines int) *lineCapWriter {
+	if maxChars > 0 {
+		// Keep one byte over the cap, so the parser sees the line is too
+		// long, and never cut inside a diffHeader prefix.
+		maxChars = max(maxChars+1, len(diffHeader))
 	}
+	return &lineCapWriter{
+		w:        w,
+		maxChars: maxChars,
+		maxLines: maxLines,
+		prefix:   make([]byte, 0, len(diffHeader)),
+	}
+}
+
+// startLine counts a line that starts with first and reports whether the
+// line opens the part of the file that is dropped.
+func (w *lineCapWriter) startLine(first byte) bool {
+	switch first {
+	case '@':
+		w.inHunk = true
+	case ' ', '+', '-':
+		if !w.inHunk {
+			return false
+		}
+	default:
+		// Not a hunk line: the parser does not count it.
+		return false
+	}
+	if w.maxLines > 0 && w.lines > w.maxLines {
+		return true
+	}
+	w.lines++
+	return false
 }
 
 func (w *lineCapWriter) Write(p []byte) (int, error) {
@@ -125,24 +177,51 @@ func (w *lineCapWriter) Write(p []byte) (int, error) {
 		if nl >= 0 {
 			body = seg[:len(seg)-1]
 		}
-		if need := cap(w.prefix) - len(w.prefix); need > 0 {
-			w.prefix = append(w.prefix, body[:min(need, len(body))]...)
+
+		if w.n == 0 && len(body) > 0 && !w.skipFile && w.startLine(body[0]) {
+			if _, err := w.w.Write(diffOverflowHunk); err != nil {
+				return 0, err
+			}
+			w.skipFile = true
 		}
 
-		out := seg
-		if room := w.max - w.n; len(body) > room && !bytes.Equal(w.prefix, diffHeader) {
-			// The line is already past max: keep only what fits. An empty
-			// write to an io.Pipe still waits for a reader, so skip it.
-			if room > 0 {
-				if _, err := w.w.Write(body[:room]); err != nil {
+		wasHeader := bytes.Equal(w.prefix, diffHeader)
+		took := 0
+		if need := cap(w.prefix) - len(w.prefix); need > 0 {
+			took = min(need, len(body))
+			w.prefix = append(w.prefix, body[:took]...)
+		}
+		isHeader := bytes.Equal(w.prefix, diffHeader)
+		if isHeader && !wasHeader {
+			// A new file starts: reset the per-file state.
+			w.inHunk = false
+			w.lines = 0
+			if w.skipFile {
+				// The prefix was held back while dropping; pass it now.
+				w.skipFile = false
+				if _, err := w.w.Write(w.prefix[:len(w.prefix)-took]); err != nil {
 					return 0, err
 				}
 			}
-			out = seg[len(body):] // the newline, if any
 		}
-		if len(out) > 0 {
-			if _, err := w.w.Write(out); err != nil {
-				return 0, err
+
+		if !w.skipFile {
+			out := seg
+			if room := w.maxChars - w.n; w.maxChars > 0 && len(body) > room && !isHeader {
+				// The line is already past the cap: keep only what fits. An
+				// empty write to an io.Pipe still waits for a reader, so
+				// skip it.
+				if room > 0 {
+					if _, err := w.w.Write(body[:room]); err != nil {
+						return 0, err
+					}
+				}
+				out = seg[len(body):] // the newline, if any
+			}
+			if len(out) > 0 {
+				if _, err := w.w.Write(out); err != nil {
+					return 0, err
+				}
 			}
 		}
 
