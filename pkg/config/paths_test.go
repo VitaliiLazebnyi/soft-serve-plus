@@ -39,6 +39,21 @@ func TestResolveSQLiteDataSource(t *testing.T) {
 	}
 }
 
+// A UNC data path (\\server\share\data on Windows) must not end up as the
+// authority of the URI: SQLite refuses file://server/... unless built with
+// SQLITE_ALLOW_URI_AUTHORITY.
+func TestResolveSQLiteDataSourceUNC(t *testing.T) {
+	dp := filepath.FromSlash("//server/share/soft data")
+	for _, c := range []struct{ in, want string }{
+		{"file:x.db", "file:////server/share/soft%20data/x.db"},
+		{"file:sub/x.db?mode=rwc", "file:////server/share/soft%20data/sub/x.db?mode=rwc"},
+	} {
+		if got := resolveSQLiteDataSource(dp, c.in); got != c.want {
+			t.Errorf("resolveSQLiteDataSource(%q, %q) = %q, want %q", dp, c.in, got, c.want)
+		}
+	}
+}
+
 func TestValidateSQLiteMemoryDataSource(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()

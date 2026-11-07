@@ -901,7 +901,13 @@ func resolveSQLiteDataSource(dataPath, dsn string) string {
 	// read as the start of the query or fragment, or as an escape. The
 	// path from the URI is already in URI form and is kept as written.
 	base := (&url.URL{Path: filepath.ToSlash(dataPath)}).EscapedPath()
-	if !strings.HasPrefix(base, "/") {
+	switch {
+	case strings.HasPrefix(base, "//"):
+		// A UNC path such as //server/share/data. As file://server/...
+		// SQLite would read "server" as the URI authority and refuse it, so
+		// keep the authority empty: file:////server/share/data.
+		base = "//" + base
+	case !strings.HasPrefix(base, "/"):
 		// A Windows path such as C:/data: SQLite wants file:///C:/data.
 		base = "///" + base
 	}
