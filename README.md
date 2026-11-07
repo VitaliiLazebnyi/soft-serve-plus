@@ -493,6 +493,10 @@ soft serve
 
 You can specify a database connection password in the _data source_ url. For example, `postgres://myuser:dbpass@localhost:5432/my_soft_serve_db`.
 
+Soft Serve Plus always sets the session `TimeZone` to UTC, overriding any
+`timezone` in the data source and the server's default, because it stores
+times in UTC.
+
 By default the connection pool has no limit on open connections, so a burst
 of requests can use up Postgres' `max_connections`. Set `db.max_open_conns`
 (and optionally `db.max_idle_conns`, `db.conn_max_lifetime` and
