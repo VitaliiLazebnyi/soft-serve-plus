@@ -53,6 +53,53 @@ func TestApplyTestEnv(t *testing.T) {
 	}
 }
 
+// A sqlite data source from the environment must not point the scripts at
+// another database: an absolute one would be used as is.
+func TestApplyTestEnvSqliteDataSource(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		driver string
+		set    bool
+	}{
+		{name: "driver unset"},
+		{name: "driver sqlite", driver: "sqlite", set: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := t.TempDir()
+			realDB := filepath.Join(t.TempDir(), "real.db") + "?_pragma=busy_timeout(5000)"
+			if tc.set {
+				t.Setenv("SOFT_SERVE_DB_DRIVER", tc.driver)
+			} else {
+				unsetEnv(t, "SOFT_SERVE_DB_DRIVER")
+			}
+			t.Setenv("SOFT_SERVE_DB_DATA_SOURCE", realDB)
+
+			cfg := config.DefaultConfig()
+			cfg.DataPath = data
+
+			if err := applyTestEnv(cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			if !strings.HasPrefix(cfg.DB.Driver, "sqlite") {
+				t.Errorf("driver = %q, want sqlite", cfg.DB.Driver)
+			}
+			if !strings.HasPrefix(cfg.DB.DataSource, data+string(filepath.Separator)) {
+				t.Errorf("data source = %q, want one under the test's data path %q", cfg.DB.DataSource, data)
+			}
+		})
+	}
+}
+
+// unsetEnv unsets key for the rest of the test and restores it afterwards.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "") // registers the restore and forbids t.Parallel
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTestEnviron(t *testing.T) {
 	data := t.TempDir()
 	devConfig := filepath.Join(t.TempDir(), "config.yaml")

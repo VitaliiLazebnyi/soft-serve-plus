@@ -245,8 +245,13 @@ func TestScript(t *testing.T) {
 	})
 }
 
-// applyTestEnv takes the database driver and data source from the
-// environment, so the scripts can run against postgres, and validates cfg.
+// applyTestEnv takes the database driver from the environment, and the data
+// source too when the driver is postgres, so the scripts can run against
+// postgres, and validates cfg. setupPostgres then swaps the data source for
+// a disposable database. A sqlite data source is never taken from the
+// environment: an absolute one would be used as is, and the scripts would
+// change the users and repositories of whatever database it names, so
+// sqlite keeps the test's database under the data path.
 // Every other SOFT_SERVE_* variable of the developer's environment is
 // ignored: the data path, listen addresses and admin keys belong to the
 // test, and the scripts would otherwise create, change and delete users
@@ -256,8 +261,10 @@ func applyTestEnv(cfg *config.Config) error {
 	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DRIVER"); ok {
 		cfg.DB.Driver = v
 	}
-	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DATA_SOURCE"); ok {
-		cfg.DB.DataSource = v
+	if cfg.DB.Driver == "postgres" {
+		if v, ok := os.LookupEnv("SOFT_SERVE_DB_DATA_SOURCE"); ok {
+			cfg.DB.DataSource = v
+		}
 	}
 	return cfg.Validate()
 }
