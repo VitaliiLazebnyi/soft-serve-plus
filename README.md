@@ -86,8 +86,10 @@ and database.
 
 By default, program configuration is stored within the `data` directory. But,
 this can be overridden by setting a custom path to a config file with `SOFT_SERVE_CONFIG_LOCATION`
-that is pre-created. If a config file pointed to by `SOFT_SERVE_CONFIG_LOCATION`,
-the default location within the `data` dir is used for generating a default config.
+that is pre-created. If the file pointed to by `SOFT_SERVE_CONFIG_LOCATION` does
+not exist, Soft Serve Plus refuses to start instead of falling back to the default
+config. The one exception is `$SOFT_SERVE_DATA_PATH/config.yaml`, the default
+location, where a default config is generated on the first start.
 
 To change the default data path use `SOFT_SERVE_DATA_PATH` environment variable.
 

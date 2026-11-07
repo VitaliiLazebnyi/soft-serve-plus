@@ -100,6 +100,9 @@ func init() {
 func main() {
 	ctx := context.Background()
 	cfg := config.DefaultConfig()
+	if err := cfg.CheckConfigLocation(); err != nil {
+		log.Fatal(err)
+	}
 	if cfg.Exist() {
 		if err := cfg.Parse(); err != nil {
 			log.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -139,6 +140,40 @@ func TestCustomConfigLocation(t *testing.T) {
 	is.NoErr(os.Setenv("SOFT_SERVE_CONFIG_LOCATION", "testdata/config_nonexistent.yaml"))
 	cfg = DefaultConfig()
 	is.Equal(cfg.Name, "Soft Serve Plus")
+}
+
+func TestCheckConfigLocation(t *testing.T) {
+	td := t.TempDir()
+	t.Setenv("SOFT_SERVE_DATA_PATH", td)
+	existing := filepath.Join(td, "custom.yaml")
+	if err := os.WriteFile(existing, []byte("name: custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		location string
+		wantErr  bool
+	}{
+		"unset":                    {location: ""},
+		"existing file":            {location: existing},
+		"missing file":             {location: filepath.Join(td, "missing.yaml"), wantErr: true},
+		"missing default location": {location: filepath.Join(td, "config.yaml")},
+		"missing directory":        {location: filepath.Join(td, "nodir", "config.yaml"), wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_CONFIG_LOCATION", tc.location)
+			err := DefaultConfig().CheckConfigLocation()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_CONFIG_LOCATION") {
+					t.Fatalf("CheckConfigLocation() = %v, want an error naming the variable", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CheckConfigLocation() = %v, want nil", err)
+			}
+		})
+	}
 }
 
 func TestDefaultRepoDisabledByDefault(t *testing.T) {
