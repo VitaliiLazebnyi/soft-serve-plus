@@ -29,7 +29,6 @@ Or by using docker-compose:
 
 ```yaml
 ---
-version: "3.1"
 services:
   soft-serve-plus:
     image: ghcr.io/vitaliilazebnyi/soft-serve-plus:latest

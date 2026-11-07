@@ -142,8 +142,9 @@ SOFT_SERVE_DEFAULT_REPO=gitops \
   soft serve
 ```
 
-The repository is created empty and public, exactly as if a human had run
-`repo create gitops` with no flags; only its *existence* is guaranteed on
+The repository is created empty, exactly as if a human had run
+`repo create gitops` with no flags: public, or private when `default_private`
+is set; only its *existence* is guaranteed on
 boot, not its reachability, which is still governed entirely by the
 `anon-access`/`allow-keyless` settings described below. Booting again against
 the same data directory is a no-op if the repository already exists.
@@ -452,6 +453,22 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_DB_MAX_OPEN_CONNS`, `SOFT_SERVE_DB_MAX_IDLE_CONNS`: Database connection pool limits. `0` (the default) keeps the database/sql defaults: no limit on open connections and 2 idle connections
 - `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
+- `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS`: Comma-separated ssh hosts, IP addresses or CIDR ranges (each with an optional port) that repositories may be imported from or mirrored (see `client_allowed_hosts` above). Defaults to empty: only server admins may import from or mirror ssh remotes.
+- `SOFT_SERVE_LOG_FORMAT`, `SOFT_SERVE_LOG_TIME_FORMAT`, `SOFT_SERVE_LOG_PATH`: Log format, timestamp format and log file (`log.format`, `log.time_format`, `log.path`). An empty path logs to stderr
+
+Every setting in `config.yaml` has one, named after its path: `ssh.listen_addr`
+is `SOFT_SERVE_SSH_LISTEN_ADDR`, `git.enabled` is `SOFT_SERVE_GIT_ENABLED`.
+List settings take a comma-separated value, except
+`SOFT_SERVE_INITIAL_ADMIN_KEYS`, which takes one key (or key file path) per
+line.
+
+A few environment variables have no `config.yaml` setting:
+
+- `SOFT_SERVE_DATA_PATH`: The data directory (see above). Defaults to `data`
+- `SOFT_SERVE_CONFIG_LOCATION`: Path to an existing config file to use instead of `<data path>/config.yaml`
+- `SOFT_SERVE_DEBUG`: Set to `true` to log at debug level, including SSH authentication attempts
+- `SOFT_SERVE_VERBOSE`: Set to `true`, together with `SOFT_SERVE_DEBUG`, to also log the caller, database queries, and each SSH session's client key and environment
+- `SOFT_SERVE_NO_COLOR`: Set to `1` to turn off colors in the `soft` command's output and syntax coloring in `repo blob -c`
 
 #### SSH Algorithms
 
@@ -614,9 +631,9 @@ and `allow-keyless`.
 - `anon-access`: Defines the access level for anonymous users. Available
   options are `no-access`, `read-only`, `read-write`, and `admin-access`.
   Default is `read-only`.
-- `allow-keyless`: Whether to allow connections that doesn't use keys to pass.
-  Setting this to `false` would disable access to SSH keyboard-interactive,
-  HTTP, and Git protocol connections. Default is `true`.
+- `allow-keyless`: Whether to allow connections that don't use keys to pass.
+  Setting this to `false` would disable SSH keyboard-interactive logins and
+  anonymous HTTP and Git protocol connections. Default is `true`.
 
 ```sh
 $ ssh -p 23231 localhost settings
@@ -638,8 +655,11 @@ Use "ssh -p 23231 localhost settings [command] --help" for more information abou
 > **Note** These settings can only be changed by admins.
 
 When `allow-keyless` is disabled, connections that don't use SSH Public Key
-authentication will get denied. This means cloning repos over HTTP(s) or git://
-will get denied.
+authentication will get denied. This means anonymous cloning over HTTP(s) or
+git:// will get denied; HTTP requests with an access token still work. It does
+not restrict SSH to registered users: a client that offers any public key,
+registered or not, is still let in with `anon-access`. To keep unregistered
+keys out, set `anon-access` to `no-access`.
 
 Meanwhile, `anon-access` controls the access level granted to connections that
 use SSH Public Key authentication but are not registered users. The default
@@ -815,10 +835,11 @@ Available Commands:
   blob         Print out the contents of file at path
   branch       Manage repository branches
   collab       Manage collaborators
+  commit       Print out the contents of a diff
   create       Create a new repository
   delete       Delete a repository
   description  Set or get the description for a repository
-  hide         Hide or unhide a repository
+  hidden       Hide or unhide a repository
   import       Import a new repository from remote
   info         Get information about a repository
   list         List repositories
@@ -828,6 +849,7 @@ Available Commands:
   rename       Rename an existing repository
   tag          Manage repository tags
   tree         Print repository tree at path
+  webhook      Manage repository webhooks
 
 Flags:
   -h, --help   help for repo
@@ -835,7 +857,12 @@ Flags:
 Use "ssh -p 23231 localhost repo [command] --help" for more information about a command.
 ```
 
-To use any of the above `repo` commands, a user must be a collaborator in the repository. More on this below.
+Each `repo` command needs a level of access to the repository (see
+[Authorization](#authorization)): commands that only read it, such as `info`,
+`tree` and `blob`, need `read-only`; `create` and `import`, and changing its
+branches, tags, metadata or collaborators, need `read-write`; and deleting or
+renaming it, changing whether it is private, and managing its webhooks need
+`admin-access`.
 
 ### Creating Repositories
 
@@ -972,7 +999,7 @@ ssh -p 23231 localhost repo description icecream "This is a new description"
 ssh -p 23231 localhost repo hidden icecream true
 
 # List repository info (branches, tags, description, etc)
-ssh -p 23231 localhost repo icecream info
+ssh -p 23231 localhost repo info icecream
 ```
 
 To make a repository private, use `repo private <repo> [true|false]`. Private
@@ -1017,7 +1044,9 @@ ssh -p 23231 localhost repo blob soft-serve-plus cmd/soft/main.go -c -l
 
 ```
 
-Use `--raw` to print raw file contents. This is useful for dumping binary data.
+Binary files are not printed unless you add `--raw`. The output always ends
+with an added newline, so to get a byte-exact copy of a file, clone the
+repository instead.
 
 ### Repository webhooks
 
@@ -1138,10 +1167,17 @@ Soft Serve Plus supports git server-side hooks `pre-receive`, `update`,
 run on repository push events. Hooks can be defined as a per-repository hook,
 and/or global hooks that run for all repositories.
 
-You can find per-repository hooks under the repository `hooks` directory.
+Per-repository hooks live in the repository's `hooks` directory,
+`<data path>/repos/<repo>.git/hooks`. Soft Serve Plus owns the
+`hooks/<name>` scripts there and writes them again when the repository is
+created and on `soft admin sync-hooks` or `soft serve --sync-hooks`, so do not
+edit them. Each one runs every executable file in `hooks/<name>.d/`, so put
+your own per-repository hooks there, for example
+`hooks/post-receive.d/notify`.
 
-Globs hooks can be found in your `SOFT_SERVE_DATA_PATH` directory under
-`hooks`. Defining global hooks is useful if you want to run CI/CD for example.
+Global hooks live in `<data path>/hooks` (`SOFT_SERVE_DATA_PATH`) and run for
+every repository. Defining global hooks is useful if you want to run CI/CD for
+example.
 
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
@@ -1192,23 +1228,15 @@ Now, you should get a message after pushing changes to any repository.
 
 ## A note about RSA keys
 
-Unfortunately, due to a shortcoming in Go’s `x/crypto/ssh` package, Soft Serve Plus
-does not currently support access via new SSH RSA keys: only the old SHA-1
-ones will work.
-
-Until we sort this out you’ll either need an SHA-1 RSA key or a key with
-another algorithm, e.g. Ed25519. Not sure what type of keys you have?
-You can check with the following:
+RSA keys work: the server accepts RSA signatures made with SHA-2
+(`rsa-sha2-256` and `rsa-sha2-512`), which current OpenSSH clients use, as
+well as the legacy SHA-1 `ssh-rsa` signatures of older clients. Ed25519 keys
+are still the better choice for new keys. Not sure what type of keys you
+have? You can check with the following:
 
 ```sh
 $ find ~/.ssh/id_*.pub -exec ssh-keygen -l -f {} \;
 ```
-
-If you’re curious about the inner workings of this problem have a look at:
-
-- https://github.com/golang/go/issues/37278
-- https://go-review.googlesource.com/c/crypto/+/220037
-- https://github.com/golang/crypto/pull/197
 
 ## Contributing
 
