@@ -126,3 +126,55 @@ func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
 	is.NoErr(be.DeleteRepository(ctx, "orphan"))
 	is.True(errors.Is(be.DeleteRepository(ctx, "orphan"), proto.ErrRepoNotFound))
 }
+
+// TestMutationsOnMissingUserOrKey verifies that changing a user who does not
+// exist, or removing a key the user does not have, reports it instead of
+// succeeding or leaking a raw SQL error.
+func TestMutationsOnMissingUserOrKey(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+
+	ctx := context.Background()
+	ctx = config.WithContext(ctx, cfg)
+	ctx = db.WithContext(ctx, be.db)
+	ctx = store.WithContext(ctx, be.store)
+	admin, err := be.User(ctx, "admin")
+	is.NoErr(err)
+	ctx = proto.WithUserContext(ctx, admin)
+
+	_, err = be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{})
+	is.NoErr(err)
+	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+
+	pk := newTestPublicKey(t)
+
+	isErr := func(err, want error) {
+		t.Helper()
+		if !errors.Is(err, want) {
+			t.Errorf("err = %v, want %v", err, want)
+		}
+	}
+
+	isErr(be.AddCollaborator(ctx, "repo", "ghost", access.ReadWriteAccess), proto.ErrUserNotFound)
+	isErr(be.AddPublicKey(ctx, "ghost", pk), proto.ErrUserNotFound)
+	isErr(be.RemovePublicKey(ctx, "ghost", pk), proto.ErrUserNotFound)
+	isErr(be.RemovePublicKey(ctx, "alice", pk), proto.ErrPublicKeyNotFound)
+	isErr(be.SetAdmin(ctx, "ghost", true), proto.ErrUserNotFound)
+	isErr(be.SetUsername(ctx, "ghost", "phantom"), proto.ErrUserNotFound)
+	isErr(be.SetPassword(ctx, "ghost", "hunter2-password"), proto.ErrUserNotFound)
+
+	// Nothing was created along the way.
+	_, err = be.User(ctx, "phantom")
+	isErr(err, proto.ErrUserNotFound)
+	collabs, err := be.Collaborators(ctx, "repo")
+	is.NoErr(err)
+	is.Equal(len(collabs), 0)
+
+	// The same changes on a user who exists still succeed.
+	is.NoErr(be.AddPublicKey(ctx, "alice", pk))
+	is.NoErr(be.RemovePublicKey(ctx, "alice", pk))
+	is.NoErr(be.SetAdmin(ctx, "alice", false))
+	is.NoErr(be.SetPassword(ctx, "alice", "hunter2-password"))
+	is.NoErr(be.SetUsername(ctx, "alice", "alicia"))
+}
