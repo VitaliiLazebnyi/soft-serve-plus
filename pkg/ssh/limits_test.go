@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
+	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -319,5 +322,131 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// startSessionLimitServer starts a bare SSH server whose session channels are
+// limited by limitSessions to maxSessions, running handler for each shell or
+// exec request and sub for the "test" subsystem.
+func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler, sub ssh.SubsystemHandler) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &ssh.Server{
+		Handler:           handler,
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{"test": sub},
+		PublicKeyHandler:  func(ssh.Context, ssh.PublicKey) bool { return true },
+		ConnCallback:      connCallback(newConnLimiter(0, 0), log.Default()),
+		ChannelHandlers: map[string]ssh.ChannelHandler{
+			"session": limitSessions(ssh.DefaultSessionHandler, maxSessions),
+		},
+	}
+	srv.AddHostKey(signer)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(l) //nolint: errcheck
+	t.Cleanup(func() { _ = srv.Close() })
+	return l.Addr().String()
+}
+
+// TestLimitSessionsHoldsPlaceWhileHandlerRuns checks that a session keeps its
+// place until the command it started has returned, not just until the client
+// closes the channel, so a client cannot run more commands on one connection
+// than max_sessions by closing each channel as soon as it has started it.
+func TestLimitSessionsHoldsPlaceWhileHandlerRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start func(*gossh.Session) error
+	}{
+		{"exec", func(s *gossh.Session) error { return s.Start("slow") }},
+		{"shell", func(s *gossh.Session) error { return s.Shell() }},
+		{"subsystem", func(s *gossh.Session) error { return s.RequestSubsystem("test") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started := make(chan struct{}, 1)
+			unblock := make(chan struct{})
+			var unblockOnce sync.Once
+			release := func() { unblockOnce.Do(func() { close(unblock) }) }
+			t.Cleanup(release)
+			block := func(ssh.Session) {
+				started <- struct{}{}
+				<-unblock
+			}
+			addr := startSessionLimitServer(t, 1, block, block)
+
+			c, err := dialClient(t, addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close() //nolint: errcheck
+
+			s, err := c.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.start(s); err != nil {
+				t.Fatal(err)
+			}
+			<-started
+			_ = s.Close()
+
+			// The handler still runs, so the only place stays taken however
+			// long the client waits after closing its channel.
+			for i := 0; i < 10; i++ {
+				s2, err := c.NewSession()
+				if err == nil {
+					_ = s2.Close()
+					t.Fatal("session accepted while a closed session's handler still runs")
+				}
+				if oce, ok := err.(*gossh.OpenChannelError); !ok || oce.Reason != gossh.ResourceShortage {
+					t.Fatalf("err = %v, want resource shortage", err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			release()
+			waitFor(t, "the place to be freed after the handler returned", func() bool {
+				s2, err := c.NewSession()
+				if err != nil {
+					return false
+				}
+				_ = s2.Close()
+				return true
+			})
+		})
+	}
+}
+
+// TestLimitSessionsFreesPlaceWithoutHandler checks that a session which never
+// starts a handler gives its place back when the client closes it, including
+// one whose subsystem request was refused.
+func TestLimitSessionsFreesPlaceWithoutHandler(t *testing.T) {
+	addr := startSessionLimitServer(t, 1, func(ssh.Session) {}, func(ssh.Session) {})
+	c, err := dialClient(t, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+
+	for i := 0; i < 3; i++ {
+		var s *gossh.Session
+		waitFor(t, "a session", func() bool {
+			s, err = c.NewSession()
+			return err == nil
+		})
+		if i == 1 {
+			if err := s.RequestSubsystem("missing"); err == nil {
+				t.Fatal("unknown subsystem accepted")
+			}
+		}
+		_ = s.Close()
 	}
 }

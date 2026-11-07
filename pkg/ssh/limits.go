@@ -149,9 +149,15 @@ func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 }
 
 // limitSessions wraps a session channel handler so that a connection holds at
-// most maxSessions session channels at once, as OpenSSH's MaxSessions does.
-// Further channels are rejected until one closes. A zero limit returns next
-// unchanged.
+// most maxSessions sessions at once, as OpenSSH's MaxSessions does. Further
+// channels are rejected until one ends. A zero limit returns next unchanged.
+//
+// A session holds its place until both its channel's request loop and the
+// handler it started, if any, have returned. ssh.DefaultSessionHandler runs
+// the shell, exec or subsystem handler in a goroutine of its own and returns
+// as soon as the client closes the channel, so freeing the place then would
+// let a client start a command, close the channel at once and repeat,
+// keeping any number of commands running on one connection.
 func limitSessions(next ssh.ChannelHandler, maxSessions int) ssh.ChannelHandler {
 	if maxSessions <= 0 {
 		return next
@@ -168,6 +174,64 @@ func limitSessions(next ssh.ChannelHandler, maxSessions int) ssh.ChannelHandler 
 			return
 		}
 		defer n.Add(-1)
-		next(srv, conn, newChan, ctx)
+		var running sync.WaitGroup
+		next(trackHandlers(srv, &running), conn, newChan, ctx)
+		running.Wait()
 	}
+}
+
+// trackHandlers returns a server for a single session channel that hands that
+// channel's handlers to ssh.DefaultSessionHandler as srv does, but counts the
+// one it starts in running until it returns.
+//
+// The handler starts in a goroutine that may not have run by the time the
+// request loop returns, so the count goes up in the session request callback,
+// which the request loop calls before it starts a handler; the request loop
+// accepts at most one shell, exec or subsystem request per session. The
+// returned server only carries the fields ssh.DefaultSessionHandler reads:
+// copying the whole of srv would copy its locks.
+func trackHandlers(srv *ssh.Server, running *sync.WaitGroup) *ssh.Server {
+	t := &ssh.Server{
+		PtyCallback: srv.PtyCallback,
+		PtyHandler:  srv.PtyHandler,
+	}
+	if srv.Handler != nil {
+		h := srv.Handler
+		t.Handler = func(s ssh.Session) {
+			defer running.Done()
+			h(s)
+		}
+	}
+	if srv.SubsystemHandlers != nil {
+		t.SubsystemHandlers = make(map[string]ssh.SubsystemHandler, len(srv.SubsystemHandlers))
+		for name, h := range srv.SubsystemHandlers {
+			if h == nil {
+				continue
+			}
+			t.SubsystemHandlers[name] = func(s ssh.Session) {
+				defer running.Done()
+				h(s)
+			}
+		}
+	}
+	cb := srv.SessionRequestCallback
+	t.SessionRequestCallback = func(s ssh.Session, requestType string) bool {
+		if cb != nil && !cb(s, requestType) {
+			return false
+		}
+		// Count the handler only when the request loop is about to start
+		// one, mirroring its own checks after this callback.
+		switch requestType {
+		case "shell", "exec":
+			if t.Handler != nil {
+				running.Add(1)
+			}
+		case "subsystem":
+			if t.SubsystemHandlers[s.Subsystem()] != nil || t.SubsystemHandlers["default"] != nil {
+				running.Add(1)
+			}
+		}
+		return true
+	}
+	return t
 }
