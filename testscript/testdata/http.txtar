@@ -194,6 +194,20 @@ cp stdout private.txt
 curl http://localhost:$HTTP_PORT/nope.git/info/refs?service=git-receive-pack
 cmp stdout private.txt
 
+# an access token logs in as its owner when sent as the username with any
+# password, or as the password with an empty username, the owner's name or a
+# placeholder that names no user; with another user's name it is refused
+curl http://$TOKEN:x-oauth-basic@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
+stdout '.*git-upload-pack.*'
+curl http://:$TOKEN@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
+stdout '.*git-upload-pack.*'
+curl http://admin:$TOKEN@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
+stdout '.*git-upload-pack.*'
+curl http://x-access-token:$TOKEN@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
+stdout '.*git-upload-pack.*'
+curl http://user1:$TOKEN@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
+stdout '403.*'
+
 # deny access ask for credentials
 # this means the server responded with a 401 and prompted for credentials
 # but we disable git terminal prompting to we get a fatal instead of a 401 "Unauthorized"
