@@ -105,7 +105,15 @@ func PubkeyCommand() *cobra.Command {
 				return err
 			}
 
-			return be.RemovePublicKey(ctx, user.Username(), apk)
+			// The check above used the key list read when the session
+			// looked the user up. RemoveOwnPublicKey counts again under a
+			// lock, so a removal racing in from another of the user's
+			// sessions cannot leave the account with no keys.
+			err = be.RemoveOwnPublicKey(ctx, user.Username(), apk)
+			if errors.Is(err, backend.ErrLastPublicKey) {
+				return errRemoveLastKey
+			}
+			return err
 		},
 	}
 

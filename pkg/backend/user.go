@@ -495,6 +495,50 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 	)
 }
 
+// ErrLastPublicKey is returned by RemoveOwnPublicKey when the key is the
+// account's only public key.
+var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
+
+// RemoveOwnPublicKey is RemovePublicKey for a user removing a key from their
+// own account: it refuses, with ErrLastPublicKey, to remove the account's
+// only key, which would leave no way to sign in over SSH.
+//
+// The count and the removal happen in one transaction that holds the user's
+// row (LockUserRepos takes the row lock on Postgres; SQLite transactions
+// begin IMMEDIATE and take turns), so two sessions of one user that each
+// remove the other's key at once cannot both pass the check and leave the
+// account with no keys: the second sees one key left and is refused.
+func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		if err != nil {
+			return err
+		}
+		if err := d.store.LockUserRepos(ctx, tx, user.ID); err != nil {
+			return err
+		}
+		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
+		if err != nil {
+			return err
+		}
+		if len(keys) <= 1 && slices.ContainsFunc(keys, func(k ssh.PublicKey) bool {
+			return sshutils.KeysEqual(k, pk)
+		}) {
+			return ErrLastPublicKey
+		}
+		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+	})
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrUserNotFound
+	}
+	return db.WrapError(err)
+}
+
 // ListPublicKeys lists the public keys of a user.
 func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.PublicKey, error) {
 	username = strings.ToLower(username)
