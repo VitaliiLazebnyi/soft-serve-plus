@@ -199,6 +199,13 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 		response.Transfer = TransferBasic
 	}
 
+	// The oids were sent as SHA-256 hashes. A server that answers in another
+	// hash algorithm names different objects, whose content would never
+	// verify against the pointers. An empty hash_algo means sha256.
+	if response.HashAlgo != "" && response.HashAlgo != HashAlgorithmSHA256 {
+		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", response.HashAlgo, HashAlgorithmSHA256)
+	}
+
 	return &response, nil
 }
 
