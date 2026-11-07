@@ -189,6 +189,12 @@ func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.
 	if err := d.checkCanCreate(ctx, user); err != nil {
 		return nil, err
 	}
+	// Report an invalid name before the limit, as ImportRepository does.
+	// createRepository sanitizes and validates again; both are idempotent.
+	name = utils.SanitizeRepo(name)
+	if err := utils.ValidateRepo(name); err != nil {
+		return nil, err
+	}
 	limited := d.repoLimited(ctx, user)
 	if limited {
 		if err := d.checkRepoLimit(ctx, user); err != nil {

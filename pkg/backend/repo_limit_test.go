@@ -91,6 +91,12 @@ func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
 
 	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
 	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+
+	// An invalid name is reported as such even at the limit, as for import.
+	_, err = be.CreateRepository(ctx, "bad name!", alice, proto.RepositoryOptions{})
+	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
+	_, err = be.ImportRepository(ctx, "bad name!", alice, "https://example.com/x.git", proto.RepositoryOptions{})
+	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
 }
 
 // Server admins are exempt: admin accounts, and the holder of a key in
