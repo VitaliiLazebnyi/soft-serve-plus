@@ -301,7 +301,9 @@ type Config struct {
 	// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
 	// "repo blob" command read into memory to display. Larger files are
 	// refused ("repo blob --raw" streams them instead), and a larger README
-	// is not shown. 0 means no limit.
+	// is not shown. 0 means no limit. The TUI renders a file synchronously,
+	// so this limit is also what bounds the time and memory one file view
+	// takes.
 	MaxBlobSize int64 `env:"MAX_BLOB_SIZE" yaml:"max_blob_size"`
 
 	// DefaultPrivate makes repositories created without an explicit

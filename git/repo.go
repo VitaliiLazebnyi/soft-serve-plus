@@ -158,19 +158,6 @@ func (r *Repository) TreePath(ref *Reference, path string) (*Tree, error) {
 	return t.SubTree(path)
 }
 
-// Diff returns the diff for the given commit.
-func (r *Repository) Diff(commit *Commit) (*Diff, error) {
-	diff, err := r.Repository.Diff(commit.ID.String(), DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, git.DiffOptions{
-		CommandOptions: git.CommandOptions{
-			Envs: []string{"GIT_CONFIG_GLOBAL=/dev/null"},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toDiff(diff), nil
-}
-
 // Patch returns the patch for the given reference.
 func (r *Repository) Patch(commit *Commit) (string, error) {
 	diff, err := r.Diff(commit)
