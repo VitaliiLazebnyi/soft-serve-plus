@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	neturl "net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -264,9 +266,7 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 
 	if res != nil {
 		resStatus = res.StatusCode
-		for k, v := range res.Header {
-			resHeaders += k + ": " + v[0] + "\n"
-		}
+		resHeaders = formatHeaders(res.Header)
 
 		if res.Body != nil {
 			defer res.Body.Close() //nolint: errcheck
@@ -316,6 +316,40 @@ func readResponseBody(body io.Reader) (string, error) {
 	return string(b), err
 }
 
+// maxStoredHeaders is how much of a request's or response's headers is
+// stored with a delivery. The secure client already refuses responses whose
+// headers pass ssrf.MaxResponseHeaderBytes; this bounds the stored text
+// whatever client sent the request.
+const maxStoredHeaders = 64 << 10
+
+// truncatedHeadersMarker is appended to stored headers that were cut off at
+// maxStoredHeaders.
+const truncatedHeadersMarker = "[headers truncated by Soft Serve]\n"
+
+// formatHeaders renders h as "Key: value" lines, one per header with its
+// first value, sorted by key so a delivery reads the same on every view. It
+// stops before the line that would take it past maxStoredHeaders and marks
+// the cut with truncatedHeadersMarker.
+func formatHeaders(h http.Header) string {
+	keys := slices.Sorted(maps.Keys(h))
+	var b strings.Builder
+	for _, k := range keys {
+		v := h[k]
+		if len(v) == 0 {
+			continue
+		}
+		if b.Len()+len(k)+len(": ")+len(v[0])+len("\n") > maxStoredHeaders {
+			b.WriteString(truncatedHeadersMarker)
+			break
+		}
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(v[0])
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // recordDelivery writes one delivery row. It uses a fresh, short context that
 // keeps ctx's values but not its cancellation or deadline, so an attempt that
 // ran out of time or was cancelled is still recorded.
@@ -323,10 +357,7 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
-	var reqHeaders string
-	for k, v := range req.headers {
-		reqHeaders += k + ": " + v[0] + "\n"
-	}
+	reqHeaders := formatHeaders(req.headers)
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
