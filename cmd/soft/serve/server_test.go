@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -605,4 +607,68 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	requireServerClosed(t, "Git daemon", gitDaemon.Serve, daemon.ErrServerClosed)
+}
+
+// blockingJob is a cron job that runs blockingJobHook, when it is set, with
+// the context the server gives the job.
+type blockingJob struct{}
+
+var blockingJobHook atomic.Pointer[func(context.Context)]
+
+func (blockingJob) Spec(context.Context) string { return "@every 1s" }
+
+func (blockingJob) Func(ctx context.Context) func() {
+	return func() {
+		if h := blockingJobHook.Load(); h != nil {
+			(*h)(ctx)
+		}
+	}
+}
+
+// Shutdown cancels a running cron job, such as a mirror sync, and waits for
+// it to end, so it does not run on against the database the caller closes
+// next.
+func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
+	jobs.Register("test-blocking", blockingJob{})
+	started := make(chan struct{}, 1)
+	var finished atomic.Bool
+	hook := func(ctx context.Context) {
+		select {
+		case started <- struct{}{}:
+		default:
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+		}
+		// Still busy for a moment after the cancellation, as a job
+		// stopping its git processes is.
+		time.Sleep(200 * time.Millisecond)
+		finished.Store(true)
+	}
+	blockingJobHook.Store(&hook)
+	t.Cleanup(func() { blockingJobHook.Store(nil) })
+
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	errc := startAsync(s)
+	select {
+	case <-started:
+	case err := <-errc:
+		t.Fatalf("Start returned %v before the job ran", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cron job did not run")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx, ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if !finished.Load() {
+		t.Fatal("Shutdown returned while the cron job was still running")
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
 }

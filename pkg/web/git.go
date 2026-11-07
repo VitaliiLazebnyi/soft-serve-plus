@@ -108,8 +108,13 @@ func withParams(next http.Handler) http.Handler {
 
 // GitController is a router for git services.
 func GitController(_ context.Context, r *mux.Router) {
+	gitController(r, newPushCreates())
+}
+
+// gitController routes git services, tracking the repositories HTTP pushes
+// create in pending.
+func gitController(r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
-	pending := newPushCreates()
 	for _, route := range gitRoutes {
 		route.pending = pending
 		// NOTE: withParam must always be the outermost wrapper, otherwise the

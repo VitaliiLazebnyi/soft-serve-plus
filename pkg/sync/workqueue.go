@@ -48,8 +48,12 @@ func NewWorkPool(ctx context.Context, workers int, opts ...WorkPoolOption) *Work
 	return wq
 }
 
-// Run starts the workers and waits for them to finish.
+// Run starts the workers and waits for them to finish. Once the pool's
+// context is done no more work starts, but Run still waits for the work
+// already running, which is expected to stop on the same context.
 func (wq *WorkPool) Run() {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	wq.work.Range(func(key, value any) bool {
 		id := key.(string)
 		fn := value.(func())
@@ -58,7 +62,9 @@ func (wq *WorkPool) Run() {
 			return false
 		}
 
+		wg.Add(1)
 		go func(id string, fn func()) {
+			defer wg.Done()
 			defer wq.sem.Release(1)
 			fn()
 			wq.work.Delete(id)
@@ -66,10 +72,6 @@ func (wq *WorkPool) Run() {
 
 		return true
 	})
-
-	if err := wq.sem.Acquire(wq.ctx, int64(wq.workers)); err != nil {
-		wq.logf("workpool: %v", err)
-	}
 }
 
 // Add adds a new job to the pool.

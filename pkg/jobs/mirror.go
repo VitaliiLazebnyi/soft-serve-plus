@@ -142,6 +142,10 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 						cmd.AddEnvs(syncEnv...)
 
 						if _, err := cmd.RunInDir(r.Path); err != nil {
+							if ctx.Err() != nil {
+								// The server is stopping.
+								return
+							}
 							logger.Error("error running git remote update", "repo", name, "err", err)
 						}
 					}
