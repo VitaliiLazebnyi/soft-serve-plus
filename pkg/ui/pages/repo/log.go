@@ -66,19 +66,9 @@ func NewLog(common common.Common) *Log {
 		vp:         viewport.New(common),
 		activeView: logViewCommits,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, LogItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, LogItemDelegate{&common})
 	l.selector = selector
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	l.spinner = s
 	return l
 }
@@ -109,16 +99,14 @@ func (l *Log) SetSize(width, height int) {
 func (l *Log) ShortHelp() []key.Binding {
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.SelectItem,
 			copyKey,
 		}
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.BackItem,
@@ -137,8 +125,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 	b := make([][]key.Binding, 0)
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		b = append(b, []key.Binding{
 			l.common.KeyMap.SelectItem,
 			l.common.KeyMap.BackItem,
@@ -157,8 +144,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 			},
 		}...)
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		k := l.vp.KeyMap
 		b = append(b, []key.Binding{
 			l.common.KeyMap.BackItem,

@@ -30,6 +30,11 @@ type Code struct {
 	renderMutex   sync.Mutex
 	styleConfig   gansi.StyleConfig
 
+	// isMarkdown caches IsFileMarkdown for content and extension, which can
+	// mean running chroma's analysers over the whole content, while the
+	// content is rendered again on every resize. SetContent clears it.
+	isMarkdown *bool
+
 	SideNotePercent float64
 	TabWidth        int
 	ShowLineNumber  bool
@@ -65,7 +70,18 @@ func (r *Code) SetSize(width, height int) {
 func (r *Code) SetContent(c, ext string) tea.Cmd {
 	r.content = c
 	r.extension = ext
+	r.isMarkdown = nil
 	return r.Init()
+}
+
+// markdown reports whether the content is markdown, working it out only once
+// per SetContent.
+func (r *Code) markdown() bool {
+	if r.isMarkdown == nil {
+		md := common.IsFileMarkdown(r.content, r.extension)
+		r.isMarkdown = &md
+	}
+	return *r.isMarkdown
 }
 
 // SetSideNote sets the sidenote of the Code.
@@ -92,7 +108,7 @@ func (r *Code) Init() tea.Cmd {
 	// 4-spaces.
 	content = strings.ReplaceAll(content, "\t", strings.Repeat(" ", r.TabWidth))
 
-	if r.UseGlamour && common.IsFileMarkdown(content, r.extension) {
+	if r.UseGlamour && r.markdown() {
 		md, err := r.glamourize(w, content)
 		if err != nil {
 			return common.ErrorCmd(err)

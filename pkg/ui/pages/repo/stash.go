@@ -44,18 +44,8 @@ type Stash struct {
 // NewStash creates a new stash model.
 func NewStash(common common.Common) *Stash {
 	code := code.New(common, "", "")
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
-	selector := selector.New(common, []selector.IdentifiableItem{}, StashItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	s := common.NewSpinner()
+	selector := selector.NewPane(common, StashItemDelegate{&common})
 	return &Stash{
 		code:    code,
 		common:  common,
@@ -92,11 +82,15 @@ func (s *Stash) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (s *Stash) FullHelp() [][]key.Binding {
+	copyKey := s.common.CopyKey("copy message")
+	if s.state == stashStatePatch {
+		copyKey = s.common.CopyKey("copy patch")
+	}
 	b := [][]key.Binding{
 		{
 			s.common.KeyMap.Select,
 			s.common.KeyMap.Back,
-			s.common.KeyMap.Copy,
+			copyKey,
 		},
 		{
 			s.code.KeyMap.Down,

@@ -53,6 +53,9 @@ type FileItemsMsg []selector.IdentifiableItem
 type FileContentMsg struct {
 	content string
 	ext     string
+	// isMarkdown is worked out once, when the file is loaded, because chroma
+	// may have to analyse the whole content to tell.
+	isMarkdown bool
 }
 
 // FileBlameMsg is a message that contains the blame of a file.
@@ -86,20 +89,10 @@ func NewFiles(common common.Common) *Files {
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, FileItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, FileItemDelegate{&common})
 	f.selector = selector
 	f.code.ShowLineNumber = f.lineNumber
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	f.spinner = s
 	return f
 }
@@ -154,7 +147,7 @@ func (f *Files) FullHelp() [][]key.Binding {
 	actionKeys := []key.Binding{}
 	switch f.activeView {
 	case filesViewFiles:
-		copyKey.SetHelp("c", "copy name")
+		copyKey = f.common.CopyKey("copy name")
 		k := f.selector.KeyMap
 		b = append(b, [][]key.Binding{
 			{
@@ -177,11 +170,10 @@ func (f *Files) FullHelp() [][]key.Binding {
 			actionKeys = append(actionKeys, lineNo)
 		}
 		actionKeys = append(actionKeys, blameView)
-		if common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) &&
-			!f.blameView {
+		if f.currentContent.isMarkdown && !f.blameView {
 			actionKeys = append(actionKeys, preview)
 		}
-		copyKey.SetHelp("c", "copy content")
+		copyKey = f.common.CopyKey("copy content")
 		k := f.code.KeyMap
 		b = append(b, []key.Binding{
 			f.common.KeyMap.BackItem,
@@ -241,7 +233,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case FileContentMsg:
 		f.activeView = filesViewContent
 		f.currentContent = msg
-		f.code.UseGlamour = common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext)
+		f.code.UseGlamour = msg.isMarkdown
 		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
 		f.code.GotoTop()
 	case FileBlameMsg:
@@ -295,7 +287,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				}
 				cmds = append(cmds, f.spinner.Tick)
 			case key.Matches(msg, preview) &&
-				common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) && !f.blameView:
+				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
 				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
 			}
@@ -475,7 +467,12 @@ func (f *Files) selectFileCmd() tea.Msg {
 		}
 
 		f.lastSelected = append(f.lastSelected, f.selector.Index())
-		return FileContentMsg{string(c), i.entry.Name()}
+		content, name := string(c), i.entry.Name()
+		return FileContentMsg{
+			content:    content,
+			ext:        name,
+			isMarkdown: common.IsFileMarkdown(content, name),
+		}
 	}
 
 	return common.ErrorMsg(errNoFileSelected)

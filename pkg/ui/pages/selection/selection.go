@@ -28,6 +28,13 @@ const (
 	lastPane
 )
 
+// refreshKey reloads the repository list, so repositories created, removed
+// or shared since the page opened show up without reconnecting.
+var refreshKey = key.NewBinding(
+	key.WithKeys("r"),
+	key.WithHelp("r", "refresh"),
+)
+
 func (p pane) String() string {
 	return []string{
 		"Repositories",
@@ -116,8 +123,7 @@ func (s *Selection) ShortHelp() []key.Binding {
 		s.common.KeyMap.Section,
 	)
 	if s.activePane == selectorPane {
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		kb = append(kb,
 			s.common.KeyMap.Select,
 			k.Filter,
@@ -151,13 +157,13 @@ func (s *Selection) FullHelp() [][]key.Binding {
 			k.Up,
 		})
 	case selectorPane:
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		k := s.selector.KeyMap
 		if !s.IsFiltering() {
 			b[0] = append(b[0],
 				s.common.KeyMap.Select,
 				copyKey,
+				refreshKey,
 			)
 		}
 		b = append(b, []key.Binding{
@@ -229,10 +235,31 @@ func (s *Selection) Init() tea.Cmd {
 		items[i] = it
 	}
 	return tea.Batch(
+		s.setItems(items),
 		s.selector.Init(),
-		s.selector.SetItems(items),
 		readmeCmd,
 	)
+}
+
+// setItems replaces the listed repositories and keeps the highlighted one
+// highlighted when it is still listed, so a refresh does not move the cursor.
+func (s *Selection) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	var id string
+	if s.selector.FilterState() == list.Unfiltered {
+		if it := s.selector.SelectedItem(); it != nil {
+			id = it.ID()
+		}
+	}
+	cmd := s.selector.SetItems(items)
+	if id != "" {
+		for i, it := range items {
+			if it.ID() == id {
+				s.selector.Select(i)
+				break
+			}
+		}
+	}
+	return cmd
 }
 
 // Update implements tea.Model.
@@ -256,6 +283,9 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, s.common.KeyMap.Back):
 				cmds = append(cmds, s.selector.Init())
+			case key.Matches(msg, refreshKey) && s.activePane == selectorPane &&
+				s.FilterState() != list.Filtering:
+				cmds = append(cmds, s.Init())
 			}
 		}
 		t, cmd := s.tabs.Update(msg)

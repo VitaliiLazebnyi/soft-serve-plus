@@ -70,8 +70,7 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 	c.Logger = c.Logger.WithPrefix("ui.repo")
 	tb := tabs.New(c, ts)
 	// Make sure the order matches the order of tab constants above.
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(c.Styles.Spinner))
+	s := c.NewSpinner()
 	r := &Repo{
 		common:     c,
 		tabs:       tb,
