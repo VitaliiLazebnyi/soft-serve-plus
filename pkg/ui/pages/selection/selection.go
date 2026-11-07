@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -180,14 +179,26 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
+// ReposMsg carries the repositories the selection page lists, loaded off
+// the UI goroutine by Init.
+type ReposMsg struct {
+	items      []selector.IdentifiableItem
+	readme     string
+	readmePath string
+	hasReadme  bool
+}
+
 // Init implements tea.Model.
 func (s *Selection) Init() tea.Cmd {
-	var readmeCmd tea.Cmd
-	cfg := s.common.Config()
-	if cfg == nil {
+	if s.common.Config() == nil {
 		return nil
 	}
+	return s.loadReposCmd
+}
 
+// loadReposCmd lists the repositories the caller may read, and the server
+// readme, without blocking the UI.
+func (s *Selection) loadReposCmd() tea.Msg {
 	ctx := s.common.Context()
 	be := s.common.Backend()
 	pk := s.common.PublicKey()
@@ -195,44 +206,36 @@ func (s *Selection) Init() tea.Cmd {
 		return nil
 	}
 
-	repos, err := be.Repositories(ctx)
-	if err != nil {
-		return common.ErrorCmd(err)
-	}
-	sortedItems := make(Items, 0)
-	for _, r := range repos {
-		if r.Name() == ".soft-serve" {
-			readme, path, err := backend.Readme(r, nil)
-			if err != nil {
-				continue
-			}
-
-			readmeCmd = s.readme.SetContent(readme, path)
+	var msg ReposMsg
+	// The server readme is the welcome page, so it is shown to everyone.
+	if r, err := be.Repository(ctx, ".soft-serve"); err == nil {
+		if readme, path, err := backend.Readme(r, nil); err == nil {
+			msg.readme, msg.readmePath, msg.hasReadme = readme, path, true
 		}
+	}
 
+	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
+	if err != nil {
+		return common.ErrorMsg(err)
+	}
+	sortedItems := make(Items, 0, len(repos))
+	for _, r := range repos {
 		if r.IsHidden() {
 			continue
 		}
-		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
-		if al >= access.ReadOnlyAccess {
-			item, err := NewItem(s.common, r)
-			if err != nil {
-				s.common.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
-				continue
-			}
-			sortedItems = append(sortedItems, item)
+		item, err := NewItem(s.common, r)
+		if err != nil {
+			s.common.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
+			continue
 		}
+		sortedItems = append(sortedItems, item)
 	}
 	sort.Sort(sortedItems)
-	items := make([]selector.IdentifiableItem, len(sortedItems))
+	msg.items = make([]selector.IdentifiableItem, len(sortedItems))
 	for i, it := range sortedItems {
-		items[i] = it
+		msg.items[i] = it
 	}
-	return tea.Batch(
-		s.selector.Init(),
-		s.selector.SetItems(items),
-		readmeCmd,
-	)
+	return msg
 }
 
 // Update implements tea.Model.
@@ -265,6 +268,12 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
+	case ReposMsg:
+		cmds = append(cmds, s.selector.SetItems(msg.items), s.selector.Init())
+		if msg.hasReadme {
+			cmds = append(cmds, s.readme.SetContent(msg.readme, msg.readmePath))
+		}
+		return s, tea.Batch(cmds...)
 	}
 	switch s.activePane {
 	case readmePane:
