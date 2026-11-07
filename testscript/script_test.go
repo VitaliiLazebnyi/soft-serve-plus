@@ -216,8 +216,7 @@ func TestScript(t *testing.T) {
 			cfg.Stats.ListenAddr = statsListen
 			cfg.LFS.Enabled = true
 
-			// Parse os SOFT_SERVE environment variables
-			if err := cfg.ParseEnv(); err != nil {
+			if err := applyTestEnv(cfg); err != nil {
 				return err
 			}
 
@@ -244,6 +243,22 @@ func TestScript(t *testing.T) {
 			return nil
 		},
 	})
+}
+
+// applyTestEnv takes the database driver and data source from the
+// environment, so the scripts can run against postgres, and validates cfg.
+// Every other SOFT_SERVE_* variable of the developer's environment is
+// ignored: the data path, listen addresses and admin keys belong to the
+// test, and the scripts would otherwise create, change and delete users
+// and repositories wherever SOFT_SERVE_DATA_PATH points.
+func applyTestEnv(cfg *config.Config) error {
+	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DRIVER"); ok {
+		cfg.DB.Driver = v
+	}
+	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DATA_SOURCE"); ok {
+		cfg.DB.DataSource = v
+	}
+	return cfg.Validate()
 }
 
 func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
