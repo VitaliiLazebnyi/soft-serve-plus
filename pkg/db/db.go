@@ -85,8 +85,9 @@ func sqliteImmediateTx(dsn string) string {
 }
 
 // postgresUTCConfig parses dsn into a lib/pq configuration whose sessions
-// use UTC as their TimeZone, whatever the DSN or the server's default says. The tables store times in TIMESTAMP (without time zone)
-// columns, filled by CURRENT_TIMESTAMP or from UTC time.Time values, and
+// use UTC as their TimeZone, whatever the DSN or the server's default
+// says. The tables store times in TIMESTAMP (without time zone) columns,
+// filled by CURRENT_TIMESTAMP or from UTC time.Time values, and
 // lib/pq reads them back as UTC. In any other session time zone
 // CURRENT_TIMESTAMP stores that zone's wall clock, which is then read back
 // off by the zone's UTC offset.
