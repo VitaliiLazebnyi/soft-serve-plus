@@ -167,11 +167,21 @@ self-explanatory and will look like this:
 # This is the name that will be displayed in the UI.
 name: "Soft Serve Plus"
 
-# Log format to use. Valid values are "json", "logfmt", and "text".
-log_format: "text"
+# Logging configuration.
+log:
+  # Log format to use. Valid values are "json", "logfmt", and "text".
+  format: "text"
+  # Time format for the log "timestamp" field.
+  # Should be described in Golang's time format.
+  time_format: "2006-01-02 15:04:05"
+  # Path to the log file. Leave empty to write to stderr.
+  #path: ""
 
 # The SSH server configuration.
 ssh:
+  # Enable SSH.
+  enabled: true
+
   # The address on which the SSH server will listen.
   listen_addr: ":23231"
 
@@ -180,18 +190,19 @@ ssh:
   public_url: "ssh://localhost:23231"
 
   # The path to the SSH server's private key.
-  key_path: "ssh/soft_serve_host"
+  key_path: "ssh/soft_serve_host_ed25519"
 
-  # The path to the SSH server's client private key.
-  # This key will be used to authenticate the server to make git requests to
-  # ssh remotes.
-  client_key_path: "ssh/soft_serve_client"
+  # The path to the server's client private key. This key will be used to
+  # authenticate the server to make git requests to ssh remotes.
+  client_key_path: "ssh/soft_serve_client_ed25519"
 
   # How the server's ssh client verifies host keys of ssh remotes it imports
   # or mirrors from, checked against <data_path>/ssh/known_hosts.
   # "accept-new" records a host key on first contact and refuses a changed
   # one (needs OpenSSH 7.6 or newer). "yes" refuses any host that is not
-  # already in known_hosts; use it with a pre-seeded known_hosts file.
+  # already in known_hosts; use it with a pre-seeded known_hosts file. The
+  # client always runs with BatchMode=yes, so it fails fast instead of
+  # prompting for a passphrase.
   client_strict_host_key_checking: "accept-new"
 
   # The ssh hosts that repositories may be imported from or mirrored. The
@@ -200,11 +211,8 @@ ssh:
   # or CIDR ranges, each with an optional port. When the list is empty, only
   # server admins may import from or mirror ssh remotes. Once the list is
   # non-empty it binds admins too: they may then reach only the hosts it
-  # names. A mirror is synced with its owner's privileges, so a key in
-  # initial_admin_keys that belongs to a non-admin account may import from
-  # ssh but not mirror from it, nor turn mirroring on later. To let such an
-  # account mirror, give it the admin flag, or list the host here, keeping
-  # in mind that the list then limits every admin as well.
+  # names. A mirror is synced with its owner's privileges, so mirroring
+  # from ssh needs an owner with the admin flag or a host on this list.
   # CIDR entries are checked against DNS only at import or sync time and ssh
   # resolves the name again, so prefer hostnames for anything you do not
   # control. The list is matched against the name given to ssh; your
@@ -219,21 +227,49 @@ ssh:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
-  idle_timeout: 120
+  # A value of 0 means no timeout.
+  idle_timeout: 600
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
-  # SHA-1 based ones. Unknown names are rejected at startup. See
-  # "SSH Algorithms" below.
+  # SHA-1 based diffie-hellman-group14-sha1, diffie-hellman-group1-sha1,
+  # diffie-hellman-group-exchange-sha1, hmac-sha1 and hmac-sha1-96. Names
+  # x/crypto does not implement are rejected at startup. A list replaces the
+  # default, so to let an old client that only speaks SHA-1 connect, copy the
+  # full default list and append the legacy algorithm. Listing fewer would
+  # drop the rest, such as the post-quantum mlkem768x25519-sha256:
+  #   kex_algorithms:
+  #     - "mlkem768x25519-sha256"
+  #     - "curve25519-sha256"
+  #     - "ecdh-sha2-nistp256"
+  #     - "ecdh-sha2-nistp384"
+  #     - "ecdh-sha2-nistp521"
+  #     - "diffie-hellman-group14-sha256"
+  #     - "diffie-hellman-group16-sha512"
+  #     - "diffie-hellman-group-exchange-sha256"
+  #     - "diffie-hellman-group14-sha1" # legacy, appended
+  #   macs:
+  #     - "hmac-sha2-256-etm@openssh.com"
+  #     - "hmac-sha2-512-etm@openssh.com"
+  #     - "hmac-sha2-256"
+  #     - "hmac-sha2-512"
+  #     - "hmac-sha1" # legacy, appended
   kex_algorithms: []
   ciphers: []
   macs: []
 
 # The Git daemon configuration.
 git:
+  # Enable the Git daemon.
+  enabled: true
+
   # The address on which the Git daemon will listen.
   listen_addr: ":9418"
+
+  # The public URL of the Git daemon server.
+  # This is the address that will be used to clone repositories.
+  public_url: "git://localhost"
 
   # The maximum number of seconds a connection can take.
   # A value of 0 means no timeout.
@@ -247,6 +283,9 @@ git:
 
 # The HTTP server configuration.
 http:
+  # Enable the HTTP server.
+  enabled: true
+
   # The address on which the HTTP server will listen.
   listen_addr: ":23232"
 
@@ -275,12 +314,10 @@ http:
       - "Authorization"
       - "Access-Control-Request-Method"
       - "Access-Control-Allow-Origin"
-
     # The allowed cross-origin URLs
     allowed_origins:
       - "http://localhost:23232" # always allowed
       # - "https://example.com"
-
     # The allowed cross-origin methods
     allowed_methods:
       - "GET"
@@ -288,6 +325,16 @@ http:
       - "POST"
       - "PUT"
       - "OPTIONS"
+
+# The stats server configuration.
+stats:
+  # Enable the stats server.
+  enabled: true
+
+  # The address on which the stats server will listen. It serves Prometheus
+  # metrics at /metrics without authentication, and they name repositories,
+  # private ones included, so keep it off untrusted networks.
+  listen_addr: "localhost:23233"
 
 # The database configuration.
 db:
@@ -341,23 +388,18 @@ webhook:
     # - "10.0.0.0/8"
     # - "127.0.0.1:8080"
 
-# The stats server configuration.
-stats:
-  # The address on which the stats server will listen.
-  listen_addr: ":23233"
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
 # or get an HTTP LFS token (git-lfs-authenticate): both need an account.
 #initial_admin_keys:
-#  - "ssh-rsa AAAAB3NzaC1yc2..."
+#  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
 
-# Override the anon-access and allow-keyless settings below (normally
-# managed at runtime via the `settings` command and stored in the
-# database). If set, these always take precedence over the database, for
-# as long as they remain set -- not just on first run. This is intended for
-# scripted, non-production bootstrapping (e.g. spinning up a throwaway
-# server for local dev tooling), not for production use.
-#anon_access: "admin-access"
+# Override the anon-access and allow-keyless settings (normally managed at
+# runtime with the "settings" command and stored in the database). While
+# set, these take precedence over the database on every read, not just on
+# first run. This is intended for scripted, non-production bootstrapping
+# (e.g. a throwaway server for local dev tooling), not for production use.
+#anon_access: "read-only"
 #allow_keyless: true
 
 # Only server admins (admin accounts or initial_admin_keys) may create
@@ -385,8 +427,8 @@ stats:
 # public).
 #default_private: false
 
-# Repository name to create on boot if it does not already exist.
-# Leave empty to disable.
+# Name of a repository to create automatically on boot if it doesn't already
+# exist. Empty disables this behavior.
 #default_repo: ""
 ```
 
