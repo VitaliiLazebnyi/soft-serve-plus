@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"charm.land/log/v2"
@@ -17,9 +18,8 @@ import (
 )
 
 // TestLFSLockRangeRejectsInvalidCursor checks that listing locks over SSH
-// refuses a cursor that is not a page number it hands out. A cursor that did
-// not parse used to read as the first page, and a huge one overflowed the
-// store's row offset, (cursor-1)*limit. The backend has no database on
+// refuses a cursor that is not a lock ID it hands out. A cursor that did not
+// parse used to read as the first page. The backend has no database on
 // purpose: a refused cursor must not reach it.
 func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
 	l := &lfsLockBackend{
@@ -32,8 +32,6 @@ func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
 		"1x",
 		"0",
 		"-1",
-		strconv.Itoa(lfs.MaxLocksCursor + 1),
-		"9223372036854775807",
 		"99999999999999999999",
 	} {
 		t.Run(cursor, func(t *testing.T) {
@@ -50,26 +48,29 @@ func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
 	}
 }
 
-// fullPageLockStore returns a full page of locks for any page, standing in
-// for a repository with more locks than the last page can reach.
-type fullPageLockStore struct{ store.Store }
+// pagedLockStore holds locks with the IDs 1 to n and returns them as the
+// database store does: up to limit of them after afterID, in ID order.
+type pagedLockStore struct {
+	store.Store
+	n int64
+}
 
-func (fullPageLockStore) GetLFSLocks(_ context.Context, _ db.Handler, repoID int64, page int, limit int) ([]models.LFSLock, error) {
-	locks := make([]models.LFSLock, limit)
-	for i := range locks {
-		locks[i] = models.LFSLock{ID: int64(i + 1), RepoID: repoID, UserID: 1, Path: strconv.Itoa(i)}
+func (s pagedLockStore) GetLFSLocks(_ context.Context, _ db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, error) {
+	var locks []models.LFSLock
+	for id := afterID + 1; id <= s.n && len(locks) < limit; id++ {
+		locks = append(locks, models.LFSLock{ID: id, RepoID: repoID, UserID: 1, Path: strconv.FormatInt(id, 10)})
 	}
 	return locks, nil
 }
 
-func (fullPageLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) (models.User, error) {
+func (pagedLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) (models.User, error) {
 	return models.User{ID: id, Username: "owner"}, nil
 }
 
-// TestLFSLockRangeLastPage checks that a full page at the largest cursor the
-// server accepts hands out no next cursor. It used to hand out
-// lfs.MaxLocksCursor+1, which the next request was then refused for.
-func TestLFSLockRangeLastPage(t *testing.T) {
+// TestLFSLockRangeCursor checks that listing locks over SSH hands out the ID
+// of the last lock of a full page as the next cursor, and starts the next
+// page after it, so paging lists every lock exactly once.
+func TestLFSLockRangeCursor(t *testing.T) {
 	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -80,7 +81,7 @@ func TestLFSLockRangeLastPage(t *testing.T) {
 		lfsTransfer: &lfsTransfer{
 			ctx:    context.Background(),
 			dbx:    dbx,
-			store:  fullPageLockStore{},
+			store:  pagedLockStore{n: 7},
 			logger: log.New(io.Discard),
 			repo:   lfsTestRepo{},
 			op:     lfs.OperationUpload,
@@ -88,17 +89,26 @@ func TestLFSLockRangeLastPage(t *testing.T) {
 		user: lfsTestUser{},
 	}
 
-	for cursor, want := range map[string]string{
-		strconv.Itoa(lfs.MaxLocksCursor - 1): strconv.Itoa(lfs.MaxLocksCursor),
-		strconv.Itoa(lfs.MaxLocksCursor):     "",
-	} {
-		var n int
-		next, err := l.Range(cursor, 1, func(transfer.Lock) error { n++; return nil })
+	var ids, cursors []string
+	cursor := ""
+	for range 10 {
+		next, err := l.Range(cursor, 3, func(lock transfer.Lock) error {
+			ids = append(ids, lock.ID())
+			return nil
+		})
 		if err != nil {
 			t.Fatalf("Range(%q): %v", cursor, err)
 		}
-		if n != 1 || next != want {
-			t.Errorf("Range(%q) = %d locks, next cursor %q; want 1, %q", cursor, n, next, want)
+		if next == "" {
+			break
 		}
+		cursors = append(cursors, next)
+		cursor = next
+	}
+	if got, want := strings.Join(ids, ","), "1,2,3,4,5,6,7"; got != want {
+		t.Errorf("listed locks %s, want %s", got, want)
+	}
+	if got, want := strings.Join(cursors, ","), "3,6"; got != want {
+		t.Errorf("next cursors %s, want %s", got, want)
 	}
 }
