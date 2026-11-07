@@ -300,7 +300,7 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 		return db.WrapError(err)
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if err := store.RepoGoneError(l.ctx, l.store, l.dbx, l.repo.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return nil, err
 		}
