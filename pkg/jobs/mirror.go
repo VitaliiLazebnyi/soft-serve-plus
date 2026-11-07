@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -86,13 +85,22 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		repos, err := b.Repositories(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			logger.Error("error getting repositories", "err", err)
 			return
 		}
 
 		// Divide the work up among the number of CPUs.
 		wq := sync.NewWorkPool(ctx, runtime.GOMAXPROCS(0),
-			sync.WithWorkPoolLogger(logger.Errorf),
+			sync.WithWorkPoolLogger(func(format string, args ...any) {
+				// The pool only fails to start work once ctx is done, which
+				// is an ordinary shutdown, not an error.
+				if ctx.Err() == nil {
+					logger.Errorf(format, args...)
+				}
+			}),
 		)
 
 		logger.Debug("updating mirror repos")
@@ -131,23 +139,8 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 					syncEnv := backend.RemoteGitEnv(cfg, remotes...)
 
-					cmds := []string{
-						"fetch --prune",         // fetch prune before updating remote
-						"remote update --prune", // update remote and prune remote refs
-					}
-
-					for _, c := range cmds {
-						args := strings.Split(c, " ")
-						cmd := git.NewCommand(args...).WithContext(ctx).WithTimeout(-1)
-						cmd.AddEnvs(syncEnv...)
-
-						if _, err := cmd.RunInDir(r.Path); err != nil {
-							if ctx.Err() != nil {
-								// The server is stopping.
-								return
-							}
-							logger.Error("error running git remote update", "repo", name, "err", err)
-						}
+					if !fetchMirror(ctx, logger, name, r.Path, syncEnv) {
+						return
 					}
 
 					if cfg.LFS.Enabled {
@@ -189,6 +182,10 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 								logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
 								return
 							}
+							if ctx.Err() != nil {
+								// The server is stopping.
+								return
+							}
 							logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
 							return
 						}
@@ -199,4 +196,46 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		wq.Run()
 	}
+}
+
+// mirrorSyncCmds are the git commands a mirror sync runs, in order.
+var mirrorSyncCmds = [][]string{
+	{"fetch", "--prune"},            // fetch prune before updating remote
+	{"remote", "update", "--prune"}, // update remote and prune remote refs
+}
+
+// runMirrorGit runs one mirror sync git command in dir. Tests replace it.
+//
+// The command does not get ctx's cancellation. Cancelling would kill git
+// (exec.CommandContext sends SIGKILL, or TerminateProcess on Windows), and a
+// killed git never removes the ref and packed-refs locks it holds, so every
+// later sync of the mirror would fail on "File exists" until someone deletes
+// them by hand. A git command that is already running is left to finish:
+// Server.Shutdown waits for it within its drain deadline, and if the server
+// exits first, git finishes on its own and cleans up after itself, as it
+// did before syncs were cancelled at all.
+var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
+	cmd := git.NewCommand(args...).WithContext(context.WithoutCancel(ctx)).WithTimeout(-1)
+	cmd.AddEnvs(env...)
+	_, err := cmd.RunInDir(dir)
+	return err
+}
+
+// fetchMirror runs the mirror sync git commands in dir and reports whether
+// the sync should go on to the lfs objects. Once ctx is done it starts no
+// further command and returns false without logging: the server is
+// stopping.
+func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, env []string) bool {
+	for _, args := range mirrorSyncCmds {
+		if ctx.Err() != nil {
+			return false
+		}
+		if err := runMirrorGit(ctx, dir, env, args...); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			logger.Error("error running git remote update", "repo", name, "err", err)
+		}
+	}
+	return ctx.Err() == nil
 }

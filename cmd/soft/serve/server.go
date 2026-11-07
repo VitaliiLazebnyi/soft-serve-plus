@@ -63,8 +63,10 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	db := db.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("server")
 	// The cron jobs run with a context Shutdown and Close cancel, so a
-	// running mirror sync stops its git processes and requests rather than
-	// outlive the server and the database.
+	// running mirror sync starts no further git command or lfs request and
+	// ends rather than outlive the server and the database. A git command
+	// already running is left to finish, since killing git leaves its ref
+	// locks behind (see jobs.runMirrorGit).
 	jobCtx, stopJobs := context.WithCancel(ctx)
 	srv := &Server{
 		Config:   cfg,
