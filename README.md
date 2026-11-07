@@ -873,6 +873,8 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
 
+Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
+
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
 ### Deleting Repositories
