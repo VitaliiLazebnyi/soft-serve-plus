@@ -33,9 +33,17 @@ func SanitizeRepo(repo string) string {
 	return ""
 }
 
-// Sanitize strips ANSI escape codes from the given string.
+// Sanitize returns s without ANSI escape sequences (CSI, OSC, DCS, APC, SOS
+// and PM strings included) and without any other C0 or C1 control character
+// except newline and tab, so that the result can be written to a terminal
+// without the terminal acting on it.
 func Sanitize(s string) string {
-	return ansi.Strip(s)
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, ansi.Strip(s))
 }
 
 // ValidateUsername returns an error if any of the given usernames are invalid.
