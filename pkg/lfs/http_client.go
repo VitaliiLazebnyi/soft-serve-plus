@@ -148,7 +148,7 @@ func (c *httpClient) transferNames() []string {
 // batch performs a batch request to the LFS server.
 func (c *httpClient) batch(ctx context.Context, operation string, objects []Pointer) (*BatchResponse, error) {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
-	url := fmt.Sprintf("%s/objects/batch", c.endpoint.String())
+	url := c.endpoint.JoinPath("objects", "batch").String()
 
 	// TODO: support ref
 	request := &BatchRequest{operation, c.transferNames(), nil, objects, HashAlgorithmSHA256}
