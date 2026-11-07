@@ -39,7 +39,8 @@ var (
 )
 
 // PrepareBuildCommand builds the soft binary under test. The webhooktest tag
-// lets the tests send webhooks to a local receiver; see newWebhookReceiver.
+// lets the tests send webhooks to a local receiver (see newWebhookReceiver)
+// and adds the HEAD /__stop endpoint that stopserver uses.
 func PrepareBuildCommand(binPath string) *exec.Cmd {
 	_, disableRaceSet := os.LookupEnv("SOFT_SERVE_DISABLE_RACE_CHECKS")
 	if disableRaceSet {
