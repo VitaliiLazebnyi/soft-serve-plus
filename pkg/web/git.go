@@ -539,7 +539,11 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		defer reader.Close() //nolint: errcheck
 	}
 
-	cmd.Stdin = reader
+	// The service ends a read of the body still blocked once git exits by
+	// setting a read deadline on the connection, and waits for it, so the
+	// body is not read after this handler returns or while the gzip reader
+	// is closed.
+	cmd.Stdin = deadlineReader{Reader: reader, rc: http.NewResponseController(w)}
 	cmd.Stdout = w
 
 	if err := service.Handler(ctx, cmd); err != nil {
@@ -560,6 +564,18 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 			logger.Errorf("failed to ensure default branch: %s", err)
 		}
 	}
+}
+
+// deadlineReader is a request body whose blocked reads can be ended by
+// setting a read deadline on the request's connection.
+type deadlineReader struct {
+	io.Reader
+	rc *http.ResponseController
+}
+
+// SetReadDeadline sets the read deadline of the request's connection.
+func (r deadlineReader) SetReadDeadline(t time.Time) error {
+	return r.rc.SetReadDeadline(t)
 }
 
 func getInfoRefs(w http.ResponseWriter, r *http.Request) {

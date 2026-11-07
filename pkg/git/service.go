@@ -144,11 +144,17 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	wg := &sync.WaitGroup{}
 
 	// stdin
+	var (
+		stdinDone   chan struct{}
+		interrupted atomic.Bool
+	)
 	if scmd.Stdin != nil {
+		stdinDone = make(chan struct{})
 		go func() {
+			defer close(stdinDone)
 			defer stdin.Close() //nolint: errcheck
 			if _, err := io.Copy(stdin, scmd.Stdin); err != nil {
-				logCopyError(ctx, "stdin", err, gitGone(err))
+				logCopyError(ctx, "stdin", err, gitGone(err) || interrupted.Load())
 			}
 		}()
 	}
@@ -176,8 +182,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	}
 
 	// Ensure all the output is written before waiting for the command to
-	// finish.
-	// Stdin is handled by the client side.
+	// finish. Stdin is joined after git exits, see joinStdin.
 	copied := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -195,6 +200,9 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 
 	err = cmd.Wait()
 	<-copied
+	if stdinDone != nil {
+		joinStdin(scmd.Stdin, stdinDone, &interrupted)
+	}
 	if err != nil && stoppedByContext(ctx, err, killed.Load()) {
 		// The context was cancelled, usually because the client went away,
 		// and git was killed for it. Report the cancellation rather than
@@ -212,6 +220,41 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	}
 
 	return nil
+}
+
+// readDeadliner is an input whose blocked reads can be ended by a read
+// deadline, such as a network connection or an HTTP request body (see
+// pkg/web).
+type readDeadliner interface {
+	SetReadDeadline(t time.Time) error
+}
+
+// joinStdin waits for the copy of the client's input to git, which done
+// reports, to finish. Git has exited and Wait closed its input, so the copy
+// ends at its next read, but that read can wait on the client for as long
+// as the client likes. An input that takes a read deadline is given one in
+// the past to end the read now, and the copy is waited for, so the handler
+// does not return while it still reads the input: the caller may close the
+// input, or, for an HTTP request body, must not read it after the handler
+// returns. The input can no longer be read after that, which does not
+// matter as git is gone. An input that cannot be interrupted, such as an SSH
+// channel, is left to its owner: the read ends when the owner closes it
+// after the handler returns.
+func joinStdin(in io.Reader, done <-chan struct{}, interrupted *atomic.Bool) {
+	select {
+	case <-done:
+		return
+	default:
+	}
+	d, ok := in.(readDeadliner)
+	if !ok {
+		return
+	}
+	interrupted.Store(true)
+	if err := d.SetReadDeadline(time.Now()); err != nil {
+		return
+	}
+	<-done
 }
 
 // logCopyError logs a failure to copy between git and the client. A client
