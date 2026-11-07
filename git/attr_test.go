@@ -9,12 +9,10 @@ import (
 func TestParseAttr(t *testing.T) {
 	cases := []struct {
 		in   string
-		file string
 		want []Attribute
 	}{
 		{
-			in:   "org/example/MyClass.java: diff: java\n",
-			file: "org/example/MyClass.java",
+			in: "org/example/MyClass.java\x00diff\x00java\x00",
 			want: []Attribute{
 				{
 					Name:  "diff",
@@ -23,10 +21,9 @@ func TestParseAttr(t *testing.T) {
 			},
 		},
 		{
-			in: `org/example/MyClass.java: crlf: unset
-org/example/MyClass.java: diff: java
-org/example/MyClass.java: myAttr: set`,
-			file: "org/example/MyClass.java",
+			in: "org/example/MyClass.java\x00crlf\x00unset\x00" +
+				"org/example/MyClass.java\x00diff\x00java\x00" +
+				"org/example/MyClass.java\x00myAttr\x00set\x00",
 			want: []Attribute{
 				{
 					Name:  "crlf",
@@ -43,23 +40,7 @@ org/example/MyClass.java: myAttr: set`,
 			},
 		},
 		{
-			in: `org/example/MyClass.java: diff: java
-org/example/MyClass.java: myAttr: set`,
-			file: "org/example/MyClass.java",
-			want: []Attribute{
-				{
-					Name:  "diff",
-					Value: "java",
-				},
-				{
-					Name:  "myAttr",
-					Value: "set",
-				},
-			},
-		},
-		{
-			in:   `README: caveat: unspecified`,
-			file: "README",
+			in: "README\x00caveat\x00unspecified\x00",
 			want: []Attribute{
 				{
 					Name:  "caveat",
@@ -68,22 +49,26 @@ org/example/MyClass.java: myAttr: set`,
 			},
 		},
 		{
-			in:   "",
-			file: "foo",
-			want: []Attribute{},
+			// git would C-quote this path without -z.
+			in: "dir/café: x.txt\x00binary\x00set\x00",
+			want: []Attribute{
+				{
+					Name:  "binary",
+					Value: "set",
+				},
+			},
 		},
 		{
-			in:   "\n",
-			file: "foo",
+			in:   "",
 			want: []Attribute{},
 		},
 	}
 
 	is := is.New(t)
 	for _, c := range cases {
-		attrs := parseAttributes(c.file, []byte(c.in))
+		attrs := parseAttributes([]byte(c.in))
 		if len(attrs) != len(c.want) {
-			t.Fatalf("parseAttributes(%q, %q) = %v, want %v", c.file, c.in, attrs, c.want)
+			t.Fatalf("parseAttributes(%q) = %v, want %v", c.in, attrs, c.want)
 		}
 
 		is.Equal(attrs, c.want)

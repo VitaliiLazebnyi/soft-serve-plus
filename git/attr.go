@@ -29,32 +29,26 @@ func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, 
 		return nil, err
 	}
 
-	checkAttr := NewCommand("check-attr", "--cached", "-a", "--", path).
+	checkAttr := NewCommand("check-attr", "--cached", "-z", "-a", "--", path).
 		AddEnvs("GIT_INDEX_FILE=" + tmpindex)
 	out, err := checkAttr.RunInDir(r.Path)
 	if err != nil {
 		return nil, err
 	}
 
-	return parseAttributes(path, out), nil
+	return parseAttributes(out), nil
 }
 
-func parseAttributes(path string, buf []byte) []Attribute {
+// parseAttributes parses the output of git check-attr -z, which is a list of
+// NUL-terminated "<path> NUL <attribute> NUL <info> NUL" triples. The path is
+// never quoted there, so non-ASCII and special file names parse as is.
+func parseAttributes(buf []byte) []Attribute {
 	attrs := make([]Attribute, 0)
-	for _, line := range strings.Split(string(buf), "\n") {
-		if line == "" {
-			continue
-		}
-
-		line = strings.TrimPrefix(line, path+": ")
-		parts := strings.SplitN(line, ": ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
+	fields := strings.Split(string(buf), "\x00")
+	for i := 0; i+2 < len(fields); i += 3 {
 		attrs = append(attrs, Attribute{
-			Name:  parts[0],
-			Value: parts[1],
+			Name:  fields[i+1],
+			Value: fields[i+2],
 		})
 	}
 

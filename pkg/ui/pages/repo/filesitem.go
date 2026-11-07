@@ -27,7 +27,7 @@ func (i FileItem) ID() string {
 
 // Title returns the title of the file item.
 func (i FileItem) Title() string {
-	return common.UnquoteFilename(i.entry.Name())
+	return common.DisplayFilename(i.entry.Name())
 }
 
 // Description returns the description of the file item.

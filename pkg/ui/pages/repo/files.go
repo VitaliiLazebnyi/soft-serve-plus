@@ -244,6 +244,12 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		f.code.UseGlamour = common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext)
 		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
 		f.code.GotoTop()
+	case common.ErrorMsg:
+		// A failed blame must not leave the content behind the spinner.
+		if f.activeView == filesViewLoading && f.blameView {
+			f.blameView = false
+			f.activeView = filesViewContent
+		}
 	case FileBlameMsg:
 		f.currentBlame = msg
 		f.activeView = filesViewContent
@@ -375,7 +381,7 @@ func (f *Files) StatusBarValue() string {
 	if p == "." || p == "" {
 		return " "
 	}
-	return p
+	return common.DisplayFilename(p)
 }
 
 // StatusBarInfo returns the status bar info.
