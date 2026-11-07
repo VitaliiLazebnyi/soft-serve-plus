@@ -98,3 +98,57 @@ func TestGitServiceLeavesUninterruptibleStdin(t *testing.T) {
 		t.Fatal("upload-pack accepted garbage input")
 	}
 }
+
+// flushRecorder is the client's output; flushed is closed at the first
+// Flush.
+type flushRecorder struct {
+	once    sync.Once
+	flushed chan struct{}
+}
+
+func (w *flushRecorder) Write(p []byte) (int, error) { return len(p), nil }
+
+func (w *flushRecorder) Flush() { w.once.Do(func() { close(w.flushed) }) }
+
+// An input that takes no read deadline is waited for when the command asks
+// for it, as an HTTP request body must not be read after the handler
+// returns: the output is flushed, and the handler returns only once the
+// client is done sending.
+func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
+	r := newStallingReader()
+	t.Cleanup(r.close)
+	out := &flushRecorder{flushed: make(chan struct{})}
+
+	dir := initBare(t)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdin:     r,
+			Stdout:    out,
+			Dir:       dir,
+			JoinStdin: true,
+		})
+	}()
+
+	select {
+	case <-out.flushed:
+	case err := <-errc:
+		t.Fatalf("the handler returned (%v) while the client's input was still being read", err)
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for the output to be flushed")
+	}
+	select {
+	case err := <-errc:
+		t.Fatalf("the handler returned (%v) while the client's input was still being read", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// The client is done sending.
+	r.close()
+	if err := waitErr(t, errc); err == nil {
+		t.Fatal("upload-pack accepted garbage input")
+	}
+	if r.reading.Load() {
+		t.Error("the handler returned while the client's input was still being read")
+	}
+}

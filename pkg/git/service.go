@@ -201,7 +201,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	err = cmd.Wait()
 	<-copied
 	if stdinDone != nil {
-		joinStdin(scmd.Stdin, stdinDone, &interrupted)
+		joinStdin(scmd, stdinDone, &interrupted)
 	}
 	if err != nil && stoppedByContext(ctx, err, killed.Load()) {
 		// The context was cancelled, usually because the client went away,
@@ -223,8 +223,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 }
 
 // readDeadliner is an input whose blocked reads can be ended by a read
-// deadline, such as a network connection or an HTTP request body (see
-// pkg/web).
+// deadline, such as a network connection.
 type readDeadliner interface {
 	SetReadDeadline(t time.Time) error
 }
@@ -232,27 +231,43 @@ type readDeadliner interface {
 // joinStdin waits for the copy of the client's input to git, which done
 // reports, to finish. Git has exited and Wait closed its input, so the copy
 // ends at its next read, but that read can wait on the client for as long
-// as the client likes. An input that takes a read deadline is given one in
-// the past to end the read now, and the copy is waited for, so the handler
-// does not return while it still reads the input: the caller may close the
-// input, or, for an HTTP request body, must not read it after the handler
-// returns. The input can no longer be read after that, which does not
-// matter as git is gone. An input that cannot be interrupted, such as an SSH
-// channel, is left to its owner: the read ends when the owner closes it
-// after the handler returns.
-func joinStdin(in io.Reader, done <-chan struct{}, interrupted *atomic.Bool) {
+// as the client likes.
+//
+// An input that takes a read deadline, such as the git daemon's connection,
+// is given one in the past to end the read now, and the copy is waited for.
+// The input can no longer be read after that, which does not matter as git
+// is gone and the caller only closes it.
+//
+// An input that cannot be interrupted is waited for only when the command
+// asks for it with JoinStdin, as an HTTP request body must not be read after
+// the handler returns. Its output is flushed first, so the client has the
+// whole response while the handler waits for it to finish sending. A read
+// deadline is not used there: on an HTTP/1 connection a deadline can also
+// end the server's own background read once the body is done, which
+// cancels the context of this and every later request on the connection.
+//
+// Any other input, such as an SSH channel, is left to its owner: the read
+// ends when the owner closes it after the handler returns. Waiting there
+// could deadlock, as the client waits for the exit status first.
+func joinStdin(scmd ServiceCommand, done <-chan struct{}, interrupted *atomic.Bool) {
 	select {
 	case <-done:
 		return
 	default:
 	}
-	d, ok := in.(readDeadliner)
-	if !ok {
+	if d, ok := scmd.Stdin.(readDeadliner); ok {
+		interrupted.Store(true)
+		if err := d.SetReadDeadline(time.Now()); err != nil {
+			return
+		}
+		<-done
 		return
 	}
-	interrupted.Store(true)
-	if err := d.SetReadDeadline(time.Now()); err != nil {
+	if !scmd.JoinStdin {
 		return
+	}
+	if f, ok := scmd.Stdout.(interface{ Flush() }); ok {
+		f.Flush()
 	}
 	<-done
 }
@@ -365,6 +380,13 @@ type ServiceCommand struct {
 	Dir    string
 	Env    []string
 	Args   []string
+
+	// JoinStdin makes the handler wait, once git has exited, for the copy
+	// of Stdin to git to end even when Stdin takes no read deadline that
+	// could end it. Set it when Stdin must not be read after the handler
+	// returns, as for an HTTP request body; the copy then ends when the
+	// client finishes sending or goes away. See joinStdin.
+	JoinStdin bool
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
