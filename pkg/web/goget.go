@@ -7,7 +7,6 @@ import (
 	"text/template"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -63,7 +62,9 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 		// Find the closest repository the caller can read; skip the rest.
 		user := proto.UserFromContext(ctx)
 		for {
-			if _, err := be.Repository(ctx, repo); err == nil && be.AccessLevelForUser(ctx, repo, user) >= access.ReadOnlyAccess {
+			// Readable loads the repository once and returns nil when it
+			// is missing or the caller may not read it.
+			if found, _ := be.Readable(ctx, repo, user); found != nil {
 				break
 			}
 
