@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
-// DB is the interface for a Soft Serve database.
+// DB is a Soft Serve database connection pool.
 type DB struct {
 	*sqlx.DB
 	logger *log.Logger
@@ -84,7 +84,7 @@ func (d *DB) SetPoolLimits(c config.DBConfig) {
 	}
 }
 
-// Close implements db.DB.
+// Close closes the database.
 func (d *DB) Close() error {
 	return d.DB.Close()
 }
@@ -95,19 +95,24 @@ type Tx struct {
 	logger *log.Logger
 }
 
-// Transaction implements db.DB.
-func (d *DB) Transaction(fn func(tx *Tx) error) error {
-	return d.TransactionContext(context.Background(), fn)
-}
-
-// TransactionContext implements db.DB.
-func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) error {
+// TransactionContext runs fn in a transaction. The transaction is committed
+// if fn returns nil and rolled back otherwise. If fn panics, the transaction
+// is rolled back and the panic continues.
+func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) (err error) {
 	txx, err := d.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
 	tx := &Tx{txx, d.logger}
+	defer func() {
+		if p := recover(); p != nil {
+			// Release the connection, and SQLite's write lock, before
+			// the panic unwinds further.
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
 	if err := fn(tx); err != nil {
 		return rollback(tx, err)
 	}
@@ -128,7 +133,8 @@ func rollback(tx *Tx, err error) error {
 		if errors.Is(rerr, sql.ErrTxDone) {
 			return err
 		}
-		return fmt.Errorf("failed to rollback: %s: %w", err.Error(), rerr)
+		// Keep both errors reachable with errors.Is and errors.As.
+		return fmt.Errorf("%w (failed to rollback: %w)", err, rerr)
 	}
 
 	return err
