@@ -22,7 +22,7 @@ func (b *Backend) AllowKeyless(ctx context.Context) bool {
 	}
 
 	var allow bool
-	if err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := b.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		allow, err = b.store.GetAllowKeylessAccess(ctx, tx)
 		return err
@@ -57,7 +57,7 @@ func (b *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 	}
 
 	var level access.AccessLevel
-	if err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := b.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		level, err = b.store.GetAnonAccess(ctx, tx)
 		return err
