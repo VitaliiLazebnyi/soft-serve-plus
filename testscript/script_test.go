@@ -75,6 +75,11 @@ var (
 // returns its path. Only TestScript runs the binary, so running just the unit
 // tests in this package (go test -run TestWaitExit, say) does not pay for a
 // -race build of the whole server.
+//
+// The build runs inside m.Run, so it counts toward the go test -timeout
+// deadline. A cold -race build plus the full TestScript run takes about a
+// minute locally; if CI runners get close to the deadline, raise -timeout
+// in the workflows instead of moving the build back into TestMain.
 func buildSoft(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
