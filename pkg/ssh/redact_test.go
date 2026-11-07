@@ -34,9 +34,14 @@ func TestRedactCommand(t *testing.T) {
 			want: []string{"repo", "webhook", "update", "r", "1", "--secret=[redacted]", "-s", "[redacted]", "-s[redacted]", "-s[redacted]"},
 		},
 		{
+			name: "grouped secret forms",
+			in:   []string{"repo", "webhook", "create", "r", "https://example.com", "-as", "S3CRET", "-asS3CRET", "-as=S3CRET", "-aes", "S3CRET"},
+			want: []string{"repo", "webhook", "create", "r", "https://example.com", "-as", "[redacted]", "-as[redacted]", "-as[redacted]", "-aes", "[redacted]"},
+		},
+		{
 			name: "webhook update url flag forms",
 			in:   []string{"repo", "webhook", "update", "r", "1", "--url", "https://u:p@example.com/x?k=TOKEN", "--url=https://example.com/TOKEN", "-uhttps://example.com/TOKEN", "-u=https://example.com/TOKEN"},
-			want: []string{"repo", "webhook", "update", "r", "1", "--url", "https://example.com/[redacted]", "--url=https://example.com/[redacted]", "-uhttps://example.com/[redacted]", "-u=https://example.com/[redacted]"},
+			want: []string{"repo", "webhook", "update", "r", "1", "--url", "https://example.com/[redacted]", "--url=https://example.com/[redacted]", "-uhttps[redacted]", "-u=https://example.com/[redacted]"},
 		},
 		{
 			name: "import token",

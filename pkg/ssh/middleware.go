@@ -196,19 +196,49 @@ func redactCommand(args []string) []string {
 		case secretNext:
 			out[i] = redacted
 			secretNext = false
-		case arg == "--secret" || arg == "-s":
+		case arg == "--secret":
 			out[i] = arg
 			secretNext = true
 		case strings.HasPrefix(arg, "--secret="):
 			out[i] = "--secret=" + redacted
-		case strings.HasPrefix(arg, "-s") && !strings.HasPrefix(arg, "--"):
-			// -sVALUE or -s=VALUE.
-			out[i] = "-s" + redacted
 		default:
+			if n := shorthandSecret(arg); n > 0 {
+				// -s, -as and the like take the next argument as the
+				// value; -sVALUE, -s=VALUE, -asVALUE and -as=VALUE carry it.
+				out[i] = arg[:n]
+				if n < len(arg) {
+					out[i] += redacted
+				} else {
+					secretNext = true
+				}
+				continue
+			}
 			out[i] = redactURLArg(arg)
 		}
 	}
 	return out
+}
+
+// shorthandSecret reports where the value of a -s flag starts in a group of
+// short flags such as -s, -sVALUE, -as or -as=VALUE: it returns the index just
+// past the "s", or 0 when arg holds no -s. Short flags can be grouped, so an
+// "s" after any run of letters counts. This may also match a letter inside
+// the value of another short flag (-uhttps://...), which only redacts more
+// than needed.
+func shorthandSecret(arg string) int {
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return 0
+	}
+	for j := 1; j < len(arg); j++ {
+		c := arg[j]
+		if c == 's' {
+			return j + 1
+		}
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return 0
+		}
+	}
+	return 0
 }
 
 // redactURLArg redacts a URL given as a positional argument or as a flag
