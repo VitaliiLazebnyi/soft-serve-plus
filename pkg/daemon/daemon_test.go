@@ -215,16 +215,23 @@ func TestListensOnLoopback(t *testing.T) {
 
 // TestRequestTimeout checks that a client trickling its request line in a
 // byte at a time, each well within the idle timeout, is still dropped once
-// the request timeout passes. Every read used to push the deadline forward,
-// so such clients could hold a connection slot indefinitely.
+// the request timeout passes, and is told why. Every read used to push the
+// deadline forward, so such clients could hold a connection slot
+// indefinitely.
 func TestRequestTimeout(t *testing.T) {
-	ctx := config.WithContext(context.Background(), testDaemon.cfg) // idle timeout 1s
+	const (
+		requestTimeout = 2 * time.Second
+		idleTimeout    = 5 * time.Second
+	)
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = int(idleTimeout / time.Second)
+	ctx := config.WithContext(context.Background(), &cfg)
 	ctx = backend.WithContext(ctx, testBackend)
 	d, err := NewGitDaemon(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.requestTimeout = 1500 * time.Millisecond
+	d.requestTimeout = requestTimeout
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -238,32 +245,36 @@ func TestRequestTimeout(t *testing.T) {
 	}
 	defer c.Close() //nolint:errcheck
 
-	// A request line whose declared length is more than is ever sent.
-	req := []byte("0fffgit-upload-pack /repo.git")
+	// Start a request line whose declared length is more than is ever
+	// sent, a byte every 200ms for the first half of the request timeout.
+	// The client then stops writing well before the request deadline, so
+	// its writes cannot race the daemon closing the connection and turn
+	// the daemon's answer into a reset.
 	start := time.Now()
-	for _, b := range req {
-		if _, err := c.Write([]byte{b}); err != nil {
-			break // the daemon dropped the connection
-		}
-		time.Sleep(300 * time.Millisecond)
-		if time.Since(start) > 6*time.Second {
+	for _, b := range []byte("0fffgit") {
+		if time.Since(start) > requestTimeout/2 {
 			break
 		}
+		if _, err := c.Write([]byte{b}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := c.SetReadDeadline(time.Now().Add(2 * idleTimeout)); err != nil {
 		t.Fatal(err)
 	}
-	// The daemon answers with a timeout error and closes the connection;
-	// the client may see either, depending on whether its last write raced
-	// the close.
+	// The scanner reports an ERR packet as an error carrying its message.
 	line, err := readPktline(c)
+	elapsed := time.Since(start)
 	if err == nil {
-		t.Fatalf("expected the connection to be dropped, got %q", line)
+		t.Fatalf("expected a timeout error, got %q", line)
 	}
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		t.Fatalf("the daemon kept the connection open: %v", err)
+	if !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+		t.Fatalf("expected the daemon to report %q, got %v", git.ErrTimeout, err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("connection was dropped only after %v", elapsed)
+	// The idle deadline after the last byte would only pass at about
+	// requestTimeout/2 + idleTimeout.
+	if elapsed > requestTimeout+idleTimeout/2 {
+		t.Fatalf("connection was dropped only after %v, want about %v", elapsed, requestTimeout)
 	}
 }

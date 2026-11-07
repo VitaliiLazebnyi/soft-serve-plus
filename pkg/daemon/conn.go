@@ -55,7 +55,9 @@ type serverConn struct {
 	// so a client trickling it in a byte at a time cannot keep pushing the
 	// idle deadline forward. It is set before the request is read and
 	// cleared once it has been, never while another goroutine uses the
-	// connection.
+	// connection. Only reads honor it: a write, such as the error the
+	// daemon sends once this deadline has passed, still gets the idle and
+	// maximum deadlines, and Write never reads the field.
 	initDeadline  time.Time
 	idleTimeout   time.Duration
 	maxDeadline   time.Time
@@ -65,7 +67,7 @@ type serverConn struct {
 var _ net.Conn = (*serverConn)(nil)
 
 func (c *serverConn) Write(p []byte) (n int, err error) {
-	c.updateDeadline()
+	c.updateDeadline(false)
 	n, err = c.Conn.Write(p)
 	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
 		c.closeCanceler()
@@ -74,7 +76,7 @@ func (c *serverConn) Write(p []byte) (n int, err error) {
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
-	c.updateDeadline()
+	c.updateDeadline(true)
 	n, err = c.Conn.Read(b)
 	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
 		c.closeCanceler()
@@ -91,16 +93,16 @@ func (c *serverConn) Close() (err error) {
 }
 
 // updateDeadline sets the connection deadline to the earliest of the idle
-// deadline, the maximum deadline and, until the request has been read, the
-// request deadline.
-func (c *serverConn) updateDeadline() {
+// deadline, the maximum deadline and, for a read before the request has been
+// read, the request deadline.
+func (c *serverConn) updateDeadline(read bool) {
 	deadline := c.maxDeadline
 	earlier := func(t time.Time) {
 		if deadline.IsZero() || t.Before(deadline) {
 			deadline = t
 		}
 	}
-	if !c.initDeadline.IsZero() {
+	if read && !c.initDeadline.IsZero() {
 		earlier(c.initDeadline)
 	}
 	if c.idleTimeout > 0 {
