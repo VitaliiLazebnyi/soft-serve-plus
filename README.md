@@ -1049,7 +1049,8 @@ The entries are trusted differently:
   entry never opens anything else, and it does not cover other names that
   resolve to the same addresses. `localhost` names need a hostname entry.
 - Link-local addresses, including the 169.254.169.254 metadata service, the
-  other cloud metadata addresses (`fd00:ec2::254`, `100.100.100.200`) and the
+  other cloud metadata addresses (`fd00:ec2::254`, `fd00:ec2::23`,
+  `fd20:ce::254`, `fd00:c1::a9fe:a9fe`, `100.100.100.200`) and the
   remaining reserved ranges can only be opened by an IP or CIDR entry inside
   that range, such as `169.254.169.254`; a broad entry such as `0.0.0.0/0`
   does not open them.
