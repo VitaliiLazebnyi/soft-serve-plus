@@ -126,19 +126,43 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			return err
 		}
 
-		// Close connection if there are too many open connections.
-		if d.conns.Size()+1 >= d.cfg.Git.MaxConnections {
-			d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
-			d.fatal(conn, git.ErrMaxConnections)
+		// Count the connection here rather than in its goroutine, so that
+		// the limit holds for a burst of connections and a connection
+		// accepted while the daemon closes is closed with the rest.
+		ctx, cancel := context.WithCancel(context.Background())
+		c := d.newServerConn(conn, cancel)
+		if err := d.conns.Add(c, d.cfg.Git.MaxConnections); err != nil {
+			if errors.Is(err, git.ErrMaxConnections) {
+				// Close connection if there are too many open connections.
+				d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
+				d.fatal(c, err)
+			} else {
+				c.Close() //nolint: errcheck
+			}
 			continue
 		}
 
 		d.wg.Add(1)
 		go func() {
-			d.handleClient(conn)
+			d.handleClient(ctx, c)
 			d.wg.Done()
 		}()
 	}
+}
+
+// newServerConn wraps conn with the configured timeouts; cancel is called
+// when the connection fails or is closed.
+func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *serverConn {
+	c := &serverConn{
+		Conn:          conn,
+		idleTimeout:   time.Duration(d.cfg.Git.IdleTimeout) * time.Second,
+		closeCanceler: cancel,
+	}
+	if d.cfg.Git.MaxTimeout > 0 {
+		dur := time.Duration(d.cfg.Git.MaxTimeout) * time.Second
+		c.maxDeadline = time.Now().Add(dur)
+	}
+	return c
 }
 
 func (d *GitDaemon) fatal(c net.Conn, err error) {
@@ -148,20 +172,9 @@ func (d *GitDaemon) fatal(c net.Conn, err error) {
 	}
 }
 
-// handleClient handles a git protocol client.
-func (d *GitDaemon) handleClient(conn net.Conn) {
-	ctx, cancel := context.WithCancel(context.Background())
-	idleTimeout := time.Duration(d.cfg.Git.IdleTimeout) * time.Second
-	c := &serverConn{
-		Conn:          conn,
-		idleTimeout:   idleTimeout,
-		closeCanceler: cancel,
-	}
-	if d.cfg.Git.MaxTimeout > 0 {
-		dur := time.Duration(d.cfg.Git.MaxTimeout) * time.Second
-		c.maxDeadline = time.Now().Add(dur)
-	}
-	d.conns.Add(c)
+// handleClient handles a git protocol client. c must already be in d.conns;
+// ctx is canceled when c fails or is closed.
+func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	defer func() {
 		d.conns.Close(c) //nolint: errcheck
 	}()

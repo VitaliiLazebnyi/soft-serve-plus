@@ -140,7 +140,8 @@ git:
   # The number of seconds a connection can be idle before it is closed.
   idle_timeout: {{ .Git.IdleTimeout }}
 
-  # The maximum number of concurrent connections.
+  # The maximum number of concurrent connections; at least 1. Connections
+  # beyond it are refused with "too many connections".
   max_connections: {{ .Git.MaxConnections }}
 
 # The HTTP server configuration.
