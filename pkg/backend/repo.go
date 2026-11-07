@@ -314,6 +314,28 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 	return d.Repository(ctx, name)
 }
 
+// DefaultAdmin returns the lowest-ID admin user, the account that owns
+// repositories the server creates on its own behalf, such as default_repo.
+// It returns proto.ErrUserNotFound if there is no admin user.
+func (d *Backend) DefaultAdmin(ctx context.Context) (proto.User, error) {
+	var adminID int64
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		var err error
+		adminID, err = d.defaultAdminUserID(ctx, tx)
+		return err
+	}); err != nil {
+		if errors.Is(err, errNoAdminUser) {
+			return nil, proto.ErrUserNotFound
+		}
+		return nil, db.WrapError(err)
+	}
+
+	return d.UserByID(ctx, adminID)
+}
+
+// errNoAdminUser is returned by defaultAdminUserID when no user is an admin.
+var errNoAdminUser = errors.New("no admin user found")
+
 // defaultAdminUserID returns the ID of the lowest-ID admin user, used to
 // own repositories created by callers with no user of their own (anonymous
 // access via an anon-access/allow-keyless override). The migration that
@@ -333,7 +355,7 @@ func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, err
 	}
 
 	if adminID == 0 {
-		return 0, errors.New("no admin user found to own anonymous repository")
+		return 0, fmt.Errorf("%w to own anonymous repository", errNoAdminUser)
 	}
 
 	return adminID, nil

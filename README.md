@@ -146,7 +146,9 @@ The repository is created empty and public, exactly as if a human had run
 `repo create gitops` with no flags; only its *existence* is guaranteed on
 boot, not its reachability, which is still governed entirely by the
 `anon-access`/`allow-keyless` settings described below. Booting again against
-the same data directory is a no-op if the repository already exists.
+the same data directory is a no-op if the repository already exists. The
+repository is owned by the admin user with the lowest ID; if there is no admin
+user, it is not created and a warning is logged.
 
 Check out [Systemd][systemd] on how to run Soft Serve Plus as a service using
 Systemd. The `.deb` and `.rpm` packages from the [releases][releases] page come
