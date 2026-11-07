@@ -14,18 +14,18 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
-// failingLookupStore fails GetRepoByName once fail is set and the lookups
-// before it have been let through.
+// failingLookupStore counts its GetRepoByName lookups and fails only the
+// failAt-th one (counting from 1; 0 fails none).
 type failingLookupStore struct {
 	store.Store
-	pass atomic.Int32
-	fail atomic.Bool
+	failAt int32
+	calls  atomic.Int32
 }
 
 var errLookup = errors.New("lookup failed")
 
 func (s *failingLookupStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
-	if s.fail.Load() && s.pass.Add(-1) < 0 {
+	if s.calls.Add(1) == s.failAt {
 		return models.Repo{}, errLookup
 	}
 	return s.Store.GetRepoByName(ctx, h, name)
@@ -33,22 +33,25 @@ func (s *failingLookupStore) GetRepoByName(ctx context.Context, h db.Handler, na
 
 // A lookup that fails for any reason other than a missing row says nothing
 // about whether the repository exists, so its directory must stay. It used
-// to be removed as an orphan, with the row kept.
+// to be removed as an orphan, with the row kept. Only the delete's own
+// lookup fails: a failure that is gone by the next lookup must still be
+// returned, not taken for an orphan and reported as not found.
 func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
 	ctx := backendTestContext(be, be.cfg)
 
-	st := &failingLookupStore{Store: be.store}
+	// Repository, which builds the webhook event, looks the row up first;
+	// the second lookup is the delete's own.
+	st := &failingLookupStore{Store: be.store, failAt: 2}
 	be.store = st
-	// Repository, which builds the webhook event, looks the row up first.
-	st.pass.Store(1)
-	st.fail.Store(true)
 
 	if err := be.DeleteRepository(ctx, "delrepo"); !errors.Is(err, errLookup) {
 		t.Fatalf("DeleteRepository => %v, want the lookup error", err)
 	}
-	st.fail.Store(false)
+	if n := st.calls.Load(); n != 2 {
+		t.Fatalf("DeleteRepository made %d lookups, want 2", n)
+	}
 
 	if _, err := os.Stat(filepath.Join(rp, "HEAD")); err != nil {
 		t.Errorf("repository directory removed after a failed lookup: %v", err)
