@@ -34,7 +34,6 @@ require (
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/matryer/is v1.4.1
 	github.com/muesli/mango-cobra v1.3.0
-	github.com/muesli/reflow v0.3.0
 	github.com/muesli/roff v0.1.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/robfig/cron/v3 v3.0.1
