@@ -212,3 +212,58 @@ func TestListensOnLoopback(t *testing.T) {
 		t.Fatalf("daemon listens on %q, want a loopback address", testDaemon.addr)
 	}
 }
+
+// TestRequestTimeout checks that a client trickling its request line in a
+// byte at a time, each well within the idle timeout, is still dropped once
+// the request timeout passes. Every read used to push the deadline forward,
+// so such clients could hold a connection slot indefinitely.
+func TestRequestTimeout(t *testing.T) {
+	ctx := config.WithContext(context.Background(), testDaemon.cfg) // idle timeout 1s
+	ctx = backend.WithContext(ctx, testBackend)
+	d, err := NewGitDaemon(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.requestTimeout = 1500 * time.Millisecond
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	// A request line whose declared length is more than is ever sent.
+	req := []byte("0fffgit-upload-pack /repo.git")
+	start := time.Now()
+	for _, b := range req {
+		if _, err := c.Write([]byte{b}); err != nil {
+			break // the daemon dropped the connection
+		}
+		time.Sleep(300 * time.Millisecond)
+		if time.Since(start) > 6*time.Second {
+			break
+		}
+	}
+	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon answers with a timeout error and closes the connection;
+	// the client may see either, depending on whether its last write raced
+	// the close.
+	line, err := readPktline(c)
+	if err == nil {
+		t.Fatalf("expected the connection to be dropped, got %q", line)
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatalf("the daemon kept the connection open: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("connection was dropped only after %v", elapsed)
+	}
+}

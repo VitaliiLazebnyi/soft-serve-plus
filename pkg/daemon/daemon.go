@@ -41,20 +41,26 @@ var (
 // ErrServerClosed indicates that the server has been closed.
 var ErrServerClosed = fmt.Errorf("git: %w", net.ErrClosed)
 
+// requestTimeout is how long a client has to send its request line, like
+// git-daemon's --init-timeout. Unlike the idle timeout, reading does not
+// extend it.
+const requestTimeout = 10 * time.Second
+
 // GitDaemon represents a Git daemon.
 type GitDaemon struct {
-	ctx       context.Context
-	addr      string
-	finished  chan struct{}
-	conns     connections
-	cfg       *config.Config
-	be        *backend.Backend
-	wg        sync.WaitGroup
-	once      sync.Once
-	logger    *log.Logger
-	done      atomic.Bool // indicates if the server has been closed
-	listeners []net.Listener
-	liMu      sync.Mutex
+	ctx            context.Context
+	addr           string
+	requestTimeout time.Duration
+	finished       chan struct{}
+	conns          connections
+	cfg            *config.Config
+	be             *backend.Backend
+	wg             sync.WaitGroup
+	once           sync.Once
+	logger         *log.Logger
+	done           atomic.Bool // indicates if the server has been closed
+	listeners      []net.Listener
+	liMu           sync.Mutex
 }
 
 // NewGitDaemon returns a new Git daemon.
@@ -62,13 +68,14 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 	cfg := config.FromContext(ctx)
 	addr := cfg.Git.ListenAddr
 	d := &GitDaemon{
-		ctx:      ctx,
-		addr:     addr,
-		finished: make(chan struct{}, 1),
-		cfg:      cfg,
-		be:       backend.FromContext(ctx),
-		conns:    connections{m: make(map[net.Conn]struct{})},
-		logger:   log.FromContext(ctx).WithPrefix("gitdaemon"),
+		ctx:            ctx,
+		addr:           addr,
+		requestTimeout: requestTimeout,
+		finished:       make(chan struct{}, 1),
+		cfg:            cfg,
+		be:             backend.FromContext(ctx),
+		conns:          connections{m: make(map[net.Conn]struct{})},
+		logger:         log.FromContext(ctx).WithPrefix("gitdaemon"),
 	}
 	return d, nil
 }
@@ -154,6 +161,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	idleTimeout := time.Duration(d.cfg.Git.IdleTimeout) * time.Second
 	c := &serverConn{
 		Conn:          conn,
+		initDeadline:  time.Now().Add(d.requestTimeout),
 		idleTimeout:   idleTimeout,
 		closeCanceler: cancel,
 	}
@@ -186,6 +194,9 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		}
 		return
 	case err := <-errc:
+		// The scanner is done with the connection: from here on reads and
+		// writes only have to keep it from going idle.
+		c.initDeadline = time.Time{}
 		if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 			d.fatal(c, git.ErrTimeout)
 			return

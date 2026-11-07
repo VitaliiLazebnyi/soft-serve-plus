@@ -51,7 +51,12 @@ func (m *connections) CloseAll() error {
 type serverConn struct {
 	net.Conn
 
-	initTimeout   time.Duration
+	// initDeadline, while set, bounds reading the request line as a whole,
+	// so a client trickling it in a byte at a time cannot keep pushing the
+	// idle deadline forward. It is set before the request is read and
+	// cleared once it has been, never while another goroutine uses the
+	// connection.
+	initDeadline  time.Time
 	idleTimeout   time.Duration
 	maxDeadline   time.Time
 	closeCanceler context.CancelFunc
@@ -85,21 +90,21 @@ func (c *serverConn) Close() (err error) {
 	return
 }
 
+// updateDeadline sets the connection deadline to the earliest of the idle
+// deadline, the maximum deadline and, until the request has been read, the
+// request deadline.
 func (c *serverConn) updateDeadline() {
-	switch {
-	case c.initTimeout > 0:
-		initTimeout := time.Now().Add(c.initTimeout)
-		c.initTimeout = 0
-		if initTimeout.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
-			c.Conn.SetDeadline(initTimeout) //nolint: errcheck
-			return
-		}
-	case c.idleTimeout > 0:
-		idleDeadline := time.Now().Add(c.idleTimeout)
-		if idleDeadline.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
-			c.Conn.SetDeadline(idleDeadline) //nolint: errcheck
-			return
+	deadline := c.maxDeadline
+	earlier := func(t time.Time) {
+		if deadline.IsZero() || t.Before(deadline) {
+			deadline = t
 		}
 	}
-	c.Conn.SetDeadline(c.maxDeadline) //nolint: errcheck
+	if !c.initDeadline.IsZero() {
+		earlier(c.initDeadline)
+	}
+	if c.idleTimeout > 0 {
+		earlier(time.Now().Add(c.idleTimeout))
+	}
+	c.Conn.SetDeadline(deadline) //nolint: errcheck
 }
