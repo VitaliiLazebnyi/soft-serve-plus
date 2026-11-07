@@ -91,6 +91,14 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 	return nil
 }
 
+// HasObject reports whether strg holds the object oid of size bytes: its file
+// under objects/ is a regular file of that size whose SHA-256 is oid. It reads
+// the whole file.
+func HasObject(strg storage.Storage, oid string, size int64) bool {
+	p := Pointer{Oid: oid, Size: size}
+	return isObject(strg, path.Join("objects", p.RelativePath()), oid, size)
+}
+
 // isObject reports whether objPath is a regular file of size bytes whose
 // SHA-256 is oid.
 func isObject(strg storage.Storage, objPath, oid string, size int64) bool {
