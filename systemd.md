@@ -22,10 +22,16 @@ will be choosing `/var/local/lib/soft-serve` to store the server's data. Soft
 Serve will look for this path in the `SOFT_SERVE_DATA_PATH` environment
 variable.
 
-Make sure this directory exists before proceeding.
+Soft Serve Plus does not need root, so we will run it as a dedicated
+unprivileged `soft-serve` system user. Create the user, then create the data
+directory owned by it before proceeding.
 
 ```sh
+sudo useradd --system --user-group --home-dir /var/local/lib/soft-serve \
+  --no-create-home --shell /usr/sbin/nologin soft-serve
 sudo mkdir -p /var/local/lib/soft-serve
+sudo chown soft-serve:soft-serve /var/local/lib/soft-serve
+sudo chmod 0750 /var/local/lib/soft-serve
 ```
 
 We will also create a `/etc/soft-serve.conf` file for any extra server settings that we want to override.
@@ -52,11 +58,13 @@ Now, let's write a new `/etc/systemd/system/soft-serve.service` Systemd service 
 [Unit]
 Description=Soft Serve Plus git server 🍦
 Documentation=https://github.com/VitaliiLazebnyi/soft-serve-plus
-Requires=network-online.target
+Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
+User=soft-serve
+Group=soft-serve
 Restart=always
 RestartSec=1
 ExecStart=/usr/bin/soft serve
@@ -64,15 +72,57 @@ Environment=SOFT_SERVE_DATA_PATH=/var/local/lib/soft-serve
 EnvironmentFile=-/etc/soft-serve.conf
 WorkingDirectory=/var/local/lib/soft-serve
 
+# Hardening
+ReadWritePaths=/var/local/lib/soft-serve
+UMask=0027
+NoNewPrivileges=true
+LimitNOFILE=1048576
+ProtectSystem=strict
+ProtectHome=true
+PrivateUsers=yes
+PrivateTmp=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Fail a filtered system call with EPERM instead of killing the process with
+# SIGSYS, so git, hooks and soft report an error rather than dying or hanging.
+SystemCallErrorNumber=EPERM
+SystemCallFilter=@system-service
+# @resources (nice, setpriority, setrlimit, sched_setaffinity, ...) is allowed:
+# git and repository hooks may use it, and without capabilities it cannot
+# raise priorities or hard limits anyway.
+SystemCallFilter=~@privileged
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target
 ```
 
-Great, we now have a Systemd service file for Soft Serve Plus. The settings defined
-here may vary depending on your specific setup. This assumes that you want to
-run Soft Serve Plus as `root`. For more information on Systemd service files, refer
-to
+Great, we now have a Systemd service file for Soft Serve Plus. It is the same
+unit the deb/rpm packages install, apart from the data path. It runs Soft Serve
+Plus as the unprivileged `soft-serve` user and sandboxes it: the file system is
+read-only except for the data directory (`ReadWritePaths=`), and the service has
+no capabilities, so it can only listen on unprivileged ports (1024 and above,
+which includes the defaults). If you move the data directory or need the server
+to write anywhere else, update `ReadWritePaths=` too. If you previously ran Soft
+Serve Plus as `root`, hand the existing data over to the new user with
+`sudo chown -R soft-serve:soft-serve /var/local/lib/soft-serve`. The settings defined here may vary depending on your
+specific setup. For more information on Systemd service files, refer to
 [systemd.service](https://www.freedesktop.org/software/systemd/man/systemd.service.html)
+and [systemd.exec](https://www.freedesktop.org/software/systemd/man/systemd.exec.html).
 
 ## Start Soft Serve Plus on boot
 
