@@ -85,15 +85,27 @@ func TestSchedulerRecoversPanic(t *testing.T) {
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	s := NewScheduler(log.WithContext(context.TODO(), logger))
-	id, err := s.AddFunc("* * * * *", func() { panic("boom") })
+	var runs atomic.Int32
+	id, err := s.AddFunc("* * * * *", func() {
+		if runs.Add(1) == 1 {
+			panic("boom")
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Remove(id)
 
-	s.Cron.Entry(cron.EntryID(id)).WrappedJob.Run()
+	job := s.Cron.Entry(cron.EntryID(id)).WrappedJob
+	job.Run()
 
 	if !strings.Contains(buf.String(), "boom") {
 		t.Errorf("expected the panic to be logged, got %q", buf.String())
+	}
+
+	// A panic must not leave the job marked as still running.
+	job.Run()
+	if n := runs.Load(); n != 2 {
+		t.Errorf("expected the job to run again after a panic, got %d runs", n)
 	}
 }
