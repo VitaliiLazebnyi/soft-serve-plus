@@ -73,21 +73,13 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			}
 		}
 
-		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-		}
-
-		// Refuse to run against a database migrated by a newer binary: its
-		// schema may not match what this binary expects.
-		if n := len(migrations); n > 0 && migrs.Version > migrations[n-1].Version {
-			return fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", migrs.Version, migrations[n-1].Version)
+		current, err := checkApplied(ctx, tx)
+		if err != nil {
+			return err
 		}
 
 		for _, m := range migrations {
-			if m.Version <= migrs.Version {
+			if m.Version <= current {
 				continue
 			}
 
@@ -117,31 +109,26 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 			return fmt.Errorf("there are no migrations to rollback")
 		}
 
-		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("get latest migration: %w", err)
-			}
+		current, err := checkApplied(ctx, tx)
+		if err != nil {
+			return err
 		}
 
-		if migrs.Version == 0 {
+		if current == 0 {
 			return fmt.Errorf("there are no migrations to rollback")
 		}
 
-		// Look the migration up by version rather than by position, and
-		// refuse to roll back one this binary does not know.
+		// checkApplied has made sure this binary knows every applied
+		// migration, so the latest one is found.
 		var m *Migration
 		for i := range migrations {
-			if migrations[i].Version == migrs.Version {
+			if migrations[i].Version == current {
 				m = &migrations[i]
 				break
 			}
 		}
 		if m == nil {
-			if n := len(migrations); n > 0 && migrs.Version > migrations[n-1].Version {
-				return fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", migrs.Version, migrations[n-1].Version)
-			}
-			return fmt.Errorf("database is at migration version %d, which is unknown to this binary", migrs.Version)
+			return fmt.Errorf("database is at migration version %d, which is unknown to this binary", current)
 		}
 
 		logger.Infof("rolling back migration %d. %s", m.Version, m.Name)
@@ -149,12 +136,70 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, tx.Rebind("DELETE FROM migrations WHERE version = ?"), migrs.Version); err != nil {
+		if _, err := tx.ExecContext(ctx, tx.Rebind("DELETE FROM migrations WHERE version = ?"), current); err != nil {
 			return err
 		}
 
 		return nil
 	})
+}
+
+// checkApplied checks every migration recorded in the database against the
+// migrations this binary knows and returns the latest applied version, 0 when
+// none is. It refuses a database that:
+//
+//   - a newer binary migrated past the latest migration known here, since its
+//     schema may not match what this binary expects;
+//   - records a migration under a version this binary knows by another name,
+//     or one this binary does not know at all, such as a database migrated by
+//     a build whose migration numbers collide with this one's;
+//   - lacks a migration that is older than the latest applied one, which
+//     would otherwise never run.
+//
+// Comparing only the latest version would miss all but the first case.
+func checkApplied(ctx context.Context, tx *db.Tx) (int64, error) {
+	var applied []Migrations
+	if err := tx.SelectContext(ctx, &applied, tx.Rebind("SELECT * FROM migrations ORDER BY version ASC")); err != nil {
+		return 0, fmt.Errorf("list applied migrations: %w", err)
+	}
+	if len(applied) == 0 {
+		return 0, nil
+	}
+
+	current := applied[len(applied)-1].Version
+	if n := len(migrations); n == 0 || current > migrations[n-1].Version {
+		var latest int64
+		if n > 0 {
+			latest = migrations[n-1].Version
+		}
+		return 0, fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", current, latest)
+	}
+
+	known := make(map[int64]string, len(migrations))
+	for _, m := range migrations {
+		known[m.Version] = m.Name
+	}
+	done := make(map[int64]bool, len(applied))
+	for _, a := range applied {
+		name, ok := known[a.Version]
+		if !ok {
+			return 0, fmt.Errorf("database has migration %d %q, which is unknown to this binary; it was migrated by a different soft-serve build", a.Version, a.Name)
+		}
+		if a.Name != name {
+			return 0, fmt.Errorf("database has migration %d %q, but this binary's migration %d is %q; it was migrated by a different soft-serve build", a.Version, a.Name, a.Version, name)
+		}
+		done[a.Version] = true
+	}
+	for _, m := range migrations {
+		if m.Version > current {
+			break
+		}
+		if !done[m.Version] {
+			return 0, fmt.Errorf("database is missing migration %d %q although the later migration %d is applied; it was migrated by a different soft-serve build", m.Version, m.Name, current)
+		}
+	}
+
+	return current, nil
 }
 
 // tableExists reports whether the table exists, returning any error from the
