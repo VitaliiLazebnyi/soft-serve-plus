@@ -499,10 +499,16 @@ func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) 
 // events queued plus running. A repository whose receivers are slow or never
 // answer, each send taking up to the per-hook timeout, then only delays and
 // drops its own events, and the others keep being sent.
+//
+// maxRepoRunningDeliveries is 1 so that one repository's events are sent one
+// at a time, in the order they were queued. A payload carries the state at
+// the time of its change, so a receiver handed two of them out of order, such
+// as making a repository private and then public again, would end in the
+// wrong state.
 const (
 	maxBackgroundDeliveries  = 32
 	maxQueuedDeliveries      = 1024
-	maxRepoRunningDeliveries = 4
+	maxRepoRunningDeliveries = 1
 	maxRepoDeliveries        = 64
 )
 
@@ -572,7 +578,8 @@ const (
 // repository, and no repository has more than maxRepoRunning deliveries
 // running or more than maxRepo queued plus running. Queued deliveries are
 // taken from the repositories in turn, so one repository's backlog does not
-// hold back the others'.
+// hold back the others'. One repository's deliveries start in the order they
+// were queued, so with maxRepoRunning at 1 they also finish in that order.
 //
 // It counts every delivery from enqueue until it has run, so shutdown can wait
 // for them. Once closed, it refuses new ones, so a request still running
@@ -611,9 +618,9 @@ func newDeliveryQueue(maxWorkers, maxPending int, logger *log.Logger) *deliveryQ
 	}
 }
 
-// enqueue starts job for repository repoID on a new goroutine if one is free
-// and the repository has not used up its share of them, or queues it. It never
-// blocks on a running job.
+// enqueue starts job for repository repoID on a new goroutine if one is free,
+// the repository has not used up its share of them and has nothing queued
+// ahead of job, or queues it. It never blocks on a running job.
 func (q *deliveryQueue) enqueue(repoID int64, job func()) enqueueResult {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -626,7 +633,7 @@ func (q *deliveryQueue) enqueue(repoID int64, job func()) enqueueResult {
 		return enqueueClosed
 	case r.running+len(r.queued) >= q.maxRepo:
 		return enqueueRepoFull
-	case q.workers < q.maxWorkers && r.running < q.maxRepoRunning:
+	case q.workers < q.maxWorkers && r.running < q.maxRepoRunning && len(r.queued) == 0:
 		q.workers++
 		r.running++
 		go q.work(repoID, job)
