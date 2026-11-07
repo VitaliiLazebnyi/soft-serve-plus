@@ -1,0 +1,34 @@
+# vi: set ft=conf
+
+# FIXME: don't skip windows
+[windows] skip 'curl makes github actions hang'
+
+# Only an admin can create the .soft-serve repository, whose README the TUI
+# shows to everyone, so push-to-create over HTTP refuses it for a user and
+# for an anonymous caller alike.
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+usoft token create 'push'
+stdout 'ss_*'
+cp stdout utokenfile
+envfile UTOKEN=utokenfile
+
+curl http://$UTOKEN@localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
+stdout 'only an admin can create the .soft-serve repository'
+
+soft settings anon-access read-write
+curl http://localhost:$HTTP_PORT/.soft-serve.git/info/refs?service=git-receive-pack
+stdout 'only an admin can create the .soft-serve repository'
+
+# a user may still push-to-create any other name
+curl http://$UTOKEN@localhost:$HTTP_PORT/other.git/info/refs?service=git-receive-pack
+stdout '.*git-receive-pack.*'
+
+soft repo list
+! stdout '.soft-serve'
+stdout 'other'

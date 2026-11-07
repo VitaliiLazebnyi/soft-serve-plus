@@ -430,7 +430,7 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			if cerr == nil {
 				repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 			}
-			if errors.Is(cerr, proto.ErrRepoLimitReached) {
+			if errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized) {
 				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
 				// git shows a text/plain error body to the user.
 				http.Error(w, cerr.Error(), http.StatusForbidden)

@@ -118,6 +118,25 @@ func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
 	return proto.ErrUnauthorized
 }
 
+// AboutRepo is the repository whose README the TUI shows on its About tab
+// (see pkg/ui/pages/selection). It speaks for the server to every TUI user,
+// so only a server admin may create it or rename a repository to it, and the
+// TUI shows it only while a server admin owns it.
+const AboutRepo = ".soft-serve"
+
+// errAboutRepoReserved refuses a non-admin's claim on AboutRepo.
+var errAboutRepoReserved = fmt.Errorf("%w: only an admin can create the %s repository", proto.ErrUnauthorized, AboutRepo)
+
+// checkCanClaim refuses user taking the new repository name: the
+// AdminOnlyCreate check (see checkCanCreate), and AboutRepo, which only a
+// server admin (see isServerAdmin) may take whatever that setting says.
+func (d *Backend) checkCanClaim(ctx context.Context, user proto.User, name string) error {
+	if name == AboutRepo && !d.isServerAdmin(ctx, user) {
+		return errAboutRepoReserved
+	}
+	return d.checkCanCreate(ctx, user)
+}
+
 // repoLimited reports whether max_repos_per_user applies to user creating
 // a repository: a limit is set and the caller is not a server admin (see
 // isServerAdmin). Decide it on the caller's own context, which carries the
@@ -170,7 +189,7 @@ func (d *Backend) DefaultPrivate(ctx context.Context, user proto.User) (bool, er
 //
 // It implements backend.Backend.
 func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
-	if err := d.checkCanCreate(ctx, user); err != nil {
+	if err := d.checkCanClaim(ctx, user, utils.SanitizeRepo(name)); err != nil {
 		return nil, err
 	}
 	return d.createRepository(ctx, name, user, opts, d.repoLimited(ctx, user))
@@ -346,7 +365,7 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
-	if err := d.checkCanCreate(ctx, user); err != nil {
+	if err := d.checkCanClaim(ctx, user, name); err != nil {
 		return nil, err
 	}
 
@@ -688,7 +707,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 
 	// Renaming onto a new name creates it, so it needs the same permission.
 	// The caller is the user and public key on the context.
-	if err := d.checkCanCreate(ctx, proto.UserFromContext(ctx)); err != nil {
+	if err := d.checkCanClaim(ctx, proto.UserFromContext(ctx), newName); err != nil {
 		return err
 	}
 
