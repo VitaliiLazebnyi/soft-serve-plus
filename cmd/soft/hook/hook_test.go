@@ -113,3 +113,34 @@ func TestHookErrorClosesDB(t *testing.T) {
 		t.Fatalf("database ping returned %v, want it closed", err)
 	}
 }
+
+// A hook run without SOFT_SERVE_DATA_PATH, i.e. not from the server, is
+// refused before it opens the backend, which would otherwise create a data
+// directory and an empty database in the working directory (the repository).
+func TestHookRefusesWithoutDataPath(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	t.Setenv("SOFT_SERVE_DATA_PATH", "")
+	cfg := config.DefaultConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(context.Background(), cfg)
+	ctx = log.WithContext(ctx, log.New(io.Discard))
+
+	Command.SetArgs([]string{"pre-receive"})
+	Command.SetIn(strings.NewReader(""))
+	Command.SetOut(io.Discard)
+	Command.SetErr(io.Discard)
+	if err := Command.ExecuteContext(ctx); !errors.Is(err, ErrNoDataPath) {
+		t.Fatalf("hook returned %v, want %v", err, ErrNoDataPath)
+	}
+
+	entries, err := os.ReadDir(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Errorf("hook created %s in the working directory", e.Name())
+	}
+}
