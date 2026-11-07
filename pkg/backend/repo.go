@@ -694,6 +694,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// directory has no row: it cannot be created, imported or renamed over,
 	// and deleting the repository again removes it.
 	if rowDeleted {
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(name)
+		}
 		if err := os.RemoveAll(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}

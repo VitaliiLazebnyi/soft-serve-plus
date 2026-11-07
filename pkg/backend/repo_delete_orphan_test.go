@@ -63,33 +63,83 @@ func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
 
 // A delete that finds no row while another delete has removed the row but
 // not yet the directory has not deleted anything: it reports the repository
-// as not found and leaves the directory to the other delete.
+// as not found and leaves the directory to the other delete, which removes
+// it. The second delete used to remove the directory and report success.
 func TestDeleteRepositoryConcurrentDeleteNotFound(t *testing.T) {
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
 	ctx := backendTestContext(be, be.cfg)
 
-	// Stand in for the first delete between its commit and the removal of
-	// the directory.
-	release := be.repoDirs.hold("delrepo")
-	if err := be.store.DeleteRepoByName(ctx, be.db, "delrepo"); err != nil {
+	ran := onRepoDirUnrecorded(t, "delrepo", func() {
+		if err := be.DeleteRepository(ctx, "delrepo"); !errors.Is(err, proto.ErrRepoNotFound) {
+			t.Errorf("second DeleteRepository => %v, want ErrRepoNotFound", err)
+		}
+		if _, err := os.Stat(filepath.Join(rp, "HEAD")); err != nil {
+			t.Errorf("second delete removed the directory: %v", err)
+		}
+	})
+	if err := be.DeleteRepository(ctx, "delrepo"); err != nil {
+		t.Fatalf("DeleteRepository => %v", err)
+	}
+	if !ran() {
+		t.Fatal("hook did not run")
+	}
+	if _, err := os.Stat(rp); !os.IsNotExist(err) {
+		t.Errorf("directory still there after the delete (stat err: %v)", err)
+	}
+}
+
+// rowAppearsStore records a row for name just before its insertAt-th
+// GetRepoByName lookup (counting from 1), as a create that records its row
+// and lets go of its hold at that moment would.
+type rowAppearsStore struct {
+	store.Store
+	name     string
+	userID   int64
+	insertAt int32
+	calls    atomic.Int32
+}
+
+func (s *rowAppearsStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	if s.calls.Add(1) == s.insertAt && name == s.name {
+		if err := s.Store.CreateRepo(ctx, h, name, s.userID, "", "", false, false, false, false); err != nil {
+			return models.Repo{}, err
+		}
+	}
+	return s.Store.GetRepoByName(ctx, h, name)
+}
+
+// A create can record its row and let go of its hold after a delete found
+// no row but before the delete removes the directory as an orphan. The
+// directory is then a live repository's, so the delete must leave it and
+// report the repository as not found.
+func TestDeleteRepositoryKeepsDirectoryRecordedAfterLookup(t *testing.T) {
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := be.DeleteRepository(ctx, "delrepo"); !errors.Is(err, proto.ErrRepoNotFound) {
-		t.Fatalf("second DeleteRepository => %v, want ErrRepoNotFound", err)
-	}
-	if _, err := os.Stat(rp); err != nil {
-		t.Fatalf("second delete removed the directory: %v", err)
+	rp := be.repoPath("pending")
+	if err := os.MkdirAll(rp, 0o755); err != nil {
+		t.Fatal(err)
 	}
 
-	// Without the other delete, the directory is an orphan and goes.
-	release()
-	if err := be.DeleteRepository(ctx, "delrepo"); err != nil {
-		t.Fatalf("DeleteRepository of the orphan => %v", err)
+	// Repository, which builds the webhook event, looks the row up first,
+	// then the delete itself; the third lookup is the orphan removal's
+	// second check.
+	st := &rowAppearsStore{Store: be.store, name: "pending", userID: admin.ID(), insertAt: 3}
+	be.store = st
+
+	if err := be.DeleteRepository(ctx, "pending"); !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatalf("DeleteRepository => %v, want ErrRepoNotFound", err)
 	}
-	if _, err := os.Stat(rp); !os.IsNotExist(err) {
-		t.Errorf("orphan directory still there (stat err: %v)", err)
+	if n := st.calls.Load(); n != 3 {
+		t.Fatalf("DeleteRepository made %d lookups, want 3", n)
+	}
+	if _, err := os.Stat(rp); err != nil {
+		t.Errorf("directory of a repository recorded meanwhile removed: %v", err)
 	}
 }
 

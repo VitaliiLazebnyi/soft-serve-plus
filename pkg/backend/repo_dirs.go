@@ -120,6 +120,7 @@ func (d *Backend) repoPathExact(name string) bool {
 
 // testHookRepoDirUnrecorded, when set, runs while name's directory exists
 // with no committed row for name: in a create or import right after the
-// directory is claimed, and in a rename right after the directory is moved to
-// its new name, inside the transaction.
+// directory is claimed, in a rename right after the directory is moved to its
+// new name, inside the transaction, and in a delete right after the row's
+// removal is committed, before the directory is removed.
 var testHookRepoDirUnrecorded func(name string)
