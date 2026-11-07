@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -35,7 +34,10 @@ func SettingsCommand() *cobra.Command {
 				case 0:
 					cmd.Println(be.AllowKeyless(ctx))
 				case 1:
-					v, _ := strconv.ParseBool(args[0])
+					v, err := parseBool(args[0])
+					if err != nil {
+						return err
+					}
 					if err := be.SetAllowKeyless(ctx, v); err != nil {
 						return err
 					}

@@ -8,10 +8,10 @@ import (
 
 func hiddenCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "hidden REPOSITORY [TRUE|FALSE]",
+		Use:               "hidden REPOSITORY [true|false]",
 		Short:             "Hide or unhide a repository",
 		Aliases:           []string{"hide"},
-		Args:              cobra.MinimumNArgs(1),
+		Args:              cobra.RangeArgs(1, 2),
 		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -25,11 +25,14 @@ func hiddenCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsHidden())
 			case 2:
+				hidden, err := parseBool(args[1])
+				if err != nil {
+					return err
+				}
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err
 				}
 
-				hidden := args[1] == "true"
 				if err := be.SetHidden(ctx, rr.Name(), hidden); err != nil {
 					return err
 				}
