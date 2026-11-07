@@ -127,11 +127,16 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		}
 	}
 
+	// Keep the end of git's stderr to explain a failure, whether or not the
+	// caller wants it too.
+	errTail := &tailBuffer{max: stderrTailSize}
+	stderrOut := io.Writer(errTail)
 	if scmd.Stderr != nil {
-		stderr, err = cmd.StderrPipe()
-		if err != nil {
-			return err
-		}
+		stderrOut = io.MultiWriter(errTail, scmd.Stderr)
+	}
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		return err
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -165,15 +170,13 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	}
 
 	// stderr
-	if scmd.Stderr != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := io.Copy(scmd.Stderr, stderr); err != nil {
-				logCopyError(ctx, "stderr", err, false)
-			}
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := io.Copy(stderrOut, stderr); err != nil {
+			logCopyError(ctx, "stderr", err, false)
+		}
+	}()
 
 	// Ensure all the output is written before waiting for the command to
 	// finish.
@@ -203,15 +206,51 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	} else if err != nil && errors.Is(err, os.ErrNotExist) {
 		return ErrInvalidRepo
 	} else if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return fmt.Errorf("%s: %s", exitErr, exitErr.Stderr)
+		if msg := errTail.String(); msg != "" {
+			return fmt.Errorf("%s: %w: %s", svc, err, msg)
 		}
-
-		return err
+		return fmt.Errorf("%s: %w", svc, err)
 	}
 
 	return nil
+}
+
+// stderrTailSize is how much of the end of git's stderr a failure reports.
+const stderrTailSize = 4 << 10
+
+// tailBuffer is a writer that keeps only the last max bytes written to it.
+// Git prints why it failed last, so the end of its stderr is what explains
+// a failure.
+type tailBuffer struct {
+	max       int
+	buf       []byte
+	truncated bool
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	b.buf = append(b.buf, p...)
+	if over := len(b.buf) - b.max; over > 0 {
+		b.buf = append(b.buf[:0], b.buf[over:]...)
+		b.truncated = true
+	}
+	return n, nil
+}
+
+// String returns the non-empty lines kept, trimmed and joined with "; " so
+// that they fit on one log line.
+func (b *tailBuffer) String() string {
+	var lines []string
+	for _, line := range strings.Split(string(b.buf), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	s := strings.Join(lines, "; ")
+	if s != "" && b.truncated {
+		s = "..." + s
+	}
+	return s
 }
 
 // logCopyError logs a failure to copy between git and the client. A client
