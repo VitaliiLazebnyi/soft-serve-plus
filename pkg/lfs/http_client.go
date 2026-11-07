@@ -189,10 +189,16 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	}
 
 	var response BatchResponse
-	err = json.NewDecoder(res.Body).Decode(&response)
+	err = decodeJSONLimit(res.Body, maxBatchResponseSize, &response)
 	if err != nil {
 		logger.Errorf("Error decoding json: %v", err)
 		return nil, err
+	}
+
+	// A response may answer for fewer objects than were asked for, but
+	// never for more.
+	if len(response.Objects) > len(objects) {
+		return nil, fmt.Errorf("lfs: batch response has %d objects, %d were requested", len(response.Objects), len(objects))
 	}
 
 	if len(response.Transfer) == 0 {
