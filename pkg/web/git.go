@@ -487,8 +487,9 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 	// git reads the request while it writes the response: receive-pack
 	// reports on each ref as it goes, and upload-pack sends progress. An
 	// HTTP/1.x handler cannot read the body once it has started the response
-	// unless full duplex is on. HTTP/2 is always full duplex, and says so by
-	// not supporting this.
+	// unless full duplex is on. HTTP/2 is always full duplex, so the call is
+	// a no-op there; a writer that cannot do it at all returns
+	// ErrNotSupported, which is fine to ignore.
 	if err := http.NewResponseController(w).EnableFullDuplex(); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		logger.Debugf("failed to enable full duplex: %v", err)
 	}
