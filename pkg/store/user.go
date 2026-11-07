@@ -12,6 +12,15 @@ import (
 type UserStore interface {
 	GetUserByID(ctx context.Context, h db.Handler, id int64) (models.User, error)
 	FindUserByUsername(ctx context.Context, h db.Handler, username string) (models.User, error)
+	// FindUserByUsernameForUpdate is FindUserByUsername that also locks the
+	// row until the transaction ends, on Postgres, with FOR UPDATE: the only
+	// row lock that also holds off the key-share lock a foreign key check
+	// takes, so no repository, public key or token can be added for the user
+	// meanwhile, and one inserted before the lock was taken is committed (or
+	// rolled back) by the time it is granted. On SQLite a writing
+	// transaction already excludes other writers, and it is
+	// FindUserByUsername.
+	FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error)
 	FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error)
 	FindUserByAccessToken(ctx context.Context, h db.Handler, token string) (models.User, error)
 	GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error)
