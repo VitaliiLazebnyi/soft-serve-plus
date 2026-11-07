@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -44,7 +45,7 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	if !unicode.IsLetter(rune(username[0])) {
+	if first, _ := utf8.DecodeRuneInString(username); !unicode.IsLetter(first) {
 		return fmt.Errorf("username must start with a letter")
 	}
 
@@ -57,9 +58,98 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
-// ValidateRepo rejects names that are not canonical or whose segments end in
-// ".git", which would nest one repository inside another.
+// ValidateNewUsername returns an error if username is not valid for a new
+// account or a rename. On top of ValidateUsername, it rejects letters from
+// scripts that are not normally mixed, such as a Cyrillic "а" in "аdmin",
+// which would make the name look like another one. Existing accounts are
+// looked up with ValidateUsername, so they stay reachable.
+func ValidateNewUsername(username string) error {
+	if err := ValidateUsername(username); err != nil {
+		return err
+	}
+	if mixedScripts(username) {
+		return fmt.Errorf("username cannot mix letters from different scripts")
+	}
+	return nil
+}
+
+// cjkScripts are the scripts that are written together, and with Latin, in
+// Chinese, Japanese and Korean, as Unicode's "highly restrictive" profile
+// (UTS #39) allows.
+var cjkScripts = map[string]bool{
+	"Han": true, "Hiragana": true, "Katakana": true, "Hangul": true, "Bopomofo": true,
+}
+
+// mixedScripts reports whether the letters of s come from more than one
+// script, other than Latin and the CJK scripts written together. Letters of
+// no particular script ("Common" or "Inherited") go with any.
+func mixedScripts(s string) bool {
+	var other string // the script other than Latin and CJK, if any
+	var latinOrCJK bool
+	for _, r := range s {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		switch script := scriptOf(r); {
+		case script == "", script == "Common", script == "Inherited":
+		case script == "Latin", cjkScripts[script]:
+			latinOrCJK = true
+		case other == "":
+			other = script
+		case other != script:
+			return true
+		}
+	}
+	return other != "" && latinOrCJK
+}
+
+// scriptOf returns the name of the Unicode script r belongs to, or "" if
+// none.
+func scriptOf(r rune) string {
+	if r < utf8.RuneSelf {
+		if unicode.IsLetter(r) {
+			return "Latin"
+		}
+		return ""
+	}
+	for name, table := range unicode.Scripts {
+		if unicode.Is(table, r) {
+			return name
+		}
+	}
+	return ""
+}
+
+// ValidateRepo rejects names that are not canonical, whose segments end in
+// ".git", which would nest one repository inside another, or that are not
+// valid for a new repository (see ValidateRepoSegments).
 func ValidateRepo(repo string) error {
+	if err := ValidateExistingRepo(repo); err != nil {
+		return err
+	}
+	return ValidateRepoSegments(repo)
+}
+
+// ValidateRepoSegments rejects repo path segments that start with a hyphen,
+// which a git command would read as an option, or consist only of periods,
+// such as "...", which Windows does not keep as a directory name.
+func ValidateRepoSegments(repo string) error {
+	for _, segment := range strings.Split(repo, "/") {
+		if strings.HasPrefix(segment, "-") {
+			return fmt.Errorf("repo path segments cannot start with a hyphen")
+		}
+		if strings.Trim(segment, ".") == "" {
+			return fmt.Errorf("repo path segments cannot consist only of periods")
+		}
+	}
+	return nil
+}
+
+// ValidateExistingRepo is ValidateRepo without the rules of
+// ValidateRepoSegments, which repositories created before them may break.
+// It is for naming a repository that already exists, such as the one being
+// renamed.
+func ValidateExistingRepo(repo string) error {
 	if repo == "" {
 		return fmt.Errorf("repo cannot be empty")
 	}

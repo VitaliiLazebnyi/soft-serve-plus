@@ -44,6 +44,10 @@ func TestValidateRepo(t *testing.T) {
 			"trailing/",
 			"suffix.git",
 			"double.git.git",
+			"-leading-dash",
+			"a/-b",
+			"...",
+			"a/.../b",
 		} {
 			t.Run(repo, func(t *testing.T) {
 				if err := ValidateRepo(repo); err == nil {
@@ -126,5 +130,55 @@ func TestRedactURL(t *testing.T) {
 		if got := RedactURL(in); got != want {
 			t.Errorf("RedactURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A repository whose name breaks the rules for new names can still be
+// named, to rename it, but not one that is unsafe as a path.
+func TestValidateExistingRepo(t *testing.T) {
+	for _, repo := range []string{"-foo", "a/-b", "...", "a/.../b", "lower"} {
+		if err := ValidateExistingRepo(repo); err != nil {
+			t.Errorf("ValidateExistingRepo(%q) = %v, want nil", repo, err)
+		}
+	}
+	for _, repo := range []string{"", "..", "foo/../bar", "suffix.git", "with$"} {
+		if err := ValidateExistingRepo(repo); err == nil {
+			t.Errorf("ValidateExistingRepo(%q) = nil, want an error", repo)
+		}
+	}
+}
+
+func TestValidateNewUsername(t *testing.T) {
+	for _, name := range []string{
+		"admin",
+		"user-1",
+		"андрей",    // Cyrillic only
+		"ελένη",     // Greek only
+		"山田太郎",      // Han
+		"やまだ-taro",  // Hiragana and Latin
+		"김철수",       // Hangul
+		"mañana",    // Latin with a diacritic
+		"testuser1", // digits are of no script
+	} {
+		if err := ValidateNewUsername(name); err != nil {
+			t.Errorf("ValidateNewUsername(%q) = %v, want nil", name, err)
+		}
+	}
+	for _, name := range []string{
+		"\u0430dmin",   // Cyrillic a, then Latin
+		"adm\u0456n",   // Latin with a Cyrillic i
+		"\u03b1lpha",   // Greek alpha, then Latin
+		"\u0430\u03b1", // Cyrillic and Greek
+		"\u0430\u5c71", // Cyrillic and Han
+		"1abc",         // not a letter first
+		"\u0663abc",    // an Arabic-Indic digit first
+	} {
+		if err := ValidateNewUsername(name); err == nil {
+			t.Errorf("ValidateNewUsername(%q) = nil, want an error", name)
+		}
+	}
+	// Existing accounts are still looked up.
+	if err := ValidateUsername("\u0430dmin"); err != nil {
+		t.Errorf("ValidateUsername(%q) = %v, want nil", "\u0430dmin", err)
 	}
 }
