@@ -114,7 +114,8 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			// Accept errors such as EMFILE are the case Temporary is still
 			// meant for; net/http's accept loop backs off on it the same way.
 			var ne net.Error
-			if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck
+			//lint:ignore SA1019 accept errors are what Temporary is still meant for.
+			if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck // see above
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
