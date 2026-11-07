@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -294,40 +295,35 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	datastore := store.FromContext(ctx)
-	dbx := db.FromContext(ctx)
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 
-	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid)
-	if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-		logger.Error("error getting object from database", "oid", oid, "repo", repo.Name(), "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
+	// The object's database row may be missing (the batch API creates it
+	// lazily), so the stored file, not the row, is the source of truth for
+	// the size. http.ServeContent takes the length from the file and
+	// handles Range requests, so interrupted downloads can resume.
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
 	if err != nil {
-		logger.Error("error opening object", "oid", oid, "err", err)
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "object not found",
-		})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
-	defer f.Close() //nolint: errcheck
-	if _, err := io.Copy(w, f); err != nil {
-		logger.Error("error copying object to response", "oid", oid, "err", err)
+		if errors.Is(err, fs.ErrNotExist) {
+			logger.Debug("object not found", "oid", oid, "repo", repo.Name())
+			renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
+				Message: "object not found",
+			})
+			return
+		}
+		logger.Error("error opening object", "oid", oid, "repo", repo.Name(), "err", err)
 		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
 	}
+	defer f.Close() //nolint: errcheck
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	// Objects are content addressed, so the oid is a strong validator.
+	w.Header().Set("ETag", `"`+oid+`"`)
+	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
