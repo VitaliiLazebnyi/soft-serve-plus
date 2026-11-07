@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -93,9 +92,8 @@ func (ui *UI) ShortHelp() []key.Binding {
 		b = append(b, ui.pages[ui.activePage].ShortHelp()...)
 	}
 	if !ui.IsFiltering() {
-		b = append(b, ui.common.KeyMap.Quit)
+		b = append(b, ui.common.KeyMap.Quit, ui.common.KeyMap.Help)
 	}
-	b = append(b, ui.common.KeyMap.Help)
 	return b
 }
 
@@ -108,13 +106,12 @@ func (ui *UI) FullHelp() [][]key.Binding {
 	case readyState:
 		b = append(b, ui.pages[ui.activePage].FullHelp()...)
 	}
-	h := []key.Binding{
-		ui.common.KeyMap.Help,
-	}
 	if !ui.IsFiltering() {
-		h = append(h, ui.common.KeyMap.Quit)
+		b = append(b, []key.Binding{
+			ui.common.KeyMap.Help,
+			ui.common.KeyMap.Quit,
+		})
 	}
-	b = append(b, h)
 	return b
 }
 
@@ -158,8 +155,8 @@ func (ui *UI) Init() tea.Cmd {
 // IsFiltering returns true if the selection page is filtering.
 func (ui *UI) IsFiltering() bool {
 	if ui.activePage == selectionPage {
-		if s, ok := ui.pages[selectionPage].(*selection.Selection); ok && s.FilterState() == list.Filtering {
-			return true
+		if s, ok := ui.pages[selectionPage].(interface{ IsFiltering() bool }); ok {
+			return s.IsFiltering()
 		}
 	}
 	return false
@@ -186,14 +183,15 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ui.state = readyState
 			// Always show the footer on error.
 			ui.showFooter = ui.footer.ShowAll()
-		case key.Matches(msg, ui.common.KeyMap.Help):
+		case key.Matches(msg, ui.common.KeyMap.Help) && !ui.IsFiltering():
 			cmds = append(cmds, footer.ToggleFooterCmd)
-		case key.Matches(msg, ui.common.KeyMap.Quit):
-			if !ui.IsFiltering() {
-				// Stop bubblezone background workers.
-				ui.common.Zone.Close()
-				return ui, tea.Quit
-			}
+		case key.Matches(msg, ui.common.KeyMap.Quit) &&
+			(!ui.IsFiltering() || msg.String() == "ctrl+c"):
+			// While filtering, "q" is typed into the filter but ctrl+c
+			// still quits.
+			// Stop bubblezone background workers.
+			ui.common.Zone.Close()
+			return ui, tea.Quit
 		case ui.activePage == repoPage &&
 			ui.pages[ui.activePage].(*repo.Repo).Path() == "" &&
 			key.Matches(msg, ui.common.KeyMap.Back):

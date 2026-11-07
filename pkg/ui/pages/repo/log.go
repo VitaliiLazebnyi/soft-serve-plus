@@ -141,7 +141,6 @@ func (l *Log) FullHelp() [][]key.Binding {
 		copyKey.SetHelp("c", "copy hash")
 		b = append(b, []key.Binding{
 			l.common.KeyMap.SelectItem,
-			l.common.KeyMap.BackItem,
 		})
 		b = append(b, [][]key.Binding{
 			{

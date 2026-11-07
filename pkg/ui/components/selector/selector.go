@@ -254,15 +254,9 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		filterState := s.FilterState()
-		switch {
-		case key.Matches(msg, s.common.KeyMap.Help):
-			if filterState == list.Filtering {
-				return s, tea.Batch(cmds...)
-			}
-		case key.Matches(msg, s.common.KeyMap.Select):
-			if filterState != list.Filtering {
-				cmds = append(cmds, s.SelectItemCmd)
-			}
+		// While filtering, keys such as "?" go to the filter input.
+		if key.Matches(msg, s.common.KeyMap.Select) && filterState != list.Filtering {
+			cmds = append(cmds, s.SelectItemCmd)
 		}
 	case list.FilterMatchesMsg:
 		cmds = append(cmds, s.activeFilterCmd)

@@ -3,6 +3,7 @@ package tabs
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -55,11 +56,11 @@ func (t *Tabs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "tab":
+		switch {
+		case key.Matches(msg, t.common.KeyMap.Section):
 			t.activeTab = (t.activeTab + 1) % len(t.tabs)
 			cmds = append(cmds, t.activeTabCmd)
-		case "shift+tab":
+		case key.Matches(msg, t.common.KeyMap.PrevSection):
 			t.activeTab = (t.activeTab - 1 + len(t.tabs)) % len(t.tabs)
 			cmds = append(cmds, t.activeTabCmd)
 		}
