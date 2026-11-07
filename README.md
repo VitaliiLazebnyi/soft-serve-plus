@@ -689,6 +689,14 @@ delete, rename or change the visibility of any of them.
 
 `read-only` can read public repos.
 
+On a public repo, `anon-access` is a floor for everyone: registered users and
+collaborators never get less than an anonymous caller would, so with
+`anon-access: read-write` every user can push to public repos, and a
+`read-only` collaborator on a public repo has read-write. Registered users
+always have at least `read-only` on public repos. On a private repo,
+`anon-access` does not apply: only the owner, collaborators (at their own
+level) and admins have access.
+
 `no-access` denies access to all repos.
 
 ## User Management
