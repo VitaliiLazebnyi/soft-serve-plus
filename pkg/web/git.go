@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	gitb "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -139,7 +137,7 @@ var gitRoutes = []GitRoute{
 	{
 		method:  []string{http.MethodGet},
 		handler: getTextFile,
-		path:    "/{_:(?:HEAD|objects/info/alternates|objects/info/http-alternates|objects/info/[^/]*)$}",
+		path:    "/{_:(?:HEAD|objects/info/alternates|objects/info/http-alternates)$}",
 	},
 	{
 		method:  []string{http.MethodGet},
@@ -486,6 +484,15 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		gitHttpReceiveCounter.WithLabelValues(repoName)
 	}
 
+	// git reads the request while it writes the response: receive-pack
+	// reports on each ref as it goes, and upload-pack sends progress. An
+	// HTTP/1.x handler cannot read the body once it has started the response
+	// unless full duplex is on. HTTP/2 is always full duplex, and says so by
+	// not supporting this.
+	if err := http.NewResponseController(w).EnableFullDuplex(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		logger.Debugf("failed to enable full duplex: %v", err)
+	}
+
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Connection", "Keep-Alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -573,9 +580,29 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 
 	if service != "" && (service == git.UploadPackService || service == git.ReceivePackService) {
 		// Smart HTTP
-		var refs bytes.Buffer
+		var version int
+		for _, p := range strings.Split(protocol, ":") {
+			if strings.HasPrefix(p, "version=") {
+				if v, _ := strconv.Atoi(p[8:]); v > version {
+					version = v
+				}
+			}
+		}
+
+		// The advertisement is streamed to the client as git writes it,
+		// rather than held in memory: a repository with many refs has a large
+		// one. The header goes out with git's first output, so a git that
+		// fails before writing anything still gets an error status.
+		refs := &advertisement{w: w, start: func() {
+			hdrNocache(w)
+			w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
+			w.WriteHeader(http.StatusOK)
+			if version < 2 {
+				git.WritePktline(w, "# service="+service.String()) //nolint: errcheck
+			}
+		}}
 		cmd := git.ServiceCommand{
-			Stdout: &refs,
+			Stdout: refs,
 			Dir:    dir,
 			Args:   []string{"--stateless-rpc", "--advertise-refs"},
 		}
@@ -596,38 +623,46 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_PROTOCOL=%s", protocol))
 		}
 
-		var version int
-		for _, p := range strings.Split(protocol, ":") {
-			if strings.HasPrefix(p, "version=") {
-				if v, _ := strconv.Atoi(p[8:]); v > version {
-					version = v
-				}
-			}
-		}
-
 		if err := service.Handler(ctx, cmd); err != nil {
+			if refs.started {
+				// The status is already sent; the client sees the
+				// advertisement cut short.
+				log.FromContext(ctx).Debugf("ref advertisement cut short: %v", err)
+				return
+			}
 			renderNotFound(w, r)
 			return
 		}
-
-		hdrNocache(w)
-		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
-		w.WriteHeader(http.StatusOK)
-		if version < 2 {
-			git.WritePktline(w, "# service="+service.String()) //nolint: errcheck
-		}
-		w.Write(refs.Bytes()) //nolint: errcheck
+		refs.begin()
 	} else {
 		// Dumb HTTP
-		updateServerInfo(ctx, dir) //nolint: errcheck
-		hdrNocache(w)
-		sendFile("text/plain; charset=utf-8", w, r)
+		getDumbInfoRefs(w, r)
 	}
 }
 
-func getInfoPacks(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w)
-	sendFile("text/plain; charset=utf-8", w, r)
+// advertisement passes git's ref advertisement through to the response,
+// calling start before the first byte.
+type advertisement struct {
+	w       io.Writer
+	start   func()
+	started bool
+}
+
+// begin calls start, once.
+func (a *advertisement) begin() {
+	if !a.started {
+		a.started = true
+		a.start()
+	}
+}
+
+// Write implements io.Writer.
+func (a *advertisement) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	a.begin()
+	return a.w.Write(p)
 }
 
 func getLooseObject(w http.ResponseWriter, r *http.Request) {
@@ -678,10 +713,6 @@ func getServiceType(r *http.Request) git.Service {
 func isSmart(r *http.Request, service git.Service) bool {
 	contentType := r.Header.Get("Content-Type")
 	return strings.HasPrefix(contentType, fmt.Sprintf("application/x-%s-request", service))
-}
-
-func updateServerInfo(ctx context.Context, dir string) error {
-	return gitb.UpdateServerInfo(ctx, dir)
 }
 
 // HTTP error response handling functions
