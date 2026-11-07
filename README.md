@@ -873,6 +873,8 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
 
+A mirror is read-only: its branches and tags follow the remote, so the next sync would undo any change made here. Pushes over SSH and HTTP, and `repo branch delete` / `repo tag delete`, are refused on a mirror, even for admins, until a repository admin turns mirroring off with `repo mirror <repo> false`. As with `repo private`, only repository admins can change the mirror and hidden flags (`repo mirror <repo> true|false`, `repo hidden <repo> true|false`); read-write collaborators get `unauthorized`.
+
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
 ### Deleting Repositories
