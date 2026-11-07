@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -368,7 +369,18 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		payload = raw
 	}
 
-	return webhook.SendWebhook(ctx, wh, webhook.Event(delivery.Event), payload)
+	return webhook.SendWebhook(b.webhookContext(ctx), wh, webhook.Event(delivery.Event), payload)
+}
+
+// webhookContext returns ctx carrying the backend's own config, database and
+// store. The webhook package reads them from the context: the store and
+// database to record the delivery, and the config for webhook.allowed_hosts.
+// Without them a caller's bare context would panic while recording and
+// ignore the allowlist the webhook's URL was validated against.
+func (b *Backend) webhookContext(ctx context.Context) context.Context {
+	ctx = config.WithContext(ctx, b.cfg)
+	ctx = db.WithContext(ctx, b.db)
+	return store.WithContext(ctx, b.store)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
