@@ -56,9 +56,11 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 
-		ac := be.AllowKeyless(ctx)
-		publicKeyCounter.WithLabelValues(strconv.FormatBool(ac || pk != nil)).Inc()
-		if !ac && pk == nil {
+		// The keyless setting only matters without a key, so a keyed
+		// session does not look it up.
+		allowed := pk != nil || be.AllowKeyless(ctx)
+		publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
+		if !allowed {
 			wish.Fatalln(s, ErrPermissionDenied)
 			return
 		}
