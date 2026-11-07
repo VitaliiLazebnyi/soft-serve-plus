@@ -50,8 +50,10 @@ func EnsureWithin(reposDir string, repo string) error {
 		return ErrSystemMalfunction
 	}
 
-	// ensure the repo is within the repos directory
-	if !strings.HasPrefix(absRepo, absRepos) {
+	// ensure the repo is within the repos directory. A plain prefix check
+	// would let "/d/repos" accept a sibling such as "/d/repos2".
+	rel, err := filepath.Rel(absRepos, absRepo)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		log.Debugf("repo path is outside of repos directory: %s", absRepo)
 		return ErrInvalidRepo
 	}

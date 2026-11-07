@@ -102,3 +102,26 @@ func TestLFSLockRangeLastPage(t *testing.T) {
 		}
 	}
 }
+
+// TestLFSLockFromIDRejectsInvalidID checks that unlocking by an ID that is
+// not a number is a client error (400) rather than an internal one (500).
+// The backend has no database on purpose: a refused ID must not reach it.
+func TestLFSLockFromIDRejectsInvalidID(t *testing.T) {
+	l := &lfsLockBackend{
+		lfsTransfer: &lfsTransfer{ctx: context.Background(), op: lfs.OperationUpload},
+		user:        lfsTestUser{},
+	}
+
+	for _, id := range []string{"abc", "", "1x", "99999999999999999999"} {
+		t.Run(id, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("FromID(%q) reached the database: %v", id, r)
+				}
+			}()
+			if _, err := l.FromID(id); !errors.Is(err, transfer.ErrParseError) {
+				t.Errorf("FromID(%q) error = %v, want %v", id, err, transfer.ErrParseError)
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
@@ -64,6 +65,9 @@ func TestEnsureWithinBad(t *testing.T) {
 	for _, f := range []string{
 		"..",
 		"../../../",
+		// A sibling whose name starts with the repos directory's name.
+		"../" + filepath.Base(tmp) + "2/x",
+		"../" + filepath.Base(tmp) + "x",
 	} {
 		if err := EnsureWithin(tmp, f); err == nil {
 			t.Errorf("EnsureWithin(%q, %q) => nil, want non-nil error", tmp, f)
@@ -77,6 +81,8 @@ func TestEnsureWithinGood(t *testing.T) {
 		tmp,
 		tmp + "/foo",
 		tmp + "/foo/bar",
+		"..foo",
+		"foo/../bar",
 	} {
 		if err := EnsureWithin(tmp, f); err != nil {
 			t.Errorf("EnsureWithin(%q, %q) => %v, want nil error", tmp, f, err)

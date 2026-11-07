@@ -52,9 +52,10 @@ var errInvalidOid = fmt.Errorf("%w: %w", transfer.ErrParseError, lfs.ErrInvalidO
 var errReadOnlySession = fmt.Errorf("%w: not allowed in a download session", transfer.ErrForbidden)
 
 // LFSTransfer is a Git LFS transfer service handler.
-// ctx is expected to have proto.User, *backend.Backend, *log.Logger,
-// *config.Config, *db.DB, and store.Store.
-// The first arg in cmd.Args should be the repo path.
+// ctx is expected to have proto.Repository, *log.Logger, *config.Config,
+// *db.DB and store.Store, and proto.User when the caller has an account.
+// The first arg in cmd.Args is the repo path; the repository itself is taken
+// from the context.
 // The second arg in cmd.Args should be the LFS operation (download or upload).
 func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	if len(cmd.Args) < 2 {
@@ -140,11 +141,7 @@ func (t *lfsTransfer) Download(oid string, _ transfer.Args) (io.ReadCloser, int6
 		return nil, 0, errInvalidOid
 	}
 
-	cfg := config.FromContext(t.ctx)
-	repoID := strconv.FormatInt(t.repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
-	pointer := transfer.Pointer{Oid: oid}
-	obj, err := strg.Open(path.Join("objects", pointer.RelativePath()))
+	obj, err := t.storage.Open(path.Join("objects", p.RelativePath()))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -201,7 +198,7 @@ func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Arg
 func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.Status, error) {
 	p := transfer.Pointer{Oid: oid}
 	if !p.IsValid() {
-		return transfer.NewStatus(transfer.StatusConflict, "invalid OID format"), nil
+		return transfer.NewStatus(transfer.StatusBadRequest, "invalid OID format"), nil
 	}
 
 	obj, err := t.store.GetLFSObjectByOid(t.ctx, t.dbx, t.repo.ID(), oid)
@@ -214,7 +211,7 @@ func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.
 	}
 
 	if obj.Size != size {
-		t.logger.Errorf("size mismatch: %d != %d", obj.Size, size)
+		t.logger.Debugf("size mismatch: %d != %d", obj.Size, size)
 		return transfer.NewStatus(transfer.StatusConflict, "size mismatch"), nil
 	}
 
@@ -223,14 +220,13 @@ func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.
 
 type lfsLockBackend struct {
 	*lfsTransfer
-	args map[string]string
 	user proto.User
 }
 
 var _ transfer.LockBackend = (*lfsLockBackend)(nil)
 
 // LockBackend implements transfer.Backend.
-func (t *lfsTransfer) LockBackend(args transfer.Args) transfer.LockBackend {
+func (t *lfsTransfer) LockBackend(_ transfer.Args) transfer.LockBackend {
 	user := proto.UserFromContext(t.ctx)
 	if user == nil {
 		// Locks are owned by an account. A caller without one (an anonymous
@@ -241,7 +237,7 @@ func (t *lfsTransfer) LockBackend(args transfer.Args) transfer.LockBackend {
 		return noUserLockBackend{}
 	}
 
-	return &lfsLockBackend{t, args, user}
+	return &lfsLockBackend{t, user}
 }
 
 // noUserLockBackend is the lock backend for a caller with no account. Every
@@ -318,11 +314,14 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 }
 
 // FromID implements transfer.LockBackend.
+//
+// An ID that is not a number is refused with transfer.ErrParseError, which
+// the processor sends back to the client as a 400 status.
 func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 	var lock LFSLock
 	iid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: invalid lock id %q", transfer.ErrParseError, id)
 	}
 
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {

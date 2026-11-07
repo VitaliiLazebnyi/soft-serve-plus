@@ -31,7 +31,7 @@ const (
 	// LFSTransferService is the LFS transfer service.
 	LFSTransferService Service = "git-lfs-transfer"
 	// LFSAuthenticateService is the LFS authenticate service.
-	LFSAuthenticateService = "git-lfs-authenticate"
+	LFSAuthenticateService Service = "git-lfs-authenticate"
 )
 
 // String returns the string representation of the service.
