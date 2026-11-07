@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -113,51 +114,17 @@ var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 // This middleware must be run after the ContextMiddleware.
 func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		// A session with a pty opens the TUI, deep-linked to a repository
-		// when the command is a single word. Anything longer cannot be a
-		// repository name, so it is a CLI command (e.g. `ssh -t host repo
-		// list`) and runs as one instead of being silently ignored.
-		if _, _, ptyReq := s.Pty(); ptyReq && len(s.Command()) <= 1 {
-			sh(s)
-			return
-		}
-
 		ctx := s.Context()
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		rootCmd := &cobra.Command{
-			Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
-			SilenceUsage: true,
-		}
-		rootCmd.CompletionOptions.DisableDefaultCmd = true
+		rootCmd := newRootCommand(cfg)
 
-		rootCmd.SetUsageTemplate(cmd.UsageTemplate)
-		rootCmd.SetUsageFunc(cmd.UsageFunc)
-		rootCmd.AddCommand(
-			cmd.GitUploadPackCommand(),
-			cmd.GitUploadArchiveCommand(),
-			cmd.GitReceivePackCommand(),
-			cmd.RepoCommand(),
-			cmd.SettingsCommand(),
-			cmd.UserCommand(),
-			cmd.InfoCommand(),
-			cmd.PubkeyCommand(),
-			cmd.SetUsernameCommand(),
-			cmd.JWTCommand(),
-			cmd.TokenCommand(),
-		)
-
-		if cfg.LFS.Enabled {
-			rootCmd.AddCommand(
-				cmd.GitLFSAuthenticateCommand(),
-			)
-
-			if cfg.LFS.SSHEnabled {
-				rootCmd.AddCommand(
-					cmd.GitLFSTransfer(),
-				)
-			}
+		// A session with a pty opens the TUI unless its command is one to
+		// run (see runWithPty).
+		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(s, rootCmd, args) {
+			sh(s)
+			return
 		}
 
 		cliCommandCounter.WithLabelValues(commandLabel(rootCmd, args)).Inc()
@@ -177,6 +144,77 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 	}
+}
+
+// runWithPty reports whether args, sent by a session with a pty, are a CLI
+// command to run rather than the TUI to open.
+//
+// No command opens the TUI, and more than one word cannot be a repository
+// name, so it is a command (e.g. `ssh -t host repo list`). A single word is a
+// repository to open the TUI on, unless it is a flag or names a top-level
+// command (e.g. `ssh -t host info` or `ssh -t host --help`) and the caller
+// can read no repository of that name. A repository the caller cannot read
+// is treated as missing, so a private repository named like a command and a
+// missing one give the same answer.
+func runWithPty(s ssh.Session, root *cobra.Command, args []string) bool {
+	switch {
+	case len(args) == 0:
+		return false
+	case len(args) > 1:
+		return true
+	}
+	word := args[0]
+	if !strings.HasPrefix(word, "-") {
+		if l := commandLabel(root, args); l == "" || l == unknownCommand {
+			return false
+		}
+	}
+	be := backend.FromContext(s.Context())
+	if be == nil {
+		return true
+	}
+	r, _ := be.ReadableByPublicKey(s.Context(), word, s.PublicKey())
+	return r == nil
+}
+
+// newRootCommand returns the CLI command tree for a session on a server
+// with cfg.
+func newRootCommand(cfg *config.Config) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
+		SilenceUsage: true,
+	}
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	rootCmd.SetUsageTemplate(cmd.UsageTemplate)
+	rootCmd.SetUsageFunc(cmd.UsageFunc)
+	rootCmd.AddCommand(
+		cmd.GitUploadPackCommand(),
+		cmd.GitUploadArchiveCommand(),
+		cmd.GitReceivePackCommand(),
+		cmd.RepoCommand(),
+		cmd.SettingsCommand(),
+		cmd.UserCommand(),
+		cmd.InfoCommand(),
+		cmd.PubkeyCommand(),
+		cmd.SetUsernameCommand(),
+		cmd.JWTCommand(),
+		cmd.TokenCommand(),
+	)
+
+	if cfg.LFS.Enabled {
+		rootCmd.AddCommand(
+			cmd.GitLFSAuthenticateCommand(),
+		)
+
+		if cfg.LFS.SSHEnabled {
+			rootCmd.AddCommand(
+				cmd.GitLFSTransfer(),
+			)
+		}
+	}
+
+	return rootCmd
 }
 
 // unknownCommand is the metric label for a command the server does not have.

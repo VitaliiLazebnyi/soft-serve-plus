@@ -24,6 +24,39 @@ ui '"    q"' nope
 cp stdout tui-nope.txt
 grep 'missing repo' tui-nope.txt
 
+# a single word that is a flag or a top-level command runs as that command
+ui '""' info
+stdout 'Username: admin'
+! stdout 'missing repo'
+ui '""' --help
+stdout 'Usage:'
+! stdout 'missing repo'
+ui '""' help
+stdout 'Usage:'
+! stdout 'missing repo'
+
+# unless a readable repository has that name: then it opens the TUI on it
+soft repo create info -d '"info repo"'
+ui '"    q"' info
+cp stdout tui-info.txt
+grep 'info repo' tui-info.txt
+! grep 'Username:' tui-info.txt
+
+# a repository the caller cannot read counts as missing, so a private one
+# named like a command runs the command, as a missing one does
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+soft repo create help -p -d '"private help"'
+uui '""' help
+stdout 'Usage:'
+! stdout 'private help'
+uui '"    q"' info
+cp stdout tui-info-user1.txt
+grep 'info repo' tui-info-user1.txt
+soft repo private info true
+uui '""' info
+stdout 'Username: user1'
+! stdout 'info repo'
+
 # stop the server
 [windows] stopserver
 [windows] ! stderr .
