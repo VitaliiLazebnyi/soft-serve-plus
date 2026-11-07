@@ -90,9 +90,10 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	return copy(p, "chunk"), nil
 }
 
-// An upload whose body keeps flowing for longer than the stall timeout must
-// succeed, even though nothing is read from the server meanwhile.
-func TestHTTPClientSlowUploadCompletes(t *testing.T) {
+// A request whose body keeps flowing for longer than the stall timeout must
+// succeed, even though nothing is read from the server meanwhile: writes
+// alone keep the connection alive.
+func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -102,12 +103,21 @@ func TestHTTPClientSlowUploadCompletes(t *testing.T) {
 	defer srv.Close()
 
 	a := newLoopbackAdapter(t)
-	p := Pointer{Size: int64(len("chunk") * testChunks)}
-	if err := a.Upload(context.Background(), p, &slowReader{left: testChunks}, &Link{Href: srv.URL}); err != nil {
-		t.Fatalf("Upload: %v", err)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL, &slowReader{left: testChunks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len("chunk") * testChunks)
+	res, err := a.client.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	res.Body.Close() //nolint:errcheck,gosec
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
 	if want := strings.Repeat("chunk", testChunks); <-got != want {
-		t.Fatal("server did not receive the whole upload")
+		t.Fatal("server did not receive the whole request body")
 	}
 }
 
