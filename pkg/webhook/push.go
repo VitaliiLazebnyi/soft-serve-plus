@@ -6,10 +6,7 @@ import (
 
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // PushEvent is a push event.
@@ -30,48 +27,27 @@ type PushEvent struct {
 func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
 	event := EventPush
 
+	repository, err := newRepository(ctx, repo)
+	if err != nil {
+		return PushEvent{}, err
+	}
+
 	payload := PushEvent{
 		Ref:    ref,
 		Before: before,
 		After:  after,
 		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
 		},
 	}
-
-	cfg := config.FromContext(ctx)
-	payload.Repository.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	payload.Repository.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	payload.Repository.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
-
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
-	if err != nil {
-		return PushEvent{}, db.WrapError(err)
-	}
-
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
 
 	// Find commits.
 	r, err := repo.Open()
 	if err != nil {
 		return PushEvent{}, err
 	}
-
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
 
 	rev := after
 	if !git.IsZeroHash(before) {
