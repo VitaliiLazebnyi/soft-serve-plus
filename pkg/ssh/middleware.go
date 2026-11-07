@@ -25,6 +25,11 @@ import (
 // ErrPermissionDenied is returned when a user is not allowed connect.
 var ErrPermissionDenied = fmt.Errorf("permission denied")
 
+// ErrUserLookupFailed is returned when the user that owns the session's
+// public key cannot be looked up. It carries no detail on purpose; the cause
+// is logged on the server.
+var ErrUserLookupFailed = errors.New("could not look up your account, try again later")
+
 // AuthenticationMiddleware handles authentication.
 func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
@@ -77,6 +82,15 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			var owned *backend.ErrAdminKeyNonAdminOwner
 			if errors.As(err, &owned) {
 				wish.Fatalln(s, owned)
+				return
+			}
+			// Any failure other than an unregistered key, such as a busy
+			// or unreachable database, ends the session. Running it as
+			// anonymous instead would deny a registered user their own
+			// repositories, or with anon-access read-write let them create
+			// repositories owned by nobody. The backend logs the cause.
+			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+				wish.Fatalln(s, ErrUserLookupFailed)
 				return
 			}
 		}
