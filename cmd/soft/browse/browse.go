@@ -137,7 +137,7 @@ func (m *model) Init() tea.Cmd {
 		func() tea.Msg {
 			return repo.RepoMsg(m.repo)
 		},
-		repo.UpdateRefCmd(m.repo),
+		repo.UpdateRefCmd(m.common.Context(), m.repo),
 	)
 }
 

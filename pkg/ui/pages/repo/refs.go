@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -211,7 +212,7 @@ func (r *Refs) StatusBarInfo() string {
 
 func (r *Refs) updateItemsCmd() tea.Msg {
 	its := make(RefItems, 0)
-	rr, err := r.repo.Open()
+	rr, err := openWithContext(r.common.Context(), r.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
@@ -266,9 +267,10 @@ func switchRefCmd(ref *git.Reference) tea.Cmd {
 // UpdateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
 // fallback branch when HEAD names a branch that does not exist (see
 // defaultRef). It sends EmptyRepoMsg when the repository has no branches.
-func UpdateRefCmd(repo proto.Repository) tea.Cmd {
+// Its git commands stop when ctx is done.
+func UpdateRefCmd(ctx context.Context, repo proto.Repository) tea.Cmd {
 	return func() tea.Msg {
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}

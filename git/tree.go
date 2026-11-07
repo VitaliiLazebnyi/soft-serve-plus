@@ -3,6 +3,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"io/fs"
 	gopath "path"
@@ -23,6 +24,9 @@ type TreeEntry struct {
 	*git.TreeEntry
 	// path is the full path of the file
 	path string
+	// repo is the repository the entry was read from. Its context bounds
+	// reading the entry's contents. It is nil for entries built elsewhere.
+	repo *Repository
 }
 
 // Entries is a wrapper around git.Entries.
@@ -82,7 +86,7 @@ func (f *File) Path() string {
 
 // SubTree returns the sub-tree at the given path.
 func (t *Tree) SubTree(path string) (*Tree, error) {
-	tree, err := t.Subtree(path)
+	tree, err := t.Subtree(path, t.lsTreeOpts())
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +99,7 @@ func (t *Tree) SubTree(path string) (*Tree, error) {
 
 // Entries returns the entries in the tree.
 func (t *Tree) Entries() (Entries, error) {
-	entries, err := t.Tree.Entries()
+	entries, err := t.Tree.Entries(t.lsTreeOpts())
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +108,7 @@ func (t *Tree) Entries() (Entries, error) {
 		ret[i] = &TreeEntry{
 			TreeEntry: e,
 			path:      gopath.Join(t.Path, e.Name()),
+			repo:      t.Repository,
 		}
 	}
 	return ret, nil
@@ -111,14 +116,21 @@ func (t *Tree) Entries() (Entries, error) {
 
 // TreeEntry returns the TreeEntry for the file path.
 func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
-	entry, err := t.Tree.TreeEntry(path)
+	entry, err := t.Tree.TreeEntry(path, t.lsTreeOpts())
 	if err != nil {
 		return nil, err
 	}
 	return &TreeEntry{
 		TreeEntry: entry,
 		path:      gopath.Join(t.Path, entry.Name()),
+		repo:      t.Repository,
 	}, nil
+}
+
+// lsTreeOpts returns options that run ls-tree under the context of the
+// tree's repository.
+func (t *Tree) lsTreeOpts() git.LsTreeOptions {
+	return git.LsTreeOptions{CommandOptions: t.Repository.cmdOpts()}
 }
 
 const sniffLen = 8000
@@ -145,6 +157,18 @@ func IsBinary(r io.Reader) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// Pipeline writes the contents of the file to stdout and git's errors to
+// stderr. Unlike git-module's Blob.Pipeline it runs under the context of the
+// repository the file was read from.
+func (f *File) Pipeline(stdout, stderr io.Writer) error {
+	if f.Entry == nil || f.Entry.repo == nil {
+		return f.Blob.Pipeline(stdout, stderr)
+	}
+	r := f.Entry.repo
+	return git.NewCommandWithContext(r.Context(), "show", f.ID().String()).
+		RunInDirPipeline(stdout, stderr, r.Path)
 }
 
 // IsBinary returns true if the file is binary.
@@ -186,5 +210,16 @@ func (e *TreeEntry) Contents() ([]byte, error) {
 
 // Contents returns the contents of the file.
 func (f *File) Contents() ([]byte, error) {
-	return f.Blob.Bytes()
+	if f.Entry == nil || f.Entry.repo == nil {
+		return f.Blob.Bytes()
+	}
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	if err := f.Pipeline(stdout, stderr); err != nil {
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("%w - %s", err, stderr.String())
+		}
+		return nil, err
+	}
+	return stdout.Bytes(), nil
 }

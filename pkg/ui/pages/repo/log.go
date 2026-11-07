@@ -425,7 +425,7 @@ func (l *Log) countCommitsCmd() tea.Msg {
 	if l.ref == nil {
 		return nil
 	}
-	r, err := l.repo.Open()
+	r, err := openWithContext(l.common.Context(), l.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
@@ -441,7 +441,7 @@ func (l *Log) updateCommitsCmd() tea.Msg {
 	if l.ref == nil {
 		return nil
 	}
-	r, err := l.repo.Open()
+	r, err := openWithContext(l.common.Context(), l.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
@@ -482,7 +482,7 @@ func (l *Log) loadDiffCmd() tea.Msg {
 	if l.selectedCommit == nil {
 		return nil
 	}
-	r, err := l.repo.Open()
+	r, err := openWithContext(l.common.Context(), l.repo)
 	if err != nil {
 		l.common.Logger.Debugf("ui: error loading diff repository: %v", err)
 		return common.ErrorMsg(err)

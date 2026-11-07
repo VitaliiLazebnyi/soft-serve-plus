@@ -23,13 +23,13 @@ func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, 
 
 	defer os.Remove(tmpindex) //nolint: errcheck
 
-	readTree := NewCommand("read-tree", "--reset", "-i", ref.Name().String()).
+	readTree := NewCommandWithContext(r.Context(), "read-tree", "--reset", "-i", ref.Name().String()).
 		AddEnvs("GIT_INDEX_FILE=" + tmpindex)
 	if _, err := readTree.RunInDir(r.Path); err != nil {
 		return nil, err
 	}
 
-	checkAttr := NewCommand("check-attr", "--cached", "-a", "--", path).
+	checkAttr := NewCommandWithContext(r.Context(), "check-attr", "--cached", "-a", "--", path).
 		AddEnvs("GIT_INDEX_FILE=" + tmpindex)
 	out, err := checkAttr.RunInDir(r.Path)
 	if err != nil {

@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -50,7 +51,7 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := UpdateRefCmd(context.Background(), openRepo{path: dir})().(type) {
 	case RefMsg:
 		if ref := (*git.Reference)(msg); ref == nil || ref.Name().Short() != "dev" {
 			t.Fatalf("UpdateRefCmd with a dangling HEAD = %v; want dev", msg)

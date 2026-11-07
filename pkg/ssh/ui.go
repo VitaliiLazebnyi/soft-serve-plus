@@ -220,7 +220,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()
-		cmds = append(cmds, repo.UpdateRefCmd(msg))
+		cmds = append(cmds, repo.UpdateRefCmd(ui.common.Context(), msg))
 	case common.ErrorMsg:
 		ui.error = msg
 		ui.state = errorState

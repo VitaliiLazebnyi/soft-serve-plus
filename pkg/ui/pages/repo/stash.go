@@ -252,7 +252,7 @@ func (s *Stash) fetchStash() tea.Msg {
 		return StashListMsg(nil)
 	}
 
-	r, err := s.repo.Open()
+	r, err := openWithContext(s.common.Context(), s.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
@@ -270,7 +270,7 @@ func (s *Stash) fetchStashPatch() tea.Msg {
 		return StashPatchMsg{nil}
 	}
 
-	r, err := s.repo.Open()
+	r, err := openWithContext(s.common.Context(), s.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}

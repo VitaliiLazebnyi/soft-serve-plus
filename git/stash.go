@@ -6,7 +6,8 @@ import "github.com/aymanbagabas/git-module"
 func (r *Repository) StashDiff(index int) (*Diff, error) {
 	diff, err := r.Repository.StashDiff(index, DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, git.DiffOptions{
 		CommandOptions: git.CommandOptions{
-			Envs: []string{"GIT_CONFIG_GLOBAL=/dev/null"},
+			Envs:    []string{"GIT_CONFIG_GLOBAL=/dev/null"},
+			Context: r.Context(),
 		},
 	})
 	if err != nil {

@@ -396,7 +396,7 @@ func (f *Files) updateFilesCmd() tea.Msg {
 	if f.ref == nil {
 		return nil
 	}
-	r, err := f.repo.Open()
+	r, err := openWithContext(f.common.Context(), f.repo)
 	if err != nil {
 		return common.ErrorCmd(err)
 	}
@@ -441,7 +441,7 @@ func (f *Files) selectFileCmd() tea.Msg {
 		var err error
 		var bin bool
 
-		r, err := f.repo.Open()
+		r, err := openWithContext(f.common.Context(), f.repo)
 		if err == nil {
 			attrs, err := r.CheckAttributes(f.ref, fi.Path())
 			if err == nil {
@@ -482,7 +482,7 @@ func (f *Files) selectFileCmd() tea.Msg {
 }
 
 func (f *Files) fetchBlame() tea.Msg {
-	r, err := f.repo.Open()
+	r, err := openWithContext(f.common.Context(), f.repo)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
