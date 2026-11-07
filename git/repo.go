@@ -78,6 +78,42 @@ func Open(path string) (*Repository, error) {
 	}, nil
 }
 
+// OpenLocal opens the repository that contains path. Unlike Open, path can be
+// any directory inside a working tree, a linked worktree or a bare
+// repository, which is what a user running "soft browse" expects. It is not
+// meant for repositories the server manages, which must use Open.
+func OpenLocal(path string) (*Repository, error) {
+	out, err := git.NewCommand("rev-parse", "--is-bare-repository", "--absolute-git-dir").RunInDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrNotAGitRepository, strings.TrimSpace(err.Error()))
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	if len(lines) != 2 {
+		return nil, ErrNotAGitRepository
+	}
+	bare := strings.TrimSpace(lines[0]) == "true"
+	root := strings.TrimRight(lines[1], "\r")
+	if !bare {
+		// --show-toplevel resolves both a subdirectory and a linked
+		// worktree, whose git directory lives in the main repository.
+		out, err := git.NewCommand("rev-parse", "--show-toplevel").RunInDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrNotAGitRepository, strings.TrimSpace(err.Error()))
+		}
+		root = strings.TrimRight(string(out), "\r\n")
+	}
+	root = filepath.FromSlash(root)
+	repo, err := git.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	return &Repository{
+		Repository: repo,
+		Path:       root,
+		IsBare:     bare,
+	}, nil
+}
+
 // HEAD returns the HEAD reference for a repository.
 func (r *Repository) HEAD() (*Reference, error) {
 	rn, err := r.Repository.SymbolicRef(git.SymbolicRefOptions{Name: "HEAD"})

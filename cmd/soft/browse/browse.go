@@ -32,7 +32,7 @@ var Command = &cobra.Command{
 			return err
 		}
 
-		r, err := git.Open(abs)
+		r, err := git.OpenLocal(abs)
 		if err != nil {
 			return fmt.Errorf("failed to open repository: %w", err)
 		}

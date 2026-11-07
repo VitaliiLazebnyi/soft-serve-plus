@@ -118,3 +118,67 @@ func TestOpenReportsGitReason(t *testing.T) {
 		t.Errorf("Open error = %q, want git's reason (dubious ownership)", err)
 	}
 }
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+func evalPath(t *testing.T, path string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestOpenLocal checks that "soft browse" can open a repository from any
+// directory inside it, from a linked worktree and from a bare repository,
+// where Open only accepts the repository root.
+func TestOpenLocal(t *testing.T) {
+	repo, _ := setupTestRepo(t)
+	wt := filepath.Join(t.TempDir(), "linked")
+	runGit(t, repo.Path, "worktree", "add", "-q", wt)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	runGit(t, t.TempDir(), "clone", "-q", "--bare", repo.Path, bare)
+
+	for _, tc := range []struct {
+		name, path, root string
+		bare             bool
+	}{
+		{"root", repo.Path, repo.Path, false},
+		{"subdirectory", filepath.Join(repo.Path, "dot_config"), repo.Path, false},
+		{"linked worktree", wt, wt, false},
+		{"linked worktree subdirectory", filepath.Join(wt, "dot_config"), wt, false},
+		{"bare", bare, bare, true},
+		{"bare subdirectory", filepath.Join(bare, "refs"), bare, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := OpenLocal(tc.path)
+			if err != nil {
+				t.Fatalf("OpenLocal(%q): %v", tc.path, err)
+			}
+			if got, want := evalPath(t, r.Path), evalPath(t, tc.root); got != want {
+				t.Errorf("Path = %q, want %q", got, want)
+			}
+			if r.IsBare != tc.bare {
+				t.Errorf("IsBare = %v, want %v", r.IsBare, tc.bare)
+			}
+			if _, err := r.HEAD(); err != nil {
+				t.Errorf("HEAD: %v", err)
+			}
+		})
+	}
+
+	t.Run("not a repository", func(t *testing.T) {
+		_, err := OpenLocal(t.TempDir())
+		if !errors.Is(err, ErrNotAGitRepository) {
+			t.Fatalf("OpenLocal error = %v, want ErrNotAGitRepository", err)
+		}
+	})
+}
