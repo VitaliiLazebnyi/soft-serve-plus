@@ -23,6 +23,15 @@ var (
 	ErrAmbiguousHost = errors.New("remote host is not a canonical IP or DNS name")
 )
 
+// An http transfer slower than GitLowSpeedLimit bytes a second for
+// GitLowSpeedTime seconds is aborted. The window is generous because a
+// server may send nothing but keepalives while it builds the pack of a large
+// repository.
+const (
+	GitLowSpeedLimit = 1000
+	GitLowSpeedTime  = 300
+)
+
 // GitRemoteTransport describes how a validated remote will be reached.
 type GitRemoteTransport int
 
@@ -63,12 +72,19 @@ type ValidatedGitRemote struct {
 // straight through a validate-then-exec check, so this environment disables
 // redirects and pins each validated address. Callers MUST apply it to every
 // git command that touches the remote, or the validation means nothing.
+//
+// It also aborts an http transfer that stalls (see GitLowSpeedLimit), so a
+// remote that stops sending cannot hold the git process open forever.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
 	// git follows the first HTTP redirect by default, which lets a public URL
 	// hand off to an internal one after validation has already passed. This
 	// costs imports of moved repositories, which is the right trade for a
 	// user-supplied remote.
-	entries := []GitConfigEntry{{Key: "http.followRedirects", Value: "false"}}
+	entries := []GitConfigEntry{
+		{Key: "http.followRedirects", Value: "false"},
+		{Key: "http.lowSpeedLimit", Value: strconv.Itoa(GitLowSpeedLimit)},
+		{Key: "http.lowSpeedTime", Value: strconv.Itoa(GitLowSpeedTime)},
+	}
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
 	}
