@@ -3,6 +3,7 @@ package lfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,7 +18,7 @@ import (
 
 // TestSearchPointerBlobsCancel verifies that the scan stops once its context
 // is canceled, even when nobody reads the remaining pointers, and reports
-// that it didn't finish.
+// that it was canceled.
 func TestSearchPointerBlobsCancel(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
@@ -77,8 +78,14 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 		t.Fatal("SearchPointerBlobs did not return after the context was canceled")
 	}
 
-	if err, ok := <-errChan; !ok || err == nil {
+	err, ok := <-errChan
+	if !ok || err == nil {
 		t.Fatal("SearchPointerBlobs did not report the canceled scan")
+	}
+	// The git commands killed by the cancellation fail too, but the scan
+	// must report why it stopped rather than their errors.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
 	}
 }
 
