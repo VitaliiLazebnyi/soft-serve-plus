@@ -138,6 +138,8 @@ git:
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: {{ .Git.IdleTimeout }}
 
   # The maximum number of concurrent connections.

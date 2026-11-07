@@ -240,6 +240,8 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
 
   # The maximum number of concurrent connections.
