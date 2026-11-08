@@ -75,6 +75,15 @@ func (a *AccessLevel) UnmarshalText(text []byte) error {
 }
 
 // MarshalText implements encoding.TextMarshaler.
+//
+// It returns ErrInvalidAccessLevel for a level outside the known set, rather
+// than writing "unknown", which UnmarshalText would then reject; this keeps
+// every marshalled level round-trippable.
 func (a AccessLevel) MarshalText() (text []byte, err error) {
-	return []byte(a.String()), nil
+	switch a {
+	case NoAccess, ReadOnlyAccess, ReadWriteAccess, AdminAccess:
+		return []byte(a.String()), nil
+	default:
+		return nil, ErrInvalidAccessLevel
+	}
 }

@@ -36,7 +36,22 @@ var (
 		Name:      "git_upload_archive_total",
 		Help:      "The total number of git-upload-archive requests",
 	}, []string{"repo"})
+
+	// requestSeconds is labelled with the service only: the repository name
+	// comes from the client and would make the label set unbounded.
+	requestSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "soft_serve",
+		Subsystem: "daemon",
+		Name:      "request_duration_seconds",
+		Help:      "The time spent serving accepted git:// requests",
+		Buckets:   []float64{.01, .05, .1, .5, 1, 5, 10, 30, 60, 300, 900},
+	}, []string{"service"})
 )
+
+// defaultAccessTimeout bounds the database lookups that decide whether the
+// daemon may serve a request, so that a slow or stuck database refuses the
+// client instead of holding its connection until the idle or max timeout.
+const defaultAccessTimeout = 10 * time.Second
 
 // ErrServerClosed indicates that the server has been closed.
 var ErrServerClosed = fmt.Errorf("git: %w", net.ErrClosed)
@@ -55,6 +70,9 @@ type GitDaemon struct {
 	done      atomic.Bool // indicates if the server has been closed
 	listeners []net.Listener
 	liMu      sync.Mutex
+
+	// accessTimeout bounds the access checks of each request.
+	accessTimeout time.Duration
 }
 
 // NewGitDaemon returns a new Git daemon.
@@ -69,6 +87,8 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 		be:       backend.FromContext(ctx),
 		conns:    connections{m: make(map[net.Conn]struct{})},
 		logger:   log.FromContext(ctx).WithPrefix("gitdaemon"),
+
+		accessTimeout: defaultAccessTimeout,
 	}
 	return d, nil
 }
@@ -111,15 +131,17 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			default:
 				d.logger.Debugf("git: error accepting connection: %v", err)
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			// Accept errors such as EMFILE are the case Temporary is still
+			// meant for; net/http's accept loop backs off on it the same way.
+			var ne net.Error
+			//lint:ignore SA1019 accept errors are what Temporary is still meant for.
+			if errors.As(err, &ne) && ne.Temporary() { //nolint:staticcheck // see above
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
 					tempDelay *= 2
 				}
-				if max := 1 * time.Second; tempDelay > max { //nolint:revive
-					tempDelay = max
-				}
+				tempDelay = min(tempDelay, time.Second)
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -148,9 +170,30 @@ func (d *GitDaemon) fatal(c net.Conn, err error) {
 	}
 }
 
+// requestContext returns the context a request is served with. It derives
+// from the server's context, so the request carries the server's config,
+// backend and logger and ends when the server's context does.
+func (d *GitDaemon) requestContext() (context.Context, context.CancelFunc) {
+	return context.WithCancel(d.ctx)
+}
+
+// readable reports whether the anonymous daemon may serve the repository
+// name. Its database lookups get at most accessTimeout, and a lookup that
+// runs out of time refuses the request.
+func (d *GitDaemon) readable(ctx context.Context, name string) bool {
+	ctx, cancel := context.WithTimeout(ctx, d.accessTimeout)
+	defer cancel()
+	if !d.be.AllowKeyless(ctx) {
+		return false
+	}
+	r, _ := d.be.Readable(ctx, name, nil)
+	return r != nil
+}
+
 // handleClient handles a git protocol client.
 func (d *GitDaemon) handleClient(conn net.Conn) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := d.requestContext()
+	defer cancel()
 	idleTimeout := time.Duration(d.cfg.Git.IdleTimeout) * time.Second
 	c := &serverConn{
 		Conn:          conn,
@@ -234,15 +277,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		}
 	}
 
-	be := d.be
-	if !be.AllowKeyless(ctx) {
-		d.fatal(c, git.ErrNotAuthed)
-		return
-	}
-
 	name := utils.SanitizeRepo(string(opts[0]))
-	d.logger.Debugf("git: connect %s %s %s", c.RemoteAddr(), service, name)
-	defer d.logger.Debugf("git: disconnect %s %s %s", c.RemoteAddr(), service, name)
 
 	// git bare repositories should end in ".git"
 	// https://git-scm.com/docs/gitrepository-layout
@@ -255,11 +290,20 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	}
 
 	// The daemon is always anonymous, so a repository it cannot read
-	// gets the anonymous answer whether it is private or missing.
-	if r, _ := be.Readable(ctx, name, nil); r == nil {
+	// gets the anonymous answer whether it is private or missing, and
+	// so does every repository when keyless access is off.
+	if !d.readable(ctx, name) {
 		d.fatal(c, git.ErrNotAuthed)
 		return
 	}
+
+	start := time.Now()
+	d.logger.Info("git: accepted request", "remote", c.RemoteAddr(), "service", service, "repo", name)
+	defer func() {
+		elapsed := time.Since(start)
+		requestSeconds.WithLabelValues(service.String()).Observe(elapsed.Seconds())
+		d.logger.Debug("git: finished request", "remote", c.RemoteAddr(), "service", service, "repo", name, "duration", elapsed)
+	}()
 
 	// Environment variables to pass down to git hooks.
 	envs := []string{
