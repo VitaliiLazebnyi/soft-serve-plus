@@ -92,12 +92,16 @@ stderr 'unauthorized'
 # a placeholder to reset stderr
 soft help
 
-# boss is still an admin-access collaborator, user1 did not escalate, and
-# peer was not added. A read-write collaborator can still list.
+# boss is still an admin-access collaborator (webhook list needs admin
+# access), user1 did not escalate, and peer was not added. A read-write
+# collaborator can still list.
 usoft repo collab list shared
 stdout 'boss\tadmin-access'
 stdout 'user1\tread-write'
 ! stdout 'peer'
+attacksoft repo webhook list shared
+! usoft repo webhook list shared
+stderr 'unauthorized'
 
 # Webhook deliveries must be scoped to the named repository. The attacker has
 # admin access to their own repo "user1", which must not expose the webhook
@@ -105,7 +109,7 @@ stdout 'user1\tread-write'
 new-webhook WH_SHARED
 soft repo webhook create shared $WH_SHARED -e push
 soft repo webhook list shared
-stdout '1.*'
+stdout '│1 *│[^│]*/hooks/WH_SHARED│'
 ! usoft repo webhook deliveries list user1 1
 ! usoft repo webhook deliveries get user1 1 00000000-0000-0000-0000-000000000000
 
