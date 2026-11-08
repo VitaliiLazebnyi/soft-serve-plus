@@ -33,9 +33,9 @@ func TestParseJWTHostKeyTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := jwtTestContext(t, tc.opts...)
-			token := signJWT(t, ctx, "repo")
+			token := signJWT(ctx, t, jwtTestClaims(ctx, "repo"))
 
-			claims, err := parseJWT(ctx, token, "repo")
+			claims, err := parseJWT(ctx, token, []string{"repo"})
 			if err != nil {
 				t.Fatalf("parseJWT: %v", err)
 			}
@@ -62,10 +62,10 @@ func TestParseJWTRejectsOtherAlgorithms(t *testing.T) {
 	rsaCtx := jwtTestContext(t, keygen.WithKeyType(keygen.RSA), keygen.WithBitSize(2048))
 	edCtx := jwtTestContext(t, keygen.WithKeyType(keygen.Ed25519))
 
-	if _, err := parseJWT(rsaCtx, signJWT(t, edCtx, "repo"), "repo"); err == nil {
+	if _, err := parseJWT(rsaCtx, signJWT(edCtx, t, jwtTestClaims(edCtx, "repo")), []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted an EdDSA token for an RSA host key")
 	}
-	if _, err := parseJWT(edCtx, signJWT(t, rsaCtx, "repo"), "repo"); err == nil {
+	if _, err := parseJWT(edCtx, signJWT(rsaCtx, t, jwtTestClaims(rsaCtx, "repo")), []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted an RS256 token for an Ed25519 host key")
 	}
 
@@ -78,7 +78,7 @@ func TestParseJWTRejectsOtherAlgorithms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignedString: %v", err)
 	}
-	if _, err := parseJWT(rsaCtx, pss, "repo"); err == nil {
+	if _, err := parseJWT(rsaCtx, pss, []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted a PS256 token for an RSA host key")
 	}
 }
@@ -104,20 +104,4 @@ func jwtTestClaims(ctx context.Context, audience ...string) jwt.RegisteredClaims
 		Issuer:    config.FromContext(ctx).HTTP.PublicURL,
 		Audience:  audience,
 	}
-}
-
-// signJWT signs a token with the host key of ctx the way `soft jwt` does.
-func signJWT(t *testing.T, ctx context.Context, audience ...string) string {
-	t.Helper()
-	kp, err := jwk.NewPair(config.FromContext(ctx))
-	if err != nil {
-		t.Fatalf("NewPair: %v", err)
-	}
-	token := jwt.NewWithClaims(kp.SigningMethod(), jwtTestClaims(ctx, audience...))
-	token.Header["kid"] = kp.JWK().KeyID
-	signed, err := token.SignedString(kp.PrivateKey())
-	if err != nil {
-		t.Fatalf("SignedString: %v", err)
-	}
-	return signed
 }
