@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -33,7 +34,7 @@ func (i LogItem) Hash() string {
 // Title returns the item title. Implements list.DefaultItem.
 func (i LogItem) Title() string {
 	if i.Commit != nil {
-		return strings.Split(i.Commit.Message, "\n")[0]
+		return utils.Sanitize(strings.Split(i.Commit.Message, "\n")[0])
 	}
 	return ""
 }
@@ -114,8 +115,8 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 				m.Width()-horizontalFrameSize),
 		)
 	}
-	author := i.Author.Name
-	committer := i.Committer.Name
+	author := utils.Sanitize(i.Author.Name)
+	committer := utils.Sanitize(i.Committer.Name)
 	who := ""
 	if author != "" && committer != "" {
 		who = styles.Keyword.Render(committer) + styles.Desc.Render(" committed")

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // StashItem represents a stash item.
@@ -21,7 +22,7 @@ func (i StashItem) ID() string {
 
 // Title returns the title of the stash item.
 func (i StashItem) Title() string {
-	return i.Message
+	return utils.Sanitize(i.Message)
 }
 
 // Description returns the description of the stash item.
