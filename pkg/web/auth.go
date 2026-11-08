@@ -15,73 +15,127 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// authenticate authenticates the user from the request. repo is the
-// requested repository name, used to check bearer token audiences.
-func authenticate(r *http.Request, repo string) (proto.User, error) {
+// authenticate authenticates the user from the request. A bearer token must
+// name one of repos in its audience, and its audience is returned; it is nil
+// for other credentials, which are not scoped to repositories. The error is
+// ErrInvalidToken or ErrInvalidPassword for bad credentials, and
+// proto.ErrUserNotFound otherwise.
+func authenticate(r *http.Request, repos ...string) (proto.User, []string, error) {
 	// Prefer the Authorization header
-	user, err := parseAuthHdr(r, repo)
+	user, audience, err := parseAuthHdr(r, repos)
 	if err != nil || user == nil {
 		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, proto.ErrUserNotFound
+		return nil, nil, proto.ErrUserNotFound
 	}
 
-	return user, nil
+	return user, audience, nil
 }
 
 // ErrInvalidPassword is returned when the password is invalid.
 var ErrInvalidPassword = errors.New("invalid password")
 
+// parseUsernamePassword authenticates HTTP Basic credentials. It accepts:
+//
+//   - a registered user's name and password;
+//   - an access token as the password, with an empty username, the token
+//     owner's username, or a placeholder that names no registered user (such
+//     as "git" or "x-access-token");
+//   - an access token as the username, with any password or none, the way
+//     GitHub clients send it (e.g. "<token>:x-oauth-basic").
+//
+// A token sent as the password with the name of another registered user is
+// refused: "alice:<bob's token>" must not log in as bob.
 func parseUsernamePassword(ctx context.Context, username, password string) (proto.User, error) {
 	logger := log.FromContext(ctx)
 	be := backend.FromContext(ctx)
 
-	if username != "" && password != "" {
-		user, err := be.User(ctx, username)
-		if err == nil && user != nil && backend.VerifyPassword(password, user.Password()) {
-			return user, nil
-		}
-
-		// Try to authenticate using access token as the password
-		user, err = be.UserByAccessToken(ctx, password)
-		if err == nil {
-			return user, nil
-		}
-
-		// Clients that follow the GitHub convention send the access token
-		// as the username, so the username is logged only when it is a
-		// valid one: tokens ("ss_...") and JWTs never are. The client
-		// address is already on the request logger.
-		if utils.ValidateUsername(username) == nil {
-			logger = logger.With("username", username)
-		}
-		logger.Info("invalid password or token", "err", err)
-		return nil, ErrInvalidPassword
-	} else if username != "" {
-		// Try to authenticate using access token as the username
-		// The username is the access token here, so it is not logged.
-		logger.Debug("trying to authenticate using access token as username")
-		user, err := be.UserByAccessToken(ctx, username)
-		if err == nil {
-			return user, nil
-		}
-
-		logger.Info("failed to get user", "err", err)
-		return nil, ErrInvalidToken
+	if username == "" && password == "" {
+		return nil, proto.ErrUserNotFound
 	}
 
-	return nil, proto.ErrUserNotFound
+	// Clients that follow the GitHub convention send the access token as
+	// the username, so the username is logged only when it is a valid one:
+	// tokens ("ss_...") and JWTs never are. The client address is already
+	// on the request logger.
+	if utils.ValidateUsername(username) == nil {
+		logger = logger.With("username", username)
+	}
+
+	if password != "" {
+		// Access token as the password. The lookup is a hash that does not
+		// depend on the username, so token clients never pay for bcrypt.
+		owner, err := be.UserByAccessToken(ctx, password)
+		if err == nil {
+			ok, err := tokenMatchesUsername(ctx, owner, username)
+			if err != nil {
+				logger.Info("failed to look up the user named with an access token", "err", err)
+				return nil, ErrInvalidPassword
+			}
+			if !ok {
+				logger.Info("access token does not belong to the named user")
+				return nil, ErrInvalidPassword
+			}
+			return owner, nil
+		}
+
+		// The password of a registered user.
+		if username != "" {
+			user, err := be.User(ctx, username)
+			if err == nil && user != nil && backend.VerifyPassword(password, user.Password()) {
+				return user, nil
+			}
+		}
+	}
+
+	if username != "" {
+		// Access token as the username, with any password. The username is
+		// the access token here, so it is not logged.
+		owner, err := be.UserByAccessToken(ctx, username)
+		if err == nil {
+			return owner, nil
+		}
+		if password == "" {
+			logger.Info("invalid access token", "err", err)
+			return nil, ErrInvalidToken
+		}
+	}
+
+	logger.Info("invalid password or token")
+	return nil, ErrInvalidPassword
+}
+
+// tokenMatchesUsername reports whether an access token owned by owner may be
+// used with username as the HTTP Basic username: it may when username is
+// empty, is owner's name, or is a placeholder that names no registered user.
+// A failed user lookup returns an error, so the login fails closed.
+func tokenMatchesUsername(ctx context.Context, owner proto.User, username string) (bool, error) {
+	if username == "" || strings.EqualFold(username, owner.Username()) {
+		return true, nil
+	}
+	// A name that is not a valid username cannot be a registered user.
+	if utils.ValidateUsername(username) != nil {
+		return true, nil
+	}
+	named, err := backend.FromContext(ctx).User(ctx, username)
+	if errors.Is(err, proto.ErrUserNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return named.ID() == owner.ID(), nil
 }
 
 // ErrInvalidHeader is returned when the authorization header is invalid.
 var ErrInvalidHeader = errors.New("invalid authorization header")
 
-func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
+func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error) {
 	// Check for auth header
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		return nil, ErrInvalidHeader
+		return nil, nil, ErrInvalidHeader
 	}
 
 	ctx := r.Context()
@@ -90,7 +144,7 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 {
-		return nil, errors.New("invalid authorization header")
+		return nil, nil, ErrInvalidHeader
 	}
 
 	// Log only a known scheme: the rest of the header is a credential, and
@@ -108,54 +162,59 @@ func parseAuthHdr(r *http.Request, repo string) (proto.User, error) {
 		user, err := be.UserByAccessToken(ctx, parts[1])
 		if err != nil {
 			logger.Info("failed to get user", "err", err)
-			return nil, err
+			return nil, nil, err
 		}
 
-		return user, nil
+		return user, nil, nil
 	case "bearer":
-		claims, err := parseJWT(ctx, parts[1], repo)
+		claims, err := parseJWT(ctx, parts[1], repos)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Find the user
 		parts := strings.SplitN(claims.Subject, "#", 2)
 		if len(parts) != 2 {
 			logger.Error("invalid jwt subject", "subject", claims.Subject)
-			return nil, errors.New("invalid jwt subject")
+			return nil, nil, errors.New("invalid jwt subject")
 		}
 
 		user, err := be.User(ctx, parts[0])
 		if err != nil {
 			logger.Error("failed to get user", "err", err)
-			return nil, err
+			return nil, nil, err
 		}
 
 		expectedSubject := fmt.Sprintf("%s#%d", user.Username(), user.ID())
 		if expectedSubject != claims.Subject {
 			logger.Error("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
-			return nil, errors.New("invalid jwt subject")
+			return nil, nil, errors.New("invalid jwt subject")
 		}
 
-		return user, nil
+		return user, claims.Audience, nil
 	default:
 		username, password, ok := r.BasicAuth()
 		if !ok {
-			return nil, ErrInvalidHeader
+			return nil, nil, ErrInvalidHeader
 		}
 
-		return parseUsernamePassword(ctx, username, password)
+		user, err := parseUsernamePassword(ctx, username, password)
+		return user, nil, err
 	}
 }
 
 // ErrInvalidToken is returned when a token is invalid.
 var ErrInvalidToken = errors.New("invalid token")
 
-// parseJWT validates a bearer token whose audience must name the requested
-// repository, so the answer does not depend on whether it exists.
-func parseJWT(ctx context.Context, bearer, repo string) (*jwt.RegisteredClaims, error) {
+// parseJWT validates a bearer token whose audience must name one of repos,
+// so the answer does not depend on whether they exist. The token must expire.
+func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.auth")
+	if len(repos) == 0 {
+		// jwt.WithAudience checks nothing without an audience.
+		return nil, ErrInvalidToken
+	}
 	kp, err := config.KeyPair(cfg)
 	if err != nil {
 		// The server cannot verify any token without its host key. That
@@ -174,7 +233,8 @@ func parseJWT(ctx context.Context, bearer, repo string) (*jwt.RegisteredClaims, 
 	},
 		jwt.WithIssuer(cfg.HTTP.PublicURL),
 		jwt.WithIssuedAt(),
-		jwt.WithAudience(repo),
+		jwt.WithExpirationRequired(),
+		jwt.WithAudience(repos...),
 	)
 	if err != nil {
 		logger.Info("failed to parse jwt", "err", err)
