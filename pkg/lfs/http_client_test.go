@@ -446,3 +446,59 @@ func TestBatchURLKeepsQuery(t *testing.T) {
 		t.Errorf("batch request went to %s, want /r.git/info/lfs/objects/batch?token=x", got)
 	}
 }
+
+// TestBatchResponseHashAlgo checks that a batch response in a hash
+// algorithm other than the sha256 the client asked for fails the transfer
+// before anything is downloaded, while an empty or sha256 one is accepted.
+func TestBatchResponseHashAlgo(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		algo    string
+		wantErr bool
+	}{
+		"empty":  {algo: ""},
+		"sha256": {algo: HashAlgorithmSHA256},
+		"sha512": {algo: "sha512", wantErr: true},
+		"SHA256": {algo: "SHA256", wantErr: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				res := BatchResponse{
+					Transfer: TransferBasic,
+					HashAlgo: tt.algo,
+					Objects: []*ObjectResponse{{
+						Pointer: testPointer,
+						Error:   &ObjectError{Code: http.StatusNotFound, Message: "not found"},
+					}},
+				}
+				w.Header().Set("Content-Type", MediaType)
+				json.NewEncoder(w).Encode(res) //nolint: errcheck
+			}))
+			t.Cleanup(srv.Close)
+			c := plainClient(t, srv.URL+"/x.git")
+
+			called := 0
+			err := c.Download(context.Background(), []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error {
+				called++
+				return nil
+			})
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "hash algorithm") {
+					t.Fatalf("err = %v, want a hash algorithm error", err)
+				}
+				if called != 0 {
+					t.Fatalf("callback called %d times, want 0", called)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if called != 1 {
+				t.Fatalf("callback called %d times, want 1", called)
+			}
+		})
+	}
+}
