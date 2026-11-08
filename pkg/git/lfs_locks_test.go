@@ -191,11 +191,11 @@ func TestLFSLockOwnership(t *testing.T) {
 	if out := session("owner", lock("a.bin")); !strings.Contains(out, "status 201") {
 		t.Fatalf("owner lock: %q", out)
 	}
-	locks, err := datastore.GetLFSLocksForUser(ctx, dbx, 1, users["owner"].id)
-	if err != nil || len(locks) != 1 {
-		t.Fatalf("owner locks = %v, %v; want one", locks, err)
+	ownerLock, err := datastore.GetLFSLockForUserPath(ctx, dbx, 1, users["owner"].id, "a.bin")
+	if err != nil {
+		t.Fatalf("owner lock: %v", err)
 	}
-	id := strconv.FormatInt(locks[0].ID, 10)
+	id := strconv.FormatInt(ownerLock.ID, 10)
 
 	expect("other lock", session("other", lock("a.bin")),
 		pkt("status 409\n"), pkt("id="+id+"\n"), pkt("ownername=owner\n"))
@@ -208,22 +208,22 @@ func TestLFSLockOwnership(t *testing.T) {
 	expect("other unlock", session("other", unlock(id)), pkt("status 403\n"))
 	expect("other force unlock", session("other", unlock(id, "force=true")), pkt("status 403\n"))
 	expect("admin unlock", session("boss", unlock(id)), pkt("status 403\n"))
-	if _, err := datastore.GetLFSLockByID(ctx, dbx, 1, locks[0].ID); err != nil {
+	if _, err := datastore.GetLFSLockByID(ctx, dbx, 1, ownerLock.ID); err != nil {
 		t.Fatalf("lock is gone after refused unlocks: %v", err)
 	}
 
 	expect("admin force unlock", session("boss", unlock(id, "force=true")),
 		pkt("status 200\n"), pkt("id="+id+"\n"))
-	if _, err := datastore.GetLFSLockByID(ctx, dbx, 1, locks[0].ID); !errors.Is(err, db.ErrRecordNotFound) {
+	if _, err := datastore.GetLFSLockByID(ctx, dbx, 1, ownerLock.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("lock after admin force unlock: err = %v, want %v", err, db.ErrRecordNotFound)
 	}
 	expect("unlock missing", session("owner", unlock(id)), pkt("status 404\n"))
 
 	// The owner still unlocks their own lock without force.
 	session("other", lock("b.bin"))
-	locks, err = datastore.GetLFSLocksForUser(ctx, dbx, 1, users["other"].id)
-	if err != nil || len(locks) != 1 {
-		t.Fatalf("other locks = %v, %v; want one", locks, err)
+	otherLock, err := datastore.GetLFSLockForUserPath(ctx, dbx, 1, users["other"].id, "b.bin")
+	if err != nil {
+		t.Fatalf("other lock: %v", err)
 	}
-	expect("other unlock own", session("other", unlock(strconv.FormatInt(locks[0].ID, 10))), pkt("status 200\n"))
+	expect("other unlock own", session("other", unlock(strconv.FormatInt(otherLock.ID, 10))), pkt("status 200\n"))
 }

@@ -298,7 +298,7 @@ func TestRollbackAllThenMigrate(t *testing.T) {
 	}
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		for _, table := range tables {
-			ok, err := tableExists(tx, table)
+			ok, err := tableExists(ctx, tx, table)
 			if err != nil {
 				return err
 			}
