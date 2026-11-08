@@ -88,6 +88,10 @@ func TestNewCollaboratorEvent(t *testing.T) {
 	is.True(ev.Collaborator.ID != 0)
 	is.Equal(ev.AccessLevel, access.ReadWriteAccess)
 	is.Equal(ev.Repository.Owner.Username, "alice")
+	// Collaborator events carry the same clone URLs as every other event.
+	is.Equal(ev.Repository.HTTPURL, "http://127.0.0.1:23232/repo.git")
+	is.Equal(ev.Repository.SSHURL, "ssh://127.0.0.1:23231/repo.git")
+	is.Equal(ev.Repository.GitURL, "git://127.0.0.1:9418/repo.git")
 }
 
 func TestNewCollaboratorEventUnknownCollaborator(t *testing.T) {
@@ -114,6 +118,10 @@ func TestNewRepositoryEventVisibilityChange(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventRepositoryVisibilityChange)
 	is.Equal(ev.Action, RepositoryEventActionVisibilityChange)
+	is.Equal(ev.Repository.Owner.Username, "alice")
+	is.Equal(ev.Repository.HTTPURL, "http://127.0.0.1:23232/repo.git")
+	is.Equal(ev.Repository.SSHURL, "ssh://127.0.0.1:23231/repo.git")
+	is.Equal(ev.Repository.GitURL, "git://127.0.0.1:9418/repo.git")
 }
 
 func TestNewRepositoryEventOtherActions(t *testing.T) {
@@ -213,6 +221,9 @@ func TestNewPushEventFirstPush(t *testing.T) {
 	is.Equal(ev.After, head)
 	is.Equal(ev.Repository.DefaultBranch, "main")
 	is.Equal(ev.Repository.Owner.Username, "alice")
+	is.Equal(ev.Repository.HTTPURL, "http://127.0.0.1:23232/repo.git")
+	is.Equal(ev.Repository.SSHURL, "ssh://127.0.0.1:23231/repo.git")
+	is.Equal(ev.Repository.GitURL, "git://127.0.0.1:9418/repo.git")
 
 	// A first push with no earlier commits lists the whole history, newest first.
 	is.Equal(len(ev.Commits), 2)

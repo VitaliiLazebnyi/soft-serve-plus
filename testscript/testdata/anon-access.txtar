@@ -21,9 +21,9 @@ git -C repo1 push origin HEAD
 ! ugit clone ssh://localhost:$SSH_PORT/repo1 urepo1
 stderr 'Error: you are not authorized to do this'
 
-# list repo as anon
+# list repo as anon; no-access hides every repository
 usoft repo list
-stdout ''
+! stdout .
 
 # create repo as anon
 ! usoft repo create urepo2
