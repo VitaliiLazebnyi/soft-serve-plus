@@ -616,11 +616,15 @@ func TestDownloadServerErrorStopsDownload(t *testing.T) {
 
 // TestDownloadIgnoresUnrequestedObjects checks that objects in the batch
 // response that were not requested, or are listed again, are neither
-// downloaded nor passed to the callback.
+// downloaded nor passed to the callback. The client rejects a response with
+// more objects than were requested, so this one leaves out two requested
+// objects to make room for the unrequested and repeated entries.
 func TestDownloadIgnoresUnrequestedObjects(t *testing.T) {
 	t.Parallel()
 	requested := Pointer{Oid: strings.Repeat("1", 64), Size: 2}
 	unrequested := Pointer{Oid: strings.Repeat("2", 64), Size: 2}
+	absent1 := Pointer{Oid: strings.Repeat("3", 64), Size: 2}
+	absent2 := Pointer{Oid: strings.Repeat("4", 64), Size: 2}
 
 	srv, hits := objectServer(t, func(_ BatchRequest, base string) BatchResponse {
 		return BatchResponse{Transfer: TransferBasic, Objects: []*ObjectResponse{
@@ -634,7 +638,7 @@ func TestDownloadIgnoresUnrequestedObjects(t *testing.T) {
 	c := plainClient(t, srv.URL+"/x.git")
 
 	results := map[string]downloadResult{}
-	if err := c.Download(t.Context(), []Pointer{requested}, collect(t, results)); err != nil {
+	if err := c.Download(t.Context(), []Pointer{requested, absent1, absent2}, collect(t, results)); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if n := hits(unrequested.Oid); n != 0 {
