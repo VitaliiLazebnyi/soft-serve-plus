@@ -49,6 +49,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.DB.Driver = odd
 	cfg.DB.DataSource = winPath
 	cfg.Jobs.MirrorPull = odd
+	cfg.Jobs.LFSSweep = odd
 	cfg.Webhook.AllowedHosts = []string{odd, `C:\y`}
 
 	var got Config
@@ -75,6 +76,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"db.driver", got.DB.Driver, cfg.DB.Driver},
 		{"db.data_source", got.DB.DataSource, cfg.DB.DataSource},
 		{"jobs.mirror_pull", got.Jobs.MirrorPull, cfg.Jobs.MirrorPull},
+		{"jobs.lfs_sweep", got.Jobs.LFSSweep, cfg.Jobs.LFSSweep},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
