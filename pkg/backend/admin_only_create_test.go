@@ -123,14 +123,6 @@ func seedCreate(be *Backend, ctx context.Context, name string, user proto.User, 
 // they run without network access.
 const offlineRemote = "https://127.0.0.1/x.git"
 
-// seedImport is seedCreate for ImportRepository.
-func seedImport(be *Backend, ctx context.Context, name string, user proto.User, remote string, opts proto.RepositoryOptions) (proto.Repository, error) {
-	prev := be.cfg.AdminOnlyCreate
-	be.cfg.AdminOnlyCreate = false
-	defer func() { be.cfg.AdminOnlyCreate = prev }()
-	return be.ImportRepository(ctx, name, user, remote, opts)
-}
-
 // With AdminOnlyCreate on, the backend itself refuses a non-admin, and an
 // anonymous caller, creating, importing or renaming to a new name, whichever
 // caller reaches it. Nothing is created.

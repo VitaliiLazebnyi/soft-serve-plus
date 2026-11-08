@@ -75,9 +75,9 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	// Advertise capabilities.
-	for _, cap := range transfer.Capabilities {
-		if err := handler.WritePacketText(cap); err != nil {
-			logger.Errorf("error sending capability: %s: %v", cap, err)
+	for _, capability := range transfer.Capabilities {
+		if err := handler.WritePacketText(capability); err != nil {
+			logger.Errorf("error sending capability: %s: %v", capability, err)
 			return err
 		}
 	}

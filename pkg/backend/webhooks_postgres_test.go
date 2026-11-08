@@ -138,7 +138,7 @@ func waitBlockedBy(e whEnv, holder int, result <-chan error, op string) error {
 	for {
 		select {
 		case err := <-result:
-			return fmt.Errorf("%s did not wait for the repository lock: %v", op, err)
+			return fmt.Errorf("%s did not wait for the repository lock: %w", op, err)
 		default:
 		}
 		var blocked bool
