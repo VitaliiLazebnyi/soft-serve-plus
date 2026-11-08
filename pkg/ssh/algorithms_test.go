@@ -83,8 +83,9 @@ func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context)
 }
 
 // startSSHServer starts a full SSH server built by NewSSHServer with cfg and
-// logger and returns its address.
-func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) string {
+// logger and returns its address and the context it runs with, which holds its
+// backend.
+func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context) {
 	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)

@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,24 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	gossh "golang.org/x/crypto/ssh"
 )
-
-// syncBuffer is a bytes.Buffer safe for concurrent writes and reads.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
 
 // TestSSHServerRefusesOverlongCommand checks that the server built by
 // NewSSHServer refuses an overlong exec command from an unregistered key with
@@ -50,7 +31,7 @@ func TestSSHServerRefusesOverlongCommand(t *testing.T) {
 	cfg.AnonAccess = &noAccess
 	allowKeyless := false
 	cfg.AllowKeyless = &allowKeyless
-	addr := startSSHServer(t, cfg, logger)
+	addr, _ := startSSHServer(t, cfg, logger)
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
