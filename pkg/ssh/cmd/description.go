@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,7 @@ func descriptionCommand() *cobra.Command {
 
 			switch len(args) {
 			case 1:
-				cmd.Println(rr.Description())
+				cmd.Println(utils.Sanitize(rr.Description()))
 			default:
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err

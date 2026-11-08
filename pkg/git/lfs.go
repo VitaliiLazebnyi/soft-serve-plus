@@ -80,9 +80,9 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	// Advertise capabilities.
-	for _, cap := range transfer.Capabilities {
-		if err := handler.WritePacketText(cap); err != nil {
-			logger.Errorf("error sending capability: %s: %v", cap, err)
+	for _, capability := range transfer.Capabilities {
+		if err := handler.WritePacketText(capability); err != nil {
+			logger.Errorf("error sending capability: %s: %v", capability, err)
 			return err
 		}
 	}
@@ -178,6 +178,11 @@ func (t *lfsTransfer) Download(oid string, _ transfer.Args) (io.ReadCloser, int6
 func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Args) error {
 	p := transfer.Pointer{Oid: oid}
 	if !p.IsValid() {
+		// Consume the object data so the next command is read from the
+		// right place in the stream.
+		if r != nil {
+			_, _ = io.Copy(io.Discard, r)
+		}
 		return errInvalidOid
 	}
 
@@ -304,6 +309,15 @@ func (noUserLockBackend) Range(string, int, func(transfer.Lock) error) (string, 
 
 var errNoUserLocks = fmt.Errorf("%w: locks need a user account", transfer.ErrForbidden)
 
+// lockForceKey is the unlock argument that asks to remove another user's
+// lock, like force in the HTTP API's unlock request.
+const lockForceKey = "force"
+
+var (
+	errLockNotOwned        = fmt.Errorf("%w: lock belongs to another user", transfer.ErrForbidden)
+	errForceUnlockNotAdmin = fmt.Errorf("%w: admin access required for force unlock", transfer.ErrForbidden)
+)
+
 // Create implements transfer.LockBackend.
 func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, error) {
 	if l.op == lfs.OperationDownload {
@@ -344,6 +358,9 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 }
 
 // FromID implements transfer.LockBackend.
+//
+// It finds the lock whoever owns it. Ownership is checked in Unlock, so
+// unlocking another user's lock is refused rather than reported missing.
 func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 	var lock LFSLock
 	iid, err := strconv.ParseInt(id, 10, 64)
@@ -353,7 +370,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
-		lock.lock, err = l.store.GetLFSLockForUserByID(l.ctx, tx, l.repo.ID(), l.user.ID(), iid)
+		lock.lock, err = l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), iid)
 		if err != nil {
 			return db.WrapError(err)
 		}
@@ -374,12 +391,15 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 }
 
 // FromPath implements transfer.LockBackend.
+//
+// Like FromID, it finds the lock whoever owns it: the processor uses it to
+// name the owner of a conflicting lock and to answer list-lock path=.
 func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 	var lock LFSLock
 
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
-		lock.lock, err = l.store.GetLFSLockForUserPath(l.ctx, tx, l.repo.ID(), l.user.ID(), path)
+		lock.lock, err = l.store.GetLFSLockForPath(l.ctx, tx, l.repo.ID(), path)
 		if err != nil {
 			return db.WrapError(err)
 		}
@@ -463,14 +483,29 @@ func (l *lfsLockBackend) Unlock(lock transfer.Lock) error {
 		return err
 	}
 
+	// As over HTTP, force removes another user's lock and needs a server
+	// admin; without it, only the owner may unlock.
+	force, _ := strconv.ParseBool(l.args[lockForceKey])
+
 	err = l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
-		return db.WrapError(
-			l.store.DeleteLFSLockForUserByID(l.ctx, tx, l.repo.ID(), l.user.ID(), id),
-		)
+		mlock, err := l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), id)
+		if err != nil {
+			return db.WrapError(err)
+		}
+		switch {
+		case force && !l.user.IsAdmin():
+			return errForceUnlockNotAdmin
+		case !force && mlock.UserID != l.user.ID():
+			return errLockNotOwned
+		}
+		return db.WrapError(l.store.DeleteLFSLock(l.ctx, tx, l.repo.ID(), id))
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return transfer.ErrNotFound
+		}
+		if errors.Is(err, transfer.ErrForbidden) {
+			return err
 		}
 		l.logger.Error("error unlocking lock", "err", err)
 		return err
@@ -511,7 +546,7 @@ func (l *LFSLock) AsLockSpec(ownerID bool) ([]string, error) {
 
 	if ownerID {
 		who := "theirs"
-		if l.lock.UserID == l.owner.ID {
+		if l.lock.UserID == l.backend.user.ID() {
 			who = "ours"
 		}
 
