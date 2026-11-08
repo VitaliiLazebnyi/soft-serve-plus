@@ -42,6 +42,14 @@ type GitRemotePolicy struct {
 // checkSSH applies the policy to an ssh host and port ("" meaning the ssh
 // default).
 func (p GitRemotePolicy) checkSSH(ctx context.Context, host, port string) error {
+	// git hands the port to ssh as the value of -p, so a bad one cannot
+	// inject an option, but it is refused here whatever the allowlist says
+	// rather than left for ssh to reject.
+	if port != "" {
+		if _, ok := parsePort(port); !ok {
+			return fmt.Errorf("%w: invalid port %q", ErrInvalidURL, port)
+		}
+	}
 	if len(p.AllowedSSHHosts) > 0 {
 		return p.AllowedSSHHosts.match(ctx, host, port, p.lookup)
 	}
@@ -55,11 +63,11 @@ func (p GitRemotePolicy) checkSSH(ctx context.Context, host, port string) error 
 type AllowedHosts []allowedHost
 
 // allowedHost is one allowlist entry: either a hostname or a prefix, plus an
-// optional port.
+// optional port (0 meaning any port).
 type allowedHost struct {
 	name   string
 	prefix netip.Prefix
-	port   string
+	port   uint16
 }
 
 // ParseAllowedHosts parses allowlist entries. Each is a hostname, IP address,
@@ -87,9 +95,11 @@ func parseAllowedHost(raw string) (allowedHost, error) {
 		return allowedHost{}, fmt.Errorf("allowed host %q: empty entry", raw)
 	}
 
-	host, port := splitHostPort(entry)
-	if port != "" {
-		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+	host, rawPort := splitHostPort(entry)
+	var port uint16
+	if rawPort != "" {
+		var ok bool
+		if port, ok = parsePort(rawPort); !ok {
 			return allowedHost{}, fmt.Errorf("allowed host %q: invalid port", raw)
 		}
 	}
@@ -124,13 +134,10 @@ func (h allowedHost) String() string {
 			host = h.prefix.String()
 		}
 	}
-	if h.port == "" {
+	if h.port == 0 {
 		return host
 	}
-	if strings.Contains(host, ":") {
-		return "[" + host + "]:" + h.port
-	}
-	return host + ":" + h.port
+	return net.JoinHostPort(host, strconv.Itoa(int(h.port)))
 }
 
 // String returns the normalised entries, comma separated. Two lists that
@@ -197,7 +204,7 @@ func (a AllowedHosts) match(ctx context.Context, host, port string, lookup looku
 
 	var candidates []allowedHost
 	for _, h := range a {
-		if h.port == "" || h.port == port {
+		if h.portMatches(port) {
 			candidates = append(candidates, h)
 		}
 	}
@@ -251,6 +258,17 @@ func containsAddr(hosts []allowedHost, addr netip.Addr) bool {
 // same name written two ways compares equal.
 func canonicalHostname(host string) string {
 	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
+// parsePort reads a decimal port number in 1-65535. Leading zeros are
+// accepted, so "080" and "80" are the same port; signs, spaces and anything
+// else that is not a digit are not.
+func parsePort(s string) (uint16, bool) {
+	n, err := strconv.ParseUint(s, 10, 16)
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	return uint16(n), true
 }
 
 // splitHostPort splits an optional trailing ":port" off a host, address,
