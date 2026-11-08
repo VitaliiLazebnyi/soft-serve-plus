@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -65,6 +68,35 @@ func TestMaxReposPerUser(t *testing.T) {
 	cfg.MaxReposPerUser = 0
 	_, err = be.CreateRepository(ctx, "a5", alice, proto.RepositoryOptions{})
 	is.NoErr(err)
+}
+
+// At the limit, create refuses before touching the disk: a nested name
+// leaves no parent directory behind, and a name that is already taken gets
+// the limit as its answer, as import does.
+func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	cfg.MaxReposPerUser = 1
+
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	_, err = be.CreateRepository(ctx, "group/a2", alice, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	_, err = os.Stat(filepath.Join(cfg.DataPath, "repos", "group"))
+	is.True(errors.Is(err, fs.ErrNotExist))
+
+	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+
+	// An invalid name is reported as such even at the limit, as for import.
+	_, err = be.CreateRepository(ctx, "bad name!", alice, proto.RepositoryOptions{})
+	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
+	_, err = be.ImportRepository(ctx, "bad name!", alice, "https://example.com/x.git", proto.RepositoryOptions{})
+	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
 }
 
 // Server admins are exempt: admin accounts, and the holder of a key in

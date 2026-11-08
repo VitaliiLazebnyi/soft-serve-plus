@@ -152,7 +152,12 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	url := fmt.Sprintf("%s/objects/batch", c.endpoint.String())
 
 	// TODO: support ref
-	request := &BatchRequest{operation, c.transferNames(), nil, objects, HashAlgorithmSHA256}
+	request := &BatchRequest{
+		Operation: operation,
+		Transfers: c.transferNames(),
+		Objects:   objects,
+		HashAlgo:  HashAlgorithmSHA256,
+	}
 
 	payload := new(bytes.Buffer)
 	err := json.NewEncoder(payload).Encode(request)
@@ -190,14 +195,27 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	}
 
 	var response BatchResponse
-	err = json.NewDecoder(res.Body).Decode(&response)
+	err = decodeJSONLimit(res.Body, maxBatchResponseSize, &response)
 	if err != nil {
 		logger.Errorf("Error decoding json: %v", err)
 		return nil, err
 	}
 
+	// A response may answer for fewer objects than were asked for, but
+	// never for more.
+	if len(response.Objects) > len(objects) {
+		return nil, fmt.Errorf("lfs: batch response has %d objects, %d were requested", len(response.Objects), len(objects))
+	}
+
 	if len(response.Transfer) == 0 {
 		response.Transfer = TransferBasic
+	}
+
+	// The oids were sent as SHA-256 hashes. A server that answers in another
+	// hash algorithm names different objects, whose content would never
+	// verify against the pointers. An empty hash_algo means sha256.
+	if response.HashAlgo != "" && response.HashAlgo != HashAlgorithmSHA256 {
+		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", response.HashAlgo, HashAlgorithmSHA256)
 	}
 
 	return &response, nil

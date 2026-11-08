@@ -129,7 +129,7 @@ func handleErrorResponse(resp *http.Response) error {
 
 func decodeResponseError(r io.Reader) (ErrorResponse, error) {
 	var er ErrorResponse
-	err := json.NewDecoder(r).Decode(&er)
+	err := decodeJSONLimit(r, maxErrorResponseSize, &er)
 	if err != nil {
 		log.Error("Error decoding json: %v", err)
 	}
