@@ -46,8 +46,11 @@ var privateNetworks = []netip.Prefix{
 // They are reachable only through an entry naming the address itself.
 // 169.254.169.254 needs no entry here: link-local is outside privateNetworks.
 var metadataAddrs = []netip.Prefix{
-	netip.MustParsePrefix("fd00:ec2::254/128"),  // AWS IMDS over IPv6
-	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata, inside CGNAT
+	netip.MustParsePrefix("fd00:ec2::254/128"),      // AWS IMDS over IPv6
+	netip.MustParsePrefix("fd00:ec2::23/128"),       // AWS EKS Pod Identity Agent over IPv6
+	netip.MustParsePrefix("fd20:ce::254/128"),       // Google Compute Engine metadata over IPv6
+	netip.MustParsePrefix("fd00:c1::a9fe:a9fe/128"), // Oracle Cloud IMDS over IPv6
+	netip.MustParsePrefix("100.100.100.200/32"),     // Alibaba Cloud metadata, inside CGNAT
 }
 
 // permitsHTTP reports whether an HTTP request to host (as named in the URL)
@@ -94,9 +97,14 @@ func (a AllowedHosts) namesHost(host, port string) bool {
 }
 
 // portMatches reports whether the entry applies to port. An entry without a
-// port applies to every port.
+// port applies to every port. Ports compare as numbers, so "080" is port 80;
+// a port that is not a number in 1-65535 matches only entries without one.
 func (h allowedHost) portMatches(port string) bool {
-	return h.port == "" || h.port == port
+	if h.port == 0 {
+		return true
+	}
+	p, ok := parsePort(port)
+	return ok && p == h.port
 }
 
 // mostSpecific returns the longest prefix in prefixes that contains addr.

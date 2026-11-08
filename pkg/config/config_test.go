@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -141,6 +143,40 @@ func TestCustomConfigLocation(t *testing.T) {
 	is.Equal(cfg.Name, "Soft Serve Plus")
 }
 
+func TestCheckConfigLocation(t *testing.T) {
+	td := t.TempDir()
+	t.Setenv("SOFT_SERVE_DATA_PATH", td)
+	existing := filepath.Join(td, "custom.yaml")
+	if err := os.WriteFile(existing, []byte("name: custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		location string
+		wantErr  bool
+	}{
+		"unset":                    {location: ""},
+		"existing file":            {location: existing},
+		"missing file":             {location: filepath.Join(td, "missing.yaml"), wantErr: true},
+		"missing default location": {location: filepath.Join(td, "config.yaml")},
+		"missing directory":        {location: filepath.Join(td, "nodir", "config.yaml"), wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_CONFIG_LOCATION", tc.location)
+			err := DefaultConfig().CheckConfigLocation()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_CONFIG_LOCATION") {
+					t.Fatalf("CheckConfigLocation() = %v, want an error naming the variable", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CheckConfigLocation() = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestDefaultRepoDisabledByDefault(t *testing.T) {
 	is := is.New(t)
 	is.Equal(DefaultConfig().DefaultRepo, "")
@@ -162,6 +198,27 @@ func TestParseDefaultRepoFromFile(t *testing.T) {
 	cfg := &Config{DataPath: t.TempDir()}
 	is.NoErr(parseFile(cfg, "testdata/config_default_repo.yaml"))
 	is.Equal(cfg.DefaultRepo, "gitops")
+}
+
+func TestParseEmptyFile(t *testing.T) {
+	t.Parallel()
+	for name, content := range map[string]string{
+		"empty":        "",
+		"whitespace":   "\n  \n",
+		"comment only": "# soft-serve config\n# name: \"Soft Serve\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			is := is.New(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			is.NoErr(os.WriteFile(path, []byte(content), 0o600))
+			cfg := DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			want := cfg.Name
+			is.NoErr(parseFile(cfg, path))
+			is.Equal(cfg.Name, want)
+		})
+	}
 }
 
 func TestParseMultipleHeaders(t *testing.T) {
@@ -710,5 +767,30 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	}
 	if !slices.Equal(fromFile.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
 		t.Fatalf("AllowedHosts from file = %q", fromFile.Webhook.AllowedHosts)
+	}
+}
+
+// WriteConfig keeps the config, which can hold a database password, and a
+// data directory it creates private to the server's user.
+func TestWriteConfigIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	cfg := DefaultConfig()
+	cfg.DataPath = filepath.Join(t.TempDir(), "data")
+	if err := cfg.WriteConfig(); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		cfg.DataPath:     0o700,
+		cfg.ConfigPath(): 0o600,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %v, want %v", path, got, want)
+		}
 	}
 }

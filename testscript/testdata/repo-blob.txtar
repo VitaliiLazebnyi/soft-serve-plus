@@ -63,6 +63,18 @@ stderr 'revision does not exist'
 ! stdout .
 stderr 'revision does not exist'
 
+# a ref that is not a single revision, or looks like a rev-parse option, is a
+# bad revision rather than a crash or a rev-parse option
+! soft repo blob repo1 '^HEAD' README.md
+! stdout .
+stderr 'revision does not exist'
+! soft repo blob repo1 'HEAD^@' README.md
+! stdout .
+stderr 'revision does not exist'
+! soft repo blob repo1 -- --git-dir README.md
+! stdout .
+stderr 'revision does not exist'
+
 # stop the server
 [windows] stopserver
 

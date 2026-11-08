@@ -86,14 +86,23 @@ and database.
 
 By default, program configuration is stored within the `data` directory. But,
 this can be overridden by setting a custom path to a config file with `SOFT_SERVE_CONFIG_LOCATION`
-that is pre-created. If a config file pointed to by `SOFT_SERVE_CONFIG_LOCATION`,
-the default location within the `data` dir is used for generating a default config.
+that is pre-created. If the file pointed to by `SOFT_SERVE_CONFIG_LOCATION` does
+not exist, Soft Serve Plus refuses to start instead of falling back to the default
+config. The one exception is `$SOFT_SERVE_DATA_PATH/config.yaml`, the default
+location, where a default config is generated on the first start.
 
 To change the default data path use `SOFT_SERVE_DATA_PATH` environment variable.
 
 ```sh
 SOFT_SERVE_DATA_PATH=/var/lib/soft-serve soft serve
 ```
+
+Soft Serve Plus creates the data directory with mode `0700` and the default
+`config.yaml` with mode `0600`, so other local users cannot read repositories,
+the database or secrets. A directory or config that already exists keeps its
+mode; tighten it yourself (`chmod 700 data`) if it is group- or world-readable.
+Packages install `/etc/soft-serve.conf` with mode `0600`, and an upgrade
+tightens an existing one that still has the old `0644` mode.
 
 When you run Soft Serve Plus for the first time, make sure you have the
 `SOFT_SERVE_INITIAL_ADMIN_KEYS` environment variable is set to your ssh
@@ -142,8 +151,9 @@ SOFT_SERVE_DEFAULT_REPO=gitops \
   soft serve
 ```
 
-The repository is created empty and public, exactly as if a human had run
-`repo create gitops` with no flags; only its *existence* is guaranteed on
+The repository is created empty, exactly as if a human had run
+`repo create gitops` with no flags: public, or private when `default_private`
+is set; only its *existence* is guaranteed on
 boot, not its reachability, which is still governed entirely by the
 `anon-access`/`allow-keyless` settings described below. Booting again against
 the same data directory is a no-op if the repository already exists.
@@ -167,11 +177,21 @@ self-explanatory and will look like this:
 # This is the name that will be displayed in the UI.
 name: "Soft Serve Plus"
 
-# Log format to use. Valid values are "json", "logfmt", and "text".
-log_format: "text"
+# Logging configuration.
+log:
+  # Log format to use. Valid values are "json", "logfmt", and "text".
+  format: "text"
+  # Time format for the log "timestamp" field.
+  # Should be described in Golang's time format.
+  time_format: "2006-01-02 15:04:05"
+  # Path to the log file. Leave empty to write to stderr.
+  #path: ""
 
 # The SSH server configuration.
 ssh:
+  # Enable SSH.
+  enabled: true
+
   # The address on which the SSH server will listen.
   listen_addr: ":23231"
 
@@ -180,18 +200,19 @@ ssh:
   public_url: "ssh://localhost:23231"
 
   # The path to the SSH server's private key.
-  key_path: "ssh/soft_serve_host"
+  key_path: "ssh/soft_serve_host_ed25519"
 
-  # The path to the SSH server's client private key.
-  # This key will be used to authenticate the server to make git requests to
-  # ssh remotes.
-  client_key_path: "ssh/soft_serve_client"
+  # The path to the server's client private key. This key will be used to
+  # authenticate the server to make git requests to ssh remotes.
+  client_key_path: "ssh/soft_serve_client_ed25519"
 
   # How the server's ssh client verifies host keys of ssh remotes it imports
   # or mirrors from, checked against <data_path>/ssh/known_hosts.
   # "accept-new" records a host key on first contact and refuses a changed
   # one (needs OpenSSH 7.6 or newer). "yes" refuses any host that is not
-  # already in known_hosts; use it with a pre-seeded known_hosts file.
+  # already in known_hosts; use it with a pre-seeded known_hosts file. The
+  # client always runs with BatchMode=yes, so it fails fast instead of
+  # prompting for a passphrase.
   client_strict_host_key_checking: "accept-new"
 
   # The ssh hosts that repositories may be imported from or mirrored. The
@@ -200,11 +221,8 @@ ssh:
   # or CIDR ranges, each with an optional port. When the list is empty, only
   # server admins may import from or mirror ssh remotes. Once the list is
   # non-empty it binds admins too: they may then reach only the hosts it
-  # names. A mirror is synced with its owner's privileges, so a key in
-  # initial_admin_keys that belongs to a non-admin account may import from
-  # ssh but not mirror from it, nor turn mirroring on later. To let such an
-  # account mirror, give it the admin flag, or list the host here, keeping
-  # in mind that the list then limits every admin as well.
+  # names. A mirror is synced with its owner's privileges, so mirroring
+  # from ssh needs an owner with the admin flag or a host on this list.
   # CIDR entries are checked against DNS only at import or sync time and ssh
   # resolves the name again, so prefer hostnames for anything you do not
   # control. The list is matched against the name given to ssh; your
@@ -219,21 +237,49 @@ ssh:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
-  idle_timeout: 120
+  # A value of 0 means no timeout.
+  idle_timeout: 600
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
-  # SHA-1 based ones. Unknown names are rejected at startup. See
-  # "SSH Algorithms" below.
+  # SHA-1 based diffie-hellman-group14-sha1, diffie-hellman-group1-sha1,
+  # diffie-hellman-group-exchange-sha1, hmac-sha1 and hmac-sha1-96. Names
+  # x/crypto does not implement are rejected at startup. A list replaces the
+  # default, so to let an old client that only speaks SHA-1 connect, copy the
+  # full default list and append the legacy algorithm. Listing fewer would
+  # drop the rest, such as the post-quantum mlkem768x25519-sha256:
+  #   kex_algorithms:
+  #     - "mlkem768x25519-sha256"
+  #     - "curve25519-sha256"
+  #     - "ecdh-sha2-nistp256"
+  #     - "ecdh-sha2-nistp384"
+  #     - "ecdh-sha2-nistp521"
+  #     - "diffie-hellman-group14-sha256"
+  #     - "diffie-hellman-group16-sha512"
+  #     - "diffie-hellman-group-exchange-sha256"
+  #     - "diffie-hellman-group14-sha1" # legacy, appended
+  #   macs:
+  #     - "hmac-sha2-256-etm@openssh.com"
+  #     - "hmac-sha2-512-etm@openssh.com"
+  #     - "hmac-sha2-256"
+  #     - "hmac-sha2-512"
+  #     - "hmac-sha1" # legacy, appended
   kex_algorithms: []
   ciphers: []
   macs: []
 
 # The Git daemon configuration.
 git:
+  # Enable the Git daemon.
+  enabled: true
+
   # The address on which the Git daemon will listen.
   listen_addr: ":9418"
+
+  # The public URL of the Git daemon server.
+  # This is the address that will be used to clone repositories.
+  public_url: "git://localhost"
 
   # The maximum number of seconds a connection can take.
   # A value of 0 means no timeout.
@@ -247,6 +293,9 @@ git:
 
 # The HTTP server configuration.
 http:
+  # Enable the HTTP server.
+  enabled: true
+
   # The address on which the HTTP server will listen.
   listen_addr: ":23232"
 
@@ -275,12 +324,10 @@ http:
       - "Authorization"
       - "Access-Control-Request-Method"
       - "Access-Control-Allow-Origin"
-
     # The allowed cross-origin URLs
     allowed_origins:
       - "http://localhost:23232" # always allowed
       # - "https://example.com"
-
     # The allowed cross-origin methods
     allowed_methods:
       - "GET"
@@ -288,6 +335,16 @@ http:
       - "POST"
       - "PUT"
       - "OPTIONS"
+
+# The stats server configuration.
+stats:
+  # Enable the stats server.
+  enabled: true
+
+  # The address on which the stats server will listen. It serves Prometheus
+  # metrics at /metrics without authentication, and they name repositories,
+  # private ones included, so keep it off untrusted networks.
+  listen_addr: "localhost:23233"
 
 # The database configuration.
 db:
@@ -320,6 +377,9 @@ lfs:
 # Cron job configuration
 jobs:
   mirror_pull: "@every 10m"
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
@@ -341,23 +401,18 @@ webhook:
     # - "10.0.0.0/8"
     # - "127.0.0.1:8080"
 
-# The stats server configuration.
-stats:
-  # The address on which the stats server will listen.
-  listen_addr: ":23233"
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
 # or get an HTTP LFS token (git-lfs-authenticate): both need an account.
 #initial_admin_keys:
-#  - "ssh-rsa AAAAB3NzaC1yc2..."
+#  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
 
-# Override the anon-access and allow-keyless settings below (normally
-# managed at runtime via the `settings` command and stored in the
-# database). If set, these always take precedence over the database, for
-# as long as they remain set -- not just on first run. This is intended for
-# scripted, non-production bootstrapping (e.g. spinning up a throwaway
-# server for local dev tooling), not for production use.
-#anon_access: "admin-access"
+# Override the anon-access and allow-keyless settings (normally managed at
+# runtime with the "settings" command and stored in the database). While
+# set, these take precedence over the database on every read, not just on
+# first run. This is intended for scripted, non-production bootstrapping
+# (e.g. a throwaway server for local dev tooling), not for production use.
+#anon_access: "read-only"
 #allow_keyless: true
 
 # Only server admins (admin accounts or initial_admin_keys) may create
@@ -393,8 +448,8 @@ stats:
 # public).
 #default_private: false
 
-# Repository name to create on boot if it does not already exist.
-# Leave empty to disable.
+# Name of a repository to create automatically on boot if it doesn't already
+# exist. Empty disables this behavior.
 #default_repo: ""
 ```
 
@@ -419,6 +474,22 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_DB_MAX_OPEN_CONNS`, `SOFT_SERVE_DB_MAX_IDLE_CONNS`: Database connection pool limits. `0` (the default) keeps the database/sql defaults: no limit on open connections and 2 idle connections
 - `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
+- `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS`: Comma-separated ssh hosts, IP addresses or CIDR ranges (each with an optional port) that repositories may be imported from or mirrored (see `client_allowed_hosts` above). Defaults to empty: only server admins may import from or mirror ssh remotes.
+- `SOFT_SERVE_LOG_FORMAT`, `SOFT_SERVE_LOG_TIME_FORMAT`, `SOFT_SERVE_LOG_PATH`: Log format, timestamp format and log file (`log.format`, `log.time_format`, `log.path`). An empty path logs to stderr
+
+Every setting in `config.yaml` has one, named after its path: `ssh.listen_addr`
+is `SOFT_SERVE_SSH_LISTEN_ADDR`, `git.enabled` is `SOFT_SERVE_GIT_ENABLED`.
+List settings take a comma-separated value, except
+`SOFT_SERVE_INITIAL_ADMIN_KEYS`, which takes one key (or key file path) per
+line.
+
+A few environment variables have no `config.yaml` setting:
+
+- `SOFT_SERVE_DATA_PATH`: The data directory (see above). Defaults to `data`
+- `SOFT_SERVE_CONFIG_LOCATION`: Path to an existing config file to use instead of `<data path>/config.yaml`
+- `SOFT_SERVE_DEBUG`: Set to `true` to log at debug level, including SSH authentication attempts
+- `SOFT_SERVE_VERBOSE`: Set to `true`, together with `SOFT_SERVE_DEBUG`, to also log the caller, database queries, and each SSH session's client key and environment
+- `SOFT_SERVE_NO_COLOR`: Set to `1` to turn off colors in the `soft` command's output and syntax coloring in `repo blob -c`
 
 #### SSH Algorithms
 
@@ -502,6 +573,10 @@ soft serve
 
 You can specify a database connection password in the _data source_ url. For example, `postgres://myuser:dbpass@localhost:5432/my_soft_serve_db`.
 
+Soft Serve Plus always sets the session `TimeZone` to UTC, overriding any
+`timezone` in the data source and the server's default, because it stores
+times in UTC.
+
 By default the connection pool has no limit on open connections, so a burst
 of requests can use up Postgres' `max_connections`. Set `db.max_open_conns`
 (and optionally `db.max_idle_conns`, `db.conn_max_lifetime` and
@@ -528,6 +603,18 @@ Soft Serve Plus supports both Git LFS [HTTP](https://github.com/git-lfs/git-lfs/
 Use the `lfs` config section to customize your Git LFS server.
 
 > **Note**: The pure-SSH transfer is disabled by default.
+
+#### Maintenance Commands
+
+`soft admin` runs maintenance against the data directory and database from
+the same configuration as `soft serve`:
+
+- `soft admin migrate`: Apply pending database migrations. `soft serve` also
+  does this on start.
+- `soft admin rollback`: Roll the database back by one migration.
+- `soft admin sync-hooks`: Write the generated git hooks of every repository
+  again, for example after moving the `soft` binary or the data directory.
+  `soft serve --sync-hooks` does the same before starting the server.
 
 ## Server Access
 
@@ -581,9 +668,9 @@ and `allow-keyless`.
 - `anon-access`: Defines the access level for anonymous users. Available
   options are `no-access`, `read-only`, `read-write`, and `admin-access`.
   Default is `read-only`.
-- `allow-keyless`: Whether to allow connections that doesn't use keys to pass.
-  Setting this to `false` would disable access to SSH keyboard-interactive,
-  HTTP, and Git protocol connections. Default is `true`.
+- `allow-keyless`: Whether to allow connections that don't use keys to pass.
+  Setting this to `false` would disable SSH keyboard-interactive logins and
+  anonymous HTTP and Git protocol connections. Default is `true`.
 
 ```sh
 $ ssh -p 23231 localhost settings
@@ -605,8 +692,11 @@ Use "ssh -p 23231 localhost settings [command] --help" for more information abou
 > **Note** These settings can only be changed by admins.
 
 When `allow-keyless` is disabled, connections that don't use SSH Public Key
-authentication will get denied. This means cloning repos over HTTP(s) or git://
-will get denied.
+authentication will get denied. This means anonymous cloning over HTTP(s) or
+git:// will get denied; HTTP requests with an access token still work. It does
+not restrict SSH to registered users: a client that offers any public key,
+registered or not, is still let in with `anon-access`. To keep unregistered
+keys out, set `anon-access` to `no-access`.
 
 Meanwhile, `anon-access` controls the access level granted to connections that
 use SSH Public Key authentication but are not registered users. The default
@@ -698,6 +788,14 @@ delete, rename or change the visibility of any of them.
 
 `read-only` can read public repos.
 
+On a public repo, `anon-access` is a floor for everyone: registered users and
+collaborators never get less than an anonymous caller would, so with
+`anon-access: read-write` every user can push to public repos, and a
+`read-only` collaborator on a public repo has read-write. Registered users
+always have at least `read-only` on public repos. On a private repo,
+`anon-access` does not apply: only the owner, collaborators (at their own
+level) and admins have access.
+
 `no-access` denies access to all repos.
 
 ## User Management
@@ -782,10 +880,11 @@ Available Commands:
   blob         Print out the contents of file at path
   branch       Manage repository branches
   collab       Manage collaborators
+  commit       Print out the contents of a diff
   create       Create a new repository
   delete       Delete a repository
   description  Set or get the description for a repository
-  hide         Hide or unhide a repository
+  hidden       Hide or unhide a repository
   import       Import a new repository from remote
   info         Get information about a repository
   list         List repositories
@@ -795,6 +894,7 @@ Available Commands:
   rename       Rename an existing repository
   tag          Manage repository tags
   tree         Print repository tree at path
+  webhook      Manage repository webhooks
 
 Flags:
   -h, --help   help for repo
@@ -802,7 +902,14 @@ Flags:
 Use "ssh -p 23231 localhost repo [command] --help" for more information about a command.
 ```
 
-To use any of the above `repo` commands, a user must be a collaborator in the repository. More on this below.
+Each `repo` command needs a level of access to the repository (see
+[Authorization](#authorization)): commands that only read it, such as `info`,
+`tree` and `blob`, need `read-only`; `create` and `import`, changing its
+branches, tags or metadata, and listing or changing its collaborators need
+`read-write`; and deleting or renaming it, changing whether it is private, and
+managing its webhooks need `admin-access`. Unless you are a server admin, you
+can only give a collaborator an access level up to your own, and you can't
+remove or change a collaborator whose level is higher than yours.
 
 ### Creating Repositories
 
@@ -847,6 +954,18 @@ unless created with `--private=false`; see
 [Server Configuration](#server-configuration). The TUI marks every repository
 as private (🔒) or public (🌐), and `repo info` and `repo private` print it.
 
+Over HTTP, git creates the repository with one request and pushes with the
+next, so a push that fails or never arrives would leave an empty repository
+behind. Soft Serve Plus removes a repository created this way if its push fails
+without writing any ref, or if nothing has reached it for 10 minutes and it
+still has none. It is kept if anything was done with it meanwhile: a
+collaborator, webhook, LFS object or LFS lock added, or its description, project
+name, visibility, hidden flag, mirror flag or owner changed, or the name now
+belongs to a different repository. It is also kept if a push or LFS upload to it
+over SSH is running when the removal comes due. Which repositories are waiting
+for their push is only kept in memory, so one still waiting when the server
+restarts is kept empty; delete it with `repo delete` if it is not wanted.
+
 ### Nested Repositories
 
 Repositories can be nested too:
@@ -869,6 +988,8 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 ```
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
+
+Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
@@ -927,7 +1048,7 @@ ssh -p 23231 localhost repo description icecream "This is a new description"
 ssh -p 23231 localhost repo hidden icecream true
 
 # List repository info (branches, tags, description, etc)
-ssh -p 23231 localhost repo icecream info
+ssh -p 23231 localhost repo info icecream
 ```
 
 To make a repository private, use `repo private <repo> [true|false]`. Private
@@ -972,7 +1093,9 @@ ssh -p 23231 localhost repo blob soft-serve-plus cmd/soft/main.go -c -l
 
 ```
 
-Use `--raw` to print raw file contents. This is useful for dumping binary data.
+Binary files are not printed unless you add `--raw`. The output always ends
+with an added newline, so to get a byte-exact copy of a file, clone the
+repository instead.
 
 ### Repository webhooks
 
@@ -1013,6 +1136,36 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+#### Delivery headers and signatures
+
+Every webhook request carries these headers:
+
+- `X-SoftServe-Event`: the event, such as `push` or `repository`.
+- `X-SoftServe-Delivery`: a GUID for the event. A redelivery sends the GUID
+  of the delivery it repeats, so a receiver can skip an event it has already
+  handled.
+- `X-SoftServe-Timestamp`: when the request was signed, in seconds since the
+  Unix epoch. A redelivery gets a new timestamp.
+
+A webhook with a secret also signs each request with HMAC-SHA256, keyed with
+the secret:
+
+- `X-SoftServe-Signature-V2`: `sha256=` and the hex HMAC of the timestamp, a
+  `.`, the delivery GUID, a `.` and the request body. Check this one, reject
+  timestamps too far from your clock (five minutes, say) and remember the
+  GUIDs seen within that window to refuse replayed requests.
+- `X-SoftServe-Signature`: `sha256=` and the hex HMAC of the body alone. It
+  is kept for existing receivers; it does not stop a captured request from
+  being replayed.
+
+Compare signatures in constant time, for example with `hmac.Equal` in Go.
+
+Repository events for a rename or a default branch change carry the old
+value in `changes`, as `changes.name.from` or `changes.default_branch.from`.
+Push events say whether the push was `forced` (the ref moved to a commit that
+does not contain its old one) and who the `pusher` was; a push that creates a
+branch or tag lists only the commits no other branch or tag already had.
+
 #### Webhooks to internal services
 
 Webhooks are protected against server-side request forgery: by default a
@@ -1046,7 +1199,8 @@ The entries are trusted differently:
   entry never opens anything else, and it does not cover other names that
   resolve to the same addresses. `localhost` names need a hostname entry.
 - Link-local addresses, including the 169.254.169.254 metadata service, the
-  other cloud metadata addresses (`fd00:ec2::254`, `100.100.100.200`) and the
+  other cloud metadata addresses (`fd00:ec2::254`, `fd00:ec2::23`,
+  `fd20:ce::254`, `fd00:c1::a9fe:a9fe`, `100.100.100.200`) and the
   remaining reserved ranges can only be opened by an IP or CIDR entry inside
   that range, such as `169.254.169.254`; a broad entry such as `0.0.0.0/0`
   does not open them.
@@ -1093,10 +1247,17 @@ Soft Serve Plus supports git server-side hooks `pre-receive`, `update`,
 run on repository push events. Hooks can be defined as a per-repository hook,
 and/or global hooks that run for all repositories.
 
-You can find per-repository hooks under the repository `hooks` directory.
+Per-repository hooks live in the repository's `hooks` directory,
+`<data path>/repos/<repo>.git/hooks`. Soft Serve Plus owns the
+`hooks/<name>` scripts there and writes them again when the repository is
+created and on `soft admin sync-hooks` or `soft serve --sync-hooks`, so do not
+edit them. Each one runs every executable file in `hooks/<name>.d/`, so put
+your own per-repository hooks there, for example
+`hooks/post-receive.d/notify`.
 
-Globs hooks can be found in your `SOFT_SERVE_DATA_PATH` directory under
-`hooks`. Defining global hooks is useful if you want to run CI/CD for example.
+Global hooks live in `<data path>/hooks` (`SOFT_SERVE_DATA_PATH`) and run for
+every repository. Defining global hooks is useful if you want to run CI/CD for
+example.
 
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
@@ -1147,23 +1308,15 @@ Now, you should get a message after pushing changes to any repository.
 
 ## A note about RSA keys
 
-Unfortunately, due to a shortcoming in Go’s `x/crypto/ssh` package, Soft Serve Plus
-does not currently support access via new SSH RSA keys: only the old SHA-1
-ones will work.
-
-Until we sort this out you’ll either need an SHA-1 RSA key or a key with
-another algorithm, e.g. Ed25519. Not sure what type of keys you have?
-You can check with the following:
+RSA keys work: the server accepts RSA signatures made with SHA-2
+(`rsa-sha2-256` and `rsa-sha2-512`), which current OpenSSH clients use, as
+well as the legacy SHA-1 `ssh-rsa` signatures of older clients. Ed25519 keys
+are still the better choice for new keys. Not sure what type of keys you
+have? You can check with the following:
 
 ```sh
 $ find ~/.ssh/id_*.pub -exec ssh-keygen -l -f {} \;
 ```
-
-If you’re curious about the inner workings of this problem have a look at:
-
-- https://github.com/golang/go/issues/37278
-- https://go-review.googlesource.com/c/crypto/+/220037
-- https://github.com/golang/crypto/pull/197
 
 ## Contributing
 

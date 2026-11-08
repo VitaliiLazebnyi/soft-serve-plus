@@ -5,15 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/aymanbagabas/git-module"
 )
 
-// diffCommandOptions are the options every diff command runs with.
-var diffCommandOptions = git.CommandOptions{
-	Envs: []string{"GIT_CONFIG_GLOBAL=/dev/null"},
+// diffCommandOptions returns the options for git commands whose diff output
+// is parsed. User and system config must not change the output: an external
+// diff driver (diff.external) or forced color (color.ui=always) produce text
+// the parser does not understand, so both are turned off on the command line
+// too, which also covers the repository's own config.
+func diffCommandOptions() git.CommandOptions {
+	return git.CommandOptions{
+		Args: []string{"--no-ext-diff", "--no-color"},
+		Envs: []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+	}
 }
 
 // Diff returns the diff for the given commit against its first parent.
@@ -27,14 +35,14 @@ func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 	var cmd *git.Command
 	if c.ParentsCount() == 0 {
 		// First commit of the repository.
-		cmd = git.NewCommand("show").AddOptions(diffCommandOptions).
+		cmd = git.NewCommand("show").AddOptions(diffCommandOptions()).
 			AddArgs("--full-index", "--end-of-options", rev)
 	} else {
 		parent, err := c.ParentID(0)
 		if err != nil {
 			return nil, err
 		}
-		cmd = git.NewCommand("diff").AddOptions(diffCommandOptions).
+		cmd = git.NewCommand("diff").AddOptions(diffCommandOptions()).
 			AddArgs("--full-index", "-M", parent.String(), "--end-of-options", rev)
 	}
 	return r.parseDiff(cmd)
@@ -43,7 +51,7 @@ func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 // StashDiff returns the diff of the given stash index.
 func (r *Repository) StashDiff(index int) (*Diff, error) {
 	cmd := git.NewCommand("stash", "show", "-p", "--full-index", "-M", strconv.Itoa(index)).
-		AddOptions(diffCommandOptions)
+		AddOptions(diffCommandOptions())
 	return r.parseDiff(cmd)
 }
 
