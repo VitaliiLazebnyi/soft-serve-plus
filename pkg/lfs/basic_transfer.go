@@ -113,7 +113,7 @@ func handleErrorResponse(logger *log.Logger, resp *http.Response) error {
 	defer resp.Body.Close() //nolint: errcheck
 
 	var er ErrorResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	if err := decodeJSONLimit(resp.Body, maxErrorResponseSize, &er); err != nil {
 		logger.Debug("error decoding error response", "status", resp.Status, "err", err)
 	}
 	if er.Message == "" {
