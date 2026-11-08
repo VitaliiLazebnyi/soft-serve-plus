@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"io"
+	"net"
 	"strings"
 	"testing"
 
@@ -156,3 +157,35 @@ func TestCommandLabelKeepsHelp(t *testing.T) {
 		t.Fatalf("root has %d help commands, want 1", n)
 	}
 }
+
+// mockSSHContext is a minimal ssh.Context for calling auth handlers
+// directly.
+type mockSSHContext struct {
+	context.Context
+	values      map[any]any
+	permissions *ssh.Permissions
+}
+
+func (m *mockSSHContext) SetValue(key, value any) {
+	m.values[key] = value
+}
+
+func (m *mockSSHContext) Value(key any) any {
+	if v, ok := m.values[key]; ok {
+		return v
+	}
+	return m.Context.Value(key)
+}
+
+func (m *mockSSHContext) Permissions() *ssh.Permissions {
+	return m.permissions
+}
+
+func (m *mockSSHContext) User() string          { return "" }
+func (m *mockSSHContext) RemoteAddr() net.Addr  { return &net.TCPAddr{} }
+func (m *mockSSHContext) LocalAddr() net.Addr   { return &net.TCPAddr{} }
+func (m *mockSSHContext) ServerVersion() string { return "" }
+func (m *mockSSHContext) ClientVersion() string { return "" }
+func (m *mockSSHContext) SessionID() string     { return "" }
+func (m *mockSSHContext) Lock()                 {}
+func (m *mockSSHContext) Unlock()               {}
