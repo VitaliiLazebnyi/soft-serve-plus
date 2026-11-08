@@ -74,17 +74,18 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	}
 }
 
-// startAlgorithmsServer starts a full SSH server built by NewSSHServer with
-// cfg and returns its address.
-func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
+// startTestServer starts a full SSH server built by NewSSHServer with cfg
+// and returns its address and the context it runs with, which holds its
+// backend.
+func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context) {
 	t.Helper()
-	addr, _ := startServer(t, cfg)
-	return addr
+	addr, ctx, _ := startServer(t, cfg)
+	return addr, ctx
 }
 
 // startServer starts an SSH server with cfg on a local port and returns its
-// address and the server.
-func startServer(t *testing.T, cfg *config.Config) (string, *SSHServer) {
+// address, the context it runs with and the server.
+func startServer(t *testing.T, cfg *config.Config) (string, context.Context, *SSHServer) {
 	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
@@ -115,7 +116,7 @@ func startServer(t *testing.T, cfg *config.Config) (string, *SSHServer) {
 	}
 	go s.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = s.Close() })
-	return l.Addr().String(), s
+	return l.Addr().String(), ctx, s
 }
 
 // dialWith connects to addr with a client limited to the given algorithms
@@ -161,7 +162,7 @@ func wantNoCommonAlgorithm(t *testing.T, err error, what string) {
 func TestSSHServerRefusesSHA1ByDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	// A non-AEAD cipher makes the MAC part of the negotiation.
 	ctr := []string{gossh.CipherAES128CTR}
@@ -188,7 +189,7 @@ func TestSSHServerHonoursConfiguredAlgorithms(t *testing.T) {
 	cfg.SSH.KexAlgorithms = []string{gossh.InsecureKeyExchangeDH14SHA1}
 	cfg.SSH.Ciphers = []string{gossh.CipherAES128CTR}
 	cfg.SSH.MACs = []string{gossh.HMACSHA1}
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	if err := dialWith(t, addr, []string{gossh.InsecureKeyExchangeDH14SHA1}, nil, []string{gossh.HMACSHA1}); err != nil {
 		t.Fatalf("client limited to the configured legacy algorithms: %v", err)

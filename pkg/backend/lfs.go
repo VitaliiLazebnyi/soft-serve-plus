@@ -214,8 +214,10 @@ func readScannedRefs(path string) ([]string, time.Time) {
 
 // writeScannedRefs saves tips and the time of the last full scan to the
 // file at path, replacing it at once so a sync never reads half of it.
+// The directory is the LFS root of the repository, which pkg/storage keeps
+// 0700 like the object directories under it.
 func writeScannedRefs(path string, tips []string, fullScan time.Time) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), lfsScannedRefsFile+"-*")

@@ -124,7 +124,7 @@ func TestSSHServerMaxConnectionsPerIP(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxConnectionsPerIP = 2
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	var clients []*gossh.Client
 	for i := 0; i < 2; i++ {
@@ -161,7 +161,7 @@ func TestSSHServerMaxConnections(t *testing.T) {
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxConnections = 1
 	cfg.SSH.MaxConnectionsPerIP = 0
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	c, err := dialClient(t, addr)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestSSHServerMaxSessions(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxSessions = 2
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	c, err := dialClient(t, addr)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 			cfg.SSH.MaxConnectionsPerIP = 0
 			cfg.SSH.IdleTimeout = 0 // the handshake timeout alone must free the place
 			cfg.SSH.HandshakeTimeout = 1
-			addr, srv := startServer(t, cfg)
+			addr, _, srv := startServer(t, cfg)
 
 			raw, err := net.Dial("tcp", addr)
 			if err != nil {
@@ -298,7 +298,7 @@ func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.IdleTimeout = 0
 	cfg.SSH.HandshakeTimeout = 1
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	c, err := dialClient(t, addr)
 	if err != nil {
