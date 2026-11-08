@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -104,7 +105,13 @@ func setupAttrRepo(t *testing.T, name string) (*Repository, *Reference) {
 // temporary-index fallback. It is not parallel because it swaps
 // attrSourceSupported.
 func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
-	const name = "dir/café \"quoted\": file.bin"
+	// Git for Windows rejects '"' and ':' in index paths (core.protectNTFS),
+	// so there the name relies on the non-ASCII character and the space to be
+	// quoted by git.
+	name := "dir/café \"quoted\": file.bin"
+	if runtime.GOOS == "windows" {
+		name = "dir/café quoted file.bin"
+	}
 	repo, ref := setupAttrRepo(t, name)
 
 	orig := attrSourceSupported
