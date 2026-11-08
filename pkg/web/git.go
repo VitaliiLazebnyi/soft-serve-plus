@@ -540,7 +540,7 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 			if service == git.ReceivePackService {
 				markPushFailed(ctx)
 			}
-			renderBadRequest(w, r)
+			renderStatus(http.StatusBadRequest)(w, r)
 			return
 		}
 		defer gz.Close() //nolint: errcheck
