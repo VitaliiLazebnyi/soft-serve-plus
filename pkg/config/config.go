@@ -201,6 +201,11 @@ type LFSConfig struct {
 // JobsConfig is the configuration for cron jobs.
 type JobsConfig struct {
 	MirrorPull string `env:"MIRROR_PULL" yaml:"mirror_pull"`
+
+	// LFSSweep is the schedule for removing temporary files that
+	// interrupted LFS uploads and mirror downloads left behind for more
+	// than a day.
+	LFSSweep string `env:"LFS_SWEEP" yaml:"lfs_sweep"`
 }
 
 // WebhookConfig is the configuration for repository webhooks.
@@ -380,6 +385,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_LFS_ENABLED=%t", c.LFS.Enabled),
 		fmt.Sprintf("SOFT_SERVE_LFS_SSH_ENABLED=%t", c.LFS.SSHEnabled),
 		fmt.Sprintf("SOFT_SERVE_JOBS_MIRROR_PULL=%s", c.Jobs.MirrorPull),
+		fmt.Sprintf("SOFT_SERVE_JOBS_LFS_SWEEP=%s", c.Jobs.LFSSweep),
 		fmt.Sprintf("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS=%s", strings.Join(c.Webhook.AllowedHosts, ",")),
 	}...)
 
@@ -494,10 +500,12 @@ func (c *Config) Parse() error {
 
 // writeConfig writes the configuration to the given file.
 func writeConfig(cfg *Config, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+	// The config can hold secrets such as a database password, so only
+	// the server's user may read it.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint: errcheck, gosec
+	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o600)
 }
 
 // WriteConfig writes the configuration to the default file.
@@ -593,6 +601,7 @@ func DefaultConfig() *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 10m",
+			LFSSweep:   "@every 1h",
 		},
 	}
 }
