@@ -212,7 +212,11 @@ func TestServerContextEndsRequestRead(t *testing.T) {
 	defer c.Close() //nolint:errcheck
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	// Wait until the daemon is reading the request before ending its context.
+	acceptDeadline := time.Now().Add(5 * time.Second)
 	for d.conns.Size() == 0 {
+		if time.Now().After(acceptDeadline) {
+			t.Fatal("daemon did not accept the connection")
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	start := time.Now()
