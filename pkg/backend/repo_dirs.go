@@ -95,6 +95,21 @@ func (d *Backend) removeOrphanRepoDir(ctx context.Context, name string, own int)
 		return proto.ErrRepoNotFound
 	}
 
+	// A directory spelled exactly as name can still be the directory of a
+	// repository whose name the filesystem maps onto it, so it is an orphan
+	// only when no repository's directory is the same one.
+	var orphan bool
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		var err error
+		orphan, err = d.isOrphanRepoPath(ctx, tx, name)
+		return err
+	}); err != nil {
+		return err
+	}
+	if !orphan {
+		return proto.ErrRepoNotFound
+	}
+
 	return os.RemoveAll(d.repoPath(name))
 }
 
