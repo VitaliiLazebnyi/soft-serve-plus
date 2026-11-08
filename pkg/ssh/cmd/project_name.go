@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,7 @@ func projectName() *cobra.Command {
 
 			switch len(args) {
 			case 1:
-				cmd.Println(rr.ProjectName())
+				cmd.Println(utils.Sanitize(rr.ProjectName()))
 			default:
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err

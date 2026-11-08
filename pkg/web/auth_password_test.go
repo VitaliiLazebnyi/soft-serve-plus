@@ -55,7 +55,7 @@ func TestBasicAuthPasswordCheckIsUniform(t *testing.T) {
 			n := countVerifies(t)
 			req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 			req.SetBasicAuth(tc.user, tc.pass)
-			user, err := authenticate(req, "")
+			user, _, err := authenticate(req)
 			is.Equal(err == nil && user != nil, tc.ok)
 			is.Equal(*n, tc.verifies)
 		})
@@ -81,7 +81,7 @@ func TestBasicAuthPasswordCheckIsBounded(t *testing.T) {
 	cancel()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	req.SetBasicAuth("stranger", "hunter2-password")
-	_, err := authenticate(req, "")
+	_, _, err := authenticate(req)
 	is.True(errors.Is(err, ErrPasswordCheckBusy))
 	is.True(!badCredentials(err))
 	is.Equal(*n, 0)
@@ -107,7 +107,7 @@ func TestBasicAuthBusyClientIsNotBadCredentials(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 	req.SetBasicAuth("stranger", "hunter2-password")
-	user, err := authenticate(req, "")
+	user, _, err := authenticate(req)
 	is.Equal(user, nil)
 	is.True(errors.Is(err, ErrPasswordCheckBusy))
 	is.True(!errors.Is(err, ErrInvalidPassword))
@@ -147,7 +147,7 @@ func TestBasicAuthPasswordCheckIsPerClient(t *testing.T) {
 		req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 		req.RemoteAddr = addr
 		req.SetBasicAuth("stranger", "hunter2-password")
-		_, err := authenticate(req, "")
+		_, _, err := authenticate(req)
 		return err
 	}
 
