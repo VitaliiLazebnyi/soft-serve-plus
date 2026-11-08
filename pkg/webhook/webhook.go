@@ -263,7 +263,8 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 	headers.Add("User-Agent", "SoftServe/"+version.Version)
 	headers.Add("X-SoftServe-Event", event.String())
 
-	id, err := uuid.NewUUID()
+	// A random (version 4) ID: version 1 would embed the server's MAC address.
+	id, err := uuid.NewRandom()
 	if err != nil {
 		return request{}, err
 	}

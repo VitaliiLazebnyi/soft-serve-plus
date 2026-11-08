@@ -845,6 +845,43 @@ func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 	is.Equal(len(started), 3) // the queued ones ran once a share was free
 }
 
+// One repository's deliveries are sent one at a time, in the order they were
+// queued, even while senders are free: a later event must not reach the
+// receiver before an earlier one, since each carries the state at its change.
+func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
+	is := is.New(t)
+	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var order []int
+	is.Equal(q.enqueue(1, func() {
+		started <- struct{}{}
+		<-release
+		mu.Lock()
+		order = append(order, 1)
+		mu.Unlock()
+	}), enqueued)
+	<-started
+	for i := 2; i <= 4; i++ {
+		is.Equal(q.enqueue(1, func() {
+			mu.Lock()
+			order = append(order, i)
+			mu.Unlock()
+		}), enqueued)
+	}
+
+	q.mu.Lock()
+	is.Equal(q.repos[1].running, 1)
+	is.Equal(len(q.repos[1].queued), 3)
+	q.mu.Unlock()
+
+	close(release)
+	_, finished := q.close()
+	<-finished
+	is.Equal(order, []int{1, 2, 3, 4})
+}
+
 // Once a repository has its cap of deliveries queued or running, its next
 // one is refused, while other repositories can still queue theirs.
 func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
