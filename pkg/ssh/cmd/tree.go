@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -54,7 +56,7 @@ func treeCommand() *cobra.Command {
 			ents := git.Entries{}
 			if path != "" && path != "/" {
 				te, err := tree.TreeEntry(path)
-				if err == git.ErrRevisionNotExist {
+				if errors.Is(err, git.ErrRevisionNotExist) {
 					return proto.ErrFileNotFound
 				}
 				if err != nil {

@@ -47,6 +47,18 @@ stderr 'file not found'
 ! stdout .
 stderr 'revision does not exist'
 
+# a ref that is not a single revision, or looks like a rev-parse option, is a
+# bad revision rather than a crash or a rev-parse option
+! soft repo tree repo1 '^HEAD' folder
+! stdout .
+stderr 'revision does not exist'
+! soft repo tree repo1 'HEAD^@' folder
+! stdout .
+stderr 'revision does not exist'
+! soft repo tree repo1 -- --git-dir folder
+! stdout .
+stderr 'revision does not exist'
+
 # test unicode file name issue #457
 soft repo create repo4
 git clone ssh://localhost:$SSH_PORT/repo4 repo4
