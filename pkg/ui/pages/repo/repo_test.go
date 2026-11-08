@@ -12,13 +12,15 @@ import (
 )
 
 type fakeRepo struct {
-	private bool
+	private     bool
+	projectName string
+	description string
 }
 
 func (r fakeRepo) ID() int64                      { return 1 }
 func (r fakeRepo) Name() string                   { return "repo" }
-func (r fakeRepo) ProjectName() string            { return "" }
-func (r fakeRepo) Description() string            { return "" }
+func (r fakeRepo) ProjectName() string            { return r.projectName }
+func (r fakeRepo) Description() string            { return r.description }
 func (r fakeRepo) IsPrivate() bool                { return r.private }
 func (r fakeRepo) IsMirror() bool                 { return false }
 func (r fakeRepo) IsHidden() bool                 { return false }
@@ -50,5 +52,34 @@ func TestHeaderVisibilityMarker(t *testing.T) {
 		if strings.Contains(header, tc.absent) {
 			t.Errorf("private=%v: header %q shows %q", tc.private, header, tc.absent)
 		}
+	}
+}
+
+// Switching to a tab with nothing to show, such as an empty Tags tab, must
+// not keep the previous tab's status value, and a copy notice must go away
+// once the status is refreshed.
+func TestStatusBarDoesNotKeepStaleValues(t *testing.T) {
+	c := common.NewCommon(context.Background(), 120, 24)
+	r := New(c, NewLog(c), NewRefs(c, git.RefsTags))
+	r.selectedRepo = fakeRepo{}
+	r.state = readyState
+
+	r.statusbar.SetStatus("repo", "abc1234 by Alice", "p. 2/3", "*")
+	r.activeTab = 1
+	r.setStatusBarInfo()
+	view := r.statusbar.View()
+	for _, stale := range []string{"abc1234", "p. 2/3"} {
+		if strings.Contains(view, stale) {
+			t.Errorf("status bar still shows %q:\n%s", stale, view)
+		}
+	}
+
+	r.Update(CopyMsg{Text: "x", Message: "Reference copied to clipboard"})
+	if view := r.statusbar.View(); !strings.Contains(view, "Reference copied to clipboard") {
+		t.Errorf("status bar lacks the copy notice:\n%s", view)
+	}
+	r.setStatusBarInfo()
+	if view := r.statusbar.View(); strings.Contains(view, "copied") {
+		t.Errorf("copy notice stuck in the status bar:\n%s", view)
 	}
 }
