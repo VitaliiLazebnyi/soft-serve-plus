@@ -9,11 +9,13 @@ import (
 
 func TestReadPointer(t *testing.T) {
 	cases := []struct {
-		name     string
-		content  string
-		want     Pointer
-		wantErr  error
-		wantErrp interface{}
+		name    string
+		content string
+		want    Pointer
+		// wantErr is the sentinel error the pointer is rejected with.
+		wantErr error
+		// wantNumErr says the pointer is rejected with a *strconv.NumError.
+		wantNumErr bool
 	}{
 		{
 			name: "valid pointer",
@@ -48,7 +50,7 @@ size 1234
 oid sha256:1234567890123456789012345678901234567890123456789012345678901234
 size abc
 `,
-			wantErrp: &strconv.NumError{},
+			wantNumErr: true,
 		},
 		{
 			name: "invalid structure",
@@ -65,25 +67,28 @@ size abc
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := ReadPointerFromBuffer([]byte(tc.content))
-			if err != tc.wantErr && !errors.As(err, &tc.wantErrp) {
-				t.Errorf("ReadPointerFromBuffer() error = %v(%T), wantErr %v(%T)", err, err, tc.wantErr, tc.wantErr)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("ReadPointerFromBuffer() error = %v, want %v", err, tc.wantErr)
+				}
 				return
-			}
-			if err != nil {
+			case tc.wantNumErr:
+				var numErr *strconv.NumError
+				if !errors.As(err, &numErr) {
+					t.Fatalf("ReadPointerFromBuffer() error = %v (%T), want a *strconv.NumError", err, err)
+				}
 				return
+			case err != nil:
+				t.Fatalf("ReadPointerFromBuffer() error = %v, want nil", err)
 			}
 
-			if err == nil {
-				if !p.IsValid() {
-					t.Errorf("Expected a valid pointer")
-					return
-				}
-				if path.Join(p.Oid[:2], p.Oid[2:4], p.Oid) != p.RelativePath() {
-					t.Errorf("Expected a valid relative path")
-					return
-				}
+			if !p.IsValid() {
+				t.Errorf("Expected a valid pointer")
 			}
-
+			if path.Join(p.Oid[:2], p.Oid[2:4], p.Oid) != p.RelativePath() {
+				t.Errorf("Expected a valid relative path")
+			}
 			if p.Oid != tc.want.Oid {
 				t.Errorf("ReadPointerFromBuffer() oid = %v, want %v", p.Oid, tc.want.Oid)
 			}
