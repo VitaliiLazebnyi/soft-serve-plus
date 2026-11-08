@@ -16,6 +16,7 @@ func TestReadPointer(t *testing.T) {
 		name    string
 		content string
 		want    Pointer
+		// wantErr is the sentinel error the pointer is rejected with.
 		wantErr error
 	}{
 		{
@@ -162,12 +163,14 @@ size abc
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := ReadPointerFromBuffer([]byte(tc.content))
-			if !errors.Is(err, tc.wantErr) {
-				t.Errorf("ReadPointerFromBuffer() error = %v(%T), wantErr %v(%T)", err, err, tc.wantErr, tc.wantErr)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("ReadPointerFromBuffer() error = %v (%T), want %v", err, err, tc.wantErr)
+				}
 				return
-			}
-			if err != nil {
-				return
+			case err != nil:
+				t.Fatalf("ReadPointerFromBuffer() error = %v, want nil", err)
 			}
 
 			if !p.IsValid() {
@@ -178,7 +181,6 @@ size abc
 				t.Errorf("Expected a valid relative path")
 				return
 			}
-
 			if p.Oid != tc.want.Oid {
 				t.Errorf("ReadPointerFromBuffer() oid = %v, want %v", p.Oid, tc.want.Oid)
 			}
