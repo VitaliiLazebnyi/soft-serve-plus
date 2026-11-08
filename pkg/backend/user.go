@@ -37,8 +37,45 @@ func (d *Backend) adminKeyList() []ssh.PublicKey {
 		d.adminKeysSrc = slices.Clone(d.cfg.InitialAdminKeys)
 		d.adminKeys = d.cfg.AdminKeys()
 		d.adminKeysOK = true
+		// The owned-admin-key warnings are about the previous list; a key
+		// still listed and still owned by a non-admin is logged again.
+		d.clearOwnedAdminKeyWarnings()
 	}
 	return d.adminKeys
+}
+
+// warnOwnedAdminKey records that the listed admin key ak is owned by the
+// non-admin account username and reports whether that has not been logged
+// yet for this key and owner.
+func (d *Backend) warnOwnedAdminKey(ak, username string) bool {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	if prev, ok := d.warnedOwnedAdminKeys[ak]; ok && prev == username {
+		return false
+	}
+	if d.warnedOwnedAdminKeys == nil {
+		d.warnedOwnedAdminKeys = make(map[string]string)
+	}
+	d.warnedOwnedAdminKeys[ak] = username
+	return true
+}
+
+// forgetOwnedAdminKey drops the owned-admin-key warning recorded for pk,
+// if any, once the key no longer resolves to a non-admin account.
+func (d *Backend) forgetOwnedAdminKey(pk ssh.PublicKey) {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	if len(d.warnedOwnedAdminKeys) == 0 {
+		return
+	}
+	delete(d.warnedOwnedAdminKeys, sshutils.MarshalAuthorizedKey(pk))
+}
+
+// clearOwnedAdminKeyWarnings drops every recorded owned-admin-key warning.
+func (d *Backend) clearOwnedAdminKeyWarnings() {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	clear(d.warnedOwnedAdminKeys)
 }
 
 // IsAdminKey reports whether pk is one of the configured admin keys
@@ -180,7 +217,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
-		if d.repoPathExists(name) {
+		// So is a row with no directory (removed by hand, a partial restore
+		// or an unmounted volume): its settings are unknown to the caller,
+		// so it must not fall back to the level for a free name, which would
+		// show a private repository in listings that walk the rows.
+		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
 		return d.baseAccessLevel(ctx, user)
@@ -191,8 +232,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.AdminAccess
 	}
 
-	// If the user is a collaborator, they have return their access level.
-	// The anonymous floor only applies to public repositories.
+	// On a public repository the anonymous level is a floor for everyone:
+	// a registered user, collaborator or not, never gets less than an
+	// anonymous caller could. On a private repository it does not apply.
+	//
+	// If the user is a collaborator, they have their access level.
 	collabAccess, isCollab, _ := d.IsCollaborator(ctx, name, username)
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
@@ -206,8 +250,9 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.NoAccess
 	}
 
-	// Otherwise, the user has read-only access.
-	if user == nil {
+	// Otherwise, anonymous users have the anonymous level, and registered
+	// users read-only or the anonymous level, whichever is higher.
+	if user == nil || anon > access.ReadOnlyAccess {
 		return anon
 	}
 
@@ -316,6 +361,10 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	}); err != nil {
 		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
+			// The key left the account it was logged as owned by.
+			if d.isAdminKey(pk) {
+				d.forgetOwnedAdminKey(pk)
+			}
 			return nil, proto.ErrUserNotFound
 		}
 		d.logger.Error("error finding user", "pk", sshutils.MarshalAuthorizedKey(pk), "error", err)
@@ -330,13 +379,17 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	// would hand them what the key holder does. Acting as nobody instead
 	// strands a legitimate owner without their account, so the session is
 	// refused with an error saying how to fix it.
-	if !m.Admin && d.isAdminKey(pk) {
-		ak := sshutils.MarshalAuthorizedKey(pk)
-		if _, seen := d.warnedOwnedAdminKeys.LoadOrStore(ak, struct{}{}); !seen {
-			d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
-				"username", m.Username, "pk", ak)
+	if d.isAdminKey(pk) {
+		if !m.Admin {
+			ak := sshutils.MarshalAuthorizedKey(pk)
+			if d.warnOwnedAdminKey(ak, m.Username) {
+				d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
+					"username", m.Username, "pk", ak)
+			}
+			return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
 		}
-		return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
+		// The owner was promoted, or the key moved to an admin account.
+		d.forgetOwnedAdminKey(pk)
 	}
 
 	return &user{
@@ -456,7 +509,13 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	}
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		// Lock the user's row before looking for their repositories: on
+		// Postgres a repository inserted meanwhile would otherwise be
+		// missed here and then removed by the cascade below, its
+		// directory left behind. The lock waits for such an insert to
+		// commit, so the query below sees it, and keeps new ones out
+		// until the user is gone.
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return err
 		}

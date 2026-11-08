@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/muesli/reflow/wrap"
 )
 
@@ -403,8 +404,8 @@ func (l *Log) StatusBarValue() string {
 	if c == nil {
 		return ""
 	}
-	who := c.Author.Name
-	if email := c.Author.Email; email != "" {
+	who := utils.Sanitize(c.Author.Name)
+	if email := utils.Sanitize(c.Author.Email); email != "" {
 		who += " <" + email + ">"
 	}
 	value := c.ID.String()[:7]
@@ -516,12 +517,12 @@ func (l *Log) loadDiffCmd() tea.Msg {
 
 func (l *Log) renderCommit(c *git.Commit) string {
 	s := strings.Builder{}
-	// FIXME: lipgloss prints empty lines when CRLF is used
-	// sanitize commit message from CRLF
-	msg := strings.ReplaceAll(c.Message, "\r\n", "\n")
+	// Strip escape sequences and control characters, CR included since
+	// lipgloss prints empty lines when CRLF is used.
+	msg := utils.Sanitize(c.Message)
 	s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
 		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
-		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", c.Author.Name, c.Author.Email)),
+		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
 		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Committer.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
 	))
@@ -529,7 +530,7 @@ func (l *Log) renderCommit(c *git.Commit) string {
 }
 
 func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
-	stats := strings.Split(diff.Stats().String(), "\n")
+	stats := strings.Split(utils.Sanitize(diff.Stats().String()), "\n")
 	for i, line := range stats {
 		ch := strings.Split(line, "|")
 		if len(ch) > 1 {
@@ -546,7 +547,7 @@ func renderDiff(diff *git.Diff, width int) string {
 	var s strings.Builder
 	var pr strings.Builder
 	diffChroma := &gansi.CodeBlockElement{
-		Code:     diff.Patch(),
+		Code:     utils.Sanitize(diff.Patch()),
 		Language: "diff",
 	}
 	err := diffChroma.Render(&pr, common.StyleRenderer())
