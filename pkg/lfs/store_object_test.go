@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
@@ -103,5 +105,32 @@ func TestStoreObjectRenameFailure(t *testing.T) {
 				t.Errorf("temp file left behind: %s", ent.Name())
 			}
 		})
+	}
+}
+
+// A failure to read the data, as when the client aborts an upload, is
+// reported as ErrObjectRead, apart from storage failures, and nothing is
+// stored.
+func TestStoreObjectReadFailure(t *testing.T) {
+	const content = "hello lfs"
+	sum := sha256.Sum256([]byte(content))
+	oid := hex.EncodeToString(sum[:])
+	root := t.TempDir()
+	datastore := &memLFSStore{objects: map[string]int64{}}
+
+	r := io.MultiReader(strings.NewReader(content[:4]), iotest.ErrReader(io.ErrUnexpectedEOF))
+	err := StoreObject(context.Background(), storage.NewLocalStorage(root), nil, datastore, 1, oid, int64(len(content)), r)
+	if !errors.Is(err, ErrObjectRead) || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("StoreObject => %v, want ErrObjectRead wrapping io.ErrUnexpectedEOF", err)
+	}
+	if len(datastore.objects) != 0 {
+		t.Error("object recorded from a failed read")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "incomplete"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, ent := range entries {
+		t.Errorf("temp file left behind: %s", ent.Name())
 	}
 }
