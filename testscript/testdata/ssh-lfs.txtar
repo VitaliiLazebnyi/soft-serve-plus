@@ -1,6 +1,6 @@
 # vi: set ft=conf
 
-[windows] dos2unix err1.txt err2.txt err3.txt errauth.txt errrepo.txt
+[windows] dos2unix err1.txt err2.txt errauth.txt errrepo.txt
 
 # enable ssh lfs transfer
 env SOFT_SERVE_LFS_SSH_ENABLED=true
@@ -96,8 +96,6 @@ exists repo1c/.git/lfs/objects
 Error: accepts 2 arg(s), received 0
 -- err2.txt --
 Error: accepts 2 arg(s), received 1
--- err3.txt --
-Error: invalid request
 -- errauth.txt --
 Error: you are not authorized to do this
 -- errrepo.txt --

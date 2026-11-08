@@ -168,13 +168,11 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch s.state {
 		case stashStateList:
+			// Copying the selected stash message is handled by
+			// StashItemDelegate.
 			switch {
 			case key.Matches(msg, s.common.KeyMap.BackItem):
 				cmds = append(cmds, goBackCmd)
-			case key.Matches(msg, s.common.KeyMap.Copy):
-				if item, ok := s.list.SelectedItem().(StashItem); ok {
-					cmds = append(cmds, copyCmd(item.Title(), "Stash message copied to clipboard"))
-				}
 			}
 		case stashStatePatch:
 			switch {
