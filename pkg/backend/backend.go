@@ -38,10 +38,16 @@ type Backend struct {
 	adminKeys    []ssh.PublicKey
 	adminKeysOK  bool
 
-	// warnedOwnedAdminKeys holds the authorized-key strings of listed admin
-	// keys already logged as owned by a non-admin account, so the warning
-	// is logged once per key rather than on every lookup.
-	warnedOwnedAdminKeys sync.Map
+	// warnedOwnedAdminKeys maps the authorized-key string of a listed admin
+	// key already logged as owned by a non-admin account to that account's
+	// name, so the warning is logged once per key and owner rather than on
+	// every lookup. An entry is dropped once the conflict is resolved (the
+	// owner is promoted or the key leaves the account) and the whole map is
+	// cleared when initial_admin_keys changes, so a conflict that comes back
+	// is logged again and the map holds only currently listed keys. See
+	// warnOwnedAdminKey and forgetOwnedAdminKey.
+	warnedOwnedAdminKeysMu sync.Mutex
+	warnedOwnedAdminKeys   map[string]string
 
 	// pushGates orders pushes against the removal of repositories created
 	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.
