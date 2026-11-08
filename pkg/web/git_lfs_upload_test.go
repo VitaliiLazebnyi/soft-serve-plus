@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,8 +14,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
@@ -319,4 +322,38 @@ func TestLFSUploadRestoresMissingObject(t *testing.T) {
 			e.assertNoTempFiles(t)
 		})
 	}
+}
+
+// TestLFSUploadAbortedBody checks an upload whose body cannot be read to the
+// end, as when the client aborts it: that is the client's doing, so it gets
+// a 400 and an info log line rather than a 500 and an error, and nothing is
+// stored. It replaces the global default logger and must not run in
+// parallel.
+func TestLFSUploadAbortedBody(t *testing.T) {
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	e := newLFSUploadEnv(t)
+	e.ctx = log.WithContext(e.ctx, logger)
+	const content = "hello lfs"
+	oid := sha256Hex(content)
+
+	body := io.MultiReader(strings.NewReader(content[:4]), iotest.ErrReader(io.ErrUnexpectedEOF))
+	w := e.upload(oid, int64(len(content)), body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, lfs.MediaType) {
+		t.Errorf("Content-Type = %q, want an LFS JSON error", ct)
+	}
+	if out := logs.String(); strings.Contains(out, "ERRO") || !strings.Contains(out, "error reading object") {
+		t.Errorf("aborted upload not logged at info level:\n%s", out)
+	}
+	if _, err := os.Stat(e.objectPath(oid)); !os.IsNotExist(err) {
+		t.Errorf("object stored from an aborted upload (stat err: %v)", err)
+	}
+	e.assertNoTempFiles(t)
 }

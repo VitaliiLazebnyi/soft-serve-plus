@@ -24,7 +24,26 @@ var (
 	// ErrObjectOidMismatch is returned by StoreObject when the SHA-256 of
 	// the data is not the object ID.
 	ErrObjectOidMismatch = errors.New("object content does not match oid")
+
+	// ErrObjectRead is returned by StoreObject when reading the data
+	// fails, as when the client aborts an upload, rather than storing it.
+	ErrObjectRead = errors.New("read object")
 )
+
+// errReader records the first error other than io.EOF that reading r
+// returns, so a failed read can be told apart from a failed write.
+type errReader struct {
+	r   io.Reader
+	err error
+}
+
+func (e *errReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && e.err == nil {
+		e.err = err
+	}
+	return n, err
+}
 
 // StoreObject verifies an uploaded object and stores it in strg, then records
 // it in datastore for the repository.
@@ -40,8 +59,9 @@ var (
 // success, but only once the row reads back: db.WrapError maps foreign key
 // violations to db.ErrDuplicateKey too. The temporary file is always removed.
 //
-// A mismatch is reported as ErrObjectSizeMismatch or ErrObjectOidMismatch;
-// any other error is a storage or database failure. size must not be
+// A mismatch is reported as ErrObjectSizeMismatch or ErrObjectOidMismatch,
+// and a failure to read r as ErrObjectRead; any other error is a storage or
+// database failure. size must not be
 // negative. StoreObject does not read r past size+1 bytes; draining the rest
 // is up to the caller.
 func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, datastore store.LFSStore, repoID int64, oid string, size int64, r io.Reader) error {
@@ -53,7 +73,11 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 	defer strg.Delete(tempName) //nolint: errcheck
 
 	hash := sha256.New()
-	written, err := strg.Put(tempName, io.TeeReader(io.LimitReader(r, size+1), hash))
+	body := &errReader{r: r}
+	written, err := strg.Put(tempName, io.TeeReader(io.LimitReader(body, size+1), hash))
+	if body.err != nil {
+		return fmt.Errorf("%w: %w", ErrObjectRead, body.err)
+	}
 	if err != nil {
 		return fmt.Errorf("write object: %w", err)
 	}
