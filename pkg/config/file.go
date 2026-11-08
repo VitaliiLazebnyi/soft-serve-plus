@@ -284,7 +284,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:

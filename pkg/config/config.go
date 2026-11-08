@@ -301,8 +301,8 @@ type Config struct {
 	// push-to-create. Server admins (admin accounts or initial_admin_keys)
 	// are exempt. Repositories created without an account all count
 	// together as one user. A user at the limit is refused; the
-	// repositories they already have are kept. 0 (the default) means no
-	// limit.
+	// repositories they already have are kept. Imports still running count
+	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
 	// DefaultPrivate makes repositories created without an explicit

@@ -427,7 +427,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:
@@ -978,7 +979,9 @@ You can also *import* repositories from any public remote. Use the `repo import`
 ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLazebnyi/soft-serve-plus
 ```
 
-Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
+Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way.
+
+An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
