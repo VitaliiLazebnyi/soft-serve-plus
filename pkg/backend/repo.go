@@ -9,9 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/log/v2"
@@ -223,6 +225,29 @@ func claimRepoPath(rp string) error {
 		}
 		return err
 	}
+	return nil
+}
+
+// renameOntoClaim moves the repository at op onto np, the empty directory
+// claimRepoPath made for it. *claimed is cleared once that directory is no
+// longer the caller's to remove.
+func renameOntoClaim(op, np string, claimed *bool) error {
+	if runtime.GOOS == "windows" {
+		// Windows does not rename onto an existing directory, so the
+		// claim is given up first. A create that claims the path in
+		// between makes the rename fail rather than be replaced.
+		if err := os.Remove(np); err != nil {
+			return err
+		}
+		*claimed = false
+		return os.Rename(op, np)
+	}
+	// os.Rename refuses an existing directory as the target, but rename(2)
+	// replaces an empty one atomically, which is what the claim is.
+	if err := syscall.Rename(op, np); err != nil {
+		return &os.LinkError{Op: "rename", Old: op, New: np, Err: err}
+	}
+	*claimed = false
 	return nil
 }
 
@@ -728,9 +753,18 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return proto.ErrRepoNotFound
 	}
 
-	if d.repoPathExists(newName) {
-		return proto.ErrRepoExist
+	// Claim the new path the way a create or import does, so that whichever
+	// comes second fails instead of this rename replacing the other's empty
+	// directory (rename(2) replaces an empty one) and that one's cleanup then
+	// deleting the moved repository.
+	if err := claimRepoPath(np); err != nil {
+		if errors.Is(err, proto.ErrRepoExist) {
+			return err
+		}
+		d.logger.Error("failed to claim repository path", "repo", newName, "err", err)
+		return errRepoUpdate
 	}
+	claimed := true
 
 	// The directory is moved inside the transaction, and the move is not
 	// undone if the transaction fails. Cancelling ctx after the move, as a
@@ -743,19 +777,16 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 			return err
 		}
 
-		// Make sure the new repository parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(np), os.ModePerm); err != nil {
-			d.logger.Error("failed to create repository parent directory", "repo", newName, "err", err)
-			return errRepoUpdate
-		}
-
-		if err := os.Rename(op, np); err != nil {
+		if err := renameOntoClaim(op, np, &claimed); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
 		}
 
 		return nil
 	}); err != nil {
+		if claimed {
+			os.Remove(np) //nolint:errcheck
+		}
 		return wrapRepoError(err)
 	}
 
