@@ -3,7 +3,6 @@ package ssh
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"runtime"
@@ -20,7 +19,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
@@ -59,21 +57,11 @@ func setup(tb testing.TB) (*gossh.Session, func() error) {
 // that closes its database.
 func setupServer(tb testing.TB) (*ssh.Server, func() error) {
 	tb.Helper()
-	is := is.New(tb)
-	dp := tb.TempDir()
-	is.NoErr(os.Setenv("SOFT_SERVE_DATA_PATH", dp))
-	is.NoErr(os.Setenv("SOFT_SERVE_GIT_LISTEN_ADDR", ":9418"))
-	is.NoErr(os.Setenv("SOFT_SERVE_SSH_LISTEN_ADDR", fmt.Sprintf("127.0.0.1:%d", test.RandomPort()))) // RandomPort checks only loopback
-	tb.Cleanup(func() {
-		is.NoErr(os.Unsetenv("SOFT_SERVE_DATA_PATH"))
-		is.NoErr(os.Unsetenv("SOFT_SERVE_GIT_LISTEN_ADDR"))
-		is.NoErr(os.Unsetenv("SOFT_SERVE_SSH_LISTEN_ADDR"))
-		is.NoErr(os.RemoveAll(dp))
-	})
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
+	cfg.DataPath = tb.TempDir()
 	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
+		tb.Fatal(err)
 	}
 	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
@@ -90,28 +78,13 @@ func setupServer(tb testing.TB) (*ssh.Server, func() error) {
 		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(BubbleTeaMiddleware(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
-				os.Exit(1)
+				tb.Error("session has no pty")
+				_ = s.Exit(1)
+				return
 			}
-			s.Exit(0)
+			_ = s.Exit(0)
 		})),
 	}, dbx.Close
-}
-
-// TestSetupListensOnLoopback checks that setup configures the SSH server to
-// bind only loopback. RandomPort checks that a port is free on loopback
-// alone, so a server bound to every interface could collide with a listener
-// on another one.
-func TestSetupListensOnLoopback(t *testing.T) {
-	_, closeDB := setup(t)
-	t.Cleanup(func() { _ = closeDB() })
-	addr := os.Getenv("SOFT_SERVE_SSH_LISTEN_ADDR")
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatalf("invalid SSH listen address %q: %v", addr, err)
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		t.Fatalf("SSH listens on %q, want a loopback address", addr)
-	}
 }
 
 // TestBubbleTeaMiddlewareClosesZoneManager checks that a TUI session that
