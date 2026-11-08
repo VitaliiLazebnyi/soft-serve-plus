@@ -494,10 +494,12 @@ func (c *Config) Parse() error {
 
 // writeConfig writes the configuration to the given file.
 func writeConfig(cfg *Config, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+	// The config can hold secrets such as a database password, so only
+	// the server's user may read it.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint: errcheck, gosec
+	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o600)
 }
 
 // WriteConfig writes the configuration to the default file.
