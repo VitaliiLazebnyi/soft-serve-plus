@@ -95,6 +95,13 @@ To change the default data path use `SOFT_SERVE_DATA_PATH` environment variable.
 SOFT_SERVE_DATA_PATH=/var/lib/soft-serve soft serve
 ```
 
+Soft Serve Plus creates the data directory with mode `0700` and the default
+`config.yaml` with mode `0600`, so other local users cannot read repositories,
+the database or secrets. A directory or config that already exists keeps its
+mode; tighten it yourself (`chmod 700 data`) if it is group- or world-readable.
+Packages install `/etc/soft-serve.conf` with mode `0600`, and an upgrade
+tightens an existing one that still has the old `0644` mode.
+
 When you run Soft Serve Plus for the first time, make sure you have the
 `SOFT_SERVE_INITIAL_ADMIN_KEYS` environment variable is set to your ssh
 authorized key. Any added key to this variable will be treated as admin with
