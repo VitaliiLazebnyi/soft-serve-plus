@@ -125,8 +125,8 @@ func TestGoGetImportRoot(t *testing.T) {
 	is.Equal(w.Header().Get("Content-Type"), "text/html; charset=utf-8")
 	body := w.Body.String()
 	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/git/pub git https://example.com/git/pub.git">`))
-	is.True(strings.Contains(body, `href="https://godoc.org/example.com/git/pub"`))
-	is.True(strings.Contains(body, `content="0; url=https://godoc.org/example.com/git/pub"`))
+	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/git/pub"`))
+	is.True(strings.Contains(body, `content="0; url=https://pkg.go.dev/example.com/git/pub"`))
 
 	cfg.HTTP.PublicURL = "https://example.com"
 	body = goGet(t, f.handler, "/pub").Body.String()
@@ -139,7 +139,7 @@ func TestGoGetImportRoot(t *testing.T) {
 	// The page still renders, with the value escaped rather than dropped.
 	is.Equal(w.Code, http.StatusOK)
 	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git">`))
-	is.True(strings.Contains(body, `href="https://godoc.org/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`))
+	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`))
 	is.True(!strings.Contains(body, "<script>"))
 	is.True(!strings.Contains(body, `a">`))
 	is.True(!strings.Contains(body, "ZgotmplZ"))

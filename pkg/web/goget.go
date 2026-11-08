@@ -90,7 +90,7 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 		root := goImportRoot(importRoot)
 		// html/template refuses a URL it cannot vet inside the refresh
 		// content attribute, so hand it one built and escaped here.
-		docURL := (&url.URL{Scheme: "https", Host: "godoc.org", Path: "/" + root + "/" + name}).String()
+		docURL := (&url.URL{Scheme: "https", Host: "pkg.go.dev", Path: "/" + root + "/" + name}).String()
 		if err := repoIndexHTMLTpl.Execute(&buf, struct {
 			Repo       string
 			Config     *config.Config
