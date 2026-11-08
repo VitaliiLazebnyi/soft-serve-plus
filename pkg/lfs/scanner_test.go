@@ -56,6 +56,24 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A scan that runs to the end finds every pointer and reports no error,
+	// so the error below comes from the cancellation.
+	{
+		pointerChan := make(chan PointerBlob)
+		errChan := make(chan error, 1)
+		go SearchPointerBlobs(context.Background(), repo, pointerChan, errChan)
+		n := 0
+		for range pointerChan {
+			n++
+		}
+		if err := <-errChan; err != nil {
+			t.Fatalf("uncanceled scan: %v", err)
+		}
+		if n != 5 {
+			t.Fatalf("uncanceled scan found %d pointers, want 5", n)
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pointerChan := make(chan PointerBlob)
