@@ -1,6 +1,7 @@
 package browse
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -37,32 +38,36 @@ var Command = &cobra.Command{
 			return fmt.Errorf("failed to open repository: %w", err)
 		}
 
-		// Bubble Tea uses Termenv default output so we have to use the same
-		// thing here.
-		ctx := cmd.Context()
-		c := common.NewCommon(ctx, 0, 0)
-		c.HideCloneCmd = true
-		comps := []common.TabComponent{
-			repo.NewReadme(c),
-			repo.NewFiles(c),
-			repo.NewLog(c),
-		}
-		if !r.IsBare {
-			comps = append(comps, repo.NewStash(c))
-		}
-		comps = append(comps, repo.NewRefs(c, git.RefsHeads), repo.NewRefs(c, git.RefsTags))
-		m := &model{
-			model:  repo.New(c, comps...),
-			repo:   repository{r},
-			common: c,
-		}
-
-		m.footer = footer.New(c, m)
+		m := newModel(cmd.Context(), r)
 		p := tea.NewProgram(m)
 
 		_, err = p.Run()
 		return err
 	},
+}
+
+// newModel returns the browse model for the repository r.
+func newModel(ctx context.Context, r *git.Repository) *model {
+	// Bubble Tea uses Termenv default output so we have to use the same
+	// thing here.
+	c := common.NewCommon(ctx, 0, 0)
+	c.HideCloneCmd = true
+	comps := []common.TabComponent{
+		repo.NewReadme(c),
+		repo.NewFiles(c),
+		repo.NewLog(c),
+	}
+	if !r.IsBare {
+		comps = append(comps, repo.NewStash(c))
+	}
+	comps = append(comps, repo.NewRefs(c, git.RefsHeads), repo.NewRefs(c, git.RefsTags))
+	m := &model{
+		model:  repo.New(c, comps...),
+		repo:   repository{r},
+		common: c,
+	}
+	m.footer = footer.New(c, m)
+	return m
 }
 
 type state int
@@ -137,7 +142,6 @@ func (m *model) Init() tea.Cmd {
 		func() tea.Msg {
 			return repo.RepoMsg(m.repo)
 		},
-		repo.UpdateRefCmd(m.common.Context(), m.repo),
 	)
 }
 
@@ -145,6 +149,10 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.common.Logger.Debugf("msg received: %T", msg)
 	cmds := make([]tea.Cmd, 0)
+	// While an error is shown the repository view underneath is hidden, so
+	// input belongs to the error alone: the key that dismisses it must not
+	// also act on the view.
+	forwardInput := m.state != errorState
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
@@ -153,7 +161,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.common.KeyMap.Back) && m.error != nil:
 			m.error = nil
 			m.state = startState
-			// Always show the footer on error.
+			// Show the footer only when all help is shown.
 			m.showFooter = m.footer.ShowAll()
 		case key.Matches(msg, m.common.KeyMap.Help):
 			cmds = append(cmds, footer.ToggleFooterCmd)
@@ -174,6 +182,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case footer.ToggleFooterMsg:
 		m.footer.SetShowAll(!m.footer.ShowAll())
 		m.showFooter = !m.showFooter
+	case repo.RepoMsg:
+		// Load the reference only once the tabs have the repository, as
+		// batched commands run concurrently and a RefMsg handled first would
+		// find no repository to read from.
+		cmds = append(cmds, repo.UpdateRefCmd(m.common.Context(), msg))
 	case common.ErrorMsg:
 		m.error = msg
 		m.state = errorState
@@ -186,10 +199,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	r, cmd := m.model.Update(msg)
-	m.model = r.(*repo.Repo)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	if forwardInput || !common.IsInputMsg(msg) {
+		r, cmd := m.model.Update(msg)
+		m.model = r.(*repo.Repo)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// This fixes determining the height margin of the footer.

@@ -30,6 +30,8 @@ type RepositoryStore interface {
 	// Postgres, so that concurrent callers that insert a repository owned by
 	// userID and then count take turns. On SQLite callers take turns because
 	// the insert already holds the write lock, and it does nothing.
+	// Backend.RemoveOwnPublicKey takes it too, so that removals of a user's
+	// keys count the remaining keys in turn.
 	LockUserRepos(ctx context.Context, h db.Handler, userID int64) error
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error
