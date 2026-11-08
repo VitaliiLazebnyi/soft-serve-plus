@@ -11,8 +11,8 @@ ensureserverrunning SSH_PORT
 soft settings anon-access read-write
 
 # bad credentials never create a repository
-curl http://bob:wrong@localhost:$HTTP_PORT/ghost1.git/info/refs?service=git-receive-pack
-stdout '403.*'
+curl -v http://bob:wrong@localhost:$HTTP_PORT/ghost1.git/info/refs?service=git-receive-pack
+stderr '^> 403 '
 
 # only the push endpoints create repositories
 curl http://localhost:$HTTP_PORT/ghost2.git/HEAD?service=git-receive-pack
