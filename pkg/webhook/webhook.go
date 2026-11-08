@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +165,15 @@ func redactURLError(err error) error {
 
 // SendWebhook sends a webhook event and records the attempt.
 func SendWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}) error {
-	return sendWebhook(ctx, w, event, payload, true)
+	return sendWebhook(ctx, w, event, payload, uuid.Nil, true)
+}
+
+// RedeliverWebhook sends a recorded delivery again and records the attempt
+// as a new delivery. The request carries guid, the X-SoftServe-Delivery value
+// of the original delivery, so a receiver can tell that it is the same event.
+// The timestamp and signatures are computed afresh.
+func RedeliverWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}, guid uuid.UUID) error {
+	return sendWebhook(ctx, w, event, payload, guid, true)
 }
 
 // sendTimeout bounds the request to one webhook, so a slow receiver cannot use
@@ -192,14 +201,40 @@ var errRereadFailed = errors.New("not sent: could not re-read webhook (database 
 
 // request is a webhook request ready to send or record.
 type request struct {
+	// id identifies the delivery record. Every attempt gets its own.
 	id      uuid.UUID
 	headers http.Header
 	body    string
 }
 
+// Request headers that identify and sign a delivery.
+const (
+	// HeaderDelivery is the delivery GUID. A redelivery keeps the GUID of
+	// the delivery it repeats, so a receiver can drop an event it has
+	// already handled.
+	HeaderDelivery = "X-SoftServe-Delivery"
+	// HeaderTimestamp is when the request was signed, in seconds since the
+	// Unix epoch.
+	HeaderTimestamp = "X-SoftServe-Timestamp"
+	// HeaderSignature is "sha256=" and the hex HMAC-SHA256 of the body,
+	// keyed with the webhook secret. It does not cover the timestamp, so a
+	// captured request can be replayed; check HeaderSignatureV2 instead.
+	HeaderSignature = "X-SoftServe-Signature"
+	// HeaderSignatureV2 is "sha256=" and the hex HMAC-SHA256, keyed with the
+	// webhook secret, of HeaderTimestamp, a ".", HeaderDelivery, a "." and
+	// the body. A receiver that checks it, rejects timestamps too far from
+	// its own clock and remembers the GUIDs it has seen recently can refuse
+	// replayed requests.
+	HeaderSignatureV2 = "X-SoftServe-Signature-V2"
+)
+
+// now returns the current time. It is a variable so tests can fix it.
+var now = time.Now
+
 // newRequest encodes payload for w and builds the request headers, including
-// the signature when w has a secret.
-func newRequest(w models.Webhook, event Event, payload interface{}) (request, error) {
+// the signatures when w has a secret. The delivery GUID is guid, or the new
+// delivery's id when guid is uuid.Nil.
+func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UUID) (request, error) {
 	var buf bytes.Buffer
 	contentType := ContentType(w.ContentType) //nolint:gosec
 	switch contentType {
@@ -233,24 +268,35 @@ func newRequest(w models.Webhook, event Event, payload interface{}) (request, er
 		return request{}, err
 	}
 
-	headers.Add("X-SoftServe-Delivery", id.String())
+	if guid == uuid.Nil {
+		guid = id
+	}
+	timestamp := strconv.FormatInt(now().Unix(), 10)
+	headers.Add(HeaderDelivery, guid.String())
+	headers.Add(HeaderTimestamp, timestamp)
 
 	body := buf.String()
 	if w.Secret != "" {
-		sig := hmac.New(sha256.New, []byte(w.Secret))
-		sig.Write([]byte(body)) //nolint: errcheck
-		headers.Add("X-SoftServe-Signature", "sha256="+hex.EncodeToString(sig.Sum(nil)))
+		headers.Add(HeaderSignature, sign(w.Secret, body))
+		headers.Add(HeaderSignatureV2, sign(w.Secret, timestamp+"."+guid.String()+"."+body))
 	}
 
 	return request{id: id, headers: headers, body: body}, nil
+}
+
+// sign returns "sha256=" and the hex HMAC-SHA256 of content keyed with secret.
+func sign(secret, content string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(content)) //nolint: errcheck
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // sendWebhook sends a webhook event. The request gets its own sendTimeout.
 // When record is false the attempt is not written to the deliveries table,
 // and a transport error or a non-2xx response is returned so the caller can
 // log it.
-func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}, record bool) error {
-	req, err := newRequest(w, event, payload)
+func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}, guid uuid.UUID, record bool) error {
+	req, err := newRequest(w, event, payload, guid)
 	if err != nil {
 		return err
 	}
@@ -420,7 +466,7 @@ var ErrTooManyWebhooks = fmt.Errorf("a repository can have at most %d webhooks",
 func RecordUndelivered(ctx context.Context, hooks []models.Webhook, payload EventPayload, reason error) error {
 	var errs []error
 	for _, w := range hooks {
-		req, err := newRequest(w, payload.Event(), payload)
+		req, err := newRequest(w, payload.Event(), payload, uuid.Nil)
 		if err == nil {
 			err = recordDelivery(ctx, w, payload.Event(), req, reason, 0, "", "")
 		}
@@ -490,7 +536,7 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 			}
 			w = cur
 		}
-		if err := sendWebhook(ctx, w, payload.Event(), payload, record); err != nil {
+		if err := sendWebhook(ctx, w, payload.Event(), payload, uuid.Nil, record); err != nil {
 			errs = append(errs, err)
 		}
 	}
