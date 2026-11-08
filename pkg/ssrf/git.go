@@ -65,6 +65,11 @@ type ValidatedGitRemote struct {
 // redirects, turns off any proxy, and pins each validated address. Callers
 // MUST apply it to every git command that touches the remote, after the
 // server's own environment so that it wins, or the validation means nothing.
+//
+// The environment needs git 2.37 or newer: GIT_CONFIG_COUNT arrived in 2.31
+// and http.curloptResolve, which carries the pin, in 2.37. Older git ignores
+// what it does not know without an error, so it would fetch unpinned. Callers
+// must refuse to run git below that version rather than rely on this.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
 	entries := []GitConfigEntry{
 		// git follows the first HTTP redirect by default, which lets a public
