@@ -280,23 +280,6 @@ func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
 	}
 }
 
-// runGit runs git in dir with a fixed identity and fails the test on error.
-func runGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-
-	cmd := exec.CommandContext(t.Context(), "git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v: %s", args, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // TestSyncMirrorFetchesOnlyNamedRemotes verifies the sync fetches the named
 // remotes and nothing git would pick on its own: neither the url in
 // branch.<HEAD>.remote, which a bare `git fetch` uses, nor the legacy file
