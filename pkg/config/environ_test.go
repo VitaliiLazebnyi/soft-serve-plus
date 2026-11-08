@@ -84,6 +84,7 @@ func roundTripConfig(t *testing.T) *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 1h",
+			LFSSweep:   "@every 2h",
 		},
 		Webhook: WebhookConfig{
 			AllowedHosts: []string{"hooks.example.com:8443"},

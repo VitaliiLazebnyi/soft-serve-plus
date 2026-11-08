@@ -92,7 +92,7 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	run := func(hook, stdin, exit string, args ...string) error {
 		t.Helper()
 		// Run the hook as git does: by path, with GIT_DIR unset.
-		cmd := exec.Command(filepath.Join(repoPath, "hooks", hook), args...)
+		cmd := exec.CommandContext(t.Context(), filepath.Join(repoPath, "hooks", hook), args...)
 		cmd.Dir = repoPath
 		cmd.Stdin = strings.NewReader(stdin)
 		cmd.Env = []string{
