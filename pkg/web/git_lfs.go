@@ -316,7 +316,7 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 	stat, err := f.Stat()
 	if err != nil {
 		logger.Error("error getting object stat", "oid", oid, "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
