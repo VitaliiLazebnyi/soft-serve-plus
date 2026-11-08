@@ -13,7 +13,8 @@ import (
 )
 
 // TestScheduleJobsMirrorPull checks that an empty jobs.mirror_pull leaves
-// the mirror job unscheduled, and that a spec schedules it.
+// the mirror job unscheduled, and that a spec schedules it. Other registered
+// jobs (such as lfs-sweep) are scheduled either way.
 func TestScheduleJobsMirrorPull(t *testing.T) {
 	j, ok := jobs.List()["mirror-pull"]
 	if !ok {
@@ -38,8 +39,9 @@ func TestScheduleJobsMirrorPull(t *testing.T) {
 		sched := cron.NewScheduler(ctx)
 		scheduleJobs(ctx, sched, logger)
 
-		if got := len(sched.Entries()); got != c.entries {
-			t.Errorf("mirror_pull %q: %d scheduled jobs, want %d", c.spec, got, c.entries)
+		want := len(jobs.List()) - 1 + c.entries
+		if got := len(sched.Entries()); got != want {
+			t.Errorf("mirror_pull %q: %d scheduled jobs, want %d", c.spec, got, want)
 		}
 		if c.spec == "" {
 			if j.ID != 0 {

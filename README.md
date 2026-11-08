@@ -184,7 +184,8 @@ log:
   # Time format for the log "timestamp" field.
   # Should be described in Golang's time format.
   time_format: "2006-01-02 15:04:05"
-  # Path to the log file. Leave empty to write to stderr.
+  # Path to the log file. Leave empty to write to stderr. A relative path
+  # is relative to the data directory.
   #path: ""
 
 # The SSH server configuration.
