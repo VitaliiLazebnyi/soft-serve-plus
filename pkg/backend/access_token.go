@@ -11,13 +11,13 @@ import (
 )
 
 // CreateAccessToken creates an access token for user.
-func (b *Backend) CreateAccessToken(ctx context.Context, user proto.User, name string, expiresAt time.Time) (string, error) {
+func (d *Backend) CreateAccessToken(ctx context.Context, user proto.User, name string, expiresAt time.Time) (string, error) {
 	token := GenerateToken()
 	tokenHash := HashToken(token)
 	name = utils.Sanitize(name)
 
-	if err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		_, err := b.store.CreateAccessToken(ctx, tx, name, user.ID(), tokenHash, expiresAt)
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		_, err := d.store.CreateAccessToken(ctx, tx, name, user.ID(), tokenHash, expiresAt)
 		if err != nil {
 			return db.WrapError(err)
 		}
@@ -31,14 +31,14 @@ func (b *Backend) CreateAccessToken(ctx context.Context, user proto.User, name s
 }
 
 // DeleteAccessToken deletes an access token for a user.
-func (b *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int64) error {
-	err := b.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		_, err := b.store.GetAccessToken(ctx, tx, id)
+func (d *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int64) error {
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		_, err := d.store.GetAccessToken(ctx, tx, id)
 		if err != nil {
 			return db.WrapError(err)
 		}
 
-		if err := b.store.DeleteAccessTokenForUser(ctx, tx, user.ID(), id); err != nil {
+		if err := d.store.DeleteAccessTokenForUser(ctx, tx, user.ID(), id); err != nil {
 			return db.WrapError(err)
 		}
 		return nil
@@ -54,8 +54,8 @@ func (b *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int
 }
 
 // ListAccessTokens lists access tokens for a user.
-func (b *Backend) ListAccessTokens(ctx context.Context, user proto.User) ([]proto.AccessToken, error) {
-	accessTokens, err := b.store.GetAccessTokensByUserID(ctx, b.db, user.ID())
+func (d *Backend) ListAccessTokens(ctx context.Context, user proto.User) ([]proto.AccessToken, error) {
+	accessTokens, err := d.store.GetAccessTokensByUserID(ctx, d.db, user.ID())
 	if err != nil {
 		return nil, db.WrapError(err)
 	}
