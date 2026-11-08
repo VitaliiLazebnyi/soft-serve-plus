@@ -162,7 +162,14 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 	case "token":
 		user, err := be.UserByAccessToken(ctx, parts[1])
 		if err != nil {
-			logger.Info("failed to get user", "err", err)
+			// An unknown or expired token is a failed login, not an
+			// anonymous request: answering it as anonymous would let it
+			// through wherever anonymous users may go.
+			if errors.Is(err, proto.ErrUserNotFound) || errors.Is(err, proto.ErrTokenExpired) {
+				logger.Info("invalid token", "err", err)
+				return nil, nil, ErrInvalidToken
+			}
+			logger.Error("failed to get user", "err", err)
 			return nil, nil, err
 		}
 
@@ -174,22 +181,28 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 		}
 
 		// Find the user
+		// A valid signature on a token whose user is gone, or was
+		// replaced by another of the same name, is still a failed login.
 		parts := strings.SplitN(claims.Subject, "#", 2)
 		if len(parts) != 2 {
-			logger.Error("invalid jwt subject", "subject", claims.Subject)
-			return nil, nil, errors.New("invalid jwt subject")
+			logger.Info("invalid jwt subject", "subject", claims.Subject)
+			return nil, nil, ErrInvalidToken
 		}
 
 		user, err := be.User(ctx, parts[0])
 		if err != nil {
+			if errors.Is(err, proto.ErrUserNotFound) {
+				logger.Info("jwt user not found", "subject", claims.Subject)
+				return nil, nil, ErrInvalidToken
+			}
 			logger.Error("failed to get user", "err", err)
 			return nil, nil, err
 		}
 
 		expectedSubject := fmt.Sprintf("%s#%d", user.Username(), user.ID())
 		if expectedSubject != claims.Subject {
-			logger.Error("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
-			return nil, nil, errors.New("invalid jwt subject")
+			logger.Info("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
+			return nil, nil, ErrInvalidToken
 		}
 
 		return user, claims.Audience, nil
