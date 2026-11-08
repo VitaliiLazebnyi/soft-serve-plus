@@ -195,9 +195,15 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
+	// The directory has no row until registerRepository records it.
+	defer d.repoDirs.hold(name)()
+
 	rp := d.repoPath(name)
 	if err := claimRepoPath(rp); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	if _, err := git.Init(rp, true); err != nil {
@@ -441,10 +447,17 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		}
 	}
 
+	// The directory has no row until importRepository records it, which
+	// is after the clone.
+	defer d.repoDirs.hold(name)()
+
 	// Claiming the directory is what serializes concurrent imports of one
 	// name: the second one fails here with ErrRepoExist.
 	if err := claimRepoPath(imp.path); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
@@ -603,6 +616,12 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
 
+	// Once the row is gone the directory is still there until it is removed
+	// below; the hold keeps a concurrent delete from taking it for an orphan
+	// and reporting a second successful delete. It is taken before the
+	// transaction: see removeOrphanRepoDir.
+	defer d.repoDirs.hold(name)()
+
 	// Build the webhook event before deleting. A repository whose directory is
 	// gone has no event, but its database row still has to go.
 	var wh *webhook.RepositoryEvent
@@ -637,6 +656,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// rowDeleted is set once the repository's row is deleted, and says the
 	// directory is to be removed after the commit.
 	var rowDeleted bool
+	// noRow is set when no row has the name.
+	var noRow bool
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// With a keep check, the row is locked before the check, so
 		// nothing can be added for the repository between the check and
@@ -647,14 +668,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		}
 		repom, dberr := getRepo(ctx, tx, name)
 		if dberr != nil {
-			// A directory with no row is an orphan; remove it.
-			if keep == nil && d.repoPathExists(name) {
-				return os.RemoveAll(rp)
-			}
-			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
-				return proto.ErrRepoNotFound
-			}
-			return db.WrapError(dberr)
+			dberr = db.WrapError(dberr)
+			noRow = errors.Is(dberr, db.ErrRecordNotFound)
+			return dberr
 		}
 		if keep != nil {
 			kept, err := keep(tx, repom)
@@ -681,6 +697,12 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		rowDeleted = true
 		return nil
 	}); err != nil {
+		// A directory with no row is an orphan; remove it. Only a missing
+		// row says so: on any other error, such as a cancelled context,
+		// the repository may well exist.
+		if noRow && keep == nil && d.repoPathExists(name) {
+			return d.removeOrphanRepoDir(ctx, name, 1)
+		}
 		return wrapRepoError(err)
 	}
 
@@ -692,6 +714,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// directory has no row: it cannot be created, imported or renamed over,
 	// and deleting the repository again removes it.
 	if rowDeleted {
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(name)
+		}
 		if err := os.RemoveAll(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}
@@ -747,6 +772,10 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return err
 	}
 
+	// The moved directory has the new name before the row does, which is
+	// only once the transaction commits.
+	defer d.repoDirs.hold(newName)()
+
 	op := d.repoPath(oldName)
 	np := d.repoPath(newName)
 	if !d.repoPathExists(oldName) {
@@ -780,6 +809,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		if err := renameOntoClaim(op, np, &claimed); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
+		}
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(newName)
 		}
 
 		return nil
