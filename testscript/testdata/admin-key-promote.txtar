@@ -24,7 +24,7 @@ ugit -C mine add -A
 ugit -C mine commit -m 'first'
 ugit -C mine push origin HEAD
 usoft token create 'mine'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 

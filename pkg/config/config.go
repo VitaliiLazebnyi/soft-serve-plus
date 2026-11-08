@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -214,6 +216,11 @@ type LFSConfig struct {
 // JobsConfig is the configuration for cron jobs.
 type JobsConfig struct {
 	MirrorPull string `env:"MIRROR_PULL" yaml:"mirror_pull"`
+
+	// LFSSweep is the schedule for removing temporary files that
+	// interrupted LFS uploads and mirror downloads left behind for more
+	// than a day.
+	LFSSweep string `env:"LFS_SWEEP" yaml:"lfs_sweep"`
 }
 
 // WebhookConfig is the configuration for repository webhooks.
@@ -396,6 +403,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_LFS_ENABLED=%t", c.LFS.Enabled),
 		fmt.Sprintf("SOFT_SERVE_LFS_SSH_ENABLED=%t", c.LFS.SSHEnabled),
 		fmt.Sprintf("SOFT_SERVE_JOBS_MIRROR_PULL=%s", c.Jobs.MirrorPull),
+		fmt.Sprintf("SOFT_SERVE_JOBS_LFS_SWEEP=%s", c.Jobs.LFSSweep),
 		fmt.Sprintf("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS=%s", strings.Join(c.Webhook.AllowedHosts, ",")),
 	}...)
 
@@ -439,7 +447,9 @@ func parseFile(cfg *Config, path string) error {
 	}
 
 	defer f.Close() //nolint: errcheck
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+	// An empty or comment-only file has no YAML document and decodes to
+	// io.EOF. Treat it like an empty document and keep the defaults.
+	if err := yaml.NewDecoder(f).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
@@ -510,10 +520,12 @@ func (c *Config) Parse() error {
 
 // writeConfig writes the configuration to the given file.
 func writeConfig(cfg *Config, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+	// The config can hold secrets such as a database password, so only
+	// the server's user may read it.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint: errcheck, gosec
+	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o600)
 }
 
 // WriteConfig writes the configuration to the default file.
@@ -542,6 +554,31 @@ func (c *Config) ConfigPath() string { //nolint:revive
 
 	// Otherwise, look in the data path.
 	return filepath.Join(c.DataPath, "config.yaml")
+}
+
+// CheckConfigLocation returns an error when SOFT_SERVE_CONFIG_LOCATION names
+// a file that does not exist. Without this check the server would silently
+// start on the default config, and write it to the data directory, after a
+// typo in the variable or with a config file that is not mounted yet.
+// Naming the default location in the data directory is allowed, since the
+// server writes the default config there on its first start.
+func (c *Config) CheckConfigLocation() error {
+	path := os.Getenv("SOFT_SERVE_CONFIG_LOCATION")
+	if path == "" {
+		return nil
+	}
+	_, err := os.Stat(path)
+	if err == nil || samePath(path, filepath.Join(c.DataPath, "config.yaml")) {
+		return nil
+	}
+	return fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
+}
+
+// samePath reports whether a and b name the same path once made absolute.
+func samePath(a, b string) bool {
+	a, errA := filepath.Abs(a)
+	b, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && a == b
 }
 
 func exist(path string) bool {
@@ -612,6 +649,7 @@ func DefaultConfig() *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 10m",
+			LFSSweep:   "@every 1h",
 		},
 	}
 }
