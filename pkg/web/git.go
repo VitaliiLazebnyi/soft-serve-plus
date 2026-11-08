@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,20 +47,23 @@ var _ http.Handler = GitRoute{}
 // authorization so a mismatched method can neither probe nor create a
 // repository.
 func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var hasMethod bool
-	for _, m := range g.method {
-		if m == r.Method {
-			hasMethod = true
-			break
-		}
-	}
-
-	if !hasMethod {
-		renderMethodNotAllowed(w, r)
+	allowed := g.allowed()
+	if !slices.Contains(allowed, r.Method) {
+		renderMethodNotAllowed(w, r, allowed)
 		return
 	}
 
 	withAccess(g.pending, g.handler)(w, r)
+}
+
+// allowed returns the methods the route answers: a route that answers GET
+// answers HEAD too, as git http-backend does.
+func (g GitRoute) allowed() []string {
+	allowed := g.method
+	if slices.Contains(allowed, http.MethodGet) {
+		allowed = append(slices.Clip(allowed), http.MethodHead)
+	}
+	return allowed
 }
 
 var (
@@ -97,9 +103,6 @@ func withParams(next http.Handler) http.Handler {
 		repo = utils.SanitizeRepo(repo)
 		vars["repo"] = repo
 		vars["dir"] = filepath.Join(cfg.DataPath, "repos", repo+".git")
-
-		// Add repo suffix (.git)
-		r.URL.Path = fmt.Sprintf("%s.git/%s", repo, vars["file"])
 		r = mux.SetURLVars(r, vars)
 
 		next.ServeHTTP(w, r)
@@ -112,20 +115,19 @@ func GitController(_ context.Context, r *mux.Router) {
 	pending := newPushCreates()
 	for _, route := range gitRoutes {
 		route.pending = pending
-		// NOTE: withParam must always be the outermost wrapper, otherwise the
+		// NOTE: withParams must always be the outermost wrapper, otherwise the
 		// request vars will not be set.
 		r.Handle(basePrefix+route.path, withParams(route))
 	}
 
 	// Handle go-get
-	r.Handle(basePrefix, withParams(withCaller(http.HandlerFunc(GoGetHandler)))).Methods(http.MethodGet)
+	r.Handle(basePrefix, withParams(withCaller(http.HandlerFunc(GoGetHandler)))).Methods(http.MethodGet, http.MethodHead)
 }
 
 var gitRoutes = []GitRoute{
 	// Git services
-	// These routes don't handle authentication/authorization.
-	// This is handled through wrapping the handlers for each route.
-	// See below (withAccess).
+	// These handlers don't authenticate or authorize the caller: GitRoute
+	// wraps each of them in withAccess.
 	{
 		method:  []string{http.MethodPost},
 		handler: serviceRpc,
@@ -197,31 +199,49 @@ var gitRoutes = []GitRoute{
 }
 
 func askCredentials(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="Git" charset="UTF-8", Token, Bearer`)
-	w.Header().Set("LFS-Authenticate", `Basic realm="Git LFS" charset="UTF-8", Token, Bearer`)
+	w.Header().Set("WWW-Authenticate", `Basic realm="Git", charset="UTF-8", Token, Bearer`)
+	w.Header().Set("LFS-Authenticate", `Basic realm="Git LFS", charset="UTF-8", Token, Bearer`)
 }
 
 // identify stores the authenticated caller in the request context and
-// returns the authentication error, if any.
-func identify(r *http.Request) (*http.Request, error) {
+// returns the authentication error, if any. A bearer token must name one of
+// repos in its audience; its audience is stored too, see tokenAudience.
+func identify(r *http.Request, repos ...string) (*http.Request, error) {
 	ctx := r.Context()
 	logger := log.FromContext(ctx)
 
-	user, err := authenticate(r, mux.Vars(r)["repo"])
-	if err != nil {
-		switch {
-		case badCredentials(err):
-		case errors.Is(err, proto.ErrUserNotFound):
-		default:
-			logger.Error("failed to authenticate", "err", err)
-		}
-	}
-
+	// authenticate logs why credentials failed, and returns only bad
+	// credentials or proto.ErrUserNotFound.
+	user, audience, err := authenticate(r, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
 	}
 
-	return r.WithContext(proto.WithUserContext(ctx, user)), err
+	ctx = proto.WithUserContext(ctx, user)
+	if audience != nil {
+		ctx = context.WithValue(ctx, tokenAudienceKey{}, audience)
+	}
+	return r.WithContext(ctx), err
+}
+
+type tokenAudienceKey struct{}
+
+// tokenAudience returns the repositories the caller's bearer token names,
+// and false when the caller did not authenticate with a bearer token, so is
+// not limited to particular repositories.
+func tokenAudience(ctx context.Context) ([]string, bool) {
+	audience, ok := ctx.Value(tokenAudienceKey{}).([]string)
+	return audience, ok
+}
+
+// callerFor returns the caller to authorize for repo: the authenticated
+// user, or nil (anonymous) when the user authenticated with a bearer token
+// that does not name repo.
+func callerFor(ctx context.Context, repo string) proto.User {
+	if audience, ok := tokenAudience(ctx); ok && !slices.Contains(audience, utils.SanitizeRepo(repo)) {
+		return nil
+	}
+	return proto.UserFromContext(ctx)
 }
 
 // badCredentials reports whether the caller sent credentials that failed.
@@ -236,10 +256,10 @@ func badCredentials(err error) bool {
 func denyLFSWrite(w http.ResponseWriter, r *http.Request) {
 	if proto.UserFromContext(r.Context()) == nil {
 		askCredentials(w, r)
-		renderJSON(w, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
 		return
 	}
-	renderJSON(w, http.StatusForbidden, lfs.ErrorResponse{Message: "write access required"})
+	renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "write access required"})
 }
 
 // denyRead answers a caller who may not read the repository. Missing and
@@ -247,17 +267,17 @@ func denyLFSWrite(w http.ResponseWriter, r *http.Request) {
 func denyRead(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) {
 	switch {
 	case badCredentials(err) && lfsJSON:
-		renderJSON(w, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+		renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
 	case badCredentials(err):
 		renderForbidden(w, r)
 	case proto.UserFromContext(r.Context()) == nil && lfsJSON:
 		askCredentials(w, r)
-		renderJSON(w, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
 	case proto.UserFromContext(r.Context()) == nil:
 		askCredentials(w, r)
 		renderUnauthorized(w, r)
 	case lfsJSON:
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
+		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
 	default:
 		renderNotFound(w, r)
 	}
@@ -332,7 +352,9 @@ func authorize(service git.Service, file, method string, readable bool, level ac
 		switch {
 		case badCreds:
 			return forbid
-		case !readable && level >= access.ReadWriteAccess && isPushEndpoint(file):
+		case !readable && level >= access.ReadWriteAccess && isPushEndpoint(file) && method != http.MethodHead:
+			// HEAD is answered like GET, but only to check the
+			// route, so it does not create the repository.
 			return createThenServe
 		case !readable:
 			return denyUnreadable
@@ -364,10 +386,13 @@ func requireCaller(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // withCaller authenticates the caller without authorizing a repository.
-// Handlers behind it must check access to any repository they reveal.
+// Handlers behind it must check access to any repository they reveal, as
+// callerFor the repository: the request is for a path inside a repository,
+// so a bearer token is accepted when it names the path or any directory
+// above it, but it only stands for the caller on the repositories it names.
 func withCaller(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r, err := identify(r)
+		r, err := identify(r, pathAncestors(mux.Vars(r)["repo"])...)
 		if !requireCaller(w, r) {
 			return
 		}
@@ -381,12 +406,25 @@ func withCaller(next http.Handler) http.HandlerFunc {
 	}
 }
 
+// pathAncestors returns p followed by each of its parent directories, each
+// spelled as a sanitized repository name, which is what `soft jwt` mints.
+func pathAncestors(p string) []string {
+	ancestors := []string{p}
+	for {
+		p = path.Dir(p)
+		if p == "." || p == "/" {
+			return ancestors
+		}
+		ancestors = append(ancestors, utils.SanitizeRepo(p))
+	}
+}
+
 // withAccess authenticates the caller and authorizes them for the requested
 // repository. A repository created by push-to-create is recorded in pending,
 // which removes it if the push fails, or never arrives, without any ref.
 func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r, err := identify(r)
+		r, err := identify(r, mux.Vars(r)["repo"])
 		if !requireCaller(w, r) {
 			return
 		}
@@ -444,12 +482,17 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 
 			ctx = proto.WithRepositoryContext(ctx, repo)
 			r = r.WithContext(ctx)
-			pending.add(ctx, repoName, repo.ID(), mux.Vars(r)["dir"])
+			pending.add(ctx, repoName, repo, mux.Vars(r)["dir"])
 		case denyUnreadable:
 			denyRead(w, r, err, lfsJSON)
 			return
 		case forbid:
-			renderForbidden(w, r)
+			if lfsJSON {
+				// Only bad credentials forbid an LFS request.
+				renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+			} else {
+				renderForbidden(w, r)
+			}
 			return
 		case unauthorized:
 			askCredentials(w, r)
@@ -477,8 +520,9 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(ctx)
 	service, dir, repoName := git.Service(mux.Vars(r)["service"]), mux.Vars(r)["dir"], mux.Vars(r)["repo"]
 
-	if !isSmart(r, service) {
-		renderForbidden(w, r)
+	// git http-backend answers 415 to any other content type.
+	if !hasMediaType(r, fmt.Sprintf("application/x-%s-request", service)) {
+		renderStatus(http.StatusUnsupportedMediaType)(w, r)
 		return
 	}
 
@@ -486,6 +530,7 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		gitHttpReceiveCounter.WithLabelValues(repoName)
 	}
 
+	hdrNocache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Connection", "Keep-Alive")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -666,8 +711,12 @@ func sendFile(contentType string, w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, reqFile)
 }
 
+// getServiceType returns the service named by the ?service= query parameter.
+// It never reads the request body: this runs before the method check and
+// authentication, and parsing a form would let any caller spool a multipart
+// body of any size to a temp file that is never removed.
 func getServiceType(r *http.Request) git.Service {
-	service := r.FormValue("service")
+	service := r.URL.Query().Get("service")
 	if !strings.HasPrefix(service, "git-") {
 		return ""
 	}
@@ -675,9 +724,11 @@ func getServiceType(r *http.Request) git.Service {
 	return git.Service(service)
 }
 
-func isSmart(r *http.Request, service git.Service) bool {
-	contentType := r.Header.Get("Content-Type")
-	return strings.HasPrefix(contentType, fmt.Sprintf("application/x-%s-request", service))
+// hasMediaType reports whether the request body has the media type want,
+// ignoring any parameters such as charset.
+func hasMediaType(r *http.Request, want string) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == want
 }
 
 func updateServerInfo(ctx context.Context, dir string) error {
@@ -686,16 +737,10 @@ func updateServerInfo(ctx context.Context, dir string) error {
 
 // HTTP error response handling functions
 
-func renderBadRequest(w http.ResponseWriter, r *http.Request) {
-	renderStatus(http.StatusBadRequest)(w, r)
-}
-
-func renderMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	if r.Proto == "HTTP/1.1" {
-		renderStatus(http.StatusMethodNotAllowed)(w, r)
-	} else {
-		renderBadRequest(w, r)
-	}
+// renderMethodNotAllowed answers 405 and lists the allowed methods.
+func renderMethodNotAllowed(w http.ResponseWriter, r *http.Request, allowed []string) {
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	renderStatus(http.StatusMethodNotAllowed)(w, r)
 }
 
 func renderNotFound(w http.ResponseWriter, r *http.Request) {

@@ -253,6 +253,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, r.updateModels(msg))
 	case common.ErrorMsg:
 		r.state = readyState
+		// The file listing loads on every ref change, usually while another
+		// tab is shown, so the Files pane must see its error to leave its
+		// loading view. The active pane gets the message below.
+		if r.panes[r.activeTab].TabName() != (&Files{}).TabName() {
+			cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		}
 	case SwitchTabMsg:
 		for i, c := range r.panes {
 			if c.TabName() == msg.TabName() {
