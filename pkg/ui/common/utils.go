@@ -6,16 +6,18 @@ import (
 	"net/url"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/muesli/reflow/truncate"
 )
 
 // TruncateString is a convenient wrapper around truncate.TruncateString.
-func TruncateString(s string, max int) string { //nolint:revive
-	if max < 0 {
-		max = 0 //nolint:revive
+func TruncateString(s string, width int) string {
+	if width < 0 {
+		width = 0
 	}
-	return truncate.StringWithTail(s, uint(max), "…") //nolint:gosec
+	return truncate.StringWithTail(s, uint(width), "…") //nolint:gosec
 }
 
 // RepoURL returns the URL of the repository.
@@ -57,4 +59,13 @@ func VisibilityMarker(private bool) string {
 		return "🔒"
 	}
 	return "🌐"
+}
+
+// IsInputMsg reports whether msg is user input: a key, mouse or paste event.
+func IsInputMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg, tea.PasteMsg, tea.PasteStartMsg, tea.PasteEndMsg:
+		return true
+	}
+	return false
 }

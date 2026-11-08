@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
@@ -206,7 +207,9 @@ func (s *Selection) Init() tea.Cmd {
 				continue
 			}
 
-			readmeCmd = s.readme.SetContent(readme, path)
+			// The README comes from the repository; glamour passes
+			// escape sequences through to the terminal.
+			readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
 		}
 
 		if r.IsHidden() {

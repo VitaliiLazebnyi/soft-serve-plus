@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/dustin/go-humanize"
 )
 
@@ -78,7 +79,7 @@ func (i Item) ID() string {
 
 // Title returns the item title. Implements list.DefaultItem.
 func (i Item) Title() string {
-	name := i.repo.ProjectName()
+	name := utils.Sanitize(i.repo.ProjectName())
 	if name == "" {
 		name = i.repo.Name()
 	}
@@ -87,7 +88,9 @@ func (i Item) Title() string {
 }
 
 // Description returns the item description. Implements list.DefaultItem.
-func (i Item) Description() string { return strings.TrimSpace(i.repo.Description()) }
+func (i Item) Description() string {
+	return strings.TrimSpace(utils.Sanitize(i.repo.Description()))
+}
 
 // FilterValue implements list.Item. It holds the project name followed by
 // the repository name, so filtering matches either.
