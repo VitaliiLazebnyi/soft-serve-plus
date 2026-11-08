@@ -47,7 +47,7 @@ func (f *infoFixture) get(t *testing.T, path string, header ...string) *httptest
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@example.com",
@@ -246,7 +246,7 @@ func TestDumbClone(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	dst := filepath.Join(t.TempDir(), "clone.git")
-	cmd := exec.Command("git", "clone", "--bare", srv.URL+"/pub", dst)
+	cmd := exec.CommandContext(t.Context(), "git", "clone", "--bare", srv.URL+"/pub", dst)
 	cmd.Env = append(os.Environ(), "GIT_SMART_HTTP=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
