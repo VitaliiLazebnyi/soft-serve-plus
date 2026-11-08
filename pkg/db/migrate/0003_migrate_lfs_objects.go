@@ -49,6 +49,8 @@ var migrateLfsObjects = Migration{
 		}
 		return nil
 	},
+	// Nothing to undo: moving the objects back to the wrong paths would
+	// break LFS, and running the migration again is harmless.
 	Rollback: func(context.Context, *db.Tx) error {
 		return nil
 	},

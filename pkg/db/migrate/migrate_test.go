@@ -269,3 +269,95 @@ func TestRollbackReportsQueryError(t *testing.T) {
 		t.Errorf("Rollback() with an unreadable migrations table => %v, want an error about the version column", err)
 	}
 }
+
+// Rolling back every migration must leave none of their tables behind, and
+// migrating again must then succeed.
+func TestRollbackAllThenMigrate(t *testing.T) {
+	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	dbx, err := test.Open(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, dbx); err != nil {
+		t.Fatalf("Migrate() => %v, want nil error", err)
+	}
+
+	for range migrations {
+		if err := Rollback(ctx, dbx); err != nil {
+			t.Fatalf("Rollback() => %v, want nil error", err)
+		}
+	}
+	if err := Rollback(ctx, dbx); err == nil || err.Error() != "there are no migrations to rollback" {
+		t.Errorf("Rollback() after rolling back everything => %v, want %q", err, "there are no migrations to rollback")
+	}
+
+	tables := []string{
+		"settings", "users", "public_keys", "repos", "collabs",
+		"lfs_objects", "lfs_locks", "access_tokens",
+		"webhooks", "webhook_events", "webhook_deliveries",
+	}
+	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+		for _, table := range tables {
+			ok, err := tableExists(tx, table)
+			if err != nil {
+				return err
+			}
+			if ok {
+				t.Errorf("table %q exists after rolling back every migration", table)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, dbx); err != nil {
+		t.Fatalf("Migrate() after rolling back every migration => %v, want nil error", err)
+	}
+	var admins int
+	if err := dbx.Get(&admins, dbx.Rebind("SELECT COUNT(*) FROM users WHERE username = ?"), "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if admins != 1 {
+		t.Errorf("admin users after migrating again = %d, want 1", admins)
+	}
+}
+
+// The first migrations must also run over their tables when they are still
+// there, as an older binary left them: its rollbacks of migrations 1-3
+// dropped nothing.
+func TestMigrateOverLeftoverTables(t *testing.T) {
+	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	dbx, err := test.Open(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, dbx); err != nil {
+		t.Fatalf("Migrate() => %v, want nil error", err)
+	}
+
+	// Roll back down to migration 3, then forget migrations 1-3 but keep
+	// their tables and seed rows.
+	for _, m := range migrations {
+		if m.Version <= migrateLfsObjectsVersion {
+			continue
+		}
+		if err := Rollback(ctx, dbx); err != nil {
+			t.Fatalf("Rollback() => %v, want nil error", err)
+		}
+	}
+	if _, err := dbx.Exec("DELETE FROM migrations"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, dbx); err != nil {
+		t.Fatalf("Migrate() over leftover tables => %v, want nil error", err)
+	}
+
+	var settings int
+	if err := dbx.Get(&settings, "SELECT COUNT(*) FROM settings"); err != nil {
+		t.Fatal(err)
+	}
+	if settings != 3 {
+		t.Errorf("settings after migrating over leftover tables = %d, want 3", settings)
+	}
+}
