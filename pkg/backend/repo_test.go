@@ -481,8 +481,11 @@ func TestImportRepositoryDisabled(t *testing.T) {
 		disabled bool
 	}{
 		{"too old", git.Version{Major: 2, Minor: 30, Patch: 2}, nil, true},
-		{"just below", git.Version{Major: 2, Minor: 32, Patch: 9}, nil, true},
-		{"minimum", git.Version{Major: 2, Minor: 33}, nil, false},
+		// 2.33 to 2.36 understand GIT_CONFIG_* but not http.curloptResolve,
+		// so they would fetch unpinned.
+		{"no curloptResolve", git.Version{Major: 2, Minor: 34, Patch: 1}, nil, true},
+		{"just below", git.Version{Major: 2, Minor: 36, Patch: 9}, nil, true},
+		{"minimum", git.Version{Major: 2, Minor: 37}, nil, false},
 		{"current", git.Version{Major: 2, Minor: 45}, nil, false},
 		{"unreadable", git.Version{}, errors.New("exec: git: not found"), true},
 	}
