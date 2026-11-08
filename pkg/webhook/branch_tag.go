@@ -5,10 +5,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // BranchTagEvent is a branch or tag event.
@@ -38,6 +35,11 @@ func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Reposito
 		return BranchTagEvent{}, fmt.Errorf("invalid branch or tag event: before=%q after=%q", before, after)
 	}
 
+	repository, err := newRepository(ctx, repo)
+	if err != nil {
+		return BranchTagEvent{}, err
+	}
+
 	payload := BranchTagEvent{
 		Ref:     ref,
 		Before:  before,
@@ -45,36 +47,11 @@ func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Reposito
 		Created: git.IsZeroHash(before),
 		Deleted: git.IsZeroHash(after),
 		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
 		},
 	}
-
-	cfg := config.FromContext(ctx)
-	payload.Repository.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	payload.Repository.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	payload.Repository.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
-
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
-	if err != nil {
-		return BranchTagEvent{}, err
-	}
-
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
 
 	return payload, nil
 }

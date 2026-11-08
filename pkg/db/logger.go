@@ -10,12 +10,14 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// trace logs a query at debug level. Only the number of arguments is logged,
+// never their values: they include webhook secrets and URLs, password and
+// token hashes, and delivery payloads.
 func trace(l *log.Logger, query string, args ...interface{}) {
 	if l != nil {
-		// Remove newlines and tabs
-		query = strings.ReplaceAll(query, "\t", "")
-		query = strings.TrimSpace(query)
-		l.Debug("trace", "query", query, "args", args)
+		// Collapse newlines, tabs and runs of spaces into single spaces.
+		query = strings.Join(strings.Fields(query), " ")
+		l.Debug("trace", "query", query, "args", len(args))
 	}
 }
 

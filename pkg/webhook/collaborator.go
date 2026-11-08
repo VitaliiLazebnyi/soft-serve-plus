@@ -35,35 +35,22 @@ const (
 func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repository, collabUsername string, action CollaboratorEventAction) (CollaboratorEvent, error) {
 	event := EventCollaborator
 
-	payload := CollaboratorEvent{
-		Action: action,
-		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
-		},
-	}
-
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
+	repository, err := newRepository(ctx, repo)
 	if err != nil {
 		return CollaboratorEvent{}, err
 	}
 
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	payload := CollaboratorEvent{
+		Action: action,
+		Common: Common{
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
+		},
+	}
 
+	dbx := db.FromContext(ctx)
+	datastore := store.FromContext(ctx)
 	collab, err := datastore.GetCollabByUsernameAndRepo(ctx, dbx, collabUsername, repo.Name())
 	if err != nil {
 		return CollaboratorEvent{}, err
