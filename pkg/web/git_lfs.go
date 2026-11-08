@@ -502,7 +502,7 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 			// The recorded size matches but the stored file does not: the
 			// object on disk is truncated or corrupt and must not verify.
 			logger.Error("stored object size mismatch", "oid", pointer.Oid, "size", pointer.Size, "stored", stat.Size())
-			renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 				Message: "object size mismatch",
 			})
 			return
