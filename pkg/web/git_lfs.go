@@ -21,7 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -51,16 +51,17 @@ type lfsActionAuth struct {
 // When the client reached the server under a different host than the one in
 // the HTTP public URL, git-lfs has to find credentials for the public-URL
 // host itself (for example from a credential helper, or by prompting).
-func lfsActionAuthFor(r *http.Request, now time.Time) lfsActionAuth {
+//
+// The token is verified again for repo, the repository of the batch request,
+// so a credential is only ever forwarded when it is a valid token for repo.
+func lfsActionAuthFor(r *http.Request, repo string, now time.Time) lfsActionAuth {
 	scheme, credential, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "bearer") || credential == "" {
 		return lfsActionAuth{}
 	}
 
-	// The request was authenticated before it got here, so only the expiry
-	// is read from the token.
-	var claims jwt.RegisteredClaims
-	if _, _, err := jwt.NewParser().ParseUnverified(credential, &claims); err != nil {
+	claims, err := parseJWT(r.Context(), credential, []string{utils.SanitizeRepo(repo)})
+	if err != nil {
 		return lfsActionAuth{}
 	}
 	auth := lfsActionAuth{header: "Bearer " + credential}
@@ -191,7 +192,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	batchResponse.Transfer = lfs.TransferBasic
 	batchResponse.HashAlgo = lfs.HashAlgorithmSHA256
 
-	actionAuth := lfsActionAuthFor(r, time.Now())
+	actionAuth := lfsActionAuthFor(r, repo.Name(), time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
 	// XXX: We don't support objects TTL for now, probably implement that with
 	// S3 using object "expires_at" & "expires_in"

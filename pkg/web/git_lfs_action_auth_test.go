@@ -126,6 +126,10 @@ func TestLFSActionAuthFor(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwtToken := mintJWT(ctx, t, owner, "repo") // expires in an hour
+	otherRepo := mintJWT(ctx, t, owner, "other")
+	// The same claims with the signature of another token: parsing it
+	// without checking the signature would accept it.
+	forged := jwtToken[:strings.LastIndex(jwtToken, ".")] + otherRepo[strings.LastIndex(otherRepo, "."):]
 
 	now := time.Now()
 	for _, tc := range []struct {
@@ -141,20 +145,22 @@ func TestLFSActionAuthFor(t *testing.T) {
 		{name: "token", header: "token ss_abc"},
 		{name: "bearer garbage", header: "Bearer garbage"},
 		{name: "bearer empty", header: "Bearer "},
+		{name: "bearer for another repository", header: "Bearer " + otherRepo},
+		{name: "bearer with a forged signature", header: "Bearer " + forged},
 		{name: "bearer", header: "Bearer " + jwtToken, now: now, forward: true, expiresMin: 3590, expiresMax: 3600},
 		{name: "lowercase bearer", header: "bearer " + jwtToken, now: now, forward: true, expiresMin: 3590, expiresMax: 3600},
 		{name: "nearly expired", header: "Bearer " + jwtToken, now: now.Add(59 * time.Minute), forward: true, expiresMin: 1, expiresMax: 60},
 		{name: "expired", header: "Bearer " + jwtToken, now: now.Add(2 * time.Hour)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/repo.git/info/lfs/objects/batch", nil)
+			req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/batch", nil)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
 			}
 			if tc.now.IsZero() {
 				tc.now = now
 			}
-			auth := lfsActionAuthFor(req, tc.now)
+			auth := lfsActionAuthFor(req, "repo", tc.now)
 			link := auth.link("http://localhost/x", nil)
 			if !tc.forward {
 				if link.Header != nil || link.ExpiresIn != nil {
