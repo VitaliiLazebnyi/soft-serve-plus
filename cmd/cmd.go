@@ -21,7 +21,9 @@ func InitBackendContext(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	cfg := config.FromContext(ctx)
 	if _, err := os.Stat(cfg.DataPath); errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(cfg.DataPath, os.ModePerm); err != nil {
+		// The data directory holds private repositories, the database and
+		// secrets, so keep it to the server's user whatever the umask.
+		if err := os.MkdirAll(cfg.DataPath, 0o700); err != nil {
 			return fmt.Errorf("create data directory: %w", err)
 		}
 	}
