@@ -201,6 +201,10 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	cmds := make([]tea.Cmd, 0)
+	// While an error is shown the page underneath is hidden, so input
+	// belongs to the error alone: the key that dismisses it must not also
+	// act on the page.
+	forwardInput := ui.state != errorState
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		ui.SetSize(msg.Width, msg.Height)
@@ -216,8 +220,9 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, ui.common.KeyMap.Back) && ui.error != nil:
 			ui.error = nil
 			ui.state = readyState
-			// Always show the footer on error.
-			ui.showFooter = ui.footer.ShowAll()
+			// Always show the footer on the selection page; on the repo page
+			// only when all help is shown.
+			ui.showFooter = ui.activePage == selectionPage || ui.footer.ShowAll()
 		case key.Matches(msg, ui.common.KeyMap.Help):
 			cmds = append(cmds, footer.ToggleFooterCmd)
 		case key.Matches(msg, ui.common.KeyMap.Quit):
@@ -275,7 +280,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if ui.state != loadingState {
+	if ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		m, cmd := ui.pages[ui.activePage].Update(msg)
 		ui.pages[ui.activePage] = m.(common.Component)
 		if cmd != nil {

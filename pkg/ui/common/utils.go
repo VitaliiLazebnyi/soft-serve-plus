@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/muesli/reflow/truncate"
 )
@@ -42,4 +44,13 @@ func VisibilityMarker(private bool) string {
 		return "🔒"
 	}
 	return "🌐"
+}
+
+// IsInputMsg reports whether msg is user input: a key, mouse or paste event.
+func IsInputMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg, tea.PasteMsg, tea.PasteStartMsg, tea.PasteEndMsg:
+		return true
+	}
+	return false
 }

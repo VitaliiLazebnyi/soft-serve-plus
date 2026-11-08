@@ -212,6 +212,40 @@ func TestLFSTransferPutObjectOversized(t *testing.T) {
 	assertNoLFSTempFiles(t, tr.cfg)
 }
 
+// A put-object with an invalid oid is refused with a 400 and its data is
+// drained, so the next command is still read from the right place in the
+// stream. The data packet and flush used to be read as commands.
+func TestLFSTransferPutObjectInvalidOid(t *testing.T) {
+	_, ctx := newLFSUploadTransfer(t)
+	data := "hello"
+
+	var in strings.Builder
+	in.WriteString(pkt("version 1\n") + "0000")
+	in.WriteString(pkt("put-object not-an-oid\n") + pkt(fmt.Sprintf("size=%d\n", len(data))) + "0001")
+	in.WriteString(pkt(data) + "0000")
+	in.WriteString(pkt("quit\n") + "0000")
+
+	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
+	ctx = proto.WithUserContext(ctx, lfsTestUser{})
+	var out bytes.Buffer
+	if err := LFSTransfer(ctx, ServiceCommand{
+		Stdin:  strings.NewReader(in.String()),
+		Stdout: &out,
+		Args:   []string{"repo1", lfs.OperationUpload},
+	}); err != nil {
+		t.Fatalf("LFSTransfer: %v", err)
+	}
+
+	var got []string
+	for _, m := range regexp.MustCompile(`status (\d{3})`).FindAllStringSubmatch(out.String(), -1) {
+		got = append(got, m[1])
+	}
+	want := []string{"200", "400", "200"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("statuses = %v, want %v\noutput: %q", got, want, out.String())
+	}
+}
+
 // failRenameStorage is a storage whose Rename always fails, as renaming onto
 // a file another upload is renaming or has open does on Windows.
 type failRenameStorage struct{ storage.Storage }
