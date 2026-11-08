@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -58,6 +60,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.DB.Driver = odd
 	cfg.DB.DataSource = winPath
 	cfg.Jobs.MirrorPull = odd
+	cfg.Jobs.LFSSweep = odd
 	cfg.Webhook.AllowedHosts = []string{odd, `C:\y`}
 
 	cfg.HTTP.CORS.AllowedOrigins = []string{odd, "https://example.com"}
@@ -90,6 +93,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"db.driver", got.DB.Driver, cfg.DB.Driver},
 		{"db.data_source", got.DB.DataSource, cfg.DB.DataSource},
 		{"jobs.mirror_pull", got.Jobs.MirrorPull, cfg.Jobs.MirrorPull},
+		{"jobs.lfs_sweep", got.Jobs.LFSSweep, cfg.Jobs.LFSSweep},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
@@ -114,6 +118,52 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 			if c.got[i] != c.want[i] {
 				t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
 				break
+			}
+		}
+	}
+}
+
+// TestReadmeConfigMatchesGenerated keeps the sample config.yaml in the
+// README identical to the file the server writes on first start.
+func TestReadmeConfigMatchesGenerated(t *testing.T) {
+	t.Parallel()
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Git may check README.md out with CRLF line endings (the windows CI
+	// runner does).
+	doc := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	i := strings.Index(doc, "### Server Configuration")
+	if i < 0 {
+		t.Fatal("README has no Server Configuration section")
+	}
+	doc = doc[i:]
+	start := strings.Index(doc, "```yaml\n")
+	if start < 0 {
+		t.Fatal("README Server Configuration has no yaml block")
+	}
+	doc = doc[start+len("```yaml\n"):]
+	got := doc[:strings.Index(doc, "```")]
+
+	// The default key paths are joined with the OS separator; the README
+	// shows them as written on Unix.
+	cfg := DefaultConfig()
+	cfg.SSH.KeyPath = filepath.ToSlash(cfg.SSH.KeyPath)
+	cfg.SSH.ClientKeyPath = filepath.ToSlash(cfg.SSH.ClientKeyPath)
+	want := newConfigFile(cfg)
+	if got != want {
+		gl, wl := strings.Split(got, "\n"), strings.Split(want, "\n")
+		for n := 0; n < len(gl) || n < len(wl); n++ {
+			var g, w string
+			if n < len(gl) {
+				g = gl[n]
+			}
+			if n < len(wl) {
+				w = wl[n]
+			}
+			if g != w {
+				t.Fatalf("README sample config differs from the generated file at line %d:\nREADME:    %q\ngenerated: %q\nRegenerate it from newConfigFile(DefaultConfig()).", n+1, g, w)
 			}
 		}
 	}
