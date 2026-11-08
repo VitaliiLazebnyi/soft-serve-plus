@@ -16,14 +16,20 @@ import (
 
 type fakeRepo struct {
 	name        string
+	private     bool
 	projectName string
 	description string
-	private     bool
 }
 
-func (r fakeRepo) ID() int64                      { return 1 }
-func (r fakeRepo) Name() string                   { return r.name }
-func (r fakeRepo) ProjectName() string            { return r.projectName }
+func (r fakeRepo) ID() int64           { return 1 }
+func (r fakeRepo) Name() string        { return r.name }
+func (r fakeRepo) ProjectName() string { return r.projectName }
+func (r fakeRepo) Description() string {
+	if r.description == "" {
+		return "a description"
+	}
+	return r.description
+}
 func (r fakeRepo) IsPrivate() bool                { return r.private }
 func (r fakeRepo) IsMirror() bool                 { return false }
 func (r fakeRepo) IsHidden() bool                 { return false }
@@ -31,13 +37,6 @@ func (r fakeRepo) UserID() int64                  { return 1 }
 func (r fakeRepo) CreatedAt() time.Time           { return time.Time{} }
 func (r fakeRepo) UpdatedAt() time.Time           { return time.Time{} }
 func (r fakeRepo) Open() (*git.Repository, error) { return nil, nil }
-
-func (r fakeRepo) Description() string {
-	if r.description == "" {
-		return "a description"
-	}
-	return r.description
-}
 
 var _ proto.Repository = fakeRepo{}
 

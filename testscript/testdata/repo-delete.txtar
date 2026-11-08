@@ -8,6 +8,7 @@ ensureserverrunning SSH_PORT
 soft repo create repo1
 soft repo create repo-to-delete
 soft repo delete repo-to-delete
+! exists $DATA_PATH/repos/repo-to-delete.git
 ! soft repo delete nope
 stderr '.*not found.*'
 
@@ -16,7 +17,8 @@ stderr '.*not found.*'
 stderr 'Error.*accepts 2 arg.*'
 
 soft repo list
-stdout 'repo1'
+stdout '^repo1$'
+! stdout 'repo-to-delete'
 
 # stop the server
 [windows] stopserver
