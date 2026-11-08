@@ -44,7 +44,7 @@ func (*repoStore) DeleteRepoByName(ctx context.Context, tx db.Handler, name stri
 // GetAllRepos implements store.RepositoryStore.
 func (*repoStore) GetAllRepos(ctx context.Context, tx db.Handler) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := tx.Rebind("SELECT * FROM repos;")
+	query := tx.Rebind("SELECT * FROM repos ORDER BY name;")
 	err := tx.SelectContext(ctx, &repos, query)
 	return repos, db.WrapError(err)
 }
@@ -52,7 +52,7 @@ func (*repoStore) GetAllRepos(ctx context.Context, tx db.Handler) ([]models.Repo
 // GetUserRepos implements store.RepositoryStore.
 func (*repoStore) GetUserRepos(ctx context.Context, tx db.Handler, userID int64) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := tx.Rebind("SELECT * FROM repos WHERE user_id = ?;")
+	query := tx.Rebind("SELECT * FROM repos WHERE user_id = ? ORDER BY name;")
 	err := tx.SelectContext(ctx, &repos, query, userID)
 	return repos, db.WrapError(err)
 }
@@ -98,6 +98,35 @@ func (*repoStore) GetRepoByName(ctx context.Context, tx db.Handler, name string)
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("SELECT * FROM repos WHERE name = ?;")
 	err := tx.GetContext(ctx, &repo, query, name)
+	return repo, db.WrapError(err)
+}
+
+// GetRepoByID implements store.RepositoryStore.
+func (*repoStore) GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
+	var repo models.Repo
+	query := h.Rebind("SELECT * FROM repos WHERE id = ?;")
+	err := h.GetContext(ctx, &repo, query, id)
+	return repo, db.WrapError(err)
+}
+
+// GetRepoByNameForUpdate implements store.RepositoryStore. See LockUserRepos
+// for the driver switch.
+func (*repoStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	d, ok := h.(interface{ DriverName() string })
+	if !ok {
+		return models.Repo{}, fmt.Errorf("get repo for update: handler %T does not report its driver", h)
+	}
+	var query string
+	switch driver := d.DriverName(); driver {
+	case "postgres":
+		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
+	case "sqlite", "sqlite3":
+		query = "SELECT * FROM repos WHERE name = ?;"
+	default:
+		return models.Repo{}, fmt.Errorf("get repo for update: unsupported database driver %q", driver)
+	}
+	var repo models.Repo
+	err := h.GetContext(ctx, &repo, query, utils.SanitizeRepo(name))
 	return repo, db.WrapError(err)
 }
 
