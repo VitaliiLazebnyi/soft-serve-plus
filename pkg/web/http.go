@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"crypto/tls"
+	stdlog "log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -32,11 +34,29 @@ func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
 			ReadHeaderTimeout: time.Second * 10,
 			IdleTimeout:       time.Second * 10,
 			MaxHeaderBytes:    http.DefaultMaxHeaderBytes,
-			ErrorLog:          logger.StandardLog(log.StandardLogOptions{ForceLevel: log.ErrorLevel}),
+			ErrorLog:          stdlog.New(serverErrorLog{logger.WithPrefix("http")}, "", 0),
 		},
 	}
 
 	return s, nil
+}
+
+// serverErrorLog is the error log of the HTTP server. Clients cause most
+// failed TLS handshakes, by scanning the port or closing the connection, so
+// those are logged at debug level; anything else is an error.
+type serverErrorLog struct {
+	logger *log.Logger
+}
+
+// Write implements io.Writer.
+func (l serverErrorLog) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	if strings.HasPrefix(msg, "http: TLS handshake error") {
+		l.logger.Debug(msg)
+	} else {
+		l.logger.Error(msg)
+	}
+	return len(p), nil
 }
 
 // SetTLSConfig sets the TLS configuration for the HTTP server.

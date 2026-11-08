@@ -20,7 +20,6 @@ import (
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
 	"github.com/spf13/cobra"
-	"go.uber.org/automaxprocs/maxprocs"
 )
 
 var (
@@ -127,16 +126,8 @@ func main() {
 	// Set global logger
 	log.SetDefault(logger)
 
-	var opts []maxprocs.Option
-	if config.IsVerbose() {
-		opts = append(opts, maxprocs.Logger(log.Debugf))
-	}
-
-	// Set the max number of processes to the number of CPUs
-	// This is useful when running soft serve in a container
-	if _, err := maxprocs.Set(opts...); err != nil {
-		log.Warn("couldn't set automaxprocs", "error", err)
-	}
+	// GOMAXPROCS is left to the Go runtime: since Go 1.25 it follows the
+	// container's cgroup CPU limit and updates it when the limit changes.
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)

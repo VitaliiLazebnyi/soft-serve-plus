@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -715,5 +716,30 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	}
 	if !slices.Equal(fromFile.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
 		t.Fatalf("AllowedHosts from file = %q", fromFile.Webhook.AllowedHosts)
+	}
+}
+
+// WriteConfig keeps the config, which can hold a database password, and a
+// data directory it creates private to the server's user.
+func TestWriteConfigIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	cfg := DefaultConfig()
+	cfg.DataPath = filepath.Join(t.TempDir(), "data")
+	if err := cfg.WriteConfig(); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		cfg.DataPath:     0o700,
+		cfg.ConfigPath(): 0o600,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %v, want %v", path, got, want)
+		}
 	}
 }
