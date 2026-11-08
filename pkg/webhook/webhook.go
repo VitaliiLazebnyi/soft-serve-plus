@@ -425,13 +425,14 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
+	// formatHeaders already makes every key and value storable.
 	reqHeaders := formatHeaders(req.headers)
 
 	// The response and the request error can carry any bytes the receiver
 	// sent. The request body is JSON or form-encoded, so always valid UTF-8
 	// without NULs, and is stored as sent: a redelivery signs and sends the
-	// same bytes.
-	reqHeaders = storableText(reqHeaders)
+	// same bytes. resHeaders normally comes from formatHeaders too; cleaning
+	// it again is a no-op then and covers a caller that builds it otherwise.
 	resHeaders = storableText(resHeaders)
 	resBody = storableText(resBody)
 	if reqErr != nil {
