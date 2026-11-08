@@ -98,6 +98,9 @@ nfpms:
       - src: ./.nfpm/soft-serve.conf
         dst: /etc/soft-serve.conf
         type: config|noreplace
+        # systemd reads the environment file as root; it may hold secrets.
+        file_info:
+          mode: 0600
       - src: ./.nfpm/sysusers.conf
         dst: /usr/lib/sysusers.d/soft-serve.conf
       - src: ./.nfpm/tmpfiles.conf

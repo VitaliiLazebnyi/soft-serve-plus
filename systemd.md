@@ -29,13 +29,26 @@ will be choosing `/var/local/lib/soft-serve` to store the server's data. Soft
 Serve will look for this path in the `SOFT_SERVE_DATA_PATH` environment
 variable.
 
-Make sure this directory exists before proceeding.
+Make sure this directory exists before proceeding. It will hold the
+repositories, the database, the SSH host keys and the logs, so make it
+readable only by the server user (`root` in this guide). Soft Serve Plus
+creates a missing data directory with mode `0700`, but it keeps the mode of
+a directory that already exists, so set it here. `install -d -m 700` also
+fixes the mode of a directory you created before.
 
 ```sh
-sudo mkdir -p /var/local/lib/soft-serve
+sudo install -d -m 700 /var/local/lib/soft-serve
 ```
 
-We will also create a `/etc/soft-serve.conf` file for any extra server settings that we want to override.
+We will also create a `/etc/soft-serve.conf` file for any extra server settings
+that we want to override. It can hold secrets such as a database password, so
+make it readable only by `root`. systemd reads it as `root`, so the server does
+not need access to it.
+
+```sh
+sudo touch /etc/soft-serve.conf
+sudo chmod 600 /etc/soft-serve.conf
+```
 
 ```conf
 # Config defined here will override the config in /var/local/lib/soft-serve/config.yaml
@@ -70,6 +83,9 @@ ExecStart=/usr/bin/soft serve
 Environment=SOFT_SERVE_DATA_PATH=/var/local/lib/soft-serve
 EnvironmentFile=-/etc/soft-serve.conf
 WorkingDirectory=/var/local/lib/soft-serve
+# Keep the files the server creates (repositories, database, logs) out of
+# reach of other local users.
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

@@ -38,14 +38,25 @@ type Backend struct {
 	adminKeys    []ssh.PublicKey
 	adminKeysOK  bool
 
-	// warnedOwnedAdminKeys holds the authorized-key strings of listed admin
-	// keys already logged as owned by a non-admin account, so the warning
-	// is logged once per key rather than on every lookup.
-	warnedOwnedAdminKeys sync.Map
+	// warnedOwnedAdminKeys maps the authorized-key string of a listed admin
+	// key already logged as owned by a non-admin account to that account's
+	// name, so the warning is logged once per key and owner rather than on
+	// every lookup. An entry is dropped once the conflict is resolved (the
+	// owner is promoted or the key leaves the account) and the whole map is
+	// cleared when initial_admin_keys changes, so a conflict that comes back
+	// is logged again and the map holds only currently listed keys. See
+	// warnOwnedAdminKey and forgetOwnedAdminKey.
+	warnedOwnedAdminKeysMu sync.Mutex
+	warnedOwnedAdminKeys   map[string]string
 
 	// pushGates orders pushes against the removal of repositories created
 	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.
 	pushGates pushGates
+
+	// repoDirs records the repository directories that a create, import,
+	// rename or delete in progress owns without a database row, so a delete
+	// does not take them for orphans.
+	repoDirs repoDirHolds
 }
 
 // New returns a new Soft Serve backend.
@@ -73,10 +84,11 @@ func (d *Backend) ImportsDisabledReason() string {
 }
 
 // minImportGitVersion is the oldest git that honours the settings the import
-// and mirror guards rely on: http.curloptResolve (2.33) for pinning the
+// and mirror guards rely on: http.curloptResolve (2.37) for pinning the
 // validated address and http.followRedirects via GIT_CONFIG_* (2.31). Older
-// git silently ignores both, so the guard degrades to nothing.
-var minImportGitVersion = git.Version{Major: 2, Minor: 33}
+// git silently ignores unknown keys, so on 2.31 to 2.36 the pin would be
+// dropped and the guard open to DNS rebinding.
+var minImportGitVersion = git.Version{Major: 2, Minor: 37}
 
 // binVersion is how the gate learns the installed git version. Tests swap it
 // out to exercise the disabled path without an old git on hand.
