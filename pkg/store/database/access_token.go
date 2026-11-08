@@ -59,7 +59,7 @@ func (*accessTokenStore) GetAccessToken(ctx context.Context, h db.Handler, id in
 
 // GetAccessTokensByUserID implements store.AccessTokenStore.
 func (*accessTokenStore) GetAccessTokensByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.AccessToken, error) {
-	query := h.Rebind(`SELECT * FROM access_tokens WHERE user_id = ?`)
+	query := h.Rebind(`SELECT * FROM access_tokens WHERE user_id = ? ORDER BY id`)
 	var m []models.AccessToken
 	err := h.SelectContext(ctx, &m, query, userID)
 	return m, err

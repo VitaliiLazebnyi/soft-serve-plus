@@ -13,18 +13,23 @@ stderr 'Created repository test-repo.*'
 
 # Try to create webhook with localhost - should fail
 ! soft repo webhook create test-repo http://localhost:8080/webhook -e push
+stderr 'private or internal IP address is not allowed'
 
 # Try to create webhook with 127.0.0.1 - should fail
 ! soft repo webhook create test-repo http://127.0.0.1:8080/webhook -e push
+stderr 'private or internal IP address is not allowed'
 
 # Try to create webhook with AWS metadata service - should fail
 ! soft repo webhook create test-repo http://169.254.169.254/latest/meta-data/ -e push
+stderr 'private or internal IP address is not allowed'
 
 # Try to create webhook with private network - should fail
 ! soft repo webhook create test-repo http://192.168.1.1/webhook -e push
+stderr 'private or internal IP address is not allowed'
 
 # Try to create webhook with private 10.x network - should fail
 ! soft repo webhook create test-repo http://10.0.0.1/webhook -e push
+stderr 'private or internal IP address is not allowed'
 
 # Create webhook with valid public IP - should succeed
 new-webhook WH_PUBLIC
@@ -33,9 +38,11 @@ soft repo webhook create test-repo $WH_PUBLIC -e push
 # List webhooks - should show only the valid one
 soft repo webhook list test-repo
 stdout '93.184.216.34/hooks/WH_PUBLIC'
+stdout -count=1 '/hooks/'
 
 # Try to update webhook to localhost - should fail
 ! soft repo webhook update test-repo 1 --url http://localhost:9090/hook
+stderr 'private or internal IP address is not allowed'
 
 # stop the server
 [windows] stopserver
