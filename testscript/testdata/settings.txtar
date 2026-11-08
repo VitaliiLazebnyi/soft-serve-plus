@@ -14,6 +14,15 @@ soft settings allow-keyless false
 soft settings allow-keyless
 stdout 'false.*'
 
+# a value that is not a boolean is refused and changes nothing
+soft settings allow-keyless true
+! soft settings allow-keyless nope
+! stdout .
+stderr 'invalid allow-keyless value'
+soft settings allow-keyless
+stdout 'true.*'
+soft settings allow-keyless false
+
 # check default anon-access
 soft settings anon-access
 stdout 'read-only.*'

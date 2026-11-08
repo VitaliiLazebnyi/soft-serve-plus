@@ -10,13 +10,13 @@ soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 
 # create access tokens
 usoft token create 'test1'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 usoft token create --expires-in 1y 'test2'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 usoft token create --expires-in 1ns 'test3'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 
 # list tokens
