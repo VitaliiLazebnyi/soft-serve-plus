@@ -288,7 +288,7 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 // sign returns "sha256=" and the hex HMAC-SHA256 of content keyed with secret.
 func sign(secret, content string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(content)) //nolint: errcheck
+	mac.Write([]byte(content))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 

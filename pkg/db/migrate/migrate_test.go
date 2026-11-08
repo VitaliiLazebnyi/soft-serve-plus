@@ -346,7 +346,7 @@ func TestMigrateOverLeftoverTables(t *testing.T) {
 			t.Fatalf("Rollback() => %v, want nil error", err)
 		}
 	}
-	if _, err := dbx.Exec("DELETE FROM migrations"); err != nil {
+	if _, err := dbx.ExecContext(ctx, "DELETE FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, dbx); err != nil {
