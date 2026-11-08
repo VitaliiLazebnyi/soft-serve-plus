@@ -3,14 +3,17 @@ package backend
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/log/v2"
@@ -192,9 +195,15 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
+	// The directory has no row until registerRepository records it.
+	defer d.repoDirs.hold(name)()
+
 	rp := d.repoPath(name)
 	if err := claimRepoPath(rp); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	if _, err := git.Init(rp, true); err != nil {
@@ -225,12 +234,37 @@ func claimRepoPath(rp string) error {
 	return nil
 }
 
+// renameOntoClaim moves the repository at op onto np, the empty directory
+// claimRepoPath made for it. *claimed is cleared once that directory is no
+// longer the caller's to remove.
+func renameOntoClaim(op, np string, claimed *bool) error {
+	if runtime.GOOS == "windows" {
+		// Windows does not rename onto an existing directory, so the
+		// claim is given up first. A create that claims the path in
+		// between makes the rename fail rather than be replaced.
+		if err := os.Remove(np); err != nil {
+			return err
+		}
+		*claimed = false
+		return os.Rename(op, np)
+	}
+	// os.Rename refuses an existing directory as the target, but rename(2)
+	// replaces an empty one atomically, which is what the claim is.
+	if err := syscall.Rename(op, np); err != nil {
+		return &os.LinkError{Op: "rename", Old: op, New: np, Err: err}
+	}
+	*claimed = false
+	return nil
+}
+
 // registerRepository records a bare repository that already exists at the
 // name's path and finishes setting it up. The directory is removed on failure.
 // When limited, max_repos_per_user is checked in the same transaction that
 // records the repository.
 func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
 	rp := d.repoPath(name)
+	opts.ProjectName = utils.Sanitize(opts.ProjectName)
+	opts.Description = utils.Sanitize(opts.Description)
 
 	var userID int64
 	if user != nil {
@@ -320,20 +354,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 // seeds the initial database always creates an admin user, so this should
 // never fail to find one in practice.
 func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, error) {
-	users, err := d.store.GetAllUsers(ctx, tx)
+	adminID, err := d.store.FindDefaultAdminUserID(ctx, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errors.New("no admin user found to own anonymous repository")
+	}
 	if err != nil {
 		return 0, err
-	}
-
-	var adminID int64
-	for _, u := range users {
-		if u.Admin && (adminID == 0 || u.ID < adminID) {
-			adminID = u.ID
-		}
-	}
-
-	if adminID == 0 {
-		return 0, errors.New("no admin user found to own anonymous repository")
 	}
 
 	return adminID, nil
@@ -421,10 +447,17 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		}
 	}
 
+	// The directory has no row until importRepository records it, which
+	// is after the clone.
+	defer d.repoDirs.hold(name)()
+
 	// Claiming the directory is what serializes concurrent imports of one
 	// name: the second one fails here with ErrRepoExist.
 	if err := claimRepoPath(imp.path); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
@@ -583,6 +616,12 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
 
+	// Once the row is gone the directory is still there until it is removed
+	// below; the hold keeps a concurrent delete from taking it for an orphan
+	// and reporting a second successful delete. It is taken before the
+	// transaction: see removeOrphanRepoDir.
+	defer d.repoDirs.hold(name)()
+
 	// Build the webhook event before deleting. A repository whose directory is
 	// gone has no event, but its database row still has to go.
 	var wh *webhook.RepositoryEvent
@@ -617,6 +656,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// rowDeleted is set once the repository's row is deleted, and says the
 	// directory is to be removed after the commit.
 	var rowDeleted bool
+	// noRow is set when no row has the name.
+	var noRow bool
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// With a keep check, the row is locked before the check, so
 		// nothing can be added for the repository between the check and
@@ -627,14 +668,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		}
 		repom, dberr := getRepo(ctx, tx, name)
 		if dberr != nil {
-			// A directory with no row is an orphan; remove it.
-			if keep == nil && d.repoPathExists(name) {
-				return os.RemoveAll(rp)
-			}
-			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
-				return proto.ErrRepoNotFound
-			}
-			return db.WrapError(dberr)
+			dberr = db.WrapError(dberr)
+			noRow = errors.Is(dberr, db.ErrRecordNotFound)
+			return dberr
 		}
 		if keep != nil {
 			kept, err := keep(tx, repom)
@@ -661,6 +697,12 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		rowDeleted = true
 		return nil
 	}); err != nil {
+		// A directory with no row is an orphan; remove it. Only a missing
+		// row says so: on any other error, such as a cancelled context,
+		// the repository may well exist.
+		if noRow && keep == nil && d.repoPathExists(name) {
+			return d.removeOrphanRepoDir(ctx, name, 1)
+		}
 		return wrapRepoError(err)
 	}
 
@@ -672,6 +714,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// directory has no row: it cannot be created, imported or renamed over,
 	// and deleting the repository again removes it.
 	if rowDeleted {
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(name)
+		}
 		if err := os.RemoveAll(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}
@@ -727,34 +772,53 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return err
 	}
 
+	// The moved directory has the new name before the row does, which is
+	// only once the transaction commits.
+	defer d.repoDirs.hold(newName)()
+
 	op := d.repoPath(oldName)
 	np := d.repoPath(newName)
 	if !d.repoPathExists(oldName) {
 		return proto.ErrRepoNotFound
 	}
 
-	if d.repoPathExists(newName) {
-		return proto.ErrRepoExist
+	// Claim the new path the way a create or import does, so that whichever
+	// comes second fails instead of this rename replacing the other's empty
+	// directory (rename(2) replaces an empty one) and that one's cleanup then
+	// deleting the moved repository.
+	if err := claimRepoPath(np); err != nil {
+		if errors.Is(err, proto.ErrRepoExist) {
+			return err
+		}
+		d.logger.Error("failed to claim repository path", "repo", newName, "err", err)
+		return errRepoUpdate
 	}
+	claimed := true
+
+	// The directory is moved inside the transaction, and the move is not
+	// undone if the transaction fails. Cancelling ctx after the move, as a
+	// client disconnecting does, would roll the new name back under the moved
+	// directory, so the rename and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
 
-		// Make sure the new repository parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(np), os.ModePerm); err != nil {
-			d.logger.Error("failed to create repository parent directory", "repo", newName, "err", err)
-			return errRepoUpdate
-		}
-
-		if err := os.Rename(op, np); err != nil {
+		if err := renameOntoClaim(op, np, &claimed); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
+		}
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(newName)
 		}
 
 		return nil
 	}); err != nil {
+		if claimed {
+			os.Remove(np) //nolint:errcheck
+		}
 		return wrapRepoError(err)
 	}
 
@@ -766,7 +830,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return nil
 	}
 
-	wh, err := webhook.NewRepositoryEvent(ctx, user, repo, webhook.RepositoryEventActionRename)
+	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
 		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
 		return nil
@@ -996,6 +1060,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 		}
 	}
 
+	// The git config is written inside the transaction and is not restored
+	// if the transaction fails, so cancelling ctx, as a client disconnecting
+	// does, must not roll the flag back once the config is written.
+	ctx = context.WithoutCancel(ctx)
+
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// Re-read both, so what is written is what was validated.
 		cur, err := d.store.GetRepoByName(ctx, tx, name)
@@ -1125,6 +1194,11 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 	desc = utils.Sanitize(desc)
 	rp := d.repoPath(name)
 
+	// The description file is written inside the transaction and is not
+	// restored if the transaction fails, so cancelling ctx, as a client
+	// disconnecting does, must not roll the row back once the file is written.
+	ctx = context.WithoutCancel(ctx)
+
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.store.GetRepoByName(ctx, tx, name); err != nil {
 			return err
@@ -1147,6 +1221,12 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
+
+	// git-daemon-export-ok is changed inside the transaction and is not
+	// restored if the transaction fails. Cancelling ctx, as a client
+	// disconnecting does, must not roll the flag back once the file is
+	// changed, so the change and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
 
 	var changed bool
 	if err := wrapRepoError(
