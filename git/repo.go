@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	gopath "path"
 	"path/filepath"
 	"strings"
@@ -131,9 +132,34 @@ func (r *Repository) References() ([]*Reference, error) {
 	return rrefs, nil
 }
 
+// treeID resolves ref to the ID of the tree it points to. The ref is passed
+// after --end-of-options so it cannot be read as an option, and --verify
+// makes git reject anything that is not a single revision. git still prints
+// a negated revision such as "^HEAD" with its leading caret, so the output is
+// parsed strictly: a ref git cannot resolve, or one that does not resolve to
+// a single object ID, is an ErrRevisionNotExist.
+func (r *Repository) treeID(ref string) (string, error) {
+	out, err := git.NewCommand("rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
+	if err != nil {
+		if strings.Contains(err.Error(), "exit status 128") {
+			return "", ErrRevisionNotExist
+		}
+		return "", err
+	}
+	id, err := git.NewIDFromString(string(out))
+	if err != nil {
+		return "", ErrRevisionNotExist
+	}
+	return id.String(), nil
+}
+
 // LsTree returns the tree for the given reference.
 func (r *Repository) LsTree(ref string) (*Tree, error) {
-	tree, err := r.Repository.LsTree(ref)
+	id, err := r.treeID(ref)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := r.Repository.LsTree(id)
 	if err != nil {
 		return nil, err
 	}
@@ -173,12 +199,22 @@ func (r *Repository) TreePath(ref *Reference, path string) (*Tree, error) {
 	return t.SubTree(path)
 }
 
+// diffCommandOptions returns the options for git commands whose diff output
+// is parsed. User and system config must not change the output: an external
+// diff driver (diff.external) or forced color (color.ui=always) produce text
+// the parser does not understand, so both are turned off on the command line
+// too, which also covers the repository's own config.
+func diffCommandOptions() git.CommandOptions {
+	return git.CommandOptions{
+		Args: []string{"--no-ext-diff", "--no-color"},
+		Envs: []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+	}
+}
+
 // Diff returns the diff for the given commit.
 func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 	diff, err := r.Repository.Diff(commit.ID.String(), DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, git.DiffOptions{
-		CommandOptions: git.CommandOptions{
-			Envs: []string{"GIT_CONFIG_GLOBAL=/dev/null"},
-		},
+		CommandOptions: diffCommandOptions(),
 	})
 	if err != nil {
 		return nil, err
@@ -186,13 +222,31 @@ func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 	return toDiff(diff), nil
 }
 
-// Patch returns the patch for the given reference.
+// Patch returns the patch for the given commit against its first parent, or
+// against the empty tree for a root commit.
+//
+// Unlike [Diff.Patch], which rebuilds a patch from a parsed and size-limited
+// [Diff], this returns git's own output unchanged, so nothing is truncated and
+// markers such as "\ No newline at end of file" are kept. The result can be
+// fed to "git apply".
 func (r *Repository) Patch(commit *Commit) (string, error) {
-	diff, err := r.Diff(commit)
+	args := []string{"diff-tree", "-r", "-p", "--full-index", "-M", "--no-commit-id"}
+	if commit.ParentsCount() == 0 {
+		args = append(args, "--root", commit.ID.String())
+	} else {
+		parent, err := commit.ParentID(0)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, parent.String(), commit.ID.String())
+	}
+	out, err := NewCommand(args...).
+		AddEnvs("GIT_CONFIG_GLOBAL=/dev/null").
+		RunInDir(r.Path)
 	if err != nil {
 		return "", err
 	}
-	return diff.Patch(), err
+	return string(out), nil
 }
 
 // CountCommits returns the number of commits in the repository.
