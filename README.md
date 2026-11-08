@@ -327,6 +327,9 @@ lfs:
 # Cron job configuration
 jobs:
   mirror_pull: "@every 10m"
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
