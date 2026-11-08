@@ -246,7 +246,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 			present, err := lfsObjectPresent(ctx, strg, dbx, datastore, repo.ID(), o)
 			if err != nil {
 				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
