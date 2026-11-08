@@ -104,6 +104,12 @@ func (r *Repo) SetSize(width, height int) {
 	}
 }
 
+// Repository returns the repository the page shows, or nil before one is
+// selected.
+func (r *Repo) Repository() proto.Repository {
+	return r.selectedRepo
+}
+
 // Path returns the current component path.
 func (r *Repo) Path() string {
 	return r.panes[r.activeTab].Path()

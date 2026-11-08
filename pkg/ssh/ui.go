@@ -332,8 +332,7 @@ func (ui *UI) View() tea.View {
 
 // openRepoCmd starts opening repository rn. It must be called from Init or
 // Update: it takes the next repoGen and copies the context, backend and public
-// key there, so the command never reads the UI, whose context Update replaces
-// when a repository is shown.
+// key there, so the command never reads the UI from another goroutine.
 func (ui *UI) openRepoCmd(rn string, initial bool) tea.Cmd {
 	ui.repoGen++
 	gen := ui.repoGen
