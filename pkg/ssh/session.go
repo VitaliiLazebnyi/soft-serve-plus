@@ -83,7 +83,6 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
-		tea.WithoutCatchPanics(),
 		tea.WithContext(ctx),
 		tea.WithColorProfile(common.DefaultColorProfile),
 	)

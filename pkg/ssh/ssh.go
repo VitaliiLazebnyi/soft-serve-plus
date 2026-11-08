@@ -77,6 +77,9 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 			// is in fact the one used for authentication, so we need to
 			// check it again here.
 			AuthenticationMiddleware,
+			// Command length middleware.
+			// Refuses overlong exec commands before anything parses them.
+			CommandLengthMiddleware,
 			// Context middleware.
 			// This must come first to set up the context.
 			ContextMiddleware(cfg, dbx, datastore, be, logger),

@@ -10,6 +10,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
@@ -220,13 +221,16 @@ func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.Register
 		return nil, err
 	}
 
-	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodEd25519); !ok {
-			return nil, errors.New("invalid signing method")
-		}
+	pub := kp.CryptoPublicKey()
+	method, err := jwk.SigningMethodFor(pub)
+	if err != nil {
+		return nil, err
+	}
 
-		return kp.CryptoPublicKey(), nil
+	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(*jwt.Token) (interface{}, error) {
+		return pub, nil
 	},
+		jwt.WithValidMethods([]string{method.Alg()}),
 		jwt.WithIssuer(cfg.HTTP.PublicURL),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),
