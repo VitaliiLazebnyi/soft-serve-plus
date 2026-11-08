@@ -25,7 +25,14 @@ var createTables = Migration{
 	Migrate: func(ctx context.Context, tx *db.Tx) error {
 		cfg := config.FromContext(ctx)
 
+		// Seed rows are inserted only when missing, so the migration also
+		// runs over tables left behind by an earlier rollback. SQLite says so
+		// with INSERT OR IGNORE, Postgres with a trailing ON CONFLICT clause.
 		insert := "INSERT "
+		var onConflict string
+		if tx.DriverName() == "postgres" {
+			onConflict = " ON CONFLICT DO NOTHING"
+		}
 
 		// Alter old tables (if exist)
 		// This is to support prior versions of Soft Serve v0.6
@@ -89,7 +96,7 @@ var createTables = Migration{
 
 		// Insert default user. It goes in before the legacy repositories are
 		// imported, since they are given to an admin.
-		insertUser := tx.Rebind(insert + "INTO users (username, admin, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)")
+		insertUser := tx.Rebind(insert + "INTO users (username, admin, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict)
 		if _, err := tx.ExecContext(ctx, insertUser, "admin", true); err != nil {
 			return err
 		}
@@ -118,12 +125,7 @@ var createTables = Migration{
 			}
 		}
 		for _, k := range adminKeys {
-			query := insert + "INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
-			if tx.DriverName() == "postgres" {
-				query += " ON CONFLICT DO NOTHING"
-			}
-
-			query = tx.Rebind(query)
+			query := tx.Rebind(insert + "INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict)
 			ak := sshutils.MarshalAuthorizedKey(k)
 			if _, err := tx.ExecContext(ctx, query, adminID, ak); err != nil {
 				if errors.Is(db.WrapError(err), db.ErrDuplicateKey) {
@@ -134,7 +136,7 @@ var createTables = Migration{
 		}
 
 		// Insert default settings
-		insertSettings := insert + "INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
+		insertSettings := insert + "INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict
 		insertSettings = tx.Rebind(insertSettings)
 		settings := []struct {
 			Key   string
