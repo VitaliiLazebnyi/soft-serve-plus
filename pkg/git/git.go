@@ -77,7 +77,7 @@ func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 	}
 	// Rename the default branch to the first branch available
 	_, err = r.HEAD()
-	if err == git.ErrReferenceNotExist {
+	if errors.Is(err, git.ErrReferenceNotExist) {
 		branch := brs[0]
 		// Prefer "main" or "master" as the default branch
 		for _, b := range brs {
@@ -95,7 +95,7 @@ func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 			return err
 		}
 	}
-	if err != nil && err != git.ErrReferenceNotExist {
+	if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
 		return err
 	}
 	return nil
