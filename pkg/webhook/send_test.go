@@ -1008,6 +1008,18 @@ func TestFormatHeaders(t *testing.T) {
 	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
 	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
 	is.True(strings.HasPrefix(got, "X-Pad-000: "+value+"\n"))
+
+	// Invalid bytes grow to U+FFFD (3 bytes) when made storable; the cap
+	// holds for the stored text, not the raw bytes.
+	invalid := http.Header{}
+	bad := strings.Repeat("\xffa", 500)
+	for i := range 200 {
+		invalid.Set(fmt.Sprintf("X-Bad-%03d", i), bad)
+	}
+	got = formatHeaders(invalid)
+	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
+	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.Equal(storableText(got), got)
 }
 
 // A receiver that answers with a flood of headers must not get them all

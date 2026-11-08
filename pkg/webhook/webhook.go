@@ -385,7 +385,9 @@ const truncatedHeadersMarker = "[headers truncated by Soft Serve]\n"
 // formatHeaders renders h as "Key: value" lines, one per header with its
 // first value, sorted by key so a delivery reads the same on every view. It
 // stops before the line that would take it past maxStoredHeaders and marks
-// the cut with truncatedHeadersMarker.
+// the cut with truncatedHeadersMarker. Each key and value goes through
+// storableText before it is measured, so the cap holds for the text that is
+// stored even when the receiver sent invalid UTF-8.
 func formatHeaders(h http.Header) string {
 	keys := slices.Sorted(maps.Keys(h))
 	var b strings.Builder
@@ -394,13 +396,14 @@ func formatHeaders(h http.Header) string {
 		if len(v) == 0 {
 			continue
 		}
-		if b.Len()+len(k)+len(": ")+len(v[0])+len("\n") > maxStoredHeaders {
+		key, value := storableText(k), storableText(v[0])
+		if b.Len()+len(key)+len(": ")+len(value)+len("\n") > maxStoredHeaders {
 			b.WriteString(truncatedHeadersMarker)
 			break
 		}
-		b.WriteString(k)
+		b.WriteString(key)
 		b.WriteString(": ")
-		b.WriteString(v[0])
+		b.WriteString(value)
 		b.WriteByte('\n')
 	}
 	return b.String()
