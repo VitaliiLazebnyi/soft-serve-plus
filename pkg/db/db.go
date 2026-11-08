@@ -156,9 +156,14 @@ func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) erro
 	}
 
 	if err := tx.Commit(); err != nil {
+		// sql.ErrTxDone here means the transaction was already rolled back,
+		// most often because ctx was cancelled after fn returned: nothing fn
+		// wrote is kept, so it is a failure like any other. Report the
+		// context's error along with it so callers can tell why.
 		if errors.Is(err, sql.ErrTxDone) {
-			// this is ok because whoever did finish the tx should have also written the error already.
-			return nil
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("failed to commit transaction: %w: %w", err, cerr)
+			}
 		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
