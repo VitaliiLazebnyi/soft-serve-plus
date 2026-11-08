@@ -22,11 +22,11 @@ import (
 )
 
 // CreateWebhook creates a webhook for a repository.
-func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
+func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, events); err != nil {
+	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
 	}
 	events = dedupeEvents(events)
@@ -68,7 +68,7 @@ func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 }
 
 // Webhook returns a webhook for a repository.
-func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
+func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -101,7 +101,7 @@ func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 }
 
 // ListWebhooks lists webhooks for a repository.
-func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
+func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -145,12 +145,12 @@ func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 }
 
 // UpdateWebhook updates a webhook.
-func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
+func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
+	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
 		return err
 	}
 	updatedEvents = dedupeEvents(updatedEvents)
@@ -215,7 +215,7 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 }
 
 // DeleteWebhook deletes a webhook for a repository.
-func (b *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
+func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -224,7 +224,7 @@ func (b *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id i
 		if err != nil {
 			return db.WrapError(err)
 		}
-		return db.WrapError(b.deleteWebhookRows(ctx, tx, repo.ID(), id))
+		return db.WrapError(d.deleteWebhookRows(ctx, tx, repo.ID(), id))
 	})
 }
 
@@ -261,7 +261,7 @@ func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID i
 //
 // The webhook is resolved scoped to the repository, so a caller authorized
 // only for repo A cannot read deliveries of a webhook owned by repo B.
-func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
+func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -283,10 +283,10 @@ func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 	}
 
 	ds := make([]webhook.Delivery, len(deliveries))
-	for i, d := range deliveries {
+	for i, del := range deliveries {
 		ds[i] = webhook.Delivery{
-			WebhookDelivery: d,
-			Event:           webhook.Event(d.Event),
+			WebhookDelivery: del,
+			Event:           webhook.Event(del.Event),
 		}
 	}
 
@@ -299,7 +299,7 @@ func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 // a webhook stops every request to its URL, including manual redeliveries, so
 // a receiver that was turned off is not sent to by mistake. Activate the
 // webhook first to redeliver.
-func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
+func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -309,7 +309,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		var err error
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			b.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
+			d.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
 			return db.WrapError(err)
 		}
 
@@ -331,7 +331,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 
 	// Log identifiers only: the stored body, headers and signature carry repo,
 	// user and commit data, and must not end up in server logs.
-	b.logger.Info("redelivering webhook delivery", "delivery", delID, "webhook", id, "event", webhook.Event(delivery.Event), "repo", repo.Name())
+	d.logger.Info("redelivering webhook delivery", "delivery", delID, "webhook", id, "event", webhook.Event(delivery.Event), "repo", repo.Name())
 
 	// The stored body is in the content type the delivery was sent with, which
 	// may differ from the webhook's current one if it was changed since. Use
@@ -342,7 +342,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 	stored, found, err := storedContentType(delivery.RequestHeaders)
 	switch {
 	case err != nil:
-		b.logger.Warn("unrecognized content type in webhook delivery, using the webhook's", "delivery", delID, "webhook", id, "content_type", ct, "err", err)
+		d.logger.Warn("unrecognized content type in webhook delivery, using the webhook's", "delivery", delID, "webhook", id, "content_type", ct, "err", err)
 	case found:
 		ct = stored
 	}
@@ -354,7 +354,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		if err != nil {
 			// The parse error quotes part of the body, so it is returned to
 			// the caller but not logged.
-			b.logger.Error("error parsing webhook form body", "delivery", delID, "webhook", id)
+			d.logger.Error("error parsing webhook form body", "delivery", delID, "webhook", id)
 			return err
 		}
 		payload = vals
@@ -362,28 +362,50 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(delivery.RequestBody), &raw); err != nil {
 			// As above: the error can quote part of the body.
-			b.logger.Error("error unmarshaling webhook payload", "delivery", delID, "webhook", id)
+			d.logger.Error("error unmarshaling webhook payload", "delivery", delID, "webhook", id)
 			return err
 		}
 		payload = raw
 	}
 
-	return webhook.SendWebhook(ctx, wh, webhook.Event(delivery.Event), payload)
+	// The redelivery keeps the GUID the receiver was first sent, so it can
+	// tell the event apart from a new one. A delivery recorded before GUIDs
+	// were kept across redeliveries may lack a usable header; its own id is
+	// the GUID it was sent with then.
+	guid := delivery.ID
+	if v, ok := storedHeader(delivery.RequestHeaders, webhook.HeaderDelivery); ok {
+		if parsed, err := uuid.Parse(v); err == nil {
+			guid = parsed
+		}
+	}
+
+	return webhook.RedeliverWebhook(ctx, wh, webhook.Event(delivery.Event), payload, guid)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
-// request headers, which hold one "Name: value" line per header. It reports
-// false when there is no Content-Type line.
+// request headers. It reports false when there is no Content-Type line.
 func storedContentType(headers string) (webhook.ContentType, bool, error) {
+	value, ok := storedHeader(headers, "Content-Type")
+	if !ok {
+		return 0, false, nil
+	}
+	ct, err := webhook.ParseContentType(value)
+	return ct, true, err
+}
+
+// storedHeader returns the first value of the header name from a delivery's
+// stored request headers, which hold one "Name: value" line per header. Names
+// are matched without regard to case. It reports false when there is no such
+// line.
+func storedHeader(headers, name string) (string, bool) {
 	for _, line := range strings.Split(headers, "\n") {
-		name, value, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Type") {
+		k, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), name) {
 			continue
 		}
-		ct, err := webhook.ParseContentType(strings.TrimSpace(value))
-		return ct, true, err
+		return strings.TrimSpace(value), true
 	}
-	return 0, false, nil
+	return "", false
 }
 
 // WebhookDelivery returns a webhook delivery for a webhook belonging to the
@@ -393,7 +415,7 @@ func storedContentType(headers string) (webhook.ContentType, bool, error) {
 // only for repo A cannot read a delivery of a webhook owned by repo B.
 // Deliveries expose the full request URL, headers, and body, so this scoping
 // is what keeps them from leaking across repositories.
-func (b *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
+func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
@@ -403,14 +425,14 @@ func (b *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 			return db.WrapError(err)
 		}
 
-		d, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
+		del, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
 		if err != nil {
 			return db.WrapError(err)
 		}
 
 		delivery = webhook.Delivery{
-			WebhookDelivery: d,
-			Event:           webhook.Event(d.Event),
+			WebhookDelivery: del,
+			Event:           webhook.Event(del.Event),
 		}
 
 		return nil
