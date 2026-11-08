@@ -21,6 +21,17 @@ func TestReadmeInSubdirectory(t *testing.T) {
 		}
 	})
 
+	// The helper pushes branch main, but the bare repository's HEAD follows
+	// git's init.defaultBranch, which may still be master. Point HEAD at main
+	// so the lookup below does not depend on the host's git config.
+	r, err := lt.repo.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SymbolicRef("HEAD", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+
 	readme, path, err := Readme(lt.repo, nil)
 	if err != nil {
 		t.Fatalf("Readme: %v", err)
