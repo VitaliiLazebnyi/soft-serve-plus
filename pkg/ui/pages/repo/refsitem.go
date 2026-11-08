@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/dustin/go-humanize"
 	"github.com/muesli/reflow/truncate"
 )
@@ -135,7 +136,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 			desc += " " + st.ItemDesc.Render(date)
 		}
 
-		if msg := strings.TrimSpace(i.TagSubject); msg != "" {
+		if msg := strings.TrimSpace(utils.Sanitize(i.TagSubject)); msg != "" {
 			msgSt := st.ItemDesc.Faint(false)
 			msgMargin := m.Width() -
 				horizontalFrameSize -
