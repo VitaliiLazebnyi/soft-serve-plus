@@ -25,7 +25,7 @@ func TestSSHServerClosesStalledHandshake(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.HandshakeTimeout = 1
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	c, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr)
 	if err != nil {
