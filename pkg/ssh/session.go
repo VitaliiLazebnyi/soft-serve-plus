@@ -16,19 +16,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-var tuiSessionCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+// The TUI counters have no labels: the repository and terminal come from the
+// client, and anyone with read access may open the TUI, so labelling by them
+// would let clients add series without limit.
+var tuiSessionCounter = promauto.NewCounter(prometheus.CounterOpts{
 	Namespace: "soft_serve",
 	Subsystem: "ssh",
 	Name:      "tui_session_total",
 	Help:      "The total number of TUI sessions",
-}, []string{"repo", "term"})
+})
 
-var tuiSessionDuration = promauto.NewCounterVec(prometheus.CounterOpts{
+var tuiSessionDuration = promauto.NewCounter(prometheus.CounterOpts{
 	Namespace: "soft_serve",
 	Subsystem: "ssh",
 	Name:      "tui_session_seconds_total",
 	Help:      "The total time spent in TUI sessions",
-}, []string{"repo", "term"})
+})
 
 // SessionHandler is the soft-serve bubbletea ssh session handler.
 // This middleware must be run after the ContextMiddleware.
@@ -67,12 +70,12 @@ func SessionHandler(s ssh.Session) *tea.Program {
 	m := NewUI(c, initialRepo)
 	p := tea.NewProgram(m, opts...)
 
-	tuiSessionCounter.WithLabelValues(initialRepo, pty.Term).Inc()
+	tuiSessionCounter.Inc()
 
 	start := time.Now()
 	go func() {
 		<-ctx.Done()
-		tuiSessionDuration.WithLabelValues(initialRepo, pty.Term).Add(time.Since(start).Seconds())
+		tuiSessionDuration.Add(time.Since(start).Seconds())
 	}()
 
 	return p
