@@ -16,6 +16,8 @@ mkfile ./repo-empty/README.md '# Hello\n\nwelcome'
 git -C repo-empty add README.md
 git -C repo-empty commit -m 'first'
 git -C repo-empty push origin HEAD
+# the hooks print nothing of their own, such as a coverage warning
+! stderr 'GOCOVERDIR'
 
 # the commit reached the server
 soft repo branch list repo-empty
