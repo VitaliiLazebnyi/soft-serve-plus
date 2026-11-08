@@ -536,6 +536,31 @@ func (c *Config) ConfigPath() string { //nolint:revive
 	return filepath.Join(c.DataPath, "config.yaml")
 }
 
+// CheckConfigLocation returns an error when SOFT_SERVE_CONFIG_LOCATION names
+// a file that does not exist. Without this check the server would silently
+// start on the default config, and write it to the data directory, after a
+// typo in the variable or with a config file that is not mounted yet.
+// Naming the default location in the data directory is allowed, since the
+// server writes the default config there on its first start.
+func (c *Config) CheckConfigLocation() error {
+	path := os.Getenv("SOFT_SERVE_CONFIG_LOCATION")
+	if path == "" {
+		return nil
+	}
+	_, err := os.Stat(path)
+	if err == nil || samePath(path, filepath.Join(c.DataPath, "config.yaml")) {
+		return nil
+	}
+	return fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
+}
+
+// samePath reports whether a and b name the same path once made absolute.
+func samePath(a, b string) bool {
+	a, errA := filepath.Abs(a)
+	b, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && a == b
+}
+
 func exist(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
