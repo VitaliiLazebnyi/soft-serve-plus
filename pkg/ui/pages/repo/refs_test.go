@@ -114,7 +114,7 @@ func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
 			r := NewRefs(common.NewCommon(ctx, 80, 10), git.RefsHeads)
 			r.SetSize(80, 10)
 			r.Update(RepoMsg(openRepo{path: dir}))
-			r.Update(r.updateItemsCmd())
+			r.Update(r.updateItemsCmd()())
 			if r.selector.TotalPages() < 2 {
 				t.Fatalf("want several pages, got %d", r.selector.TotalPages())
 			}
