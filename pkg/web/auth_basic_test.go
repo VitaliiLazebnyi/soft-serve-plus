@@ -55,7 +55,7 @@ func TestBasicAuthTokenForms(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.SetBasicAuth(tc.user, tc.pass)
 
-			user, err := parseAuthHdr(req, "secret")
+			user, _, err := parseAuthHdr(req, []string{"secret"})
 			if tc.want == "" {
 				is.True(user == nil)
 				if !errors.Is(err, tc.wantErr) {

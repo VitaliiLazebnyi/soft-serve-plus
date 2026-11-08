@@ -140,7 +140,10 @@ func TestReadableAccessTimeout(t *testing.T) {
 	if !d.readable(context.Background(), "timeout-public") {
 		t.Fatal("public repository is not readable")
 	}
-	d.accessTimeout = time.Nanosecond
+	// A deadline already in the past expires before any query runs. A tiny
+	// positive timeout is not enough: on Windows the timer can fire after the
+	// (fast, in-memory) checks have finished.
+	d.accessTimeout = -time.Second
 	if d.readable(context.Background(), "timeout-public") {
 		t.Fatal("public repository is readable although the access checks ran out of time")
 	}
