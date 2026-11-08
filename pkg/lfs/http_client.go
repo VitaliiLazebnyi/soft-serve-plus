@@ -151,7 +151,12 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	url := fmt.Sprintf("%s/objects/batch", c.endpoint.String())
 
 	// TODO: support ref
-	request := &BatchRequest{operation, c.transferNames(), nil, objects, HashAlgorithmSHA256}
+	request := &BatchRequest{
+		Operation: operation,
+		Transfers: c.transferNames(),
+		Objects:   objects,
+		HashAlgo:  HashAlgorithmSHA256,
+	}
 
 	payload := new(bytes.Buffer)
 	err := json.NewEncoder(payload).Encode(request)
