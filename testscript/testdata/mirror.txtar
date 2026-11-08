@@ -20,8 +20,7 @@ git -C src push origin HEAD
 soft repo import --mirror charmbracelet/wizard-tutorial ssh://git@127.0.0.1:$SSH_PORT/src
 
 # check empty description file
-readfile $DATA_PATH/repos/charmbracelet/wizard-tutorial.git/description
-! stdout .
+readfile $DATA_PATH/repos/charmbracelet/wizard-tutorial.git/description ''
 
 # check repo info
 soft repo info charmbracelet/wizard-tutorial
@@ -68,8 +67,7 @@ soft repo description charmbracelet/wizard-tutorial
 soft repo description charmbracelet/wizard-tutorial "testing repo"
 soft repo description charmbracelet/wizard-tutorial
 stdout 'testing repo'
-readfile $DATA_PATH/repos/charmbracelet/wizard-tutorial.git/description
-stdout '^testing repo$'
+readfile $DATA_PATH/repos/charmbracelet/wizard-tutorial.git/description 'testing repo'
 
 # rename
 soft repo rename charmbracelet/wizard-tutorial charmbracelet/test
