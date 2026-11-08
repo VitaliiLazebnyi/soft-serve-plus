@@ -75,6 +75,11 @@ type ValidatedGitRemote struct {
 //
 // It also aborts an http transfer that stalls (see GitLowSpeedLimit), so a
 // remote that stops sending cannot hold the git process open forever.
+//
+// The environment needs git 2.37 or newer: GIT_CONFIG_COUNT arrived in 2.31
+// and http.curloptResolve, which carries the pin, in 2.37. Older git ignores
+// what it does not know without an error, so it would fetch unpinned. Callers
+// must refuse to run git below that version rather than rely on this.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
 	// git follows the first HTTP redirect by default, which lets a public URL
 	// hand off to an internal one after validation has already passed. This
