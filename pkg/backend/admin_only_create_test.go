@@ -389,3 +389,77 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	is.Equal(u.Username(), "mallory")
 	is.True(u.IsAdmin())
 }
+
+// The owned-admin-key warning is not remembered forever: once the conflict
+// is resolved (the owner is promoted or the key leaves the account) or the
+// admin key list changes, a conflict that comes back is logged again, and
+// the record of warned keys holds only currently listed keys.
+func TestOwnedAdminKeyWarningIsForgottenOnceResolved(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	be, cfg := newTestBackendWithLog(t, &logs)
+	ctx := backendTestContext(be, cfg)
+	warnings := func() int {
+		return strings.Count(logs.String(), "admin key is owned by a non-admin account")
+	}
+	warned := func() int {
+		be.warnedOwnedAdminKeysMu.Lock()
+		defer be.warnedOwnedAdminKeysMu.Unlock()
+		return len(be.warnedOwnedAdminKeys)
+	}
+
+	key := newTestPublicKey(t)
+	_, err := be.CreateUser(ctx, "mallory", proto.UserOptions{PublicKeys: []ssh.PublicKey{key}})
+	is.NoErr(err)
+	_, err = be.CreateUser(ctx, "eve", proto.UserOptions{})
+	is.NoErr(err)
+
+	orig := cfg.InitialAdminKeys
+	listed := append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(key))
+	cfg.InitialAdminKeys = listed
+
+	lookup := func(owner string) {
+		t.Helper()
+		for range 2 {
+			_, err := be.UserByPublicKey(ctx, key)
+			var owned *ErrAdminKeyNonAdminOwner
+			is.True(errors.As(err, &owned))
+			is.Equal(owned.Username, owner)
+		}
+	}
+
+	lookup("mallory")
+	is.Equal(warnings(), 1)
+	is.Equal(warned(), 1)
+
+	// Promoting the owner resolves it; demoting them again is logged again.
+	is.NoErr(be.SetAdmin(ctx, "mallory", true))
+	u, err := be.UserByPublicKey(ctx, key)
+	is.NoErr(err)
+	is.Equal(u.Username(), "mallory")
+	is.Equal(warned(), 0)
+	is.NoErr(be.SetAdmin(ctx, "mallory", false))
+	lookup("mallory")
+	is.Equal(warnings(), 2)
+
+	// The key leaving the account resolves it; another non-admin claiming
+	// it is logged again, naming the new owner.
+	is.NoErr(be.RemovePublicKey(ctx, "mallory", key))
+	_, err = be.UserByPublicKey(ctx, key)
+	is.True(errors.Is(err, proto.ErrUserNotFound))
+	is.Equal(warned(), 0)
+	is.NoErr(be.AddPublicKey(ctx, "eve", key))
+	lookup("eve")
+	is.Equal(warnings(), 3)
+
+	// Unlisting the key drops the record; listing it again logs again.
+	cfg.InitialAdminKeys = orig
+	u, err = be.UserByPublicKey(ctx, key)
+	is.NoErr(err)
+	is.Equal(u.Username(), "eve")
+	is.Equal(warned(), 0)
+	cfg.InitialAdminKeys = listed
+	lookup("eve")
+	is.Equal(warnings(), 4)
+	is.Equal(warned(), 1)
+}

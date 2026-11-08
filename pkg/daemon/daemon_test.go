@@ -30,10 +30,18 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests starts the daemon the tests talk to, runs the tests and tears the
+// daemon down again. It is separate from TestMain so that its deferred
+// cleanup runs before os.Exit.
+func runTests(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "soft-serve-test")
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer os.RemoveAll(tmp) //nolint:errcheck
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
@@ -52,6 +60,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer dbx.Close() //nolint:errcheck
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		log.Fatal(err)
 	}
@@ -65,13 +74,9 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 	testDaemon = d
+	defer d.Close()       //nolint:errcheck
 	go d.ListenAndServe() //nolint:errcheck
-	code := m.Run()
-	_ = d.Close()
-	_ = dbx.Close()
-	// os.Exit skips deferred calls, so clean up here.
-	_ = os.RemoveAll(tmp)
-	os.Exit(code)
+	return m.Run()
 }
 
 func TestIdleTimeout(t *testing.T) {
