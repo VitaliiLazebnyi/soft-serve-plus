@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
@@ -207,7 +208,9 @@ func (s *Selection) Init() tea.Cmd {
 			if err != nil {
 				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
 			} else {
-				readmeCmd = s.readme.SetContent(readme, path)
+				// The README comes from the repository; glamour passes
+				// escape sequences through to the terminal.
+				readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
 			}
 		}
 
