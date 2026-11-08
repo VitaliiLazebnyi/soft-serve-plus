@@ -69,6 +69,18 @@ func TestNewLoggerCreatesMissingLogDir(t *testing.T) {
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("expected log file to exist: %v", err)
 	}
+	if runtime.GOOS == "windows" {
+		return // unix permissions
+	}
+	for _, dir := range []string{dataPath, filepath.Dir(want)} {
+		fi, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode = %v, want 0700", dir, got)
+		}
+	}
 }
 
 // The log file is not readable by other users.

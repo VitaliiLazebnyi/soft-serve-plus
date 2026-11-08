@@ -278,6 +278,9 @@ webhook:
 # set, these take precedence over the database on every read, not just on
 # first run. This is intended for scripted, non-production bootstrapping
 # (e.g. a throwaway server for local dev tooling), not for production use.
+# "admin-access" with allow_keyless: true gives anyone who can reach the
+# server full admin access. Valid anon_access values are "no-access",
+# "read-only", "read-write" and "admin-access".
 #anon_access: "read-only"
 #allow_keyless: true
 

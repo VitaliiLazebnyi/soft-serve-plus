@@ -44,8 +44,10 @@ func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 		// A relative log path resolves into the data directory, which may
 		// not exist yet on a first run (the logger is created before
 		// anything else touches the data path). Create the parent
-		// directory, using the same mode as the data path itself.
-		if err := os.MkdirAll(filepath.Dir(cfg.Log.Path), os.ModePerm); err != nil {
+		// directory private (0o700), the same mode the data path is
+		// created with, so a first run does not leave the data directory
+		// readable by other users.
+		if err := os.MkdirAll(filepath.Dir(cfg.Log.Path), 0o700); err != nil {
 			return nil, nil, err
 		}
 		var err error
