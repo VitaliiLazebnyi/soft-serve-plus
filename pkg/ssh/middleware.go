@@ -25,6 +25,11 @@ import (
 // ErrPermissionDenied is returned when a user is not allowed connect.
 var ErrPermissionDenied = fmt.Errorf("permission denied")
 
+// ErrUserLookupFailed is returned when the user that owns the session's
+// public key cannot be looked up. It carries no detail on purpose; the cause
+// is logged on the server.
+var ErrUserLookupFailed = errors.New("could not look up your account, try again later")
+
 // AuthenticationMiddleware handles authentication.
 func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
@@ -81,6 +86,15 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 				wish.Fatalln(s, owned)
 				return
 			}
+			// Any failure other than an unregistered key, such as a busy
+			// or unreachable database, ends the session. Running it as
+			// anonymous instead would deny a registered user their own
+			// repositories, or with anon-access read-write let them create
+			// repositories owned by nobody. The backend logs the cause.
+			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+				wish.Fatalln(s, ErrUserLookupFailed)
+				return
+			}
 		}
 		ctx.SetValue(proto.ContextKeyUser, user)
 
@@ -125,7 +139,6 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		cliCommandCounter.WithLabelValues(cmd.CommandName(args)).Inc()
 		rootCmd := &cobra.Command{
 			Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
 			SilenceUsage: true,
@@ -160,6 +173,8 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			}
 		}
 
+		cliCommandCounter.WithLabelValues(commandLabel(rootCmd, args)).Inc()
+
 		rootCmd.SetArgs(args)
 		if len(args) == 0 {
 			// otherwise it'll default to os.Args, which is not what we want.
@@ -175,6 +190,33 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 	}
+}
+
+// unknownCommand is the metric label for a command the server does not have.
+const unknownCommand = "unknown"
+
+// commandLabel returns the name of the top-level command of root that args
+// run, for use as a metric label. Labels come from the command tree, never
+// from the client, so the set of series stays fixed: anything that matches
+// no command is unknownCommand, and running root itself (no command, or
+// only flags) is the empty string.
+func commandLabel(root *cobra.Command, args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	// Execute adds the help command; add it now so it is matched too.
+	root.InitDefaultHelpCmd()
+	c, _, err := root.Find(args)
+	if err != nil || c == nil {
+		return unknownCommand
+	}
+	if c == root {
+		return ""
+	}
+	for c.HasParent() && c.Parent() != root {
+		c = c.Parent()
+	}
+	return c.Name()
 }
 
 // LoggingMiddleware logs the ssh connection and command.
@@ -202,11 +244,11 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 		}
 
 		if isPty {
-			logArgs = []interface{}{
+			logArgs = append(logArgs,
 				"term", ptyReq.Term,
 				"width", ptyReq.Window.Width,
 				"height", ptyReq.Window.Height,
-			}
+			)
 		}
 
 		if config.IsVerbose() {

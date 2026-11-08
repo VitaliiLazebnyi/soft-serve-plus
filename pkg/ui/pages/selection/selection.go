@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
@@ -210,7 +211,9 @@ func (s *Selection) loadReposCmd() tea.Msg {
 	// The server readme is the welcome page, so it is shown to everyone.
 	if r, err := be.Repository(ctx, ".soft-serve"); err == nil {
 		if readme, path, err := backend.Readme(r, nil); err == nil {
-			msg.readme, msg.readmePath, msg.hasReadme = readme, path, true
+			// The README comes from the repository; glamour passes
+			// escape sequences through to the terminal.
+			msg.readme, msg.readmePath, msg.hasReadme = utils.Sanitize(readme), path, true
 		}
 	}
 
