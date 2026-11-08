@@ -22,7 +22,8 @@ import (
 // authenticate authenticates the user from the request. A bearer token must
 // name one of repos in its audience, and its audience is returned; it is nil
 // for other credentials, which are not scoped to repositories. The error is
-// ErrInvalidToken or ErrInvalidPassword for bad credentials, and
+// ErrInvalidToken or ErrInvalidPassword for bad credentials, an error
+// wrapping ErrPasswordCheckBusy when the password could not be checked, and
 // proto.ErrUserNotFound otherwise.
 func authenticate(r *http.Request, repos ...string) (proto.User, []string, error) {
 	// Prefer the Authorization header
