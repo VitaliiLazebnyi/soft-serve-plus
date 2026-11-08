@@ -1,0 +1,13 @@
+# vi: set ft=conf
+
+# a SOFT_SERVE_CONFIG_LOCATION naming a missing file stops soft from
+# running on the default config
+env SOFT_SERVE_CONFIG_LOCATION=$WORK/missing.yaml
+
+# checked first so that a regression fails here instead of starting a server
+! exec soft --version
+stderr 'SOFT_SERVE_CONFIG_LOCATION'
+
+! exec soft serve
+stderr 'SOFT_SERVE_CONFIG_LOCATION'
+! exists $DATA_PATH/config.yaml
