@@ -106,8 +106,8 @@ func setupAttrRepo(t *testing.T, name string) (*Repository, *Reference) {
 // attrSourceSupported.
 func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
 	// Git for Windows rejects '"' and ':' in index paths (core.protectNTFS),
-	// so there the name relies on the non-ASCII character and the space to be
-	// quoted by git.
+	// so there the name relies on the non-ASCII character, which git quotes in
+	// plain output, plus a space.
 	name := "dir/café \"quoted\": file.bin"
 	if runtime.GOOS == "windows" {
 		name = "dir/café quoted file.bin"
