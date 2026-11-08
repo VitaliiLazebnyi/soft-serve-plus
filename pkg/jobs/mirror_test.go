@@ -179,14 +179,15 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 		mu    sync.Mutex
 		conns []net.Conn
 	)
-	t.Cleanup(func() {
+	closeRemote := func() {
 		ln.Close()
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range conns {
 			c.Close()
 		}
-	})
+	}
+	t.Cleanup(closeRemote)
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -209,6 +210,25 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 
 	r := newRepoWithRemotes(t, map[string]string{
 		"origin": "http://" + ln.Addr().String() + "/x.git",
+	})
+	// The http helper outlives the killed git and, on Windows, keeps the
+	// repository directory open until its connection drops. Cleanups run in
+	// reverse order, so this one runs before t.TempDir removes the directory:
+	// it closes the stalled connections so the helper exits, then waits for
+	// the directory to become removable.
+	t.Cleanup(func() {
+		closeRemote()
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			err := os.RemoveAll(r.Path)
+			if err == nil || time.Now().After(deadline) {
+				if err != nil {
+					t.Errorf("removing %s: %v", r.Path, err)
+				}
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	})
 
 	old := mirrorGitTimeout
