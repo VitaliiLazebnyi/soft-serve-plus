@@ -31,11 +31,18 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests starts the daemon the tests talk to, runs the tests and tears the
+// daemon down again. It is separate from TestMain so that its deferred
+// cleanup runs before os.Exit.
+func runTests(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "soft-serve-test")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(tmp)
+	defer os.RemoveAll(tmp) //nolint:errcheck
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
@@ -68,16 +75,9 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 	testDaemon = d
+	defer d.Close()       //nolint:errcheck
 	go d.ListenAndServe() //nolint:errcheck
-	code := m.Run()
-	os.Unsetenv("SOFT_SERVE_DATA_PATH")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_CONNECTIONS")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_IDLE_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_LISTEN_ADDR")
-	_ = d.Close()
-	_ = dbx.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 func TestIdleTimeout(t *testing.T) {
@@ -124,7 +124,7 @@ func TestBadRequests(t *testing.T) {
 		{"push", pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported},
 	}
 	for _, tc := range cases {
-		if got := request(t, tc.raw); got != tc.want.Error() {
+		if got := rawRequest(t, tc.raw); got != tc.want.Error() {
 			t.Errorf("%s: expected %q, got %q", tc.name, tc.want, got)
 		}
 	}
@@ -164,12 +164,12 @@ func requestUploadPack(t *testing.T, repo string) string {
 	if err := pktline.NewEncoder(&b).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
 		t.Fatalf("expected nil, got error: %v", err)
 	}
-	return request(t, b.Bytes())
+	return rawRequest(t, b.Bytes())
 }
 
-// request sends raw bytes to the daemon and returns the first line it
+// rawRequest sends raw bytes to the daemon and returns the first line it
 // answers with.
-func request(t *testing.T, raw []byte) string {
+func rawRequest(t *testing.T, raw []byte) string {
 	t.Helper()
 	c, err := net.Dial("tcp", testDaemon.addr) //nolint:noctx
 	if err != nil {
