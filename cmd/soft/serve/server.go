@@ -302,12 +302,16 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Shutdown lets the server gracefully shutdown. The servers drain within ctx.
-// The background webhook deliveries are then waited for within their own
-// budget, backend.ShutdownDeliveryTimeout, or until abort is done, whichever
-// comes first.
+// Shutdown lets the server gracefully shutdown. Imports in flight are
+// cancelled, and the servers drain within ctx. The cancelled imports'
+// cleanup and the background webhook deliveries are then waited for within
+// their own budget, backend.ShutdownDeliveryTimeout, or until abort is done,
+// whichever comes first.
 func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	s.markClosed()
+	// Stop the imports first: an SSH session running one would otherwise
+	// hold the SSH server's drain until the import finished.
+	s.Backend.StopImports()
 	// Close the listeners first, and wait until every server serves on its
 	// listener, which then fails at once, or has given up on it. A server's
 	// Shutdown only closes the listeners it already serves on, and the SSH
@@ -348,9 +352,12 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	// Always wait for the deliveries, even when a server failed to stop:
 	// the queue is closed here so no new delivery starts, and the ones
 	// already queued or running get their own budget, which is separate from
-	// the caller's drain deadline for the HTTP and SSH servers.
+	// the caller's drain deadline for the HTTP and SSH servers. The stopped
+	// imports are waited for first, within the same budget, since cleaning
+	// up a registered one queues a repository delete event.
 	dctx, cancel := context.WithTimeout(abort, backend.ShutdownDeliveryTimeout)
 	defer cancel()
+	s.Backend.WaitForImports(dctx)
 	s.Backend.WaitForDeliveries(dctx)
 	return err
 }
@@ -359,10 +366,13 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 // Tests replace it to see which server NewServer closed.
 var closeFailedServer = func(s *Server) { _ = s.Close() }
 
-// Close closes the servers. It skips the ones that were never built, so it
+// Close closes the servers and cancels the imports in flight. It skips the ones that were never built, so it
 // also closes a server NewServer failed to finish.
 func (s *Server) Close() error {
 	s.markClosed()
+	if s.Backend != nil {
+		s.Backend.StopImports()
+	}
 	s.closeListeners()
 	var errg errgroup.Group
 	if s.GitDaemon != nil {
