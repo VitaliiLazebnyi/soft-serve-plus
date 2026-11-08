@@ -12,13 +12,15 @@ import (
 )
 
 type fakeRepo struct {
-	private bool
+	private     bool
+	projectName string
+	description string
 }
 
 func (r fakeRepo) ID() int64                      { return 1 }
 func (r fakeRepo) Name() string                   { return "repo" }
-func (r fakeRepo) ProjectName() string            { return "" }
-func (r fakeRepo) Description() string            { return "" }
+func (r fakeRepo) ProjectName() string            { return r.projectName }
+func (r fakeRepo) Description() string            { return r.description }
 func (r fakeRepo) IsPrivate() bool                { return r.private }
 func (r fakeRepo) IsMirror() bool                 { return false }
 func (r fakeRepo) IsHidden() bool                 { return false }

@@ -230,6 +230,9 @@ jobs:
   # How often pull mirrors sync: a standard five-field cron spec or a
   # descriptor such as "@hourly" or "@every 10m".
   mirror_pull: {{ q .Jobs.MirrorPull }}
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: {{ q .Jobs.LFSSweep }}
 
 # Repository webhook configuration.
 webhook:
