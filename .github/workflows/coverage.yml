@@ -6,6 +6,13 @@ on:
       - "main"
   pull_request:
 
+# A new push to a pull request cancels the run for its previous push. Other
+# runs (pushes to main) get a group of their own, so they are never cancelled
+# or held back as pending.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -16,7 +23,9 @@ jobs:
         os: [ubuntu-latest] # TODO: add macos & windows
     services:
       postgres:
-        image: postgres
+        # Pinned by digest so a new Postgres release cannot change CI
+        # behind our back; bump both the tag and the digest together.
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
         ports:
           - 5432:5432
         env:
@@ -27,13 +36,15 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ^1
+          go-version-file: go.mod
+          cache: true
 
       - name: Test
         run: |
@@ -59,6 +70,12 @@ jobs:
 
           # Convert coverage data to legacy textfmt format to upload
           go tool covdata textfmt -i=coverage/unit,coverage/int,coverage/int2 -o=coverage.txt
+      # Uploads need the CODECOV_TOKEN repository secret. Without it (fork
+      # pull requests, or before the secret is set) the upload is tokenless
+      # and may be rejected, so it only fails the job once the token exists.
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          file: ./coverage.txt
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
