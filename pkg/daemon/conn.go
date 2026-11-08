@@ -69,7 +69,7 @@ func (c *serverConn) Write(p []byte) (n int, err error) {
 	if n > 0 {
 		c.wrote.Store(true)
 	}
-	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
+	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
 	return
@@ -78,7 +78,7 @@ func (c *serverConn) Write(p []byte) (n int, err error) {
 func (c *serverConn) Read(b []byte) (n int, err error) {
 	c.updateDeadline()
 	n, err = c.Conn.Read(b)
-	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
+	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
 	return
@@ -116,4 +116,10 @@ func (c *serverConn) updateDeadline() {
 		}
 	}
 	c.Conn.SetDeadline(c.maxDeadline) //nolint: errcheck
+}
+
+// isNetError reports whether err is, or wraps, a net.Error.
+func isNetError(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne)
 }

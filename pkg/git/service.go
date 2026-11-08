@@ -83,10 +83,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 
 	cmd.Args = append(cmd.Args, ".")
 
-	cmd.Env = os.Environ()
-	if len(scmd.Env) > 0 {
-		cmd.Env = append(cmd.Env, scmd.Env...)
-	}
+	cmd.Env = serviceEnv(os.Environ(), scmd.Env)
 
 	// killed records that git was killed because the context was done. On
 	// Windows a killed process exits with status 1, so the exit status cannot
@@ -109,35 +106,32 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		scmd.CmdFunc(cmd)
 	}
 
-	var (
-		err    error
-		stdin  io.WriteCloser
-		stdout io.ReadCloser
-		stderr io.ReadCloser
-	)
+	// git's output goes through pipes the handler owns rather than through
+	// StdoutPipe and StderrPipe, whose read ends Wait closes as soon as git
+	// exits. That lets the handler wait for git and for the copies of its
+	// output separately, so that a process git started that keeps the
+	// output open does not keep the handler waiting for it.
+	outputs, err := outputPipes(cmd, scmd.Stdout, scmd.Stderr)
+	if err != nil {
+		return err
+	}
 
+	var stdin io.WriteCloser
 	if scmd.Stdin != nil {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
+			outputs.close()
+			outputs.closeGitEnds()
 			return err
 		}
 	}
 
-	if scmd.Stdout != nil {
-		stdout, err = cmd.StdoutPipe()
-		if err != nil {
-			return err
-		}
-	}
-
-	if scmd.Stderr != nil {
-		stderr, err = cmd.StderrPipe()
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// git has its own copies of the write ends now, and the copies of its
+	// output only see the end of it once every copy is closed.
+	outputs.closeGitEnds()
+	if err != nil {
+		outputs.close()
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrInvalidRepo
 		}
@@ -156,65 +150,178 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		}()
 	}
 
-	// stdout
-	if scmd.Stdout != nil {
+	// stdout and stderr
+	activity := &outputActivity{}
+	// stopped is set once the handler stops waiting for the copies and
+	// closes the pipes under them. Their reads then fail, which is
+	// expected.
+	var stopped atomic.Bool
+	for _, o := range outputs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := io.Copy(scmd.Stdout, stdout); err != nil {
-				logCopyError(ctx, "stdout", err, false)
+			if _, err := io.Copy(activity.writer(o.dst), o.r); err != nil {
+				logCopyError(ctx, o.name, err, stopped.Load())
 			}
 		}()
 	}
 
-	// stderr
-	if scmd.Stderr != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := io.Copy(scmd.Stderr, stderr); err != nil {
-				logCopyError(ctx, "stderr", err, false)
-			}
-		}()
-	}
-
-	// Ensure all the output is written before waiting for the command to
-	// finish.
-	// Stdin is handled by the client side.
 	copied := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(copied)
 	}()
-	select {
-	case <-copied:
-	case <-ctx.Done():
-		// git is killed for the context, and its output has nowhere to go.
-		// A process git started can still hold the output pipes open after
-		// git is gone, as the git wrapper on Windows does, so the copies may
-		// never finish on their own. Wait closes the pipes once git exits,
-		// which ends them.
-	}
 
 	err = cmd.Wait()
-	<-copied
+	// Ensure all of git's output is written before returning. Stdin is
+	// handled by the client side.
+	waitOutput(ctx, copied, activity, func() {
+		stopped.Store(true)
+		outputs.close()
+	})
+	outputs.close()
 	if err != nil && stoppedByContext(ctx, err, killed.Load()) {
 		// The context was cancelled, usually because the client went away,
 		// and git was killed for it. Report the cancellation rather than
 		// the kill so callers can tell it apart from a git failure.
-		return fmt.Errorf("%s: %w (%v)", svc, ctx.Err(), err)
+		return fmt.Errorf("%s: %w (%w)", svc, ctx.Err(), err)
 	} else if err != nil && errors.Is(err, os.ErrNotExist) {
 		return ErrInvalidRepo
 	} else if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return fmt.Errorf("%s: %s", exitErr, exitErr.Stderr)
+			return fmt.Errorf("%w: %s", exitErr, exitErr.Stderr)
 		}
 
 		return err
 	}
 
 	return nil
+}
+
+// output is one of git's output streams, copied from the read end of its
+// pipe, r, to the client, dst. git writes to w.
+type output struct {
+	name string
+	dst  io.Writer
+	r, w *os.File
+}
+
+// outputs are git's output streams.
+type outputs []output
+
+// outputPipes connects stdout and stderr, those that are set, to the
+// output of cmd through new pipes.
+func outputPipes(cmd *exec.Cmd, stdout, stderr io.Writer) (outputs, error) {
+	var outs outputs
+	for _, o := range []struct {
+		name string
+		dst  io.Writer
+		set  *io.Writer
+	}{
+		{"stdout", stdout, &cmd.Stdout},
+		{"stderr", stderr, &cmd.Stderr},
+	} {
+		if o.dst == nil {
+			continue
+		}
+		if *o.set != nil {
+			outs.close()
+			outs.closeGitEnds()
+			return nil, fmt.Errorf("exec: %s already set", o.name)
+		}
+		r, w, err := os.Pipe()
+		if err != nil {
+			outs.close()
+			outs.closeGitEnds()
+			return nil, err
+		}
+		*o.set = w
+		outs = append(outs, output{name: o.name, dst: o.dst, r: r, w: w})
+	}
+	return outs, nil
+}
+
+// closeGitEnds closes the handler's copies of the write ends git inherits.
+func (outs outputs) closeGitEnds() {
+	for _, o := range outs {
+		o.w.Close() //nolint: errcheck
+	}
+}
+
+// close closes the read ends, which ends copies still reading from them.
+// Closing them again does nothing.
+func (outs outputs) close() {
+	for _, o := range outs {
+		o.r.Close() //nolint: errcheck
+	}
+}
+
+// outputActivity tracks the copies of git's output to the client, to tell
+// whether they still make progress.
+type outputActivity struct {
+	// writes counts the writes to the client that finished.
+	writes atomic.Int64
+	// writing counts the writes to the client in progress.
+	writing atomic.Int64
+}
+
+// writer returns w, recording the writes to it in a.
+func (a *outputActivity) writer(w io.Writer) io.Writer {
+	return activityWriter{w: w, a: a}
+}
+
+// activityWriter is a writer whose writes are recorded in an
+// outputActivity.
+type activityWriter struct {
+	w io.Writer
+	a *outputActivity
+}
+
+func (w activityWriter) Write(p []byte) (int, error) {
+	w.a.writing.Add(1)
+	defer func() {
+		w.a.writes.Add(1)
+		w.a.writing.Add(-1)
+	}()
+	return w.w.Write(p)
+}
+
+// outputIdleTimeout is how long, after git exited, the copies of its output
+// may go without writing anything to the client before the handler stops
+// waiting for them. It is a variable for tests.
+var outputIdleTimeout = waitDelay
+
+// waitOutput waits, after git exited, for the copies of its output to the
+// client to finish. What git wrote is in the pipes by then, but a process
+// git started can hold the pipes open after git is gone: a hook that leaves
+// a process running in the background, or the git wrapper on Windows when
+// git was killed. The copies then never finish on their own, so waitOutput
+// stops waiting once the context is done, since the output has nowhere to
+// go, or once the copies went outputIdleTimeout without writing to the
+// client, and calls closeOutput to close the pipes and end them. A slow
+// client does not count as idle while a write to it is in progress, so it
+// still gets all of git's output.
+func waitOutput(ctx context.Context, copied <-chan struct{}, a *outputActivity, closeOutput func()) {
+	timer := time.NewTimer(outputIdleTimeout)
+	defer timer.Stop()
+	last := a.writes.Load()
+	for {
+		select {
+		case <-copied:
+			return
+		case <-ctx.Done():
+		case <-timer.C:
+			if n := a.writes.Load(); n != last || a.writing.Load() > 0 {
+				last = n
+				timer.Reset(outputIdleTimeout)
+				continue
+			}
+		}
+		closeOutput()
+		<-copied
+		return
+	}
 }
 
 // logCopyError logs a failure to copy between git and the client. A client
