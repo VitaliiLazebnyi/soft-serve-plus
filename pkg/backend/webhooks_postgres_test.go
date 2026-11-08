@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -160,4 +164,44 @@ func waitBlockedBy(e whEnv, holder int, result <-chan error, op string) error {
 // ErrTooManyWebhooks, and none fail with a deadlock or other error.
 func TestCreateWebhookConcurrentPostgres(t *testing.T) {
 	testConcurrentCreates(t, newPostgresWebhookEnv(t))
+}
+
+// Postgres refuses invalid UTF-8 and NUL in TEXT columns. A response with a
+// Latin-1 header, a NUL and a multi-byte body cut off at the size limit must
+// still be recorded, and redelivering it must not report an error.
+func TestWebhookDeliveryNonUTF8ResponsePostgres(t *testing.T) {
+	is := is.New(t)
+	e := newPostgresWebhookEnv(t)
+
+	body := "\x00" + strings.Repeat("€", 64<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Name", "caf\xe9")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
+	id := e.createHook(t, srv.URL+"/hook", webhook.EventRepositoryVisibilityChange)
+
+	is.NoErr(e.be.SetPrivate(e.ctx, "repo", true))
+	e.be.WaitForDeliveries(e.ctx)
+
+	ds, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ResponseStatus, http.StatusOK)
+
+	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, ds[0].ID))
+	ds, err = e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	is.Equal(len(ds), 2)
+	for _, d := range ds {
+		full, err := e.be.WebhookDelivery(e.ctx, e.repo, id, d.ID)
+		is.NoErr(err)
+		is.True(strings.Contains(full.ResponseHeaders, "X-Name: caf�\n"))
+		is.True(strings.HasPrefix(full.ResponseBody, "€€"))
+		is.True(utf8.ValidString(full.ResponseBody))
+		is.True(!strings.Contains(full.ResponseBody, "\x00"))
+	}
 }

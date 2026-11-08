@@ -3,10 +3,7 @@ package webhook
 import (
 	"context"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // RepositoryEvent is a repository payload.
@@ -60,39 +57,19 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 		event = EventRepository
 	}
 
+	repository, err := newRepository(ctx, repo)
+	if err != nil {
+		return RepositoryEvent{}, err
+	}
+
 	payload := RepositoryEvent{
 		Action: action,
 		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
 		},
 	}
-
-	cfg := config.FromContext(ctx)
-	payload.Repository.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	payload.Repository.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	payload.Repository.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
-
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
-	if err != nil {
-		return RepositoryEvent{}, db.WrapError(err)
-	}
-
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
 
 	return payload, nil
 }
