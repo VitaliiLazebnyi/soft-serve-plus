@@ -37,9 +37,12 @@ func TestParseBool(t *testing.T) {
 	}
 }
 
+// wantInvalidBool accepts both the shared parseBool error and the
+// command-specific errors of hidden and allow-keyless; all of them name the
+// accepted values as "true or false".
 func wantInvalidBool(t *testing.T, err error) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "invalid boolean value") {
+	if err == nil || !strings.Contains(err.Error(), "invalid ") || !strings.Contains(err.Error(), "true or false") {
 		t.Fatalf("expected invalid boolean error, got %v", err)
 	}
 }
