@@ -374,6 +374,25 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// --active must refuse anything that is not a boolean, with an error naming
+// the flag, and leave the webhook as it was rather than switching it off.
+func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	id := whCreate(t, ownerCtx, be, "-e", "push", "-a=true")
+	ids := strconv.FormatInt(id, 10)
+	before := whSnapshot(t, ownerCtx, be)
+
+	for _, v := range []string{"yes", "no", "off", "maybe", "True "} {
+		err := runRepo(t, ownerCtx, "webhook", "update", "hooks", ids, "--active", v)
+		if err == nil || !strings.Contains(err.Error(), "invalid active value") {
+			t.Errorf("--active %q: err = %v, want an invalid active value error", v, err)
+		}
+		is.Equal(whSnapshot(t, ownerCtx, be), before)
+	}
+}
+
 func TestWebhookUpdateRejectsBadIDs(t *testing.T) {
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)

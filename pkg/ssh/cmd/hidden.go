@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/spf13/cobra"
@@ -11,7 +14,7 @@ func hiddenCommand() *cobra.Command {
 		Use:               "hidden REPOSITORY [TRUE|FALSE]",
 		Short:             "Hide or unhide a repository",
 		Aliases:           []string{"hide"},
-		Args:              cobra.MinimumNArgs(1),
+		Args:              cobra.RangeArgs(1, 2),
 		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -29,7 +32,12 @@ func hiddenCommand() *cobra.Command {
 					return err
 				}
 
-				hidden := args[1] == "true"
+				// Read anything but a boolean as false would unhide the
+				// repository on a typo such as "True " or "yes".
+				hidden, err := strconv.ParseBool(args[1])
+				if err != nil {
+					return fmt.Errorf("invalid hidden value %q: want true or false", args[1])
+				}
 				if err := be.SetHidden(ctx, rr.Name(), hidden); err != nil {
 					return err
 				}

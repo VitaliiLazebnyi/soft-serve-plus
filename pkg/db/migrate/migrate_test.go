@@ -14,7 +14,7 @@ func TestMigrate(t *testing.T) {
 	// XXX: we need a config.Config in the context for the migrations to run
 	// properly. Some migrations depend on the config being present.
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	dbx, err := test.OpenSqlite(ctx, t)
+	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
