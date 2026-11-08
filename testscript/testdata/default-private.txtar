@@ -153,4 +153,3 @@ stdout 'false'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

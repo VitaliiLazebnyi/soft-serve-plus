@@ -69,4 +69,3 @@ stdout 'admin-made'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

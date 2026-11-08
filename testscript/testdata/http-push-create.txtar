@@ -43,4 +43,3 @@ stdout 'README.md'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

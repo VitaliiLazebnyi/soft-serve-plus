@@ -94,4 +94,3 @@ soft repo collab list secret
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

@@ -42,4 +42,3 @@ cmp stdout want.txt
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

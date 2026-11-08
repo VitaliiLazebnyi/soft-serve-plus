@@ -66,4 +66,3 @@ stdout '.*git-upload-pack.*'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

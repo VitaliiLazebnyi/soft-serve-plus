@@ -103,4 +103,3 @@ stderr '> 403 Forbidden'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

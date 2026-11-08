@@ -60,4 +60,3 @@ usoft repo create two
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

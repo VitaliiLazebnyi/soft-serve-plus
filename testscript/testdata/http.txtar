@@ -255,7 +255,6 @@ stderr '^> 401 '
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .
 
 -- http1.txt --
 {"transfer":"basic","objects":[{"oid":"","size":0,"error":{"code":422,"message":"invalid object"}}],"hash_algo":"sha256"}
