@@ -204,13 +204,31 @@ func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 	return toDiff(diff), nil
 }
 
-// Patch returns the patch for the given reference.
+// Patch returns the patch for the given commit against its first parent, or
+// against the empty tree for a root commit.
+//
+// Unlike [Diff.Patch], which rebuilds a patch from a parsed and size-limited
+// [Diff], this returns git's own output unchanged, so nothing is truncated and
+// markers such as "\ No newline at end of file" are kept. The result can be
+// fed to "git apply".
 func (r *Repository) Patch(commit *Commit) (string, error) {
-	diff, err := r.Diff(commit)
+	args := []string{"diff-tree", "-r", "-p", "--full-index", "-M", "--no-commit-id"}
+	if commit.ParentsCount() == 0 {
+		args = append(args, "--root", commit.ID.String())
+	} else {
+		parent, err := commit.ParentID(0)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, parent.String(), commit.ID.String())
+	}
+	out, err := NewCommand(args...).
+		AddEnvs("GIT_CONFIG_GLOBAL=/dev/null").
+		RunInDir(r.Path)
 	if err != nil {
 		return "", err
 	}
-	return diff.Patch(), err
+	return string(out), nil
 }
 
 // CountCommits returns the number of commits in the repository.

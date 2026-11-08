@@ -318,7 +318,13 @@ func writeFilePatchHeader(sb *strings.Builder, filePatch *DiffFile) {
 	sb.WriteByte('\n')
 }
 
-// Patch returns the diff as a patch.
+// Patch returns the diff as a patch for display.
+//
+// The patch is rebuilt from the parsed diff, which is limited in size (see
+// [DiffMaxFiles], [DiffMaxFileLines] and [DiffMaxLineChars]) and does not keep
+// "\ No newline at end of file" markers, so it is not meant to be applied.
+// When the diff was cut short, a line saying so follows the truncated file and
+// ends the patch. Use [Repository.Patch] for a complete patch.
 func (d *Diff) Patch() string {
 	var p strings.Builder
 	for _, f := range d.Files {
@@ -329,6 +335,12 @@ func (d *Diff) Patch() string {
 				p.WriteString("\n")
 			}
 		}
+		if f.IsIncomplete() {
+			fmt.Fprintf(&p, "[diff of %s truncated]\n", f.Name)
+		}
+	}
+	if d.IsIncomplete() {
+		p.WriteString("[diff truncated]\n")
 	}
 	return p.String()
 }
