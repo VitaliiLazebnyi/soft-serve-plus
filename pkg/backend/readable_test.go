@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -77,4 +78,40 @@ func TestBaseAccessLevelByPublicKey(t *testing.T) {
 
 	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
 	is.Equal(be.BaseAccessLevelByPublicKey(ctx, nil), access.NoAccess)
+}
+
+// TestAccessLevelRowWithoutDirectory verifies a repository row whose
+// directory is gone counts as a taken name, not a free one: listings walk
+// the rows and check each name, so falling back to the level for a missing
+// name would show a private repository to everyone.
+func TestAccessLevelRowWithoutDirectory(t *testing.T) {
+	is := is.New(t)
+	be, _ := newTestBackend(t)
+	ctx := context.Background()
+
+	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
+	is.NoErr(err)
+	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
+	is.NoErr(err)
+	admin, err := be.User(ctx, "admin")
+	is.NoErr(err)
+	_, err = be.CreateRepository(ctx, "secret", owner, proto.RepositoryOptions{
+		Private:     true,
+		Description: "confidential",
+	})
+	is.NoErr(err)
+	is.NoErr(os.RemoveAll(be.repoPath("secret")))
+
+	is.Equal(be.AccessLevelForUser(ctx, "secret", nil), access.NoAccess)
+	is.Equal(be.AccessLevelForUser(ctx, "secret", stranger), access.NoAccess)
+	is.Equal(be.AccessLevelForUser(ctx, "secret", owner), access.NoAccess)
+	is.Equal(be.AccessLevelForUser(ctx, "secret", admin), access.AdminAccess)
+	is.Equal(be.AccessLevelByPublicKey(ctx, "secret", nil), access.NoAccess)
+
+	r, level := be.Readable(ctx, "secret", stranger)
+	is.Equal(r, nil)
+	is.Equal(level, access.NoAccess)
+
+	// A truly free name is unaffected.
+	is.Equal(be.AccessLevelForUser(ctx, "ghost", stranger), access.ReadWriteAccess)
 }
