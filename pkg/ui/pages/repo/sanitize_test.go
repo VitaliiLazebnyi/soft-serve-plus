@@ -87,7 +87,7 @@ func TestCodeSanitisesContent(t *testing.T) {
 
 	f := NewFiles(c)
 	f.SetSize(120, 40)
-	f.Update(FileContentMsg{"package main\n\n// comment" + escapes + "\nfunc main() {}\n", "main.go"})
+	f.Update(FileContentMsg{"package main\n\n// comment" + escapes + "\nfunc main() {}\n", "main.go", false})
 	assertClean(t, f.code.View(), "comment")
 	// The raw bytes are kept for copying to the clipboard.
 	if !strings.Contains(f.currentContent.content, escapes) {
@@ -113,7 +113,7 @@ func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
 	} {
 		f := NewFiles(c)
 		f.SetSize(120, 40)
-		f.Update(FileContentMsg{content, "file.txt"})
+		f.Update(FileContentMsg{content, "file.txt", false})
 		want := "MALICIOUS_CODE"
 		if strings.Contains(content, "VISIBLE_AFTER_C1") {
 			want = "VISIBLE_AFTER_C1"
