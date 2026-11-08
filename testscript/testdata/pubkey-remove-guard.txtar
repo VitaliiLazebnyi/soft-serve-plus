@@ -1,0 +1,38 @@
+# vi: set ft=conf
+
+# `pubkey remove` refuses the key the session authenticated with, so a user
+# cannot sign themselves out, and in particular cannot remove their last key
+# and lock themselves out of the account.
+
+# convert crlf to lf on windows
+[windows] dos2unix user1_keys.txt
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft user create user1 -k "$USER1_AUTHORIZED_KEY"
+
+# the only key is refused
+! usoft pubkey remove "$USER1_AUTHORIZED_KEY"
+stderr 'refusing to remove your last public key'
+usoft pubkey list
+cmpenv stdout user1_keys.txt
+
+# with a second key, the session key is still refused
+soft user add-pubkey user1 "$ATTACKER_AUTHORIZED_KEY"
+! usoft pubkey remove "$USER1_AUTHORIZED_KEY"
+stderr 'refusing to remove the key this session authenticated with'
+
+# another key of the caller can be removed
+usoft pubkey remove "$ATTACKER_AUTHORIZED_KEY"
+usoft pubkey list
+cmpenv stdout user1_keys.txt
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .
+
+-- user1_keys.txt --
+$USER1_AUTHORIZED_KEY
