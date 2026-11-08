@@ -127,7 +127,7 @@ func (r *Repository) References() ([]*Reference, error) {
 // parsed strictly: a ref git cannot resolve, or one that does not resolve to
 // a single object ID, is an ErrRevisionNotExist.
 func (r *Repository) treeID(ref string) (string, error) {
-	out, err := git.NewCommand("rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
+	out, err := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
 	if err != nil {
 		if strings.Contains(err.Error(), "exit status 128") {
 			return "", ErrRevisionNotExist
