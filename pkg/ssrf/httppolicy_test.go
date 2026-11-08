@@ -21,6 +21,7 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		"169.254.10.0/24",
 		"fd00:ec2::254",
 		"0.0.0.0/0:7000",
+		"[fc00::/7]:7001",
 	)
 
 	tests := []struct {
@@ -53,6 +54,13 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		{"broad entry opens private networks", "x.example", "7000", "192.168.1.1", true},
 		{"broad entry does not open metadata", "x.example", "7000", "169.254.169.254", false},
 		{"broad entry does not open Alibaba metadata", "x.example", "7000", "100.100.100.200", false},
+		{"hostname entry never reaches EKS Pod Identity", "hooks.internal", "80", "fd00:ec2::23", false},
+		{"hostname entry never reaches GCE IPv6 metadata", "hooks.internal", "80", "fd20:ce::254", false},
+		{"hostname entry never reaches OCI IPv6 metadata", "hooks.internal", "80", "fd00:c1::a9fe:a9fe", false},
+		{"unique local entry does not open EKS Pod Identity", "x.example", "7001", "fd00:ec2::23", false},
+		{"unique local entry does not open GCE IPv6 metadata", "x.example", "7001", "fd20:ce::254", false},
+		{"unique local entry does not open OCI IPv6 metadata", "x.example", "7001", "fd00:c1::a9fe:a9fe", false},
+		{"unique local entry opens other unique local", "x.example", "7001", "fd00:c1::1", true},
 		{"IPv4-mapped IPv6 is checked as IPv4", "x.example", "80", "::ffff:10.0.0.1", true},
 		{"IPv4-mapped metadata stays blocked", "hooks.internal", "80", "::ffff:169.254.169.254", false},
 	}
@@ -67,7 +75,10 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 
 	// A hostname entry alone opens no metadata or link-local address.
 	hostOnly := mustAllowedHosts(t, "hooks.internal")
-	for _, ip := range []string{"169.254.169.254", "fd00:ec2::254", "100.100.100.200", "fe80::1", "64:ff9b::a9fe:a9fe"} {
+	for _, ip := range []string{
+		"169.254.169.254", "fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "fd00:c1::a9fe:a9fe",
+		"100.100.100.200", "fe80::1", "64:ff9b::a9fe:a9fe",
+	} {
 		if hostOnly.permitsHTTP("hooks.internal", "80", net.ParseIP(ip)) {
 			t.Errorf("hostname entry permits %s", ip)
 		}

@@ -46,8 +46,11 @@ var privateNetworks = []netip.Prefix{
 // They are reachable only through an entry naming the address itself.
 // 169.254.169.254 needs no entry here: link-local is outside privateNetworks.
 var metadataAddrs = []netip.Prefix{
-	netip.MustParsePrefix("fd00:ec2::254/128"),  // AWS IMDS over IPv6
-	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata, inside CGNAT
+	netip.MustParsePrefix("fd00:ec2::254/128"),      // AWS IMDS over IPv6
+	netip.MustParsePrefix("fd00:ec2::23/128"),       // AWS EKS Pod Identity Agent over IPv6
+	netip.MustParsePrefix("fd20:ce::254/128"),       // Google Compute Engine metadata over IPv6
+	netip.MustParsePrefix("fd00:c1::a9fe:a9fe/128"), // Oracle Cloud IMDS over IPv6
+	netip.MustParsePrefix("100.100.100.200/32"),     // Alibaba Cloud metadata, inside CGNAT
 }
 
 // permitsHTTP reports whether an HTTP request to host (as named in the URL)
