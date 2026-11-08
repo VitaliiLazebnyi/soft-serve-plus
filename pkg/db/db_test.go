@@ -119,6 +119,10 @@ func TestPostgresConfigConnectTimeout(t *testing.T) {
 		if cfg.ConnectTimeout != want {
 			t.Errorf("postgresConfig(%q).ConnectTimeout = %v, want %v", dsn, cfg.ConnectTimeout, want)
 		}
+		// The connect timeout must not drop the UTC session time zone.
+		if got := cfg.Runtime["timezone"]; got != "UTC" {
+			t.Errorf("postgresConfig(%q): timezone = %q, want UTC", dsn, got)
+		}
 	}
 
 	// PGCONNECT_TIMEOUT is honoured as lib/pq honours it.
@@ -141,7 +145,7 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 	defaultPostgresConnectTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { defaultPostgresConnectTimeout = old })
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
