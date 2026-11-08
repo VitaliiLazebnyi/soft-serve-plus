@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -139,6 +141,40 @@ func TestCustomConfigLocation(t *testing.T) {
 	is.NoErr(os.Setenv("SOFT_SERVE_CONFIG_LOCATION", "testdata/config_nonexistent.yaml"))
 	cfg = DefaultConfig()
 	is.Equal(cfg.Name, "Soft Serve Plus")
+}
+
+func TestCheckConfigLocation(t *testing.T) {
+	td := t.TempDir()
+	t.Setenv("SOFT_SERVE_DATA_PATH", td)
+	existing := filepath.Join(td, "custom.yaml")
+	if err := os.WriteFile(existing, []byte("name: custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		location string
+		wantErr  bool
+	}{
+		"unset":                    {location: ""},
+		"existing file":            {location: existing},
+		"missing file":             {location: filepath.Join(td, "missing.yaml"), wantErr: true},
+		"missing default location": {location: filepath.Join(td, "config.yaml")},
+		"missing directory":        {location: filepath.Join(td, "nodir", "config.yaml"), wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_CONFIG_LOCATION", tc.location)
+			err := DefaultConfig().CheckConfigLocation()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_CONFIG_LOCATION") {
+					t.Fatalf("CheckConfigLocation() = %v, want an error naming the variable", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CheckConfigLocation() = %v, want nil", err)
+			}
+		})
+	}
 }
 
 func TestDefaultRepoDisabledByDefault(t *testing.T) {
@@ -701,5 +737,30 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	}
 	if !slices.Equal(fromFile.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
 		t.Fatalf("AllowedHosts from file = %q", fromFile.Webhook.AllowedHosts)
+	}
+}
+
+// WriteConfig keeps the config, which can hold a database password, and a
+// data directory it creates private to the server's user.
+func TestWriteConfigIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	cfg := DefaultConfig()
+	cfg.DataPath = filepath.Join(t.TempDir(), "data")
+	if err := cfg.WriteConfig(); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		cfg.DataPath:     0o700,
+		cfg.ConfigPath(): 0o600,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %v, want %v", path, got, want)
+		}
 	}
 }
