@@ -193,7 +193,7 @@ func TestBearerWithoutHostKey(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", bearer)
-	_, err = authenticate(req, "secret")
+	_, _, err = authenticate(req, "secret")
 	is.True(errors.Is(err, ErrInvalidToken))
 	is.True(errors.Is(err, fs.ErrNotExist))
 
