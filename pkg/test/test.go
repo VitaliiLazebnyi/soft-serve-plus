@@ -59,7 +59,7 @@ const (
 //
 // Reservations are never released, so one process gets at most
 // maxPort-minPort (12,000) ports in total, fewer when other processes hold
-// some. A full testscript pass takes four per script (228 for 57 scripts), so
+// some. A full testscript pass takes four per script (236 for 59 scripts), so
 // a single process can run it about 50 times (for example with -count) before
 // RandomPort panics.
 // This is mainly used for testing.
