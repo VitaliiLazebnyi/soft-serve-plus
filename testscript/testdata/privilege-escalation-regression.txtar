@@ -87,15 +87,19 @@ soft repo collab add shared boss admin-access
 # a placeholder to reset stderr
 soft help
 
-# boss is still an admin-access collaborator, and user1 did not escalate.
+# boss is still a collaborator and keeps admin access (webhook list needs
+# it), and user1 did not escalate to admin access.
 soft repo collab list shared
-stdout 'boss'
+stdout '^boss$'
+attacksoft repo webhook list shared
+! usoft repo webhook list shared
+stderr 'unauthorized'
 
 # Granting at or below the caller's own level still works.
 soft user create peer
 usoft repo collab add shared peer read-only
 soft repo collab list shared
-stdout 'peer'
+stdout '^peer$'
 
 # Webhook deliveries must be scoped to the named repository. The attacker has
 # admin access to their own repo "user1", which must not expose the webhook
@@ -103,7 +107,7 @@ stdout 'peer'
 new-webhook WH_SHARED
 soft repo webhook create shared $WH_SHARED -e push
 soft repo webhook list shared
-stdout '1.*'
+stdout '│1 *│[^│]*/hooks/WH_SHARED│'
 ! usoft repo webhook deliveries list user1 1
 ! usoft repo webhook deliveries get user1 1 00000000-0000-0000-0000-000000000000
 
