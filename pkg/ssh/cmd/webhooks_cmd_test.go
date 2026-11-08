@@ -772,7 +772,11 @@ func TestWebhookListReportsStoreFailure(t *testing.T) {
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
-	failCtx := store.WithContext(ownerCtx, failingWebhookStore{Store: store.FromContext(ownerCtx)})
+	// The backend lists webhooks through its own store, not the context's,
+	// so the failing store goes into a backend over the same database.
+	failStore := failingWebhookStore{Store: store.FromContext(ownerCtx)}
+	failBe := backend.New(ownerCtx, config.FromContext(ownerCtx), db.FromContext(ownerCtx), failStore)
+	failCtx := backend.WithContext(store.WithContext(ownerCtx, failStore), failBe)
 
 	stdout, _, err := runRepoOutput(t, failCtx, "webhook", "list", "hooks")
 	is.True(err != nil)
