@@ -104,6 +104,12 @@ func branchDefaultCommand() *cobra.Command {
 					return git.ErrReferenceNotExist
 				}
 
+				// The default branch before the change, for the event. HEAD
+				// can name a branch that does not exist yet, so it is read
+				// as a symbolic ref rather than resolved.
+				oldHead, _ := r.SymbolicRef(git.HEAD, "")
+				oldBranch := git.ReferenceName(oldHead).Short()
+
 				if _, err := r.SymbolicRef(git.HEAD, gitm.RefsHeads+branch, gitm.SymbolicRefOptions{
 					CommandOptions: gitm.CommandOptions{
 						Context: ctx,
@@ -119,7 +125,7 @@ func branchDefaultCommand() *cobra.Command {
 				// and sent even if the session ends now.
 				ctx, cancel := backend.AfterChangeContext(ctx)
 				defer cancel()
-				wh, err := webhook.NewRepositoryEvent(ctx, user, rr, webhook.RepositoryEventActionDefaultBranchChange)
+				wh, err := webhook.NewDefaultBranchChangeEvent(ctx, user, rr, oldBranch)
 				if err != nil {
 					log.Error("default branch changed but webhook event skipped", "err", err)
 					return nil
