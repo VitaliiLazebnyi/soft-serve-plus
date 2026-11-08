@@ -15,6 +15,7 @@ permissions: {} # each job asks for exactly what it needs
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -29,6 +30,7 @@ jobs:
   goreleaser:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # The "release" environment requires the maintainer's approval before
     # this job starts, and only accepts v* tags.
     environment: release
