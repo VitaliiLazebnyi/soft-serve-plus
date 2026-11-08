@@ -766,7 +766,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return nil
 	}
 
-	wh, err := webhook.NewRepositoryEvent(ctx, user, repo, webhook.RepositoryEventActionRename)
+	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
 		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
 		return nil

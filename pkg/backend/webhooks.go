@@ -368,22 +368,44 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		payload = raw
 	}
 
-	return webhook.SendWebhook(ctx, wh, webhook.Event(delivery.Event), payload)
+	// The redelivery keeps the GUID the receiver was first sent, so it can
+	// tell the event apart from a new one. A delivery recorded before GUIDs
+	// were kept across redeliveries may lack a usable header; its own id is
+	// the GUID it was sent with then.
+	guid := delivery.ID
+	if v, ok := storedHeader(delivery.RequestHeaders, webhook.HeaderDelivery); ok {
+		if parsed, err := uuid.Parse(v); err == nil {
+			guid = parsed
+		}
+	}
+
+	return webhook.RedeliverWebhook(ctx, wh, webhook.Event(delivery.Event), payload, guid)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
-// request headers, which hold one "Name: value" line per header. It reports
-// false when there is no Content-Type line.
+// request headers. It reports false when there is no Content-Type line.
 func storedContentType(headers string) (webhook.ContentType, bool, error) {
+	value, ok := storedHeader(headers, "Content-Type")
+	if !ok {
+		return 0, false, nil
+	}
+	ct, err := webhook.ParseContentType(value)
+	return ct, true, err
+}
+
+// storedHeader returns the first value of the header name from a delivery's
+// stored request headers, which hold one "Name: value" line per header. Names
+// are matched without regard to case. It reports false when there is no such
+// line.
+func storedHeader(headers, name string) (string, bool) {
 	for _, line := range strings.Split(headers, "\n") {
-		name, value, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Type") {
+		k, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), name) {
 			continue
 		}
-		ct, err := webhook.ParseContentType(strings.TrimSpace(value))
-		return ct, true, err
+		return strings.TrimSpace(value), true
 	}
-	return 0, false, nil
+	return "", false
 }
 
 // WebhookDelivery returns a webhook delivery for a webhook belonging to the

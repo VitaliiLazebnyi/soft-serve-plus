@@ -1,11 +1,13 @@
 package webhook
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/google/go-querystring/query"
 	"github.com/matryer/is"
 )
 
@@ -130,6 +132,67 @@ func TestNewRepositoryEventOtherActions(t *testing.T) {
 	}
 }
 
+// Events other than renames and default branch changes leave changes out.
+func TestNewRepositoryEventNoChanges(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+
+	ev, err := NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), RepositoryEventActionDelete)
+	is.NoErr(err)
+	is.True(ev.Changes == nil)
+	b, err := json.Marshal(ev)
+	is.NoErr(err)
+	is.True(!strings.Contains(string(b), `"changes"`))
+	v, err := query.Values(ev)
+	is.NoErr(err)
+	for k := range v {
+		is.True(!strings.HasPrefix(k, "changes"))
+	}
+}
+
+func TestNewRepositoryRenameEvent(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+
+	ev, err := NewRepositoryRenameEvent(e.ctx, e.sender(), e.senderRepo(""), "old-name")
+	is.NoErr(err)
+	is.Equal(ev.EventType, EventRepository)
+	is.Equal(ev.Action, RepositoryEventActionRename)
+	b, err := json.Marshal(ev)
+	is.NoErr(err)
+	is.True(strings.Contains(string(b), `"changes":{"name":{"from":"old-name"}}`))
+	v, err := query.Values(ev)
+	is.NoErr(err)
+	is.Equal(v.Get("changes[name][from]"), "old-name")
+	is.Equal(v.Get("changes[default_branch][from]"), "")
+}
+
+func TestNewDefaultBranchChangeEvent(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+
+	ev, err := NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.senderRepo(""), "master")
+	is.NoErr(err)
+	is.Equal(ev.EventType, EventRepository)
+	is.Equal(ev.Action, RepositoryEventActionDefaultBranchChange)
+	b, err := json.Marshal(ev)
+	is.NoErr(err)
+	is.True(strings.Contains(string(b), `"changes":{"default_branch":{"from":"master"}}`))
+	v, err := query.Values(ev)
+	is.NoErr(err)
+	is.Equal(v.Get("changes[default_branch][from]"), "master")
+}
+
+func TestRepositoryChangeEventsOwnerLookupFails(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+
+	_, err := NewRepositoryRenameEvent(e.ctx, e.sender(), e.ownerLess(), "old")
+	is.True(err != nil)
+	_, err = NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.ownerLess(), "old")
+	is.True(err != nil)
+}
+
 func TestNewRepositoryEventOwnerLookupFails(t *testing.T) {
 	is := is.New(t)
 	e := newTestEnv(t)
@@ -173,6 +236,127 @@ func TestNewPushEventRangePush(t *testing.T) {
 	// Only commits after `before` are listed.
 	is.Equal(len(ev.Commits), 1)
 	is.Equal(ev.Commits[0].Title, "second commit")
+}
+
+// commitOn writes a commit with an empty tree on top of parent (none when
+// parent is empty) into the bare repository at path and returns its id.
+func commitOn(t *testing.T, path, parent, msg string) string {
+	t.Helper()
+	tree := gitOutput(t, path, "mktree")
+	args := []string{"-c", "user.name=Alice", "-c", "user.email=alice@example.com", "commit-tree", tree, "-m", msg}
+	if parent != "" {
+		args = append(args, "-p", parent)
+	}
+	return gitOutput(t, path, args...)
+}
+
+// A new branch lists only the commits no other branch or tag has, whether
+// the ref already points at after (post-receive) or not yet (update hook).
+func TestNewPushEventNewBranchListsOnlyNewCommits(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+	dev := commitOn(t, path, head, "dev commit")
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
+	is.NoErr(err)
+	is.Equal(len(ev.Commits), 1)
+	is.Equal(ev.Commits[0].ID, dev)
+	is.True(!ev.Forced)
+
+	runGit(t, path, "update-ref", "refs/heads/dev", dev)
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
+	is.NoErr(err)
+	is.Equal(len(ev.Commits), 1)
+	is.Equal(ev.Commits[0].ID, dev)
+
+	// Commits a tag already has are not new either.
+	runGit(t, path, "update-ref", "refs/heads/dev", head)
+	runGit(t, path, "update-ref", "refs/tags/v1", dev)
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/other", zeroHash, dev)
+	is.NoErr(err)
+	is.Equal(len(ev.Commits), 0)
+}
+
+// A new branch at a commit another branch already has brings no commits.
+func TestNewPushEventNewBranchAtExistingCommit(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+	runGit(t, path, "update-ref", "refs/heads/copy", head)
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/copy", zeroHash, head)
+	is.NoErr(err)
+	is.Equal(len(ev.Commits), 0)
+	// An empty list, not null.
+	is.True(ev.Commits != nil)
+}
+
+func TestNewPushEventForced(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+	first := gitOutput(t, path, "rev-parse", "main~1")
+	other := commitOn(t, path, first, "rewritten second")
+	unrelated := commitOn(t, path, "", "unrelated root")
+
+	// A fast-forward is not forced.
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
+	is.NoErr(err)
+	is.True(!ev.Forced)
+
+	// Rewriting the last commit is.
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, other)
+	is.NoErr(err)
+	is.True(ev.Forced)
+	is.Equal(len(ev.Commits), 1)
+	is.Equal(ev.Commits[0].ID, other)
+
+	// So is moving back, and moving to an unrelated history.
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, first)
+	is.NoErr(err)
+	is.True(ev.Forced)
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, unrelated)
+	is.NoErr(err)
+	is.True(ev.Forced)
+}
+
+// Annotated tags are compared by the commits they point at.
+func TestNewPushEventForcedAnnotatedTag(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+	tagOn := func(commit string) string {
+		runGit(t, path, "-c", "user.name=Alice", "-c", "user.email=alice@example.com",
+			"tag", "-f", "-a", "-m", "release", "v1", commit)
+		return gitOutput(t, path, "rev-parse", "refs/tags/v1")
+	}
+	older := tagOn("main~1")
+	newer := tagOn(head)
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", older, newer)
+	is.NoErr(err)
+	is.True(!ev.Forced)
+
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", newer, older)
+	is.NoErr(err)
+	is.True(ev.Forced)
+}
+
+func TestNewPushEventPusher(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	is.NoErr(err)
+	is.Equal(ev.Pusher.Username, "alice")
+	is.Equal(ev.Pusher.ID, e.owner.ID)
+
+	// A push without a user has an empty pusher.
+	ev, err = NewPushEvent(e.ctx, nil, e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	is.NoErr(err)
+	is.Equal(ev.Pusher, User{})
 }
 
 func TestNewPushEventUnknownAfterFails(t *testing.T) {
