@@ -130,3 +130,41 @@ func TestReferencesEmpty(t *testing.T) {
 		t.Fatalf("References of an empty repository = %v, %v; want none", refs, err)
 	}
 }
+
+// TestLsTreeRejectsBadRefs checks that a ref that is not a single revision,
+// or that looks like a rev-parse option, is reported as a missing revision
+// instead of panicking or reaching rev-parse as an option.
+func TestLsTreeRejectsBadRefs(t *testing.T) {
+	t.Parallel()
+	repo, ref := setupTestRepo(t)
+
+	for _, bad := range []string{
+		"^HEAD",
+		"^" + ref.ID,
+		"HEAD^@",
+		"HEAD^!",
+		"--git-dir",
+		"--",
+		"-- --git-dir",
+		"HEAD..HEAD",
+		"nope",
+		"",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			t.Parallel()
+			if _, err := repo.LsTree(bad); !errors.Is(err, ErrRevisionNotExist) {
+				t.Fatalf("LsTree(%q) error = %v, want ErrRevisionNotExist", bad, err)
+			}
+		})
+	}
+
+	for _, good := range []string{"HEAD", ref.ID, ref.ID[:7], ref.Name().Short() + "~0", "HEAD^{tree}"} {
+		tree, err := repo.LsTree(good)
+		if err != nil {
+			t.Fatalf("LsTree(%q): %v", good, err)
+		}
+		if _, err := tree.TreeEntry("dot_config/bat"); err != nil {
+			t.Fatalf("LsTree(%q).TreeEntry: %v", good, err)
+		}
+	}
+}

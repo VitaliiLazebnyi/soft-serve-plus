@@ -1,12 +1,18 @@
 package repo
 
 import (
+	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
 // openRepo is a proto.Repository that only opens a repository on disk.
@@ -105,4 +111,62 @@ func refs(t *testing.T, r *git.Repository) []*git.Reference {
 		t.Fatal(err)
 	}
 	return refs
+}
+
+// runCmd runs cmd and every command it batches, returning the messages.
+func runCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var msgs []tea.Msg
+		for _, c := range batch {
+			msgs = append(msgs, runCmd(c)...)
+		}
+		return msgs
+	}
+	return []tea.Msg{msg}
+}
+
+// `l` and `→` open the highlighted branch or tag; they must not also turn
+// the page, which would open an item on the next page instead.
+func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	for i := range 30 {
+		gitRun(t, dir, "branch", fmt.Sprintf("b%02d", i))
+	}
+
+	for _, k := range []tea.KeyPressMsg{
+		{Code: 'l', Text: "l"},
+		{Code: tea.KeyRight},
+	} {
+		t.Run(k.String(), func(t *testing.T) {
+			ctx := config.WithContext(context.Background(), config.DefaultConfig())
+			r := NewRefs(common.NewCommon(ctx, 80, 10), git.RefsHeads)
+			r.SetSize(80, 10)
+			r.Update(RepoMsg(openRepo{path: dir}))
+			r.Update(r.updateItemsCmd())
+			if r.selector.TotalPages() < 2 {
+				t.Fatalf("want several pages, got %d", r.selector.TotalPages())
+			}
+			want := r.selector.SelectedItem().ID()
+
+			_, cmd := r.Update(k)
+			if p := r.selector.Page(); p != 0 {
+				t.Errorf("%s turned the page to %d", k, p)
+			}
+			var got string
+			for _, msg := range runCmd(cmd) {
+				if sel, ok := msg.(selector.SelectMsg); ok {
+					got = sel.ID()
+				}
+			}
+			if got != want {
+				t.Errorf("%s selected %q, want %q", k, got, want)
+			}
+		})
+	}
 }
