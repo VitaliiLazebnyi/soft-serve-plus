@@ -273,7 +273,8 @@ func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess acc
 // ReadableRepositories returns every repository user may read. It gives
 // each the level Readable would, but loads the anonymous level and the
 // user's collaborations once for the whole list instead of once per
-// repository.
+// repository. Like Readable, it leaves out a row whose directory is gone
+// for everyone but admins, who are listed every row.
 func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]proto.Repository, error) {
 	repos, err := d.Repositories(ctx)
 	if err != nil {
@@ -302,6 +303,11 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 
 	readable := make([]proto.Repository, 0, len(repos))
 	for _, r := range repos {
+		// A row with no directory is NoAccess for every non-admin, owner
+		// and collaborators included (see accessLevel).
+		if !d.repoPathExists(r.Name()) {
+			continue
+		}
 		collabAccess, isCollab := collabs[r.ID()]
 		if repoAccessLevel(r, user, anon, collabAccess, isCollab) >= access.ReadOnlyAccess {
 			readable = append(readable, r)
