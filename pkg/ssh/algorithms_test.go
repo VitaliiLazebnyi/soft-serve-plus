@@ -267,7 +267,7 @@ func wantAuthFailure(t *testing.T, err error, what string) {
 func TestSSHServerRefusesSHA1SignaturesByDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	signers := rsaSigners(t, gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSASHA512, gossh.KeyAlgoRSA)
 	for _, a := range []string{gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSASHA512} {
@@ -282,7 +282,7 @@ func TestSSHServerHonoursConfiguredPublicKeyAuthAlgorithms(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoRSA}
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	signers := rsaSigners(t, gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSA)
 	if err := dialWithSigner(addr, signers[gossh.KeyAlgoRSA]); err != nil {
