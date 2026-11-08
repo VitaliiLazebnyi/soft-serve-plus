@@ -3,12 +3,20 @@ name: dependency-review
 on:
   pull_request:
 
+# A new push to a pull request cancels the run for its previous push. Other
+# runs (pushes to main) get a group of their own, so they are never cancelled
+# or held back as pending.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Block new dependencies with known vulnerabilities
