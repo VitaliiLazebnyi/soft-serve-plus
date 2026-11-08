@@ -11,14 +11,19 @@ soft repo create repo-empty -d 'description' -H -p -n 'repo-empty'
 # clone repo
 git clone ssh://localhost:$SSH_PORT/repo-empty repo-empty
 
-# push repo without any commits
-! git -C repo-empty push origin HEAD
-
 # push repo with a commit
 mkfile ./repo-empty/README.md '# Hello\n\nwelcome'
 git -C repo-empty add README.md
 git -C repo-empty commit -m 'first'
 git -C repo-empty push origin HEAD
+# the hooks print nothing of their own, such as a coverage warning
+! stderr 'GOCOVERDIR'
+
+# the commit reached the server
+soft repo branch list repo-empty
+stdout '^master$'
+soft repo blob repo-empty README.md
+stdout '# Hello'
 
 # a push that leaves no branch succeeds: a tag-only push that creates a repo
 git -C repo-empty tag v1
