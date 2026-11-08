@@ -43,7 +43,7 @@ func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 	var f *os.File
 	if cfg.Log.Path != "" {
 		var err error
-		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
 		if err != nil {
 			return logger, nil, err
 		}

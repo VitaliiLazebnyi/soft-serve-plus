@@ -49,7 +49,7 @@ var (
 			// Create custom hooks directory if it doesn't exist
 			customHooksPath := filepath.Join(cfg.DataPath, "hooks")
 			if _, err := os.Stat(customHooksPath); err != nil && os.IsNotExist(err) {
-				if err := os.MkdirAll(customHooksPath, os.ModePerm); err != nil {
+				if err := os.MkdirAll(customHooksPath, 0o700); err != nil {
 					return fmt.Errorf("create hooks directory: %w", err)
 				}
 				// Generate update hook example without executable permissions
@@ -62,7 +62,7 @@ var (
 
 			// Create log directory if it doesn't exist
 			logPath := filepath.Join(cfg.DataPath, "log")
-			if err := os.MkdirAll(logPath, os.ModePerm); err != nil {
+			if err := os.MkdirAll(logPath, 0o700); err != nil {
 				return fmt.Errorf("create log directory: %w", err)
 			}
 

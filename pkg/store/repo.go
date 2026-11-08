@@ -10,6 +10,14 @@ import (
 // RepositoryStore is an interface for managing repositories.
 type RepositoryStore interface {
 	GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error)
+	GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
+	// GetRepoByNameForUpdate is GetRepoByName that also locks the row until
+	// the transaction ends, on Postgres, with FOR UPDATE: the only row lock
+	// that also holds off the key-share lock a foreign key check takes, so
+	// no collaborator, webhook or LFS row can be added for the repository
+	// meanwhile. On SQLite a writing transaction already excludes other
+	// writers, and it is GetRepoByName.
+	GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error)
 	GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, error)
 	GetUserRepos(ctx context.Context, h db.Handler, userID int64) ([]models.Repo, error)
 	CreateRepo(ctx context.Context, h db.Handler, name string, userID int64, projectName string, description string, isPrivate bool, isHidden bool, isMirror bool, isAnonymous bool) error
@@ -22,6 +30,8 @@ type RepositoryStore interface {
 	// Postgres, so that concurrent callers that insert a repository owned by
 	// userID and then count take turns. On SQLite callers take turns because
 	// the insert already holds the write lock, and it does nothing.
+	// Backend.RemoveOwnPublicKey takes it too, so that removals of a user's
+	// keys count the remaining keys in turn.
 	LockUserRepos(ctx context.Context, h db.Handler, userID int64) error
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error
