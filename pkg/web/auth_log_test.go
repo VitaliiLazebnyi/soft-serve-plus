@@ -69,6 +69,10 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 		// placeholder password; both lookups fail.
 		{"basic token with placeholder", basic(badToken, "x-oauth-basic"), false, "basic", []string{badToken}, nil},
 		{"basic jwt with placeholder", basic(badJWT, "x-oauth-basic"), false, "basic", []string{badJWT}, nil},
+		{"basic valid token with placeholder", basic(f.token, "x-oauth-basic"), true, "basic", []string{f.token}, nil},
+		{"basic token as password, empty username", basic("", f.token), true, "basic", []string{f.token}, nil},
+		// Another user's name with the token is refused and logged.
+		{"basic token of another user", basic("owner", f.token), false, "basic", []string{f.token}, []string{"username=owner"}},
 		// A malformed header whose first word is the credential.
 		{"malformed", badToken + " x", false, "other", []string{badToken}, nil},
 	} {
