@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // ReadmeMsg is a message sent when the readme is loaded.
@@ -119,7 +120,9 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.isLoading = false
 		r.readmePath = msg.Path
 		r.code.GotoTop()
-		cmds = append(cmds, r.code.SetContent(msg.Content, msg.Path))
+		// The README comes from the repository; glamour passes escape
+		// sequences through to the terminal.
+		cmds = append(cmds, r.code.SetContent(utils.Sanitize(msg.Content), msg.Path))
 	case spinner.TickMsg:
 		if r.isLoading && r.spinner.ID() == msg.ID {
 			s, cmd := r.spinner.Update(msg)
