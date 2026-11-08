@@ -217,7 +217,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
-		if d.repoPathExists(name) {
+		// So is a row with no directory (removed by hand, a partial restore
+		// or an unmounted volume): its settings are unknown to the caller,
+		// so it must not fall back to the level for a free name, which would
+		// show a private repository in listings that walk the rows.
+		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
 		return d.baseAccessLevel(ctx, user)
@@ -228,8 +232,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.AdminAccess
 	}
 
-	// If the user is a collaborator, they have return their access level.
-	// The anonymous floor only applies to public repositories.
+	// On a public repository the anonymous level is a floor for everyone:
+	// a registered user, collaborator or not, never gets less than an
+	// anonymous caller could. On a private repository it does not apply.
+	//
+	// If the user is a collaborator, they have their access level.
 	collabAccess, isCollab, _ := d.IsCollaborator(ctx, name, username)
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
@@ -243,8 +250,9 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.NoAccess
 	}
 
-	// Otherwise, the user has read-only access.
-	if user == nil {
+	// Otherwise, anonymous users have the anonymous level, and registered
+	// users read-only or the anonymous level, whichever is higher.
+	if user == nil || anon > access.ReadOnlyAccess {
 		return anon
 	}
 
@@ -501,7 +509,13 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	}
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		// Lock the user's row before looking for their repositories: on
+		// Postgres a repository inserted meanwhile would otherwise be
+		// missed here and then removed by the cascade below, its
+		// directory left behind. The lock waits for such an insert to
+		// commit, so the query below sees it, and keeps new ones out
+		// until the user is gone.
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return err
 		}
@@ -538,6 +552,50 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 			return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
 		}),
 	)
+}
+
+// ErrLastPublicKey is returned by RemoveOwnPublicKey when the key is the
+// account's only public key.
+var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
+
+// RemoveOwnPublicKey is RemovePublicKey for a user removing a key from their
+// own account: it refuses, with ErrLastPublicKey, to remove the account's
+// only key, which would leave no way to sign in over SSH.
+//
+// The count and the removal happen in one transaction that holds the user's
+// row (LockUserRepos takes the row lock on Postgres; SQLite transactions
+// begin IMMEDIATE and take turns), so two sessions of one user that each
+// remove the other's key at once cannot both pass the check and leave the
+// account with no keys: the second sees one key left and is refused.
+func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		if err != nil {
+			return err
+		}
+		if err := d.store.LockUserRepos(ctx, tx, user.ID); err != nil {
+			return err
+		}
+		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
+		if err != nil {
+			return err
+		}
+		if len(keys) <= 1 && slices.ContainsFunc(keys, func(k ssh.PublicKey) bool {
+			return sshutils.KeysEqual(k, pk)
+		}) {
+			return ErrLastPublicKey
+		}
+		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+	})
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrUserNotFound
+	}
+	return db.WrapError(err)
 }
 
 // ListPublicKeys lists the public keys of a user.

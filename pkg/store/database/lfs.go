@@ -189,7 +189,7 @@ func (*lfsStore) GetLFSObjectByOid(ctx context.Context, tx db.Handler, repoID in
 // GetLFSObjects implements store.LFSStore.
 func (*lfsStore) GetLFSObjects(ctx context.Context, tx db.Handler, repoID int64) ([]models.LFSObject, error) {
 	var objs []models.LFSObject
-	query := tx.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ?;`)
+	query := tx.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? ORDER BY id;`)
 	err := tx.SelectContext(ctx, &objs, query, repoID)
 	return objs, db.WrapError(err)
 }
@@ -201,7 +201,8 @@ func (*lfsStore) GetLFSObjectsByName(ctx context.Context, tx db.Handler, name st
 		SELECT lfs_objects.*
 		FROM lfs_objects
 		INNER JOIN repos ON lfs_objects.repo_id = repos.id
-		WHERE repos.name = ?;
+		WHERE repos.name = ?
+		ORDER BY lfs_objects.id;
 	`)
 	err := tx.SelectContext(ctx, &objs, query, name)
 	return objs, db.WrapError(err)
