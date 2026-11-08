@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -65,5 +67,32 @@ func TestInitBackendContextAppliesPoolLimits(t *testing.T) {
 	t.Cleanup(func() { _ = dbx.Close() })
 	if got := dbx.Stats().MaxOpenConnections; got != 7 {
 		t.Errorf("MaxOpenConnections = %d, want 7", got)
+	}
+}
+
+// InitBackendContext creates a missing data directory that only the
+// server's user can open, since it holds private repositories and the
+// database.
+func TestInitBackendContextCreatesPrivateDataPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataPath = filepath.Join(t.TempDir(), "data")
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c := &cobra.Command{}
+	c.SetContext(config.WithContext(context.Background(), cfg))
+	if err := InitBackendContext(c, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.FromContext(c.Context()).Close() })
+	fi, err := os.Stat(cfg.DataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Errorf("data path mode = %v, want %v", got, os.FileMode(0o700))
 	}
 }
