@@ -43,9 +43,14 @@ func TestHandlerMapsErrors(t *testing.T) {
 		if err := h.SelectContext(ctx, &ns, "SELECT n FROM t"); err != nil || len(ns) != 1 {
 			t.Errorf("SelectContext = %v, %v; want [1], nil", ns, err)
 		}
-		if _, err := h.QueryxContext(ctx, "SELECT n FROM missing"); err == nil {
+		func() {
+			rows, err := h.QueryxContext(ctx, "SELECT n FROM missing")
+			if err != nil {
+				return
+			}
+			defer rows.Close() //nolint:errcheck
 			t.Error("QueryxContext on a missing table: err = nil, want error")
-		}
+		}()
 	}
 
 	t.Run("DB", func(t *testing.T) { check(t, d) })
