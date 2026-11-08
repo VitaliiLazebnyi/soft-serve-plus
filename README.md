@@ -86,14 +86,23 @@ and database.
 
 By default, program configuration is stored within the `data` directory. But,
 this can be overridden by setting a custom path to a config file with `SOFT_SERVE_CONFIG_LOCATION`
-that is pre-created. If a config file pointed to by `SOFT_SERVE_CONFIG_LOCATION`,
-the default location within the `data` dir is used for generating a default config.
+that is pre-created. If the file pointed to by `SOFT_SERVE_CONFIG_LOCATION` does
+not exist, Soft Serve Plus refuses to start instead of falling back to the default
+config. The one exception is `$SOFT_SERVE_DATA_PATH/config.yaml`, the default
+location, where a default config is generated on the first start.
 
 To change the default data path use `SOFT_SERVE_DATA_PATH` environment variable.
 
 ```sh
 SOFT_SERVE_DATA_PATH=/var/lib/soft-serve soft serve
 ```
+
+Soft Serve Plus creates the data directory with mode `0700` and the default
+`config.yaml` with mode `0600`, so other local users cannot read repositories,
+the database or secrets. A directory or config that already exists keeps its
+mode; tighten it yourself (`chmod 700 data`) if it is group- or world-readable.
+Packages install `/etc/soft-serve.conf` with mode `0600`, and an upgrade
+tightens an existing one that still has the old `0644` mode.
 
 When you run Soft Serve Plus for the first time, make sure you have the
 `SOFT_SERVE_INITIAL_ADMIN_KEYS` environment variable is set to your ssh
@@ -368,6 +377,9 @@ lfs:
 # Cron job configuration
 jobs:
   mirror_pull: "@every 10m"
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
@@ -551,6 +563,10 @@ soft serve
 ```
 
 You can specify a database connection password in the _data source_ url. For example, `postgres://myuser:dbpass@localhost:5432/my_soft_serve_db`.
+
+Soft Serve Plus always sets the session `TimeZone` to UTC, overriding any
+`timezone` in the data source and the server's default, because it stores
+times in UTC.
 
 By default the connection pool has no limit on open connections, so a burst
 of requests can use up Postgres' `max_connections`. Set `db.max_open_conns`
@@ -763,6 +779,14 @@ delete, rename or change the visibility of any of them.
 
 `read-only` can read public repos.
 
+On a public repo, `anon-access` is a floor for everyone: registered users and
+collaborators never get less than an anonymous caller would, so with
+`anon-access: read-write` every user can push to public repos, and a
+`read-only` collaborator on a public repo has read-write. Registered users
+always have at least `read-only` on public repos. On a private repo,
+`anon-access` does not apply: only the owner, collaborators (at their own
+level) and admins have access.
+
 `no-access` denies access to all repos.
 
 ## User Management
@@ -956,6 +980,8 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
 
+Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
+
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
 ### Deleting Repositories
@@ -1101,6 +1127,36 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+#### Delivery headers and signatures
+
+Every webhook request carries these headers:
+
+- `X-SoftServe-Event`: the event, such as `push` or `repository`.
+- `X-SoftServe-Delivery`: a GUID for the event. A redelivery sends the GUID
+  of the delivery it repeats, so a receiver can skip an event it has already
+  handled.
+- `X-SoftServe-Timestamp`: when the request was signed, in seconds since the
+  Unix epoch. A redelivery gets a new timestamp.
+
+A webhook with a secret also signs each request with HMAC-SHA256, keyed with
+the secret:
+
+- `X-SoftServe-Signature-V2`: `sha256=` and the hex HMAC of the timestamp, a
+  `.`, the delivery GUID, a `.` and the request body. Check this one, reject
+  timestamps too far from your clock (five minutes, say) and remember the
+  GUIDs seen within that window to refuse replayed requests.
+- `X-SoftServe-Signature`: `sha256=` and the hex HMAC of the body alone. It
+  is kept for existing receivers; it does not stop a captured request from
+  being replayed.
+
+Compare signatures in constant time, for example with `hmac.Equal` in Go.
+
+Repository events for a rename or a default branch change carry the old
+value in `changes`, as `changes.name.from` or `changes.default_branch.from`.
+Push events say whether the push was `forced` (the ref moved to a commit that
+does not contain its old one) and who the `pusher` was; a push that creates a
+branch or tag lists only the commits no other branch or tag already had.
+
 #### Webhooks to internal services
 
 Webhooks are protected against server-side request forgery: by default a
@@ -1134,7 +1190,8 @@ The entries are trusted differently:
   entry never opens anything else, and it does not cover other names that
   resolve to the same addresses. `localhost` names need a hostname entry.
 - Link-local addresses, including the 169.254.169.254 metadata service, the
-  other cloud metadata addresses (`fd00:ec2::254`, `100.100.100.200`) and the
+  other cloud metadata addresses (`fd00:ec2::254`, `fd00:ec2::23`,
+  `fd20:ce::254`, `fd00:c1::a9fe:a9fe`, `100.100.100.200`) and the
   remaining reserved ranges can only be opened by an IP or CIDR entry inside
   that range, such as `169.254.169.254`; a broad entry such as `0.0.0.0/0`
   does not open them.
