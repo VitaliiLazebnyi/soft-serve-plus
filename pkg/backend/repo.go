@@ -232,6 +232,8 @@ func claimRepoPath(rp string) error {
 // records the repository.
 func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
 	rp := d.repoPath(name)
+	opts.ProjectName = utils.Sanitize(opts.ProjectName)
+	opts.Description = utils.Sanitize(opts.Description)
 
 	var userID int64
 	if user != nil {

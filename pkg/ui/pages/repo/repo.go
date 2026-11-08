@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/statusbar"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type state int
@@ -330,13 +331,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.common.Width)
-	header := r.selectedRepo.ProjectName()
+	header := utils.Sanitize(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(r.selectedRepo.Description())
+	desc := strings.TrimSpace(utils.Sanitize(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,
