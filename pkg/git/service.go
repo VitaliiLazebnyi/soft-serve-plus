@@ -80,10 +80,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 
 	cmd.Args = append(cmd.Args, ".")
 
-	cmd.Env = os.Environ()
-	if len(scmd.Env) > 0 {
-		cmd.Env = append(cmd.Env, scmd.Env...)
-	}
+	cmd.Env = serviceEnv(os.Environ(), scmd.Env)
 
 	// killed records that git was killed because the context was done. On
 	// Windows a killed process exits with status 1, so the exit status cannot
