@@ -211,9 +211,20 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 
 	// Read the request line on this goroutine. The connection's deadlines
 	// bound the read, and closing the connection on shutdown unblocks it, so
-	// there is nothing to wait on beside it.
+	// there is nothing to wait on beside it. If the server's context ends
+	// first, the client gets the timeout answer and the connection is closed,
+	// which ends the read too.
+	stopRead := context.AfterFunc(d.ctx, func() {
+		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
+		d.fatal(conn, git.ErrTimeout)
+	})
 	s := pktline.NewScanner(c)
-	if !s.Scan() {
+	scanned := s.Scan()
+	if !stopRead() {
+		// The server's context ended and the client has been answered.
+		return
+	}
+	if !scanned {
 		if err := s.Err(); err != nil {
 			var nerr net.Error
 			if errors.As(err, &nerr) && nerr.Timeout() {
