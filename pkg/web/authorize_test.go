@@ -32,6 +32,7 @@ func TestAuthorize(t *testing.T) {
 		{"lfs batch", "", "info/lfs/objects/batch", http.MethodPost},
 		{"lfs upload", "", "info/lfs/objects/basic/00", http.MethodPut},
 		{"lfs lock", "", "info/lfs/locks", http.MethodPost},
+		{"push advert head", git.ReceivePackService, "info/refs", http.MethodHead},
 	}
 
 	type caller struct {
@@ -60,7 +61,7 @@ func TestAuthorize(t *testing.T) {
 				// LFS renders bad credentials from denyRead so the body
 				// is JSON; the verdict stays denyUnreadable.
 				want = forbid
-			case rt.service == git.ReceivePackService && !c.anonymous && isPushEndpoint(rt.file):
+			case rt.service == git.ReceivePackService && !c.anonymous && isPushEndpoint(rt.file) && rt.method != http.MethodHead:
 				// The one inherent difference: a push to a new name by a
 				// user who may create repositories creates it.
 				if missing != createThenServe {
@@ -101,6 +102,7 @@ func TestAuthorize(t *testing.T) {
 		{"writer lfs upload", routes[6], access.ReadWriteAccess, false, serve},
 		{"writer lfs lock", routes[7], access.ReadWriteAccess, false, serve},
 		{"anon writer push", routes[2], access.ReadWriteAccess, true, serve},
+		{"writer push head", routes[8], access.ReadWriteAccess, false, serve},
 	}
 	for _, tt := range tests {
 		got := authorize(tt.route.service, tt.route.file, tt.route.method, true, tt.level, tt.anonymous, false)
@@ -124,7 +126,7 @@ func TestAuthorize(t *testing.T) {
 		}
 	}
 
-	// A push may only create from the push endpoints.
+	// A push may only create from the push endpoints, and not on HEAD.
 	if got := authorize(git.ReceivePackService, "HEAD", http.MethodGet, false, access.ReadWriteAccess, false, false); got != denyUnreadable {
 		t.Errorf("push service on HEAD: got %v, want denyUnreadable", got)
 	}
