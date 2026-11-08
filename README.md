@@ -185,7 +185,7 @@ name: "Soft Serve Plus"
 log:
   # Log format to use. Valid values are "json", "logfmt", and "text".
   format: "text"
-  # Time format for the log "timestamp" field.
+  # Time format for the log "time" field.
   # Should be described in Golang's time format.
   time_format: "2006-01-02 15:04:05"
   # Path to the log file. Leave empty to write to stderr.

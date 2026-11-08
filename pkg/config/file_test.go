@@ -151,7 +151,10 @@ func TestReadmeConfigMatchesGenerated(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SSH.KeyPath = filepath.ToSlash(cfg.SSH.KeyPath)
 	cfg.SSH.ClientKeyPath = filepath.ToSlash(cfg.SSH.ClientKeyPath)
-	want := newConfigFile(cfg)
+	want, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != want {
 		gl, wl := strings.Split(got, "\n"), strings.Split(want, "\n")
 		for n := 0; n < len(gl) || n < len(wl); n++ {
