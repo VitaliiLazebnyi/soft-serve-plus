@@ -161,7 +161,7 @@ func (*userStore) FindUserByAccessToken(ctx context.Context, tx db.Handler, toke
 // GetAllUsers implements store.UserStore.
 func (*userStore) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
 	var ms []models.User
-	query := tx.Rebind(`SELECT * FROM users;`)
+	query := tx.Rebind(`SELECT * FROM users ORDER BY username;`)
 	err := tx.SelectContext(ctx, &ms, query)
 	return ms, err
 }
