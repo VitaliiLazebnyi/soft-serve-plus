@@ -22,7 +22,15 @@ type PushEvent struct {
 	Before string `json:"before" url:"before"`
 	// After is the current commit SHA.
 	After string `json:"after" url:"after"`
-	// Commits is the list of commits.
+	// Forced is whether the push moved the ref to a commit that does not
+	// descend from the one it pointed at, dropping commits from it.
+	Forced bool `json:"forced" url:"forced"`
+	// Pusher is the user who pushed. It is empty for a push made without a
+	// user, such as an anonymous or keyless one.
+	Pusher User `json:"pusher" url:"pusher"`
+	// Commits is the list of commits the push brought to the ref, newest
+	// first. For a new branch or tag these are only the commits no other
+	// branch or tag already had.
 	Commits []Commit `json:"commits" url:"commits"`
 }
 
@@ -47,6 +55,7 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 			},
 			Sender: senderOf(user),
 		},
+		Pusher: senderOf(user),
 	}
 
 	cfg := config.FromContext(ctx)
@@ -74,14 +83,34 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
 
 	rev := after
-	if !git.IsZeroHash(before) {
+	var args []string
+	if git.IsZeroHash(before) {
+		// A new ref lists only the commits it brings: those not reachable
+		// from any other branch or tag. The pushed ref itself is left out of
+		// that set, since it may already point at after when the event is
+		// built. Each --exclude only applies to the --glob after it (which
+		// takes nested refs too), and the second --not turns the revision
+		// after it back into a positive one. Ref names cannot hold glob
+		// characters, so ref matches only itself.
+		args = []string{
+			"--not",
+			"--exclude=" + ref, "--glob=refs/heads",
+			"--exclude=" + ref, "--glob=refs/tags",
+			"--not",
+		}
+	} else {
 		rev = fmt.Sprintf("%s..%s", before, after)
+		payload.Forced, err = isForced(r, before, after)
+		if err != nil {
+			return PushEvent{}, err
+		}
 	}
 
 	commits, err := r.Log(rev, gitm.LogOptions{
 		// XXX: limit to 20 commits for now
 		// TODO: implement a commits api
-		MaxCount: 20,
+		MaxCount:       20,
+		CommandOptions: gitm.CommandOptions{Args: args},
 	})
 	if err != nil {
 		return PushEvent{}, err
@@ -108,4 +137,17 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 	}
 
 	return payload, nil
+}
+
+// isForced reports whether moving a ref from before to after drops commits:
+// whether before has a commit that after does not. Tag objects are peeled to
+// the commits they point at.
+func isForced(r *git.Repository, before, after string) (bool, error) {
+	n, err := r.RevListCount([]string{after + ".." + before}, gitm.RevListCountOptions{
+		CommandOptions: gitm.CommandOptions{Args: []string{"--max-count=1"}},
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
