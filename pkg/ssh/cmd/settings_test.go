@@ -106,3 +106,39 @@ func TestSettingsAllowKeylessWarnsOnConfigOverride(t *testing.T) {
 		t.Fatalf("expected override warning on stderr, got: %q", stderr)
 	}
 }
+
+// allow-keyless must reject a value that is not a boolean instead of reading
+// it as false, which would silently lock keyless users out.
+func TestSettingsAllowKeylessParsesBool(t *testing.T) {
+	ctx, _ := newSettingsTestContext(t)
+	be := backend.FromContext(ctx)
+
+	for _, tc := range []struct {
+		arg  string
+		want bool
+	}{
+		{"false", false},
+		{"true", true},
+		{"0", false},
+		{"1", true},
+		{"F", false},
+		{"T", true},
+	} {
+		if _, _, err := runSettings(t, ctx, "allow-keyless", tc.arg); err != nil {
+			t.Fatalf("allow-keyless %s: %v", tc.arg, err)
+		}
+		if got := be.AllowKeyless(ctx); got != tc.want {
+			t.Errorf("allow-keyless %s: AllowKeyless() = %v, want %v", tc.arg, got, tc.want)
+		}
+	}
+
+	for _, arg := range []string{"nope", "yes", "off", ""} {
+		_, _, err := runSettings(t, ctx, "allow-keyless", arg)
+		if err == nil {
+			t.Errorf("allow-keyless %q: nil error, want an invalid value error", arg)
+		}
+		if !be.AllowKeyless(ctx) {
+			t.Errorf("allow-keyless %q changed the setting to false", arg)
+		}
+	}
+}
