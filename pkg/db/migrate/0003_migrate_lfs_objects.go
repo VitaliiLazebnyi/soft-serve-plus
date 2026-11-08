@@ -9,7 +9,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
 const (
@@ -35,14 +34,14 @@ var migrateLfsObjects = Migration{
 			return err
 		}
 		for _, r := range repoIDs {
-			var objs []models.LFSObject
-			if err := tx.SelectContext(ctx, &objs, tx.Rebind("SELECT * FROM lfs_objects WHERE repo_id = ?"), r); err != nil {
+			var oids []string
+			if err := tx.SelectContext(ctx, &oids, tx.Rebind("SELECT oid FROM lfs_objects WHERE repo_id = ?"), r); err != nil {
 				return err
 			}
 			objsp := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(r, 10), "objects")
-			for _, obj := range objs {
-				oldpath := filepath.Join(objsp, badRelativePath(obj.Oid))
-				newpath := filepath.Join(objsp, goodRelativePath(obj.Oid))
+			for _, oid := range oids {
+				oldpath := filepath.Join(objsp, badRelativePath(oid))
+				newpath := filepath.Join(objsp, goodRelativePath(oid))
 				if _, err := os.Stat(oldpath); err == nil {
 					if err := os.Rename(oldpath, newpath); err != nil {
 						logger.Error("rename lfs object", "oldpath", oldpath, "newpath", newpath, "err", err)
@@ -53,6 +52,8 @@ var migrateLfsObjects = Migration{
 		}
 		return nil
 	},
+	// Nothing to undo: moving the objects back to the wrong paths would
+	// break LFS, and running the migration again is harmless.
 	Rollback: func(context.Context, *db.Tx) error {
 		return nil
 	},

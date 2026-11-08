@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -120,6 +121,32 @@ func (*userStore) FindUserByUsername(ctx context.Context, tx db.Handler, usernam
 	return m, err
 }
 
+// FindUserByUsernameForUpdate implements store.UserStore. See
+// GetRepoByNameForUpdate.
+func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return models.User{}, err
+	}
+
+	d, ok := h.(interface{ DriverName() string })
+	if !ok {
+		return models.User{}, fmt.Errorf("find user for update: handler %T does not report its driver", h)
+	}
+	var query string
+	switch driver := d.DriverName(); driver {
+	case "postgres":
+		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
+	case "sqlite", "sqlite3":
+		query = `SELECT * FROM users WHERE username = ?;`
+	default:
+		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
+	}
+	var m models.User
+	err := h.GetContext(ctx, &m, query, username)
+	return m, err
+}
+
 // FindUserByAccessToken implements store.UserStore.
 func (*userStore) FindUserByAccessToken(ctx context.Context, tx db.Handler, token string) (models.User, error) {
 	var m models.User
@@ -134,9 +161,20 @@ func (*userStore) FindUserByAccessToken(ctx context.Context, tx db.Handler, toke
 // GetAllUsers implements store.UserStore.
 func (*userStore) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
 	var ms []models.User
-	query := tx.Rebind(`SELECT * FROM users;`)
+	query := tx.Rebind(`SELECT * FROM users ORDER BY username;`)
 	err := tx.SelectContext(ctx, &ms, query)
 	return ms, err
+}
+
+// FindDefaultAdminUserID implements store.UserStore.
+//
+// It reads a single row instead of every user, so registering an anonymous
+// repository does not scan the users table inside its write transaction.
+func (*userStore) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
+	var id int64
+	query := tx.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
+	err := tx.GetContext(ctx, &id, query, true)
+	return id, err
 }
 
 // ListPublicKeysByUserID implements store.UserStore.

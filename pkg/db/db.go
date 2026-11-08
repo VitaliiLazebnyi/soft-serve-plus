@@ -12,7 +12,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"  // postgres driver
+	"github.com/lib/pq"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -24,12 +24,31 @@ type DB struct {
 
 // Open opens a database connection.
 func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
-	if driverName == "sqlite" {
-		dsn = sqliteImmediateTx(dsn)
-	}
-	db, err := sqlx.ConnectContext(ctx, driverName, dsn)
-	if err != nil {
-		return nil, err
+	var db *sqlx.DB
+	switch driverName {
+	case "postgres":
+		cfg, err := postgresUTCConfig(dsn)
+		if err != nil {
+			return nil, err
+		}
+		connector, err := pq.NewConnectorConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		db = sqlx.NewDb(sql.OpenDB(connector), driverName)
+		if err := db.PingContext(ctx); err != nil {
+			db.Close() //nolint:errcheck
+			return nil, err
+		}
+	default:
+		if driverName == "sqlite" {
+			dsn = sqliteImmediateTx(dsn)
+		}
+		var err error
+		db, err = sqlx.ConnectContext(ctx, driverName, dsn)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	d := &DB{
@@ -63,6 +82,30 @@ func sqliteImmediateTx(dsn string) string {
 		return dsn + "&_txlock=immediate"
 	}
 	return dsn + "?_txlock=immediate"
+}
+
+// postgresUTCConfig parses dsn into a lib/pq configuration whose sessions
+// use UTC as their TimeZone, whatever the DSN or the server's default
+// says. The tables store times in TIMESTAMP (without time zone) columns,
+// filled by CURRENT_TIMESTAMP or from UTC time.Time values, and
+// lib/pq reads them back as UTC. In any other session time zone
+// CURRENT_TIMESTAMP stores that zone's wall clock, which is then read back
+// off by the zone's UTC offset.
+func postgresUTCConfig(dsn string) (pq.Config, error) {
+	cfg, err := pq.NewConfig(dsn)
+	if err != nil {
+		return cfg, err
+	}
+	rt := make(map[string]string, len(cfg.Runtime)+1)
+	for k, v := range cfg.Runtime {
+		// Run-time parameter names are case-insensitive.
+		if !strings.EqualFold(k, "timezone") {
+			rt[k] = v
+		}
+	}
+	rt["timezone"] = "UTC"
+	cfg.Runtime = rt
+	return cfg, nil
 }
 
 // SetPoolLimits applies the connection pool settings in c. A zero value
@@ -121,9 +164,14 @@ func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) erro
 	}
 
 	if err := tx.Commit(); err != nil {
+		// sql.ErrTxDone here means the transaction was already rolled back,
+		// most often because ctx was cancelled after fn returned: nothing fn
+		// wrote is kept, so it is a failure like any other. Report the
+		// context's error along with it so callers can tell why.
 		if errors.Is(err, sql.ErrTxDone) {
-			// this is ok because whoever did finish the tx should have also written the error already.
-			return nil
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("failed to commit transaction: %w: %w", err, cerr)
+			}
 		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}

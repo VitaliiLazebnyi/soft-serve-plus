@@ -34,6 +34,8 @@ type RepositoryStore interface {
 	// userID and then count take turns. On SQLite it does nothing: a write
 	// transaction holds the database's write lock from BEGIN IMMEDIATE (see
 	// db.Open), or from its first write, so callers already take turns.
+	// Backend.RemoveOwnPublicKey takes it too, so that removals of a user's
+	// keys count the remaining keys in turn.
 	LockUserRepos(ctx context.Context, h db.Handler, userID int64) error
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error

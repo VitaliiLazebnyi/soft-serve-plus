@@ -38,7 +38,7 @@ func (*repoStore) DeleteRepoByName(ctx context.Context, tx db.Handler, name stri
 // GetAllRepos implements store.RepositoryStore.
 func (*repoStore) GetAllRepos(ctx context.Context, tx db.Handler) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := tx.Rebind("SELECT * FROM repos;")
+	query := tx.Rebind("SELECT * FROM repos ORDER BY name;")
 	err := tx.SelectContext(ctx, &repos, query)
 	return repos, db.WrapError(err)
 }
@@ -46,7 +46,7 @@ func (*repoStore) GetAllRepos(ctx context.Context, tx db.Handler) ([]models.Repo
 // GetUserRepos implements store.RepositoryStore.
 func (*repoStore) GetUserRepos(ctx context.Context, tx db.Handler, userID int64) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := tx.Rebind("SELECT * FROM repos WHERE user_id = ?;")
+	query := tx.Rebind("SELECT * FROM repos WHERE user_id = ? ORDER BY name;")
 	err := tx.SelectContext(ctx, &repos, query, userID)
 	return repos, db.WrapError(err)
 }
