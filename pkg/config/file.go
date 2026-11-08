@@ -163,6 +163,21 @@ http:
   # Make sure to use https:// if you are using TLS.
   public_url: {{ q .HTTP.PublicURL }}
 
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: {{ .HTTP.MaxTimeout }}
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: {{ .HTTP.IdleTimeout }}
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: {{ .HTTP.MaxConnections }}
+
   # The cross-origin request security options
   cors:
     # The allowed cross-origin headers
