@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -34,9 +35,9 @@ func SettingsCommand() *cobra.Command {
 				case 0:
 					cmd.Println(be.AllowKeyless(ctx))
 				case 1:
-					v, err := parseBool(args[0])
+					v, err := strconv.ParseBool(args[0])
 					if err != nil {
-						return err
+						return fmt.Errorf("invalid allow-keyless value %q: want true or false", args[0])
 					}
 					if err := be.SetAllowKeyless(ctx, v); err != nil {
 						return err
@@ -91,7 +92,7 @@ func warnIfAllowKeylessOverridden(cmd *cobra.Command, cfg *config.Config) {
 		return
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	cmd.PrintErrf(
 		"Warning: allow-keyless is set to %t by server config and takes precedence over this change. "+
 			"The database was updated, but it will have no effect until the config override is removed.\n",
 		*cfg.AllowKeyless)
@@ -106,7 +107,7 @@ func warnIfAnonAccessOverridden(cmd *cobra.Command, cfg *config.Config) {
 		return
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	cmd.PrintErrf(
 		"Warning: anon-access is set to %q by server config and takes precedence over this change. "+
 			"The database was updated, but it will have no effect until the config override is removed.\n",
 		cfg.AnonAccess.String())
