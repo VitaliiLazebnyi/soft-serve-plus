@@ -849,6 +849,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	ctx = context.WithoutCancel(ctx)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The directory checks above find a repository whose name differs
+		// only in case on a case-insensitive filesystem, so the row decides:
+		// with no row named oldName this fails before the directory moves.
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
@@ -893,7 +896,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) {
 	repos := make([]proto.Repository, 0)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		ms, err := d.store.GetAllRepos(ctx, tx)
 		if err != nil {
 			return err
@@ -927,13 +930,17 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 
 	rp := d.repoPath(name)
 	if _, err := os.Stat(rp); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case isInvalidName(err):
+			d.logger.Debug("invalid repository name", "err", err)
+		default:
 			d.logger.Errorf("failed to stat repository path: %v", err)
 		}
 		return nil, proto.ErrRepoNotFound
 	}
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetRepoByName(ctx, tx, name)
 		return err
@@ -972,7 +979,7 @@ func wrapRepoError(err error) error {
 func (d *Backend) Description(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var desc string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		desc, err = d.store.GetRepoDescriptionByName(ctx, tx, name)
 		return err
@@ -989,7 +996,7 @@ func (d *Backend) Description(ctx context.Context, name string) (string, error) 
 func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var mirror bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		mirror, err = d.store.GetRepoIsMirrorByName(ctx, tx, name)
 		return err
@@ -1005,7 +1012,7 @@ func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var private bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		private, err = d.store.GetRepoIsPrivateByName(ctx, tx, name)
 		return err
@@ -1022,7 +1029,7 @@ func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var hidden bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		hidden, err = d.store.GetRepoIsHiddenByName(ctx, tx, name)
 		return err
@@ -1039,7 +1046,7 @@ func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var pname string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		pname, err = d.store.GetRepoProjectNameByName(ctx, tx, name)
 		return err
@@ -1348,6 +1355,30 @@ func (d *Backend) repoPath(name string) string {
 	name = utils.SanitizeRepo(name)
 	rn := strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
+}
+
+// isOrphanRepoPath reports whether the directory of the repository named name,
+// which has no row, exists and is not the directory of any repository with a
+// row. A filesystem can lead the path of a different name to a repository's
+// directory: one that ignores case (macOS, Windows) or Unicode normalization
+// (APFS). Which names match depends on the filesystem, so every repository's
+// directory is compared, not only those of names that look alike.
+func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
+	fi, err := os.Lstat(d.repoPath(name))
+	if err != nil {
+		return false, nil //nolint:nilerr // no directory, nothing to remove
+	}
+	repos, err := d.store.GetAllRepos(ctx, tx)
+	if err != nil {
+		return false, db.WrapError(err)
+	}
+	for _, r := range repos {
+		rfi, err := os.Lstat(d.repoPath(r.Name))
+		if err == nil && os.SameFile(fi, rfi) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // repoPathExists reports whether anything occupies the repository's directory,
