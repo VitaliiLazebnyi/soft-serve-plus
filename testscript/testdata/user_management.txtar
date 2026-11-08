@@ -11,6 +11,7 @@ ensureserverrunning SSH_PORT
 # add key to admin
 soft user add-pubkey admin "$ADMIN2_AUTHORIZED_KEY"
 soft user info admin
+cmpenv stdout info.txt
 soft info
 cmpenv stdout info.txt
 

@@ -212,12 +212,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if cfg := r.common.Config(); cfg != nil {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
-		r.statusbar.SetStatus("", msg.Message, "", "")
+		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
-	case LogItemsMsg, LogDiffMsg, LogCountMsg:
+	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
