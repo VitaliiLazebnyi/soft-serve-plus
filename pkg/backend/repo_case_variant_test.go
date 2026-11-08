@@ -145,3 +145,29 @@ func TestDeleteRepositoryNormalizationVariantKeepsRepository(t *testing.T) {
 		t.Errorf("repository directory damaged: %v", err)
 	}
 }
+
+// On a case-insensitive filesystem a repository can be named "Secret" while
+// its directory is still spelled secret.git. Deleting "secret", which has no
+// row and whose directory is spelled exactly so on disk, must not treat that
+// directory as an orphan: it is the directory of "Secret".
+func TestDeleteRepositoryExactSpellingOfAnotherRepositoryKeepsIt(t *testing.T) {
+	be, cfg := newTestBackend(t)
+	if !createCaseVariantFixture(t, be) {
+		t.Skip("filesystem is case-sensitive: Secret has its own directory")
+	}
+	ctx := backendTestContext(be, cfg)
+
+	if err := be.store.SetRepoNameByName(ctx, be.db, "secret", "Secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := be.DeleteRepository(ctx, "secret"); !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Errorf("DeleteRepository(secret) => %v, want ErrRepoNotFound", err)
+	}
+	if _, err := be.Repository(ctx, "Secret"); err != nil {
+		t.Fatalf("repository row gone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(be.repoPath("Secret"), "HEAD")); err != nil {
+		t.Errorf("repository directory damaged: %v", err)
+	}
+}
