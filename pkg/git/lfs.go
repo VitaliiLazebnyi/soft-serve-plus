@@ -251,13 +251,14 @@ func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.
 
 type lfsLockBackend struct {
 	*lfsTransfer
+	args map[string]string
 	user proto.User
 }
 
 var _ transfer.LockBackend = (*lfsLockBackend)(nil)
 
 // LockBackend implements transfer.Backend.
-func (t *lfsTransfer) LockBackend(_ transfer.Args) transfer.LockBackend {
+func (t *lfsTransfer) LockBackend(args transfer.Args) transfer.LockBackend {
 	user := proto.UserFromContext(t.ctx)
 	if user == nil {
 		// Locks are owned by an account. A caller without one (an anonymous
@@ -268,7 +269,7 @@ func (t *lfsTransfer) LockBackend(_ transfer.Args) transfer.LockBackend {
 		return noUserLockBackend{}
 	}
 
-	return &lfsLockBackend{t, user}
+	return &lfsLockBackend{t, args, user}
 }
 
 // noUserLockBackend is the lock backend for a caller with no account. Every

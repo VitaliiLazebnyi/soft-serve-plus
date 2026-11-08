@@ -2,7 +2,6 @@ package lfs
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
