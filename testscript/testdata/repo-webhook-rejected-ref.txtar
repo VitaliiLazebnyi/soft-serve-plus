@@ -1,0 +1,44 @@
+# vi: set ft=conf
+
+# Push and branch/tag webhooks are sent for the refs git actually updated. A
+# ref that git rejects after the update hook ran, here for a refname conflict
+# with an existing branch, sends no events.
+
+# FIXME: don't skip windows
+[windows] skip 'curl makes github actions hang'
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo1
+
+new-webhook WH_REPO1
+soft repo webhook create repo1 $WH_REPO1 -e branch_tag_create -e push
+
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md 'foobar'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD:refs/heads/foo
+
+# refs/heads/foo/bar conflicts with refs/heads/foo, so git rejects it
+! git -C repo1 push origin HEAD:refs/heads/foo/bar
+
+soft repo branch list repo1
+stdout 'foo'
+! stdout 'foo/bar'
+
+# only the push of refs/heads/foo was delivered
+webhook-received
+[windows] dos2unix received.txt
+cmp stdout received.txt
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .
+
+-- received.txt --
+branch_tag_create /hooks/WH_REPO1
+push /hooks/WH_REPO1

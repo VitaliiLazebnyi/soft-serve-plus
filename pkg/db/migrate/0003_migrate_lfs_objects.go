@@ -9,7 +9,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
 const (
@@ -28,18 +27,18 @@ var migrateLfsObjects = Migration{
 		logger := log.FromContext(ctx).WithPrefix("migrate_lfs_objects")
 
 		var repoIDs []int64
-		if err := tx.Select(&repoIDs, "SELECT id FROM repos"); err != nil {
+		if err := tx.SelectContext(ctx, &repoIDs, "SELECT id FROM repos"); err != nil {
 			return err
 		}
 		for _, r := range repoIDs {
-			var objs []models.LFSObject
-			if err := tx.Select(&objs, "SELECT * FROM lfs_objects WHERE repo_id = ?", r); err != nil {
+			var oids []string
+			if err := tx.SelectContext(ctx, &oids, tx.Rebind("SELECT oid FROM lfs_objects WHERE repo_id = ?"), r); err != nil {
 				return err
 			}
 			objsp := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(r, 10), "objects")
-			for _, obj := range objs {
-				oldpath := filepath.Join(objsp, badRelativePath(obj.Oid))
-				newpath := filepath.Join(objsp, goodRelativePath(obj.Oid))
+			for _, oid := range oids {
+				oldpath := filepath.Join(objsp, badRelativePath(oid))
+				newpath := filepath.Join(objsp, goodRelativePath(oid))
 				if _, err := os.Stat(oldpath); err == nil {
 					if err := os.Rename(oldpath, newpath); err != nil {
 						logger.Error("rename lfs object", "oldpath", oldpath, "newpath", newpath, "err", err)
