@@ -101,7 +101,11 @@ func TestLoggingMiddlewareServeContent(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +118,10 @@ func TestLoggingMiddlewareServeContent(t *testing.T) {
 		t.Fatalf("GET: status %d, %d bytes; want 200, %d bytes", resp.StatusCode, len(body), len(content))
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Range", "bytes=50000-")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
