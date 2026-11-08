@@ -200,6 +200,27 @@ func TestParseDefaultRepoFromFile(t *testing.T) {
 	is.Equal(cfg.DefaultRepo, "gitops")
 }
 
+func TestParseEmptyFile(t *testing.T) {
+	t.Parallel()
+	for name, content := range map[string]string{
+		"empty":        "",
+		"whitespace":   "\n  \n",
+		"comment only": "# soft-serve config\n# name: \"Soft Serve\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			is := is.New(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			is.NoErr(os.WriteFile(path, []byte(content), 0o600))
+			cfg := DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			want := cfg.Name
+			is.NoErr(parseFile(cfg, path))
+			is.Equal(cfg.Name, want)
+		})
+	}
+}
+
 func TestParseMultipleHeaders(t *testing.T) {
 	is := is.New(t)
 	is.NoErr(os.Setenv("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS", "Accept,Accept-Language,User-Agent"))
