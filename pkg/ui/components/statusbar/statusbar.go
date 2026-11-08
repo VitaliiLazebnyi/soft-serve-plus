@@ -15,6 +15,9 @@ type Model struct {
 	value  string
 	info   string
 	extra  string
+	// msg is a transient message, such as a copy notice, shown in place of
+	// the value until the status is set again.
+	msg string
 }
 
 // New creates a new status bar component.
@@ -31,26 +34,24 @@ func (s *Model) SetSize(width, height int) {
 	s.common.Height = height
 }
 
-// SetStatus sets the status bar status.
+// SetStatus sets the status bar status. Empty values clear the matching
+// part, and any transient message set with SetMessage is dropped.
 //
 // The values come from the repository (ref names, commit authors, paths), so
 // they are stripped of escape sequences and control characters here, whatever
 // pane they come from.
 func (s *Model) SetStatus(key, value, info, extra string) {
-	key, value = utils.Sanitize(key), utils.Sanitize(value)
-	info, extra = utils.Sanitize(info), utils.Sanitize(extra)
-	if key != "" {
-		s.key = key
-	}
-	if value != "" {
-		s.value = value
-	}
-	if info != "" {
-		s.info = info
-	}
-	if extra != "" {
-		s.extra = extra
-	}
+	s.key = utils.Sanitize(key)
+	s.value = utils.Sanitize(value)
+	s.info = utils.Sanitize(info)
+	s.extra = utils.Sanitize(extra)
+	s.msg = ""
+}
+
+// SetMessage shows a transient message in place of the status value until
+// the next SetStatus call. It is sanitised like the status values.
+func (s *Model) SetMessage(msg string) {
+	s.msg = utils.Sanitize(msg)
 }
 
 // Init implements tea.Model.
@@ -82,7 +83,11 @@ func (s *Model) View() string {
 	}
 	branch := st.StatusBarBranch.Render(s.extra)
 	maxWidth := s.common.Width - w(key) - w(info) - w(branch) - w(help)
-	v := ansi.Truncate(s.value, maxWidth-st.StatusBarValue.GetHorizontalFrameSize(), "…")
+	v := s.value
+	if s.msg != "" {
+		v = s.msg
+	}
+	v = ansi.Truncate(v, maxWidth-st.StatusBarValue.GetHorizontalFrameSize(), "…")
 	value := st.StatusBarValue.
 		Width(maxWidth).
 		Render(v)

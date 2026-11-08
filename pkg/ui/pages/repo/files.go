@@ -320,6 +320,21 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				}
 			}
 		}
+	case common.ErrorMsg:
+		// A listing or blame that failed to load never sends its result, so
+		// leave the loading view rather than spin until the next reload.
+		if f.activeView == filesViewLoading {
+			if f.blameView {
+				f.blameView = false
+				f.activeView = filesViewContent
+			} else {
+				// The selector still holds the previous listing, maybe of
+				// another ref or repository. Clear it now, not through a
+				// FileItemsMsg that could land after a later good listing.
+				f.activeView = filesViewFiles
+				cmds = append(cmds, f.selector.SetItems(nil))
+			}
+		}
 	case EmptyRepoMsg:
 		f.ref = nil
 		f.path = ""
@@ -404,17 +419,17 @@ func (f *Files) updateFilesCmd() tea.Msg {
 	}
 	r, err := f.repo.Open()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	path := f.path
 	ref := f.ref
 	t, err := r.TreePath(ref, path)
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents, err := t.Entries()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents.Sort()
 	for _, e := range ents {
