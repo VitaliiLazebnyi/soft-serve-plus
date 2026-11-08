@@ -826,6 +826,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	ctx = context.WithoutCancel(ctx)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The directory checks above find a repository whose name differs
+		// only in case on a case-insensitive filesystem, so the row decides:
+		// with no row named oldName this fails before the directory moves.
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
@@ -1329,6 +1332,30 @@ func (d *Backend) repoPath(name string) string {
 	name = utils.SanitizeRepo(name)
 	rn := strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
+}
+
+// isOrphanRepoPath reports whether the directory of the repository named name,
+// which has no row, exists and is not the directory of any repository with a
+// row. A filesystem can lead the path of a different name to a repository's
+// directory: one that ignores case (macOS, Windows) or Unicode normalization
+// (APFS). Which names match depends on the filesystem, so every repository's
+// directory is compared, not only those of names that look alike.
+func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
+	fi, err := os.Lstat(d.repoPath(name))
+	if err != nil {
+		return false, nil //nolint:nilerr // no directory, nothing to remove
+	}
+	repos, err := d.store.GetAllRepos(ctx, tx)
+	if err != nil {
+		return false, db.WrapError(err)
+	}
+	for _, r := range repos {
+		rfi, err := os.Lstat(d.repoPath(r.Name))
+		if err == nil && os.SameFile(fi, rfi) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // repoPathExists reports whether anything occupies the repository's directory,
