@@ -139,6 +139,17 @@ func (*userStore) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User
 	return ms, err
 }
 
+// FindDefaultAdminUserID implements store.UserStore.
+//
+// It reads a single row instead of every user, so registering an anonymous
+// repository does not scan the users table inside its write transaction.
+func (*userStore) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
+	var id int64
+	query := tx.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
+	err := tx.GetContext(ctx, &id, query, true)
+	return id, err
+}
+
 // ListPublicKeysByUserID implements store.UserStore..
 func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
