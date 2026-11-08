@@ -24,7 +24,6 @@ var (
 	_ http.ResponseWriter = (*logWriter)(nil)
 	_ http.Flusher        = (*logWriter)(nil)
 	_ http.Hijacker       = (*logWriter)(nil)
-	_ http.CloseNotifier  = (*logWriter)(nil)
 	_ io.ReaderFrom       = (*logWriter)(nil)
 )
 
@@ -68,14 +67,6 @@ func (r *logWriter) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-// CloseNotify implements http.CloseNotifier.
-func (r *logWriter) CloseNotify() <-chan bool {
-	if cn, ok := r.ResponseWriter.(http.CloseNotifier); ok {
-		return cn.CloseNotify()
-	}
-	return nil
 }
 
 // Hijack implements http.Hijacker.
