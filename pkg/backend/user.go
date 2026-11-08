@@ -509,7 +509,13 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	}
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		// Lock the user's row before looking for their repositories: on
+		// Postgres a repository inserted meanwhile would otherwise be
+		// missed here and then removed by the cascade below, its
+		// directory left behind. The lock waits for such an insert to
+		// commit, so the query below sees it, and keeps new ones out
+		// until the user is gone.
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return err
 		}

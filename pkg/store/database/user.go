@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -117,6 +118,32 @@ func (*userStore) FindUserByUsername(ctx context.Context, tx db.Handler, usernam
 	var m models.User
 	query := tx.Rebind(`SELECT * FROM users WHERE username = ?;`)
 	err := tx.GetContext(ctx, &m, query, username)
+	return m, err
+}
+
+// FindUserByUsernameForUpdate implements store.UserStore. See
+// GetRepoByNameForUpdate.
+func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return models.User{}, err
+	}
+
+	d, ok := h.(interface{ DriverName() string })
+	if !ok {
+		return models.User{}, fmt.Errorf("find user for update: handler %T does not report its driver", h)
+	}
+	var query string
+	switch driver := d.DriverName(); driver {
+	case "postgres":
+		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
+	case "sqlite", "sqlite3":
+		query = `SELECT * FROM users WHERE username = ?;`
+	default:
+		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
+	}
+	var m models.User
+	err := h.GetContext(ctx, &m, query, username)
 	return m, err
 }
 
