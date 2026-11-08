@@ -3,10 +3,7 @@ package webhook
 import (
 	"context"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // RepositoryEvent is a repository payload.
@@ -15,6 +12,25 @@ type RepositoryEvent struct {
 
 	// Action is the repository event action.
 	Action RepositoryEventAction `json:"action" url:"action"`
+	// Changes holds the previous values of what the event changed. It is
+	// set for renames and default branch changes, and left out otherwise.
+	Changes *RepositoryChanges `json:"changes,omitempty" url:"changes,omitempty"`
+}
+
+// RepositoryChanges holds the previous values of what a repository event
+// changed. Only the changed fields are set.
+type RepositoryChanges struct {
+	// Name is the repository name before a rename.
+	Name *ChangeFrom `json:"name,omitempty" url:"name,omitempty"`
+	// DefaultBranch is the default branch before it was changed. Its From
+	// is empty when HEAD did not name a branch before.
+	DefaultBranch *ChangeFrom `json:"default_branch,omitempty" url:"default_branch,omitempty"`
+}
+
+// ChangeFrom is the previous value of a changed field.
+type ChangeFrom struct {
+	// From is the previous value.
+	From string `json:"from" url:"from"`
 }
 
 // RepositoryEventAction is a repository event action.
@@ -41,39 +57,41 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 		event = EventRepository
 	}
 
+	repository, err := newRepository(ctx, repo)
+	if err != nil {
+		return RepositoryEvent{}, err
+	}
+
 	payload := RepositoryEvent{
 		Action: action,
 		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
 		},
 	}
 
-	cfg := config.FromContext(ctx)
-	payload.Repository.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	payload.Repository.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	payload.Repository.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
+	return payload, nil
+}
 
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
+// NewRepositoryRenameEvent builds the payload for a repository rename. repo
+// is the renamed repository, and oldName the name it had before.
+func NewRepositoryRenameEvent(ctx context.Context, user proto.User, repo proto.Repository, oldName string) (RepositoryEvent, error) {
+	payload, err := NewRepositoryEvent(ctx, user, repo, RepositoryEventActionRename)
 	if err != nil {
-		return RepositoryEvent{}, db.WrapError(err)
+		return RepositoryEvent{}, err
 	}
+	payload.Changes = &RepositoryChanges{Name: &ChangeFrom{From: oldName}}
+	return payload, nil
+}
 
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
-	payload.Repository.DefaultBranch = defaultBranch(ctx, repo)
-
+// NewDefaultBranchChangeEvent builds the payload for a default branch change.
+// oldBranch is the default branch before the change, as a short branch name.
+func NewDefaultBranchChangeEvent(ctx context.Context, user proto.User, repo proto.Repository, oldBranch string) (RepositoryEvent, error) {
+	payload, err := NewRepositoryEvent(ctx, user, repo, RepositoryEventActionDefaultBranchChange)
+	if err != nil {
+		return RepositoryEvent{}, err
+	}
+	payload.Changes = &RepositoryChanges{DefaultBranch: &ChangeFrom{From: oldBranch}}
 	return payload, nil
 }

@@ -93,7 +93,11 @@ func TestSendWebhookJSONDelivered(t *testing.T) {
 	is.Equal(rec.header.Get("Content-Type"), ContentTypeJSON.String())
 	is.Equal(rec.header.Get("X-SoftServe-Event"), EventBranchTagCreate.String())
 	is.True(strings.HasPrefix(rec.header.Get("User-Agent"), "SoftServe/"))
-	is.True(rec.header.Get("X-SoftServe-Delivery") != "")
+	// The delivery ID is a random (version 4) UUID: a version 1 UUID would
+	// embed the server's MAC address and clock in every request.
+	delID, err := uuid.Parse(rec.header.Get("X-SoftServe-Delivery"))
+	is.NoErr(err)
+	is.Equal(delID.Version(), uuid.Version(4))
 	is.True(rec.header.Get("X-SoftServe-Signature") == "")
 
 	var got BranchTagEvent
@@ -189,6 +193,74 @@ func TestSendWebhookSignatureMatchesBody(t *testing.T) {
 	mac.Write([]byte(rec.body))
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	is.Equal(rec.header.Get("X-SoftServe-Signature"), want)
+}
+
+// The V2 signature covers the timestamp and delivery GUID as well as the
+// body, so a receiver can refuse a replayed request.
+func TestSendWebhookSignatureV2CoversTimestampAndDelivery(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	fixed := time.Unix(1731000000, 0)
+	now = func() time.Time { return fixed }
+	t.Cleanup(func() { now = time.Now })
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	ts := rec.header.Get(HeaderTimestamp)
+	is.Equal(ts, "1731000000")
+	guid := rec.header.Get(HeaderDelivery)
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write([]byte(ts + "." + guid + "." + rec.body))
+	is.Equal(rec.header.Get(HeaderSignatureV2), "sha256="+hex.EncodeToString(mac.Sum(nil)))
+
+	// The delivery GUID of a first delivery is the id of its record.
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ID.String(), guid)
+}
+
+// Without a secret there is nothing to sign, but the timestamp is still sent.
+func TestSendWebhookTimestampWithoutSecret(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	is.True(rec.header.Get(HeaderTimestamp) != "")
+	is.Equal(rec.header.Get(HeaderSignatureV2), "")
+}
+
+// A redelivery sends the GUID it is given, under a record of its own, and
+// signs it with a fresh timestamp.
+func TestRedeliverWebhookKeepsGUID(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
+	guid := uuid.New()
+	fixed := time.Unix(1731000500, 0)
+	now = func() time.Time { return fixed }
+	t.Cleanup(func() { now = time.Now })
+
+	is.NoErr(RedeliverWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), guid))
+
+	is.Equal(rec.header.Get(HeaderDelivery), guid.String())
+	is.Equal(rec.header.Get(HeaderTimestamp), "1731000500")
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write([]byte("1731000500." + guid.String() + "." + rec.body))
+	is.Equal(rec.header.Get(HeaderSignatureV2), "sha256="+hex.EncodeToString(mac.Sum(nil)))
+
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.True(ds[0].ID != guid)
+	is.True(strings.Contains(ds[0].RequestHeaders, "X-Softserve-Delivery: "+guid.String()))
 }
 
 func TestSendWebhookSignatureDependsOnSecret(t *testing.T) {
@@ -661,7 +733,7 @@ func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
 		uuid.MustParse("00000000-0000-1000-8000-000000000000"),
 	}
 	for _, id := range ids {
-		req, err := newRequest(w, EventPush, samplePayloadFor(e))
+		req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
 		is.NoErr(err)
 		req.id = id
 		is.NoErr(recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
@@ -690,7 +762,7 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
 	ctx := store.WithContext(e.ctx, failingPruneStore{e.ds})
 	ctx = log.WithContext(ctx, log.New(&logs))
 
-	req, err := newRequest(w, EventPush, samplePayloadFor(e))
+	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
 	is.NoErr(err)
 	is.NoErr(recordDelivery(ctx, w, EventPush, req, nil, 200, "", ""))
 
