@@ -47,9 +47,10 @@ ssh:
   # How the server's ssh client verifies host keys of ssh remotes it imports
   # or mirrors from, checked against <data_path>/ssh/known_hosts.
   # "accept-new" records a host key on first contact and refuses a changed
-  # one. "yes" refuses any host that is not already in known_hosts; use it
-  # with a pre-seeded known_hosts file. The client always runs with
-  # BatchMode=yes, so it fails fast instead of prompting for a passphrase.
+  # one (needs OpenSSH 7.6 or newer). "yes" refuses any host that is not
+  # already in known_hosts; use it with a pre-seeded known_hosts file. The
+  # client always runs with BatchMode=yes, so it fails fast instead of
+  # prompting for a passphrase.
   client_strict_host_key_checking: {{ q .SSH.ClientStrictHostKeyChecking }}
 
   # The ssh hosts that repositories may be imported from or mirrored. The
@@ -167,34 +168,36 @@ http:
   cors:
     # The allowed cross-origin headers
     allowed_headers:
-       - "Accept"
-       - "Accept-Language"
-       - "Content-Language"
-       - "Content-Type"
-       - "Origin"
-       - "X-Requested-With"
-       - "User-Agent"
-       - "Authorization"
-       - "Access-Control-Request-Method"
-       - "Access-Control-Allow-Origin"
+      - "Accept"
+      - "Accept-Language"
+      - "Content-Language"
+      - "Content-Type"
+      - "Origin"
+      - "X-Requested-With"
+      - "User-Agent"
+      - "Authorization"
+      - "Access-Control-Request-Method"
+      - "Access-Control-Allow-Origin"
     # The allowed cross-origin URLs
     allowed_origins:
-       - {{ q .HTTP.PublicURL }} # always allowed
-       # - "https://example.com"
+      - {{ q .HTTP.PublicURL }} # always allowed
+      # - "https://example.com"
     # The allowed cross-origin methods
     allowed_methods:
-       - "GET"
-       - "HEAD"
-       - "POST"
-       - "PUT"
-       - "OPTIONS"
+      - "GET"
+      - "HEAD"
+      - "POST"
+      - "PUT"
+      - "OPTIONS"
 
 # The stats server configuration.
 stats:
   # Enable the stats server.
   enabled: {{ .Stats.Enabled }}
 
-  # The address on which the stats server will listen.
+  # The address on which the stats server will listen. It serves Prometheus
+  # metrics at /metrics without authentication, and they name repositories,
+  # private ones included, so keep it off untrusted networks.
   listen_addr: {{ q .Stats.ListenAddr }}
 
 # The database configuration.
@@ -234,6 +237,9 @@ jobs:
   # "0 * * * *". Set to "" to disable mirror syncing. An empty
   # SOFT_SERVE_JOBS_MIRROR_PULL does not disable it; it keeps this value.
   mirror_pull: {{ q .Jobs.MirrorPull }}
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: {{ q .Jobs.LFSSweep }}
 
 # Repository webhook configuration.
 webhook:
@@ -259,20 +265,19 @@ webhook:
     # - "127.0.0.1:8080"
 {{- end }}
 
-# Additional admin keys. An entry may also be the path to a file in
-# authorized_keys format; a relative path is relative to the data directory.
+# Additional admin keys. A listed key that no account holds is still a
+# server admin over SSH, git transport included, but it can't take LFS locks
+# or get an HTTP LFS token (git-lfs-authenticate): both need an account.
+# An entry may also be the path to a file in authorized_keys format; a
+# relative path is relative to the data directory.
 #initial_admin_keys:
-#  - "ssh-rsa AAAAB3NzaC1yc2..."
+#  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
 
 # Override the anon-access and allow-keyless settings (normally managed at
-# runtime via the "settings" command and stored in the database). If set,
-# these always take precedence over the database, for as long as they remain
-# set -- not just on first run. This is intended for scripted, non-production
-# bootstrapping (e.g. spinning up a throwaway server for local dev tooling),
-# not for production use. "admin-access" with allow_keyless: true gives
-# anyone who can reach the server full admin access.
-# Valid anon_access values are "no-access", "read-only", "read-write" and
-# "admin-access".
+# runtime with the "settings" command and stored in the database). While
+# set, these take precedence over the database on every read, not just on
+# first run. This is intended for scripted, non-production bootstrapping
+# (e.g. a throwaway server for local dev tooling), not for production use.
 #anon_access: "read-only"
 #allow_keyless: true
 
