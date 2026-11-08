@@ -34,6 +34,8 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		{"private address outside every entry", "anything.example", "443", "192.168.1.1", false},
 		{"IP entry with port, matching port", "127.0.0.1", "8080", "127.0.0.1", true},
 		{"IP entry with port, other port", "127.0.0.1", "8081", "127.0.0.1", false},
+		{"IP entry with port, matching port with leading zeros", "127.0.0.1", "08080", "127.0.0.1", true},
+		{"IP entry with port, non-numeric port", "127.0.0.1", "80x", "127.0.0.1", false},
 		{"hostname entry reaches loopback", "hooks.internal", "80", "127.0.0.1", true},
 		{"hostname entry reaches RFC1918 outside the CIDR entries", "hooks.internal", "443", "192.168.5.5", true},
 		{"hostname entry is case and dot insensitive", "Hooks.Internal.", "443", "192.168.5.5", true},
@@ -123,6 +125,7 @@ func TestValidateURLAllowing(t *testing.T) {
 		"elsewhere.example": {"192.168.0.1"},
 	})
 	allowed := mustAllowedHosts(t, "hooks.internal", "rebind.internal", "mixed.internal", "172.16.0.0/12", "127.0.0.1", "localhost:8080")
+	port80 := mustAllowedHosts(t, "127.0.0.1:80", "hooks.internal:0443")
 
 	tests := []struct {
 		name    string
@@ -142,6 +145,11 @@ func TestValidateURLAllowing(t *testing.T) {
 		{"metadata literal is refused", allowed, "http://169.254.169.254/latest/meta-data/", ErrPrivateIP},
 		{"localhost name refused on unlisted port", allowed, "http://localhost:9090/hook", ErrPrivateIP},
 		{"localhost name allowed when listed", allowed, "http://localhost:8080/hook", nil},
+		{"localhost name allowed when listed, port with leading zero", allowed, "http://localhost:08080/hook", nil},
+		{"port with leading zero matches entry", port80, "http://127.0.0.1:080/hook", nil},
+		{"default port matches entry", port80, "http://127.0.0.1/hook", nil},
+		{"entry port with leading zero matches default https port", port80, "https://hooks.internal/hook", nil},
+		{"entry port does not open other ports", port80, "http://127.0.0.1:8080/hook", ErrPrivateIP},
 		{"scheme still checked", allowed, "ftp://127.0.0.1/hook", ErrInvalidScheme},
 	}
 	for _, tt := range tests {
