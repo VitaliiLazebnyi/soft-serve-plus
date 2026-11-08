@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type filesView int
@@ -234,7 +235,10 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		f.activeView = filesViewContent
 		f.currentContent = msg
 		f.code.UseGlamour = msg.isMarkdown
-		cmds = append(cmds, f.code.SetMarkdownContent(msg.content, msg.ext, msg.isMarkdown))
+		// File contents come from the repository and must not reach the
+		// terminal as escape sequences; chroma and glamour pass them
+		// through. currentContent keeps the raw bytes for copying.
+		cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(msg.content), msg.ext, msg.isMarkdown))
 		f.code.GotoTop()
 	case FileBlameMsg:
 		f.currentBlame = msg
@@ -275,7 +279,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetMarkdownContent(f.currentContent.content, f.currentContent.ext, f.currentContent.isMarkdown))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
@@ -289,7 +293,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, preview) &&
 				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetMarkdownContent(f.currentContent.content, f.currentContent.ext, f.currentContent.isMarkdown))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -306,6 +310,21 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
+			}
+		}
+	case common.ErrorMsg:
+		// A listing or blame that failed to load never sends its result, so
+		// leave the loading view rather than spin until the next reload.
+		if f.activeView == filesViewLoading {
+			if f.blameView {
+				f.blameView = false
+				f.activeView = filesViewContent
+			} else {
+				// The selector still holds the previous listing, maybe of
+				// another ref or repository. Clear it now, not through a
+				// FileItemsMsg that could land after a later good listing.
+				f.activeView = filesViewFiles
+				cmds = append(cmds, f.selector.SetItems(nil))
 			}
 		}
 	case EmptyRepoMsg:
@@ -367,7 +386,9 @@ func (f *Files) StatusBarValue() string {
 	if p == "." || p == "" {
 		return " "
 	}
-	return p
+	// Quote the path the way the file list quotes names, as file names may
+	// contain control characters.
+	return common.UnquoteFilename(p)
 }
 
 // StatusBarInfo returns the status bar info.
@@ -390,17 +411,17 @@ func (f *Files) updateFilesCmd() tea.Msg {
 	}
 	r, err := f.repo.Open()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	path := f.path
 	ref := f.ref
 	t, err := r.TreePath(ref, path)
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents, err := t.Entries()
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
 	ents.Sort()
 	for _, e := range ents {
@@ -505,10 +526,10 @@ func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
 		if commit == nil {
 			break
 		}
-		who := fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email)
+		who := utils.Sanitize(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
 		line := fmt.Sprintf("%s %s %s",
 			c.Styles.Tree.Blame.Hash.Render(commit.ID.String()[:7]),
-			c.Styles.Tree.Blame.Message.Render(commit.Summary()),
+			c.Styles.Tree.Blame.Message.Render(utils.Sanitize(commit.Summary())),
 			c.Styles.Tree.Blame.Who.Render(who),
 		)
 		if line != prev {

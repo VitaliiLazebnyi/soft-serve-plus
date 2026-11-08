@@ -238,8 +238,10 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		case tea.MouseWheelDown:
 			s.CursorDown()
 		case tea.MouseLeft:
+			// Index() and Select() count from the start of the filtered
+			// list, so look up the clicked item among the visible ones.
 			curIdx := s.Index()
-			for i, item := range s.Items() {
+			for i, item := range s.VisibleItems() {
 				item, _ := item.(IdentifiableItem)
 				// Check each item to see if it's in bounds.
 				if item != nil && s.common.Zone.Get(item.ID()).InBounds(msg) {
