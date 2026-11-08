@@ -17,7 +17,7 @@ ensureserverrunning SSH_PORT
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
 usoft token create 'read'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
@@ -45,7 +45,12 @@ soft repo list
 ! stdout 'secret'
 ! a2git clone ssh://localhost:$SSH_PORT/secret secret
 stderr 'attached to non-admin account "user1"'
-! a2git -C . push ssh://localhost:$SSH_PORT/secret HEAD
+a2git init pushsrc
+mkfile ./pushsrc/README.md '# secret'
+a2git -C pushsrc add -A
+a2git -C pushsrc commit -m 'first'
+! a2git -C pushsrc push ssh://localhost:$SSH_PORT/secret HEAD
+stderr 'attached to non-admin account "user1"'
 ! exists secret
 soft repo list
 ! stdout 'secret'

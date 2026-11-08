@@ -19,19 +19,19 @@ soft settings anon-access read-write
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
 usoft token create 'push'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
 # the admin account (admin flag) gets a token too
 soft token create 'push'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout atokenfile
 envfile ATOKEN=atokenfile
 
 # an ordinary account cannot push-to-create over HTTP
-curl http://$UTOKEN@localhost:$HTTP_PORT/before.git/info/refs?service=git-receive-pack
-stdout '404.*'
+curl -v http://$UTOKEN@localhost:$HTTP_PORT/before.git/info/refs?service=git-receive-pack
+stderr '^> 404 '
 
 # the operator now lists the claimed key as an admin key
 stopserver
@@ -44,13 +44,13 @@ soft user info user1
 stdout 'Admin: false'
 
 # user1 still cannot create over HTTP, by token or by basic auth
-curl http://$UTOKEN@localhost:$HTTP_PORT/claimed.git/info/refs?service=git-receive-pack
-stdout '404.*'
-curl http://user1:$UTOKEN@localhost:$HTTP_PORT/claimed2.git/info/refs?service=git-receive-pack
-stdout '404.*'
+curl -v http://$UTOKEN@localhost:$HTTP_PORT/claimed.git/info/refs?service=git-receive-pack
+stderr '^> 404 '
+curl -v http://user1:$UTOKEN@localhost:$HTTP_PORT/claimed2.git/info/refs?service=git-receive-pack
+stderr '^> 404 '
 # nor can an anonymous caller
-curl http://localhost:$HTTP_PORT/anon.git/info/refs?service=git-receive-pack
-stdout '401.*'
+curl -v http://localhost:$HTTP_PORT/anon.git/info/refs?service=git-receive-pack
+stderr '^> 401 '
 
 # while listed, a non-admin cannot attach the key to their account
 usoft pubkey remove "$ADMIN2_AUTHORIZED_KEY"

@@ -27,15 +27,15 @@ envfile SECRETJWT=secretjwt
 usoft jwt ghost
 cp stdout ghostjwt
 envfile GHOSTJWT=ghostjwt
-curl -H 'Authorization: Bearer '$SECRETJWT http://localhost:$HTTP_PORT/secret.git/info/refs?service=git-upload-pack
-stdout '404.*'
+curl -v -H 'Authorization: Bearer '$SECRETJWT http://localhost:$HTTP_PORT/secret.git/info/refs?service=git-upload-pack
+stderr '^> 404 '
 cp stdout want.txt
 curl -H 'Authorization: Bearer '$GHOSTJWT http://localhost:$HTTP_PORT/ghost.git/info/refs?service=git-upload-pack
 cmp stdout want.txt
 
 # a token minted for another repo is bad credentials either way
-curl -H 'Authorization: Bearer '$GHOSTJWT http://localhost:$HTTP_PORT/secret.git/info/refs?service=git-upload-pack
-stdout '403.*'
+curl -v -H 'Authorization: Bearer '$GHOSTJWT http://localhost:$HTTP_PORT/secret.git/info/refs?service=git-upload-pack
+stderr '^> 403 '
 cp stdout want.txt
 curl -H 'Authorization: Bearer '$SECRETJWT http://localhost:$HTTP_PORT/ghost.git/info/refs?service=git-upload-pack
 cmp stdout want.txt

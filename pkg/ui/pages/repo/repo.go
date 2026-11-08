@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/statusbar"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type state int
@@ -211,12 +212,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if cfg := r.common.Config(); cfg != nil {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
-		r.statusbar.SetStatus("", msg.Message, "", "")
+		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
-	case LogItemsMsg, LogDiffMsg, LogCountMsg:
+	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
@@ -253,6 +254,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, r.updateModels(msg))
 	case common.ErrorMsg:
 		r.state = readyState
+		// The file listing loads on every ref change, usually while another
+		// tab is shown, so the Files pane must see its error to leave its
+		// loading view. The active pane gets the message below.
+		if r.panes[r.activeTab].TabName() != (&Files{}).TabName() {
+			cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		}
 	case SwitchTabMsg:
 		for i, c := range r.panes {
 			if c.TabName() == msg.TabName() {
@@ -324,13 +331,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.common.Width)
-	header := r.selectedRepo.ProjectName()
+	header := utils.Sanitize(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(r.selectedRepo.Description())
+	desc := strings.TrimSpace(utils.Sanitize(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,

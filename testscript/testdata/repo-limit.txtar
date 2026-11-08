@@ -13,7 +13,7 @@ ensureserverrunning SSH_PORT
 
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 usoft token create 'push'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
