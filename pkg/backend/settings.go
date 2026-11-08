@@ -16,15 +16,15 @@ import (
 // from taking effect, which is a fail-open risk on an access-control check.
 //
 // It implements backend.Backend.
-func (b *Backend) AllowKeyless(ctx context.Context) bool {
-	if b.cfg.AllowKeyless != nil {
-		return *b.cfg.AllowKeyless
+func (d *Backend) AllowKeyless(ctx context.Context) bool {
+	if d.cfg.AllowKeyless != nil {
+		return *d.cfg.AllowKeyless
 	}
 
 	var allow bool
-	if err := b.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
-		allow, err = b.store.GetAllowKeylessAccess(ctx, tx)
+		allow, err = d.store.GetAllowKeylessAccess(ctx, tx)
 		return err
 	}); err != nil {
 		return false
@@ -36,9 +36,9 @@ func (b *Backend) AllowKeyless(ctx context.Context) bool {
 // SetAllowKeyless sets whether or not keyless access is allowed.
 //
 // It implements backend.Backend.
-func (b *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
-	return b.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return b.store.SetAllowKeylessAccess(ctx, tx, allow)
+func (d *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.SetAllowKeylessAccess(ctx, tx, allow)
 	})
 }
 
@@ -51,15 +51,15 @@ func (b *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
 // effect, which is a fail-open risk on an access-control check.
 //
 // It implements backend.Backend.
-func (b *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
-	if b.cfg.AnonAccess != nil {
-		return *b.cfg.AnonAccess
+func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
+	if d.cfg.AnonAccess != nil {
+		return *d.cfg.AnonAccess
 	}
 
 	var level access.AccessLevel
-	if err := b.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
-		level, err = b.store.GetAnonAccess(ctx, tx)
+		level, err = d.store.GetAnonAccess(ctx, tx)
 		return err
 	}); err != nil {
 		return access.NoAccess
@@ -71,8 +71,8 @@ func (b *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 // SetAnonAccess sets the level of anonymous access.
 //
 // It implements backend.Backend.
-func (b *Backend) SetAnonAccess(ctx context.Context, level access.AccessLevel) error {
-	return b.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return b.store.SetAnonAccess(ctx, tx, level)
+func (d *Backend) SetAnonAccess(ctx context.Context, level access.AccessLevel) error {
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.SetAnonAccess(ctx, tx, level)
 	})
 }
