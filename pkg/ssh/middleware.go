@@ -150,7 +150,6 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		cliCommandCounter.WithLabelValues(cmd.CommandName(args)).Inc()
 		rootCmd := &cobra.Command{
 			Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
 			SilenceUsage: true,
@@ -192,6 +191,8 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			}
 		}
 
+		cliCommandCounter.WithLabelValues(commandLabel(rootCmd, args)).Inc()
+
 		rootCmd.SetArgs(args)
 		if len(args) == 0 {
 			// otherwise it'll default to os.Args, which is not what we want.
@@ -207,6 +208,33 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 	}
+}
+
+// unknownCommand is the metric label for a command the server does not have.
+const unknownCommand = "unknown"
+
+// commandLabel returns the name of the top-level command of root that args
+// run, for use as a metric label. Labels come from the command tree, never
+// from the client, so the set of series stays fixed: anything that matches
+// no command is unknownCommand, and running root itself (no command, or
+// only flags) is the empty string.
+func commandLabel(root *cobra.Command, args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	// Execute adds the help command; add it now so it is matched too.
+	root.InitDefaultHelpCmd()
+	c, _, err := root.Find(args)
+	if err != nil || c == nil {
+		return unknownCommand
+	}
+	if c == root {
+		return ""
+	}
+	for c.HasParent() && c.Parent() != root {
+		c = c.Parent()
+	}
+	return c.Name()
 }
 
 // LoggingMiddleware logs the ssh connection and command.
