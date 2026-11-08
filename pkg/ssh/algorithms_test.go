@@ -74,9 +74,10 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	}
 }
 
-// startAlgorithmsServer starts a full SSH server built by NewSSHServer with
-// cfg and returns its address.
-func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
+// startTestServer starts a full SSH server built by NewSSHServer with cfg
+// and returns its address and the context it runs with, which holds its
+// backend.
+func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context) {
 	t.Helper()
 	ctx := serverContext(t, cfg)
 	s, err := NewSSHServer(ctx)
@@ -89,7 +90,7 @@ func startAlgorithmsServer(t *testing.T, cfg *config.Config) string {
 	}
 	go s.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = s.Close() })
-	return l.Addr().String()
+	return l.Addr().String(), ctx
 }
 
 // serverContext validates cfg and returns a context with what NewSSHServer
@@ -159,7 +160,7 @@ func wantNoCommonAlgorithm(t *testing.T, err error, what string) {
 func TestSSHServerRefusesSHA1ByDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	// A non-AEAD cipher makes the MAC part of the negotiation.
 	ctr := []string{gossh.CipherAES128CTR}
@@ -186,7 +187,7 @@ func TestSSHServerHonoursConfiguredAlgorithms(t *testing.T) {
 	cfg.SSH.KexAlgorithms = []string{gossh.InsecureKeyExchangeDH14SHA1}
 	cfg.SSH.Ciphers = []string{gossh.CipherAES128CTR}
 	cfg.SSH.MACs = []string{gossh.HMACSHA1}
-	addr := startAlgorithmsServer(t, cfg)
+	addr, _ := startTestServer(t, cfg)
 
 	if err := dialWith(t, addr, []string{gossh.InsecureKeyExchangeDH14SHA1}, nil, []string{gossh.HMACSHA1}); err != nil {
 		t.Fatalf("client limited to the configured legacy algorithms: %v", err)

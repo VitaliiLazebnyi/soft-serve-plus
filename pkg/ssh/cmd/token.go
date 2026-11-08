@@ -38,14 +38,15 @@ func TokenCommand() *cobra.Command {
 			}
 
 			var expiresAt time.Time
-			var expiresIn time.Duration
 			if createExpiresIn != "" {
 				d, err := duration.Parse(createExpiresIn)
 				if err != nil {
 					return err
 				}
+				if d <= 0 {
+					return fmt.Errorf("invalid --expires-in %q: must be a positive duration", createExpiresIn)
+				}
 
-				expiresIn = d
 				expiresAt = time.Now().Add(d)
 			}
 
@@ -55,8 +56,8 @@ func TokenCommand() *cobra.Command {
 			}
 
 			notice := "Access token created"
-			if expiresIn != 0 {
-				notice += " (expires in " + humanize.Time(expiresAt) + ")"
+			if !expiresAt.IsZero() {
+				notice += " (expires " + humanize.Time(expiresAt) + ")"
 			}
 
 			cmd.PrintErrln(notice)

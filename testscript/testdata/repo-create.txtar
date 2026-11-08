@@ -14,14 +14,26 @@ stderr 'Created repository repo1.*'
 stdout ssh://localhost:$SSH_PORT/repo1.git
 soft repo hidden repo1
 stdout true
+
+# a hidden value that is not a boolean is refused and does not unhide it
+! soft repo hidden repo1 yes
+stderr 'invalid hidden value "yes"'
+soft repo hidden repo1
+stdout true
 soft repo private repo1
 stdout true
 ! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
+
+# a visibility that is not a boolean is refused and changes nothing
+! soft repo private repo1 maybe
+stderr 'invalid syntax'
+soft repo private repo1
+stdout true
 soft repo description repo1
 stdout 'description'
 readfile $DATA_PATH/repos/repo1.git/description 'description'
 soft repo project-name repo1
-stdout 'repo1'
+stdout '^repo11$'
 
 # clone repo
 git clone ssh://localhost:$SSH_PORT/repo1 repo1
@@ -96,7 +108,8 @@ stdout branch1
 # delete other branch
 soft repo branch delete repo1 master
 soft repo branch list repo1
-stdout branch1
+stdout '^branch1$'
+! stdout master
 
 # create a new user
 soft user create bar --key "$USER1_AUTHORIZED_KEY"
@@ -114,7 +127,7 @@ usoft repo description repo2
 stdout 'description'
 readfile $DATA_PATH/repos/repo2.git/description 'description'
 usoft repo project-name repo2
-stdout 'repo2'
+stdout '^repo2$'
 
 # user delete a repo
 usoft repo delete repo2
