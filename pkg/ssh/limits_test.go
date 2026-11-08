@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
@@ -239,7 +240,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 			cfg.SSH.HandshakeTimeout = 1
 			addr, _, srv := startServer(t, cfg)
 
-			raw, err := net.Dial("tcp", addr)
+			raw, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -348,7 +349,7 @@ func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler,
 		},
 	}
 	srv.AddHostKey(signer)
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
