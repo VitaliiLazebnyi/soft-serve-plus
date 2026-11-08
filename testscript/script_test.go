@@ -40,13 +40,26 @@ var (
 
 // PrepareBuildCommand builds the soft binary under test. The webhooktest tag
 // lets the tests send webhooks to a local receiver; see newWebhookReceiver.
+// The binary is built with -cover only when its coverage is collected (see
+// coverDirSet): a -cover binary run without GOCOVERDIR warns on stderr, and
+// every server hook would print that warning to the pushing client.
 func PrepareBuildCommand(binPath string) *exec.Cmd {
-	_, disableRaceSet := os.LookupEnv("SOFT_SERVE_DISABLE_RACE_CHECKS")
-	if disableRaceSet {
-		// don't add the -race flag
-		return exec.Command("go", "build", "-tags", "webhooktest", "-cover", "-o", binPath, filepath.Join("..", "cmd", "soft")) //nolint:noctx
+	args := []string{"build", "-tags", "webhooktest"}
+	if _, disableRaceSet := os.LookupEnv("SOFT_SERVE_DISABLE_RACE_CHECKS"); !disableRaceSet {
+		args = append(args, "-race")
 	}
-	return exec.Command("go", "build", "-tags", "webhooktest", "-race", "-cover", "-o", binPath, filepath.Join("..", "cmd", "soft")) //nolint:noctx
+	if coverDirSet() {
+		args = append(args, "-cover")
+	}
+	args = append(args, "-o", binPath, filepath.Join("..", "cmd", "soft"))
+	return exec.Command("go", args...) //nolint:noctx
+}
+
+// coverDirSet reports whether the soft processes the scripts start have a
+// directory to write coverage counters to: GOCOVERDIR, which testscript passes
+// through, or SOFT_SERVE_TEST_COVDIR (see TestScript's Setup).
+func coverDirSet() bool {
+	return os.Getenv("GOCOVERDIR") != "" || os.Getenv("SOFT_SERVE_TEST_COVDIR") != ""
 }
 
 func TestMain(m *testing.M) {
@@ -56,27 +69,32 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	os.Exit(runTests(m))
+}
+
+// runTests builds the soft binary into a temporary directory, runs the tests
+// and removes the directory again. It is separate from TestMain so that its
+// deferred cleanup runs before os.Exit.
+func runTests(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "soft-serve*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temporary directory: %s", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "failed to create temporary directory: %s\n", err)
+		return 1
 	}
-	defer os.RemoveAll(tmp)
+	defer os.RemoveAll(tmp) //nolint:errcheck
 
 	binPath = filepath.Join(tmp, "soft")
 	if runtime.GOOS == "windows" {
 		binPath += ".exe"
 	}
 
-	// Build the soft binary with -cover flag.
 	cmd := PrepareBuildCommand(binPath)
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build soft-serve binary: %s", err)
-		os.Exit(1)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to build soft-serve binary: %s\n%s", err, out)
+		return 1
 	}
 
-	// Run tests
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 func TestScript(t *testing.T) {
@@ -131,8 +149,8 @@ func TestScript(t *testing.T) {
 		Setup: func(e *testscript.Env) error {
 			// Add binPath to PATH
 			e.Setenv("PATH", fmt.Sprintf("%s%c%s", filepath.Dir(binPath), os.PathListSeparator, e.Getenv("PATH")))
-			// The soft binary is built with -cover. When SOFT_SERVE_TEST_COVDIR
-			// is set, pass it to the server and hook processes as GOCOVERDIR so
+			// The soft binary is built with -cover when a coverage directory
+			// is set. When SOFT_SERVE_TEST_COVDIR is set, pass it to the server and hook processes as GOCOVERDIR so
 			// their counters are written there. A separate variable is used
 			// because `go test -cover` overrides GOCOVERDIR for the test process.
 			if dir := os.Getenv("SOFT_SERVE_TEST_COVDIR"); dir != "" {
@@ -216,8 +234,7 @@ func TestScript(t *testing.T) {
 			cfg.Stats.ListenAddr = statsListen
 			cfg.LFS.Enabled = true
 
-			// Parse os SOFT_SERVE environment variables
-			if err := cfg.ParseEnv(); err != nil {
+			if err := applyTestEnv(cfg); err != nil {
 				return err
 			}
 
@@ -233,7 +250,7 @@ func TestScript(t *testing.T) {
 				}
 			}
 
-			for _, env := range cfg.Environ() {
+			for _, env := range testEnviron(cfg) {
 				parts := strings.SplitN(env, "=", 2)
 				if len(parts) != 2 {
 					e.T().Fatal("invalid environment variable", env)
@@ -244,6 +261,54 @@ func TestScript(t *testing.T) {
 			return nil
 		},
 	})
+}
+
+// applyTestEnv takes the database driver from the environment, and the data
+// source too when the driver is postgres, so the scripts can run against
+// postgres, and validates cfg. setupPostgres then swaps the data source for
+// a disposable database. A sqlite data source is never taken from the
+// environment: an absolute one would be used as is, and the scripts would
+// change the users and repositories of whatever database it names, so
+// sqlite keeps the test's database under the data path.
+// Every other SOFT_SERVE_* variable of the developer's environment is
+// ignored: the data path, listen addresses and admin keys belong to the
+// test, and the scripts would otherwise create, change and delete users
+// and repositories wherever SOFT_SERVE_DATA_PATH points. testEnviron keeps
+// SOFT_SERVE_CONFIG_LOCATION out as well.
+func applyTestEnv(cfg *config.Config) error {
+	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DRIVER"); ok {
+		cfg.DB.Driver = v
+	}
+	if cfg.DB.Driver == "postgres" {
+		if v, ok := os.LookupEnv("SOFT_SERVE_DB_DATA_SOURCE"); ok {
+			cfg.DB.DataSource = v
+		}
+	}
+	return cfg.Validate()
+}
+
+// testEnviron returns the environment the scripts run with: cfg.Environ,
+// with SOFT_SERVE_CONFIG_LOCATION pointing into the test's data path.
+// cfg.Environ takes the config location from the developer's
+// SOFT_SERVE_CONFIG_LOCATION when that file exists, and the `soft serve`
+// started by a script would then read the developer's config file, taking
+// anon access, keyless access, extra admin keys and every other setting
+// cfg.Environ does not export from it.
+func testEnviron(cfg *config.Config) []string {
+	const key = "SOFT_SERVE_CONFIG_LOCATION="
+	location := key + filepath.Join(cfg.DataPath, "config.yaml")
+	envs := cfg.Environ()
+	found := false
+	for i, env := range envs {
+		if strings.HasPrefix(env, key) {
+			envs[i] = location
+			found = true
+		}
+	}
+	if !found {
+		envs = append(envs, location)
+	}
+	return envs
 }
 
 func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
@@ -466,8 +531,27 @@ func check(ts *testscript.TestScript, err error, neg bool) {
 	}
 }
 
+// cmdReadfile writes the content of a file to stdout. When an expected content
+// is given, it also checks that the file holds exactly that content (or, with
+// a "!" prefix, anything else).
 func cmdReadfile(ts *testscript.TestScript, neg bool, args []string) {
-	ts.Stdout().Write([]byte(ts.ReadFile(args[0])))
+	if len(args) < 1 || len(args) > 2 {
+		ts.Fatalf("usage: readfile path [content]")
+	}
+	got := ts.ReadFile(args[0])
+	ts.Stdout().Write([]byte(got))
+	if len(args) == 1 {
+		if neg {
+			ts.Fatalf("unsupported: ! readfile without content")
+		}
+		return
+	}
+	if want := args[1]; (got == want) == neg {
+		if neg {
+			ts.Fatalf("%s: unexpected content %q", args[0], got)
+		}
+		ts.Fatalf("%s: got %q, want %q", args[0], got, want)
+	}
 }
 
 func cmdEnvfile(ts *testscript.TestScript, neg bool, args []string) {
