@@ -73,10 +73,11 @@ func (d *Backend) ImportsDisabledReason() string {
 }
 
 // minImportGitVersion is the oldest git that honours the settings the import
-// and mirror guards rely on: http.curloptResolve (2.33) for pinning the
+// and mirror guards rely on: http.curloptResolve (2.37) for pinning the
 // validated address and http.followRedirects via GIT_CONFIG_* (2.31). Older
-// git silently ignores both, so the guard degrades to nothing.
-var minImportGitVersion = git.Version{Major: 2, Minor: 33}
+// git silently ignores unknown keys, so on 2.31 to 2.36 the pin would be
+// dropped and the guard open to DNS rebinding.
+var minImportGitVersion = git.Version{Major: 2, Minor: 37}
 
 // binVersion is how the gate learns the installed git version. Tests swap it
 // out to exercise the disabled path without an old git on hand.
