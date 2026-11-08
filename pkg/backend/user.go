@@ -217,7 +217,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
-		if d.repoPathExists(name) {
+		// So is a row with no directory (removed by hand, a partial restore
+		// or an unmounted volume): its settings are unknown to the caller,
+		// so it must not fall back to the level for a free name, which would
+		// show a private repository in listings that walk the rows.
+		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
 		return d.baseAccessLevel(ctx, user)
