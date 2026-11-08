@@ -80,10 +80,11 @@ func connectPostgres(ctx context.Context, dsn string) (*sqlx.DB, error) {
 	return db, nil
 }
 
-// postgresConfig parses dsn the way lib/pq does, environment included, and
-// applies defaultPostgresConnectTimeout when no connect_timeout is set.
+// postgresConfig parses dsn the way lib/pq does, environment included, with
+// sessions in UTC (see postgresUTCConfig), and applies
+// defaultPostgresConnectTimeout when no connect_timeout is set.
 func postgresConfig(dsn string) (pq.Config, error) {
-	cfg, err := pq.NewConfig(dsn)
+	cfg, err := postgresUTCConfig(dsn)
 	if err != nil {
 		return cfg, err
 	}
@@ -123,6 +124,30 @@ func sqliteImmediateTx(dsn string) string {
 		return dsn + "&_txlock=immediate"
 	}
 	return dsn + "?_txlock=immediate"
+}
+
+// postgresUTCConfig parses dsn into a lib/pq configuration whose sessions
+// use UTC as their TimeZone, whatever the DSN or the server's default
+// says. The tables store times in TIMESTAMP (without time zone) columns,
+// filled by CURRENT_TIMESTAMP or from UTC time.Time values, and
+// lib/pq reads them back as UTC. In any other session time zone
+// CURRENT_TIMESTAMP stores that zone's wall clock, which is then read back
+// off by the zone's UTC offset.
+func postgresUTCConfig(dsn string) (pq.Config, error) {
+	cfg, err := pq.NewConfig(dsn)
+	if err != nil {
+		return cfg, err
+	}
+	rt := make(map[string]string, len(cfg.Runtime)+1)
+	for k, v := range cfg.Runtime {
+		// Run-time parameter names are case-insensitive.
+		if !strings.EqualFold(k, "timezone") {
+			rt[k] = v
+		}
+	}
+	rt["timezone"] = "UTC"
+	cfg.Runtime = rt
+	return cfg, nil
 }
 
 // SetPoolLimits applies the connection pool settings in c. A zero value
@@ -173,9 +198,14 @@ func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) erro
 	}
 
 	if err := tx.Commit(); err != nil {
+		// sql.ErrTxDone here means the transaction was already rolled back,
+		// most often because ctx was cancelled after fn returned: nothing fn
+		// wrote is kept, so it is a failure like any other. Report the
+		// context's error along with it so callers can tell why.
 		if errors.Is(err, sql.ErrTxDone) {
-			// this is ok because whoever did finish the tx should have also written the error already.
-			return nil
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("failed to commit transaction: %w: %w", err, cerr)
+			}
 		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
