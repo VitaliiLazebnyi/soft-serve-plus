@@ -184,3 +184,27 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 		t.Errorf("refused request logged as accepted; logs:\n%s", out)
 	}
 }
+
+// A client that has not sent its request when the server's context ends is
+// told the server timed out instead of waiting for the idle timeout.
+func TestServerContextEndsBeforeRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, _ := newRequestTestDaemon(t, ctx)
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	deadline := time.Now().Add(5 * time.Second)
+	for d.conns.Size() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	// Well under the tests' one second idle timeout, which would also
+	// answer ErrTimeout.
+	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, err := readPktline(c); err == nil || err.Error() != git.ErrTimeout.Error() {
+		t.Fatalf("expected %q, got %v", git.ErrTimeout, err)
+	}
+}

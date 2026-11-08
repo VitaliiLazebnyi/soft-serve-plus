@@ -213,8 +213,23 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		d.conns.Close(c) //nolint: errcheck
 	}()
 
+	// A client that has not sent its request yet is told the server timed
+	// out when the server's context ends, rather than holding the
+	// connection until the idle timeout. Only the server's context counts
+	// here: the request context also ends when a read on c fails, which the
+	// scan below answers itself.
+	stop := context.AfterFunc(d.ctx, func() {
+		d.logger.Debugf("git: server context ended before %s sent a request", c.RemoteAddr())
+		d.fatal(c, git.ErrTimeout)
+	})
 	s := pktline.NewScanner(c)
-	if !s.Scan() {
+	scanned := s.Scan()
+	if !stop() {
+		// The server's context ended while reading and the client has
+		// already been answered.
+		return
+	}
+	if !scanned {
 		err := s.Err()
 		var nerr net.Error
 		switch {
