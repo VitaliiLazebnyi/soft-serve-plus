@@ -339,12 +339,16 @@ func renameOntoClaim(op, np string, claimed *bool) error {
 	if runtime.GOOS == "windows" {
 		// Windows does not rename onto an existing directory, so the
 		// claim is given up first. A create that claims the path in
-		// between makes the rename fail rather than be replaced.
+		// between makes the rename fail rather than be replaced, and
+		// withRepoParent does not retry that. With the claim gone, np's
+		// group directories may be empty, so a concurrent delete or
+		// rename can remove them before the rename; withRepoParent
+		// recreates them and retries.
 		if err := os.Remove(np); err != nil {
 			return err
 		}
 		*claimed = false
-		return os.Rename(op, np)
+		return withRepoParent(np, func() error { return os.Rename(op, np) })
 	}
 	// os.Rename refuses an existing directory as the target, but rename(2)
 	// replaces an empty one atomically, which is what the claim is.
