@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	gopath "path"
 	"path/filepath"
 	"strings"
@@ -180,12 +181,22 @@ func (r *Repository) TreePath(ref *Reference, path string) (*Tree, error) {
 	return t.SubTree(path)
 }
 
+// diffCommandOptions returns the options for git commands whose diff output
+// is parsed. User and system config must not change the output: an external
+// diff driver (diff.external) or forced color (color.ui=always) produce text
+// the parser does not understand, so both are turned off on the command line
+// too, which also covers the repository's own config.
+func diffCommandOptions() git.CommandOptions {
+	return git.CommandOptions{
+		Args: []string{"--no-ext-diff", "--no-color"},
+		Envs: []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+	}
+}
+
 // Diff returns the diff for the given commit.
 func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 	diff, err := r.Repository.Diff(commit.ID.String(), DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, git.DiffOptions{
-		CommandOptions: git.CommandOptions{
-			Envs: []string{"GIT_CONFIG_GLOBAL=/dev/null"},
-		},
+		CommandOptions: diffCommandOptions(),
 	})
 	if err != nil {
 		return nil, err
