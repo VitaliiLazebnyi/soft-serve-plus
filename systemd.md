@@ -24,17 +24,28 @@ variable.
 
 Soft Serve Plus does not need root, so we will run it as a dedicated
 unprivileged `soft-serve` system user. Create the user, then create the data
-directory owned by it before proceeding.
+directory owned by it before proceeding. It will hold the repositories, the
+database, the SSH host keys and the logs, so make it readable only by the
+`soft-serve` user. Soft Serve Plus creates a missing data directory with mode
+`0700`, but it keeps the mode of a directory that already exists, so set it
+here. `install -d -m 700` also fixes the mode and owner of a directory you
+created before.
 
 ```sh
 sudo useradd --system --user-group --home-dir /var/local/lib/soft-serve \
   --no-create-home --shell /usr/sbin/nologin soft-serve
-sudo mkdir -p /var/local/lib/soft-serve
-sudo chown soft-serve:soft-serve /var/local/lib/soft-serve
-sudo chmod 0750 /var/local/lib/soft-serve
+sudo install -d -m 700 -o soft-serve -g soft-serve /var/local/lib/soft-serve
 ```
 
-We will also create a `/etc/soft-serve.conf` file for any extra server settings that we want to override.
+We will also create a `/etc/soft-serve.conf` file for any extra server settings
+that we want to override. It can hold secrets such as a database password, so
+make it readable only by `root`. systemd reads it as `root`, so the server does
+not need access to it.
+
+```sh
+sudo touch /etc/soft-serve.conf
+sudo chmod 600 /etc/soft-serve.conf
+```
 
 ```conf
 # Config defined here will override the config in /var/local/lib/soft-serve/config.yaml
@@ -71,10 +82,12 @@ ExecStart=/usr/bin/soft serve
 Environment=SOFT_SERVE_DATA_PATH=/var/local/lib/soft-serve
 EnvironmentFile=-/etc/soft-serve.conf
 WorkingDirectory=/var/local/lib/soft-serve
+# Keep the files the server creates (repositories, database, logs) out of
+# reach of other local users.
+UMask=0027
 
 # Hardening
 ReadWritePaths=/var/local/lib/soft-serve
-UMask=0027
 NoNewPrivileges=true
 LimitNOFILE=1048576
 ProtectSystem=strict
