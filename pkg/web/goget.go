@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,7 +33,7 @@ var repoIndexHTMLTpl = template.Must(template.New("index").Parse(`<!DOCTYPE html
     <meta name="go-import" content="{{ .ImportRoot }}/{{ .Repo }} git {{ .Config.HTTP.PublicURL }}/{{ .Repo }}.git">
 </head>
 <body>
-Redirecting to docs at <a href="{{ .DocURL }}">godoc.org/{{ .ImportRoot }}/{{ .Repo }}</a>...
+Redirecting to docs at <a href="{{ .DocURL }}">pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}</a>...
 </body>
 </html>
 `))
@@ -69,10 +68,11 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Find the closest repository the caller can read; skip the rest.
-		user := proto.UserFromContext(ctx)
+		// Find the closest repository the caller can read; skip the rest. A
+		// bearer token only stands for the caller on the repositories it
+		// names, so a token for "repo" does not reveal "repo/sub".
 		for {
-			if _, err := be.Repository(ctx, repo); err == nil && be.AccessLevelForUser(ctx, repo, user) >= access.ReadOnlyAccess {
+			if _, err := be.Repository(ctx, repo); err == nil && be.AccessLevelForUser(ctx, repo, callerFor(ctx, repo)) >= access.ReadOnlyAccess {
 				break
 			}
 
