@@ -149,6 +149,10 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.common.Logger.Debugf("msg received: %T", msg)
 	cmds := make([]tea.Cmd, 0)
+	// While an error is shown the repository view underneath is hidden, so
+	// input belongs to the error alone: the key that dismisses it must not
+	// also act on the view.
+	forwardInput := m.state != errorState
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
@@ -157,7 +161,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.common.KeyMap.Back) && m.error != nil:
 			m.error = nil
 			m.state = startState
-			// Always show the footer on error.
+			// Show the footer only when all help is shown.
 			m.showFooter = m.footer.ShowAll()
 		case key.Matches(msg, m.common.KeyMap.Help):
 			cmds = append(cmds, footer.ToggleFooterCmd)
@@ -195,10 +199,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	r, cmd := m.model.Update(msg)
-	m.model = r.(*repo.Repo)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	if forwardInput || !common.IsInputMsg(msg) {
+		r, cmd := m.model.Update(msg)
+		m.model = r.(*repo.Repo)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// This fixes determining the height margin of the footer.
