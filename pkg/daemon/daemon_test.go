@@ -32,11 +32,18 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests starts the daemon the tests talk to, runs the tests and tears the
+// daemon down again. It is separate from TestMain so that its deferred
+// cleanup runs before os.Exit.
+func runTests(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "soft-serve-test")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(tmp)
+	defer os.RemoveAll(tmp) //nolint:errcheck
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
@@ -69,6 +76,7 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 	testDaemon = d
+	defer d.Close() //nolint:errcheck
 	// Bind before running the tests so the first dial cannot race the
 	// listener and be refused.
 	var lc net.ListenConfig
@@ -77,15 +85,7 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 	go d.Serve(l) //nolint:errcheck
-	code := m.Run()
-	os.Unsetenv("SOFT_SERVE_DATA_PATH")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_CONNECTIONS")
-	os.Unsetenv("SOFT_SERVE_GIT_MAX_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_IDLE_TIMEOUT")
-	os.Unsetenv("SOFT_SERVE_GIT_LISTEN_ADDR")
-	_ = d.Close()
-	_ = dbx.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 // dialDaemon connects to the test daemon. The connection is closed when the
