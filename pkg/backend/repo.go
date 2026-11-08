@@ -3,6 +3,7 @@ package backend
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -256,6 +257,8 @@ func renameOntoClaim(op, np string, claimed *bool) error {
 // records the repository.
 func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
 	rp := d.repoPath(name)
+	opts.ProjectName = utils.Sanitize(opts.ProjectName)
+	opts.Description = utils.Sanitize(opts.Description)
 
 	var userID int64
 	if user != nil {
@@ -345,20 +348,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 // seeds the initial database always creates an admin user, so this should
 // never fail to find one in practice.
 func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, error) {
-	users, err := d.store.GetAllUsers(ctx, tx)
+	adminID, err := d.store.FindDefaultAdminUserID(ctx, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errors.New("no admin user found to own anonymous repository")
+	}
 	if err != nil {
 		return 0, err
-	}
-
-	var adminID int64
-	for _, u := range users {
-		if u.Admin && (adminID == 0 || u.ID < adminID) {
-			adminID = u.ID
-		}
-	}
-
-	if adminID == 0 {
-		return 0, errors.New("no admin user found to own anonymous repository")
 	}
 
 	return adminID, nil
@@ -771,6 +766,12 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	}
 	claimed := true
 
+	// The directory is moved inside the transaction, and the move is not
+	// undone if the transaction fails. Cancelling ctx after the move, as a
+	// client disconnecting does, would roll the new name back under the moved
+	// directory, so the rename and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
+
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
@@ -797,7 +798,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return nil
 	}
 
-	wh, err := webhook.NewRepositoryEvent(ctx, user, repo, webhook.RepositoryEventActionRename)
+	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
 		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
 		return nil
@@ -1027,6 +1028,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 		}
 	}
 
+	// The git config is written inside the transaction and is not restored
+	// if the transaction fails, so cancelling ctx, as a client disconnecting
+	// does, must not roll the flag back once the config is written.
+	ctx = context.WithoutCancel(ctx)
+
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// Re-read both, so what is written is what was validated.
 		cur, err := d.store.GetRepoByName(ctx, tx, name)
@@ -1156,6 +1162,11 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 	desc = utils.Sanitize(desc)
 	rp := d.repoPath(name)
 
+	// The description file is written inside the transaction and is not
+	// restored if the transaction fails, so cancelling ctx, as a client
+	// disconnecting does, must not roll the row back once the file is written.
+	ctx = context.WithoutCancel(ctx)
+
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.store.GetRepoByName(ctx, tx, name); err != nil {
 			return err
@@ -1178,6 +1189,12 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
+
+	// git-daemon-export-ok is changed inside the transaction and is not
+	// restored if the transaction fails. Cancelling ctx, as a client
+	// disconnecting does, must not roll the flag back once the file is
+	// changed, so the change and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
 
 	var changed bool
 	if err := wrapRepoError(
