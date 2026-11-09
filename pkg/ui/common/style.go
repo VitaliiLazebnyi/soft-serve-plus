@@ -19,7 +19,13 @@ func StyleConfig() gansi.StyleConfig {
 	s := styles.DarkStyleConfig
 	// This fixes an issue with the default style config. For example
 	// highlighting empty spaces with red in Dockerfile type.
-	s.CodeBlock.Chroma.Error.BackgroundColor = noColor
+	// Chroma is a pointer into glamour's shared style. Change a copy, since
+	// every TUI session calls StyleConfig and writing the shared one races.
+	if s.CodeBlock.Chroma != nil {
+		chroma := *s.CodeBlock.Chroma
+		chroma.Error.BackgroundColor = noColor
+		s.CodeBlock.Chroma = &chroma
+	}
 	return s
 }
 
