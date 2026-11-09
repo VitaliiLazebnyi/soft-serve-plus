@@ -3,10 +3,13 @@ package ssrf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -268,5 +271,49 @@ func TestSecureClientAllowing(t *testing.T) {
 	// The default client is unaffected.
 	if _, err := get(NewSecureClient(), srv.URL+"/hook"); !errors.Is(err, ErrPrivateIP) {
 		t.Fatalf("NewSecureClient reached loopback: %v", err)
+	}
+}
+
+// TestNewSecureClientCapsResponseHeaders covers a receiver that answers with
+// more header bytes than MaxResponseHeaderBytes. The client gives up with an
+// error rather than reading net/http's default of up to 10 MiB, and a
+// response just under the cap still goes through.
+func TestNewSecureClientCapsResponseHeaders(t *testing.T) {
+	t.Parallel()
+	// Each header line is "X-Pad-NNNNN: <filler>\r\n".
+	filler := strings.Repeat("a", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		for i := range n {
+			w.Header().Set(fmt.Sprintf("X-Pad-%05d", i), filler)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	client := NewSecureClientAllowing(mustAllowedHosts(t, "127.0.0.0/8"))
+
+	get := func(n int) error {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("%s/?n=%d", srv.URL, n), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := client.Do(req)
+		if res != nil {
+			_ = res.Body.Close()
+		}
+		return err
+	}
+
+	// 50 headers are about 50 KiB, under the cap.
+	if err := get(50); err != nil {
+		t.Fatalf("GET with headers under the cap: %v", err)
+	}
+	// 100 headers are about 100 KiB, over the cap.
+	err := get(100)
+	if err == nil {
+		t.Fatal("GET with headers over the cap succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), "header") {
+		t.Fatalf("GET with headers over the cap: err = %v, want a header limit error", err)
 	}
 }
