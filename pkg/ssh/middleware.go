@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -101,6 +102,28 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
+// MaxCommandLength is the longest exec command, in bytes, the SSH server
+// accepts. Every Soft Serve command fits well within it. Splitting a command
+// into arguments costs time quadratic in its length, and any client with any
+// key reaches the middleware chain, so longer commands are refused before
+// anything parses them.
+const MaxCommandLength = 4 << 10
+
+// ErrCommandTooLong is returned when an exec command exceeds MaxCommandLength.
+var ErrCommandTooLong = fmt.Errorf("command too long: exceeds %d bytes", MaxCommandLength)
+
+// CommandLengthMiddleware refuses sessions whose exec command is longer than
+// MaxCommandLength, before any middleware or handler parses it.
+func CommandLengthMiddleware(sh ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		if len(s.RawCommand()) > MaxCommandLength {
+			wish.Fatalln(s, ErrCommandTooLong)
+			return
+		}
+		sh(s)
+	}
+}
+
 // ContextMiddleware adds the config, backend, and logger to the session context.
 // The session context is shared by every session on the connection, so the
 // session itself is added per session by sessionContext instead.
@@ -117,6 +140,10 @@ func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be
 		}
 	}
 }
+
+// maxSuggestionArgLength is the longest argument, in bytes, for which the
+// command handler still suggests a command name for an unknown command.
+const maxSuggestionArgLength = 64
 
 var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "soft_serve",
@@ -144,6 +171,13 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			SilenceUsage: true,
 		}
 		rootCmd.CompletionOptions.DisableDefaultCmd = true
+		// "Did you mean" suggestions compare an unknown command with every
+		// command name by edit distance, which costs milliseconds for a
+		// word near MaxCommandLength. No typo of a command name is that
+		// long, so leave suggestions out for long arguments.
+		rootCmd.DisableSuggestions = slices.ContainsFunc(args, func(a string) bool {
+			return len(a) > maxSuggestionArgLength
+		})
 
 		rootCmd.SetUsageTemplate(cmd.UsageTemplate)
 		rootCmd.SetUsageFunc(cmd.UsageFunc)
@@ -233,6 +267,12 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		ctx := s.Context()
 		logger := log.FromContext(ctx).WithPrefix("ssh")
+		if logger.GetLevel() > log.DebugLevel {
+			// Nothing below is logged, so skip parsing the command.
+			sh(s)
+			return
+		}
+
 		ct := time.Now()
 		hpk := sshutils.MarshalAuthorizedKey(s.PublicKey())
 		ptyReq, _, isPty := s.Pty()
