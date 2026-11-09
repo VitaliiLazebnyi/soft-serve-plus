@@ -32,12 +32,35 @@ var tuiSessionDuration = promauto.NewCounter(prometheus.CounterOpts{
 	Help:      "The total time spent in TUI sessions",
 })
 
-// SessionHandler is the soft-serve bubbletea ssh session handler.
+// BubbleTeaMiddleware runs the soft-serve TUI for sessions with a pty.
 // This middleware must be run after the ContextMiddleware.
-func SessionHandler(s ssh.Session) *tea.Program {
+//
+// It releases the session's UI resources once the program has exited,
+// however the session ended: quit, disconnect or idle timeout. They cannot
+// be released any earlier, as the program renders one last frame after the
+// model quits, and that render needs them.
+func BubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		var c *common.Common
+		defer func() {
+			if c != nil {
+				c.Zone.Close()
+			}
+		}()
+		bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
+			p, pc := newSessionProgram(s)
+			c = pc
+			return p
+		})(next)(s)
+	}
+}
+
+// newSessionProgram returns the TUI program for the session, and the Common
+// its UI was built with, or nil for both when the session gets no TUI.
+func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	pty, _, active := s.Pty()
 	if !active {
-		return nil
+		return nil, nil
 	}
 
 	ctx := s.Context()
@@ -53,12 +76,11 @@ func SessionHandler(s ssh.Session) *tea.Program {
 	// private and a missing repository the same way.
 	if be.BaseAccessLevelByPublicKey(ctx, s.PublicKey()) < access.ReadOnlyAccess {
 		wish.Fatalln(s, proto.ErrUnauthorized)
-		return nil
+		return nil, nil
 	}
 
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
-		tea.WithoutCatchPanics(),
 		tea.WithContext(ctx),
 		tea.WithColorProfile(common.DefaultColorProfile),
 	)
@@ -75,5 +97,5 @@ func SessionHandler(s ssh.Session) *tea.Program {
 		tuiSessionDuration.Add(time.Since(start).Seconds())
 	}()
 
-	return p
+	return p, &c
 }

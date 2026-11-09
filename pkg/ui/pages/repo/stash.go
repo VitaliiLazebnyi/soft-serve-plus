@@ -143,7 +143,7 @@ func (s *Stash) SpinnerID() int {
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
-	return tea.Batch(s.spinner.Tick, s.fetchStash)
+	return tea.Batch(s.spinner.Tick, s.fetchStashCmd())
 }
 
 // Update updates the model.
@@ -210,7 +210,7 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case StashItem:
-			cmds = append(cmds, s.fetchStashPatch)
+			cmds = append(cmds, s.fetchStashPatchCmd())
 		}
 	case GoBackMsg:
 		if s.state == stashStateList {
@@ -260,38 +260,49 @@ func (s *Stash) renderPatch() {
 	))
 }
 
-func (s *Stash) fetchStash() tea.Msg {
-	if s.repo == nil {
-		return StashListMsg(nil)
-	}
+// fetchStashCmd returns a command that lists the stashes of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (s *Stash) fetchStashCmd() tea.Cmd {
+	repo := s.repo
+	return func() tea.Msg {
+		if repo == nil {
+			return StashListMsg(nil)
+		}
 
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	stash, err := r.StashList()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		stash, err := r.StashList()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return StashListMsg(stash)
+		return StashListMsg(stash)
+	}
 }
 
-func (s *Stash) fetchStashPatch() tea.Msg {
-	if s.repo == nil {
-		return StashPatchMsg{nil}
-	}
+// fetchStashPatchCmd returns a command that loads the patch of the selected
+// stash.
+func (s *Stash) fetchStashPatchCmd() tea.Cmd {
+	repo, index := s.repo, s.list.Index()
+	return func() tea.Msg {
+		if repo == nil {
+			return StashPatchMsg{nil}
+		}
 
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		r, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	diff, err := r.StashDiff(s.list.Index())
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		diff, err := r.StashDiff(index)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return StashPatchMsg{diff}
+		return StashPatchMsg{diff}
+	}
 }

@@ -74,7 +74,7 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 	// cleanly, so report it rather than let it pass for a complete one.
 	// Don't block if a stage already reported an error.
 	if err := ctx.Err(); err != nil {
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 	}
 
 	close(pointerChan)
@@ -85,8 +85,14 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 // breaks the pipes around it, so the stages next to it may fail as well; the
 // first error is the one that counts and later ones are dropped rather than
 // block. Each stage reports before it closes its pipes with the error, so
-// the stage that failed first gets in ahead of the ones it broke.
-func sendScanError(errChan chan<- error, err error) {
+// the stage that failed first gets in ahead of the ones it broke. A stage
+// that fails once ctx is done failed because the scan was canceled, with an
+// error that doesn't say so (git's commands report a timeout when they are
+// killed), so ctx's error is reported instead.
+func sendScanError(ctx context.Context, errChan chan<- error, err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
 	select {
 	case errChan <- err:
 	default:
@@ -102,7 +108,7 @@ func createPointerResultsFromCatFileBatch(ctx context.Context, catFileBatchReade
 
 	fail := func(err error) {
 		err = fmt.Errorf("reading git cat-file --batch output: %w", err)
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = catFileBatchReader.CloseWithError(err)
 	}
 
@@ -174,7 +180,7 @@ func catFileBatch(ctx context.Context, shasToBatchReader *io.PipeReader, catFile
 			Stderr: stderr,
 		}); err != nil {
 		err = fmt.Errorf("git cat-file --batch [%s]: %w - %s", basePath, err, stderr.String())
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = shasToBatchReader.CloseWithError(err)
 	}
 }
@@ -225,7 +231,7 @@ func catFileBatchCheck(ctx context.Context, shasToCheckReader *io.PipeReader, ca
 			Stderr: stderr,
 		}); err != nil {
 		err = fmt.Errorf("git cat-file --batch-check [%s]: %w - %s", basePath, err, stderr.String())
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = shasToCheckReader.CloseWithError(err)
 	}
 }
@@ -271,6 +277,6 @@ func revListObjects(ctx context.Context, revListWriter *io.PipeWriter, wg *sync.
 			Stdout: revListWriter,
 			Stderr: stderr,
 		}); err != nil {
-		sendScanError(errChan, fmt.Errorf("git rev-list [%s]: %w - %s", basePath, err, stderr.String()))
+		sendScanError(ctx, errChan, fmt.Errorf("git rev-list [%s]: %w - %s", basePath, err, stderr.String()))
 	}
 }
