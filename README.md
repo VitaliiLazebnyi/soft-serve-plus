@@ -617,6 +617,11 @@ Use the `lfs` config section to customize your Git LFS server.
 
 > **Note**: The pure-SSH transfer is disabled by default.
 
+Without it, Git LFS over an SSH remote asks `git-lfs-authenticate` for an HTTP
+token, which is issued for an account. A key that belongs to no account,
+even one with anonymous read access, is refused with an error that says so;
+use an HTTP(S) remote for LFS instead, or register the key.
+
 #### Maintenance Commands
 
 `soft admin` runs maintenance against the data directory and database from
