@@ -242,6 +242,11 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
+  # The number of seconds a client has to complete the key exchange and
+  # authenticate before the connection is closed.
+  # A value of 0 means no timeout.
+  handshake_timeout: 120
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
@@ -270,6 +275,27 @@ ssh:
   kex_algorithms: []
   ciphers: []
   macs: []
+
+  # The signature algorithms the SSH server accepts for client public key
+  # authentication. When empty, the server accepts every algorithm
+  # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
+  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
+  # implement are rejected at startup. A list replaces the default, so to let
+  # an old client that only signs with ssh-rsa authenticate, copy the default
+  # list and append it. Builds with Go 1.27 or later also accept ssh-mldsa-44,
+  # ssh-mldsa-65 and ssh-mldsa-87 by default; add those too to keep them:
+  #   public_key_auth_algorithms:
+  #     - "ssh-ed25519"
+  #     - "sk-ssh-ed25519@openssh.com"
+  #     - "sk-ecdsa-sha2-nistp256@openssh.com"
+  #     - "ecdsa-sha2-nistp256"
+  #     - "ecdsa-sha2-nistp384"
+  #     - "ecdsa-sha2-nistp521"
+  #     - "rsa-sha2-256"
+  #     - "rsa-sha2-512"
+  #     - "ssh-rsa" # legacy, appended
+  public_key_auth_algorithms: []
 
 # The Git daemon configuration.
 git:
@@ -481,6 +507,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_DEFAULT_PRIVATE`: Make repositories created without an explicit visibility (push-to-create, `repo create` and `repo import` without `--private`, `default_repo`) private. Defaults to `false`. When set, anonymous push-to-create is refused, and anonymous `repo create` and `repo import` need `--private=false`, since an anonymous user could not access the private repository.
 - `SOFT_SERVE_DEFAULT_REPO`: Repository name to create on boot if missing
 - `SOFT_SERVE_SSH_KEX_ALGORITHMS`, `SOFT_SERVE_SSH_CIPHERS`, `SOFT_SERVE_SSH_MACS`: Comma-separated lists of the SSH key exchange algorithms, ciphers and MACs to offer. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
+- `SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS`: Comma-separated list of the signature algorithms accepted for client public key authentication. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
 - `SOFT_SERVE_DB_MAX_OPEN_CONNS`, `SOFT_SERVE_DB_MAX_IDLE_CONNS`: Database connection pool limits. `0` (the default) keeps the database/sql defaults: no limit on open connections and 2 idle connections
 - `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
@@ -510,13 +537,22 @@ considers secure, minus `hmac-sha1`. With the current x/crypto that is:
 - key exchange: `mlkem768x25519-sha256`, `curve25519-sha256` (and its alias `curve25519-sha256@libssh.org`), `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521`, `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group-exchange-sha256`
 - ciphers: `aes128-gcm@openssh.com`, `aes256-gcm@openssh.com`, `chacha20-poly1305@openssh.com`, `aes128-ctr`, `aes192-ctr`, `aes256-ctr`
 - MACs: `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256`, `hmac-sha2-512`
+- public key authentication: `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`, `rsa-sha2-256`, `rsa-sha2-512`
+
+Builds with Go 1.27 or later also accept the ML-DSA keys `ssh-mldsa-44`,
+`ssh-mldsa-65` and `ssh-mldsa-87` for public key authentication.
 
 Earlier versions offered x/crypto's defaults, which also include the SHA-1
-based `diffie-hellman-group14-sha1`, `hmac-sha1` and `hmac-sha1-96`. To
-restrict the server further, for example to drop the NIST curves, set
-`ssh.kex_algorithms`, `ssh.ciphers` or `ssh.macs` (or the environment
-variables above). A list replaces the default rather than adding to it, and
-a name x/crypto does not implement stops the server at startup.
+based `diffie-hellman-group14-sha1`, `hmac-sha1` and `hmac-sha1-96`, and
+accepted SHA-1 `ssh-rsa` and `ssh-dss` signatures for public key
+authentication. RSA keys still work: clients sign with `rsa-sha2-256` or
+`rsa-sha2-512`, as OpenSSH has done since 7.2 (and OpenSSH 8.8 itself
+refuses `ssh-rsa`). DSA keys can no longer authenticate. To restrict the
+server further, for example to drop the NIST curves, set
+`ssh.kex_algorithms`, `ssh.ciphers`, `ssh.macs` or
+`ssh.public_key_auth_algorithms` (or the environment variables above). A
+list replaces the default rather than adding to it, and a name x/crypto does
+not implement stops the server at startup.
 
 **Older clients.** The host key Soft Serve Plus generates by default is
 Ed25519, and the clients we checked that can verify an Ed25519 host key all
@@ -533,10 +569,17 @@ from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
 and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
 type. Replacing the host key invalidates tokens issued before.
 
-A client limited to SHA-1 key exchange or MACs is refused. To let one in,
-copy the default list above and append the legacy algorithm. Listing only a
-few algorithms would drop the rest, including the post-quantum
-`mlkem768x25519-sha256`, for every client:
+Authenticating with an RSA user key needs a client that signs with
+`rsa-sha2-256` or `rsa-sha2-512`: OpenSSH 7.2 and later, libssh2 1.11 and
+later, and the maintained JSch fork. Older clients, such as libssh2 before
+1.11 and the original JCraft JSch, sign with `ssh-rsa` only, so with an RSA
+key they need `ssh-rsa` appended as below, or a key of another type they
+support.
+
+A client limited to SHA-1 key exchange, MACs or `ssh-rsa` signatures is
+refused. To let one in, copy the default list above and append the legacy
+algorithm. Listing only a few algorithms would drop the rest, including the
+post-quantum `mlkem768x25519-sha256`, for every client:
 
 ```yaml
 ssh:
@@ -556,7 +599,21 @@ ssh:
     - "hmac-sha2-256"
     - "hmac-sha2-512"
     - "hmac-sha1" # legacy, appended
+  public_key_auth_algorithms:
+    - "ssh-ed25519"
+    - "sk-ssh-ed25519@openssh.com"
+    - "sk-ecdsa-sha2-nistp256@openssh.com"
+    - "ecdsa-sha2-nistp256"
+    - "ecdsa-sha2-nistp384"
+    - "ecdsa-sha2-nistp521"
+    - "rsa-sha2-256"
+    - "rsa-sha2-512"
+    - "ssh-rsa" # legacy, appended
 ```
+
+Add the `ssh-mldsa-*` names from the note above to the
+`public_key_auth_algorithms` list if your build accepts them and you want to
+keep them.
 
 #### Database Configuration
 

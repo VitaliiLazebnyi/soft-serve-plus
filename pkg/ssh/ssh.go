@@ -114,6 +114,10 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
 	}
 
+	if cfg.SSH.HandshakeTimeout > 0 {
+		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
+	}
+
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); err != nil && os.IsNotExist(err) {
 		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
@@ -126,10 +130,11 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 }
 
 // serverConfig returns the x/crypto server configuration for a new
-// connection. It restricts the key exchanges, ciphers and MACs offered to
-// those in the config, which default to the algorithms x/crypto considers
-// secure. Without them x/crypto falls back to its own defaults, which still
-// include SHA-1 key exchange and MACs. The SSH server adds the host keys
+// connection. It restricts the key exchanges, ciphers and MACs offered, and
+// the signature algorithms accepted for public key authentication, to those
+// in the config, which default to the algorithms x/crypto considers secure.
+// Without them x/crypto falls back to its own defaults, which still include
+// SHA-1 key exchange and MACs and accept ssh-rsa and ssh-dss signatures. The SSH server adds the host keys
 // and authentication callbacks on top of this.
 func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 	sc := &gossh.ServerConfig{
@@ -138,6 +143,7 @@ func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 			Ciphers:      cfg.SSH.SSHCiphers(),
 			MACs:         cfg.SSH.SSHMACs(),
 		},
+		PublicKeyAuthAlgorithms: cfg.SSH.SSHPublicKeyAuthAlgorithms(),
 	}
 	if config.IsDebug() {
 		sc.AuthLogCallback = func(conn gossh.ConnMetadata, method string, err error) {
