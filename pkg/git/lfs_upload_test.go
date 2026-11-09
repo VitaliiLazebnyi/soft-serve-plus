@@ -297,9 +297,10 @@ func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
 	}
 }
 
-// Batch reports an object present only if its file has the pointer's size.
-// A short file, such as one a failed write left behind, used to be reported
-// present, so the client skipped the upload and downloads served it short.
+// Batch reports a recorded object present only if its file has the
+// pointer's size. A short file, such as one a failed write left behind, used
+// to be reported present, so the client skipped the upload and downloads
+// served it short.
 func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
 	tr, _ := newLFSUploadTransfer(t)
 	const content = "hello lfs"
@@ -307,6 +308,11 @@ func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
 	size := int64(len(content))
 	objPath := lfsObjectPath(tr.cfg, oid)
 	if err := os.MkdirAll(filepath.Dir(objPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Record the object at its real size, so only the file on disk decides
+	// whether it is present.
+	if err := tr.store.CreateLFSObject(tr.ctx, tr.dbx, 1, oid, size); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,9 +330,6 @@ func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
 	}
 	if batch() {
 		t.Error("short object reported present")
-	}
-	if _, err := tr.store.GetLFSObjectByOid(tr.ctx, tr.dbx, 1, oid); err == nil {
-		t.Error("short object recorded")
 	}
 
 	if err := os.WriteFile(objPath, []byte(content), 0o600); err != nil {
