@@ -22,7 +22,6 @@ type UserStore interface {
 	// FindUserByUsername.
 	FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error)
 	FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error)
-	FindUserByAccessToken(ctx context.Context, h db.Handler, token string) (models.User, error)
 	GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error)
 	// FindDefaultAdminUserID returns the ID of the lowest-ID admin user. It
 	// returns sql.ErrNoRows if no user is an admin.

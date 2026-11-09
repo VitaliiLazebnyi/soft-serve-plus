@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -204,6 +205,18 @@ func isServerAdmin(ctx context.Context) bool {
 
 	user := proto.UserFromContext(ctx)
 	return user != nil && user.IsAdmin()
+}
+
+// parseBool parses a boolean command argument. It accepts the values
+// strconv.ParseBool does (true/false, t/f, 1/0 in any common case) and
+// rejects anything else, so a typo such as "yes" or "ture" fails instead of
+// silently meaning false.
+func parseBool(s string) (bool, error) {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean value %q: use true or false", s)
+	}
+	return v, nil
 }
 
 // repoArg returns the repository name from a repo-scoped command's arguments.
