@@ -367,3 +367,65 @@ func TestStoppedByContext(t *testing.T) {
 		t.Errorf("a process killed by a signal must report a cancellation: %v", killed)
 	}
 }
+
+// TestServiceErrorCarriesStderr checks a git failure reports why git failed,
+// from its stderr, whether or not the caller takes stderr too. It used to
+// report only the exit status unless the caller kept stderr itself.
+func TestServiceErrorCarriesStderr(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stderr *strings.Builder
+	}{
+		{"no caller stderr", nil},
+		{"caller stderr", &strings.Builder{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+			defer cancel()
+			scmd := ServiceCommand{
+				Stdout: io.Discard,
+				// An empty directory is not a repository.
+				Dir:  t.TempDir(),
+				Args: []string{"--stateless-rpc", "--advertise-refs"},
+			}
+			if tc.stderr != nil {
+				scmd.Stderr = tc.stderr
+			}
+			err := UploadPack(ctx, scmd)
+			if err == nil {
+				t.Fatal("upload-pack succeeded outside a repository")
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Errorf("error does not wrap the exit error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "fatal:") {
+				t.Errorf("error does not carry git's stderr: %v", err)
+			}
+			if tc.stderr != nil && !strings.Contains(tc.stderr.String(), "fatal:") {
+				t.Errorf("caller did not get git's stderr: %q", tc.stderr.String())
+			}
+		})
+	}
+}
+
+func TestTailBuffer(t *testing.T) {
+	t.Parallel()
+	b := &tailBuffer{max: 20}
+	if got := b.String(); got != "" {
+		t.Errorf("empty buffer = %q", got)
+	}
+	fmt.Fprint(b, "\n  warning: one \n\n")
+	if got, want := b.String(), "warning: one"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+	n, err := fmt.Fprint(b, "fatal: two\nend\n")
+	if err != nil || n != 15 {
+		t.Errorf("Write = %d, %v; want 15, nil", n, err)
+	}
+	if got, want := b.String(), "...ne; fatal: two; end"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
