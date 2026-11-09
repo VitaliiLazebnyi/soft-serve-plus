@@ -81,6 +81,52 @@ func Open(path string) (*Repository, error) {
 	}, nil
 }
 
+// OpenLocal opens the repository that contains path. Unlike Open, path can be
+// any directory inside a working tree, a linked worktree, a bare repository or
+// a git directory, which is what a user running "soft browse" expects. It is
+// not meant for repositories the server manages, which must use Open.
+func OpenLocal(path string) (*Repository, error) {
+	// git would fail with "fork/exec git: not a directory", which reads as
+	// if git were missing.
+	if fi, err := os.Stat(path); err != nil {
+		return nil, err
+	} else if !fi.IsDir() {
+		return nil, fmt.Errorf("%w: %s is not a directory", ErrNotAGitRepository, path)
+	}
+	out, err := git.NewCommand("rev-parse", "--is-bare-repository", "--is-inside-git-dir", "--absolute-git-dir").RunInDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrNotAGitRepository, strings.TrimSpace(err.Error()))
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	if len(lines) != 3 {
+		return nil, ErrNotAGitRepository
+	}
+	// Inside a git directory, also the .git directory of a working tree,
+	// there is no work tree to show (git refuses --show-toplevel there), so
+	// open the git directory as a bare repository, as Open does.
+	bare := strings.TrimSpace(lines[0]) == "true" || strings.TrimSpace(lines[1]) == "true"
+	root := strings.TrimRight(lines[2], "\r")
+	if !bare {
+		// --show-toplevel resolves both a subdirectory and a linked
+		// worktree, whose git directory lives in the main repository.
+		out, err := git.NewCommand("rev-parse", "--show-toplevel").RunInDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrNotAGitRepository, strings.TrimSpace(err.Error()))
+		}
+		root = strings.TrimRight(string(out), "\r\n")
+	}
+	root = filepath.FromSlash(root)
+	repo, err := git.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	return &Repository{
+		Repository: repo,
+		Path:       root,
+		IsBare:     bare,
+	}, nil
+}
+
 // HEAD returns the HEAD reference for a repository.
 func (r *Repository) HEAD() (*Reference, error) {
 	rn, err := r.Repository.SymbolicRef(git.SymbolicRefOptions{Name: "HEAD"})
