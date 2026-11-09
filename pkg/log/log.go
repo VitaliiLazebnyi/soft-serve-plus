@@ -50,7 +50,7 @@ func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 		// created with, so a first run does not leave the data directory
 		// readable by other users.
 		if err := os.MkdirAll(filepath.Dir(cfg.Log.Path), 0o700); err != nil {
-			return nil, nil, err
+			return logger, nil, err
 		}
 		var err error
 		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)

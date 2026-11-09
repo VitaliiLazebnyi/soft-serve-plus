@@ -84,7 +84,13 @@ func TestNewLoggerCreatesMissingLogDir(t *testing.T) {
 }
 
 func TestNewLoggerFallsBackToStderr(t *testing.T) {
-	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(t.TempDir(), "missing", "logfile.txt")}}
+	// The log file's parent is a regular file, so neither the directory
+	// nor the log file can be created.
+	parent := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(parent, "logfile.txt")}}
 	logger, f, err := NewLogger(c)
 	if err == nil {
 		t.Fatal("expected error got nil")
