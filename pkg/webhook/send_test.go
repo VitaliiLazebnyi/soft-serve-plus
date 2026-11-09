@@ -1041,3 +1041,65 @@ func TestReadResponseBodyKeepsPartialReadOnError(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(got, long[:maxResponseBody]+truncatedMarker)
 }
+
+// formatHeaders lists headers sorted by key with their first value, skips
+// keys without a value, and stops at maxStoredHeaders with a marker.
+func TestFormatHeaders(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	is.Equal(formatHeaders(http.Header{
+		"X-B":     {"two", "ignored"},
+		"X-A":     {"one"},
+		"X-Empty": {},
+		"X-C":     {""},
+	}), "X-A: one\nX-B: two\nX-C: \n")
+	is.Equal(formatHeaders(nil), "")
+
+	big := http.Header{}
+	value := strings.Repeat("v", 1000)
+	for i := range 200 {
+		big.Set(fmt.Sprintf("X-Pad-%03d", i), value)
+	}
+	got := formatHeaders(big)
+	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
+	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.True(strings.HasPrefix(got, "X-Pad-000: "+value+"\n"))
+
+	// Invalid bytes grow to U+FFFD (3 bytes) when made storable; the cap
+	// holds for the stored text, not the raw bytes.
+	invalid := http.Header{}
+	bad := strings.Repeat("\xffa", 500)
+	for i := range 200 {
+		invalid.Set(fmt.Sprintf("X-Bad-%03d", i), bad)
+	}
+	got = formatHeaders(invalid)
+	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
+	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.Equal(storableText(got), got)
+}
+
+// A receiver that answers with a flood of headers must not get them all
+// stored: the stored response headers stay within maxStoredHeaders.
+func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	value := strings.Repeat("v", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for i := range 200 {
+			w.Header().Set(fmt.Sprintf("X-Pad-%03d", i), value)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ResponseStatus, http.StatusOK)
+	is.True(len(ds[0].ResponseHeaders) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.True(strings.HasSuffix(ds[0].ResponseHeaders, truncatedHeadersMarker))
+}
