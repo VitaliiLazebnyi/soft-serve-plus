@@ -62,8 +62,8 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 
 		return nil
 	})
-	// A repository deleted meanwhile fails the insert on its foreign key,
-	// which would read as a duplicate; report it as gone.
+	// A repository deleted meanwhile fails the insert on its foreign key;
+	// report it as gone.
 	return store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err)
 }
 
@@ -73,7 +73,7 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 	datastore := store.FromContext(ctx)
 
 	var wh webhook.Hook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		h, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
 			return db.WrapError(err)
@@ -107,7 +107,7 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 	var webhooks []models.Webhook
 	webhookEvents := map[int64][]models.WebhookEvent{}
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		webhooks, err = datastore.GetWebhooksByRepoID(ctx, tx, repo.ID())
 		if err != nil {
@@ -266,7 +266,7 @@ func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 	datastore := store.FromContext(ctx)
 
 	var deliveries []models.WebhookDelivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
 			return db.WrapError(err)
 		}
@@ -305,7 +305,7 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 
 	var delivery models.WebhookDelivery
 	var wh models.Webhook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
@@ -420,7 +420,7 @@ func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 	datastore := store.FromContext(ctx)
 
 	var delivery webhook.Delivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), webhookID); err != nil {
 			return db.WrapError(err)
 		}

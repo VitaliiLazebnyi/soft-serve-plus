@@ -35,7 +35,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		}),
 	); err != nil {
 		// A repository deleted meanwhile fails the insert on a
-		// constraint too; report it as gone, not as a duplicate.
+		// constraint; report it as gone.
 		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return err
 		}
@@ -65,7 +65,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 func (d *Backend) Collaborators(ctx context.Context, repo string) ([]string, error) {
 	repo = utils.SanitizeRepo(repo)
 	var users []models.User
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		// The join returns an empty list for a missing repository, so
 		// look it up first.
 		if _, err := d.store.GetRepoByName(ctx, tx, repo); err != nil {
@@ -97,7 +97,7 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 
 	repo = utils.SanitizeRepo(repo)
 	var m models.Collab
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
 		return err
