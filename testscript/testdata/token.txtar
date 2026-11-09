@@ -26,6 +26,15 @@ grep '1.*test1.*-' tokens.txt
 grep '2.*test2.*1 year from now' tokens.txt
 grep '3.*est3.*expired' tokens.txt
 
+# another user cannot delete the token, and gets the same answer as for an
+# unused ID
+! soft token delete 2
+stderr 'token not found'
+! soft token delete 99
+stderr 'token not found'
+usoft token list
+stdout 'test2'
+
 # delete token
 usoft token delete 1
 stderr 'Access token deleted'
