@@ -260,13 +260,15 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	// msg, so they carry the items the list holds once Update returns.
 	var selectItem, activeFilter bool
 	switch msg := msg.(type) {
-	case tea.MouseClickMsg:
-		m := msg.Mouse()
-		switch m.Button {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
 		case tea.MouseWheelUp:
 			s.CursorUp()
 		case tea.MouseWheelDown:
 			s.CursorDown()
+		}
+	case tea.MouseClickMsg:
+		switch msg.Button {
 		case tea.MouseLeft:
 			// Index() and Select() count from the start of the filtered
 			// list, so look up the clicked item among the visible ones.
