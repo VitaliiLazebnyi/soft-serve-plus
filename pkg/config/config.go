@@ -382,7 +382,9 @@ func (c *Config) Environ() []string {
 		return envs
 	}
 
-	// TODO: do this dynamically
+	// TestEnvironRoundTrip checks that ParseEnv reads every field back, so
+	// a new field must be added here. Log.Path is left out on purpose: the
+	// server gives hooks their own log file.
 	envs = append(envs, []string{
 		fmt.Sprintf("SOFT_SERVE_CONFIG_LOCATION=%s", c.ConfigPath()),
 		fmt.Sprintf("SOFT_SERVE_DATA_PATH=%s", c.DataPath),
