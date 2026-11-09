@@ -489,6 +489,10 @@ webhook:
 #default_repo: ""
 ```
 
+Keys the server does not know, such as a misspelt `admin_only_creat`, are
+ignored. `soft serve` logs a warning naming each one and its line, so check the
+log after editing `config.yaml`.
+
 You can also use environment variables, to override these settings. All server
 settings environment variables start with `SOFT_SERVE_` followed by the setting
 name all in uppercase. Here are some examples:

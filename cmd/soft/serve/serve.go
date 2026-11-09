@@ -36,6 +36,9 @@ var (
 			// Use the config the database and backend were set up with,
 			// so hooks and directories land under the same data path.
 			cfg := config.FromContext(ctx)
+			for _, k := range cfg.UnknownKeys() {
+				log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+			}
 			if !cfg.Exist() {
 				// Write the defaults, not cfg, so environment overrides
 				// are not saved to the file.

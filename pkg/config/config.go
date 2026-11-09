@@ -1,12 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -352,6 +354,18 @@ type Config struct {
 	// per config source, and more than once for the environment.
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
+
+	// unknownKeys records the config file keys no setting is read from.
+	unknownKeys []UnknownKey
+}
+
+// UnknownKey is a key in the config file that no setting is read from,
+// such as a misspelt one. It is ignored.
+type UnknownKey struct {
+	// Key is the dotted path of the key, such as "ssh.listen_adr".
+	Key string
+	// Line is the line of the key in the config file.
+	Line int
 }
 
 // Environ returns the config as a list of environment variables.
@@ -452,19 +466,95 @@ func IsVerbose() bool {
 // parseFile parses the given file as a configuration file.
 // The file must be in YAML format.
 func parseFile(cfg *Config, path string) error {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	defer f.Close() //nolint: errcheck
 	// An empty or comment-only file has no YAML document and decodes to
 	// io.EOF. Treat it like an empty document and keep the defaults.
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
+	// Unknown keys are reported, not rejected, so a config written for
+	// another version still loads.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	cfg.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
+
 	return cfg.Validate()
+}
+
+// findUnknownKeys returns the keys of the mappings in n that no field of t,
+// or of the structs nested in it, is decoded from. prefix is the dotted
+// path of n.
+func findUnknownKeys(n *yaml.Node, t reflect.Type, prefix string) []UnknownKey {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch n.Kind {
+	case yaml.DocumentNode:
+		var keys []UnknownKey
+		for _, c := range n.Content {
+			keys = append(keys, findUnknownKeys(c, t, prefix)...)
+		}
+		return keys
+	case yaml.AliasNode:
+		return findUnknownKeys(n.Alias, t, prefix)
+	case yaml.MappingNode:
+	default:
+		return nil
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	fields := make(map[string]reflect.Type, t.NumField())
+	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			name = strings.ToLower(f.Name)
+		}
+		fields[name] = f.Type
+	}
+
+	var keys []UnknownKey
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if k.Tag == "!!merge" {
+			// The keys of a "<<" merge belong to this mapping.
+			if v.Kind == yaml.SequenceNode {
+				for _, m := range v.Content {
+					keys = append(keys, findUnknownKeys(m, t, prefix)...)
+				}
+			} else {
+				keys = append(keys, findUnknownKeys(v, t, prefix)...)
+			}
+			continue
+		}
+		ft, ok := fields[k.Value]
+		if !ok {
+			keys = append(keys, UnknownKey{Key: prefix + k.Value, Line: k.Line})
+			continue
+		}
+		keys = append(keys, findUnknownKeys(v, ft, prefix+k.Value+".")...)
+	}
+	return keys
+}
+
+// UnknownKeys returns the keys of the parsed config file that no setting is
+// read from, in file order. They are ignored.
+func (c *Config) UnknownKeys() []UnknownKey {
+	return slices.Clone(c.unknownKeys)
 }
 
 // ParseFile parses the config from the default file path.
