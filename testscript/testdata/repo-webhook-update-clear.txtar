@@ -1,0 +1,37 @@
+# vi: set ft=conf
+
+# webhook update replaces a value whose flag is given, even with an empty
+# value: --events= unsubscribes the webhook from every event. Flags left out
+# keep their value, and an empty URL is refused.
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo-clear
+new-webhook WH_CLEAR
+soft repo webhook create repo-clear $WH_CLEAR -s secret -e push -e repository
+soft repo webhook list repo-clear
+stdout '1.*93.184.216.34/hooks/WH_CLEAR.*push,repository.*true'
+
+# an empty --events removes every event and keeps everything else
+soft repo webhook update repo-clear 1 --events= --secret=
+soft repo webhook list repo-clear
+stdout '1 *│http://93.184.216.34/hooks/WH_CLEAR *│ *│true'
+! stdout 'push'
+
+# events can be set again
+soft repo webhook update repo-clear 1 -e push
+soft repo webhook list repo-clear
+stdout '1.*93.184.216.34/hooks/WH_CLEAR.*push.*true'
+
+# an empty URL is refused rather than ignored
+! soft repo webhook update repo-clear 1 --url=
+stderr 'invalid'
+soft repo webhook list repo-clear
+stdout '1.*93.184.216.34/hooks/WH_CLEAR.*push.*true'
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .
