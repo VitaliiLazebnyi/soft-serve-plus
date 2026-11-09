@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	neturl "net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,9 +314,7 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 
 	if res != nil {
 		resStatus = res.StatusCode
-		for k, v := range res.Header {
-			resHeaders += k + ": " + v[0] + "\n"
-		}
+		resHeaders = formatHeaders(res.Header)
 
 		if res.Body != nil {
 			defer res.Body.Close() //nolint: errcheck
@@ -372,6 +372,43 @@ func readResponseBody(body io.Reader) (string, error) {
 	return string(b), err
 }
 
+// maxStoredHeaders is how much of a request's or response's headers is
+// stored with a delivery. The secure client already refuses responses whose
+// headers pass ssrf.MaxResponseHeaderBytes; this bounds the stored text
+// whatever client sent the request.
+const maxStoredHeaders = 64 << 10
+
+// truncatedHeadersMarker is appended to stored headers that were cut off at
+// maxStoredHeaders.
+const truncatedHeadersMarker = "[headers truncated by Soft Serve]\n"
+
+// formatHeaders renders h as "Key: value" lines, one per header with its
+// first value, sorted by key so a delivery reads the same on every view. It
+// stops before the line that would take it past maxStoredHeaders and marks
+// the cut with truncatedHeadersMarker. Each key and value goes through
+// storableText before it is measured, so the cap holds for the text that is
+// stored even when the receiver sent invalid UTF-8.
+func formatHeaders(h http.Header) string {
+	keys := slices.Sorted(maps.Keys(h))
+	var b strings.Builder
+	for _, k := range keys {
+		v := h[k]
+		if len(v) == 0 {
+			continue
+		}
+		key, value := storableText(k), storableText(v[0])
+		if b.Len()+len(key)+len(": ")+len(value)+len("\n") > maxStoredHeaders {
+			b.WriteString(truncatedHeadersMarker)
+			break
+		}
+		b.WriteString(key)
+		b.WriteString(": ")
+		b.WriteString(value)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // storableText returns s as text every database accepts. Postgres refuses
 // invalid UTF-8 and NUL in TEXT columns, which would lose the whole delivery
 // row, so invalid bytes are replaced with U+FFFD and NULs are dropped. Use it
@@ -388,16 +425,14 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 
-	var reqHeaders string
-	for k, v := range req.headers {
-		reqHeaders += k + ": " + v[0] + "\n"
-	}
+	// formatHeaders already makes every key and value storable.
+	reqHeaders := formatHeaders(req.headers)
 
 	// The response and the request error can carry any bytes the receiver
 	// sent. The request body is JSON or form-encoded, so always valid UTF-8
 	// without NULs, and is stored as sent: a redelivery signs and sends the
-	// same bytes.
-	reqHeaders = storableText(reqHeaders)
+	// same bytes. resHeaders normally comes from formatHeaders too; cleaning
+	// it again is a no-op then and covers a caller that builds it otherwise.
 	resHeaders = storableText(resHeaders)
 	resBody = storableText(resBody)
 	if reqErr != nil {

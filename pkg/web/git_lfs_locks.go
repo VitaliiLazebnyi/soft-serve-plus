@@ -60,11 +60,14 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A lock has an owner, so even with anonymous write access the caller
+	// must sign in. git-lfs only asks for credentials after a 401.
 	user := proto.UserFromContext(ctx)
 	if user == nil {
 		logger.Info("anonymous caller cannot create a lock")
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "user not found",
+		askCredentials(w, r)
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{
+			Message: "credentials needed",
 		})
 		return
 	}
@@ -73,7 +76,7 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 	datastore := store.FromContext(ctx)
 	if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if errors.Is(store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err), proto.ErrRepoNotFound) {
 			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
 			return
@@ -84,7 +87,8 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 					Message: "lock already exists",
 				},
 			}
-			lock, err := datastore.GetLFSLockForUserPath(ctx, dbx, repo.ID(), user.ID(), req.Path)
+			// The conflicting lock may be anyone's; the spec returns it.
+			lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), req.Path)
 			if err == nil {
 				errResp.Lock = lfs.Lock{
 					ID:       strconv.FormatInt(lock.ID, 10),
@@ -205,9 +209,8 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		lock, err := datastore.GetLFSLockByID(ctx, dbx, repo.ID(), id)
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
-				renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-					Message: "lock not found",
-				})
+				// A filter that matches nothing is an empty list.
+				renderJSON(w, r, http.StatusOK, lfs.LockListResponse{Locks: []lfs.Lock{}})
 				return
 			}
 			logger.Error("error getting lock", "err", err)
@@ -243,9 +246,8 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), path)
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
-				renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-					Message: "lock not found",
-				})
+				// A filter that matches nothing is an empty list.
+				renderJSON(w, r, http.StatusOK, lfs.LockListResponse{Locks: []lfs.Lock{}})
 				return
 			}
 			logger.Error("error getting lock", "err", err)
@@ -458,6 +460,19 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only a lock's owner or an admin may unlock, so even with anonymous
+	// write access the caller must sign in. git-lfs only asks for
+	// credentials after a 401.
+	user := proto.UserFromContext(ctx)
+	if user == nil {
+		logger.Info("anonymous caller cannot delete a lock")
+		askCredentials(w, r)
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{
+			Message: "credentials needed",
+		})
+		return
+	}
+
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 	repo, ok := lfsRepository(w, r)
@@ -498,16 +513,6 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Retrieve user context first for authorization checks
-	user := proto.UserFromContext(ctx)
-	if user == nil {
-		logger.Info("anonymous caller cannot delete a lock")
-		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{
-			Message: "unauthorized",
-		})
-		return
-	}
-
 	// Force delete another user's lock (requires admin privileges)
 	if req.Force {
 		if !user.IsAdmin() {
@@ -526,7 +531,7 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		renderJSON(w, r, http.StatusOK, l)
+		renderJSON(w, r, http.StatusOK, lfs.LockResponse{Lock: l})
 		return
 	}
 

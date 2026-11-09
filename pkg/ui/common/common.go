@@ -37,6 +37,10 @@ type Common struct {
 }
 
 // NewCommon returns a new Common struct.
+//
+// Its Zone manager runs a background worker. The caller must close it with
+// Zone.Close once the program using it has exited, and not before: a render
+// after Close blocks once the view has more zones than the worker buffers.
 func NewCommon(ctx context.Context, width, height int) Common {
 	if ctx == nil {
 		ctx = context.TODO()

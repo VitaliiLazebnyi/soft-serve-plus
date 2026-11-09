@@ -204,8 +204,20 @@ func (*repoStore) SetRepoNameByName(ctx context.Context, tx db.Handler, name str
 	name = utils.SanitizeRepo(name)
 	newName = utils.SanitizeRepo(newName)
 	query := tx.Rebind("UPDATE repos SET name = ? WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, newName, name)
-	return err
+	res, err := tx.ExecContext(ctx, query, newName, name)
+	if err != nil {
+		return err
+	}
+
+	// Nothing updated means there was no such repository.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return db.ErrRecordNotFound
+	}
+	return nil
 }
 
 // SetRepoProjectNameByName implements store.RepositoryStore.

@@ -62,8 +62,8 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 
 		return nil
 	})
-	// A repository deleted meanwhile fails the insert on its foreign key,
-	// which would read as a duplicate; report it as gone.
+	// A repository deleted meanwhile fails the insert on its foreign key;
+	// report it as gone.
 	return store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err)
 }
 
@@ -73,7 +73,7 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 	datastore := store.FromContext(ctx)
 
 	var wh webhook.Hook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		h, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
 			return err
@@ -107,7 +107,7 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 	var webhooks []models.Webhook
 	webhookEvents := map[int64][]models.WebhookEvent{}
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		webhooks, err = datastore.GetWebhooksByRepoID(ctx, tx, repo.ID())
 		if err != nil {
@@ -266,7 +266,7 @@ func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 	datastore := store.FromContext(ctx)
 
 	var deliveries []models.WebhookDelivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 
 	var delivery models.WebhookDelivery
 	var wh models.Webhook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
@@ -420,7 +420,7 @@ func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 	datastore := store.FromContext(ctx)
 
 	var delivery webhook.Delivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), webhookID); err != nil {
 			return err
 		}
@@ -493,6 +493,20 @@ func dedupeEvents(events []webhook.Event) []webhook.Event {
 // the wait early.
 const ShutdownDeliveryTimeout = time.Minute
 
+// afterChangeTimeout bounds the reads made after a change is committed to
+// build and send its webhook event.
+const afterChangeTimeout = 30 * time.Second
+
+// AfterChangeContext returns a context for the reads made after a change is
+// committed to build and send its webhook event. It keeps ctx's values but not
+// its cancellation, so a caller that goes away right after the commit, such as
+// an SSH client that disconnects, does not lose the event. The reads are
+// bounded by afterChangeTimeout instead. The caller must call the returned
+// cancel function.
+func AfterChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), afterChangeTimeout)
+}
+
 // SendEventAfterChange sends the webhook event for a change that is already
 // committed, the same way the backend's own changes do. See sendAfterChange.
 func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayload) {
@@ -501,9 +515,12 @@ func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayl
 
 // sendAfterChange sends the webhook event for a change that is already
 // committed. The subscribers are read now and the deliveries run in the
-// background, so the caller does not wait on receivers. The change has
+// background, so the caller does not wait on receivers. Neither is cut short
+// by the caller's context ending (see AfterChangeContext). The change has
 // happened, so a failure is logged rather than returned.
 func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) {
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	hooks, err := webhook.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)

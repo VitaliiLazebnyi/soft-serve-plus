@@ -237,7 +237,12 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 	// anonymous caller could. On a private repository it does not apply.
 	//
 	// If the user is a collaborator, they have their access level.
-	collabAccess, isCollab, _ := d.IsCollaborator(ctx, name, username)
+	collabAccess, isCollab, err := d.IsCollaborator(ctx, name, username)
+	if err != nil {
+		// Fall through to the non-collaborator rules, which deny access to
+		// a private repository, but leave a trace of the failed lookup.
+		d.logger.Error("error checking collaborator", "repo", name, "user", username, "err", err)
+	}
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
 			return anon
@@ -270,7 +275,7 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.FindUserByUsername(ctx, tx, username)
 		if err != nil {
@@ -297,7 +302,7 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 func (d *Backend) UserByID(ctx context.Context, id int64) (proto.User, error) {
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetUserByID(ctx, tx, id)
 		if err != nil {
@@ -347,7 +352,7 @@ func (e *ErrAdminKeyNonAdminOwner) Unwrap() error { return proto.ErrUserNotFound
 func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.User, error) {
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.FindUserByPublicKey(ctx, tx, pk)
 		if err != nil {
@@ -402,7 +407,7 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 	var pks []ssh.PublicKey
 	token = HashToken(token)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		t, err := d.store.GetAccessTokenByToken(ctx, tx, token)
 		if err != nil {
 			return err
@@ -412,7 +417,9 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 			return proto.ErrTokenExpired
 		}
 
-		m, err = d.store.FindUserByAccessToken(ctx, tx, token)
+		// The token row names its user, so look the user up by ID instead
+		// of matching the token a second time.
+		m, err = d.store.GetUserByID(ctx, tx, t.UserID)
 		if err != nil {
 			return err
 		}
@@ -442,7 +449,7 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 // It implements backend.Backend.
 func (d *Backend) Users(ctx context.Context) ([]string, error) {
 	var users []string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		ms, err := d.store.GetAllUsers(ctx, tx)
 		if err != nil {
 			return err
@@ -598,7 +605,7 @@ func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.Pu
 	}
 
 	var keys []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		keys, err = d.store.ListPublicKeysByUsername(ctx, tx, username)
 		return err

@@ -53,7 +53,8 @@ func (h *repoDirHolds) hold(name string) (release func()) {
 
 // removeOrphanRepoDir removes name's directory when it is an orphan: no
 // operation other than the caller, which holds name own times, holds it, no
-// row names it, and its name on disk is name exactly. Otherwise it leaves the
+// row names it, its name on disk is name exactly, and no repository's
+// directory is the same one (isOrphanRepoPath). Otherwise it leaves the
 // directory alone and returns proto.ErrRepoNotFound.
 //
 // Each delete holds the name before it looks for the row, so when two deletes
@@ -78,24 +79,38 @@ func (d *Backend) removeOrphanRepoDir(ctx context.Context, name string, own int)
 
 	// A create may have recorded its row and let go of its hold after the
 	// caller looked for the row.
-	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		_, err := d.store.GetRepoByName(ctx, tx, name)
-		return err
-	})
-	switch {
-	case err == nil:
-		return proto.ErrRepoNotFound
-	case !errors.Is(err, db.ErrRecordNotFound):
-		return err
-	}
-
+	//
 	// On a case-insensitive filesystem a case variant of a repository's
 	// name reaches that repository's directory, which is not an orphan.
-	if !d.repoPathExact(name) {
-		return proto.ErrRepoNotFound
+	//
+	// A directory spelled exactly as name can still be the directory of a
+	// repository whose name the filesystem maps onto it, so it is an orphan
+	// only when no repository's directory is the same one.
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		_, err := d.store.GetRepoByName(ctx, tx, name)
+		switch {
+		case err == nil:
+			return proto.ErrRepoNotFound
+		case !errors.Is(err, db.ErrRecordNotFound):
+			return err
+		}
+		if !d.repoPathExact(name) {
+			return proto.ErrRepoNotFound
+		}
+		orphan, err := d.isOrphanRepoPath(ctx, tx, name)
+		if err != nil {
+			return err
+		}
+		if !orphan {
+			return proto.ErrRepoNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	return os.RemoveAll(d.repoPath(name))
+	return d.removeRepoDir(d.repoPath(name))
 }
 
 // repoPathExact reports whether name's directory exists with every path
