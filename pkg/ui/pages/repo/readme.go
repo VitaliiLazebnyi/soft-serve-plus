@@ -91,7 +91,7 @@ func (r *Readme) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Readme) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd)
+	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd())
 }
 
 // Update implements tea.Model.
@@ -112,7 +112,7 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.readmePath = ""
 		r.code.GotoTop()
 		cmds = append(cmds,
-			r.code.SetContent(defaultEmptyRepoMsg(r.common.Config(),
+			r.code.SetContent(defaultEmptyRepoMsg(r.common,
 				r.repo.Name()), ".md"),
 		)
 	case ReadmeMsg:
@@ -166,13 +166,19 @@ func (r *Readme) StatusBarInfo() string {
 	return common.ScrollPercent(r.code.ScrollPosition())
 }
 
-func (r *Readme) updateReadmeCmd() tea.Msg {
-	m := ReadmeMsg{}
-	if r.repo == nil {
-		return common.ErrorMsg(common.ErrMissingRepo)
+// updateReadmeCmd returns a command that loads the readme of the current ref.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (r *Readme) updateReadmeCmd() tea.Cmd {
+	repo, ref := r.repo, r.ref
+	return func() tea.Msg {
+		m := ReadmeMsg{}
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
+		}
+		rm, rp, _ := backend.Readme(repo, ref)
+		m.Content = rm
+		m.Path = rp
+		return m
 	}
-	rm, rp, _ := backend.Readme(r.repo, r.ref)
-	m.Content = rm
-	m.Path = rp
-	return m
 }

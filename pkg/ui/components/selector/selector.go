@@ -106,8 +106,8 @@ func (s *Selector) SelectedItem() IdentifiableItem {
 
 // Select selects the item at the given index.
 func (s *Selector) Select(index int) {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 	s.Model.Select(index)
 }
 
@@ -223,12 +223,15 @@ func (s *Selector) CursorDown() {
 
 // Init implements tea.Model.
 func (s *Selector) Init() tea.Cmd {
-	return s.activeCmd
+	return s.activeCmd()
 }
 
 // Update implements tea.Model.
 func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// The select and filter commands are built after the list has handled
+	// msg, so they carry the items the list holds once Update returns.
+	var selectItem, activeFilter bool
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
 		m := msg.Mouse()
@@ -246,7 +249,7 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				// Check each item to see if it's in bounds.
 				if item != nil && s.common.Zone.Get(item.ID()).InBounds(msg) {
 					if i == curIdx {
-						cmds = append(cmds, s.SelectItemCmd)
+						selectItem = true
 					} else {
 						s.Select(i)
 					}
@@ -263,28 +266,34 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, s.common.KeyMap.Select):
 			if filterState != list.Filtering {
-				cmds = append(cmds, s.SelectItemCmd)
+				selectItem = true
 			}
 		}
 	case list.FilterMatchesMsg:
-		cmds = append(cmds, s.activeFilterCmd)
+		activeFilter = true
 	}
 	m, cmd := s.Model.Update(msg)
 	s.mtx.Lock()
 	s.Model = &m
 	s.mtx.Unlock()
+	if selectItem {
+		cmds = append(cmds, s.SelectItemCmd())
+	}
+	if activeFilter {
+		cmds = append(cmds, s.activeFilterCmd())
+	}
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	// Track filter state and update active item when filter state changes.
 	filterState := s.FilterState()
 	if s.filterState != filterState {
-		cmds = append(cmds, s.activeFilterCmd)
+		cmds = append(cmds, s.activeFilterCmd())
 	}
 	s.filterState = filterState
 	// Send ActiveMsg when index change.
 	if s.active != s.Index() {
-		cmds = append(cmds, s.activeCmd)
+		cmds = append(cmds, s.activeCmd())
 	}
 	s.active = s.Index()
 	return s, tea.Batch(cmds...)
@@ -295,17 +304,24 @@ func (s *Selector) View() string {
 	return s.Model.View()
 }
 
-// SelectItemCmd is a command that selects the currently active item.
-func (s *Selector) SelectItemCmd() tea.Msg {
-	return SelectMsg{s.SelectedItem()}
-}
-
-func (s *Selector) activeCmd() tea.Msg {
+// SelectItemCmd returns a command that selects the currently active item.
+// bubbletea runs commands in their own goroutines, so the item is read here,
+// in Update, and not from the command.
+func (s *Selector) SelectItemCmd() tea.Cmd {
 	item := s.SelectedItem()
-	return ActiveMsg{item}
+	return func() tea.Msg {
+		return SelectMsg{item}
+	}
 }
 
-func (s *Selector) activeFilterCmd() tea.Msg {
+func (s *Selector) activeCmd() tea.Cmd {
+	item := s.SelectedItem()
+	return func() tea.Msg {
+		return ActiveMsg{item}
+	}
+}
+
+func (s *Selector) activeFilterCmd() tea.Cmd {
 	// Here we use VisibleItems because when list.FilterMatchesMsg is sent,
 	// VisibleItems is the only way to get the list of filtered items. The list
 	// bubble should export something like list.FilterMatchesMsg.Items().
@@ -313,12 +329,13 @@ func (s *Selector) activeFilterCmd() tea.Msg {
 	if len(items) == 0 {
 		return nil
 	}
-	item := items[0]
-	i, ok := item.(IdentifiableItem)
+	i, ok := items[0].(IdentifiableItem)
 	if !ok {
 		return nil
 	}
-	return ActiveMsg{i}
+	return func() tea.Msg {
+		return ActiveMsg{i}
+	}
 }
 
 // NewPane returns a selector for a list inside a repository pane: no title,

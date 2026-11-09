@@ -39,6 +39,13 @@ cmp stderr notauthorizederr.txt
 cmp stderr notauthorizederr.txt
 ! usoft git-lfs-authenticate ghost upload
 cmp stderr notauthorizederr.txt
+# a public repo it may read: git-lfs-authenticate issues a token for an
+# account, which an anonymous key lacks, and says so
+soft repo create open
+! usoft git-lfs-authenticate open download
+stderr 'git-lfs-authenticate needs an account'
+! usoft git-lfs-authenticate open upload
+cmp stderr notauthorizederr.txt
 ! ugit clone ssh://localhost:$SSH_PORT/secret secret_anon
 stderr 'you are not authorized to do this'
 ! ugit clone ssh://localhost:$SSH_PORT/ghost ghost_anon
@@ -128,8 +135,7 @@ cmp stderr notauthorizederr.txt
 ! usoft git-receive-pack secret
 cmp stderr notauthorizederr.txt
 
-# stop the server; the last command must succeed so stderr is clean
-soft repo list
+# stop the server
 [windows] stopserver
 [windows] ! stderr .
 
