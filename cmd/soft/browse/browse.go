@@ -33,12 +33,15 @@ var Command = &cobra.Command{
 			return err
 		}
 
-		r, err := git.Open(abs)
+		r, err := git.OpenLocal(abs)
 		if err != nil {
 			return fmt.Errorf("failed to open repository: %w", err)
 		}
 
 		m := newModel(cmd.Context(), r)
+		// Stop the bubblezone worker once the program has exited, and not
+		// on quit: the program renders once more after the model quits.
+		defer m.common.Zone.Close()
 		p := tea.NewProgram(m)
 
 		_, err = p.Run()
@@ -167,8 +170,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.common.KeyMap.Help):
 			cmds = append(cmds, footer.ToggleFooterCmd)
 		case key.Matches(msg, m.common.KeyMap.Quit):
-			// Stop bubblezone background workers.
-			m.common.Zone.Close()
 			return m, tea.Quit
 		}
 	case tea.MouseClickMsg:

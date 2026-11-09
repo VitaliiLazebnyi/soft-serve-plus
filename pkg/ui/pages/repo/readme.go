@@ -120,7 +120,7 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.readmePath = ""
 		r.code.GotoTop()
 		cmds = append(cmds,
-			r.code.SetContent(defaultEmptyRepoMsg(r.common.Config(),
+			r.code.SetContent(defaultEmptyRepoMsg(r.common,
 				r.repo.Name()), ".md"),
 		)
 	case ReadmeMsg:
@@ -174,13 +174,19 @@ func (r *Readme) StatusBarInfo() string {
 	return common.ScrollPercent(r.code.ScrollPosition())
 }
 
+// updateReadmeCmd returns a command that loads the readme of the current ref.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
 func (r *Readme) updateReadmeCmd() tea.Cmd {
 	repo, ref, gen := r.repo, r.ref, r.gen
 	return func() tea.Msg {
+		m := ReadmeMsg{gen: gen}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
 		rm, rp, _ := backend.Readme(repo, ref)
-		return ReadmeMsg{Content: rm, Path: rp, gen: gen}
+		m.Content = rm
+		m.Path = rp
+		return m
 	}
 }

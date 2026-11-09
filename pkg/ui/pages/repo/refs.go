@@ -169,7 +169,7 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, r.common.KeyMap.SelectItem):
-			cmds = append(cmds, r.selector.SelectItemCmd)
+			cmds = append(cmds, r.selector.SelectItemCmd())
 		}
 	case EmptyRepoMsg:
 		r.ref = nil
@@ -222,50 +222,52 @@ func (r *Refs) StatusBarInfo() string {
 	return fmt.Sprintf("p. %d/%d", r.selector.Page()+1, totalPages)
 }
 
+// updateItemsCmd returns a command that lists the refs of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
 func (r *Refs) updateItemsCmd() tea.Cmd {
-	repo, prefix, gen := r.repo, r.refPrefix, r.gen
+	repo, prefix, logger, gen := r.repo, r.refPrefix, r.common.Logger, r.gen
 	return func() tea.Msg {
-		return loadRefItems(r.common, repo, prefix, gen)
-	}
-}
-
-func loadRefItems(c common.Common, repo proto.Repository, refPrefix string, gen uint64) tea.Msg {
-	its := make(RefItems, 0)
-	rr, err := repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-	refs, err := rr.References()
-	if err != nil {
-		c.Logger.Debugf("ui: error getting references: %v", err)
-		return common.ErrorMsg(err)
-	}
-	for _, ref := range refs {
-		if strings.HasPrefix(ref.Name().String(), refPrefix) {
-			refItem := RefItem{
-				Reference: ref,
-			}
-
-			if ref.IsTag() {
-				refItem.Tag, _ = rr.Tag(ref.Name().Short())
-				if refItem.Tag != nil {
-					refItem.Commit, _ = refItem.Tag.Commit()
-				}
-			} else {
-				refItem.Commit, _ = rr.CatFileCommit(ref.ID)
-			}
-			its = append(its, refItem)
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-	}
-	sort.Sort(its)
-	items := make([]selector.IdentifiableItem, len(its))
-	for i, it := range its {
-		items[i] = it
-	}
-	return RefItemsMsg{
-		items:  items,
-		prefix: refPrefix,
-		gen:    gen,
+		its := make(RefItems, 0)
+		rr, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		refs, err := rr.References()
+		if err != nil {
+			logger.Debugf("ui: error getting references: %v", err)
+			return common.ErrorMsg(err)
+		}
+		for _, ref := range refs {
+			if strings.HasPrefix(ref.Name().String(), prefix) {
+				refItem := RefItem{
+					Reference: ref,
+				}
+
+				if ref.IsTag() {
+					refItem.Tag, _ = rr.Tag(ref.Name().Short())
+					if refItem.Tag != nil {
+						refItem.Commit, _ = refItem.Tag.Commit()
+					}
+				} else {
+					refItem.Commit, _ = rr.CatFileCommit(ref.ID)
+				}
+				its = append(its, refItem)
+			}
+		}
+		sort.Sort(its)
+		items := make([]selector.IdentifiableItem, len(its))
+		for i, it := range its {
+			items[i] = it
+		}
+		return RefItemsMsg{
+			items:  items,
+			prefix: prefix,
+			gen:    gen,
+		}
 	}
 }
 

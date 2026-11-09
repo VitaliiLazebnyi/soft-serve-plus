@@ -153,7 +153,7 @@ func (s *Stash) SpinnerID() int {
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
-	return tea.Batch(s.spinner.Tick, s.fetchStash())
+	return tea.Batch(s.spinner.Tick, s.fetchStashCmd())
 }
 
 // Update updates the model.
@@ -225,7 +225,7 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case StashItem:
-			cmds = append(cmds, s.fetchStashPatch())
+			cmds = append(cmds, s.fetchStashPatchCmd())
 		}
 	case GoBackMsg:
 		if s.state == stashStateList {
@@ -263,7 +263,10 @@ func (s *Stash) View() string {
 	return ""
 }
 
-func (s *Stash) fetchStash() tea.Cmd {
+// fetchStashCmd returns a command that lists the stashes of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (s *Stash) fetchStashCmd() tea.Cmd {
 	repo, gen := s.repo, s.gen
 	return func() tea.Msg {
 		if repo == nil {
@@ -284,7 +287,9 @@ func (s *Stash) fetchStash() tea.Cmd {
 	}
 }
 
-func (s *Stash) fetchStashPatch() tea.Cmd {
+// fetchStashPatchCmd returns a command that loads the patch of the selected
+// stash.
+func (s *Stash) fetchStashPatchCmd() tea.Cmd {
 	repo, index, gen := s.repo, s.list.Index(), s.gen
 	return func() tea.Msg {
 		if repo == nil {
