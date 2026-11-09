@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,6 +282,22 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "invalid object",
 					},
 				})
+				continue
+			}
+
+			// The batch API omits actions for objects the server already
+			// has, so the client does not send them again.
+			// https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md#successful-responses
+			present, err := lfsObjectPresent(ctx, strg, dbx, datastore, repo.ID(), o)
+			if err != nil {
+				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+					Message: "internal server error",
+				})
+				return
+			}
+			if present {
+				objects = append(objects, &lfs.ObjectResponse{Pointer: o})
 			} else {
 				upload := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), map[string]string{
 					// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
@@ -309,6 +326,32 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 
 	batchResponse.Objects = objects
 	renderJSON(w, r, http.StatusOK, batchResponse)
+}
+
+// lfsObjectPresent reports whether the repository already stores the object
+// with the given size: it has a database row of that size and its file is a
+// regular file of that size in storage. A missing, truncated or overgrown file
+// is not present, so the client sends it again and the upload handler restores
+// it. The content is not hashed here, to keep batch requests cheap.
+func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) (bool, error) {
+	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid)
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if obj.Size != p.Size {
+		return false, nil
+	}
+	stat, err := strg.Stat(path.Join("objects", p.RelativePath()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return stat.Mode().IsRegular() && stat.Size() == p.Size, nil
 }
 
 // serviceLfsBasic implements Git LFS basic transfer API
