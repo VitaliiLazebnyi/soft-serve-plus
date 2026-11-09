@@ -109,9 +109,21 @@ nfpms:
       postinstall: ./.nfpm/postinstall.sh
       preremove: ./.nfpm/preremove.sh
       postremove: ./.nfpm/postremove.sh
+    apk:
+      scripts:
+        # apk runs postinstall only on first install; run it on upgrade too so
+        # the service is restarted with the new binary.
+        postupgrade: ./.nfpm/postinstall.sh
     dependencies:
       - git
       - bash
+    # git runs ssh to mirror repositories over ssh:// URLs.
+    recommends:
+      - openssh-client
+    overrides:
+      rpm:
+        recommends:
+          - openssh-clients
 
 checksum:
   name_template: "checksums.txt"
