@@ -90,7 +90,9 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 			if err != nil {
 				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
 			}
-			remotes.validated = append(remotes.validated, v)
+			// fetch and remote update reach each remote by name, so a
+			// remote.<name>.proxy must be cleared too.
+			remotes.validated = append(remotes.validated, v.Named(name))
 		}
 		remotes.names = append(remotes.names, name)
 	}

@@ -1082,6 +1082,14 @@ Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is sy
 
 An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
+Imports and mirror syncs over http, https and `git://` connect to the remote
+directly. They ignore any proxy set for the server, whether through
+`http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
+(including URL-scoped `http.<url>.proxy`), `remote.<name>.proxy` and
+`core.gitProxy` in its git configuration, since a proxy would resolve the
+remote's host name itself and could reach internal addresses the import check
+refuses. Webhooks and Git LFS transfers never use a proxy either.
+
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
