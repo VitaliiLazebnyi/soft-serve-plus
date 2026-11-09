@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
+	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/crypto/ssh"
 )
@@ -800,6 +802,37 @@ func (c *Config) Validate() error {
 	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
 
+	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
+	// value without a scheme or a host would hand clients unusable links.
+	if c.HTTP.PublicURL != "" {
+		u, err := url.Parse(c.HTTP.PublicURL)
+		if err != nil {
+			return fmt.Errorf("http.public_url: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http.public_url: %q must be an http:// or https:// URL with a host", c.HTTP.PublicURL)
+		}
+	}
+
+	// Setting only one of the pair would silently serve plain HTTP.
+	if (c.HTTP.TLSKeyPath == "") != (c.HTTP.TLSCertPath == "") {
+		return fmt.Errorf("http.tls_key_path and http.tls_cert_path must be set together")
+	}
+
+	switch strings.ToLower(c.Log.Format) {
+	case "", "json", "logfmt", "text":
+	default:
+		return fmt.Errorf("log.format: %q is not one of %q, %q, %q", c.Log.Format, "json", "logfmt", "text")
+	}
+
+	// The scheduler uses the standard parser; a spec it rejects would leave
+	// mirrors never syncing behind a startup warning.
+	if c.Jobs.MirrorPull != "" {
+		if _, err := cron.ParseStandard(c.Jobs.MirrorPull); err != nil {
+			return fmt.Errorf("jobs.mirror_pull: %q: %w", c.Jobs.MirrorPull, err)
+		}
+	}
+
 	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {
 		c.SSH.KeyPath = filepath.Join(c.DataPath, c.SSH.KeyPath)
 	}
@@ -819,6 +852,20 @@ func (c *Config) Validate() error {
 	} {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for the default", v.name, v.value)
+		}
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.max_timeout", c.SSH.MaxTimeout},
+		{"ssh.idle_timeout", c.SSH.IdleTimeout},
+		{"git.max_timeout", c.Git.MaxTimeout},
+		{"git.idle_timeout", c.Git.IdleTimeout},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
 		}
 	}
 

@@ -187,7 +187,8 @@ http:
   # The path to the TLS private key.
   tls_key_path: {{ q .HTTP.TLSKeyPath }}
 
-  # The path to the TLS certificate.
+  # The path to the TLS certificate. Set both paths to serve HTTPS, or
+  # neither to serve plain HTTP.
   tls_cert_path: {{ q .HTTP.TLSCertPath }}
 
   # The public URL of the HTTP server.
@@ -276,6 +277,8 @@ lfs:
 
 # Cron job configuration
 jobs:
+  # How often pull mirrors sync: a standard five-field cron spec or a
+  # descriptor such as "@hourly" or "@every 10m".
   mirror_pull: {{ q .Jobs.MirrorPull }}
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
