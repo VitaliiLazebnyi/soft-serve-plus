@@ -81,6 +81,11 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: {{ .SSH.IdleTimeout }}
 
+  # The number of seconds a client has to complete the key exchange and
+  # authenticate before the connection is closed.
+  # A value of 0 means no timeout.
+  handshake_timeout: {{ .SSH.HandshakeTimeout }}
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
@@ -187,6 +192,21 @@ http:
   # This is the address that will be used to clone repositories.
   # Make sure to use https:// if you are using TLS.
   public_url: {{ q .HTTP.PublicURL }}
+
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: {{ .HTTP.MaxTimeout }}
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: {{ .HTTP.IdleTimeout }}
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: {{ .HTTP.MaxConnections }}
 
   # The cross-origin request security options
   cors:
@@ -309,7 +329,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:

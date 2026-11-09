@@ -11,7 +11,6 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	bm "charm.land/wish/v2/bubbletea"
 	rm "charm.land/wish/v2/recover"
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -68,7 +67,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		rm.MiddlewareWithLogger(
 			logger,
 			// BubbleTea middleware.
-			bm.MiddlewareWithProgramHandler(SessionHandler),
+			BubbleTeaMiddleware,
 			// CLI middleware.
 			CommandMiddleware,
 			// Logging middleware.
@@ -78,6 +77,9 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 			// is in fact the one used for authentication, so we need to
 			// check it again here.
 			AuthenticationMiddleware,
+			// Command length middleware.
+			// Refuses overlong exec commands before anything parses them.
+			CommandLengthMiddleware,
 			// Context middleware.
 			// This must come first to set up the context.
 			ContextMiddleware(cfg, dbx, datastore, be, logger),
@@ -110,6 +112,10 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 
 	if cfg.SSH.IdleTimeout > 0 {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
+	}
+
+	if cfg.SSH.HandshakeTimeout > 0 {
+		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
 	}
 
 	// Create client ssh key
