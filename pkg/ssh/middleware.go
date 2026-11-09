@@ -1,8 +1,10 @@
 package ssh
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -101,12 +103,35 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
+// MaxCommandLength is the longest exec command, in bytes, the SSH server
+// accepts. Every Soft Serve command fits well within it. Splitting a command
+// into arguments costs time quadratic in its length, and any client with any
+// key reaches the middleware chain, so longer commands are refused before
+// anything parses them.
+const MaxCommandLength = 4 << 10
+
+// ErrCommandTooLong is returned when an exec command exceeds MaxCommandLength.
+var ErrCommandTooLong = fmt.Errorf("command too long: exceeds %d bytes", MaxCommandLength)
+
+// CommandLengthMiddleware refuses sessions whose exec command is longer than
+// MaxCommandLength, before any middleware or handler parses it.
+func CommandLengthMiddleware(sh ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		if len(s.RawCommand()) > MaxCommandLength {
+			wish.Fatalln(s, ErrCommandTooLong)
+			return
+		}
+		sh(s)
+	}
+}
+
 // ContextMiddleware adds the config, backend, and logger to the session context.
+// The session context is shared by every session on the connection, so the
+// session itself is added per session by sessionContext instead.
 func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be *backend.Backend, logger *log.Logger) func(ssh.Handler) ssh.Handler {
 	return func(sh ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
 			ctx := s.Context()
-			ctx.SetValue(sshutils.ContextKeySession, s)
 			ctx.SetValue(config.ContextKey, cfg)
 			ctx.SetValue(db.ContextKey, dbx)
 			ctx.SetValue(store.ContextKey, datastore)
@@ -116,6 +141,10 @@ func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be
 		}
 	}
 }
+
+// maxSuggestionArgLength is the longest argument, in bytes, for which the
+// command handler still suggests a command name for an unknown command.
+const maxSuggestionArgLength = 64
 
 var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "soft_serve",
@@ -128,11 +157,11 @@ var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 // This middleware must be run after the ContextMiddleware.
 func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		ctx := s.Context()
+		ctx := sessionContext(s)
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		rootCmd := newRootCommand(cfg)
+		rootCmd := newRootCommand(cfg, args)
 
 		// A session with a pty opens the TUI unless its command is one to
 		// run (see runWithPty).
@@ -192,13 +221,20 @@ func runWithPty(s ssh.Session, root *cobra.Command, args []string) bool {
 }
 
 // newRootCommand returns the CLI command tree for a session on a server
-// with cfg.
-func newRootCommand(cfg *config.Config) *cobra.Command {
+// with cfg running args.
+func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
 		SilenceUsage: true,
 	}
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	// "Did you mean" suggestions compare an unknown command with every
+	// command name by edit distance, which costs milliseconds for a
+	// word near MaxCommandLength. No typo of a command name is that
+	// long, so leave suggestions out for long arguments.
+	rootCmd.DisableSuggestions = slices.ContainsFunc(args, func(a string) bool {
+		return len(a) > maxSuggestionArgLength
+	})
 
 	rootCmd.SetUsageTemplate(cmd.UsageTemplate)
 	rootCmd.SetUsageFunc(cmd.UsageFunc)
@@ -229,6 +265,15 @@ func newRootCommand(cfg *config.Config) *cobra.Command {
 	}
 
 	return rootCmd
+}
+
+// sessionContext returns a context derived from the session's context that
+// carries the session itself. The session's context belongs to the
+// connection, and a client multiplexing sessions over one connection (such as
+// OpenSSH with ControlMaster) would otherwise have each session read another
+// session's environment, e.g. its GIT_PROTOCOL.
+func sessionContext(s ssh.Session) context.Context {
+	return context.WithValue(s.Context(), sshutils.ContextKeySession, s)
 }
 
 // unknownCommand is the metric label for a command the server does not have.
@@ -263,6 +308,12 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		ctx := s.Context()
 		logger := log.FromContext(ctx).WithPrefix("ssh")
+		if logger.GetLevel() > log.DebugLevel {
+			// Nothing below is logged, so skip parsing the command.
+			sh(s)
+			return
+		}
+
 		ct := time.Now()
 		hpk := sshutils.MarshalAuthorizedKey(s.PublicKey())
 		ptyReq, _, isPty := s.Pty()

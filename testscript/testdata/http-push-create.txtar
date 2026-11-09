@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
@@ -46,4 +43,3 @@ stdout 'README.md'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

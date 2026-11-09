@@ -226,8 +226,6 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, footer.ToggleFooterCmd)
 		case key.Matches(msg, ui.common.KeyMap.Quit):
 			if !ui.IsFiltering() {
-				// Stop bubblezone background workers.
-				ui.common.Zone.Close()
 				return ui, tea.Quit
 			}
 		case ui.activePage == repoPage &&
