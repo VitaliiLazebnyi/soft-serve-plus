@@ -545,6 +545,23 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		gitHttpReceiveCounter.WithLabelValues(repoName)
 	}
 
+	// Open a gzip body before writing any header, so a body that is not
+	// gzip gets a client error rather than a 200 followed by an error page.
+	var reader io.Reader = r.Body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			logger.Debugf("bad gzip request body: %v", err)
+			if service == git.ReceivePackService {
+				markPushFailed(ctx)
+			}
+			renderStatus(http.StatusBadRequest)(w, r)
+			return
+		}
+		defer gz.Close() //nolint: errcheck
+		reader = gz
+	}
+
 	hdrNocache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Connection", "Keep-Alive")
@@ -579,24 +596,6 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		cmd.Env = append(cmd.Env, []string{
 			fmt.Sprintf("GIT_PROTOCOL=%s", version),
 		}...)
-	}
-
-	var (
-		err    error
-		reader io.ReadCloser
-	)
-
-	// Handle gzip encoding
-	reader = r.Body
-	switch r.Header.Get("Content-Encoding") {
-	case "gzip":
-		reader, err = gzip.NewReader(reader)
-		if err != nil {
-			logger.Errorf("failed to create gzip reader: %v", err)
-			renderInternalServerError(w, r)
-			return
-		}
-		defer reader.Close() //nolint: errcheck
 	}
 
 	cmd.Stdin = reader
