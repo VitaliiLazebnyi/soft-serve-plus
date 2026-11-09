@@ -169,6 +169,8 @@ git:
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: {{ .Git.IdleTimeout }}
 
   # The maximum number of concurrent connections.
@@ -335,6 +337,14 @@ webhook:
 # limit is refused; existing repositories are kept. Imports still running
 # count against the limit. 0 means no limit.
 #max_repos_per_user: 0
+
+# Largest file, in bytes, that the TUI and "repo blob" read into memory to
+# display. Larger files are refused ("repo blob --raw" streams them instead),
+# and a larger README is not shown. The TUI highlights and wraps a file
+# while handling input, so this limit is also what keeps one file view from
+# stalling a session: raising it, or 0 for no limit, makes large files slow
+# to open and costly in memory. Defaults to 1048576 (1 MiB).
+#max_blob_size: 1048576
 
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without

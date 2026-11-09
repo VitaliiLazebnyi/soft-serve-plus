@@ -42,6 +42,9 @@ type pushCreates struct {
 	// takes it.
 	mu    sync.Mutex
 	repos map[string]*pushCreate
+	// waiting, if set, is called when a request starts waiting for a
+	// removal. Tests use it to end the removal only once a request waits.
+	waiting func(name string)
 }
 
 // pushCreate is a repository created by an HTTP push that has no refs yet.
@@ -100,23 +103,30 @@ func (p *pushCreates) add(ctx context.Context, name string, repo proto.Repositor
 // removed under the request. It returns the request's context, carrying a
 // pushOutcome, and the function to call when the request ends, or ctx and
 // nil when name is not on the list.
-func (p *pushCreates) begin(ctx context.Context, name string) (context.Context, func()) {
+//
+// If the repository is being removed, begin waits for the removal to end
+// and returns waited true, with ctx and nil: the repository the caller
+// resolved before may be gone, so the caller must resolve it, and the
+// caller's access to it, again.
+func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context, done func(), waited bool) {
 	if p == nil {
-		return ctx, nil
+		return ctx, nil, false
 	}
 	p.mu.Lock()
 	pc, ok := p.repos[name]
 	if !ok {
 		p.mu.Unlock()
-		return ctx, nil
+		return ctx, nil, false
 	}
 	if pc.removing != nil {
-		// Wait for the removal to end; the request then finds the
-		// repository gone, or kept and off the list.
 		ch := pc.removing
+		waiting := p.waiting
 		p.mu.Unlock()
+		if waiting != nil {
+			waiting(name)
+		}
 		<-ch
-		return ctx, nil
+		return ctx, nil, true
 	}
 	pc.inflight++
 	pc.gen++
@@ -126,7 +136,7 @@ func (p *pushCreates) begin(ctx context.Context, name string) (context.Context, 
 	}
 	p.mu.Unlock()
 	o := &pushOutcome{}
-	return context.WithValue(ctx, pushOutcomeKey{}, o), func() { p.end(name, pc, o.failed) }
+	return context.WithValue(ctx, pushOutcomeKey{}, o), func() { p.end(name, pc, o.failed) }, false
 }
 
 // end is called when a request to a listed repository ends. Once no
