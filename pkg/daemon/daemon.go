@@ -228,7 +228,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	// which ends the read too.
 	stopRead := context.AfterFunc(d.ctx, func() {
 		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
-		d.fatal(conn, git.ErrTimeout)
+		d.fatal(c, git.ErrTimeout)
 	})
 	s := pktline.NewScanner(c)
 	scanned := s.Scan()
