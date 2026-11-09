@@ -156,7 +156,9 @@ The repository is created empty, exactly as if a human had run
 is set; only its *existence* is guaranteed on
 boot, not its reachability, which is still governed entirely by the
 `anon-access`/`allow-keyless` settings described below. Booting again against
-the same data directory is a no-op if the repository already exists.
+the same data directory is a no-op if the repository already exists. The
+repository is owned by the admin user with the lowest ID; if there is no admin
+user, it is not created and a warning is logged.
 
 Check out [Systemd][systemd] on how to run Soft Serve Plus as a service using
 Systemd. The `.deb` and `.rpm` packages from the [releases][releases] page come
@@ -240,6 +242,11 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
+  # The number of seconds a client has to complete the key exchange and
+  # authenticate before the connection is closed.
+  # A value of 0 means no timeout.
+  handshake_timeout: 120
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
@@ -268,6 +275,27 @@ ssh:
   kex_algorithms: []
   ciphers: []
   macs: []
+
+  # The signature algorithms the SSH server accepts for client public key
+  # authentication. When empty, the server accepts every algorithm
+  # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
+  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
+  # implement are rejected at startup. A list replaces the default, so to let
+  # an old client that only signs with ssh-rsa authenticate, copy the default
+  # list and append it. Builds with Go 1.27 or later also accept ssh-mldsa-44,
+  # ssh-mldsa-65 and ssh-mldsa-87 by default; add those too to keep them:
+  #   public_key_auth_algorithms:
+  #     - "ssh-ed25519"
+  #     - "sk-ssh-ed25519@openssh.com"
+  #     - "sk-ecdsa-sha2-nistp256@openssh.com"
+  #     - "ecdsa-sha2-nistp256"
+  #     - "ecdsa-sha2-nistp384"
+  #     - "ecdsa-sha2-nistp521"
+  #     - "rsa-sha2-256"
+  #     - "rsa-sha2-512"
+  #     - "ssh-rsa" # legacy, appended
+  public_key_auth_algorithms: []
 
 # The Git daemon configuration.
 git:
@@ -309,6 +337,21 @@ http:
   # This is the address that will be used to clone repositories.
   # Make sure to use https:// if you are using TLS.
   public_url: "http://localhost:23232"
+
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: 0
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: 60
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: 64
 
   # The cross-origin request security options
   cors:
@@ -427,7 +470,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:
@@ -455,6 +499,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
 - `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The number of simultaneous connections to git daemon
+- `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS`: Seconds a git or LFS request over HTTP may take in all (default `0`, no limit) or go without reading the request body or writing the response (default `60`), and how many such requests are served at once (default `64`; more get 503). `0` means no limit
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.
@@ -462,6 +507,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_DEFAULT_PRIVATE`: Make repositories created without an explicit visibility (push-to-create, `repo create` and `repo import` without `--private`, `default_repo`) private. Defaults to `false`. When set, anonymous push-to-create is refused, and anonymous `repo create` and `repo import` need `--private=false`, since an anonymous user could not access the private repository.
 - `SOFT_SERVE_DEFAULT_REPO`: Repository name to create on boot if missing
 - `SOFT_SERVE_SSH_KEX_ALGORITHMS`, `SOFT_SERVE_SSH_CIPHERS`, `SOFT_SERVE_SSH_MACS`: Comma-separated lists of the SSH key exchange algorithms, ciphers and MACs to offer. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
+- `SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS`: Comma-separated list of the signature algorithms accepted for client public key authentication. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
 - `SOFT_SERVE_DB_MAX_OPEN_CONNS`, `SOFT_SERVE_DB_MAX_IDLE_CONNS`: Database connection pool limits. `0` (the default) keeps the database/sql defaults: no limit on open connections and 2 idle connections
 - `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
@@ -491,13 +537,22 @@ considers secure, minus `hmac-sha1`. With the current x/crypto that is:
 - key exchange: `mlkem768x25519-sha256`, `curve25519-sha256` (and its alias `curve25519-sha256@libssh.org`), `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521`, `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group-exchange-sha256`
 - ciphers: `aes128-gcm@openssh.com`, `aes256-gcm@openssh.com`, `chacha20-poly1305@openssh.com`, `aes128-ctr`, `aes192-ctr`, `aes256-ctr`
 - MACs: `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256`, `hmac-sha2-512`
+- public key authentication: `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`, `rsa-sha2-256`, `rsa-sha2-512`
+
+Builds with Go 1.27 or later also accept the ML-DSA keys `ssh-mldsa-44`,
+`ssh-mldsa-65` and `ssh-mldsa-87` for public key authentication.
 
 Earlier versions offered x/crypto's defaults, which also include the SHA-1
-based `diffie-hellman-group14-sha1`, `hmac-sha1` and `hmac-sha1-96`. To
-restrict the server further, for example to drop the NIST curves, set
-`ssh.kex_algorithms`, `ssh.ciphers` or `ssh.macs` (or the environment
-variables above). A list replaces the default rather than adding to it, and
-a name x/crypto does not implement stops the server at startup.
+based `diffie-hellman-group14-sha1`, `hmac-sha1` and `hmac-sha1-96`, and
+accepted SHA-1 `ssh-rsa` and `ssh-dss` signatures for public key
+authentication. RSA keys still work: clients sign with `rsa-sha2-256` or
+`rsa-sha2-512`, as OpenSSH has done since 7.2 (and OpenSSH 8.8 itself
+refuses `ssh-rsa`). DSA keys can no longer authenticate. To restrict the
+server further, for example to drop the NIST curves, set
+`ssh.kex_algorithms`, `ssh.ciphers`, `ssh.macs` or
+`ssh.public_key_auth_algorithms` (or the environment variables above). A
+list replaces the default rather than adding to it, and a name x/crypto does
+not implement stops the server at startup.
 
 **Older clients.** The host key Soft Serve Plus generates by default is
 Ed25519, and the clients we checked that can verify an Ed25519 host key all
@@ -509,12 +564,22 @@ setting: OpenSSH before 6.5, libssh2 1.8 (Ubuntu 18.04 and 20.04, used by
 libgit2 based tools there), and the original JCraft JSch up to 0.1.55. With
 an RSA host key (`ssh.key_path`), libssh2 1.8 and JSch 0.1.55 do connect
 with the defaults, using `diffie-hellman-group-exchange-sha256` (or ECDH for
-JSch), `aes128-ctr` and `hmac-sha2-256`.
+JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
+from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
+and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
+type. Replacing the host key invalidates tokens issued before.
 
-A client limited to SHA-1 key exchange or MACs is refused. To let one in,
-copy the default list above and append the legacy algorithm. Listing only a
-few algorithms would drop the rest, including the post-quantum
-`mlkem768x25519-sha256`, for every client:
+Authenticating with an RSA user key needs a client that signs with
+`rsa-sha2-256` or `rsa-sha2-512`: OpenSSH 7.2 and later, libssh2 1.11 and
+later, and the maintained JSch fork. Older clients, such as libssh2 before
+1.11 and the original JCraft JSch, sign with `ssh-rsa` only, so with an RSA
+key they need `ssh-rsa` appended as below, or a key of another type they
+support.
+
+A client limited to SHA-1 key exchange, MACs or `ssh-rsa` signatures is
+refused. To let one in, copy the default list above and append the legacy
+algorithm. Listing only a few algorithms would drop the rest, including the
+post-quantum `mlkem768x25519-sha256`, for every client:
 
 ```yaml
 ssh:
@@ -534,7 +599,21 @@ ssh:
     - "hmac-sha2-256"
     - "hmac-sha2-512"
     - "hmac-sha1" # legacy, appended
+  public_key_auth_algorithms:
+    - "ssh-ed25519"
+    - "sk-ssh-ed25519@openssh.com"
+    - "sk-ecdsa-sha2-nistp256@openssh.com"
+    - "ecdsa-sha2-nistp256"
+    - "ecdsa-sha2-nistp384"
+    - "ecdsa-sha2-nistp521"
+    - "rsa-sha2-256"
+    - "rsa-sha2-512"
+    - "ssh-rsa" # legacy, appended
 ```
+
+Add the `ssh-mldsa-*` names from the note above to the
+`public_key_auth_algorithms` list if your build accepts them and you want to
+keep them.
 
 #### Database Configuration
 
@@ -594,6 +673,11 @@ Soft Serve Plus supports both Git LFS [HTTP](https://github.com/git-lfs/git-lfs/
 Use the `lfs` config section to customize your Git LFS server.
 
 > **Note**: The pure-SSH transfer is disabled by default.
+
+Without it, Git LFS over an SSH remote asks `git-lfs-authenticate` for an HTTP
+token, which is issued for an account. A key that belongs to no account,
+even one with anonymous read access, is refused with an error that says so;
+use an HTTP(S) remote for LFS instead, or register the key.
 
 #### Maintenance Commands
 
@@ -978,7 +1062,9 @@ You can also *import* repositories from any public remote. Use the `repo import`
 ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLazebnyi/soft-serve-plus
 ```
 
-Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
+Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way.
+
+An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
@@ -1127,6 +1213,12 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+A push event lists at most the 20 newest pushed commits. To keep its payload
+small, a commit message is cut to 4 KiB (ending in `[message truncated by Soft
+Serve]`), a title to 1 KiB and an author or committer name or email to 256
+bytes, and older commits are left out once the listed commits hold about 64 KiB
+of text. The newest commit is always listed.
+
 #### Delivery headers and signatures
 
 Every webhook request carries these headers:
@@ -1223,6 +1315,14 @@ It's also possible to “link” to a specific repo:
 ssh -p 23231 localhost -t soft-serve-plus
 ```
 
+The TUI's About tab shows the `README.md` of the `.soft-serve` repository.
+Only a server admin can create that repository or rename one to it, and the
+About tab shows its README only while a server admin owns it, and only to
+users who can read it: make it private to show it to collaborators only. A
+`.soft-serve` that an anonymous user created (possible before the name was
+reserved, with `anon-access` set to `read-write`) is not shown; delete it and
+create it again as an admin.
+
 You can copy text to your clipboard over SSH. For instance, you can press
 <kbd>c</kbd> on the highlighted repo in the menu to copy the clone command
 [^osc52].
@@ -1248,7 +1348,9 @@ your own per-repository hooks there, for example
 
 Global hooks live in `<data path>/hooks` (`SOFT_SERVE_DATA_PATH`) and run for
 every repository. Defining global hooks is useful if you want to run CI/CD for
-example.
+example. Global hooks run only when they are executable. Windows has no execute
+bit, so there every global hook file is run with `sh`, the one that comes with
+Git for Windows, the way git runs its own hooks.
 
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
