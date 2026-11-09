@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SanitizeRepo returns the canonical repository name; the result is a fixed point.
@@ -130,7 +131,7 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	if !unicode.IsLetter(rune(username[0])) {
+	if first, _ := utf8.DecodeRuneInString(username); !unicode.IsLetter(first) {
 		return fmt.Errorf("username must start with a letter")
 	}
 

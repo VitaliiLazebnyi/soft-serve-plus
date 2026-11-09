@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"net"
 	"slices"
 	"strings"
@@ -51,6 +52,14 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 	if !slices.Contains(sc.KeyExchanges, gossh.KeyExchangeCurve25519) {
 		t.Errorf("default key exchanges %v lack %s", sc.KeyExchanges, gossh.KeyExchangeCurve25519)
 	}
+	if len(sc.PublicKeyAuthAlgorithms) == 0 {
+		t.Fatal("serverConfig leaves public key auth algorithms to x/crypto defaults")
+	}
+	for _, a := range []string{gossh.KeyAlgoRSA, gossh.InsecureKeyAlgoDSA} {
+		if slices.Contains(sc.PublicKeyAuthAlgorithms, a) {
+			t.Errorf("serverConfig accepts %q signatures by default", a)
+		}
+	}
 }
 
 func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
@@ -59,6 +68,7 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	cfg.SSH.KexAlgorithms = []string{gossh.KeyExchangeCurve25519, gossh.InsecureKeyExchangeDH14SHA1}
 	cfg.SSH.Ciphers = []string{gossh.CipherAES256CTR}
 	cfg.SSH.MACs = []string{gossh.HMACSHA512, gossh.HMACSHA1}
+	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoED25519, gossh.KeyAlgoRSA}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +82,9 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	if !slices.Equal(sc.MACs, cfg.SSH.MACs) {
 		t.Errorf("macs = %v, want %v", sc.MACs, cfg.SSH.MACs)
 	}
+	if !slices.Equal(sc.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms) {
+		t.Errorf("public key auth algorithms = %v, want %v", sc.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms)
+	}
 }
 
 // startTestServer starts a full SSH server built by NewSSHServer with cfg
@@ -79,7 +92,15 @@ func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 // backend.
 func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context) {
 	t.Helper()
-	addr, ctx, _ := startServer(t, cfg)
+	return startSSHServer(t, cfg, log.Default())
+}
+
+// startSSHServer starts a full SSH server built by NewSSHServer with cfg and
+// logger and returns its address and the context it runs with, which holds its
+// backend.
+func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context) {
+	t.Helper()
+	addr, ctx, _ := startServerWithLogger(t, cfg, logger)
 	return addr, ctx
 }
 
@@ -87,11 +108,18 @@ func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context)
 // address, the context it runs with and the server.
 func startServer(t *testing.T, cfg *config.Config) (string, context.Context, *SSHServer) {
 	t.Helper()
+	return startServerWithLogger(t, cfg, log.Default())
+}
+
+// startServerWithLogger starts an SSH server with cfg and logger on a local
+// port and returns its address, the context it runs with and the server.
+func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context, *SSHServer) {
+	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.Default())
+	ctx = log.WithContext(ctx, logger)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
 	if err != nil {
 		t.Fatal(err)
@@ -200,4 +228,88 @@ func TestSSHServerHonoursConfiguredAlgorithms(t *testing.T) {
 		"client limited to aes256-gcm")
 	wantNoCommonAlgorithm(t, dialWith(t, addr, nil, nil, []string{gossh.HMACSHA256}),
 		"client limited to hmac-sha2-256")
+}
+
+// dialWithSigner connects to addr authenticating with signer and returns
+// the handshake error.
+func dialWithSigner(addr string, signer gossh.Signer) error {
+	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		User:            "test",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		Timeout:         10 * time.Second,
+	})
+	if err == nil {
+		_ = c.Close()
+	}
+	return err
+}
+
+// rsaSigners returns signers for one RSA key, each limited to one of algos.
+func rsaSigners(t *testing.T, algos ...string) map[string]gossh.Signer {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	as, ok := signer.(gossh.AlgorithmSigner)
+	if !ok {
+		t.Fatal("RSA signer is not an AlgorithmSigner")
+	}
+	signers := make(map[string]gossh.Signer, len(algos))
+	for _, a := range algos {
+		s, err := gossh.NewSignerWithAlgorithms(as, []string{a})
+		if err != nil {
+			t.Fatal(err)
+		}
+		signers[a] = s
+	}
+	return signers
+}
+
+// wantAuthFailure checks that public key authentication was refused. The
+// x/crypto client reads the server-sig-algs list the server advertises and
+// gives up before signing when its algorithm is not on it; a client that
+// ignores the list is turned away by the server instead.
+func wantAuthFailure(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s: client authenticated, want it refused", what)
+		return
+	}
+	if !strings.Contains(err.Error(), "no common public key signature algorithm") &&
+		!strings.Contains(err.Error(), "unable to authenticate") {
+		t.Errorf("%s: err = %v, want an authentication failure", what, err)
+	}
+}
+
+func TestSSHServerRefusesSHA1SignaturesByDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	addr, _ := startTestServer(t, cfg)
+
+	signers := rsaSigners(t, gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSASHA512, gossh.KeyAlgoRSA)
+	for _, a := range []string{gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSASHA512} {
+		if err := dialWithSigner(addr, signers[a]); err != nil {
+			t.Errorf("RSA key signing with %s: %v", a, err)
+		}
+	}
+	wantAuthFailure(t, dialWithSigner(addr, signers[gossh.KeyAlgoRSA]), "RSA key signing with ssh-rsa")
+}
+
+func TestSSHServerHonoursConfiguredPublicKeyAuthAlgorithms(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoRSA}
+	addr, _ := startTestServer(t, cfg)
+
+	signers := rsaSigners(t, gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSA)
+	if err := dialWithSigner(addr, signers[gossh.KeyAlgoRSA]); err != nil {
+		t.Errorf("RSA key signing with ssh-rsa, which is configured: %v", err)
+	}
+	wantAuthFailure(t, dialWithSigner(addr, signers[gossh.KeyAlgoRSASHA256]), "RSA key signing with rsa-sha2-256")
 }
