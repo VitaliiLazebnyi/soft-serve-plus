@@ -159,9 +159,8 @@ func TestLFSTransferUploadDuplicate(t *testing.T) {
 	assertNoLFSTempFiles(t, tr.cfg)
 }
 
-// A foreign key violation is not a duplicate upload. db.WrapError maps both
-// to ErrDuplicateKey, so Upload must confirm the row exists before it
-// reports success.
+// A foreign key violation is not a duplicate upload, which Upload reports as
+// success.
 func TestLFSTransferUploadRepoDeleted(t *testing.T) {
 	tr, _ := newLFSUploadTransfer(t)
 	if err := tr.store.DeleteRepoByName(tr.ctx, tr.dbx, "repo1"); err != nil {

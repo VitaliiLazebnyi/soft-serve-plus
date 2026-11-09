@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"sync"
 
 	"charm.land/log/v2"
 	"golang.org/x/crypto/bcrypt"
@@ -21,8 +22,26 @@ func HashPassword(password string) (string, error) {
 	return string(crypt), nil
 }
 
-// VerifyPassword verifies the password against the hash.
+// dummyHash is a password hash no password matches. VerifyPassword compares
+// against it when there is no hash, so a missing user or a user without a
+// password costs the same bcrypt work as a wrong password.
+var dummyHash = sync.OnceValue(func() []byte {
+	hash, err := HashPassword(GenerateToken())
+	if err != nil {
+		// Unreachable: bcrypt fails only on passwords over 72 bytes.
+		panic(err)
+	}
+	return []byte(hash)
+})
+
+// VerifyPassword verifies the password against the hash. An empty hash, for
+// a missing user or one without a password, never verifies but takes as long
+// as a real comparison, so the response time does not tell the two apart.
 func VerifyPassword(password, hash string) bool {
+	if hash == "" {
+		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password+saltySalt))
+		return false
+	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password+saltySalt))
 	return err == nil
 }
