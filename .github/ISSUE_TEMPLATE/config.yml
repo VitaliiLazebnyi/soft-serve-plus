@@ -1,0 +1,7 @@
+# Security issues must not be filed as public issues. This adds a link to
+# private vulnerability reporting next to the bug and feature templates.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/VitaliiLazebnyi/soft-serve-plus/security/advisories/new
+    about: Please report security issues privately, not as a public issue. See SECURITY.md.

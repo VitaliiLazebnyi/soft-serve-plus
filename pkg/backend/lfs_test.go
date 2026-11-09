@@ -232,8 +232,8 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 
 // TestStoreRepoMissingLFSObjectsRepoDeleted verifies that a sync fails, rather
 // than keep storing objects, once the repository's database row is gone.
-// Recording an object then violates the foreign key, which db.WrapError
-// reports as a duplicate key.
+// Recording an object then violates the foreign key, which must not be taken
+// for an object recorded already.
 func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 	for _, onDisk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("on disk %v", onDisk), func(t *testing.T) {
