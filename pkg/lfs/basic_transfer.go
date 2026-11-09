@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,14 +100,15 @@ func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return res, &statusError{code: res.StatusCode, err: handleErrorResponse(res)}
+		return res, &statusError{code: res.StatusCode, err: handleErrorResponse(logger, res)}
 	}
 
 	return res, nil
 }
 
 // statusError is the error of a transfer request the server answered with a
-// status other than 200 OK. It reads as err, the error the server sent.
+// status other than 200 OK. It reads as err, the error handleErrorResponse
+// built from the response.
 type statusError struct {
 	code int
 	err  error
@@ -117,21 +117,18 @@ type statusError struct {
 func (e *statusError) Error() string { return e.err.Error() }
 func (e *statusError) Unwrap() error { return e.err }
 
-func handleErrorResponse(resp *http.Response) error {
+// handleErrorResponse closes resp's body and returns an error carrying its
+// status and, when the body is an LFS error object with a message, that
+// message.
+func handleErrorResponse(logger *log.Logger, resp *http.Response) error {
 	defer resp.Body.Close() //nolint: errcheck
 
-	er, err := decodeResponseError(resp.Body)
-	if err != nil {
+	var er ErrorResponse
+	if err := decodeJSONLimit(resp.Body, maxErrorResponseSize, &er); err != nil {
+		logger.Debug("error decoding error response", "status", resp.Status, "err", err)
+	}
+	if er.Message == "" {
 		return fmt.Errorf("request failed with status %s", resp.Status)
 	}
-	return errors.New(er.Message)
-}
-
-func decodeResponseError(r io.Reader) (ErrorResponse, error) {
-	var er ErrorResponse
-	err := decodeJSONLimit(r, maxErrorResponseSize, &er)
-	if err != nil {
-		log.Error("Error decoding json: %v", err)
-	}
-	return er, err
+	return fmt.Errorf("request failed with status %s: %s", resp.Status, er.Message)
 }
