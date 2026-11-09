@@ -2,11 +2,9 @@ package cmd
 
 import (
 	"context"
-	"errors"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
@@ -69,13 +67,9 @@ func checkCollabDemote(ctx context.Context, repo string, username string) error 
 	be := backend.FromContext(ctx)
 	current, isCollab, err := be.IsCollaborator(ctx, repo, username)
 	if err != nil {
-		// A missing row just means the user is not a collaborator yet, which
-		// is the common case when adding one. Any other error is real and
-		// must fail closed.
-		if !errors.Is(err, db.ErrRecordNotFound) {
-			return err
-		}
-		return nil
+		// IsCollaborator reports "not a collaborator" as isCollab false, so
+		// an error here is real and must fail closed.
+		return err
 	}
 
 	if !isCollab {

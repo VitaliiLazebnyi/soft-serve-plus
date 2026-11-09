@@ -170,6 +170,10 @@ func GitLFSTransfer() *cobra.Command {
 	return cmd
 }
 
+// errLFSAuthNoAccount is returned by git-lfs-authenticate to a caller whose
+// key belongs to no account: the token it issues is for an account.
+var errLFSAuthNoAccount = errors.New("git-lfs-authenticate needs an account: register this SSH key or use an HTTP(S) remote for LFS")
+
 // gitDenyRead is denyReadAs for git services: ErrNotAuthed when anonymous,
 // ErrInvalidRepo otherwise.
 func gitDenyRead(anonymous bool) error {
@@ -215,7 +219,8 @@ func gitServiceError(logger *log.Logger, service git.Service, repo string, err e
 // must not be the cancelled one.
 func deleteFailedPushRepo(ctx context.Context, be *backend.Backend, logger *log.Logger, name, dir string) {
 	removeFailedPushRepo(ctx, logger, name, dir, failedPushRepoOps{
-		del: be.DeleteRepository,
+		del:       be.DeleteRepository,
+		removeDir: be.RemoveRepositoryDir,
 		rowExists: func(ctx context.Context, name string) (bool, error) {
 			_, err := be.Repository(ctx, name)
 			if errors.Is(err, proto.ErrRepoNotFound) {
@@ -232,6 +237,9 @@ type failedPushRepoOps struct {
 	del func(ctx context.Context, name string) error
 	// rowExists reports whether a repository with the name is listed.
 	rowExists func(ctx context.Context, name string) (bool, error)
+	// removeDir removes the leftover directory of a deleted repository and
+	// the group directories it leaves empty.
+	removeDir func(dir string) error
 }
 
 // failedPushRetry is how removeFailedPushRepo retries: a first wait of 100ms,
@@ -314,7 +322,7 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
 				return
 			default:
-				err = os.RemoveAll(dir)
+				err = ops.removeDir(dir)
 			}
 		}
 
@@ -534,9 +542,8 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			// HTTP LFS endpoint checks that token against the account's own
 			// access; it knows nothing about admin keys. Authorize with the
 			// account's access here too, so a listed admin key with no
-			// account is refused with a plain "not authorized" instead of
-			// reaching the handler, which has no account to issue a token
-			// for. git-lfs-transfer stays on SSH and keeps the admin key's
+			// account gets the answer any caller without an account gets.
+			// git-lfs-transfer stays on SSH and keeps the admin key's
 			// access.
 			repo, accessLevel = be.Readable(ctx, name, user)
 			anonymous = user == nil
@@ -547,6 +554,16 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 		if err := gitAccess(anonymous, repo, accessLevel, need); err != nil {
 			return err
+		}
+
+		// A caller without an account that may read the repository, such
+		// as an unregistered key on a public repository with anonymous
+		// access, has no account to issue a token for. Say so instead of
+		// failing in the handler. The repository is readable to it, so
+		// this reveals nothing about it.
+		if service == git.LFSAuthenticateService && user == nil {
+			logger.Debug("refusing git-lfs-authenticate without an account", "repo", name, "operation", operation)
+			return errLFSAuthNoAccount
 		}
 
 		// An upload writes to the repository like a push, so it holds off
@@ -578,8 +595,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		}
 
 		if err := service.Handler(ctx, scmd); err != nil {
-			logger.Error("failed to handle lfs service", "service", service, "err", err, "repo", name)
-			return git.ErrSystemMalfunction
+			return gitServiceError(logger, service, name, err)
 		}
 
 		return nil

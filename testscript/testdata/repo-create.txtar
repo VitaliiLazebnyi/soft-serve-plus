@@ -26,7 +26,7 @@ stdout true
 
 # a visibility that is not a boolean is refused and changes nothing
 ! soft repo private repo1 maybe
-stderr 'invalid syntax'
+stderr 'invalid boolean value "maybe"'
 soft repo private repo1
 stdout true
 soft repo description repo1

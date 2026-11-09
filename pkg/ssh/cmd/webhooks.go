@@ -104,24 +104,14 @@ func webhookCreateCommand() *cobra.Command {
 				return err
 			}
 
-			var evs []webhook.Event
-			for _, e := range events {
-				ev, err := webhook.ParseEvent(e)
-				if err != nil {
-					return fmt.Errorf("invalid event: %w", err)
-				}
-
-				evs = append(evs, ev)
+			evs, err := parseWebhookEvents(events)
+			if err != nil {
+				return err
 			}
 
-			var ct webhook.ContentType
-			switch strings.ToLower(strings.TrimSpace(contentType)) {
-			case "json":
-				ct = webhook.ContentTypeJSON
-			case "form":
-				ct = webhook.ContentTypeForm
-			default:
-				return webhook.ErrInvalidContentType
+			ct, err := parseWebhookContentType(contentType)
+			if err != nil {
+				return err
 			}
 
 			url := utils.Sanitize(args[1])
@@ -135,6 +125,34 @@ func webhookCreateCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&contentType, "content-type", "c", "json", "content type of the webhook payload, can be either `json` or `form`")
 
 	return cmd
+}
+
+// parseWebhookEvents parses the --events flag values of create and update.
+func parseWebhookEvents(events []string) ([]webhook.Event, error) {
+	evs := make([]webhook.Event, 0, len(events))
+	for _, e := range events {
+		ev, err := webhook.ParseEvent(e)
+		if err != nil {
+			return nil, fmt.Errorf("invalid event: %w", err)
+		}
+
+		evs = append(evs, ev)
+	}
+
+	return evs, nil
+}
+
+// parseWebhookContentType parses the --content-type flag value of create and
+// update: "json" or "form", ignoring case and surrounding spaces.
+func parseWebhookContentType(s string) (webhook.ContentType, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "json":
+		return webhook.ContentTypeJSON, nil
+	case "form":
+		return webhook.ContentTypeForm, nil
+	default:
+		return -1, webhook.ErrInvalidContentType
+	}
 }
 
 func webhookDeleteCommand() *cobra.Command {
@@ -192,19 +210,24 @@ func webhookUpdateCommand() *cobra.Command {
 				return err
 			}
 
+			// A flag given on the command line replaces the stored value, even
+			// when it is empty: --secret= removes the secret and --events=
+			// unsubscribes from every event. Flags left out keep their value.
+			flags := cmd.Flags()
+
 			newURL := wh.URL
-			if url != "" {
+			if flags.Changed("url") {
 				// Normalise the same way create does.
 				newURL = strings.TrimSpace(utils.Sanitize(url))
 			}
 
 			newSecret := wh.Secret
-			if secret != "" {
+			if flags.Changed("secret") {
 				newSecret = secret
 			}
 
 			newActive := wh.Active
-			if active != "" {
+			if flags.Changed("active") {
 				active, err := strconv.ParseBool(active)
 				if err != nil {
 					return fmt.Errorf("invalid active value: %w", err)
@@ -214,40 +237,27 @@ func webhookUpdateCommand() *cobra.Command {
 			}
 
 			newContentType := wh.ContentType
-			if contentType != "" {
-				var ct webhook.ContentType
-				switch strings.ToLower(strings.TrimSpace(contentType)) {
-				case "json":
-					ct = webhook.ContentTypeJSON
-				case "form":
-					ct = webhook.ContentTypeForm
-				default:
-					return webhook.ErrInvalidContentType
+			if flags.Changed("content-type") {
+				newContentType, err = parseWebhookContentType(contentType)
+				if err != nil {
+					return err
 				}
-				newContentType = ct
 			}
 
 			newEvents := wh.Events
-			if len(events) > 0 {
-				var evs []webhook.Event
-				for _, e := range events {
-					ev, err := webhook.ParseEvent(e)
-					if err != nil {
-						return fmt.Errorf("invalid event: %w", err)
-					}
-
-					evs = append(evs, ev)
+			if flags.Changed("events") {
+				newEvents, err = parseWebhookEvents(events)
+				if err != nil {
+					return err
 				}
-
-				newEvents = evs
 			}
 
 			return be.UpdateWebhook(ctx, repo, id, newURL, newContentType, newSecret, newEvents, newActive)
 		},
 	}
 
-	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, available events are (%s)", strings.Join(webhookEvents, ", ")))
-	cmd.Flags().StringVarP(&secret, "secret", "s", "", "secret to sign the webhook payload")
+	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, replacing the current ones; available events are (%s); pass --events= to remove them all", strings.Join(webhookEvents, ", ")))
+	cmd.Flags().StringVarP(&secret, "secret", "s", "", "secret to sign the webhook payload; pass --secret= to remove it")
 	cmd.Flags().StringVarP(&active, "active", "a", "", "whether the webhook is active")
 	cmd.Flags().StringVarP(&contentType, "content-type", "c", "", "content type of the webhook payload, can be either `json` or `form`")
 	cmd.Flags().StringVarP(&url, "url", "u", "", "webhook URL")

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"charm.land/log/v2"
+
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
@@ -20,7 +22,7 @@ func TestNewSSHServerReportsClientKeyStatError(t *testing.T) {
 	}
 	cfg.SSH.ClientKeyPath = filepath.Join(file, "client_ed25519")
 
-	if _, err := NewSSHServer(serverContext(t, cfg)); err == nil {
+	if _, err := NewSSHServer(serverContext(t, cfg, log.Default())); err == nil {
 		t.Fatal("NewSSHServer succeeded, want a client key error")
 	}
 }
