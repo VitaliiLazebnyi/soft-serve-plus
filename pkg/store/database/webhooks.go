@@ -11,9 +11,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
-	sqlite "modernc.org/sqlite"
-	sqlitelib "modernc.org/sqlite/lib"
 )
 
 type webhookStore struct{}
@@ -85,15 +82,7 @@ func (*webhookStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id
 // isForeignKeyViolation reports whether err is a foreign key violation from
 // SQLite or Postgres.
 func isForeignKeyViolation(err error) bool {
-	var liteErr *sqlite.Error
-	if errors.As(err, &liteErr) {
-		return liteErr.Code() == sqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY
-	}
-	var pgErr *pq.Error
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23503" // foreign_key_violation
-	}
-	return false
+	return errors.Is(db.WrapError(err), db.ErrForeignKey)
 }
 
 // CreateWebhookEvents implements store.WebhookStore.

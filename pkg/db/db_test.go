@@ -230,3 +230,60 @@ type failingRollbackTx struct{}
 
 func (failingRollbackTx) Commit() error   { return nil }
 func (failingRollbackTx) Rollback() error { return errRollback }
+
+// TestSqliteReadTransactionDoesNotWaitForWriter checks that a read-only
+// transaction does not take the write lock: it reads while another
+// connection holds a write transaction open.
+func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+
+	written := make(chan struct{})
+	release := make(chan struct{})
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (2)"); err != nil {
+				return err
+			}
+			close(written)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-written:
+	case err := <-writerErr:
+		t.Fatalf("writer: %v", err)
+	}
+
+	// Well under busy_timeout, so a read that waits for the writer fails
+	// instead of slowing the test down.
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var n int
+	readErr := d.ReadTransactionContext(rctx, func(tx *Tx) error {
+		return tx.GetContext(rctx, &n, "SELECT COUNT(*) FROM t")
+	})
+	close(release)
+	if err := <-writerErr; err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read transaction: %v", readErr)
+	}
+	if n != 1 {
+		t.Errorf("read transaction saw %d rows, want 1", n)
+	}
+}
