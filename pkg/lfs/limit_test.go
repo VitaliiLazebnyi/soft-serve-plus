@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+
+	"charm.land/log/v2"
 )
 
 func TestDecodeJSONLimit(t *testing.T) {
@@ -39,11 +41,21 @@ func TestDecodeJSONLimit(t *testing.T) {
 	}
 }
 
-func TestDecodeResponseErrorLimit(t *testing.T) {
+func TestHandleErrorResponseLimit(t *testing.T) {
 	t.Parallel()
 	body := `{"message":"` + strings.Repeat("x", maxErrorResponseSize) + `"}`
-	if _, err := decodeResponseError(strings.NewReader(body)); !errors.Is(err, errResponseTooLarge) {
-		t.Fatalf("err = %v, want %v", err, errResponseTooLarge)
+	ctx, logs := debugContext(t)
+	res := &http.Response{
+		Status:     "500 Internal Server Error",
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	err := handleErrorResponse(log.FromContext(ctx), res)
+	if want := "request failed with status 500 Internal Server Error"; err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if !strings.Contains(logs.String(), errResponseTooLarge.Error()) {
+		t.Fatalf("logs %q do not contain %q", logs, errResponseTooLarge)
 	}
 }
 
