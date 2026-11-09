@@ -39,6 +39,9 @@ type GitRoute struct {
 	// pending tracks repositories created by push-to-create; see
 	// pushCreates. GitController sets it.
 	pending *pushCreates
+	// limits bounds the requests the git routes serve; see requestLimits.
+	// GitController sets it.
+	limits *requestLimits
 }
 
 var _ http.Handler = GitRoute{}
@@ -53,7 +56,7 @@ func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	withAccess(g.pending, g.handler)(w, r)
+	g.limits.serve(w, r, withAccess(g.pending, g.handler))
 }
 
 // allowed returns the methods the route answers: a route that answers GET
@@ -110,11 +113,13 @@ func withParams(next http.Handler) http.Handler {
 }
 
 // GitController is a router for git services.
-func GitController(_ context.Context, r *mux.Router) {
+func GitController(ctx context.Context, r *mux.Router) {
 	basePrefix := "/{repo:.*}"
 	pending := newPushCreates()
+	limits := newRequestLimits(config.FromContext(ctx).HTTP)
 	for _, route := range gitRoutes {
 		route.pending = pending
+		route.limits = limits
 		// NOTE: withParams must always be the outermost wrapper, otherwise the
 		// request vars will not be set.
 		r.Handle(basePrefix+route.path, withParams(route))
@@ -288,7 +293,8 @@ func denyRead(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) {
 func lfsNeedsWrite(file, method string) bool {
 	switch {
 	case strings.HasPrefix(file, "info/lfs/locks"):
-		return strings.HasSuffix(file, "lfs/locks") ||
+		// GET lists locks, which only needs read access.
+		return strings.HasSuffix(file, "lfs/locks") && method == http.MethodPost ||
 			strings.HasSuffix(file, "lfs/locks/verify") ||
 			strings.HasSuffix(file, "/unlock") && method == http.MethodPost
 	case strings.HasPrefix(file, "info/lfs/objects/basic"):
@@ -468,7 +474,16 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			if cerr == nil {
 				repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 			}
-			if errors.Is(cerr, proto.ErrRepoLimitReached) {
+			if errors.Is(cerr, proto.ErrUnauthorized) && user == nil {
+				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+				// As above: git sends credentials only after a 401, so ask
+				// for them. A signed-in admin then creates the repository; an
+				// anonymous client sees this body.
+				askCredentials(w, r)
+				http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
+				return
+			}
+			if errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized) {
 				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
 				// git shows a text/plain error body to the user.
 				http.Error(w, cerr.Error(), http.StatusForbidden)
@@ -530,6 +545,23 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		gitHttpReceiveCounter.WithLabelValues(repoName)
 	}
 
+	// Open a gzip body before writing any header, so a body that is not
+	// gzip gets a client error rather than a 200 followed by an error page.
+	var reader io.Reader = r.Body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			logger.Debugf("bad gzip request body: %v", err)
+			if service == git.ReceivePackService {
+				markPushFailed(ctx)
+			}
+			renderStatus(http.StatusBadRequest)(w, r)
+			return
+		}
+		defer gz.Close() //nolint: errcheck
+		reader = gz
+	}
+
 	hdrNocache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Connection", "Keep-Alive")
@@ -564,24 +596,6 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		cmd.Env = append(cmd.Env, []string{
 			fmt.Sprintf("GIT_PROTOCOL=%s", version),
 		}...)
-	}
-
-	var (
-		err    error
-		reader io.ReadCloser
-	)
-
-	// Handle gzip encoding
-	reader = r.Body
-	switch r.Header.Get("Content-Encoding") {
-	case "gzip":
-		reader, err = gzip.NewReader(reader)
-		if err != nil {
-			logger.Errorf("failed to create gzip reader: %v", err)
-			renderInternalServerError(w, r)
-			return
-		}
-		defer reader.Close() //nolint: errcheck
 	}
 
 	cmd.Stdin = reader
