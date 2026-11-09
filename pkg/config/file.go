@@ -335,6 +335,14 @@ webhook:
 # count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
+# Largest file, in bytes, that the TUI and "repo blob" read into memory to
+# display. Larger files are refused ("repo blob --raw" streams them instead),
+# and a larger README is not shown. The TUI highlights and wraps a file
+# while handling input, so this limit is also what keeps one file view from
+# stalling a session: raising it, or 0 for no limit, makes large files slow
+# to open and costly in memory. Defaults to 1048576 (1 MiB).
+#max_blob_size: 1048576
+
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without
 # --private, and default_repo. "repo create --private=false" still creates a
