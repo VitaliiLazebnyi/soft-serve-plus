@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -137,15 +138,21 @@ func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.
 			return pointers, db.WrapError(err)
 		}
 
-		pointers[i].Present, err = t.storage.Exists(path.Join("objects", pointers[i].RelativePath()))
-		if err != nil {
+		fi, err := t.storage.Stat(path.Join("objects", pointers[i].RelativePath()))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return pointers, err
 		}
 
-		if pointers[i].Present && obj.ID == 0 {
-			if err := t.store.CreateLFSObject(t.ctx, t.dbx, t.repo.ID(), pointers[i].Oid, pointers[i].Size); err != nil {
-				return pointers, store.RepoGoneError(t.ctx, t.store, t.dbx, t.repo.ID(), db.WrapError(err))
-			}
+		// The client's size is checked, never recorded: a batch only reads.
+		// A file without a record (an upload that has not recorded it yet)
+		// counts at the size it has on disk when downloading. An upload
+		// session reports it missing, so the client sends it and the upload
+		// records it.
+		onDisk := err == nil && fi.Mode().IsRegular() && fi.Size() == pointers[i].Size
+		if obj.ID != 0 {
+			pointers[i].Present = onDisk && obj.Size == pointers[i].Size
+		} else {
+			pointers[i].Present = onDisk && t.op == lfs.OperationDownload
 		}
 	}
 
@@ -340,7 +347,7 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 		return err
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if err := store.RepoGoneError(l.ctx, l.store, l.dbx, l.repo.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return nil, err
 		}
@@ -368,7 +375,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 		return nil, err
 	}
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), iid)
 		if err != nil {
@@ -397,7 +404,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 	var lock LFSLock
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockForPath(l.ctx, tx, l.repo.ID(), path)
 		if err != nil {
@@ -434,7 +441,7 @@ func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) 
 	}
 	limit = lfs.ClampLocksLimit(limit)
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		l.logger.Debug("getting locks", "limit", limit, "page", page)
 		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), page, limit)
 		if err != nil {
