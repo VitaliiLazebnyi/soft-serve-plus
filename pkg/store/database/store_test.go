@@ -313,16 +313,17 @@ func TestAccessTokenStore(t *testing.T) {
 	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-expiring"); err != nil || got.ID != expiring.ID {
 		t.Errorf("GetAccessTokenByToken() = %+v, %v, want token %d", got, err, expiring.ID)
 	}
-	if u, err := s.FindUserByAccessToken(ctx, dbx, "hash-forever"); err != nil || u.ID != owner {
-		t.Errorf("FindUserByAccessToken() = %+v, %v, want user %d", u, err, owner)
+	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-forever"); err != nil || got.UserID != owner {
+		t.Errorf("GetAccessTokenByToken() = %+v, %v, want user %d", got, err, owner)
 	}
 	if ts, err := s.GetAccessTokensByUserID(ctx, dbx, owner); err != nil || len(ts) != 2 {
 		t.Errorf("GetAccessTokensByUserID() = %d, %v, want 2", len(ts), err)
 	}
 
-	// A user cannot delete someone else's token.
-	if err := s.DeleteAccessTokenForUser(ctx, dbx, other.ID, forever.ID); err != nil {
-		t.Fatal(err)
+	// A user cannot delete someone else's token, and is told it was not
+	// found, exactly like a missing one.
+	if err := s.DeleteAccessTokenForUser(ctx, dbx, other.ID, forever.ID); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		t.Errorf("DeleteAccessTokenForUser(other user) error = %v, want ErrRecordNotFound", err)
 	}
 	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); err != nil {
 		t.Errorf("token deleted by another user: GetAccessToken() error = %v", err)
@@ -332,6 +333,9 @@ func TestAccessTokenStore(t *testing.T) {
 	}
 	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
 		t.Errorf("GetAccessToken() after its owner deleted it: error = %v, want ErrRecordNotFound", err)
+	}
+	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, forever.ID); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		t.Errorf("DeleteAccessTokenForUser(already deleted) error = %v, want ErrRecordNotFound", err)
 	}
 	if err := s.DeleteAccessToken(ctx, dbx, expiring.ID); err != nil {
 		t.Fatal(err)

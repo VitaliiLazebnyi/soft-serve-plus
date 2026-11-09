@@ -78,7 +78,7 @@ func (i Item) ID() string {
 
 // Title returns the item title. Implements list.DefaultItem.
 func (i Item) Title() string {
-	name := utils.Sanitize(i.repo.ProjectName())
+	name := singleLine(utils.Sanitize(i.repo.ProjectName()))
 	if name == "" {
 		name = i.repo.Name()
 	}
@@ -87,9 +87,11 @@ func (i Item) Title() string {
 }
 
 // Description returns the item description. Implements list.DefaultItem.
-func (i Item) Description() string {
-	return strings.TrimSpace(utils.Sanitize(i.repo.Description()))
-}
+func (i Item) Description() string { return singleLine(utils.Sanitize(i.repo.Description())) }
+
+// singleLine collapses every run of whitespace, line breaks included, into a
+// single space so that a value fits on the one line the list gives it.
+func singleLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // FilterValue implements list.Item.
 func (i Item) FilterValue() string { return i.Title() }
