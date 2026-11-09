@@ -1,0 +1,83 @@
+# vi: set ft=conf
+
+# The About tab shows the README of the .soft-serve repository to every TUI
+# user, so it is shown only to viewers who can read that repository and only
+# while a server admin owns it, and only an admin can claim the name.
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+# an empty .soft-serve is still listed for those who can read it
+soft repo create .soft-serve -n 'Config'
+ui '"    q"'
+cp stdout empty.txt
+grep 'Config' empty.txt
+soft repo delete .soft-serve
+
+# a private, hidden .soft-serve with a README
+soft repo create .soft-serve -p -H
+git clone ssh://localhost:$SSH_PORT/.soft-serve config
+mkfile ./config/README.md '# Admin Banner'
+git -C config add -A
+git -C config commit -m 'first'
+git -C config push origin HEAD
+
+# the admin sees it
+ui '"\t    q"'
+cp stdout admin-about.txt
+grep 'Admin Banner' admin-about.txt
+
+# an anonymous user, who cannot read it, does not
+uui '"\t    q"'
+cp stdout anon-about.txt
+! grep 'Admin Banner' anon-about.txt
+grep 'An admin can create a `.soft-serve` repository' anon-about.txt
+
+# nor does a registered user without access
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+uui '"\t    q"'
+cp stdout user-about.txt
+! grep 'Admin Banner' user-about.txt
+
+# once it is public, they do
+soft repo private .soft-serve false
+uui '"\t    q"'
+cp stdout user-about2.txt
+grep 'Admin Banner' user-about2.txt
+soft repo delete .soft-serve
+
+# a non-admin cannot claim the name
+! usoft repo create .soft-serve -p -H
+stderr 'only an admin can create the .soft-serve repository'
+usoft repo create mine
+! usoft repo rename mine .soft-serve
+stderr 'only an admin can create the .soft-serve repository'
+! usoft repo import .soft-serve https://example.invalid/x.git
+stderr 'only an admin can create the .soft-serve repository'
+mkdir push
+ugit -C push init
+mkfile ./push/README.md '# User Banner'
+ugit -C push add -A
+ugit -C push commit -m 'first'
+! ugit -C push push ssh://localhost:$SSH_PORT/.soft-serve HEAD:refs/heads/main
+stderr 'only an admin can create the .soft-serve repository'
+soft repo list
+! stdout '.soft-serve'
+
+# a .soft-serve whose owner is no longer an admin is not shown
+soft user set-admin user1 true
+usoft repo create .soft-serve
+ugit -C push push ssh://localhost:$SSH_PORT/.soft-serve HEAD:refs/heads/main
+ui '"\t    q"'
+cp stdout owner-admin.txt
+grep 'User Banner' owner-admin.txt
+soft user set-admin user1 false
+ui '"\t    q"'
+cp stdout owner-demoted.txt
+! grep 'User Banner' owner-demoted.txt
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .

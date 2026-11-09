@@ -69,6 +69,10 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
+	// HandshakeTimeout is the number of seconds a client has to complete the
+	// key exchange and authenticate before the connection is closed.
+	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
+
 	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
 	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
 	KexAlgorithms []string `env:"KEX_ALGORITHMS" yaml:"kex_algorithms"`
@@ -80,6 +84,11 @@ type SSHConfig struct {
 	// MACs lists the message authentication codes the SSH server offers, in
 	// order of preference. When empty, DefaultSSHMACs is used.
 	MACs []string `env:"MACS" yaml:"macs"`
+
+	// PublicKeyAuthAlgorithms lists the signature algorithms the SSH server
+	// accepts for client public key authentication. When empty,
+	// DefaultSSHPublicKeyAuthAlgorithms is used.
+	PublicKeyAuthAlgorithms []string `env:"PUBLIC_KEY_AUTH_ALGORITHMS" yaml:"public_key_auth_algorithms"`
 
 	// allowedHosts is ClientAllowedHosts parsed by Validate.
 	allowedHosts ssrf.AllowedHosts
@@ -137,6 +146,19 @@ type HTTPConfig struct {
 
 	// PublicURL is the public URL of the HTTP server.
 	PublicURL string `env:"PUBLIC_URL" yaml:"public_url"`
+
+	// MaxTimeout is the maximum number of seconds a git or LFS request can
+	// take. 0 means no limit.
+	MaxTimeout int `env:"MAX_TIMEOUT" yaml:"max_timeout"`
+
+	// IdleTimeout is the number of seconds a git or LFS request can go
+	// without reading from or writing to the client before it is closed.
+	// 0 means no limit.
+	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
+
+	// MaxConnections is the maximum number of git and LFS requests served at
+	// once. 0 means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
 
 	// CORS is the cross-origin configuration for the HTTP server.
 	CORS CORSConfig `envPrefix:"CORS_" yaml:"cors"`
@@ -303,8 +325,8 @@ type Config struct {
 	// push-to-create. Server admins (admin accounts or initial_admin_keys)
 	// are exempt. Repositories created without an account all count
 	// together as one user. A user at the limit is refused; the
-	// repositories they already have are kept. 0 (the default) means no
-	// limit.
+	// repositories they already have are kept. Imports still running count
+	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
 	// DefaultPrivate makes repositories created without an explicit
@@ -371,9 +393,11 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
+		fmt.Sprintf("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=%s", strings.Join(c.SSH.PublicKeyAuthAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_GIT_ENABLED=%t", c.Git.Enabled),
 		fmt.Sprintf("SOFT_SERVE_GIT_LISTEN_ADDR=%s", c.Git.ListenAddr),
 		fmt.Sprintf("SOFT_SERVE_GIT_PUBLIC_URL=%s", c.Git.PublicURL),
@@ -385,6 +409,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_KEY_PATH=%s", c.HTTP.TLSKeyPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_CERT_PATH=%s", c.HTTP.TLSCertPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_PUBLIC_URL=%s", c.HTTP.PublicURL),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_TIMEOUT=%d", c.HTTP.MaxTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_IDLE_TIMEOUT=%d", c.HTTP.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_CONNECTIONS=%d", c.HTTP.MaxConnections),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS=%s", strings.Join(c.HTTP.CORS.AllowedHeaders, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=%s", strings.Join(c.HTTP.CORS.AllowedOrigins, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS=%s", strings.Join(c.HTTP.CORS.AllowedMethods, ",")),
@@ -682,6 +709,7 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
+			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
 		},
 		Git: GitConfig{
 			Enabled:        true,
@@ -692,9 +720,12 @@ func DefaultConfig() *Config {
 			MaxConnections: 32,
 		},
 		HTTP: HTTPConfig{
-			Enabled:    true,
-			ListenAddr: ":23232",
-			PublicURL:  "http://localhost:23232",
+			Enabled:        true,
+			ListenAddr:     ":23232",
+			PublicURL:      "http://localhost:23232",
+			MaxTimeout:     0,
+			IdleTimeout:    60,
+			MaxConnections: 64,
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "Accept-Language", "Content-Language", "Content-Type", "Origin", "X-Requested-With", "User-Agent", "Authorization", "Access-Control-Request-Method", "Access-Control-Allow-Origin"},
 				AllowedMethods: []string{"GET", "HEAD", "POST", "PUT", "OPTIONS"},
@@ -765,6 +796,19 @@ func (c *Config) Validate() error {
 	} {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for the default", v.name, v.value)
+		}
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"http.max_timeout", c.HTTP.MaxTimeout},
+		{"http.idle_timeout", c.HTTP.IdleTimeout},
+		{"http.max_connections", c.HTTP.MaxConnections},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
 		}
 	}
 

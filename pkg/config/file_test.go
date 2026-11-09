@@ -42,6 +42,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.SSH.KexAlgorithms = []string{odd, `C:\k`}
 	cfg.SSH.Ciphers = []string{odd, `C:\c`}
 	cfg.SSH.MACs = []string{odd, `C:\m`}
+	cfg.SSH.PublicKeyAuthAlgorithms = []string{odd, `C:\p`}
 	cfg.Git.ListenAddr = odd
 	cfg.Git.PublicURL = odd
 	cfg.HTTP.ListenAddr = odd
@@ -94,6 +95,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"ssh.kex_algorithms", got.SSH.KexAlgorithms, cfg.SSH.KexAlgorithms},
 		{"ssh.ciphers", got.SSH.Ciphers, cfg.SSH.Ciphers},
 		{"ssh.macs", got.SSH.MACs, cfg.SSH.MACs},
+		{"ssh.public_key_auth_algorithms", got.SSH.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms},
 		{"http.cors.allowed_origins", got.HTTP.CORS.AllowedOrigins, []string{cfg.HTTP.PublicURL}},
 	} {
 		if len(c.got) != len(c.want) {

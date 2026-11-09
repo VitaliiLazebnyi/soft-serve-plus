@@ -36,6 +36,13 @@ Redirecting to docs at <a href="https://pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}
 </html>
 `))
 
+// maxGoGetPathLen bounds the import path a go get request may walk. Each
+// step of the walk costs one filesystem lookup, and a step per segment of an
+// unbounded request path would let one anonymous request run for minutes. No
+// repository can be named by a path longer than the usual PATH_MAX, so a
+// longer import path never resolves to one.
+const maxGoGetPathLen = 4096
+
 // GoGetHandler handles go get requests.
 func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -53,6 +60,11 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 	// https://go.dev/ref/mod#vcs-branch
 	if r.URL.Query().Get("go-get") == "1" {
 		repo := repo
+		if len(repo) > maxGoGetPathLen {
+			renderNotFound(w, r)
+			return
+		}
+
 		importRoot, err := url.Parse(cfg.HTTP.PublicURL)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -63,6 +75,10 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 		// bearer token only stands for the caller on the repositories it
 		// names, so a token for "repo" does not reveal "repo/sub".
 		for {
+			if ctx.Err() != nil {
+				return
+			}
+
 			if _, err := be.Repository(ctx, repo); err == nil && be.AccessLevelForUser(ctx, repo, callerFor(ctx, repo)) >= access.ReadOnlyAccess {
 				break
 			}
