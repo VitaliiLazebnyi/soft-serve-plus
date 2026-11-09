@@ -204,7 +204,7 @@ func (s *Selection) Init() tea.Cmd {
 	for _, r := range repos {
 		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
 		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(r, nil)
+			readme, path, err := backend.Readme(r, nil, cfg.BlobSizeLimit())
 			if err != nil {
 				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
 			} else {
