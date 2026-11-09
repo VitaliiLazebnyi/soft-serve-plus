@@ -194,15 +194,23 @@ func (s *Selection) Init() tea.Cmd {
 	if s.common.Config() == nil {
 		return nil
 	}
-	return s.loadReposCmd
+	return loadReposCmd(s.common)
 }
 
 // loadReposCmd lists the repositories the caller may read, and the server
-// readme, without blocking the UI.
-func (s *Selection) loadReposCmd() tea.Msg {
-	ctx := s.common.Context()
-	be := s.common.Backend()
-	pk := s.common.PublicKey()
+// readme, without blocking the UI. bubbletea runs the command on its own
+// goroutine while Update keeps resizing the page, so it works on the copy
+// of common taken when Init returned and never reads the model.
+func loadReposCmd(c common.Common) tea.Cmd {
+	return func() tea.Msg {
+		return loadRepos(c)
+	}
+}
+
+func loadRepos(c common.Common) tea.Msg {
+	ctx := c.Context()
+	be := c.Backend()
+	pk := c.PublicKey()
 	if pk == nil && !be.AllowKeyless(ctx) {
 		return nil
 	}
@@ -218,7 +226,7 @@ func (s *Selection) loadReposCmd() tea.Msg {
 		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
 			readme, path, err := backend.Readme(r, nil)
 			if err != nil {
-				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
+				c.Logger.Debugf("ui: failed to read the about readme: %v", err)
 			} else {
 				// The README comes from the repository; glamour passes
 				// escape sequences through to the terminal.
@@ -229,9 +237,9 @@ func (s *Selection) loadReposCmd() tea.Msg {
 		if r.IsHidden() {
 			continue
 		}
-		item, err := NewItem(s.common, r)
+		item, err := NewItem(c, r)
 		if err != nil {
-			s.common.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
+			c.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
 			continue
 		}
 		sortedItems = append(sortedItems, item)
