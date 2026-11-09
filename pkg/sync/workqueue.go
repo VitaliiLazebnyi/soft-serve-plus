@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 
 	"golang.org/x/sync/semaphore"
@@ -60,8 +61,14 @@ func (wq *WorkPool) Run() {
 
 		go func(id string, fn func()) {
 			defer wq.sem.Release(1)
+			defer wq.work.Delete(id)
+			// A panicking job must not take the whole process down with it.
+			defer func() {
+				if r := recover(); r != nil {
+					wq.logf("workpool: job %s panicked: %v\n%s", id, r, debug.Stack())
+				}
+			}()
 			fn()
-			wq.work.Delete(id)
 		}(id, fn)
 
 		return true
