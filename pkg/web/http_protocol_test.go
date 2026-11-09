@@ -106,14 +106,15 @@ func TestServiceRPCContentType(t *testing.T) {
 	}
 }
 
-// signJWT signs claims with the server key.
+// signJWT signs claims with the server host key, using the algorithm of its
+// key type the way `soft jwt` does.
 func signJWT(ctx context.Context, t *testing.T, claims jwt.RegisteredClaims) string {
 	t.Helper()
 	kp, err := jwk.NewPair(config.FromContext(ctx))
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := jwt.NewWithClaims(jwk.SigningMethod, claims)
+	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
 	token.Header["kid"] = kp.JWK().KeyID
 	signed, err := token.SignedString(kp.PrivateKey())
 	if err != nil {
