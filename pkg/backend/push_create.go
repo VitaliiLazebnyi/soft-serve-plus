@@ -167,7 +167,7 @@ func (d *Backend) pushCreatedRepositoryUsed(ctx context.Context, tx *db.Tx, m mo
 	if err != nil || len(objs) > 0 {
 		return true, err
 	}
-	locks, err := d.store.GetLFSLocks(ctx, tx, m.ID, 1, 1)
+	locks, err := d.store.GetLFSLocks(ctx, tx, m.ID, 0, 1)
 	if err != nil || len(locks) > 0 {
 		return true, err
 	}

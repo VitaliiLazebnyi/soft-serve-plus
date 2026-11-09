@@ -17,4 +17,7 @@ var (
 	ErrRevisionNotExist = git.ErrRevisionNotExist
 	// ErrNotAGitRepository is returned when the given path is not a Git repository.
 	ErrNotAGitRepository = errors.New("not a git repository")
+	// ErrFileTooLarge is returned when a file is larger than the size limit
+	// it is read with.
+	ErrFileTooLarge = errors.New("file too large")
 )
