@@ -533,11 +533,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 func recordLFSObject(ctx context.Context, dbx *db.DB, store store.Store, repoID int64, p lfs.Pointer) error {
 	err := db.WrapError(store.CreateLFSObject(ctx, dbx, repoID, p.Oid, p.Size))
 	if errors.Is(err, db.ErrDuplicateKey) {
-		// db.WrapError reports foreign key violations, e.g. a repository
-		// deleted mid-sync, as duplicate keys too, so check the row is there.
-		if _, gerr := store.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid); gerr == nil {
-			return nil
-		}
+		return nil
 	}
 	return err
 }

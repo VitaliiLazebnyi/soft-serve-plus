@@ -32,7 +32,9 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 
 	user := proto.UserFromContext(ctx)
 	if user == nil {
-		logger.Errorf("missing user")
+		// The SSH command refuses a caller without an account before it
+		// gets here.
+		logger.Debug("missing user")
 		return proto.ErrUserNotFound
 	}
 
@@ -63,7 +65,7 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwk.SigningMethod, claims)
+	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
 	token.Header["kid"] = kp.JWK().KeyID
 	j, err := token.SignedString(kp.PrivateKey())
 	if err != nil {

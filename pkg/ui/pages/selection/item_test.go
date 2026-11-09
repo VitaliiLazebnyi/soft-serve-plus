@@ -91,3 +91,25 @@ func TestItemVisibilityMarkerLongName(t *testing.T) {
 		}
 	}
 }
+
+// A project name or description with line breaks still renders on one line
+// each, so the item keeps the height the list reserves for it.
+func TestItemMultiLineFields(t *testing.T) {
+	t.Parallel()
+	const width = 80
+	plain := renderItem(t, fakeRepo{name: "repo"}, width)
+	out := renderItem(t, fakeRepo{
+		name:        "repo",
+		projectName: "My\nProject",
+		description: "first line\r\nsecond\tline\n\nthird line\n",
+	}, width)
+	if got, want := lipgloss.Height(out), lipgloss.Height(plain); got != want {
+		t.Fatalf("item renders %d lines, want %d:\n%s", got, want, out)
+	}
+	if !strings.Contains(out, "My Project") {
+		t.Errorf("item %q lacks the joined project name", out)
+	}
+	if !strings.Contains(out, "first line second line third line") {
+		t.Errorf("item %q lacks the joined description", out)
+	}
+}
