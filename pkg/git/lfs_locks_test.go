@@ -117,7 +117,7 @@ func TestLFSLockRangeCursor(t *testing.T) {
 }
 
 // passwordLockStore returns one lock owned by a user with a password hash.
-type passwordLockStore struct{ fullPageLockStore }
+type passwordLockStore struct{ pagedLockStore }
 
 const testPasswordHash = "$2a$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012"
 
@@ -143,7 +143,7 @@ func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
 		lfsTransfer: &lfsTransfer{
 			ctx:    context.Background(),
 			dbx:    dbx,
-			store:  passwordLockStore{},
+			store:  passwordLockStore{pagedLockStore{n: 1}},
 			logger: log.New(io.Discard),
 			repo:   lfsTestRepo{},
 			op:     lfs.OperationUpload,
