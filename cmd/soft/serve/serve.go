@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -36,6 +34,9 @@ var (
 			// Use the config the database and backend were set up with,
 			// so hooks and directories land under the same data path.
 			cfg := config.FromContext(ctx)
+			for _, k := range cfg.UnknownKeys() {
+				log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+			}
 			if !cfg.Exist() {
 				// Write the defaults, not cfg, so environment overrides
 				// are not saved to the file.
@@ -96,19 +97,9 @@ var (
 
 			signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-			// This endpoint is added for testing purposes
-			// It allows us to stop the server from the test suite.
-			// This is needed since Windows doesn't support signals.
-			if testRun, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_TESTRUN")); testRun {
-				h := s.HTTPServer.Server.Handler
-				s.HTTPServer.Server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/__stop" && r.Method == http.MethodHead {
-						close(testStop)
-						return
-					}
-					h.ServeHTTP(w, r)
-				})
-			}
+			// Test builds add an endpoint that stops the server, since
+			// Windows doesn't support signals. Release builds don't have it.
+			s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
 
 			go func() {
 				lch <- s.Start()

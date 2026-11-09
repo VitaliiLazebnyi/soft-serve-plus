@@ -194,6 +194,7 @@ func noRowOps(del func(context.Context, string) error) failedPushRepoOps {
 	return failedPushRepoOps{
 		del:       del,
 		rowExists: func(context.Context, string) (bool, error) { return false, nil },
+		removeDir: os.RemoveAll,
 	}
 }
 
@@ -238,6 +239,35 @@ func TestRemoveFailedPushRepoRemovesLeftoverDirectory(t *testing.T) {
 	is.True(!dirExists(dir))
 }
 
+// A leftover directory of a nested repository is removed through the
+// backend, which also removes the group directory it leaves empty, as when
+// DeleteRepository removed the row but could not remove the directory still
+// held by receive-pack on Windows.
+func TestRemoveFailedPushRepoRemovesEmptyGroupOfLeftover(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	root := filepath.Join(config.FromContext(ctx).DataPath, "repos")
+	group := filepath.Join(root, "a")
+	dir := filepath.Join(group, "b.git")
+	if out, err := exec.CommandContext(t.Context(), "git", "init", "--bare", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	calls := 0
+	del := func(context.Context, string) error {
+		calls++
+		// The row is gone and the directory was left behind.
+		return nil
+	}
+	ops := noRowOps(del)
+	ops.removeDir = be.RemoveRepositoryDir
+
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "a/b", dir, ops, fastRetry)
+	is.Equal(calls, 1)
+	is.True(!dirExists(dir))
+	is.True(!dirExists(group)) // the empty group directory is removed too
+	is.True(dirExists(root))   // the repos directory is kept
+}
+
 // Once the repository was deleted, a new repository created with the same
 // name before the leftover directory is removed is left alone.
 func TestRemoveFailedPushRepoLeavesRecreatedRepository(t *testing.T) {
@@ -264,6 +294,7 @@ func TestRemoveFailedPushRepoLeavesRecreatedRepository(t *testing.T) {
 			return nil
 		},
 		rowExists: func(context.Context, string) (bool, error) { return recreated, nil },
+		removeDir: os.RemoveAll,
 	}
 
 	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, ops, fastRetry)

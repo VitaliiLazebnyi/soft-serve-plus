@@ -88,6 +88,8 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]string, err
 }
 
 // IsCollaborator returns the access level and true if the user is a collaborator of the repository.
+// A user who is not a collaborator gives (-1, false, nil); the error is only
+// set when the lookup itself fails.
 //
 // It implements backend.Backend.
 func (d *Backend) IsCollaborator(ctx context.Context, repo string, username string) (access.AccessLevel, bool, error) {
@@ -102,7 +104,11 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
 		return err
 	}); err != nil {
-		return -1, false, db.WrapError(err)
+		err = db.WrapError(err)
+		if errors.Is(err, db.ErrRecordNotFound) {
+			return -1, false, nil
+		}
+		return -1, false, err
 	}
 
 	return m.AccessLevel, m.ID > 0, nil

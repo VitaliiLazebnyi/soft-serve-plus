@@ -317,10 +317,13 @@ func isIPLiteral(host string) bool {
 // (user@host:path, [user@host:port]:path, user@[v6:addr]:path) and returns
 // the user and host. The rules mirror git's connect.c: "://" is a URL, a
 // slash before the first colon is a local path, "::" selects a remote helper,
-// and brackets count only at the start or right after "user@".
+// and brackets count only at the start or right after "user@". A DOS drive
+// prefix ("C:/repo", "C:repo") is a local path as git for Windows reads it
+// (has_dos_drive_prefix); it is refused on every OS rather than allowed as
+// the ssh host "C" where git would open a local repository instead.
 func parseBareSSHRemote(remote string) (user, host string, ok bool) {
 	colon, slash := strings.IndexByte(remote, ':'), strings.IndexByte(remote, '/')
-	if strings.Contains(remote, "://") || colon < 0 || (slash >= 0 && slash < colon) {
+	if strings.Contains(remote, "://") || colon < 0 || (slash >= 0 && slash < colon) || hasDOSDrivePrefix(remote) {
 		return "", "", false
 	}
 	userHost, rest := remote[:colon], remote[colon:]
@@ -338,6 +341,12 @@ func parseBareSSHRemote(remote string) (user, host string, ok bool) {
 		return userHost[:at], userHost[at+1:], true
 	}
 	return "", userHost, true
+}
+
+// hasDOSDrivePrefix reports whether s starts with a drive letter and a
+// colon, as git's has_dos_drive_prefix does on Windows.
+func hasDOSDrivePrefix(s string) bool {
+	return len(s) >= 2 && s[1] == ':' && ('a' <= s[0] && s[0] <= 'z' || 'A' <= s[0] && s[0] <= 'Z')
 }
 
 // validateSSHHost rejects SSH remotes with no host, whose user or host would

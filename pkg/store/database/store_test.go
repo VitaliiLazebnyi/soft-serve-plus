@@ -313,8 +313,8 @@ func TestAccessTokenStore(t *testing.T) {
 	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-expiring"); err != nil || got.ID != expiring.ID {
 		t.Errorf("GetAccessTokenByToken() = %+v, %v, want token %d", got, err, expiring.ID)
 	}
-	if u, err := s.FindUserByAccessToken(ctx, dbx, "hash-forever"); err != nil || u.ID != owner {
-		t.Errorf("FindUserByAccessToken() = %+v, %v, want user %d", u, err, owner)
+	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-forever"); err != nil || got.UserID != owner {
+		t.Errorf("GetAccessTokenByToken() = %+v, %v, want user %d", got, err, owner)
 	}
 	if ts, err := s.GetAccessTokensByUserID(ctx, dbx, owner); err != nil || len(ts) != 2 {
 		t.Errorf("GetAccessTokensByUserID() = %d, %v, want 2", len(ts), err)

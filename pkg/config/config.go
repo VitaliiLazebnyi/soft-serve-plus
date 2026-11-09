@@ -1,12 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -67,6 +69,10 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
+	// HandshakeTimeout is the number of seconds a client has to complete the
+	// key exchange and authenticate before the connection is closed.
+	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
+
 	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
 	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
 	KexAlgorithms []string `env:"KEX_ALGORITHMS" yaml:"kex_algorithms"`
@@ -78,6 +84,11 @@ type SSHConfig struct {
 	// MACs lists the message authentication codes the SSH server offers, in
 	// order of preference. When empty, DefaultSSHMACs is used.
 	MACs []string `env:"MACS" yaml:"macs"`
+
+	// PublicKeyAuthAlgorithms lists the signature algorithms the SSH server
+	// accepts for client public key authentication. When empty,
+	// DefaultSSHPublicKeyAuthAlgorithms is used.
+	PublicKeyAuthAlgorithms []string `env:"PUBLIC_KEY_AUTH_ALGORITHMS" yaml:"public_key_auth_algorithms"`
 
 	// allowedHosts is ClientAllowedHosts parsed by Validate.
 	allowedHosts ssrf.AllowedHosts
@@ -343,6 +354,18 @@ type Config struct {
 	// per config source, and more than once for the environment.
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
+
+	// unknownKeys records the config file keys no setting is read from.
+	unknownKeys []UnknownKey
+}
+
+// UnknownKey is a key in the config file that no setting is read from,
+// such as a misspelt one. It is ignored.
+type UnknownKey struct {
+	// Key is the dotted path of the key, such as "ssh.listen_adr".
+	Key string
+	// Line is the line of the key in the config file.
+	Line int
 }
 
 // Environ returns the config as a list of environment variables.
@@ -370,9 +393,11 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
+		fmt.Sprintf("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=%s", strings.Join(c.SSH.PublicKeyAuthAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_GIT_ENABLED=%t", c.Git.Enabled),
 		fmt.Sprintf("SOFT_SERVE_GIT_LISTEN_ADDR=%s", c.Git.ListenAddr),
 		fmt.Sprintf("SOFT_SERVE_GIT_PUBLIC_URL=%s", c.Git.PublicURL),
@@ -441,19 +466,95 @@ func IsVerbose() bool {
 // parseFile parses the given file as a configuration file.
 // The file must be in YAML format.
 func parseFile(cfg *Config, path string) error {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	defer f.Close() //nolint: errcheck
 	// An empty or comment-only file has no YAML document and decodes to
 	// io.EOF. Treat it like an empty document and keep the defaults.
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
+	// Unknown keys are reported, not rejected, so a config written for
+	// another version still loads.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	cfg.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
+
 	return cfg.Validate()
+}
+
+// findUnknownKeys returns the keys of the mappings in n that no field of t,
+// or of the structs nested in it, is decoded from. prefix is the dotted
+// path of n.
+func findUnknownKeys(n *yaml.Node, t reflect.Type, prefix string) []UnknownKey {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch n.Kind {
+	case yaml.DocumentNode:
+		var keys []UnknownKey
+		for _, c := range n.Content {
+			keys = append(keys, findUnknownKeys(c, t, prefix)...)
+		}
+		return keys
+	case yaml.AliasNode:
+		return findUnknownKeys(n.Alias, t, prefix)
+	case yaml.MappingNode:
+	default:
+		return nil
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	fields := make(map[string]reflect.Type, t.NumField())
+	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			name = strings.ToLower(f.Name)
+		}
+		fields[name] = f.Type
+	}
+
+	var keys []UnknownKey
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if k.Tag == "!!merge" {
+			// The keys of a "<<" merge belong to this mapping.
+			if v.Kind == yaml.SequenceNode {
+				for _, m := range v.Content {
+					keys = append(keys, findUnknownKeys(m, t, prefix)...)
+				}
+			} else {
+				keys = append(keys, findUnknownKeys(v, t, prefix)...)
+			}
+			continue
+		}
+		ft, ok := fields[k.Value]
+		if !ok {
+			keys = append(keys, UnknownKey{Key: prefix + k.Value, Line: k.Line})
+			continue
+		}
+		keys = append(keys, findUnknownKeys(v, ft, prefix+k.Value+".")...)
+	}
+	return keys
+}
+
+// UnknownKeys returns the keys of the parsed config file that no setting is
+// read from, in file order. They are ignored.
+func (c *Config) UnknownKeys() []UnknownKey {
+	return slices.Clone(c.unknownKeys)
 }
 
 // ParseFile parses the config from the default file path.
@@ -608,6 +709,7 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
+			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
 		},
 		Git: GitConfig{
 			Enabled:        true,
