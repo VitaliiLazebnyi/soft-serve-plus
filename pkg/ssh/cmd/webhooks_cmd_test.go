@@ -942,3 +942,41 @@ func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
 	is.True(strings.Contains(d.RequestBody, `"default_branch":"feature"`))
 	is.True(strings.Contains(d.RequestBody, `"changes":{"default_branch":{"from":"main"}}`))
 }
+
+// Deleting an annotated tag sends the tag object as "before", the same id a
+// push that deletes the tag sends, not the commit it points at.
+func TestTagDeleteEventNamesTagObject(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	whPushRefs(t, ownerCtx)
+	bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+	gitOut := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"--git-dir", bare, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...) //nolint:noctx
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	gitOut("tag", "-a", "-m", "annotated", "v2", "main")
+	tagObj := gitOut("rev-parse", "refs/tags/v2")
+	commit := gitOut("rev-parse", "refs/tags/v2^{commit}")
+	is.True(tagObj != commit)
+
+	id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
+	whPointAtLoopback(t, ownerCtx, "hooks", id)
+	is.NoErr(runRepo(t, ownerCtx, "tag", "delete", "hooks", "v2"))
+	be.WaitForDeliveries(context.Background())
+
+	r, err := be.Repository(ownerCtx, "hooks")
+	is.NoErr(err)
+	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
+	is.NoErr(err)
+	is.Equal(len(ds), 1)
+	d, err := be.WebhookDelivery(ownerCtx, r, id, ds[0].ID)
+	is.NoErr(err)
+	is.True(strings.Contains(d.RequestBody, `"before":"`+tagObj+`"`))
+}

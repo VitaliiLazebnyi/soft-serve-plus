@@ -50,12 +50,15 @@ func ParseVersion(s string) (Version, error) {
 	return Version{Major: major, Minor: minor, Patch: patch}, nil
 }
 
-// BinVersion returns the version of the git binary in use. The lookup is
-// cached by git-module, so this runs `git version` at most once.
+// BinVersion returns the version of the git binary in use. It runs
+// `git version` on every call and keeps nothing: git-module's own BinVersion
+// remembers its first result in a sync.Once, failures included, so a single
+// passing failure (fork EAGAIN under load) would stick until restart. Callers
+// that want to cache a successful result do so themselves.
 func BinVersion() (Version, error) {
-	s, err := git.BinVersion()
+	out, err := git.NewCommand("version").Run()
 	if err != nil {
 		return Version{}, fmt.Errorf("git version: %w", err)
 	}
-	return ParseVersion(s)
+	return ParseVersion(string(out))
 }
