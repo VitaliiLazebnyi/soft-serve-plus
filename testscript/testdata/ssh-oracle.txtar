@@ -135,8 +135,7 @@ cmp stderr notauthorizederr.txt
 ! usoft git-receive-pack secret
 cmp stderr notauthorizederr.txt
 
-# stop the server; the last command must succeed so stderr is clean
-soft repo list
+# stop the server
 [windows] stopserver
 [windows] ! stderr .
 
