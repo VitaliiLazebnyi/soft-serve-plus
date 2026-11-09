@@ -172,11 +172,13 @@ func ensureDefaultRepo(ctx context.Context, cfg *config.Config, be *backend.Back
 		return
 	}
 
-	// The migration always inserts a user at ID 1. The repos table requires
-	// a non-null owner, so we attribute the repo to that account. This is the
-	// server's own bootstrap, not a user request, so it is not subject to
-	// admin_only_create even if that account is no longer an admin.
-	owner, err := be.UserByID(ctx, 1)
+	// The repos table requires a non-null owner, so we attribute the repo to
+	// the lowest-ID admin, the same account that owns repositories created
+	// anonymously. User ID 1 is not necessarily that account: it can be
+	// deleted or demoted, and a database imported from an older version
+	// keeps that version's user IDs. This is the server's own bootstrap, not
+	// a user request, so it is not subject to admin_only_create.
+	owner, err := be.DefaultAdmin(ctx)
 	if err != nil {
 		logger.Warn("failed to look up default repo owner, skipping", "name", name, "err", err)
 		return
