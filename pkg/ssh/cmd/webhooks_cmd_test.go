@@ -848,6 +848,77 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 	is.Equal(events(), []string{"branch_tag_delete", "branch_tag_delete", "repository"})
 }
 
+// An empty --secret or --events given to update clears the stored value;
+// leaving the flag out keeps it.
+func TestWebhookUpdateClearsSecretAndEvents(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	id := strconv.FormatInt(whCreate(t, ownerCtx, be, "-s", "old", "-e", "push", "-e", "repository"), 10)
+
+	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "--secret="))
+	h := whHooks(t, ownerCtx, be, "hooks")[0]
+	is.Equal(h.Secret, "")
+	is.Equal(eventNames(h.Events), []string{"push", "repository"})
+
+	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-s", "new", "--events="))
+	h = whHooks(t, ownerCtx, be, "hooks")[0]
+	is.Equal(h.Secret, "new")
+	is.Equal(len(h.Events), 0)
+
+	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-e", "push", "-s", ""))
+	h = whHooks(t, ownerCtx, be, "hooks")[0]
+	is.Equal(h.Secret, "")
+	is.Equal(eventNames(h.Events), []string{"push"})
+}
+
+// An empty value for a flag that cannot be empty is refused, not silently
+// treated as if the flag were left out.
+func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
+	cases := map[string]struct {
+		flag string
+		want string
+	}{
+		"url":          {"--url=", "invalid"},
+		"content type": {"--content-type=", webhook.ErrInvalidContentType.Error()},
+		"active":       {"--active=", "invalid active value"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			ctx, be := newAuthTestContext(t)
+			ownerCtx := whRepo(t, ctx, be)
+			id := whCreate(t, ownerCtx, be, "-s", "keep", "-e", "push")
+			before := whSnapshot(t, ownerCtx, be)
+
+			_, _, err := runRepoOutput(t, ownerCtx, "webhook", "update", "hooks", strconv.FormatInt(id, 10), tc.flag)
+			is.True(err != nil)
+			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
+				t.Fatalf("error %q does not contain %q", err, tc.want)
+			}
+			is.Equal(whSnapshot(t, ownerCtx, be), before)
+		})
+	}
+}
+
+func TestParseWebhookContentType(t *testing.T) {
+	cases := map[string]webhook.ContentType{
+		"json": webhook.ContentTypeJSON, " JSON ": webhook.ContentTypeJSON,
+		"form": webhook.ContentTypeForm, "Form": webhook.ContentTypeForm,
+	}
+	for in, want := range cases {
+		got, err := parseWebhookContentType(in)
+		if err != nil || got != want {
+			t.Errorf("parseWebhookContentType(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", " ", "xml", "application/json", "jsonx"} {
+		if _, err := parseWebhookContentType(in); !errors.Is(err, webhook.ErrInvalidContentType) {
+			t.Errorf("parseWebhookContentType(%q) error = %v; want ErrInvalidContentType", in, err)
+		}
+	}
+}
+
 // A default branch change says which branch was the default before.
 func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
 	is := is.New(t)
@@ -870,4 +941,42 @@ func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
 	is.True(strings.Contains(d.RequestBody, `"action":"default_branch_change"`))
 	is.True(strings.Contains(d.RequestBody, `"default_branch":"feature"`))
 	is.True(strings.Contains(d.RequestBody, `"changes":{"default_branch":{"from":"main"}}`))
+}
+
+// Deleting an annotated tag sends the tag object as "before", the same id a
+// push that deletes the tag sends, not the commit it points at.
+func TestTagDeleteEventNamesTagObject(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	whPushRefs(t, ownerCtx)
+	bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+	gitOut := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"--git-dir", bare, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...) //nolint:noctx
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	gitOut("tag", "-a", "-m", "annotated", "v2", "main")
+	tagObj := gitOut("rev-parse", "refs/tags/v2")
+	commit := gitOut("rev-parse", "refs/tags/v2^{commit}")
+	is.True(tagObj != commit)
+
+	id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
+	whPointAtLoopback(t, ownerCtx, "hooks", id)
+	is.NoErr(runRepo(t, ownerCtx, "tag", "delete", "hooks", "v2"))
+	be.WaitForDeliveries(context.Background())
+
+	r, err := be.Repository(ownerCtx, "hooks")
+	is.NoErr(err)
+	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
+	is.NoErr(err)
+	is.Equal(len(ds), 1)
+	d, err := be.WebhookDelivery(ownerCtx, r, id, ds[0].ID)
+	is.NoErr(err)
+	is.True(strings.Contains(d.RequestBody, `"before":"`+tagObj+`"`))
 }
