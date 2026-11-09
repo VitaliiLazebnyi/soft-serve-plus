@@ -69,7 +69,7 @@ func TestUserStore(t *testing.T) {
 	if got, err := s.FindUserByPublicKey(ctx, dbx, k2); err != nil || got.ID != u.ID {
 		t.Errorf("FindUserByPublicKey(k2) = %+v, %v, want alice", got, err)
 	}
-	if _, err := s.FindUserByPublicKey(ctx, dbx, k3); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if _, err := s.FindUserByPublicKey(ctx, dbx, k3); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("FindUserByPublicKey(unknown key) error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -99,10 +99,10 @@ func TestUserStore(t *testing.T) {
 	if err := s.CreateUser(ctx, dbx, "bob", false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddPublicKeyByUsername(ctx, dbx, "bob", k1); !errors.Is(db.WrapError(err), db.ErrDuplicateKey) {
+	if err := s.AddPublicKeyByUsername(ctx, dbx, "bob", k1); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("AddPublicKeyByUsername(bob, alice's key) error = %v, want ErrDuplicateKey", err)
 	}
-	if err := s.CreateUser(ctx, dbx, "BOB", false, nil); !errors.Is(db.WrapError(err), db.ErrDuplicateKey) {
+	if err := s.CreateUser(ctx, dbx, "BOB", false, nil); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("CreateUser(BOB) with bob taken: error = %v, want ErrDuplicateKey", err)
 	}
 	if err := s.CreateUser(ctx, dbx, "-bad name", false, nil); err == nil {
@@ -125,7 +125,7 @@ func TestUserStore(t *testing.T) {
 	if !u.Admin || !u.Password.Valid || u.Password.String != "hash" {
 		t.Errorf("carol = %+v, want an admin with password %q", u, "hash")
 	}
-	if _, err := s.FindUserByUsername(ctx, dbx, "alice"); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if _, err := s.FindUserByUsername(ctx, dbx, "alice"); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("FindUserByUsername(alice) after rename: error = %v, want ErrRecordNotFound", err)
 	}
 
@@ -142,7 +142,7 @@ func TestUserStore(t *testing.T) {
 	if err := s.DeleteUserByUsername(ctx, dbx, "carol"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FindUserByPublicKey(ctx, dbx, k1); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if _, err := s.FindUserByPublicKey(ctx, dbx, k1); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("FindUserByPublicKey(k1) after deleting its user: error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -259,7 +259,7 @@ func TestCollabStore(t *testing.T) {
 	if c.RepoID != 7 || c.AccessLevel != access.ReadWriteAccess {
 		t.Errorf("GetCollabByUsernameAndRepo() = %+v, want read-write on repo 7", c)
 	}
-	if err := s.AddCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7", access.ReadOnlyAccess); !errors.Is(db.WrapError(err), db.ErrDuplicateKey) {
+	if err := s.AddCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7", access.ReadOnlyAccess); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("AddCollabByUsernameAndRepo(again) error = %v, want ErrDuplicateKey", err)
 	}
 
@@ -278,7 +278,7 @@ func TestCollabStore(t *testing.T) {
 	if err := s.RemoveCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7"); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if _, err := s.GetCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7"); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("GetCollabByUsernameAndRepo() after remove: error = %v, want ErrRecordNotFound", err)
 	}
 }
@@ -313,16 +313,17 @@ func TestAccessTokenStore(t *testing.T) {
 	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-expiring"); err != nil || got.ID != expiring.ID {
 		t.Errorf("GetAccessTokenByToken() = %+v, %v, want token %d", got, err, expiring.ID)
 	}
-	if u, err := s.FindUserByAccessToken(ctx, dbx, "hash-forever"); err != nil || u.ID != owner {
-		t.Errorf("FindUserByAccessToken() = %+v, %v, want user %d", u, err, owner)
+	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-forever"); err != nil || got.UserID != owner {
+		t.Errorf("GetAccessTokenByToken() = %+v, %v, want user %d", got, err, owner)
 	}
 	if ts, err := s.GetAccessTokensByUserID(ctx, dbx, owner); err != nil || len(ts) != 2 {
 		t.Errorf("GetAccessTokensByUserID() = %d, %v, want 2", len(ts), err)
 	}
 
-	// A user cannot delete someone else's token.
-	if err := s.DeleteAccessTokenForUser(ctx, dbx, other.ID, forever.ID); err != nil {
-		t.Fatal(err)
+	// A user cannot delete someone else's token, and is told it was not
+	// found, exactly like a missing one.
+	if err := s.DeleteAccessTokenForUser(ctx, dbx, other.ID, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("DeleteAccessTokenForUser(other user) error = %v, want ErrRecordNotFound", err)
 	}
 	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); err != nil {
 		t.Errorf("token deleted by another user: GetAccessToken() error = %v", err)
@@ -330,8 +331,11 @@ func TestAccessTokenStore(t *testing.T) {
 	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, forever.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("GetAccessToken() after its owner deleted it: error = %v, want ErrRecordNotFound", err)
+	}
+	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("DeleteAccessTokenForUser(already deleted) error = %v, want ErrRecordNotFound", err)
 	}
 	if err := s.DeleteAccessToken(ctx, dbx, expiring.ID); err != nil {
 		t.Fatal(err)
