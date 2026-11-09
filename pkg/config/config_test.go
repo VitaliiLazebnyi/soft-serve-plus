@@ -573,6 +573,36 @@ func TestMaxReposPerUser(t *testing.T) {
 	is.True(cfg.ParseEnv() != nil)
 }
 
+func TestMaxBlobSize(t *testing.T) {
+	is := is.New(t)
+	// Ignore any value exported in the environment running the tests.
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "")
+	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_BLOB_SIZE"))
+	cfg := DefaultConfig()
+	is.NoErr(cfg.ParseEnv())
+	is.Equal(cfg.MaxBlobSize, int64(DefaultMaxBlobSize))
+	is.Equal(cfg.BlobSizeLimit(), int64(DefaultMaxBlobSize))
+	is.Equal((*Config)(nil).BlobSizeLimit(), int64(DefaultMaxBlobSize))
+
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "0")
+	cfg = DefaultConfig()
+	is.NoErr(cfg.ParseEnv())
+	is.Equal(cfg.BlobSizeLimit(), int64(0)) // no limit
+	// Hooks re-read the config from the environment.
+	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_MAX_BLOB_SIZE=0"))
+
+	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_BLOB_SIZE"))
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	is.NoErr(os.WriteFile(path, []byte("max_blob_size: 4096\n"), 0o600))
+	cfg = DefaultConfig()
+	is.NoErr(parseFile(cfg, path))
+	is.Equal(cfg.MaxBlobSize, int64(4096))
+
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "-1")
+	cfg = DefaultConfig()
+	is.True(cfg.ParseEnv() != nil)
+}
+
 func TestDefaultPrivate(t *testing.T) {
 	is := is.New(t)
 	// Ignore any value exported in the environment running the tests.

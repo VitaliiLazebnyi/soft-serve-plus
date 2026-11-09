@@ -449,7 +449,9 @@ func pathAncestors(p string) []string {
 // repository. A repository created by push-to-create is recorded in pending,
 // which removes it if the push fails, or never arrives, without any ref.
 func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	var serve http.HandlerFunc
+	serve = func(w http.ResponseWriter, r *http.Request) {
+		orig := r
 		r, err := identify(r, mux.Vars(r)["repo"])
 		if denyBusy(w, r, err) {
 			return
@@ -541,7 +543,14 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			return
 		}
 
-		ctx, done := pending.begin(ctx, repoName)
+		ctx, done, waited := pending.begin(ctx, repoName)
+		if waited {
+			// The repository was being removed, so repo and accessLevel
+			// may describe one that is gone. Start over, as a request
+			// arriving now would.
+			serve(w, orig)
+			return
+		}
 		if done != nil {
 			defer done()
 			r = r.WithContext(ctx)
@@ -549,6 +558,7 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 
 		next.ServeHTTP(w, r)
 	}
+	return serve
 }
 
 //nolint:revive

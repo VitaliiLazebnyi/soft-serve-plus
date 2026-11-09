@@ -754,7 +754,9 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // so one missing object doesn't throw the whole import away. For a mirror,
 // the mirror job tries them again on every sync; a plain import never
 // fetches them again, so they stay missing until someone pushes them. Any
-// other failure fails the import.
+// other failure fails the import, including a transfer that fails for a
+// reason a retry may get past, such as a dropped connection or a 5xx, so
+// such objects are not dropped for good.
 func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
 	err := StoreRepoMissingLFSObjects(ctx, r, d.db, d.store, client)
 	var unavailable *lfsObjectsUnavailableError
