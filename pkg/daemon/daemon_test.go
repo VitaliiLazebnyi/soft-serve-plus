@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,67 @@ func TestProtocolVersion(t *testing.T) {
 		if got := protocolVersion([]byte(tc.params)); got != tc.want {
 			t.Errorf("protocolVersion(%q) = %q, want %q", tc.params, got, tc.want)
 		}
+	}
+}
+
+// clientGoroutines returns how many goroutines are still running code of
+// handleClient, including goroutines it started.
+func clientGoroutines(t *testing.T) int {
+	t.Helper()
+	var buf strings.Builder
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
+		t.Fatalf("failed to dump goroutines: %v", err)
+	}
+	var n int
+	for _, g := range strings.Split(buf.String(), "\n\n") {
+		if strings.Contains(g, "daemon.(*GitDaemon).handleClient") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFailedRequestDoesNotLeak checks that a connection that fails before
+// sending its request, by timing out or by being reset, leaves no goroutine
+// behind. Reading the request used to run on a goroutine that sent its result
+// twice into a channel with room for one, and blocked forever once the
+// handler had stopped listening.
+func TestFailedRequestDoesNotLeak(t *testing.T) {
+	var dialer net.Dialer
+	dial := func() *net.TCPConn {
+		t.Helper()
+		c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+		if err != nil {
+			t.Fatalf("failed to connect to daemon: %v", err)
+		}
+		return c.(*net.TCPConn)
+	}
+
+	// Idle until the daemon gives up on the request.
+	idle := dial()
+	defer idle.Close() //nolint:errcheck
+	_ = idle.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := readPktline(idle); err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+		t.Errorf("idle connection: expected %q, got %v", git.ErrTimeout, err)
+	}
+
+	// Reset the connection before sending anything.
+	for range 5 {
+		c := dial()
+		_ = c.SetLinger(0)
+		_ = c.Close()
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n := clientGoroutines(t)
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d goroutines still in handleClient after their connections ended", n)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

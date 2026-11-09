@@ -185,26 +185,46 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}
 }
 
-// A client that has not sent its request when the server's context ends is
-// told the server timed out instead of waiting for the idle timeout.
-func TestServerContextEndsBeforeRequest(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+// A client still sending its request when the server's context ends gets
+// the timeout answer, and its handler returns without waiting for the idle
+// timeout.
+func TestServerContextEndsRequestRead(t *testing.T) {
+	// Give the daemon an idle timeout well past the test's bound, so only
+	// the server's context can end the read in time.
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = 60
+	sctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	d, _ := newRequestTestDaemon(t, ctx)
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
+	d, err := NewGitDaemon(backend.WithContext(config.WithContext(sctx, &cfg), testBackend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	deadline := time.Now().Add(5 * time.Second)
-	for d.conns.Size() == 0 && time.Now().Before(deadline) {
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	// Wait until the daemon is reading the request before ending its context.
+	acceptDeadline := time.Now().Add(5 * time.Second)
+	for d.conns.Size() == 0 {
+		if time.Now().After(acceptDeadline) {
+			t.Fatal("daemon did not accept the connection")
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	start := time.Now()
 	cancel()
-	// Well under the tests' one second idle timeout, which would also
-	// answer ErrTimeout.
-	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if _, err := readPktline(c); err == nil || err.Error() != git.ErrTimeout.Error() {
-		t.Fatalf("expected %q, got %v", git.ErrTimeout, err)
+	if _, err := readPktline(c); err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("answer took %v", elapsed)
 	}
 }
