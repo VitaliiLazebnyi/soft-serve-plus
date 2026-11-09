@@ -114,6 +114,10 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
 	}
 
+	if cfg.SSH.HandshakeTimeout > 0 {
+		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
+	}
+
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); err != nil && os.IsNotExist(err) {
 		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())

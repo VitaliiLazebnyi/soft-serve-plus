@@ -242,6 +242,11 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
+  # The number of seconds a client has to complete the key exchange and
+  # authenticate before the connection is closed.
+  # A value of 0 means no timeout.
+  handshake_timeout: 120
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
