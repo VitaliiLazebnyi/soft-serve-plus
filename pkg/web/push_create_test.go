@@ -190,6 +190,7 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 		handler: next,
 		path:    "/info/refs",
 		pending: pending,
+		limits:  &requestLimits{},
 	}))
 	handler := NewContextHandler(f.ctx)(router)
 
