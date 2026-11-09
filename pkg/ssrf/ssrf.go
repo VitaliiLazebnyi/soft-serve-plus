@@ -32,6 +32,13 @@ const ClientTimeout = 30 * time.Second
 // whole-request timeout to let long transfers run, as the LFS client does.
 const ResponseHeaderTimeout = ClientTimeout
 
+// MaxResponseHeaderBytes caps the response headers the client from
+// NewSecureClient reads, status line included. The destinations it talks to
+// are chosen by users, so the net/http default of 10 MiB would let one
+// response make Soft Serve read and keep megabytes of headers. A response
+// with more fails with an error instead.
+const MaxResponseHeaderBytes = 64 << 10
+
 // dialTimeout bounds one dial made by the secure client, from DNS resolution
 // through the last connection attempt. It is a fixed budget: net/http dials
 // with a context detached from the request (context.WithoutCancel), so the
@@ -78,12 +85,13 @@ func NewSecureClientAllowing(allowed AllowedHosts) *http.Client {
 	return &http.Client{
 		Timeout: ClientTimeout,
 		Transport: &http.Transport{
-			DialContext:           dial,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: ResponseHeaderTimeout,
+			DialContext:            dial,
+			MaxIdleConns:           100,
+			IdleConnTimeout:        90 * time.Second,
+			TLSHandshakeTimeout:    10 * time.Second,
+			ExpectContinueTimeout:  1 * time.Second,
+			MaxResponseHeaderBytes: MaxResponseHeaderBytes,
+			ResponseHeaderTimeout:  ResponseHeaderTimeout,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
