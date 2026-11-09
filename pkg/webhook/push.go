@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
@@ -106,27 +107,74 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 		return PushEvent{}, err
 	}
 
-	payload.Commits = make([]Commit, len(commits))
-	for i, c := range commits {
-		payload.Commits[i] = Commit{
+	payload.Commits = make([]Commit, 0, len(commits))
+	size := 0
+	for _, c := range commits {
+		commit := Commit{
 			ID:      c.ID.String(),
-			Message: c.Message,
-			Title:   c.Summary(),
+			Message: truncate(c.Message, maxCommitMessage, truncatedMessageMarker),
+			Title:   truncate(c.Summary(), maxCommitTitle, ""),
 			Author: Author{
-				Name:  c.Author.Name,
-				Email: c.Author.Email,
+				Name:  truncate(c.Author.Name, maxCommitIdentity, ""),
+				Email: truncate(c.Author.Email, maxCommitIdentity, ""),
 				Date:  c.Author.When,
 			},
 			Committer: Author{
-				Name:  c.Committer.Name,
-				Email: c.Committer.Email,
+				Name:  truncate(c.Committer.Name, maxCommitIdentity, ""),
+				Email: truncate(c.Committer.Email, maxCommitIdentity, ""),
 				Date:  c.Committer.When,
 			},
 			Timestamp: c.Committer.When,
 		}
+		// Commits are newest first. Keep the newest one whatever its size and
+		// leave out older ones once the list would grow past its budget.
+		size += commitSize(commit)
+		if len(payload.Commits) > 0 && size > maxPushCommitsSize {
+			break
+		}
+		payload.Commits = append(payload.Commits, commit)
 	}
 
 	return payload, nil
+}
+
+// Limits on the commits a push event lists. The payload is sent to every
+// webhook of the repository and stored with each delivery, so a push of
+// commits with huge messages or identities must not make it unbounded.
+const (
+	// maxCommitMessage is how many bytes of a commit message are kept.
+	maxCommitMessage = 4 << 10
+	// maxCommitTitle is how many bytes of a commit title are kept.
+	maxCommitTitle = 1 << 10
+	// maxCommitIdentity is how many bytes of an author or committer name or
+	// email are kept.
+	maxCommitIdentity = 256
+	// maxPushCommitsSize is roughly how many bytes of commit text a push
+	// event carries. Older commits past it are left out.
+	maxPushCommitsSize = 64 << 10
+)
+
+// truncatedMessageMarker is appended to a commit message that was cut off at
+// maxCommitMessage.
+const truncatedMessageMarker = "\n[message truncated by Soft Serve]"
+
+// truncate returns s cut to at most n bytes, followed by marker, when s is
+// longer than n. It never cuts a UTF-8 character in half.
+func truncate(s string, n int, marker string) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + marker
+}
+
+// commitSize is the number of bytes of variable-length text in c.
+func commitSize(c Commit) int {
+	return len(c.ID) + len(c.Message) + len(c.Title) +
+		len(c.Author.Name) + len(c.Author.Email) +
+		len(c.Committer.Name) + len(c.Committer.Email)
 }
 
 // isForced reports whether moving a ref from before to after drops commits:
