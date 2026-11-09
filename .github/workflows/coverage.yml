@@ -61,7 +61,8 @@ jobs:
           # Collect unit tests coverage
           go test -failfast -race -timeout 5m -skip=^TestScript -cover ./... -args -test.gocoverdir=$PWD/coverage/unit
 
-          # Collect integration tests coverage
+          # Collect integration tests coverage. The -timeout also covers the
+          # -race build of cmd/soft, which TestScript does on first use.
           GOCOVERDIR=$PWD/coverage/int go test -failfast -race -timeout 5m -run=^TestScript ./...
           SOFT_SERVE_DB_DRIVER=postgres \
             SOFT_SERVE_DB_DATA_SOURCE=postgres://postgres:postgres@localhost/postgres?sslmode=disable \
