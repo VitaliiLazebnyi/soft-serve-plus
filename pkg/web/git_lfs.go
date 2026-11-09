@@ -379,41 +379,32 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 
+	// The object's database row may be missing (the batch API creates it
+	// lazily), so the stored file, not the row, is the source of truth for
+	// the size. http.ServeContent takes the length from the file and
+	// handles Range and HEAD requests, so interrupted downloads can resume.
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			logger.Info("object not found", "oid", oid)
-		} else {
-			logger.Error("error opening object", "oid", oid, "err", err)
+			logger.Debug("object not found", "oid", oid, "repo", repo.Name())
+			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+				Message: "object not found",
+			})
+			return
 		}
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "object not found",
+		logger.Error("error opening object", "oid", oid, "repo", repo.Name(), "err", err)
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+			Message: "internal server error",
 		})
 		return
 	}
 	defer f.Close() //nolint: errcheck
 
-	// Send the length of the file being sent, which an object not recorded
-	// yet has too.
-	stat, err := f.Stat()
-	if err != nil {
-		logger.Error("error getting object stat", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
-	if _, err := io.Copy(w, f); err != nil {
-		logger.Error("error copying object to response", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
+	// Objects are content addressed, so the oid is a strong validator.
+	w.Header().Set("ETag", `"`+oid+`"`)
+	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
