@@ -15,7 +15,7 @@ func TestFilesUsesLoadedMarkdownFlag(t *testing.T) {
 	c := common.NewCommon(context.Background(), 80, 24)
 	f := NewFiles(c)
 
-	f.Update(FileContentMsg{content: "# Title\n", ext: "README.md", isMarkdown: true})
+	f.Update(FileContentMsg{content: "# Title\n", ext: "README.md", isMarkdown: true, load: f.load})
 	if !f.code.UseGlamour {
 		t.Error("markdown file not rendered with glamour")
 	}
@@ -23,7 +23,7 @@ func TestFilesUsesLoadedMarkdownFlag(t *testing.T) {
 		t.Error("preview key missing from help for a markdown file")
 	}
 
-	f.Update(FileContentMsg{content: "package main\n", ext: "main.go"})
+	f.Update(FileContentMsg{content: "package main\n", ext: "main.go", load: f.load})
 	if f.code.UseGlamour {
 		t.Error("non-markdown file rendered with glamour")
 	}
