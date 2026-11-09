@@ -91,8 +91,8 @@ func TestRefAfterRepo(t *testing.T) {
 	}
 
 	_, cmd := m.Update(repoMsg)
-	if !hasRefMsg(msgs(t, cmd)) {
-		t.Fatal("handling RepoMsg does not load the reference")
+	if got := msgs(t, cmd); !hasRefMsg(got) {
+		t.Fatalf("handling RepoMsg does not load the reference: %v", got)
 	}
 }
 
