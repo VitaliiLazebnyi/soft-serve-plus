@@ -179,6 +179,8 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 	is.NoErr(err)
 
 	pending := newPushCreates()
+	waits := make(chan string, 1)
+	pending.waiting = func(name string) { waits <- name }
 	var reached proto.Repository
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = proto.RepositoryFromContext(r.Context())
@@ -212,7 +214,12 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 			req.Header.Set("Authorization", "Token "+token)
 			handler.ServeHTTP(w, req)
 		}()
-		time.Sleep(200 * time.Millisecond) // let the request reach the wait
+		select {
+		case got := <-waits:
+			is.Equal(got, name)
+		case <-served:
+			t.Fatalf("request for %q ended without waiting for the removal", name)
+		}
 		end()
 		pending.mu.Lock()
 		delete(pending.repos, name)

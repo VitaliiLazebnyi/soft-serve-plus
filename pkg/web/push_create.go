@@ -42,6 +42,9 @@ type pushCreates struct {
 	// takes it.
 	mu    sync.Mutex
 	repos map[string]*pushCreate
+	// waiting, if set, is called when a request starts waiting for a
+	// removal. Tests use it to end the removal only once a request waits.
+	waiting func(name string)
 }
 
 // pushCreate is a repository created by an HTTP push that has no refs yet.
@@ -117,7 +120,11 @@ func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context
 	}
 	if pc.removing != nil {
 		ch := pc.removing
+		waiting := p.waiting
 		p.mu.Unlock()
+		if waiting != nil {
+			waiting(name)
+		}
 		<-ch
 		return ctx, nil, true
 	}
