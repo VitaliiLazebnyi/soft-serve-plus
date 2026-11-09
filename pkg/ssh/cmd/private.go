@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"strconv"
-
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/spf13/cobra"
@@ -26,7 +24,7 @@ func privateCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsPrivate())
 			case 2:
-				isPrivate, err := strconv.ParseBool(args[1])
+				isPrivate, err := parseBool(args[1])
 				if err != nil {
 					return err
 				}

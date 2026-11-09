@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultNoContent = "No readme found.\n\nCreate a `.soft-serve` repository and add a `README.md` file to display readme."
+	defaultNoContent = "No readme found.\n\nAn admin can create a `.soft-serve` repository with a `README.md` file to show it here."
 )
 
 type pane int
@@ -207,22 +207,25 @@ func (s *Selection) loadReposCmd() tea.Msg {
 		return nil
 	}
 
-	var msg ReposMsg
-	// The server readme is the welcome page, so it is shown to everyone.
-	if r, err := be.Repository(ctx, ".soft-serve"); err == nil {
-		if readme, path, err := backend.Readme(r, nil); err == nil {
-			// The README comes from the repository; glamour passes
-			// escape sequences through to the terminal.
-			msg.readme, msg.readmePath, msg.hasReadme = utils.Sanitize(readme), path, true
-		}
-	}
-
 	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
 	if err != nil {
 		return common.ErrorMsg(err)
 	}
+	var msg ReposMsg
 	sortedItems := make(Items, 0, len(repos))
 	for _, r := range repos {
+		// Every repository here is readable by the caller.
+		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
+			readme, path, err := backend.Readme(r, nil)
+			if err != nil {
+				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
+			} else {
+				// The README comes from the repository; glamour passes
+				// escape sequences through to the terminal.
+				msg.readme, msg.readmePath, msg.hasReadme = utils.Sanitize(readme), path, true
+			}
+		}
+
 		if r.IsHidden() {
 			continue
 		}
