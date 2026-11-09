@@ -26,7 +26,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 				},
 			},
 			want: `GIT_SSH_COMMAND=ssh -o 'UserKnownHostsFile="/data/ssh/known_hosts"'` +
-				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i '/data/ssh/client_ed25519'`,
+				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i '/data/ssh/client_ed25519'`,
 		},
 		{
 			name: "yes",
@@ -38,7 +38,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 				},
 			},
 			want: `GIT_SSH_COMMAND=ssh -o 'UserKnownHostsFile="/data/ssh/known_hosts"'` +
-				` -o StrictHostKeyChecking=yes -o BatchMode=yes -i '/data/ssh/client_ed25519'`,
+				` -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i '/data/ssh/client_ed25519'`,
 		},
 		{
 			// ssh splits option values on whitespace regardless of shell
@@ -53,7 +53,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 				},
 			},
 			want: `GIT_SSH_COMMAND=ssh -o 'UserKnownHostsFile="/Users/me/Library/Application Support/soft-serve/ssh/known_hosts"'` +
-				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i '/Users/me/Library/Application Support/soft-serve/ssh/client_ed25519'`,
+				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i '/Users/me/Library/Application Support/soft-serve/ssh/client_ed25519'`,
 		},
 		{
 			// $ and backticks must not expand in the shell; ' must survive
@@ -67,7 +67,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 				},
 			},
 			want: `GIT_SSH_COMMAND=ssh -o 'UserKnownHostsFile="/it'\''s/$HOME/` + "`id`" + `/100%%/ssh/known_hosts"'` +
-				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i '/it'\''s/$HOME/` + "`id`" + `/100%%/key'`,
+				` -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i '/it'\''s/$HOME/` + "`id`" + `/100%%/key'`,
 		},
 	}
 

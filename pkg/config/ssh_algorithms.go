@@ -40,6 +40,16 @@ func DefaultSSHMACs() []string {
 	})
 }
 
+// DefaultSSHPublicKeyAuthAlgorithms returns the signature algorithms the
+// SSH server accepts for client public key authentication when
+// ssh.public_key_auth_algorithms is empty: every algorithm x/crypto
+// considers secure. This leaves out the SHA-1 based ssh-rsa and ssh-dss
+// signatures that x/crypto still accepts by default. RSA keys keep working
+// through rsa-sha2-256 and rsa-sha2-512.
+func DefaultSSHPublicKeyAuthAlgorithms() []string {
+	return slices.Clone(ssh.SupportedAlgorithms().PublicKeyAuths)
+}
+
 // SSHKexAlgorithms returns the key exchange algorithms the SSH server
 // offers: ssh.kex_algorithms, or DefaultSSHKexAlgorithms when it is empty.
 func (c *SSHConfig) SSHKexAlgorithms() []string {
@@ -67,6 +77,17 @@ func (c *SSHConfig) SSHMACs() []string {
 	return slices.Clone(c.MACs)
 }
 
+// SSHPublicKeyAuthAlgorithms returns the signature algorithms the SSH
+// server accepts for client public key authentication:
+// ssh.public_key_auth_algorithms, or DefaultSSHPublicKeyAuthAlgorithms when
+// it is empty.
+func (c *SSHConfig) SSHPublicKeyAuthAlgorithms() []string {
+	if len(c.PublicKeyAuthAlgorithms) == 0 {
+		return DefaultSSHPublicKeyAuthAlgorithms()
+	}
+	return slices.Clone(c.PublicKeyAuthAlgorithms)
+}
+
 // validateAlgorithms trims the algorithm lists, drops blank entries so an
 // unset environment variable does not read as one empty name, and rejects
 // names x/crypto does not implement. x/crypto silently ignores unknown
@@ -88,6 +109,7 @@ func (c *SSHConfig) validateAlgorithms() error {
 		{"ssh.kex_algorithms", &c.KexAlgorithms, slices.Concat(supported.KeyExchanges, insecure.KeyExchanges, []string{keyExchangeCurve25519LibSSH})},
 		{"ssh.ciphers", &c.Ciphers, slices.Concat(supported.Ciphers, insecure.Ciphers)},
 		{"ssh.macs", &c.MACs, slices.Concat(supported.MACs, insecure.MACs)},
+		{"ssh.public_key_auth_algorithms", &c.PublicKeyAuthAlgorithms, slices.Concat(supported.PublicKeyAuths, insecure.PublicKeyAuths)},
 	} {
 		names := make([]string, 0, len(*l.list))
 		for _, n := range *l.list {
