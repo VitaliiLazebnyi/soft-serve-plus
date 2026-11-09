@@ -423,6 +423,30 @@ func TestSecureHTTPClientIsSSRFProtected(t *testing.T) {
 	}
 }
 
+// TestBatchURLKeepsQuery checks that the batch path is added to the
+// endpoint's path, not appended inside its query.
+func TestBatchURLKeepsQuery(t *testing.T) {
+	t.Parallel()
+	var got *url.URL
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL
+		w.Header().Set("Content-Type", MediaType)
+		json.NewEncoder(w).Encode(BatchResponse{Transfer: TransferBasic}) //nolint: errcheck
+	}))
+	t.Cleanup(srv.Close)
+
+	c := plainClient(t, srv.URL+"/r.git/info/lfs?token=x")
+	if _, err := c.batch(context.Background(), "download", []Pointer{testPointer}); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("server got no request")
+	}
+	if got.Path != "/r.git/info/lfs/objects/batch" || got.RawQuery != "token=x" {
+		t.Errorf("batch request went to %s, want /r.git/info/lfs/objects/batch?token=x", got)
+	}
+}
+
 // TestBatchResponseHashAlgo checks that a batch response in a hash
 // algorithm other than the sha256 the client asked for fails the transfer
 // before anything is downloaded, while an empty or sha256 one is accepted.
