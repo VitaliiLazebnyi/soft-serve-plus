@@ -367,12 +367,16 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint: errcheck
 
 	// NOTE: Git LFS client will retry uploading the same object if there was a
-	// partial error, so we need to skip existing objects.
-	if _, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
-		// Object exists, skip request
-		io.Copy(io.Discard, r.Body) //nolint: errcheck
-		renderStatus(http.StatusOK)(w, nil)
-		return
+	// partial error, so we need to skip existing objects. The object exists
+	// only if it is recorded and its file is in place: a recorded object
+	// whose file is gone or damaged is stored again, which restores it.
+	if obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
+		if lfs.HasObject(strg, oid, obj.Size) {
+			// Object exists, skip request
+			io.Copy(io.Discard, r.Body) //nolint: errcheck
+			renderStatus(http.StatusOK)(w, nil)
+			return
+		}
 	} else if !errors.Is(err, db.ErrRecordNotFound) {
 		logger.Error("error getting object", "oid", oid, "err", err)
 		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
