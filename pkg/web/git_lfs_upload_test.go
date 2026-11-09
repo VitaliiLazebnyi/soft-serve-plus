@@ -298,7 +298,8 @@ func (e *lfsUploadEnv) batchUpload(t *testing.T, objects ...lfs.Pointer) lfs.Bat
 // TestLFSBatchUploadOmitsActionsForPresentObjects checks that an upload batch
 // leaves out actions for objects the server already stores, as the batch API
 // asks, so the client does not send them again. Objects that are missing, or
-// whose row or file is incomplete, still get upload and verify actions.
+// whose row or file is incomplete or truncated, still get upload and verify
+// actions.
 func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
 	e := newLFSUploadEnv(t)
 
@@ -315,16 +316,28 @@ func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A row whose file was truncated: the upload handler restores such a
+	// file, so the client must be asked to send it again.
+	truncated := "truncated object"
+	truncatedOid := sha256Hex(truncated)
+	if w := e.upload(truncatedOid, int64(len(truncated)), strings.NewReader(truncated)); w.Code != http.StatusOK {
+		t.Fatalf("upload: got status %d: %s", w.Code, w.Body.String())
+	}
+	if err := os.WriteFile(e.objectPath(truncatedOid), []byte(truncated[:4]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	missingOid := sha256Hex("not uploaded")
 
 	resp := e.batchUpload(t,
 		lfs.Pointer{Oid: storedOid, Size: int64(len(stored))},
 		lfs.Pointer{Oid: storedOid, Size: int64(len(stored)) + 1},
 		lfs.Pointer{Oid: noFileOid, Size: int64(len(noFile))},
+		lfs.Pointer{Oid: truncatedOid, Size: int64(len(truncated))},
 		lfs.Pointer{Oid: missingOid, Size: 12},
 	)
 
-	wantActions := []bool{false, true, true, true}
+	wantActions := []bool{false, true, true, true, true}
 	for i, o := range resp.Objects {
 		if o.Error != nil {
 			t.Errorf("object %d: unexpected error %+v", i, o.Error)

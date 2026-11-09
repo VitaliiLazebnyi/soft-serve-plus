@@ -329,8 +329,10 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 // lfsObjectPresent reports whether the repository already stores the object
-// with the given size: it has a database row of that size and its file is in
-// storage.
+// with the given size: it has a database row of that size and its file is a
+// regular file of that size in storage. A missing, truncated or overgrown file
+// is not present, so the client sends it again and the upload handler restores
+// it. The content is not hashed here, to keep batch requests cheap.
 func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) (bool, error) {
 	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid)
 	if errors.Is(err, db.ErrRecordNotFound) {
@@ -342,11 +344,14 @@ func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, dat
 	if obj.Size != p.Size {
 		return false, nil
 	}
-	exist, err := strg.Exists(path.Join("objects", p.RelativePath()))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	stat, err := strg.Stat(path.Join("objects", p.RelativePath()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
-	return exist, nil
+	return stat.Mode().IsRegular() && stat.Size() == p.Size, nil
 }
 
 // serviceLfsBasic implements Git LFS basic transfer API
