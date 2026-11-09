@@ -13,6 +13,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
@@ -303,7 +304,14 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 	case "token":
 		user, err := be.UserByAccessToken(ctx, parts[1])
 		if err != nil {
-			logger.Info("failed to get user", "err", err)
+			// An unknown or expired token is a failed login, not an
+			// anonymous request: answering it as anonymous would let it
+			// through wherever anonymous users may go.
+			if errors.Is(err, proto.ErrUserNotFound) || errors.Is(err, proto.ErrTokenExpired) {
+				logger.Info("invalid token", "err", err)
+				return nil, nil, ErrInvalidToken
+			}
+			logger.Error("failed to get user", "err", err)
 			return nil, nil, err
 		}
 
@@ -315,22 +323,28 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 		}
 
 		// Find the user
+		// A valid signature on a token whose user is gone, or was
+		// replaced by another of the same name, is still a failed login.
 		parts := strings.SplitN(claims.Subject, "#", 2)
 		if len(parts) != 2 {
-			logger.Error("invalid jwt subject", "subject", claims.Subject)
-			return nil, nil, errors.New("invalid jwt subject")
+			logger.Info("invalid jwt subject", "subject", claims.Subject)
+			return nil, nil, ErrInvalidToken
 		}
 
 		user, err := be.User(ctx, parts[0])
 		if err != nil {
+			if errors.Is(err, proto.ErrUserNotFound) {
+				logger.Info("jwt user not found", "subject", claims.Subject)
+				return nil, nil, ErrInvalidToken
+			}
 			logger.Error("failed to get user", "err", err)
 			return nil, nil, err
 		}
 
 		expectedSubject := fmt.Sprintf("%s#%d", user.Username(), user.ID())
 		if expectedSubject != claims.Subject {
-			logger.Error("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
-			return nil, nil, errors.New("invalid jwt subject")
+			logger.Info("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
+			return nil, nil, ErrInvalidToken
 		}
 
 		return user, claims.Audience, nil
@@ -362,13 +376,16 @@ func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.Register
 		return nil, err
 	}
 
-	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodEd25519); !ok {
-			return nil, errors.New("invalid signing method")
-		}
+	pub := kp.CryptoPublicKey()
+	method, err := jwk.SigningMethodFor(pub)
+	if err != nil {
+		return nil, err
+	}
 
-		return kp.CryptoPublicKey(), nil
+	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(*jwt.Token) (interface{}, error) {
+		return pub, nil
 	},
+		jwt.WithValidMethods([]string{method.Alg()}),
 		jwt.WithIssuer(cfg.HTTP.PublicURL),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),

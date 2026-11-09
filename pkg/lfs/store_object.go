@@ -56,8 +56,7 @@ func (e *errReader) Read(p []byte) (int, error) {
 // rename fails, as it can on Windows, a file already in place is taken to be
 // the object if it is size bytes long and hashes to oid. If the object is
 // already recorded, by an earlier or concurrent upload, that counts as
-// success, but only once the row reads back: db.WrapError maps foreign key
-// violations to db.ErrDuplicateKey too. The temporary file is always removed.
+// success. The temporary file is always removed.
 //
 // A mismatch is reported as ErrObjectSizeMismatch or ErrObjectOidMismatch,
 // and a failure to read r as ErrObjectRead; any other error is a storage or
@@ -103,16 +102,19 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 		}
 	}
 
-	if err := datastore.CreateLFSObject(ctx, dbx, repoID, oid, size); err != nil {
-		if !errors.Is(err, db.ErrDuplicateKey) {
-			return fmt.Errorf("record object: %w", err)
-		}
-		if _, gerr := datastore.GetLFSObjectByOid(ctx, dbx, repoID, oid); gerr != nil {
-			return fmt.Errorf("record object: %w (lookup: %v)", err, gerr)
-		}
+	if err := datastore.CreateLFSObject(ctx, dbx, repoID, oid, size); err != nil && !errors.Is(err, db.ErrDuplicateKey) {
+		return fmt.Errorf("record object: %w", err)
 	}
 
 	return nil
+}
+
+// HasObject reports whether strg holds the object oid of size bytes: its file
+// under objects/ is a regular file of that size whose SHA-256 is oid. It reads
+// the whole file.
+func HasObject(strg storage.Storage, oid string, size int64) bool {
+	p := Pointer{Oid: oid, Size: size}
+	return isObject(strg, path.Join("objects", p.RelativePath()), oid, size)
 }
 
 // isObject reports whether objPath is a regular file of size bytes whose
