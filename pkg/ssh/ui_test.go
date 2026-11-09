@@ -145,7 +145,9 @@ func (p *resizeCountingPage) SetSize(int, int)          {}
 // A resize reaches every page once, the active page included.
 func TestUIDeliversResizeOnce(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	ui := NewUI(common.NewCommon(ctx, 80, 40), "")
+	c := common.NewCommon(ctx, 80, 40)
+	t.Cleanup(c.Zone.Close)
+	ui := NewUI(c, "")
 	sel, rp := &resizeCountingPage{}, &resizeCountingPage{}
 	ui.pages = []common.Component{sel, rp}
 	ui.state = readyState
