@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -205,15 +206,21 @@ func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.
 			return pointers, db.WrapError(err)
 		}
 
-		pointers[i].Present, err = t.storage.Exists(path.Join("objects", pointers[i].RelativePath()))
-		if err != nil {
+		fi, err := t.storage.Stat(path.Join("objects", pointers[i].RelativePath()))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return pointers, err
 		}
 
-		if pointers[i].Present && obj.ID == 0 {
-			if err := t.store.CreateLFSObject(t.ctx, t.dbx, t.repo.ID(), pointers[i].Oid, pointers[i].Size); err != nil {
-				return pointers, store.RepoGoneError(t.ctx, t.store, t.dbx, t.repo.ID(), db.WrapError(err))
-			}
+		// The client's size is checked, never recorded: a batch only reads.
+		// A file without a record (an upload that has not recorded it yet)
+		// counts at the size it has on disk when downloading. An upload
+		// session reports it missing, so the client sends it and the upload
+		// records it.
+		onDisk := err == nil && fi.Mode().IsRegular() && fi.Size() == pointers[i].Size
+		if obj.ID != 0 {
+			pointers[i].Present = onDisk && obj.Size == pointers[i].Size
+		} else {
+			pointers[i].Present = onDisk && t.op == lfs.OperationDownload
 		}
 	}
 
@@ -404,11 +411,11 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 			return db.WrapError(err)
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if err := store.RepoGoneError(l.ctx, l.store, l.dbx, l.repo.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return nil, err
 		}
@@ -436,15 +443,15 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 		return nil, err
 	}
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), iid)
 		if err != nil {
 			return db.WrapError(err)
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, transfer.ErrNotFound
@@ -465,15 +472,15 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 	var lock LFSLock
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.GetLFSLockForPath(l.ctx, tx, l.repo.ID(), path)
 		if err != nil {
 			return db.WrapError(err)
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, transfer.ErrNotFound
@@ -502,7 +509,7 @@ func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) 
 	}
 	limit = lfs.ClampLocksLimit(limit)
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		l.logger.Debug("getting locks", "limit", limit, "page", page)
 		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), page, limit)
 		if err != nil {
@@ -511,13 +518,13 @@ func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) 
 
 		nextCursor = lfs.NextLocksCursor(page, limit, len(mlocks))
 
-		users := make(map[int64]models.User, 0)
+		users := make(map[int64]lfsLockOwner, 0)
 		for _, mlock := range mlocks {
 			owner, ok := users[mlock.UserID]
 			if !ok {
-				owner, err = l.store.GetUserByID(l.ctx, tx, mlock.UserID)
+				owner, err = l.lockOwner(tx, mlock.UserID)
 				if err != nil {
-					return db.WrapError(err)
+					return err
 				}
 
 				users[mlock.UserID] = owner
@@ -582,15 +589,37 @@ func (l *lfsLockBackend) Unlock(lock transfer.Lock) error {
 	return nil
 }
 
+// lockOwner returns the owner of a lock: only the user's ID and name, so
+// a lock never carries the rest of the user record, password hash included.
+func (l *lfsLockBackend) lockOwner(tx *db.Tx, id int64) (lfsLockOwner, error) {
+	user, err := l.store.GetUserByID(l.ctx, tx, id)
+	if err != nil {
+		return lfsLockOwner{}, db.WrapError(err)
+	}
+	return lfsLockOwner{ID: user.ID, Username: user.Username}, nil
+}
+
+// lfsLockOwner is the owner of an LFS lock.
+type lfsLockOwner struct {
+	ID       int64
+	Username string
+}
+
 // LFSLock is a Git LFS lock object.
 // It implements transfer.Lock.
 type LFSLock struct {
 	lock    models.LFSLock
-	owner   models.User
+	owner   lfsLockOwner
 	backend *lfsLockBackend
 }
 
 var _ transfer.Lock = (*LFSLock)(nil)
+
+// String implements fmt.Stringer, which is how the transfer library's debug
+// log prints a lock.
+func (l *LFSLock) String() string {
+	return fmt.Sprintf("id=%s path=%q ownername=%q", l.ID(), l.Path(), l.OwnerName())
+}
 
 // AsArguments implements transfer.Lock.
 func (l *LFSLock) AsArguments() []string {

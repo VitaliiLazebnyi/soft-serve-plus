@@ -156,7 +156,9 @@ The repository is created empty, exactly as if a human had run
 is set; only its *existence* is guaranteed on
 boot, not its reachability, which is still governed entirely by the
 `anon-access`/`allow-keyless` settings described below. Booting again against
-the same data directory is a no-op if the repository already exists.
+the same data directory is a no-op if the repository already exists. The
+repository is owned by the admin user with the lowest ID; if there is no admin
+user, it is not created and a warning is logged.
 
 Check out [Systemd][systemd] on how to run Soft Serve Plus as a service using
 Systemd. The `.deb` and `.rpm` packages from the [releases][releases] page come
@@ -310,6 +312,21 @@ http:
   # Make sure to use https:// if you are using TLS.
   public_url: "http://localhost:23232"
 
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: 0
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: 60
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: 64
+
   # The cross-origin request security options
   cors:
     # The allowed cross-origin headers
@@ -427,7 +444,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Make repositories created without an explicit visibility private:
@@ -455,6 +473,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
 - `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The number of simultaneous connections to git daemon
+- `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS`: Seconds a git or LFS request over HTTP may take in all (default `0`, no limit) or go without reading the request body or writing the response (default `60`), and how many such requests are served at once (default `64`; more get 503). `0` means no limit
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.
@@ -509,7 +528,10 @@ setting: OpenSSH before 6.5, libssh2 1.8 (Ubuntu 18.04 and 20.04, used by
 libgit2 based tools there), and the original JCraft JSch up to 0.1.55. With
 an RSA host key (`ssh.key_path`), libssh2 1.8 and JSch 0.1.55 do connect
 with the defaults, using `diffie-hellman-group-exchange-sha256` (or ECDH for
-JSch), `aes128-ctr` and `hmac-sha2-256`.
+JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
+from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
+and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
+type. Replacing the host key invalidates tokens issued before.
 
 A client limited to SHA-1 key exchange or MACs is refused. To let one in,
 copy the default list above and append the legacy algorithm. Listing only a
@@ -978,7 +1000,9 @@ You can also *import* repositories from any public remote. Use the `repo import`
 ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLazebnyi/soft-serve-plus
 ```
 
-Use `--mirror` or `-m` to mark the repository as a *pull* mirror.
+Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way.
+
+An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
@@ -1222,6 +1246,14 @@ It's also possible to “link” to a specific repo:
 ```sh
 ssh -p 23231 localhost -t soft-serve-plus
 ```
+
+The TUI's About tab shows the `README.md` of the `.soft-serve` repository.
+Only a server admin can create that repository or rename one to it, and the
+About tab shows its README only while a server admin owns it, and only to
+users who can read it: make it private to show it to collaborators only. A
+`.soft-serve` that an anonymous user created (possible before the name was
+reserved, with `anon-access` set to `read-write`) is not shown; delete it and
+create it again as an admin.
 
 You can copy text to your clipboard over SSH. For instance, you can press
 <kbd>c</kbd> on the highlighted repo in the menu to copy the clone command

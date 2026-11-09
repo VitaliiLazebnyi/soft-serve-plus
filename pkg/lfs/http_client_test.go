@@ -478,3 +478,74 @@ func TestBatchResponseHashAlgo(t *testing.T) {
 		})
 	}
 }
+
+// TestNullInBatchResponse checks that a null object or link in a batch
+// response fails the transfer instead of panicking.
+func TestNullInBatchResponse(t *testing.T) {
+	t.Parallel()
+	oid := testPointer.Oid
+	tests := map[string]struct {
+		upload   bool
+		body     string
+		wantText string
+	}{
+		"null object": {
+			body:     `{"objects":[null]}`,
+			wantText: "null object",
+		},
+		"null download link": {
+			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"download":null}}]}`,
+			wantText: "invalid action 'download'",
+		},
+		"empty download href": {
+			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"download":{"href":""}}}]}`,
+			wantText: "invalid action 'download'",
+		},
+		"null upload object": {
+			upload:   true,
+			body:     `{"objects":[null]}`,
+			wantText: "null object",
+		},
+		"null upload link": {
+			upload:   true,
+			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"upload":null}}]}`,
+			wantText: "invalid action 'upload'",
+		},
+		"null verify link": {
+			upload:   true,
+			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"upload":{"href":"UPLOAD"},"verify":null}}]}`,
+			wantText: "invalid action 'verify'",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					io.Copy(io.Discard, r.Body) //nolint: errcheck
+					return
+				}
+				w.Header().Set("Content-Type", MediaType)
+				io.WriteString(w, strings.ReplaceAll(tt.body, "UPLOAD", srv.URL+"/upload")) //nolint: errcheck
+			}))
+			t.Cleanup(srv.Close)
+			c := plainClient(t, srv.URL+"/x.git")
+
+			var err error
+			if tt.upload {
+				err = c.Upload(context.Background(), []Pointer{testPointer}, func(Pointer, error) (io.ReadCloser, error) {
+					return io.NopCloser(strings.NewReader("x")), nil
+				})
+			} else {
+				err = c.Download(context.Background(), []Pointer{testPointer}, discard)
+			}
+			if err == nil {
+				t.Fatal("expected the transfer to fail")
+			}
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Errorf("error %q does not contain %q", err, tt.wantText)
+			}
+		})
+	}
+}
