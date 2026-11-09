@@ -47,6 +47,8 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 	}
 
 	// The collaborator is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	wh, err := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventAdded)
 	if err != nil {
 		d.logger.Error("collaborator added but webhook event skipped", "repo", repo, "user", username, "err", err)

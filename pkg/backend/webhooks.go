@@ -493,6 +493,20 @@ func dedupeEvents(events []webhook.Event) []webhook.Event {
 // the wait early.
 const ShutdownDeliveryTimeout = time.Minute
 
+// afterChangeTimeout bounds the reads made after a change is committed to
+// build and send its webhook event.
+const afterChangeTimeout = 30 * time.Second
+
+// AfterChangeContext returns a context for the reads made after a change is
+// committed to build and send its webhook event. It keeps ctx's values but not
+// its cancellation, so a caller that goes away right after the commit, such as
+// an SSH client that disconnects, does not lose the event. The reads are
+// bounded by afterChangeTimeout instead. The caller must call the returned
+// cancel function.
+func AfterChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), afterChangeTimeout)
+}
+
 // SendEventAfterChange sends the webhook event for a change that is already
 // committed, the same way the backend's own changes do. See sendAfterChange.
 func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayload) {
@@ -501,9 +515,12 @@ func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayl
 
 // sendAfterChange sends the webhook event for a change that is already
 // committed. The subscribers are read now and the deliveries run in the
-// background, so the caller does not wait on receivers. The change has
+// background, so the caller does not wait on receivers. Neither is cut short
+// by the caller's context ending (see AfterChangeContext). The change has
 // happened, so a failure is logged rather than returned.
 func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) {
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	hooks, err := webhook.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
