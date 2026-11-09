@@ -624,6 +624,7 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cfg := config.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	dir, repoName, file := mux.Vars(r)["dir"], mux.Vars(r)["repo"], mux.Vars(r)["file"]
 	service := git.Service(mux.Vars(r)["service"])
 	protocol := r.Header.Get("Git-Protocol")
@@ -665,7 +666,16 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := service.Handler(ctx, cmd); err != nil {
-			renderNotFound(w, r)
+			switch {
+			case errors.Is(err, context.Canceled):
+				// The client went away before git was done.
+				logger.Debugf("service cancelled: %v", err)
+			case errors.Is(err, git.ErrInvalidRepo):
+				renderNotFound(w, r)
+			default:
+				logger.Errorf("failed to advertise refs: %v", err)
+				renderInternalServerError(w, r)
+			}
 			return
 		}
 
