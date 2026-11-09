@@ -165,7 +165,7 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 
 		// A session with a pty opens the TUI unless its command is one to
 		// run (see runWithPty).
-		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(s, rootCmd, args) {
+		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(ctx, s, rootCmd, args) {
 			sh(s)
 			return
 		}
@@ -199,7 +199,7 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 // can read no repository of that name. A repository the caller cannot read
 // is treated as missing, so a private repository named like a command and a
 // missing one give the same answer.
-func runWithPty(s ssh.Session, root *cobra.Command, args []string) bool {
+func runWithPty(ctx context.Context, s ssh.Session, root *cobra.Command, args []string) bool {
 	switch {
 	case len(args) == 0:
 		return false
@@ -212,11 +212,11 @@ func runWithPty(s ssh.Session, root *cobra.Command, args []string) bool {
 			return false
 		}
 	}
-	be := backend.FromContext(s.Context())
+	be := backend.FromContext(ctx)
 	if be == nil {
 		return true
 	}
-	r, _ := be.ReadableByPublicKey(s.Context(), word, s.PublicKey())
+	r, _ := be.ReadableByPublicKey(ctx, word, s.PublicKey())
 	return r == nil
 }
 

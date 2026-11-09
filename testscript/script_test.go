@@ -404,7 +404,7 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
 		if len(args) < 1 {
-			ts.Fatalf("usage: ui <quoted string input> [repository]")
+			ts.Fatalf("usage: ui <quoted string input> [repository | command...]")
 			return
 		}
 		in, err := strconv.Unquote(args[0])
@@ -419,8 +419,9 @@ func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []stri
 }
 
 // runUI opens a session with a pty over SSH running command (empty for the
-// TUI), types in one rune at a time and waits for the session to end. Every failure is returned, so that "! ui" stops at the
-// first one instead of going on with what failed to open.
+// TUI), types in one rune at a time and waits for the session to end. Every
+// failure is returned, so that "! ui" stops at the first one instead of going
+// on with what failed to open.
 func runUI(ts *testscript.TestScript, key ssh.Signer, in, command string) error {
 	cli, err := ssh.Dial(
 		"tcp",
