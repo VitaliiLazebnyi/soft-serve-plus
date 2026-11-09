@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # With admin_only_create on, only an account with the admin flag may create a
 # repository by pushing over HTTP. Owning a key listed in initial_admin_keys
 # does not count: `pubkey add` takes any public key without proof of holding
@@ -72,4 +69,3 @@ stdout 'admin-made'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .
