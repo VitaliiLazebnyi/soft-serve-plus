@@ -72,8 +72,11 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		"-c", "receive.advertisePushOptions=true",
 		// Disable LFS filters
 		"-c", "filter.lfs.required=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=",
-		svc.Name(),
 	}...)
+	for _, kv := range scmd.Config {
+		cmd.Args = append(cmd.Args, "-c", kv)
+	}
+	cmd.Args = append(cmd.Args, svc.Name())
 	if len(scmd.Args) > 0 {
 		cmd.Args = append(cmd.Args, scmd.Args...)
 	}
@@ -473,6 +476,9 @@ type ServiceCommand struct {
 	Dir    string
 	Env    []string
 	Args   []string
+	// Config holds extra "key=value" git settings, each passed to git
+	// with -c before the service name.
+	Config []string
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
