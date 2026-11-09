@@ -24,11 +24,14 @@ func mirrorCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsMirror())
 			case 2:
+				isMirror, err := parseBool(args[1])
+				if err != nil {
+					return err
+				}
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err
 				}
 
-				isMirror := args[1] == "true"
 				if err := be.SetMirror(ctx, rr.Name(), isMirror); err != nil {
 					return err
 				}

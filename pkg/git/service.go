@@ -108,7 +108,15 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	// exits. That lets the handler wait for git and for the copies of its
 	// output separately, so that a process git started that keeps the
 	// output open does not keep the handler waiting for it.
-	outputs, err := outputPipes(cmd, scmd.Stdout, scmd.Stderr)
+	//
+	// The end of git's stderr is kept to explain a failure, whether or not
+	// the caller wants it too.
+	errTail := &tailBuffer{max: stderrTailSize}
+	stderrOut := io.Writer(errTail)
+	if scmd.Stderr != nil {
+		stderrOut = io.MultiWriter(errTail, scmd.Stderr)
+	}
+	outputs, err := outputPipes(cmd, scmd.Stdout, stderrOut)
 	if err != nil {
 		return err
 	}
@@ -194,12 +202,10 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	} else if err != nil && errors.Is(err, os.ErrNotExist) {
 		return ErrInvalidRepo
 	} else if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return fmt.Errorf("%w: %s", exitErr, exitErr.Stderr)
+		if msg := errTail.String(); msg != "" {
+			return fmt.Errorf("%s: %w: %s", svc, err, msg)
 		}
-
-		return err
+		return fmt.Errorf("%s: %w", svc, err)
 	}
 
 	return nil
@@ -270,6 +276,44 @@ func joinStdin(scmd ServiceCommand, done <-chan struct{}, interrupted *atomic.Bo
 		f.Flush()
 	}
 	<-done
+}
+
+// stderrTailSize is how much of the end of git's stderr a failure reports.
+const stderrTailSize = 4 << 10
+
+// tailBuffer is a writer that keeps only the last max bytes written to it.
+// Git prints why it failed last, so the end of its stderr is what explains
+// a failure.
+type tailBuffer struct {
+	max       int
+	buf       []byte
+	truncated bool
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	b.buf = append(b.buf, p...)
+	if over := len(b.buf) - b.max; over > 0 {
+		b.buf = append(b.buf[:0], b.buf[over:]...)
+		b.truncated = true
+	}
+	return n, nil
+}
+
+// String returns the non-empty lines kept, trimmed and joined with "; " so
+// that they fit on one log line.
+func (b *tailBuffer) String() string {
+	var lines []string
+	for _, line := range strings.Split(string(b.buf), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	s := strings.Join(lines, "; ")
+	if s != "" && b.truncated {
+		s = "..." + s
+	}
+	return s
 }
 
 // output is one of git's output streams, copied from the read end of its

@@ -18,7 +18,7 @@ func RemoteGitEnv(cfg *config.Config, remotes ...ssrf.ValidatedGitRemote) []stri
 
 // gitSSHCommandEnv is the GIT_SSH_COMMAND entry for the server's ssh client:
 // its own known_hosts under the data path, the configured host key policy,
-// no prompting, and the client key.
+// no prompting, timeouts for a host that stalls, and the client key.
 func gitSSHCommandEnv(cfg *config.Config) string {
 	knownHosts := filepath.Join(cfg.DataPath, "ssh", "known_hosts")
 
@@ -33,6 +33,10 @@ func gitSSHCommandEnv(cfg *config.Config) string {
 		" -o " + shellQuote(knownHostsOpt) +
 		" -o StrictHostKeyChecking=" + cfg.SSH.ClientStrictHostKeyChecking +
 		" -o BatchMode=yes" +
+		// A host that accepts the connection and then says nothing, or
+		// stops answering, would otherwise hold ssh, and the git above it,
+		// until the import or sync is given up.
+		" -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4" +
 		" -i " + shellQuote(sshEscape(cfg.SSH.ClientKeyPath))
 }
 

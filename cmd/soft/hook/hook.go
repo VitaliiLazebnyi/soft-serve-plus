@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"charm.land/log/v2"
@@ -170,10 +171,35 @@ func runCommand(ctx context.Context, in io.Reader, out io.Writer, err io.Writer,
 }
 
 func runCustomHook(ctx context.Context, path string, in io.Reader, out io.Writer, err io.Writer, args ...string) error {
-	stat, statErr := os.Stat(path)
-	if statErr != nil || stat.IsDir() || stat.Mode()&0o111 == 0 {
-		return nil
+	name, hookArgs, ok, cmdErr := customHookCommand(runtime.GOOS, path)
+	if cmdErr != nil || !ok {
+		return cmdErr
 	}
 
-	return runCommand(ctx, in, out, err, path, args...)
+	return runCommand(ctx, in, out, err, name, append(hookArgs, args...)...)
+}
+
+// customHookCommand returns the program and leading arguments that run the
+// custom hook at path on goos, or ok false when there is no hook to run.
+//
+// Elsewhere a hook runs only when it is executable, as git does. Windows
+// has no execute bit and cannot start an extensionless script, so there a
+// hook file is run with sh, as git for Windows runs its hooks. Its sh is on
+// PATH while git runs hooks.
+func customHookCommand(goos, path string) (name string, args []string, ok bool, err error) {
+	stat, err := os.Stat(path)
+	if err != nil || stat.IsDir() {
+		return "", nil, false, nil
+	}
+	if goos != "windows" {
+		if stat.Mode()&0o111 == 0 {
+			return "", nil, false, nil
+		}
+		return path, nil, true, nil
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		return "", nil, false, fmt.Errorf("custom hook %s: no sh to run it with: %w", path, err)
+	}
+	return sh, []string{path}, true, nil
 }

@@ -190,7 +190,7 @@ func mintJWT(ctx context.Context, t *testing.T, user proto.User, audience ...str
 		Issuer:    cfg.HTTP.PublicURL,
 		Audience:  audience,
 	}
-	token := jwt.NewWithClaims(jwk.SigningMethod, claims)
+	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
 	token.Header["kid"] = kp.JWK().KeyID
 	signed, err := token.SignedString(kp.PrivateKey())
 	is.NoErr(err)
