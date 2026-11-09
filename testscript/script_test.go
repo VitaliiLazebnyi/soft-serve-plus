@@ -40,7 +40,8 @@ var (
 )
 
 // PrepareBuildCommand builds the soft binary under test. The webhooktest tag
-// lets the tests send webhooks to a local receiver; see newWebhookReceiver.
+// lets the tests send webhooks to a local receiver (see newWebhookReceiver)
+// and adds the HEAD /__stop endpoint that stopserver uses.
 // The binary is built with -cover only when its coverage is collected (see
 // coverDirSet): a -cover binary run without GOCOVERDIR warns on stderr, and
 // every server hook would print that warning to the pushing client.
@@ -406,63 +407,74 @@ func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []stri
 			ts.Fatalf("usage: ui <quoted string input> [repository]")
 			return
 		}
-
-		cli, err := ssh.Dial(
-			"tcp",
-			net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-			&ssh.ClientConfig{
-				User:            "git",
-				Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
-				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			},
-		)
-		check(ts, err, neg)
-		defer cli.Close()
-
-		sess, err := cli.NewSession()
-		check(ts, err, neg)
-		defer sess.Close()
-
-		// XXX: this is a hack to make the UI tests work
-		// cmp command always complains about an extra newline
-		// in the output
-		defer ts.Stdout().Write([]byte("\n"))
-
-		sess.Stdout = ts.Stdout()
-		sess.Stderr = ts.Stderr()
-
-		stdin, err := sess.StdinPipe()
-		check(ts, err, neg)
-
-		err = sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{})
-		check(ts, err, neg)
+		in, err := strconv.Unquote(args[0])
+		if err != nil {
+			ts.Fatalf("ui: input must be a quoted string: %v", err)
+		}
 		// An optional repository name opens the TUI on that repository.
 		initialRepo := ""
 		if len(args) > 1 {
 			initialRepo = args[1]
 		}
-		check(ts, sess.Start(initialRepo), neg)
-
-		in, err := strconv.Unquote(args[0])
-		check(ts, err, neg)
-		reader := strings.NewReader(in)
-		go func() {
-			defer stdin.Close()
-			for {
-				r, _, err := reader.ReadRune()
-				if err == io.EOF {
-					break
-				}
-				check(ts, err, neg)
-				_, _ = io.WriteString(stdin, string(r))
-
-				// Wait for the UI to process the input
-				time.Sleep(100 * time.Millisecond)
-			}
-		}()
-
-		check(ts, sess.Wait(), neg)
+		check(ts, runUI(ts, key, in, initialRepo), neg)
 	}
+}
+
+// runUI opens the TUI over SSH, types in one rune at a time and waits for
+// the session to end. Every failure is returned, so that "! ui" stops at the
+// first one instead of going on with what failed to open.
+func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo string) error {
+	cli, err := ssh.Dial(
+		"tcp",
+		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
+		&ssh.ClientConfig{
+			User:            "git",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	sess, err := cli.NewSession()
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+
+	// XXX: this is a hack to make the UI tests work
+	// cmp command always complains about an extra newline
+	// in the output
+	defer ts.Stdout().Write([]byte("\n"))
+
+	sess.Stdout = ts.Stdout()
+	sess.Stderr = ts.Stderr()
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{}); err != nil {
+		return err
+	}
+	if err := sess.Start(initialRepo); err != nil {
+		return err
+	}
+
+	go func() {
+		defer stdin.Close()
+		for _, r := range in {
+			_, _ = io.WriteString(stdin, string(r))
+
+			// Wait for the UI to process the input
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	return sess.Wait()
 }
 
 func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {
@@ -492,15 +504,20 @@ func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {
 const loopback = "127.0.0.1"
 
 // loopbackClient sends requests for "localhost" to loopback, for the same
-// reason the servers listen there.
-var loopbackClient = &http.Client{Transport: &http.Transport{
-	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
-			addr = net.JoinHostPort(loopback, port)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+// reason the servers listen there. A request that gets no answer fails the
+// script after a minute instead of hanging it until the test binary times
+// out.
+var loopbackClient = &http.Client{
+	Timeout: time.Minute,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
+				addr = net.JoinHostPort(loopback, port)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
 	},
-}}
+}
 
 var sshConfig = `
 Host *
@@ -757,6 +774,9 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 }
 
 func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) {
+	if neg {
+		ts.Fatalf("unsupported: ! ensureserverrunning (use ensureservernotrunning)")
+	}
 	if len(args) < 1 {
 		ts.Fatalf("Must supply a TCP port of one of the services to connect to. " +
 			"These are set as env vars as they are randomized. " +
@@ -788,6 +808,9 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 }
 
 func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []string) {
+	if neg {
+		ts.Fatalf("unsupported: ! ensureservernotrunning (use ensureserverrunning)")
+	}
 	if len(args) < 1 {
 		ts.Fatalf("Must supply a TCP port of one of the services to connect to. " +
 			"These are set as env vars as they are randomized. " +
@@ -797,16 +820,20 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 
 	port := ts.Getenv(args[0])
 
-	// verify that the server is not up
+	// verify that the server is not up. Only a refused connection says that
+	// nothing listens: a dial that times out on a loaded machine does not.
 	addr := net.JoinHostPort(loopback, port)
-	conn, _ := net.DialTimeout( //nolint:noctx
+	conn, err := net.DialTimeout( //nolint:noctx
 		"tcp",
 		addr,
-		time.Second,
+		5*time.Second,
 	)
-	if conn != nil {
-		ts.Fatalf("server is running on port %s while it should not be running", port)
+	if err == nil {
 		conn.Close()
+		ts.Fatalf("server is running on port %s while it should not be running", port)
+	}
+	if !connRefused(err) {
+		ts.Fatalf("cannot tell whether a server is running on port %s: %v", port, err)
 	}
 }
 
@@ -837,6 +864,10 @@ func cmdOccupyIPv6(ts *testscript.TestScript, neg bool, args []string) {
 }
 
 func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
+	// Start with empty stdout and stderr, so that a check that follows looks
+	// at this command's output rather than at the previous command's.
+	ts.Stdout()
+
 	// stop the server
 	publicURL := ts.Getenv("SOFT_SERVE_HTTP_PUBLIC_URL")
 	resp, err := loopbackClient.Head(fmt.Sprintf("%s/__stop", publicURL)) //nolint:noctx
