@@ -1,0 +1,32 @@
+# vi: set ft=conf
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+# create a repo with a commit
+soft repo create repo1
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md '# Hello'
+git -C repo1 add README.md
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+
+# git sends GIT_PROTOCOL over SSH, and the server must hand it to git so
+# protocol v2 is negotiated
+env GIT_TRACE_PACKET=1
+git -c protocol.version=2 ls-remote ssh://localhost:$SSH_PORT/repo1
+stdout 'refs/heads/master'
+stderr 'packet: +[a-z-]+< version 2'
+stderr 'packet: +[a-z-]+> command=ls-refs'
+
+# without GIT_PROTOCOL, the server speaks protocol v0
+git -c protocol.version=0 ls-remote ssh://localhost:$SSH_PORT/repo1
+stdout 'refs/heads/master'
+! stderr 'version 2'
+! stderr 'command=ls-refs'
+env GIT_TRACE_PACKET=
+
+# stop the server
+[windows] stopserver
