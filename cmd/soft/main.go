@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -36,10 +39,14 @@ var (
 	CommitDate = ""
 
 	rootCmd = &cobra.Command{
-		Use:          "soft",
+		Use:          "soft [PATH]",
 		Short:        "A self-hostable Git server for the command line",
 		Long:         "Soft Serve Plus is a self-hostable Git server for the command line.",
 		SilenceUsage: true,
+		Args:         rootArgs,
+		// Same as cobra's default, which only applies to its own
+		// unknown command error.
+		SuggestionsMinimumDistance: 2,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return browse.Command.RunE(cmd, args)
 		},
@@ -63,6 +70,29 @@ var (
 		},
 	}
 )
+
+// rootArgs lets "soft PATH" browse the repository at PATH like "soft browse
+// PATH". An argument that is not an existing path is reported as an unknown
+// command, since it is more likely a mistyped one.
+func rootArgs(cmd *cobra.Command, args []string) error {
+	if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
+		return err
+	}
+	if len(args) == 1 {
+		if _, err := os.Stat(args[0]); err != nil {
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "unknown command %q for %q", args[0], cmd.CommandPath())
+			if s := cmd.SuggestionsFor(args[0]); !cmd.DisableSuggestions && len(s) > 0 {
+				sb.WriteString("\n\nDid you mean this?\n")
+				for _, c := range s {
+					fmt.Fprintf(&sb, "\t%s\n", c)
+				}
+			}
+			return errors.New(sb.String())
+		}
+	}
+	return nil
+}
 
 func init() {
 	if noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR")); noColor {
@@ -115,10 +145,15 @@ func main() {
 	ctx = config.WithContext(ctx, cfg)
 	logger, f, err := logr.NewLogger(cfg)
 	if err != nil {
-		log.Errorf("failed to create logger: %v", err)
-		// NewLogger returns a nil logger on error; keep logging to
-		// stderr instead of installing a nil default logger.
-		logger = log.Default()
+		if isHookCommand(os.Args[1:]) {
+			// A hook's stderr is relayed to the git client as "remote:"
+			// lines. Don't send it server paths or server logs; drop the
+			// hook logs instead.
+			logger.SetOutput(io.Discard)
+		} else {
+			// logger still writes to stderr.
+			logger.Warn("failed to open log file, logging to stderr", "err", err)
+		}
 	}
 
 	ctx = log.WithContext(ctx, logger)
@@ -135,4 +170,19 @@ func main() {
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
+}
+
+// isHookCommand reports whether args run the hook command or one of its
+// subcommands.
+func isHookCommand(args []string) bool {
+	c, _, err := rootCmd.Find(args)
+	if err != nil {
+		return false
+	}
+	for ; c != nil; c = c.Parent() {
+		if c == hook.Command {
+			return true
+		}
+	}
+	return false
 }

@@ -83,6 +83,21 @@ func TestNewLoggerCreatesMissingLogDir(t *testing.T) {
 	}
 }
 
+func TestNewLoggerFallsBackToStderr(t *testing.T) {
+	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(t.TempDir(), "missing", "logfile.txt")}}
+	logger, f, err := NewLogger(c)
+	if err == nil {
+		t.Fatal("expected error got nil")
+	}
+	if f != nil {
+		t.Errorf("expected no file got %v", f.Name())
+	}
+	if logger == nil {
+		t.Fatal("expected a stderr logger got nil")
+	}
+	logger.Info("still logging")
+}
+
 // The log file is not readable by other users.
 func TestNewLoggerFileMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
