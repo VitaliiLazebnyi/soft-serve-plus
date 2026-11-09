@@ -861,8 +861,18 @@ func (c *Config) Validate() error {
 	}
 	c.SSH.allowedHosts = allowed
 
-	if c.SSH.HandshakeTimeout < 0 || c.SSH.MaxConnections < 0 || c.SSH.MaxConnectionsPerIP < 0 || c.SSH.MaxSessions < 0 {
-		return fmt.Errorf("ssh handshake_timeout, max_connections, max_connections_per_ip and max_sessions must not be negative")
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.handshake_timeout", c.SSH.HandshakeTimeout},
+		{"ssh.max_connections", c.SSH.MaxConnections},
+		{"ssh.max_connections_per_ip", c.SSH.MaxConnectionsPerIP},
+		{"ssh.max_sessions", c.SSH.MaxSessions},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
+		}
 	}
 
 	if err := c.SSH.validateAlgorithms(); err != nil {
