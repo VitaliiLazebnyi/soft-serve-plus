@@ -41,6 +41,7 @@ func init() {
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
 			},
+			MaxResponseHeaderBytes: ssrf.MaxResponseHeaderBytes,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse

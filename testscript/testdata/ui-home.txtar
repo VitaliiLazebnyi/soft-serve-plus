@@ -15,7 +15,7 @@ grep 'No items' home.txt
 # test about tab
 ui '"\t    q"'
 cp stdout about.txt
-grep 'Create a `.soft-serve` repository and add a `README.md` file' about.txt
+grep 'An admin can create a `.soft-serve` repository' about.txt
 
 # add a new repo
 soft repo create .soft-serve -n 'Config' -d '"Test Soft Serve"'
