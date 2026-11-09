@@ -216,7 +216,7 @@ func identify(r *http.Request, repos ...string) (*http.Request, error) {
 	logger := log.FromContext(ctx)
 
 	// authenticate logs why credentials failed, and returns only bad
-	// credentials or proto.ErrUserNotFound.
+	// credentials, ErrPasswordCheckBusy or proto.ErrUserNotFound.
 	user, audience, err := authenticate(r, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
@@ -252,6 +252,23 @@ func callerFor(ctx context.Context, repo string) proto.User {
 // badCredentials reports whether the caller sent credentials that failed.
 func badCredentials(err error) bool {
 	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword)
+}
+
+// denyBusy answers 429 when the caller's password could not be checked
+// because too many checks were pending, and reports whether it did. There is
+// no credentials challenge: the password was not found wrong, and a 401
+// would make git erase it from the user's credential helper.
+func denyBusy(w http.ResponseWriter, r *http.Request, err error) bool {
+	if !errors.Is(err, ErrPasswordCheckBusy) {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	if strings.HasPrefix(mux.Vars(r)["file"], "info/lfs") {
+		renderJSON(w, r, http.StatusTooManyRequests, lfs.ErrorResponse{Message: ErrPasswordCheckBusy.Error()})
+		return true
+	}
+	http.Error(w, ErrPasswordCheckBusy.Error(), http.StatusTooManyRequests)
+	return true
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
@@ -399,6 +416,9 @@ func requireCaller(w http.ResponseWriter, r *http.Request) bool {
 func withCaller(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r, err := identify(r, pathAncestors(mux.Vars(r)["repo"])...)
+		if denyBusy(w, r, err) {
+			return
+		}
 		if !requireCaller(w, r) {
 			return
 		}
@@ -431,6 +451,9 @@ func pathAncestors(p string) []string {
 func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r, err := identify(r, mux.Vars(r)["repo"])
+		if denyBusy(w, r, err) {
+			return
+		}
 		if !requireCaller(w, r) {
 			return
 		}
