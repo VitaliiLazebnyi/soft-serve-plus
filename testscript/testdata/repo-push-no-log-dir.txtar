@@ -9,9 +9,11 @@ exec soft serve &
 # wait for SSH server to start
 ensureserverrunning SSH_PORT
 
-# the hooks log to $DATA_PATH/log/hooks.log; take its directory away
+# the hooks log to $DATA_PATH/log/hooks.log; replace its directory with a
+# regular file so it cannot be recreated
 exists $DATA_PATH/log
 rm $DATA_PATH/log
+mkfile $DATA_PATH/log 'not a dir'
 
 # create a repo
 soft repo create repo1
