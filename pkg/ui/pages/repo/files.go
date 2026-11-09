@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
@@ -484,6 +485,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load := f.repo, f.ref, f.load
+	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		if item.entry.IsTree() || item.Mode().IsDir() {
 			return common.ErrorMsg(errInvalidFile)
@@ -508,20 +510,19 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			}
 		}
 
-		if !bin {
-			bin, err = fi.IsBinary()
-			if err != nil {
-				return common.ErrorMsg(err)
-			}
-		}
-
 		if bin {
 			return common.ErrorMsg(errBinaryFile)
 		}
 
-		c, err := fi.Bytes()
+		// Read the file once, capped by the size limit, and sniff the
+		// bytes in hand rather than piping the blob a second time.
+		c, err := fi.ContentsLimit(limit)
 		if err != nil {
 			return common.ErrorMsg(err)
+		}
+
+		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
+			return common.ErrorMsg(errBinaryFile)
 		}
 
 		return FileContentMsg{

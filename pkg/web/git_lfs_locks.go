@@ -320,7 +320,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	resp := lfs.LockListResponse{
 		Locks: lockList,
 	}
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
 	renderJSON(w, r, http.StatusOK, resp)
 }
@@ -417,7 +417,7 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	resp.Ours = ours
 	resp.Theirs = theirs
 
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
 	renderJSON(w, r, http.StatusOK, resp)
 }
