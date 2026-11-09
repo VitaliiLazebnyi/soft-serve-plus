@@ -140,6 +140,19 @@ type HTTPConfig struct {
 	// PublicURL is the public URL of the HTTP server.
 	PublicURL string `env:"PUBLIC_URL" yaml:"public_url"`
 
+	// MaxTimeout is the maximum number of seconds a git or LFS request can
+	// take. 0 means no limit.
+	MaxTimeout int `env:"MAX_TIMEOUT" yaml:"max_timeout"`
+
+	// IdleTimeout is the number of seconds a git or LFS request can go
+	// without reading from or writing to the client before it is closed.
+	// 0 means no limit.
+	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
+
+	// MaxConnections is the maximum number of git and LFS requests served at
+	// once. 0 means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
 	// CORS is the cross-origin configuration for the HTTP server.
 	CORS CORSConfig `envPrefix:"CORS_" yaml:"cors"`
 }
@@ -305,8 +318,8 @@ type Config struct {
 	// push-to-create. Server admins (admin accounts or initial_admin_keys)
 	// are exempt. Repositories created without an account all count
 	// together as one user. A user at the limit is refused; the
-	// repositories they already have are kept. 0 (the default) means no
-	// limit.
+	// repositories they already have are kept. Imports still running count
+	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
 	// DefaultPrivate makes repositories created without an explicit
@@ -376,6 +389,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_KEY_PATH=%s", c.HTTP.TLSKeyPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_CERT_PATH=%s", c.HTTP.TLSCertPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_PUBLIC_URL=%s", c.HTTP.PublicURL),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_TIMEOUT=%d", c.HTTP.MaxTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_IDLE_TIMEOUT=%d", c.HTTP.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_CONNECTIONS=%d", c.HTTP.MaxConnections),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS=%s", strings.Join(c.HTTP.CORS.AllowedHeaders, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=%s", strings.Join(c.HTTP.CORS.AllowedOrigins, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS=%s", strings.Join(c.HTTP.CORS.AllowedMethods, ",")),
@@ -608,9 +624,12 @@ func DefaultConfig() *Config {
 			MaxConnections: 32,
 		},
 		HTTP: HTTPConfig{
-			Enabled:    true,
-			ListenAddr: ":23232",
-			PublicURL:  "http://localhost:23232",
+			Enabled:        true,
+			ListenAddr:     ":23232",
+			PublicURL:      "http://localhost:23232",
+			MaxTimeout:     0,
+			IdleTimeout:    60,
+			MaxConnections: 64,
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "Accept-Language", "Content-Language", "Content-Type", "Origin", "X-Requested-With", "User-Agent", "Authorization", "Access-Control-Request-Method", "Access-Control-Allow-Origin"},
 				AllowedMethods: []string{"GET", "HEAD", "POST", "PUT", "OPTIONS"},
@@ -681,6 +700,19 @@ func (c *Config) Validate() error {
 	} {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for the default", v.name, v.value)
+		}
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"http.max_timeout", c.HTTP.MaxTimeout},
+		{"http.idle_timeout", c.HTTP.IdleTimeout},
+		{"http.max_connections", c.HTTP.MaxConnections},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
 		}
 	}
 
