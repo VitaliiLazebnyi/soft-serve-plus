@@ -39,7 +39,8 @@ var (
 )
 
 // PrepareBuildCommand builds the soft binary under test. The webhooktest tag
-// lets the tests send webhooks to a local receiver; see newWebhookReceiver.
+// lets the tests send webhooks to a local receiver (see newWebhookReceiver)
+// and adds the HEAD /__stop endpoint that stopserver uses.
 // The binary is built with -cover only when its coverage is collected (see
 // coverDirSet): a -cover binary run without GOCOVERDIR warns on stderr, and
 // every server hook would print that warning to the pushing client.
