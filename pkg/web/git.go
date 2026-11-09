@@ -293,7 +293,8 @@ func denyRead(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) {
 func lfsNeedsWrite(file, method string) bool {
 	switch {
 	case strings.HasPrefix(file, "info/lfs/locks"):
-		return strings.HasSuffix(file, "lfs/locks") ||
+		// GET lists locks, which only needs read access.
+		return strings.HasSuffix(file, "lfs/locks") && method == http.MethodPost ||
 			strings.HasSuffix(file, "lfs/locks/verify") ||
 			strings.HasSuffix(file, "/unlock") && method == http.MethodPost
 	case strings.HasPrefix(file, "info/lfs/objects/basic"):
