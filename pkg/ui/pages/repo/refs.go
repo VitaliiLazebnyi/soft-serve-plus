@@ -122,7 +122,7 @@ func (r *Refs) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Refs) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateItemsCmd)
+	return tea.Batch(r.spinner.Tick, r.updateItemsCmd())
 }
 
 // Update implements tea.Model.
@@ -166,7 +166,7 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, r.common.KeyMap.SelectItem):
-			cmds = append(cmds, r.selector.SelectItemCmd)
+			cmds = append(cmds, r.selector.SelectItemCmd())
 		}
 	case EmptyRepoMsg:
 		r.ref = nil
@@ -218,28 +218,37 @@ func (r *Refs) StatusBarInfo() string {
 	return fmt.Sprintf("p. %d/%d", r.selector.Page()+1, totalPages)
 }
 
-func (r *Refs) updateItemsCmd() tea.Msg {
-	rr, err := r.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-	refs, err := rr.RefInfos(r.refPrefix)
-	if err != nil {
-		r.common.Logger.Debugf("ui: error getting references: %v", err)
-		return common.ErrorMsg(err)
-	}
-	its := make(RefItems, len(refs))
-	for i, ref := range refs {
-		its[i] = RefItem{ref}
-	}
-	sort.Sort(its)
-	items := make([]selector.IdentifiableItem, len(its))
-	for i, it := range its {
-		items[i] = it
-	}
-	return RefItemsMsg{
-		items:  items,
-		prefix: r.refPrefix,
+// updateItemsCmd returns a command that lists the refs of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (r *Refs) updateItemsCmd() tea.Cmd {
+	repo, prefix, logger := r.repo, r.refPrefix, r.common.Logger
+	return func() tea.Msg {
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
+		}
+		rr, err := repo.Open()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		refs, err := rr.RefInfos(prefix)
+		if err != nil {
+			logger.Debugf("ui: error getting references: %v", err)
+			return common.ErrorMsg(err)
+		}
+		its := make(RefItems, len(refs))
+		for i, ref := range refs {
+			its[i] = RefItem{ref}
+		}
+		sort.Sort(its)
+		items := make([]selector.IdentifiableItem, len(its))
+		for i, it := range its {
+			items[i] = it
+		}
+		return RefItemsMsg{
+			items:  items,
+			prefix: prefix,
+		}
 	}
 }
 

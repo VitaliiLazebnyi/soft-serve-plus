@@ -101,7 +101,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	if !r.isLoading || !r.loaded {
 		t.Fatal("the first RefMsg did not load the tags")
 	}
-	msg, ok := r.updateItemsCmd().(RefItemsMsg)
+	msg, ok := r.updateItemsCmd()().(RefItemsMsg)
 	if !ok {
 		t.Fatal("updateItemsCmd did not return RefItemsMsg")
 	}
@@ -140,22 +140,6 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 }
 
-// runCmd runs cmd and every command it batches, returning the messages.
-func runCmd(cmd tea.Cmd) []tea.Msg {
-	if cmd == nil {
-		return nil
-	}
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		var msgs []tea.Msg
-		for _, c := range batch {
-			msgs = append(msgs, runCmd(c)...)
-		}
-		return msgs
-	}
-	return []tea.Msg{msg}
-}
-
 // `l` and `→` open the highlighted branch or tag; they must not also turn
 // the page, which would open an item on the next page instead.
 func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
@@ -175,7 +159,7 @@ func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
 			r := NewRefs(common.NewCommon(ctx, 80, 10), git.RefsHeads)
 			r.SetSize(80, 10)
 			r.Update(RepoMsg(openRepo{path: dir}))
-			r.Update(r.updateItemsCmd())
+			r.Update(r.updateItemsCmd()())
 			if r.selector.TotalPages() < 2 {
 				t.Fatalf("want several pages, got %d", r.selector.TotalPages())
 			}
