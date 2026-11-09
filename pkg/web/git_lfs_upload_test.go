@@ -248,9 +248,7 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 }
 
 // TestLFSUploadRepoDeletedMidUpload checks that a foreign key violation is
-// not mistaken for a duplicate upload. db.WrapError maps both to
-// ErrDuplicateKey, so the handler must confirm the row exists before it
-// reports success.
+// not mistaken for a duplicate upload, which the handler reports as success.
 func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 	e := newLFSUploadEnv(t)
 	const content = "orphan object"

@@ -102,7 +102,10 @@ func tagDeleteCommand() *cobra.Command {
 			}
 
 			// The tag is already deleted, so a failed event is logged rather
-			// than reported as a failed command.
+			// than reported as a failed command. The event is built
+			// and sent even if the session ends now.
+			ctx, cancel := backend.AfterChangeContext(ctx)
+			defer cancel()
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagCommit.ID.String(), git.ZeroID)
 			if err != nil {
 				log.Error("tag deleted but webhook event skipped", "err", err)
