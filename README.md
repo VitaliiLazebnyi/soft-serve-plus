@@ -1285,7 +1285,9 @@ your own per-repository hooks there, for example
 
 Global hooks live in `<data path>/hooks` (`SOFT_SERVE_DATA_PATH`) and run for
 every repository. Defining global hooks is useful if you want to run CI/CD for
-example.
+example. Global hooks run only when they are executable. Windows has no execute
+bit, so there every global hook file is run with `sh`, the one that comes with
+Git for Windows, the way git runs its own hooks.
 
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
