@@ -32,7 +32,7 @@ func TestReadmeInSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readme, path, err := Readme(lt.repo, nil)
+	readme, path, err := Readme(t.Context(), lt.repo, nil)
 	if err != nil {
 		t.Fatalf("Readme: %v", err)
 	}
