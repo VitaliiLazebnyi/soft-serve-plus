@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -137,15 +138,21 @@ func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.
 			return pointers, db.WrapError(err)
 		}
 
-		pointers[i].Present, err = t.storage.Exists(path.Join("objects", pointers[i].RelativePath()))
-		if err != nil {
+		fi, err := t.storage.Stat(path.Join("objects", pointers[i].RelativePath()))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return pointers, err
 		}
 
-		if pointers[i].Present && obj.ID == 0 {
-			if err := t.store.CreateLFSObject(t.ctx, t.dbx, t.repo.ID(), pointers[i].Oid, pointers[i].Size); err != nil {
-				return pointers, store.RepoGoneError(t.ctx, t.store, t.dbx, t.repo.ID(), db.WrapError(err))
-			}
+		// The client's size is checked, never recorded: a batch only reads.
+		// A file without a record (an upload that has not recorded it yet)
+		// counts at the size it has on disk when downloading. An upload
+		// session reports it missing, so the client sends it and the upload
+		// records it.
+		onDisk := err == nil && fi.Mode().IsRegular() && fi.Size() == pointers[i].Size
+		if obj.ID != 0 {
+			pointers[i].Present = onDisk && obj.Size == pointers[i].Size
+		} else {
+			pointers[i].Present = onDisk && t.op == lfs.OperationDownload
 		}
 	}
 
