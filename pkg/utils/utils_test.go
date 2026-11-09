@@ -195,6 +195,35 @@ func TestValidateNewUsername(t *testing.T) {
 	}
 }
 
+// New names must start with a letter character, decoded as a whole rune
+// rather than read from its first byte.
+func TestValidateNewUsernameFirstCharacter(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		username string
+		valid    bool
+	}{
+		{"alice", true},
+		{"אבי", true},      // Hebrew: lead byte 0xD7 is '×', not a letter
+		{"ñandu", true},    // Latin-1 letter
+		{"Ωμέγα-2", true},  // Greek letters
+		{"٣abc", false},    // Arabic-Indic digit: lead byte 0xD9 is 'Ù'
+		{"०abc", false},    // Devanagari digit
+		{"1abc", false},    // ASCII digit
+		{"-abc", false},    // hyphen
+		{"\xffabc", false}, // invalid UTF-8
+		{"a\xffbc", false}, // invalid UTF-8 later on
+	} {
+		err := ValidateNewUsername(tc.username)
+		if tc.valid && err != nil {
+			t.Errorf("ValidateNewUsername(%q) = %v, want nil", tc.username, err)
+		}
+		if !tc.valid && err == nil {
+			t.Errorf("ValidateNewUsername(%q) = nil, want an error", tc.username)
+		}
+	}
+}
+
 func TestSanitize(t *testing.T) {
 	cases := []struct {
 		name, in, out string

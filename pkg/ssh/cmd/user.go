@@ -184,8 +184,12 @@ func UserCommand() *cobra.Command {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			username := args[0]
+			admin, err := parseBool(args[1])
+			if err != nil {
+				return err
+			}
 
-			return be.SetAdmin(ctx, username, args[1] == "true")
+			return be.SetAdmin(ctx, username, admin)
 		},
 	}
 
