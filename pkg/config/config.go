@@ -329,6 +329,14 @@ type Config struct {
 	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
+	// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
+	// "repo blob" command read into memory to display. Larger files are
+	// refused ("repo blob --raw" streams them instead), and a larger README
+	// is not shown. 0 means no limit. The TUI renders a file synchronously,
+	// so this limit is also what bounds the time and memory one file view
+	// takes.
+	MaxBlobSize int64 `env:"MAX_BLOB_SIZE" yaml:"max_blob_size"`
+
 	// DefaultPrivate makes repositories created without an explicit
 	// visibility private: push-to-create over SSH and HTTP, repo create and
 	// repo import without --private, and default_repo on boot. An explicit
@@ -447,6 +455,7 @@ func (c *Config) Environ() []string {
 
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_ADMIN_ONLY_CREATE=%t", c.AdminOnlyCreate))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_REPOS_PER_USER=%d", c.MaxReposPerUser))
+	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_BLOB_SIZE=%d", c.MaxBlobSize))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_DEFAULT_PRIVATE=%t", c.DefaultPrivate))
 
 	return envs
@@ -755,7 +764,19 @@ func DefaultConfig() *Config {
 			MirrorPull: "@every 10m",
 			LFSSweep:   "@every 1h",
 		},
+		MaxBlobSize: DefaultMaxBlobSize,
 	}
+}
+
+// DefaultMaxBlobSize is the default MaxBlobSize: 1 MiB.
+const DefaultMaxBlobSize = 1 << 20
+
+// BlobSizeLimit returns MaxBlobSize, or DefaultMaxBlobSize for a nil config.
+func (c *Config) BlobSizeLimit() int64 {
+	if c == nil {
+		return DefaultMaxBlobSize
+	}
+	return c.MaxBlobSize
 }
 
 // Validate validates the configuration.
@@ -816,6 +837,10 @@ func (c *Config) Validate() error {
 
 	if c.MaxReposPerUser < 0 {
 		return fmt.Errorf("max_repos_per_user: %d is negative; use 0 for no limit", c.MaxReposPerUser)
+	}
+
+	if c.MaxBlobSize < 0 {
+		return fmt.Errorf("max_blob_size: %d is negative; use 0 for no limit", c.MaxBlobSize)
 	}
 
 	switch c.SSH.ClientStrictHostKeyChecking {
