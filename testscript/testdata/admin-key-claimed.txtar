@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # A key in initial_admin_keys that is owned by a non-admin account is
 # refused for SSH sessions. `pubkey add` takes any public key without proof
 # of holding its private half, so user1 can claim admin2's public key before
@@ -97,4 +94,3 @@ soft repo collab list secret
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

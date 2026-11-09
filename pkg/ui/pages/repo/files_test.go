@@ -105,7 +105,7 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 				t.Fatalf("after RefMsg activeView = %v; want filesViewLoading", f.activeView)
 			}
 			f.path = tc.path
-			msg := f.updateFilesCmd()
+			msg := f.updateFilesCmd()()
 			if _, ok := msg.(common.ErrorMsg); !ok {
 				t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
 			}
@@ -173,14 +173,14 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	f := NewFiles(common.NewCommon(ctx, 80, 40))
 	f.Update(RepoMsg(openRepo{path: dir}))
 	f.Update(RefMsg(ref))
-	f.Update(f.updateFilesCmd())
+	f.Update(f.updateFilesCmd()())
 	if n := len(f.selector.Items()); n != 1 {
 		t.Fatalf("after the first listing items = %d; want 1", n)
 	}
 
 	f.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
 	f.Update(RefMsg(ref))
-	msg := f.updateFilesCmd()
+	msg := f.updateFilesCmd()()
 	if _, ok := msg.(common.ErrorMsg); !ok {
 		t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
 	}

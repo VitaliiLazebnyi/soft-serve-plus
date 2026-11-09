@@ -1,7 +1,7 @@
 package backend
 
 import (
-	"path/filepath"
+	pathpkg "path"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -23,7 +23,8 @@ func LatestFile(r proto.Repository, ref *git.Reference, pattern string, maxSize 
 // maxSize bytes is not read; 0 or less means no limit.
 func Readme(r proto.Repository, ref *git.Reference, maxSize int64) (readme string, path string, err error) {
 	for _, dir := range []string{".", ".github", "docs"} {
-		readme, path, err = LatestFile(r, ref, filepath.Join(dir, "[rR][eE][aA][dD][mM][eE]*"), maxSize)
+		// Tree paths always use forward slashes, whatever the OS.
+		readme, path, err = LatestFile(r, ref, pathpkg.Join(dir, "[rR][eE][aA][dD][mM][eE]*"), maxSize)
 		if err == nil {
 			return
 		}

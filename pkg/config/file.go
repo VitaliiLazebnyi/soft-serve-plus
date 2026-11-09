@@ -81,6 +81,11 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: {{ .SSH.IdleTimeout }}
 
+  # The number of seconds a client has to complete the key exchange and
+  # authenticate before the connection is closed.
+  # A value of 0 means no timeout.
+  handshake_timeout: {{ .SSH.HandshakeTimeout }}
+
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
   # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
@@ -118,6 +123,31 @@ ssh:
 {{- end }}
   macs:
 {{- range .SSH.MACs }}
+    - {{ q . }}
+{{- else }} []
+{{- end }}
+
+  # The signature algorithms the SSH server accepts for client public key
+  # authentication. When empty, the server accepts every algorithm
+  # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
+  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
+  # implement are rejected at startup. A list replaces the default, so to let
+  # an old client that only signs with ssh-rsa authenticate, copy the default
+  # list and append it. Builds with Go 1.27 or later also accept ssh-mldsa-44,
+  # ssh-mldsa-65 and ssh-mldsa-87 by default; add those too to keep them:
+  #   public_key_auth_algorithms:
+  #     - "ssh-ed25519"
+  #     - "sk-ssh-ed25519@openssh.com"
+  #     - "sk-ecdsa-sha2-nistp256@openssh.com"
+  #     - "ecdsa-sha2-nistp256"
+  #     - "ecdsa-sha2-nistp384"
+  #     - "ecdsa-sha2-nistp521"
+  #     - "rsa-sha2-256"
+  #     - "rsa-sha2-512"
+  #     - "ssh-rsa" # legacy, appended
+  public_key_auth_algorithms:
+{{- range .SSH.PublicKeyAuthAlgorithms }}
     - {{ q . }}
 {{- else }} []
 {{- end }}
@@ -162,6 +192,21 @@ http:
   # This is the address that will be used to clone repositories.
   # Make sure to use https:// if you are using TLS.
   public_url: {{ q .HTTP.PublicURL }}
+
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: {{ .HTTP.MaxTimeout }}
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: {{ .HTTP.IdleTimeout }}
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: {{ .HTTP.MaxConnections }}
 
   # The cross-origin request security options
   cors:
@@ -284,7 +329,8 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
 # Largest file, in bytes, that the TUI and "repo blob" read into memory to
