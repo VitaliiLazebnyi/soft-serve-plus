@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultNoContent = "No readme found.\n\nCreate a `.soft-serve` repository and add a `README.md` file to display readme."
+	defaultNoContent = "No readme found.\n\nAn admin can create a `.soft-serve` repository with a `README.md` file to show it here."
 )
 
 type pane int
@@ -202,21 +202,21 @@ func (s *Selection) Init() tea.Cmd {
 	}
 	sortedItems := make(Items, 0)
 	for _, r := range repos {
-		if r.Name() == ".soft-serve" {
+		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
+		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && be.AboutRepoOwnedByAdmin(ctx, r) {
 			readme, path, err := backend.Readme(ctx, r, nil)
 			if err != nil {
-				continue
+				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
+			} else {
+				// The README comes from the repository; glamour passes
+				// escape sequences through to the terminal.
+				readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
 			}
-
-			// The README comes from the repository; glamour passes
-			// escape sequences through to the terminal.
-			readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
 		}
 
 		if r.IsHidden() {
 			continue
 		}
-		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
 		if al >= access.ReadOnlyAccess {
 			item, err := NewItem(s.common, r)
 			if err != nil {

@@ -2,7 +2,7 @@ package backend
 
 import (
 	"context"
-	"path/filepath"
+	pathpkg "path"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -23,7 +23,8 @@ func LatestFile(ctx context.Context, r proto.Repository, ref *git.Reference, pat
 // when ctx is done.
 func Readme(ctx context.Context, r proto.Repository, ref *git.Reference) (readme string, path string, err error) {
 	for _, dir := range []string{".", ".github", "docs"} {
-		readme, path, err = LatestFile(ctx, r, ref, filepath.Join(dir, "[rR][eE][aA][dD][mM][eE]*"))
+		// Tree paths always use forward slashes, whatever the OS.
+		readme, path, err = LatestFile(ctx, r, ref, pathpkg.Join(dir, "[rR][eE][aA][dD][mM][eE]*"))
 		if err == nil {
 			return
 		}

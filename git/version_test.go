@@ -2,6 +2,7 @@ package git
 
 import (
 	"errors"
+	"os"
 	"testing"
 )
 
@@ -75,6 +76,25 @@ func TestBinVersion(t *testing.T) {
 	v, err := BinVersion()
 	if err != nil {
 		t.Fatalf("BinVersion(): %v", err)
+	}
+	if v.Major < 2 {
+		t.Errorf("BinVersion() = %v, implausible", v)
+	}
+}
+
+// TestBinVersionRetriesAfterFailure checks a failed lookup is not remembered:
+// with no git on PATH the call fails, and once git is back it succeeds.
+func TestBinVersionRetriesAfterFailure(t *testing.T) {
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", t.TempDir())
+	if _, err := BinVersion(); err == nil {
+		t.Fatal("BinVersion() with no git on PATH: want error, got nil")
+	}
+
+	t.Setenv("PATH", path)
+	v, err := BinVersion()
+	if err != nil {
+		t.Fatalf("BinVersion() after git is back on PATH: %v", err)
 	}
 	if v.Major < 2 {
 		t.Errorf("BinVersion() = %v, implausible", v)
