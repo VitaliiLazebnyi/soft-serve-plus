@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -107,11 +109,77 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		stdin:   stdin,
 	}, &lfsLogger{logger})
 
-	err := processor.ProcessCommands(op)
+	err := processCommands(processor, handler, op)
 	if errors.Is(err, errLFSCommandTooLarge) {
 		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
 	}
 	return err
+}
+
+// processCommands runs the transfer processor's command loop.
+//
+// The processor reads the argument of a "version" command without checking
+// that one was sent (`len(msgs) > 0 && msgs[1]`), so a bare "version" panics
+// the loop. That happens right after the command packet is read, before the
+// processor writes anything or reads further, so the stream is still in step:
+// answer the way the guard means to (400 "unknown version") and carry on with
+// the next command. Any other panic is not ours to swallow.
+func processCommands(p *transfer.Processor, handler *transfer.Pktline, op string) error {
+	for {
+		resume, err := processCommandsOnce(p, handler, op)
+		if !resume {
+			return err
+		}
+	}
+}
+
+func processCommandsOnce(p *transfer.Processor, handler *transfer.Pktline, op string) (resume bool, err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if !isBareVersionPanic(r) {
+			panic(r)
+		}
+		if err = handler.SendError(transfer.StatusBadRequest, "unknown version"); err == nil {
+			resume = true
+		}
+	}()
+	return false, p.ProcessCommands(op)
+}
+
+// processCommandsFunc is the function whose own unguarded index panics on a
+// bare "version" command.
+const processCommandsFunc = "github.com/charmbracelet/git-lfs-transfer/transfer.(*Processor).ProcessCommands"
+
+// isBareVersionPanic reports whether r is the processor indexing past the
+// single field of a bare "version" command. It must be called from the
+// deferred function that recovered r, while the panicking frames are still on
+// the stack: the index error has to come from ProcessCommands itself, not
+// from a backend method it called.
+func isBareVersionPanic(r any) bool {
+	rerr, ok := r.(runtime.Error)
+	if !ok || !strings.Contains(rerr.Error(), "index out of range [1] with length 1") {
+		return false
+	}
+	pcs := make([]uintptr, 32)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+	// Skip this function and the deferred one, up to the runtime's panic
+	// frames; the first frame past those is where the panic was raised.
+	inRuntime := false
+	for {
+		frame, more := frames.Next()
+		switch {
+		case strings.HasPrefix(frame.Function, "runtime."):
+			inRuntime = true
+		case inRuntime:
+			return frame.Function == processCommandsFunc
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 // Batch implements transfer.Backend.
