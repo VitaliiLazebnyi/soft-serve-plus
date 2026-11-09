@@ -552,3 +552,52 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 		}
 	}
 }
+
+// TestLFSVerifyRejectsStoredSizeMismatch checks that verify fails when the
+// object recorded in the database matches the requested size but the file on
+// disk does not. The handler used to fall through without writing a response,
+// which net/http turns into an implicit 200, so a truncated or corrupt object
+// passed verification.
+func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
+	is := is.New(t)
+	ctx, be, datastore := newLFSTestContext(t)
+
+	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
+	is.NoErr(err)
+	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	pointer := lfs.Pointer{
+		Oid:  "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393",
+		Size: 12,
+	}
+	dbx := db.FromContext(ctx)
+	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
+
+	objPath := filepath.Join(config.FromContext(ctx).DataPath, "lfs",
+		strconv.FormatInt(repo.ID(), 10), "objects", filepath.FromSlash(pointer.RelativePath()))
+	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
+
+	router := lfsTestRouter(ctx)
+	verify := func() *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"oid":%q,"size":%d}`, pointer.Oid, pointer.Size)
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/basic/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", lfs.MediaType)
+		req.Header.Set("Accept", lfs.MediaType)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	// Truncated on disk: must not verify.
+	is.NoErr(os.WriteFile(objPath, []byte("short"), 0o644))
+	if w := verify(); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("truncated object: got status %d, want 422: %s", w.Code, w.Body.String())
+	}
+
+	// Intact on disk: verifies.
+	is.NoErr(os.WriteFile(objPath, []byte("hello world\n"), 0o644))
+	if w := verify(); w.Code != http.StatusOK {
+		t.Fatalf("intact object: got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
