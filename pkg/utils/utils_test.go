@@ -129,6 +129,33 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
+func TestValidateUsernameFirstCharacter(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		username string
+		valid    bool
+	}{
+		{"alice", true},
+		{"אבי", true},      // Hebrew: lead byte 0xD7 is '×', not a letter
+		{"ñandu", true},    // Latin-1 letter
+		{"Ωmega-2", true},  // Greek letter
+		{"٣abc", false},    // Arabic-Indic digit: lead byte 0xD9 is 'Ù'
+		{"०abc", false},    // Devanagari digit
+		{"1abc", false},    // ASCII digit
+		{"-abc", false},    // hyphen
+		{"\xffabc", false}, // invalid UTF-8
+		{"a\xffbc", false}, // invalid UTF-8 later on
+	} {
+		err := ValidateUsername(tc.username)
+		if tc.valid && err != nil {
+			t.Errorf("ValidateUsername(%q) = %v, want nil", tc.username, err)
+		}
+		if !tc.valid && err == nil {
+			t.Errorf("ValidateUsername(%q) = nil, want an error", tc.username)
+		}
+	}
+}
+
 func TestSanitize(t *testing.T) {
 	cases := []struct {
 		name, in, out string

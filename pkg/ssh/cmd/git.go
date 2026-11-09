@@ -170,6 +170,10 @@ func GitLFSTransfer() *cobra.Command {
 	return cmd
 }
 
+// errLFSAuthNoAccount is returned by git-lfs-authenticate to a caller whose
+// key belongs to no account: the token it issues is for an account.
+var errLFSAuthNoAccount = errors.New("git-lfs-authenticate needs an account: register this SSH key or use an HTTP(S) remote for LFS")
+
 // gitDenyRead is denyReadAs for git services: ErrNotAuthed when anonymous,
 // ErrInvalidRepo when registered.
 func gitDenyRead(user proto.User) error {
@@ -532,9 +536,8 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			// HTTP LFS endpoint checks that token against the account's own
 			// access; it knows nothing about admin keys. Authorize with the
 			// account's access here too, so a listed admin key with no
-			// account is refused with a plain "not authorized" instead of
-			// reaching the handler, which has no account to issue a token
-			// for. git-lfs-transfer stays on SSH and keeps the admin key's
+			// account gets the answer any caller without an account gets.
+			// git-lfs-transfer stays on SSH and keeps the admin key's
 			// access.
 			repo, accessLevel = be.Readable(ctx, name, user)
 			// Keep the context in step with the repo checked here, so the
@@ -544,6 +547,16 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 		if err := gitAccess(user, repo, accessLevel, need); err != nil {
 			return err
+		}
+
+		// A caller without an account that may read the repository, such
+		// as an unregistered key on a public repository with anonymous
+		// access, has no account to issue a token for. Say so instead of
+		// failing in the handler. The repository is readable to it, so
+		// this reveals nothing about it.
+		if service == git.LFSAuthenticateService && user == nil {
+			logger.Debug("refusing git-lfs-authenticate without an account", "repo", name, "operation", operation)
+			return errLFSAuthNoAccount
 		}
 
 		// An upload writes to the repository like a push, so it holds off
@@ -575,8 +588,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		}
 
 		if err := service.Handler(ctx, scmd); err != nil {
-			logger.Error("failed to handle lfs service", "service", service, "err", err, "repo", name)
-			return git.ErrSystemMalfunction
+			return gitServiceError(logger, service, name, err)
 		}
 
 		return nil
