@@ -35,7 +35,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		}),
 	); err != nil {
 		// A repository deleted meanwhile fails the insert on a
-		// constraint too; report it as gone, not as a duplicate.
+		// constraint; report it as gone.
 		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return err
 		}

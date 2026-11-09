@@ -62,8 +62,8 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 
 		return nil
 	})
-	// A repository deleted meanwhile fails the insert on its foreign key,
-	// which would read as a duplicate; report it as gone.
+	// A repository deleted meanwhile fails the insert on its foreign key;
+	// report it as gone.
 	return store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err)
 }
 
