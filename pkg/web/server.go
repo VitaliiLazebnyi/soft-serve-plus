@@ -27,7 +27,7 @@ func newRouter(ctx context.Context, pending *pushCreates) http.Handler {
 	HealthController(ctx, router)
 
 	// Git routes
-	gitController(router, pending)
+	gitController(ctx, router, pending)
 
 	router.PathPrefix("/").HandlerFunc(renderNotFound)
 
