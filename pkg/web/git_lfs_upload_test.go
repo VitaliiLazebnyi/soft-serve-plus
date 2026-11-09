@@ -248,9 +248,7 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 }
 
 // TestLFSUploadRepoDeletedMidUpload checks that a foreign key violation is
-// not mistaken for a duplicate upload. db.WrapError maps both to
-// ErrDuplicateKey, so the handler must confirm the row exists before it
-// reports success.
+// not mistaken for a duplicate upload, which the handler reports as success.
 func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 	e := newLFSUploadEnv(t)
 	const content = "orphan object"
@@ -266,6 +264,62 @@ func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 		t.Fatalf("got 200 for an object whose repository was deleted")
 	}
 	e.assertNoTempFiles(t)
+}
+
+// TestLFSUploadRestoresMissingObject checks that an upload of an object that
+// is recorded but whose file is gone or damaged stores it again. The handler
+// used to skip any upload of a recorded object, so the file could never be
+// restored.
+func TestLFSUploadRestoresMissingObject(t *testing.T) {
+	const content = "restore me"
+	oid := sha256Hex(content)
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, objPath string)
+	}{
+		{"file removed", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.Remove(objPath); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file truncated", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.WriteFile(objPath, []byte(content[:3]), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file corrupted", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.WriteFile(objPath, []byte(strings.ToUpper(content)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLFSUploadEnv(t)
+			if w := e.upload(oid, int64(len(content)), strings.NewReader(content)); w.Code != http.StatusOK {
+				t.Fatalf("first upload: got status %d, want 200: %s", w.Code, w.Body.String())
+			}
+			tc.damage(t, e.objectPath(oid))
+
+			if w := e.upload(oid, int64(len(content)), strings.NewReader(content)); w.Code != http.StatusOK {
+				t.Fatalf("second upload: got status %d, want 200: %s", w.Code, w.Body.String())
+			}
+			got, err := os.ReadFile(e.objectPath(oid))
+			if err != nil {
+				t.Fatalf("object not restored: %v", err)
+			}
+			if string(got) != content {
+				t.Errorf("stored content %q, want %q", got, content)
+			}
+			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err != nil {
+				t.Errorf("object no longer recorded: %v", err)
+			}
+			e.assertNoTempFiles(t)
+		})
+	}
 }
 
 // TestLFSUploadAbortedBody checks an upload whose body cannot be read to the
