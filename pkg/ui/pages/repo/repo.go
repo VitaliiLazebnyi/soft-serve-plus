@@ -150,6 +150,9 @@ func (r *Repo) Init() tea.Cmd {
 // Update implements tea.Model.
 func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// routed is set when the message has already been delivered to the panes
+	// it is meant for, so that the active pane does not get it a second time.
+	routed := false
 	switch msg := msg.(type) {
 	case RepoMsg:
 		// Set the state to loading when we get a new repository.
@@ -159,9 +162,11 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
 		)
+		routed = true
 	case RefMsg:
 		r.ref = msg
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 		r.state = readyState
 	case tabs.SelectTabMsg:
 		r.activeTab = int(msg)
@@ -215,18 +220,26 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
+		routed = true
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		routed = true
 	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
+		routed = true
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
+		routed = true
 	case StashListMsg, StashPatchMsg:
 		cmds = append(cmds, r.updateTabComponent(&Stash{}, msg))
+		routed = true
 	// We have two spinners, one is used to when loading the repository and the
 	// other is used when loading the log.
 	// Check if the spinner ID matches the spinner model.
 	case spinner.TickMsg:
+		// A tick belongs to exactly one spinner, so it never goes to the
+		// active pane unless that pane owns it.
+		routed = true
 		if r.state == loadingState && r.spinner.ID() == msg.ID {
 			s, cmd := r.spinner.Update(msg)
 			r.spinner = s
@@ -248,10 +261,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case EmptyRepoMsg:
 		r.ref = nil
 		r.state = readyState
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case common.ErrorMsg:
 		r.state = readyState
 		// The file listing loads on every ref change, usually while another
@@ -268,11 +283,13 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		}
 	}
-	active := r.panes[r.activeTab]
-	m, cmd := active.Update(msg)
-	r.panes[r.activeTab] = m.(common.TabComponent)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	if !routed {
+		active := r.panes[r.activeTab]
+		m, cmd := active.Update(msg)
+		r.panes[r.activeTab] = m.(common.TabComponent)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Update the status bar on these events

@@ -278,7 +278,9 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
+	// A window size message has already been delivered to every page above.
+	_, resized := msg.(tea.WindowSizeMsg)
+	if !resized && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		m, cmd := ui.pages[ui.activePage].Update(msg)
 		ui.pages[ui.activePage] = m.(common.Component)
 		if cmd != nil {
