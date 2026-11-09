@@ -226,8 +226,6 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			(!ui.IsFiltering() || msg.String() == "ctrl+c"):
 			// While filtering, "q" is typed into the filter but ctrl+c
 			// still quits.
-			// Stop bubblezone background workers.
-			ui.common.Zone.Close()
 			return ui, tea.Quit
 		case ui.activePage == repoPage &&
 			ui.pages[ui.activePage].(*repo.Repo).Path() == "" &&

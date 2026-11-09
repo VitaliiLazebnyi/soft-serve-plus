@@ -2,8 +2,10 @@ package browse
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,8 +25,11 @@ func hasHelp(bindings []key.Binding, k string) bool {
 	return false
 }
 
-// msgs runs cmd, expanding batches, and returns the messages that arrive
-// promptly. Commands that wait (ticks and the like) are left out.
+// msgs runs cmd to completion, expanding batches, and returns the messages
+// it produces. Every command the model returns here finishes on its own
+// (loading the reference runs git, which can take seconds on a loaded Windows
+// runner), so each one is waited for rather than dropped after a deadline;
+// the deadline below only turns a hang into a failure.
 func msgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
 	if cmd == nil {
@@ -35,8 +40,8 @@ func msgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(time.Second):
-		return nil
+	case <-time.After(time.Minute):
+		t.Fatal("command did not return")
 	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
 		var out []tea.Msg
@@ -96,8 +101,40 @@ func TestRefAfterRepo(t *testing.T) {
 	}
 
 	_, cmd := m.Update(repoMsg)
-	if !hasRefMsg(msgs(t, cmd)) {
-		t.Fatal("handling RepoMsg does not load the reference")
+	if got := msgs(t, cmd); !hasRefMsg(got) {
+		t.Fatalf("handling RepoMsg does not load the reference: %v", got)
+	}
+}
+
+// TestQuitKeepsZoneManagerRunning checks that quitting leaves the zone
+// manager running for the program's last render, which blocks forever after
+// the manager is closed once the view has more zones than its worker buffers.
+func TestQuitKeepsZoneManagerRunning(t *testing.T) {
+	c := common.NewCommon(context.Background(), 80, 24)
+	t.Cleanup(c.Zone.Close)
+	m := &model{common: c}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd == nil {
+		t.Fatal("quit key returned no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("quit key did not quit")
+	}
+
+	var view strings.Builder
+	for i := range 500 {
+		view.WriteString(c.Zone.Mark(fmt.Sprintf("zone-%d", i), "x"))
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.Zone.Scan(view.String())
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("render after quit blocked: the zone manager was closed on quit")
 	}
 }
 
