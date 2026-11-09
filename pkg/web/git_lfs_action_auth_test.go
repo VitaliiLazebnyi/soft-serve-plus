@@ -55,11 +55,19 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	is.NoErr(os.WriteFile(objPath, []byte(body), 0o644))
 	is.NoErr(datastore.CreateLFSObject(ctx, db.FromContext(ctx), repo.ID(), oid, int64(len(body))))
 
+	// An object the server does not have, so an upload batch returns
+	// actions: objects already stored get none.
+	missingOid := sha256Hex("missing")
+
 	router := lfsTestRouter(ctx)
 	batch := func(op, auth string) lfs.BatchResponse {
 		t.Helper()
+		reqOid := oid
+		if op == lfs.OperationUpload {
+			reqOid = missingOid
+		}
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/batch",
-			strings.NewReader(`{"operation":"`+op+`","objects":[{"oid":"`+oid+`","size":7}]}`))
+			strings.NewReader(`{"operation":"`+op+`","objects":[{"oid":"`+reqOid+`","size":7}]}`))
 		req.Header.Set("Accept", lfs.MediaType)
 		req.Header.Set("Content-Type", lfs.MediaType)
 		req.Header.Set("Authorization", auth)
