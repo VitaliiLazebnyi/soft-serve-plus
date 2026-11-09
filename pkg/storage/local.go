@@ -73,8 +73,20 @@ func (l *LocalStorage) Put(name string, r io.Reader) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close() //nolint: errcheck
-	return io.Copy(f, r)
+	n, err := io.Copy(f, r)
+	if err != nil {
+		_ = f.Close()
+		return n, err
+	}
+	// Callers rename the file into place once Put returns, after which its
+	// presence alone marks the object as stored. Flush it to disk first, and
+	// report a failed close, so a crash or a late write error cannot leave a
+	// short file there.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return n, err
+	}
+	return n, f.Close()
 }
 
 // Exists implements Storage.
