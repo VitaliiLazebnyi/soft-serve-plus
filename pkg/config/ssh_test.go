@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"errors"
 	"io/fs"
@@ -143,23 +144,35 @@ func TestSSHKeyPairPathWithDollar(t *testing.T) {
 	}
 }
 
-// A host key that cannot sign Ed25519 tokens, or is not a key at all, is an
-// error rather than a reason to make one up.
-func TestSSHKeyPairUnusableFile(t *testing.T) {
+// Every host key type the SSH server accepts (Ed25519, RSA, ECDSA) is
+// loaded from disk, so tokens can be signed with whichever key is set.
+func TestSSHKeyPairKeyTypes(t *testing.T) {
 	dir := t.TempDir()
-
-	rsaPath := filepath.Join(dir, "rsa_key")
-	if _, err := keygen.New(rsaPath, keygen.WithKeyType(keygen.RSA), keygen.WithWrite()); err != nil {
-		t.Fatalf("write rsa key: %v", err)
+	for _, kt := range []keygen.KeyType{keygen.Ed25519, keygen.RSA, keygen.ECDSA} {
+		path := filepath.Join(dir, string(kt)+"_key")
+		want, err := keygen.New(path, keygen.WithKeyType(kt), keygen.WithWrite())
+		if err != nil {
+			t.Fatalf("write %s key: %v", kt, err)
+		}
+		kp, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: path}})
+		if err != nil {
+			t.Fatalf("KeyPair(%s) => _, %v, want nil error", kt, err)
+		}
+		pub, ok := kp.CryptoPublicKey().(interface{ Equal(crypto.PublicKey) bool })
+		if !ok || !pub.Equal(want.CryptoPublicKey()) {
+			t.Errorf("KeyPair(%s) returned a key that is not the one on disk", kt)
+		}
 	}
-	junkPath := filepath.Join(dir, "junk")
+}
+
+// A file that is not a key is an error rather than a reason to make one up.
+func TestSSHKeyPairUnusableFile(t *testing.T) {
+	junkPath := filepath.Join(t.TempDir(), "junk")
 	if err := os.WriteFile(junkPath, []byte("not a key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{rsaPath, junkPath} {
-		if kp, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: path}}); err == nil {
-			t.Errorf("KeyPair(%s) => %v, nil, want an error", filepath.Base(path), kp)
-		}
+	if kp, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: junkPath}}); err == nil {
+		t.Errorf("KeyPair(junk) => %v, nil, want an error", kp)
 	}
 }

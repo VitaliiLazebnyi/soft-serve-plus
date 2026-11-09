@@ -2,7 +2,9 @@ package config
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"io"
@@ -21,10 +23,10 @@ var (
 	ErrEmptySSHKeyPath = errors.New("empty SSH key path")
 )
 
-// HostKey is the server's Ed25519 SSH host key, used to sign and verify
-// tokens.
+// HostKey is the server's SSH host key (Ed25519, RSA or ECDSA), used to
+// sign and verify tokens.
 type HostKey struct {
-	priv ed25519.PrivateKey
+	priv crypto.Signer
 }
 
 // PrivateKey returns the private key.
@@ -56,10 +58,11 @@ type keyPairCacheEntry struct {
 }
 
 // KeyPair returns the server's SSH host key, read from ssh.key_path. The
-// file must exist and hold an unencrypted Ed25519 key: the SSH server
-// writes it on first start, and a key generated in memory here would differ
-// on every call, so tokens signed with it could never be verified. The path
-// is used as is, without expanding "~" or environment variables.
+// file must exist and hold an unencrypted Ed25519, RSA or ECDSA key: the
+// SSH server writes it on first start, and a key generated in memory here
+// would differ on every call, so tokens signed with it could never be
+// verified. The path is used as is, without expanding "~" or environment
+// variables.
 func KeyPair(cfg *Config) (*HostKey, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig
@@ -99,14 +102,18 @@ func KeyPair(cfg *Config) (*HostKey, error) {
 		return nil, fmt.Errorf("ssh host key %s: %w", path, err)
 	}
 
-	var priv ed25519.PrivateKey
+	var priv crypto.Signer
 	switch k := raw.(type) {
 	case *ed25519.PrivateKey:
 		priv = *k
 	case ed25519.PrivateKey:
 		priv = k
+	case *rsa.PrivateKey:
+		priv = k
+	case *ecdsa.PrivateKey:
+		priv = k
 	default:
-		return nil, fmt.Errorf("ssh host key %s: unsupported key type %T, want ed25519", path, raw)
+		return nil, fmt.Errorf("ssh host key %s: unsupported key type %T, want ed25519, rsa or ecdsa", path, raw)
 	}
 
 	key := &HostKey{priv: priv}
