@@ -11,7 +11,7 @@ import (
 
 func hiddenCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "hidden REPOSITORY [TRUE|FALSE]",
+		Use:               "hidden REPOSITORY [true|false]",
 		Short:             "Hide or unhide a repository",
 		Aliases:           []string{"hide"},
 		Args:              cobra.RangeArgs(1, 2),

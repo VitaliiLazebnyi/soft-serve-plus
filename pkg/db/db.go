@@ -68,7 +68,9 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 // reads before it writes cannot upgrade to a write lock while another
 // connection holds one: SQLite returns SQLITE_BUSY at once instead of waiting
 // for busy_timeout. Taking the write lock at BEGIN makes it wait instead.
-// Read-only transactions are still started as deferred by the driver.
+// Transactions begun with TxOptions.ReadOnly, as ReadTransactionContext
+// does, are still started as deferred by the driver, so reads do not queue
+// behind writers.
 func sqliteImmediateTx(dsn string) string {
 	i := strings.IndexByte(dsn, '?')
 	if i == 0 {
@@ -145,7 +147,22 @@ func (d *DB) Transaction(fn func(tx *Tx) error) error {
 
 // TransactionContext implements db.DB.
 func (d *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) error {
-	txx, err := d.DB.BeginTxx(ctx, nil)
+	return d.transaction(ctx, nil, fn)
+}
+
+// ReadTransactionContext runs fn in a read-only transaction. On SQLite it
+// starts with a deferred BEGIN, so it does not take the write lock and wait
+// behind writers; on Postgres it is a READ ONLY transaction. fn must not
+// write: Postgres rejects the write, and on SQLite a deferred transaction
+// that reads and then writes fails at once with SQLITE_BUSY while another
+// connection holds the write lock, instead of waiting for it. Use
+// TransactionContext for anything that writes.
+func (d *DB) ReadTransactionContext(ctx context.Context, fn func(tx *Tx) error) error {
+	return d.transaction(ctx, &sql.TxOptions{ReadOnly: true}, fn)
+}
+
+func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *Tx) error) error {
+	txx, err := d.DB.BeginTxx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
