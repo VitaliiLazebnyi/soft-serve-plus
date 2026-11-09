@@ -1,0 +1,58 @@
+# vi: set ft=conf
+
+# The LFS batch response does not echo the caller's Basic credentials (an
+# access token here) into the action URLs. git-lfs must still authenticate
+# the upload, verify and download requests to those URLs on its own, by
+# reusing the credentials it got for the batch request. Anonymous access is
+# off, so any action request sent without credentials fails.
+
+# git and git-lfs dial the remote and the LFS action URLs (built from the
+# public URL) themselves, so both name the address the server listens on
+env SOFT_SERVE_HTTP_PUBLIC_URL=http://127.0.0.1:$HTTP_PORT
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft settings anon-access no-access
+soft repo create repo1 --private
+
+# create access token
+soft token create --expires-in '1h' 'lfs'
+stdout 'ss_*'
+cp stdout tokenfile
+envfile TOKEN=tokenfile
+
+# Pass the token through a credential helper, not the URL (see http.txtar).
+mkdir ./repo1
+git -C repo1 init
+git -C repo1 remote add origin http://127.0.0.1:$HTTP_PORT/repo1
+git -C repo1 config credential.helper ''
+git -C repo1 config --add credential.helper '!f() { echo username=soft; echo password='$TOKEN'; }; f'
+git -C repo1 lfs install --local
+git -C repo1 lfs track '*.png'
+mkfile ./repo1/foo.png 'lfs content over token auth'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD:refs/heads/master
+
+# the pointer reached the server; the clone below proves the object did too
+soft repo blob repo1 foo.png
+stdout 'oid sha256:'
+
+# without credentials, the server refuses the batch request
+! git clone http://127.0.0.1:$HTTP_PORT/repo1 noauth
+
+# a fresh clone with the same credentials downloads the real object content
+mkdir ./clone1
+git -C clone1 init
+git -C clone1 remote add origin http://127.0.0.1:$HTTP_PORT/repo1
+git -C clone1 config credential.helper ''
+git -C clone1 config --add credential.helper '!f() { echo username=soft; echo password='$TOKEN'; }; f'
+git -C clone1 lfs install --local
+git -C clone1 fetch origin master
+git -C clone1 checkout -b master origin/master
+git -C clone1 lfs pull
+exec cat clone1/foo.png
+stdout 'lfs content over token auth'

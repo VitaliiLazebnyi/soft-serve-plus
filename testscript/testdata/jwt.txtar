@@ -20,8 +20,6 @@ stdout '.*\..*\..*'
 
 # a token for a private repo the user cannot read and one for a missing
 # repo get the same answer, so the token cannot be used to probe names
-[windows] stopserver
-[windows] skip 'curl makes github actions hang'
 soft repo create secret -p
 usoft jwt secret
 cp stdout secretjwt
@@ -44,4 +42,3 @@ cmp stdout want.txt
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .
