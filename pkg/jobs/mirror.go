@@ -114,9 +114,7 @@ var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
 func syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
-		cmd := git.NewCommand("fetch", "--prune", "--", name).WithContext(ctx).WithTimeout(-1)
-		cmd.AddEnvs(env...)
-		if _, err := cmd.RunInDir(path); err != nil {
+		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name); err != nil {
 			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
 		}
 	}
