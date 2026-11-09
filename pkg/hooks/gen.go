@@ -3,11 +3,12 @@ package hooks
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"text/template"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
@@ -48,7 +49,7 @@ func GenerateHooks(_ context.Context, cfg *config.Config, repo string) error {
 		hp := filepath.Join(hooksPath, hook)
 
 		// Write the hooks primary script
-		if err := os.WriteFile(hp, []byte(hookTemplate), os.ModePerm); err != nil { //nolint:gosec
+		if err := writeHook(hp, []byte(hookTemplate)); err != nil {
 			return err
 		}
 
@@ -74,19 +75,32 @@ func GenerateHooks(_ context.Context, cfg *config.Config, repo string) error {
 			Hook:       hook,
 			Args:       args,
 		}); err != nil {
-			log.WithPrefix("hooks").Error("failed to execute hook template", "err", err)
-			continue
+			return fmt.Errorf("execute %s hook template: %w", hook, err)
 		}
 
 		// Write the soft-serve hook inside ${hook}.d directory.
-		hp = filepath.Join(hp, "soft-serve")
-		err := os.WriteFile(hp, data.Bytes(), os.ModePerm) //nolint:gosec
-		if err != nil {
-			log.WithPrefix("hooks").Error("failed to write hook", "err", err)
-			continue
+		if err := writeHook(filepath.Join(hp, "soft-serve"), data.Bytes()); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// hookPerm is the mode of a generated hook script. Git skips hooks that are
+// not executable.
+const hookPerm fs.FileMode = 0o755
+
+// writeHook writes a hook script and makes it executable. os.WriteFile keeps
+// the mode of an existing file, so the mode is set explicitly to repair a hook
+// that lost its executable bit, e.g. after a restore from a backup.
+func writeHook(path string, data []byte) error {
+	if err := os.WriteFile(path, data, hookPerm); err != nil {
+		return fmt.Errorf("write hook: %w", err)
+	}
+	if err := os.Chmod(path, hookPerm); err != nil {
+		return fmt.Errorf("make hook executable: %w", err)
+	}
 	return nil
 }
 

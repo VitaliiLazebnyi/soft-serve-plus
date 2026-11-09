@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"path/filepath"
@@ -112,6 +113,59 @@ func TestLFSLockRangeCursor(t *testing.T) {
 	}
 	if got, want := strings.Join(cursors, ","), "3,6"; got != want {
 		t.Errorf("next cursors %s, want %s", got, want)
+	}
+}
+
+// passwordLockStore returns one lock owned by a user with a password hash.
+type passwordLockStore struct{ fullPageLockStore }
+
+const testPasswordHash = "$2a$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012"
+
+func (passwordLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) (models.User, error) {
+	return models.User{
+		ID:       id,
+		Username: "owner",
+		Password: sql.NullString{String: testPasswordHash, Valid: true},
+	}, nil
+}
+
+// TestLFSLockDebugLogOmitsPassword checks that the transfer library's debug
+// log of a lock, as in its "lock success" line, does not print the owner's
+// password hash. A lock used to hold the owner's whole user record.
+func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
+	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
+
+	l := &lfsLockBackend{
+		lfsTransfer: &lfsTransfer{
+			ctx:    context.Background(),
+			dbx:    dbx,
+			store:  passwordLockStore{},
+			logger: log.New(io.Discard),
+			repo:   lfsTestRepo{},
+			op:     lfs.OperationUpload,
+		},
+		user: lfsTestUser{},
+	}
+
+	var buf bytes.Buffer
+	logger := &lfsLogger{l: log.NewWithOptions(&buf, log.Options{Level: log.DebugLevel})}
+	if _, err := l.Range("", 1, func(lock transfer.Lock) error {
+		logger.Log("lock success", "lock", lock)
+		return nil
+	}); err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "owner") {
+		t.Errorf("log %q does not name the lock owner", out)
+	}
+	if strings.Contains(out, testPasswordHash) {
+		t.Errorf("log %q includes the owner's password hash", out)
 	}
 }
 
