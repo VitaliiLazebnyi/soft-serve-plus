@@ -39,3 +39,25 @@ func TestReadmeEmptyRepoStopsLoading(t *testing.T) {
 		t.Errorf("status bar value = %q, want no readme directory", got)
 	}
 }
+
+// "soft browse" hides clone commands, and an empty local repository has no
+// server to clone from, so its readme must not point at the server's URL.
+func TestReadmeEmptyRepoHidesCloneCmd(t *testing.T) {
+	cfg := config.DefaultConfig()
+	ctx := config.WithContext(context.Background(), cfg)
+	c := common.NewCommon(ctx, 80, 40)
+	c.HideCloneCmd = true
+	r := NewReadme(c)
+
+	r.Update(RepoMsg(readmeTestRepo{}))
+	r.Init()
+	r.Update(EmptyRepoMsg{})
+
+	view := ansi.Strip(r.View())
+	if strings.Contains(view, "git clone") || strings.Contains(view, cfg.SSH.PublicURL) {
+		t.Errorf("readme shows a clone command for a local repository:\n%s", view)
+	}
+	if !strings.Contains(view, "Empty repository") {
+		t.Errorf("readme does not say the repository is empty:\n%s", view)
+	}
+}

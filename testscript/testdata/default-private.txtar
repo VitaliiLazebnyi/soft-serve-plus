@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # default_private decides the visibility of repositories created without an
 # explicit one: repo create and repo import without --private, push-to-create
 # over SSH and HTTP, and default_repo. --private=false still creates a public
@@ -156,4 +153,3 @@ stdout 'false'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .
