@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # max_repos_per_user caps the repositories a non-admin may create, by repo
 # create, push-to-create over SSH and push-to-create over HTTP. Admins are
 # exempt, and anonymous creates count together as one user.
@@ -63,4 +60,3 @@ usoft repo create two
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

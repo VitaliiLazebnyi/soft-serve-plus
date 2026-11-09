@@ -86,3 +86,32 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 		t.Errorf("skip not logged with the job name: %q", out)
 	}
 }
+
+func TestSchedulerRecoversPanic(t *testing.T) {
+	var buf bytes.Buffer
+	logger := log.New(&buf)
+	s := NewScheduler(log.WithContext(context.TODO(), logger))
+	var runs atomic.Int32
+	id, err := s.AddFunc("panics", "* * * * *", func() {
+		if runs.Add(1) == 1 {
+			panic("boom")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Remove(id)
+
+	job := s.Cron.Entry(cron.EntryID(id)).WrappedJob
+	job.Run()
+
+	if !strings.Contains(buf.String(), "boom") {
+		t.Errorf("expected the panic to be logged, got %q", buf.String())
+	}
+
+	// A panic must not leave the job marked as still running.
+	job.Run()
+	if n := runs.Load(); n != 2 {
+		t.Errorf("expected the job to run again after a panic, got %d runs", n)
+	}
+}

@@ -373,6 +373,43 @@ func TestNewPushEventPusher(t *testing.T) {
 	is.Equal(ev.Pusher, User{})
 }
 
+// A push that deletes a branch or tag lists no commits, since there is no
+// revision range to walk, and says the ref was deleted.
+func TestNewPushEventDelete(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, zeroHash)
+	is.NoErr(err)
+	is.Equal(ev.EventType, EventPush)
+	is.Equal(ev.Before, head)
+	is.Equal(ev.After, zeroHash)
+	is.True(ev.Deleted)
+	is.True(!ev.Created)
+	is.True(!ev.Forced)
+	// Empty rather than nil, so the JSON payload has "commits":[].
+	is.True(ev.Commits != nil)
+	is.Equal(len(ev.Commits), 0)
+}
+
+func TestNewPushEventCreatedFlag(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	path, head := gitRepo(t)
+	first := gitOutput(t, path, "rev-parse", "main~1")
+
+	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	is.NoErr(err)
+	is.True(ev.Created)
+	is.True(!ev.Deleted)
+
+	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
+	is.NoErr(err)
+	is.True(!ev.Created)
+	is.True(!ev.Deleted)
+}
+
 func TestNewPushEventUnknownAfterFails(t *testing.T) {
 	is := is.New(t)
 	e := newTestEnv(t)

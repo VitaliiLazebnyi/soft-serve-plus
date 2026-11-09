@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
+	"go.yaml.in/yaml/v4"
 )
 
 func TestParseMultipleKeys(t *testing.T) {
@@ -755,6 +757,67 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	if !slices.Equal(fromFile.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
 		t.Fatalf("AllowedHosts from file = %q", fromFile.Webhook.AllowedHosts)
 	}
+}
+
+// A misspelt key is ignored, so it is reported with its dotted path and line
+// for the server to warn about.
+func TestUnknownConfigKeys(t *testing.T) {
+	is := is.New(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	is.NoErr(os.WriteFile(path, []byte(`name: "x"
+admin_only_creat: true
+log_format: "text"
+anon_access: read-only
+initial_admin_keys:
+  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8"
+ssh: &ssh
+  listen_addr: ":23231"
+  listen_adr: ":1"
+http:
+  cors:
+    allowed_origin: ["*"]
+git:
+  <<: *ssh
+  max_connections: 3
+`), 0o600))
+	cfg := DefaultConfig()
+	is.NoErr(parseFile(cfg, path))
+	is.True(!cfg.AdminOnlyCreate)
+	is.Equal(cfg.UnknownKeys(), []UnknownKey{
+		{Key: "admin_only_creat", Line: 2},
+		{Key: "log_format", Line: 3},
+		{Key: "ssh.listen_adr", Line: 9},
+		{Key: "http.cors.allowed_origin", Line: 12},
+		// The merged ssh keys land in git, which only knows listen_addr.
+		{Key: "git.listen_adr", Line: 9},
+	})
+
+	// A config file without unknown keys reports none.
+	is.NoErr(os.WriteFile(path, []byte("admin_only_create: true\n"), 0o600))
+	cfg = DefaultConfig()
+	is.NoErr(parseFile(cfg, path))
+	is.True(cfg.AdminOnlyCreate)
+	is.Equal(len(cfg.UnknownKeys()), 0)
+}
+
+// The generated config file and the README's sample use only known keys.
+func TestConfigSamplesHaveNoUnknownKeys(t *testing.T) {
+	is := is.New(t)
+	var doc yaml.Node
+	is.NoErr(yaml.Unmarshal([]byte(newConfigFile(DefaultConfig())), &doc))
+	is.Equal(findUnknownKeys(&doc, reflect.TypeFor[Config](), ""), []UnknownKey(nil))
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	is.NoErr(err)
+	s := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	const start = "```yaml\n# Soft Serve Plus Server configurations\n"
+	i := strings.Index(s, start)
+	is.True(i >= 0) // README has the sample config
+	sample := s[i+len("```yaml\n"):]
+	sample = sample[:strings.Index(sample, "\n```")]
+	doc = yaml.Node{}
+	is.NoErr(yaml.Unmarshal([]byte(sample), &doc))
+	is.Equal(findUnknownKeys(&doc, reflect.TypeFor[Config](), ""), []UnknownKey(nil))
 }
 
 // WriteConfig keeps the config, which can hold a database password, and a

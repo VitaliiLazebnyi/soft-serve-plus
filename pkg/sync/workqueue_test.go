@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -63,5 +64,35 @@ func TestWorkPoolRunTwice(t *testing.T) {
 	}
 	if wp.Status("second") {
 		t.Error("second job still queued")
+	}
+}
+
+// TestWorkPoolRecoversPanic checks that a panicking job is logged and
+// removed without killing the process or stopping the other jobs.
+func TestWorkPoolRecoversPanic(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	ran := false
+	wp := NewWorkPool(context.Background(), 1, WithWorkPoolLogger(func(format string, args ...interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}))
+	wp.Add("panics", func() { panic("boom") })
+	wp.Add("runs", func() {
+		mu.Lock()
+		defer mu.Unlock()
+		ran = true
+	})
+	wp.Run()
+
+	if !ran {
+		t.Error("expected the other job to run")
+	}
+	if wp.Status("panics") {
+		t.Error("expected the panicking job to be removed from the pool")
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "job panics panicked: boom") {
+		t.Errorf("expected the panic to be logged, got %q", logs)
 	}
 }
