@@ -1,0 +1,23 @@
+# vi: set ft=conf
+
+# "soft PATH" hands PATH to browse instead of rejecting it as a command
+mkdir notrepo
+! exec soft notrepo
+stderr 'failed to open repository'
+! stderr 'unknown command'
+
+# a file is not a repository, and the error says so instead of blaming git
+! exec soft somefile
+stderr 'somefile is not a directory'
+! stderr 'fork/exec'
+
+# a word that is not a path is still reported as an unknown command
+! exec soft brwse
+stderr 'unknown command "brwse" for "soft"'
+stderr 'browse'
+
+! exec soft notrepo notrepo
+stderr 'accepts at most 1 arg'
+
+-- somefile --
+not a repository
