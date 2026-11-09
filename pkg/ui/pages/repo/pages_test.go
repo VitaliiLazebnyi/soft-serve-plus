@@ -86,10 +86,10 @@ func TestStashPatchHighlightedOnce(t *testing.T) {
 	s := NewStash(common.NewCommon(context.Background(), width, 200))
 	s.SetSize(width, 200)
 	s.Update(RepoMsg(openRepo{path: dir}))
-	s.Update(s.fetchStash())
-	msg, ok := s.fetchStashPatch().(StashPatchMsg)
+	s.Update(s.fetchStashCmd()())
+	msg, ok := s.fetchStashPatchCmd()().(StashPatchMsg)
 	if !ok || msg.Diff == nil {
-		t.Fatalf("fetchStashPatch = %v, want a patch", msg)
+		t.Fatalf("fetchStashPatchCmd()() = %v, want a patch", msg)
 	}
 	s.Update(msg)
 
