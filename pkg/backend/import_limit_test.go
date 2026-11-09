@@ -322,8 +322,10 @@ func TestRegisteredImportCountsOnce(t *testing.T) {
 	is.NoErr(claimRepoPath(imp.path))
 	errc := make(chan error, 1)
 	go func() {
-		defer slot.release()
 		_, err := be.importRepository(ctx, alice, imp)
+		// Release before reporting, as ImportRepository does, so the
+		// counts are settled once the error has been received.
+		slot.release()
 		errc <- err
 	}()
 	select {

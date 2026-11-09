@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"sync"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
@@ -54,7 +55,9 @@ func (e *errReader) Read(p []byte) (int, error) {
 // is oid is the file renamed into objects/ and recorded. A concurrent upload
 // of the same object renames identical bytes over the same path; where that
 // rename fails, as it can on Windows, a file already in place is taken to be
-// the object if it is size bytes long and hashes to oid. If the object is
+// the object if it is size bytes long and hashes to oid. Uploads of the same
+// object to the same repository take turns at that step, so the check never
+// runs while another upload's rename is still in flight. If the object is
 // already recorded, by an earlier or concurrent upload, that counts as
 // success. The temporary file is always removed.
 //
@@ -91,15 +94,8 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 	// the temp file happens to live at.
 	pointer := Pointer{Oid: oid, Size: size}
 	objPath := path.Join("objects", pointer.RelativePath())
-	if err := strg.Rename(tempName, objPath); err != nil {
-		// On Windows, renaming onto a file that another upload is renaming
-		// or a download has open fails. If objPath already holds the object,
-		// the rename counts as done. Not everything that writes objects/
-		// verifies the content, so the existing file must hash to the oid;
-		// otherwise the caller gets the error and the client retries.
-		if !isObject(strg, objPath, oid, size) {
-			return fmt.Errorf("rename object: %w", err)
-		}
+	if err := placeObject(strg, tempName, objPath, repoID, oid, size); err != nil {
+		return err
 	}
 
 	if err := datastore.CreateLFSObject(ctx, dbx, repoID, oid, size); err != nil && !errors.Is(err, db.ErrDuplicateKey) {
@@ -107,6 +103,77 @@ func StoreObject(ctx context.Context, strg storage.Storage, dbx db.Handler, data
 	}
 
 	return nil
+}
+
+// placeObject renames the verified temporary file tempName to objPath.
+//
+// On Windows, renaming onto a file that is open fails with "Access is
+// denied", and so does opening a file that another rename still holds open:
+// MoveFileEx keeps the source open for delete until it returns, and os.Open
+// does not share delete access. Two concurrent uploads of one object could
+// thus see their rename fail and then fail to open the file the other had
+// just put in place, and answer the upload with an error. Holding a lock per
+// object across the rename and the check below keeps a rename from running
+// while another upload of the object is renaming or checking it.
+func placeObject(strg storage.Storage, tempName, objPath string, repoID int64, oid string, size int64) error {
+	unlock := objectLocks.lock(objectKey{repoID: repoID, oid: oid})
+	defer unlock()
+
+	if err := strg.Rename(tempName, objPath); err != nil {
+		// On Windows, renaming onto a file a download has open fails. If
+		// objPath already holds the object, the rename counts as done. Not
+		// everything that writes objects/ verifies the content, so the
+		// existing file must hash to the oid; otherwise the caller gets the
+		// error and the client retries.
+		if !isObject(strg, objPath, oid, size) {
+			return fmt.Errorf("rename object: %w", err)
+		}
+	}
+	return nil
+}
+
+// objectKey names an object in one repository's LFS storage.
+type objectKey struct {
+	repoID int64
+	oid    string
+}
+
+// keyedMutex is a set of mutexes, one per key in use. A key's mutex is
+// dropped once nobody holds or waits for it.
+type keyedMutex struct {
+	mu    sync.Mutex
+	locks map[objectKey]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// objectLocks serializes the placing of each object in this process.
+var objectLocks = keyedMutex{locks: map[objectKey]*keyedLock{}}
+
+// lock locks the mutex for key and returns the function that unlocks it.
+func (k *keyedMutex) lock(key objectKey) (unlock func()) {
+	k.mu.Lock()
+	l, ok := k.locks[key]
+	if !ok {
+		l = &keyedLock{}
+		k.locks[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
 }
 
 // HasObject reports whether strg holds the object oid of size bytes: its file
