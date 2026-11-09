@@ -33,8 +33,8 @@ func newTestLog(t *testing.T, dir string) *Log {
 	l.SetSize(80, 40)
 	l.Update(RepoMsg(openRepo{path: dir}))
 	l.Update(RefMsg(ref))
-	l.Update(l.countCommitsCmd())
-	l.Update(l.updateCommitsCmd())
+	l.Update(l.countCommitsCmd()())
+	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {
 		t.Fatalf("after loading commits, view = %v; want commits", l.activeView)
 	}
@@ -50,12 +50,12 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 	l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
 	// A resize while the diff loads must not show the commit list.
 	l.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	l.Update(l.updateCommitsCmd())
+	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize while loading a diff, view = %v; want loading", l.activeView)
 	}
 	l.Update(l.selectCommitCmd(l.selectedCommit)())
-	l.Update(l.loadDiffCmd())
+	l.Update(l.loadDiffCmd()())
 	if l.activeView != logViewDiff {
 		t.Fatalf("after loading the diff, view = %v; want diff", l.activeView)
 	}
@@ -68,7 +68,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 		if l.activeView != logViewDiff {
 			t.Fatalf("after %T, view = %v; want diff", msg, l.activeView)
 		}
-		l.Update(l.updateCommitsCmd())
+		l.Update(l.updateCommitsCmd()())
 		if l.activeView != logViewDiff {
 			t.Fatalf("after reloading commits on %T, view = %v; want diff", msg, l.activeView)
 		}
@@ -84,7 +84,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize in the commits view, view = %v; want loading", l.activeView)
 	}
-	l.Update(l.updateCommitsCmd())
+	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {
 		t.Fatalf("after reloading commits, view = %v; want commits", l.activeView)
 	}
@@ -100,7 +100,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 	l.Update(l.selectCommitCmd(l.selectedCommit)())
 	// The repository can no longer be opened when the diff loads.
 	l.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
-	msg := l.loadDiffCmd()
+	msg := l.loadDiffCmd()()
 	if _, ok := msg.(LogDiffErrorMsg); !ok {
 		t.Fatalf("loadDiffCmd() = %T; want LogDiffErrorMsg", msg)
 	}
@@ -124,7 +124,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 	// A resize after the error is dismissed shows the commit list again.
 	l.Update(RepoMsg(openRepo{path: dir}))
 	l.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	l.Update(l.updateCommitsCmd())
+	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {
 		t.Fatalf("after a resize following a diff error, view = %v; want commits", l.activeView)
 	}
