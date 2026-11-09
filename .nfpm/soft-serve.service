@@ -1,7 +1,7 @@
 [Unit]
 Description=Soft Serve Plus git server 🍦
 Documentation=https://github.com/VitaliiLazebnyi/soft-serve-plus
-Requires=network-online.target
+Wants=network-online.target
 After=network-online.target
 
 [Service]

@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -89,4 +91,41 @@ func TestSetDescriptionHidesFilesystemError(t *testing.T) {
 	err = be.SetDescription(ctx, "repo", "desc")
 	is.True(err != nil)
 	is.True(!strings.Contains(err.Error(), cfg.DataPath))
+}
+
+// TestRepositoryInvalidNameNotLogged verifies a name the filesystem cannot
+// hold, which comes straight from a request, is reported as a missing
+// repository without an error log line.
+func TestRepositoryInvalidNameNotLogged(t *testing.T) {
+	var logs bytes.Buffer
+	be, _ := newTestBackendWithLog(t, &logs)
+	ctx := context.Background()
+
+	for name, repo := range map[string]string{
+		"nul":            "a\x00b",
+		"long segment":   strings.Repeat("x", 300),
+		"long path":      strings.Repeat("a/", 3000),
+		"through a file": "repo/sub",
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs.Reset()
+			if repo == "repo/sub" {
+				// A file where the parent directory of the repository should be.
+				dir := filepath.Dir(be.repoPath("repo"))
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "repo"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := be.Repository(ctx, repo)
+			if !errors.Is(err, proto.ErrRepoNotFound) {
+				t.Fatalf("expected ErrRepoNotFound, got %v", err)
+			}
+			if strings.Contains(logs.String(), "ERRO") {
+				t.Fatalf("invalid name logged an error: %s", logs.String())
+			}
+		})
+	}
 }
