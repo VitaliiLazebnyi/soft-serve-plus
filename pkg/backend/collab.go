@@ -35,7 +35,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		}),
 	); err != nil {
 		// A repository deleted meanwhile fails the insert on a
-		// constraint too; report it as gone, not as a duplicate.
+		// constraint; report it as gone.
 		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return err
 		}
@@ -47,6 +47,8 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 	}
 
 	// The collaborator is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	wh, err := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventAdded)
 	if err != nil {
 		d.logger.Error("collaborator added but webhook event skipped", "repo", repo, "user", username, "err", err)
@@ -71,7 +73,7 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 	repo = utils.SanitizeRepo(repo)
 	var users []models.User
 	var collabs []models.Collab
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		// The join returns an empty list for a missing repository, so
 		// look it up first.
 		if _, err := d.store.GetRepoByName(ctx, tx, repo); err != nil {
@@ -110,6 +112,8 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 }
 
 // IsCollaborator returns the access level and true if the user is a collaborator of the repository.
+// A user who is not a collaborator gives (-1, false, nil); the error is only
+// set when the lookup itself fails.
 //
 // It implements backend.Backend.
 func (d *Backend) IsCollaborator(ctx context.Context, repo string, username string) (access.AccessLevel, bool, error) {
@@ -119,12 +123,16 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 
 	repo = utils.SanitizeRepo(repo)
 	var m models.Collab
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
 		return err
 	}); err != nil {
-		return -1, false, db.WrapError(err)
+		err = db.WrapError(err)
+		if errors.Is(err, db.ErrRecordNotFound) {
+			return -1, false, nil
+		}
+		return -1, false, err
 	}
 
 	return m.AccessLevel, m.ID > 0, nil

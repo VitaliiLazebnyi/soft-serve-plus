@@ -15,8 +15,12 @@ var (
 	ErrImportFailed = errors.New("import failed")
 	// ErrImportsDisabled is returned when the server has turned imports off,
 	// which it does when the installed git is too old to enforce the remote
-	// validation. The reason stays in the server log.
+	// validation, and once it starts shutting down. The reason stays in the
+	// server log.
 	ErrImportsDisabled = errors.New("imports are disabled on this server")
+	// ErrTooManyImports is returned when the server, or the importing user,
+	// already runs as many imports at once as it allows.
+	ErrTooManyImports = errors.New("too many imports in progress; try again later")
 	// ErrRepoLimitReached is returned when creating a repository would take
 	// its creator past max_repos_per_user.
 	ErrRepoLimitReached = errors.New("repository limit reached")
