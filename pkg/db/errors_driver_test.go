@@ -11,9 +11,9 @@ import (
 	"github.com/lib/pq/pqerror"
 )
 
-// WrapError must map the constraint violations the stores rely on (unique,
-// primary key, foreign key, check) to ErrDuplicateKey, from the driver that
-// actually raised them, and leave other errors alone.
+// WrapError must map unique and primary key violations to ErrDuplicateKey,
+// and foreign key, check and not-null violations to their own errors, from
+// the driver that actually raised them, and leave other errors alone.
 func TestWrapErrorConstraintViolations(t *testing.T) {
 	ctx := context.Background()
 	dbx, err := test.Open(ctx, t)
@@ -54,11 +54,9 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 	}{
 		{"unique", `INSERT INTO parents (id, name) VALUES (2, 'one')`, db.ErrDuplicateKey},
 		{"primary key", `INSERT INTO parents (id, name) VALUES (1, 'two')`, db.ErrDuplicateKey},
-		{"foreign key", `INSERT INTO children (id, parent_id, n) VALUES (1, 42, 1)`, db.ErrDuplicateKey},
-		// SQLite reports CHECK failures as SQLITE_CONSTRAINT_CHECK, which
-		// WrapError does not map; Postgres maps 23514.
-		{"check", `INSERT INTO children (id, parent_id, n) VALUES (1, 1, 0)`, nil},
-		{"not null", `INSERT INTO parents (id) VALUES (3)`, nil},
+		{"foreign key", `INSERT INTO children (id, parent_id, n) VALUES (1, 42, 1)`, db.ErrForeignKey},
+		{"check", `INSERT INTO children (id, parent_id, n) VALUES (1, 1, 0)`, db.ErrCheck},
+		{"not null", `INSERT INTO parents (id) VALUES (3)`, db.ErrNotNull},
 		{"syntax", `INSERT INTO nowhere VALUES (1)`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,9 +65,6 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 				t.Fatalf("%s: nil error, want a constraint violation", tc.query)
 			}
 			want := tc.want
-			if tc.name == "check" && dbx.DriverName() == "postgres" {
-				want = db.ErrDuplicateKey
-			}
 			got := db.WrapError(err)
 			if want != nil {
 				if !errors.Is(got, want) {
@@ -86,19 +81,19 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 
 // The Postgres codes WrapError maps, and one it does not.
 func TestWrapErrorPostgresCodes(t *testing.T) {
-	for code, want := range map[pqerror.Code]bool{
-		pqerror.UniqueViolation:     true,
-		pqerror.ForeignKeyViolation: true,
-		pqerror.CheckViolation:      true,
-		pqerror.NotNullViolation:    false,
-		pqerror.UndefinedTable:      false,
+	for code, want := range map[pqerror.Code]error{
+		pqerror.UniqueViolation:     db.ErrDuplicateKey,
+		pqerror.ForeignKeyViolation: db.ErrForeignKey,
+		pqerror.CheckViolation:      db.ErrCheck,
+		pqerror.NotNullViolation:    db.ErrNotNull,
+		pqerror.UndefinedTable:      nil,
 	} {
 		err := &pq.Error{Code: code}
 		got := db.WrapError(err)
-		if want && !errors.Is(got, db.ErrDuplicateKey) {
-			t.Errorf("WrapError(pq code %s) = %v, want ErrDuplicateKey", code, got)
+		if want != nil && !errors.Is(got, want) {
+			t.Errorf("WrapError(pq code %s) = %v, want %v", code, got, want)
 		}
-		if !want && got != error(err) { //nolint:errorlint
+		if want == nil && got != error(err) { //nolint:errorlint
 			t.Errorf("WrapError(pq code %s) = %v, want the error unchanged", code, got)
 		}
 	}
