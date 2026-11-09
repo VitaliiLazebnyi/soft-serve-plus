@@ -137,7 +137,7 @@ func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler,
 	switch driver := d.DriverName(); driver {
 	case "postgres":
 		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		query = `SELECT * FROM users WHERE username = ?;`
 	default:
 		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
