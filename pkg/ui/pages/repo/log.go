@@ -42,6 +42,9 @@ func (m LogCountMsg) generation() uint64 { return m.gen }
 // LogItemsMsg is a message that contains a slice of LogItem.
 type LogItemsMsg struct {
 	items []selector.IdentifiableItem
+	// limit is the page size the items were loaded for, or 0 when they
+	// were not loaded by page.
+	limit int
 	gen   uint64
 }
 
@@ -255,6 +258,13 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, l.selector.SetItems(msg.items))
 		l.selector.SetPage(l.nextPage)
 		l.SetSize(l.common.Width, l.common.Height)
+		if msg.limit > 0 && msg.limit != l.selector.PerPage() {
+			// The list was resized after the load was built: on
+			// footer.ToggleFooterMsg the page is resized only after the
+			// Log pane builds its load. Load the page again by the size
+			// the list has now, or it shows rows that were never loaded.
+			cmds = append(cmds, l.updateCommitsCmd())
+		}
 		i := l.selector.SelectedItem()
 		if i != nil {
 			l.activeCommit = i.(LogItem).Commit
@@ -526,7 +536,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 			}
 			items[idx] = LogItem{Commit: c}
 		}
-		return LogItemsMsg{items: items, gen: gen}
+		return LogItemsMsg{items: items, limit: limit, gen: gen}
 	}
 }
 
