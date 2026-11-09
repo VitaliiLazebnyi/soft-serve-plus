@@ -58,10 +58,10 @@ func (t *Tabs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		switch msg.String() {
 		case "tab":
 			t.activeTab = (t.activeTab + 1) % len(t.tabs)
-			cmds = append(cmds, t.activeTabCmd)
+			cmds = append(cmds, t.activeTabCmd())
 		case "shift+tab":
 			t.activeTab = (t.activeTab - 1 + len(t.tabs)) % len(t.tabs)
-			cmds = append(cmds, t.activeTabCmd)
+			cmds = append(cmds, t.activeTabCmd())
 		}
 	case tea.MouseClickMsg:
 		switch msg.Button {
@@ -69,7 +69,7 @@ func (t *Tabs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			for i, tab := range t.tabs {
 				if t.common.Zone.Get(tab).InBounds(msg) {
 					t.activeTab = i
-					cmds = append(cmds, t.activeTabCmd)
+					cmds = append(cmds, t.activeTabCmd())
 				}
 			}
 		}
@@ -111,8 +111,13 @@ func (t *Tabs) View() string {
 		Render(s.String())
 }
 
-func (t *Tabs) activeTabCmd() tea.Msg {
-	return ActiveTabMsg(t.activeTab)
+// activeTabCmd returns a command that reports the active tab. It captures the
+// tab here because commands run in their own goroutines.
+func (t *Tabs) activeTabCmd() tea.Cmd {
+	tab := t.activeTab
+	return func() tea.Msg {
+		return ActiveTabMsg(tab)
+	}
 }
 
 // SelectTabCmd is a bubbletea command that selects the tab at the given index.

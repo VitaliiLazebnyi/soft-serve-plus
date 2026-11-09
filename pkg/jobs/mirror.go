@@ -30,39 +30,97 @@ func init() {
 
 type mirrorPull struct{}
 
+// mirrorRemotes are the remotes of a mirror that passed validation: their
+// names, which are what the sync fetches, and their validated urls, which
+// render the environment the sync must run with.
+type mirrorRemotes struct {
+	names     []string
+	validated []ssrf.ValidatedGitRemote
+}
+
 // validateMirrorRemotes validates every remote configured on a mirror
 // repository against address ranges and the operator's ssh host policy, and
-// returns them so the caller can render the git environment that must be
-// applied to the sync commands.
+// returns them so the caller can fetch exactly those remotes, with the git
+// environment their validation requires.
 //
-// `git remote update` fetches from all remotes, not just origin, so every one
-// of them has to pass. Any failure to read or validate skips the sync: a
-// remote that cannot be checked is not one to fetch from.
-func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
-	cfg, err := r.Config()
+// Every remote has to pass, and any failure to read or validate skips the
+// sync: a remote that cannot be checked is not one to fetch from.
+//
+// The remotes and their URLs come from git itself rather than from parsing
+// the config: only git knows which of several `url` entries it fetches from,
+// how `url.<base>.insteadOf` rewrites them, and which spellings of a remote
+// section it accepts. Every URL of a remote is checked, not only the one
+// fetched from.
+//
+// Only fetching each remote by name keeps git to the remotes checked here.
+// Without a name git picks for itself: `git fetch` takes the url-or-name in
+// `branch.<HEAD>.remote`, and `git remote update` follows the
+// `remotes.default` group, either of which can lead to a url or a legacy
+// `branches/` or `remotes/` file remote that `git remote` does not list. A
+// remote group named like a remote also takes the place of that remote when
+// it is fetched by name, so a repository with any remote group is refused.
+func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) (mirrorRemotes, error) {
+	keys, err := git.NewCommand("config", "--list", "--name-only").WithContext(ctx).RunInDir(r.Path)
 	if err != nil {
-		return nil, fmt.Errorf("reading git config: %w", err)
+		return mirrorRemotes{}, fmt.Errorf("reading config: %w", err)
+	}
+	for _, key := range strings.Split(string(keys), "\n") {
+		if strings.HasPrefix(key, "remotes.") {
+			return mirrorRemotes{}, fmt.Errorf("remote group %q: %w", strings.TrimPrefix(key, "remotes."), errRemoteGroup)
+		}
 	}
 
-	var remotes []ssrf.ValidatedGitRemote
-	for _, sub := range cfg.Section("remote").Subsections {
-		url := sub.Option("url")
-		if url == "" {
-			continue
-		}
+	out, err := git.NewCommand("remote").WithContext(ctx).RunInDir(r.Path)
+	if err != nil {
+		return mirrorRemotes{}, fmt.Errorf("listing remotes: %w", err)
+	}
 
-		v, err := ssrf.ValidateGitRemote(url, policy)
+	var remotes mirrorRemotes
+	for _, name := range strings.Fields(string(out)) {
+		// A remote without a url is printed as its own name, which git
+		// would fetch from as a local path. That fails validation, as it
+		// should.
+		out, err := git.NewCommand("remote", "get-url", "--all", "--", name).WithContext(ctx).RunInDir(r.Path)
 		if err != nil {
-			return nil, fmt.Errorf("remote %q: %w", sub.Name, err)
+			return mirrorRemotes{}, fmt.Errorf("remote %q: reading url: %w", name, err)
 		}
-		remotes = append(remotes, v)
+
+		for _, url := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+			v, err := ssrf.ValidateGitRemoteContext(ctx, url, policy)
+			if err != nil {
+				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
+			}
+			remotes.validated = append(remotes.validated, v)
+		}
+		remotes.names = append(remotes.names, name)
 	}
 
-	if len(remotes) == 0 {
-		return nil, fmt.Errorf("no remote url configured")
+	if len(remotes.validated) == 0 {
+		return mirrorRemotes{}, fmt.Errorf("no remote url configured")
 	}
 
 	return remotes, nil
+}
+
+// errRemoteGroup refuses a mirror with a remote group: a group named like a
+// remote is fetched in its place, and its members need not be remotes that
+// `git remote` lists.
+var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
+
+// syncMirror fetches each named remote of the mirror at path, pruning refs
+// the remote no longer has. Naming every remote keeps git from choosing one
+// that was not validated. A remote that fails to fetch does not stop the
+// others; their errors are joined.
+func syncMirror(ctx context.Context, path string, names []string, env []string) error {
+	var errs []error
+	for _, name := range names {
+		cmd := git.NewCommand("fetch", "--prune", "--", name).WithContext(ctx).WithTimeout(-1)
+		cmd.AddEnvs(env...)
+		if _, err := cmd.RunInDir(path); err != nil {
+			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Spec derives the spec used for pull mirrors and implements Runner.
@@ -114,7 +172,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					repo := repo
 
 					// Re-validate every configured remote before syncing.
-					// `remote update` touches all of them, and a remote may
+					// The sync fetches all of them, and a remote may
 					// predate the import-time guard or have been written out
 					// of band. Validation failure skips the repo entirely.
 					// No user acts here, so the owner stands in for the
@@ -128,23 +186,15 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					}
 					policy := backend.RemotePolicy(cfg, owner)
 
-					remotes, err := validateMirrorRemotes(r, policy)
+					remotes, err := validateMirrorRemotes(ctx, r, policy)
 					if err != nil {
 						logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
 						return
 					}
 
-					syncEnv := backend.RemoteGitEnv(cfg, remotes...)
-
-					cmds := [][]string{
-						{"fetch", "--prune"},            // fetch prune before updating remote
-						{"remote", "update", "--prune"}, // update remote and prune remote refs
-					}
-
-					for _, args := range cmds {
-						if err := runMirrorGit(ctx, r.Path, syncEnv, args...); err != nil {
-							logger.Error("error running git remote update", "repo", name, "err", err)
-						}
+					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
+					if err := syncMirror(ctx, r.Path, remotes.names, syncEnv); err != nil {
+						logger.Error("error syncing mirror", "repo", name, "err", err)
 					}
 
 					if cfg.LFS.Enabled {

@@ -23,6 +23,15 @@ var (
 	ErrAmbiguousHost = errors.New("remote host is not a canonical IP or DNS name")
 )
 
+// An http transfer slower than GitLowSpeedLimit bytes a second for
+// GitLowSpeedTime seconds is aborted. The window is generous because a
+// server may send nothing but keepalives while it builds the pack of a large
+// repository.
+const (
+	GitLowSpeedLimit = 1000
+	GitLowSpeedTime  = 300
+)
+
 // GitRemoteTransport describes how a validated remote will be reached.
 type GitRemoteTransport int
 
@@ -61,9 +70,11 @@ type ValidatedGitRemote struct {
 // Validation alone is not sufficient for a subprocess: git resolves hostnames
 // again itself, and follows the first HTTP redirect by default. Both walk
 // straight through a validate-then-exec check, so this environment disables
-// redirects and pins each validated address. It also bounds how long a
-// stalled http remote can hold the subprocess. Callers MUST apply it to every
+// redirects and pins each validated address. Callers MUST apply it to every
 // git command that touches the remote, or the validation means nothing.
+//
+// It also aborts an http transfer that stalls (see GitLowSpeedLimit), so a
+// remote that stops sending cannot hold the git process open forever.
 //
 // The environment needs git 2.37 or newer: GIT_CONFIG_COUNT arrived in 2.31
 // and http.curloptResolve, which carries the pin, in 2.37. Older git ignores
@@ -76,11 +87,8 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 	// user-supplied remote.
 	entries := []GitConfigEntry{
 		{Key: "http.followRedirects", Value: "false"},
-		// libcurl sets no read timeout of its own, so a remote that sends
-		// headers and then stalls holds git forever. Give up on one that
-		// stays under 1 KB/s for a minute.
-		{Key: "http.lowSpeedLimit", Value: "1000"},
-		{Key: "http.lowSpeedTime", Value: "60"},
+		{Key: "http.lowSpeedLimit", Value: strconv.Itoa(GitLowSpeedLimit)},
+		{Key: "http.lowSpeedTime", Value: strconv.Itoa(GitLowSpeedTime)},
 	}
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
@@ -309,10 +317,13 @@ func isIPLiteral(host string) bool {
 // (user@host:path, [user@host:port]:path, user@[v6:addr]:path) and returns
 // the user and host. The rules mirror git's connect.c: "://" is a URL, a
 // slash before the first colon is a local path, "::" selects a remote helper,
-// and brackets count only at the start or right after "user@".
+// and brackets count only at the start or right after "user@". A DOS drive
+// prefix ("C:/repo", "C:repo") is a local path as git for Windows reads it
+// (has_dos_drive_prefix); it is refused on every OS rather than allowed as
+// the ssh host "C" where git would open a local repository instead.
 func parseBareSSHRemote(remote string) (user, host string, ok bool) {
 	colon, slash := strings.IndexByte(remote, ':'), strings.IndexByte(remote, '/')
-	if strings.Contains(remote, "://") || colon < 0 || (slash >= 0 && slash < colon) {
+	if strings.Contains(remote, "://") || colon < 0 || (slash >= 0 && slash < colon) || hasDOSDrivePrefix(remote) {
 		return "", "", false
 	}
 	userHost, rest := remote[:colon], remote[colon:]
@@ -330,6 +341,12 @@ func parseBareSSHRemote(remote string) (user, host string, ok bool) {
 		return userHost[:at], userHost[at+1:], true
 	}
 	return "", userHost, true
+}
+
+// hasDOSDrivePrefix reports whether s starts with a drive letter and a
+// colon, as git's has_dos_drive_prefix does on Windows.
+func hasDOSDrivePrefix(s string) bool {
+	return len(s) >= 2 && s[1] == ':' && ('a' <= s[0] && s[0] <= 'z' || 'A' <= s[0] && s[0] <= 'Z')
 }
 
 // validateSSHHost rejects SSH remotes with no host, whose user or host would

@@ -101,6 +101,13 @@ func TestValidateGitRemote(t *testing.T) {
 		{"bare ssh unterminated bracket", "[host:22]path", 0, ErrInvalidURL},
 		{"bare ssh empty host", ":path", 0, ErrInvalidURL},
 		{"remote helper syntax", "host::path", 0, ErrUnsupportedRemoteScheme},
+		// git for Windows reads a drive prefix as a local path, not as the
+		// ssh host "C". Regression: these validated as ssh remotes, letting
+		// an import open a local repository on a Windows server.
+		{"drive path forward slash", "C:/Users/x/repo", 0, ErrUnsupportedRemoteScheme},
+		{"drive path backslash", `C:\Users\x\repo`, 0, ErrUnsupportedRemoteScheme},
+		{"drive relative path", "c:repo", 0, ErrUnsupportedRemoteScheme},
+		{"two-letter ssh host", "cc:repo", GitTransportSSH, nil},
 		// An ssh host must be a plain DNS name or IP literal, so that the
 		// name the policy matched is the name ssh connects to.
 		{"ssh url non-canonical ip", "ssh://git@0177.0.0.1/x.git", 0, ErrAmbiguousHost},
@@ -216,13 +223,15 @@ func TestGitEnvDisablesRedirects(t *testing.T) {
 	}
 }
 
-// TestGitEnvBoundsStalledHTTP covers a remote that sends headers and then
-// stops: libcurl has no read timeout, so without a low-speed limit git waits
-// on it forever, and with it every mirror sync behind it.
-func TestGitEnvBoundsStalledHTTP(t *testing.T) {
-	env := GitEnv(ValidatedGitRemote{Transport: GitTransportHTTP})
-	if !hasGitConfig(env, "http.lowSpeedLimit", "1000") || !hasGitConfig(env, "http.lowSpeedTime", "60") {
-		t.Errorf("GitEnv did not set a low-speed limit: %v", env)
+// TestGitEnvSetsLowSpeedLimit covers a remote that stops sending, or
+// trickles, after the transfer starts: without a low-speed limit libcurl
+// waits on it forever.
+func TestGitEnvSetsLowSpeedLimit(t *testing.T) {
+	for _, env := range [][]string{GitEnv(), GitEnv(ValidatedGitRemote{Transport: GitTransportHTTP})} {
+		if !hasGitConfig(env, "http.lowSpeedLimit", strconv.Itoa(GitLowSpeedLimit)) ||
+			!hasGitConfig(env, "http.lowSpeedTime", strconv.Itoa(GitLowSpeedTime)) {
+			t.Errorf("GitEnv set no low-speed limit: %v", env)
+		}
 	}
 }
 
