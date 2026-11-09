@@ -171,9 +171,9 @@ func TestFilesNonASCIIName(t *testing.T) {
 	f.Update(RefMsg(ref))
 
 	// Walk into the directory, then onto the file, like selecting them.
-	selectOnly := func(want string) {
+	selectOnly := func(want string) FileItem {
 		t.Helper()
-		items, ok := f.updateFilesCmd().(FileItemsMsg)
+		items, ok := f.updateFilesCmd()().(FileItemsMsg)
 		if !ok || len(items) != 1 {
 			t.Fatalf("files at %q = %v, want one item", f.path, items)
 		}
@@ -182,12 +182,13 @@ func TestFilesNonASCIIName(t *testing.T) {
 			t.Fatalf("item title = %q, want %q", item.Title(), want)
 		}
 		f.currentItem = &item
-		f.path = path.Join(f.path, item.entry.Name())
+		return item
 	}
-	selectOnly(dirName)
-	selectOnly(fileName)
+	dirItem := selectOnly(dirName)
+	f.path = path.Join(f.path, dirItem.entry.Name())
+	fileItem := selectOnly(fileName)
 
-	msg := f.selectFileCmd()
+	msg := f.selectFileCmd(fileItem, path.Join(f.path, fileItem.entry.Name()), 0)()
 	content, ok := msg.(FileContentMsg)
 	if !ok {
 		t.Fatalf("selectFileCmd = %T %v, want FileContentMsg", msg, msg)
@@ -197,7 +198,7 @@ func TestFilesNonASCIIName(t *testing.T) {
 		t.Errorf("status bar = %q, want %q", f.StatusBarValue(), want)
 	}
 
-	if msg := f.fetchBlame(); !isBlame(msg) {
+	if msg := f.fetchBlameCmd()(); !isBlame(msg) {
 		t.Fatalf("fetchBlame = %T %v, want FileBlameMsg", msg, msg)
 	}
 }
