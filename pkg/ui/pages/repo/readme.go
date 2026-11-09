@@ -113,7 +113,7 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.readmePath = ""
 		r.code.GotoTop()
 		cmds = append(cmds,
-			r.code.SetContent(defaultEmptyRepoMsg(r.common.Config(),
+			r.code.SetContent(defaultEmptyRepoMsg(r.common,
 				r.repo.Name()), ".md"),
 		)
 	case ReadmeMsg:

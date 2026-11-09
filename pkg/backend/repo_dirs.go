@@ -110,7 +110,7 @@ func (d *Backend) removeOrphanRepoDir(ctx context.Context, name string, own int)
 		return err
 	}
 
-	return os.RemoveAll(d.repoPath(name))
+	return d.removeRepoDir(d.repoPath(name))
 }
 
 // repoPathExact reports whether name's directory exists with every path

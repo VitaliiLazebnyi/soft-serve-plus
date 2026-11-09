@@ -27,6 +27,7 @@ func (d *Backend) AllowKeyless(ctx context.Context) bool {
 		allow, err = d.store.GetAllowKeylessAccess(ctx, tx)
 		return err
 	}); err != nil {
+		d.logger.Error("error getting allow-keyless setting, denying keyless access", "err", err)
 		return false
 	}
 
@@ -62,6 +63,7 @@ func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 		level, err = d.store.GetAnonAccess(ctx, tx)
 		return err
 	}); err != nil {
+		d.logger.Error("error getting anon-access setting, denying anonymous access", "err", err)
 		return access.NoAccess
 	}
 

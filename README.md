@@ -47,7 +47,8 @@ ssh localhost -p 23231 repo blob my-repo README.md -c -l
 ```
 
 Or you can use Soft Serve Plus to browse local repositories using `soft browse
-[directory]` or running `soft` within a Git repository.
+[directory]`, `soft [directory]`, or running `soft` anywhere within a Git
+repository, including a linked worktree.
 
 ## Installation
 

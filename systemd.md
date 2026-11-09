@@ -9,6 +9,13 @@ pre-packaged. You can download them from the
 Follow the [installation instructions](https://github.com/VitaliiLazebnyi/soft-serve-plus#installation)
 for more information.
 
+The packages create the `soft-serve` user and the `/var/lib/soft-serve` data
+directory through systemd-sysusers and systemd-tmpfiles. A package upgrade
+restarts the service if it is running, so it picks up the new binary; a stopped,
+disabled or masked service is left as it is. The deb and rpm packages recommend
+the OpenSSH client (`openssh-client`, `openssh-clients` on rpm), which git needs
+to mirror repositories over `ssh://` URLs.
+
 ## Writing a Systemd Service File
 
 > **Note** you can skip this section if you installed Soft Serve Plus from our
