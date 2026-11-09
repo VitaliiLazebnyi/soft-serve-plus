@@ -63,7 +63,7 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwk.SigningMethod, claims)
+	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
 	token.Header["kid"] = kp.JWK().KeyID
 	j, err := token.SignedString(kp.PrivateKey())
 	if err != nil {
