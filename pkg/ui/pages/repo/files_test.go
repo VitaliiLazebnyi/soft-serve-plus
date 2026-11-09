@@ -56,8 +56,7 @@ func TestSelectFileSizeLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.currentItem = &FileItem{entry: te}
-		return f.selectFileCmd()
+		return f.selectFileCmd(FileItem{entry: te}, name, 0)()
 	}
 
 	if msg, ok := sel("small.txt").(FileContentMsg); !ok || msg.content != "hello\n" {
