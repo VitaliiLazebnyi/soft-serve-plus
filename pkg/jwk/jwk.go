@@ -5,7 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
-	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -72,13 +72,18 @@ func NewPair(cfg *config.Config) (Pair, error) {
 		return Pair{}, err
 	}
 
-	sum := sha256.Sum256(kp.RawPrivateKey())
-	kid := fmt.Sprintf("%x", sum)
 	jwk := jose.JSONWebKey{
 		Key:       kp.CryptoPublicKey(),
-		KeyID:     kid,
 		Algorithm: method.Alg(),
 	}
+
+	// The key ID is the RFC 7638 thumbprint of the public key, so it is
+	// stable for a given host key and reveals nothing about the private key.
+	thumb, err := jwk.Thumbprint(crypto.SHA256)
+	if err != nil {
+		return Pair{}, fmt.Errorf("jwk thumbprint: %w", err)
+	}
+	jwk.KeyID = base64.RawURLEncoding.EncodeToString(thumb)
 
 	return Pair{privateKey: kp.PrivateKey(), jwk: jwk, method: method}, nil
 }
