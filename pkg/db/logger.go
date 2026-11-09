@@ -22,10 +22,10 @@ func trace(l *log.Logger, query string, args ...interface{}) {
 }
 
 // mapError maps err with WrapError. A mapped constraint violation reads as
-// ErrDuplicateKey's generic message, so the driver error, which names the
-// constraint that failed, is logged here at debug level. l is the handler's
-// error logger, which unlike the query trace is set outside verbose mode too;
-// a nil l skips the log.
+// the generic message of the error it maps to, so the driver error, which
+// names the constraint that failed, is logged here at debug level. l is the
+// handler's error logger, which unlike the query trace is set outside verbose
+// mode too; a nil l skips the log.
 func mapError(l *log.Logger, err error) error {
 	err = WrapError(err)
 	var me *mappedError
