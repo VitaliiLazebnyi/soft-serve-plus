@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -15,20 +16,38 @@ import (
 // the HTTP status code and bytes written to the response.
 type logWriter struct {
 	http.ResponseWriter
-	code, bytes int
+	code  int
+	bytes int64
 }
 
 var (
 	_ http.ResponseWriter = (*logWriter)(nil)
 	_ http.Flusher        = (*logWriter)(nil)
 	_ http.Hijacker       = (*logWriter)(nil)
+	_ io.ReaderFrom       = (*logWriter)(nil)
 )
 
 // Write implements http.ResponseWriter.
 func (r *logWriter) Write(p []byte) (int, error) {
 	written, err := r.ResponseWriter.Write(p)
-	r.bytes += written
+	r.bytes += int64(written)
 	return written, err
+}
+
+// ReadFrom implements io.ReaderFrom. io.Copy and http.ServeContent use it,
+// so forwarding to the underlying writer's ReadFrom lets net/http send a
+// file with sendfile(2) instead of copying it through user space.
+func (r *logWriter) ReadFrom(src io.Reader) (int64, error) {
+	var n int64
+	var err error
+	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		n, err = rf.ReadFrom(src)
+	} else {
+		// Hide our own ReadFrom from io.Copy so it does not recurse.
+		n, err = io.Copy(struct{ io.Writer }{r.ResponseWriter}, src)
+	}
+	r.bytes += n
+	return n, err
 }
 
 // Note this is generally only called when sending an HTTP error, so it's
