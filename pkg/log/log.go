@@ -9,7 +9,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-// NewLogger returns a new logger with default settings.
+// NewLogger returns a new logger with default settings. If the configured
+// log file cannot be opened, it returns the error together with a logger
+// that writes to stderr, so the caller can keep logging.
 func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 	if cfg == nil {
 		return nil, nil, config.ErrNilConfig
@@ -43,7 +45,7 @@ func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 		var err error
 		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
 		if err != nil {
-			return nil, nil, err
+			return logger, nil, err
 		}
 		logger.SetOutput(f)
 	}

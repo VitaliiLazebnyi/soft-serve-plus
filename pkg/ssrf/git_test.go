@@ -223,6 +223,18 @@ func TestGitEnvDisablesRedirects(t *testing.T) {
 	}
 }
 
+// TestGitEnvSetsLowSpeedLimit covers a remote that stops sending, or
+// trickles, after the transfer starts: without a low-speed limit libcurl
+// waits on it forever.
+func TestGitEnvSetsLowSpeedLimit(t *testing.T) {
+	for _, env := range [][]string{GitEnv(), GitEnv(ValidatedGitRemote{Transport: GitTransportHTTP})} {
+		if !hasGitConfig(env, "http.lowSpeedLimit", strconv.Itoa(GitLowSpeedLimit)) ||
+			!hasGitConfig(env, "http.lowSpeedTime", strconv.Itoa(GitLowSpeedTime)) {
+			t.Errorf("GitEnv set no low-speed limit: %v", env)
+		}
+	}
+}
+
 // TestCurlResolvePin covers DNS rebinding: git re-resolves the hostname
 // itself, so the validated address has to be pinned for the check to survive
 // into the subprocess.
