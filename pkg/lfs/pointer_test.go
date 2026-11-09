@@ -3,8 +3,12 @@ package lfs
 import (
 	"errors"
 	"path"
-	"strconv"
 	"testing"
+)
+
+const (
+	testOid  = "1234567890123456789012345678901234567890123456789012345678901234"
+	testOid2 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 )
 
 func TestReadPointer(t *testing.T) {
@@ -14,8 +18,6 @@ func TestReadPointer(t *testing.T) {
 		want    Pointer
 		// wantErr is the sentinel error the pointer is rejected with.
 		wantErr error
-		// wantNumErr says the pointer is rejected with a *strconv.NumError.
-		wantNumErr bool
 	}{
 		{
 			name: "valid pointer",
@@ -50,7 +52,7 @@ size 1234
 oid sha256:1234567890123456789012345678901234567890123456789012345678901234
 size abc
 `,
-			wantNumErr: true,
+			wantErr: ErrInvalidSize,
 		},
 		{
 			name: "invalid structure",
@@ -62,6 +64,100 @@ size abc
 			name:    "empty pointer",
 			wantErr: ErrMissingPrefix,
 		},
+		{
+			name:    "no trailing newline",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 1234",
+			want:    Pointer{Oid: testOid, Size: 1234},
+		},
+		{
+			name:    "zero size",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 0\n",
+			want:    Pointer{Oid: testOid, Size: 0},
+		},
+		{
+			name: "extensions",
+			content: "version https://git-lfs.github.com/spec/v1\n" +
+				"ext-0-foo sha256:" + testOid2 + "\n" +
+				"ext-1-bar_baz sha256:" + testOid2 + "\n" +
+				"oid sha256:" + testOid + "\nsize 1234\n",
+			want: Pointer{Oid: testOid, Size: 1234},
+		},
+		{
+			name:    "version suffix",
+			content: "version https://git-lfs.github.com/spec/v1garbage\noid sha256:" + testOid + "\nsize 1234\n",
+			wantErr: ErrMissingPrefix,
+		},
+		{
+			name:    "oid without key",
+			content: "version https://git-lfs.github.com/spec/v1\n" + testOid + "\nsize 1234\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name:    "oid without hash algorithm",
+			content: "version https://git-lfs.github.com/spec/v1\noid " + testOid + "\nsize 1234\n",
+			wantErr: ErrInvalidOIDFormat,
+		},
+		{
+			name:    "size without key",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\n1234\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name:    "size with plus sign",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize +5\n",
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "negative size",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize -5\n",
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "size overflow",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 99999999999999999999\n",
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "size with trailing text",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 5 bytes\n",
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "extra line",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 1234\nfoo bar\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name:    "trailing blank line",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\nsize 1234\n\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name:    "oid and size swapped",
+			content: "version https://git-lfs.github.com/spec/v1\nsize 1234\noid sha256:" + testOid + "\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name: "extension after oid",
+			content: "version https://git-lfs.github.com/spec/v1\noid sha256:" + testOid + "\n" +
+				"ext-0-foo sha256:" + testOid2 + "\nsize 1234\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name: "extensions out of order",
+			content: "version https://git-lfs.github.com/spec/v1\n" +
+				"ext-1-foo sha256:" + testOid2 + "\n" +
+				"ext-0-bar sha256:" + testOid2 + "\n" +
+				"oid sha256:" + testOid + "\nsize 1234\n",
+			wantErr: ErrInvalidStructure,
+		},
+		{
+			name: "malformed extension",
+			content: "version https://git-lfs.github.com/spec/v1\n" +
+				"ext-0-foo sha256:xyz\n" +
+				"oid sha256:" + testOid + "\nsize 1234\n",
+			wantErr: ErrInvalidStructure,
+		},
 	}
 
 	for _, tc := range cases {
@@ -70,13 +166,7 @@ size abc
 			switch {
 			case tc.wantErr != nil:
 				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("ReadPointerFromBuffer() error = %v, want %v", err, tc.wantErr)
-				}
-				return
-			case tc.wantNumErr:
-				var numErr *strconv.NumError
-				if !errors.As(err, &numErr) {
-					t.Fatalf("ReadPointerFromBuffer() error = %v (%T), want a *strconv.NumError", err, err)
+					t.Fatalf("ReadPointerFromBuffer() error = %v (%T), want %v", err, err, tc.wantErr)
 				}
 				return
 			case err != nil:
@@ -85,9 +175,11 @@ size abc
 
 			if !p.IsValid() {
 				t.Errorf("Expected a valid pointer")
+				return
 			}
 			if path.Join(p.Oid[:2], p.Oid[2:4], p.Oid) != p.RelativePath() {
 				t.Errorf("Expected a valid relative path")
+				return
 			}
 			if p.Oid != tc.want.Oid {
 				t.Errorf("ReadPointerFromBuffer() oid = %v, want %v", p.Oid, tc.want.Oid)
