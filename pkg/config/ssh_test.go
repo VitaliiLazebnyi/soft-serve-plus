@@ -2,11 +2,16 @@ package config
 
 import (
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +179,30 @@ func TestSSHKeyPairUnusableFile(t *testing.T) {
 
 	if kp, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: junkPath}}); err == nil {
 		t.Errorf("KeyPair(junk) => %v, nil, want an error", kp)
+	}
+}
+
+// A key file that parses but holds a key type that cannot sign tokens (here
+// an X25519 key in PKCS#8) is an error naming the unsupported type.
+func TestSSHKeyPairUnsupportedKeyType(t *testing.T) {
+	x, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "x25519_key")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	kp, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: path}})
+	if err == nil {
+		t.Fatalf("KeyPair(x25519) => %v, nil, want an error", kp)
+	}
+	if !strings.Contains(err.Error(), "unsupported key type") {
+		t.Errorf("KeyPair(x25519) => _, %v, want an unsupported key type error", err)
 	}
 }
