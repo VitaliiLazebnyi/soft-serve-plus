@@ -15,8 +15,11 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 )
 
-// msgs runs cmd, expanding batches, and returns the messages that arrive
-// promptly. Commands that wait (ticks and the like) are left out.
+// msgs runs cmd to completion, expanding batches, and returns the messages
+// it produces. Every command the model returns here finishes on its own
+// (loading the reference runs git, which can take seconds on a loaded Windows
+// runner), so each one is waited for rather than dropped after a deadline;
+// the deadline below only turns a hang into a failure.
 func msgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
 	if cmd == nil {
@@ -27,8 +30,8 @@ func msgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(time.Second):
-		return nil
+	case <-time.After(time.Minute):
+		t.Fatal("command did not return")
 	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
 		var out []tea.Msg
