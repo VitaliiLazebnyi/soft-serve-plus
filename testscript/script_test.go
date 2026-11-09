@@ -478,15 +478,20 @@ func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {
 const loopback = "127.0.0.1"
 
 // loopbackClient sends requests for "localhost" to loopback, for the same
-// reason the servers listen there.
-var loopbackClient = &http.Client{Transport: &http.Transport{
-	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
-			addr = net.JoinHostPort(loopback, port)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+// reason the servers listen there. A request that gets no answer fails the
+// script after a minute instead of hanging it until the test binary times
+// out.
+var loopbackClient = &http.Client{
+	Timeout: time.Minute,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
+				addr = net.JoinHostPort(loopback, port)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
 	},
-}}
+}
 
 var sshConfig = `
 Host *
