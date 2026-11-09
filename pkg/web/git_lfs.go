@@ -213,7 +213,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			exist, err := strg.Exists(path.Join("objects", o.RelativePath()))
+			stat, err := strg.Stat(path.Join("objects", o.RelativePath()))
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				logger.Error("error getting object stat", "oid", o.Oid, "repo", name, "err", err)
 				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
@@ -221,6 +221,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			exist := err == nil && stat.Mode().IsRegular()
 
 			obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), o.Oid)
 			if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
@@ -231,6 +232,10 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// A download is read-only: the client's size is checked against
+			// the file and its record, never recorded. A file without a
+			// record (an upload that has not recorded it yet) is offered at
+			// the size it has on disk.
 			if !exist {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -239,7 +244,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "object not found",
 					},
 				})
-			} else if obj.Size != o.Size {
+			} else if stat.Size() != o.Size || (obj.ID != 0 && obj.Size != o.Size) {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
 					Error: &lfs.ObjectError{
@@ -256,17 +261,6 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						lfs.ActionDownload: download,
 					},
 				})
-
-				// If the object doesn't exist in the database, create it
-				if exist && obj.ID == 0 {
-					if err := datastore.CreateLFSObject(ctx, dbx, repo.ID(), o.Oid, o.Size); err != nil {
-						logger.Error("error creating object in datastore", "oid", o.Oid, "repo", name, "err", err)
-						renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-							Message: "internal server error",
-						})
-						return
-					}
-				}
 			}
 		}
 	case lfs.OperationUpload:
@@ -339,19 +333,8 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	datastore := store.FromContext(ctx)
-	dbx := db.FromContext(ctx)
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
-
-	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid)
-	if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-		logger.Error("error getting object from database", "oid", oid, "repo", repo.Name(), "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
 
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
@@ -366,10 +349,21 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	defer f.Close() //nolint: errcheck
+
+	// Send the length of the file being sent, which an object not recorded
+	// yet has too.
+	stat, err := f.Stat()
+	if err != nil {
+		logger.Error("error getting object stat", "oid", oid, "err", err)
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+			Message: "internal server error",
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
-	defer f.Close() //nolint: errcheck
+	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	if _, err := io.Copy(w, f); err != nil {
 		logger.Error("error copying object to response", "oid", oid, "err", err)
 		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
@@ -413,12 +407,16 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint: errcheck
 
 	// NOTE: Git LFS client will retry uploading the same object if there was a
-	// partial error, so we need to skip existing objects.
-	if _, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
-		// Object exists, skip request
-		io.Copy(io.Discard, r.Body) //nolint: errcheck
-		renderStatus(http.StatusOK)(w, nil)
-		return
+	// partial error, so we need to skip existing objects. The object exists
+	// only if it is recorded and its file is in place: a recorded object
+	// whose file is gone or damaged is stored again, which restores it.
+	if obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
+		if lfs.HasObject(strg, oid, obj.Size) {
+			// Object exists, skip request
+			io.Copy(io.Discard, r.Body) //nolint: errcheck
+			renderStatus(http.StatusOK)(w, nil)
+			return
+		}
 	} else if !errors.Is(err, db.ErrRecordNotFound) {
 		logger.Error("error getting object", "oid", oid, "err", err)
 		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
@@ -538,10 +536,17 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if stat.Size() == pointer.Size {
-			renderStatus(http.StatusOK)(w, nil)
+		if stat.Size() != pointer.Size {
+			// The recorded size matches but the stored file does not: the
+			// object on disk is truncated or corrupt and must not verify.
+			logger.Error("stored object size mismatch", "oid", pointer.Oid, "size", pointer.Size, "stored", stat.Size())
+			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+				Message: "object size mismatch",
+			})
 			return
 		}
+
+		renderStatus(http.StatusOK)(w, nil)
 	} else if errors.Is(err, fs.ErrNotExist) {
 		logger.Info("object not found", "oid", pointer.Oid)
 		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
