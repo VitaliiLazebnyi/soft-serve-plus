@@ -197,7 +197,7 @@ func TestEveryPaneSanitisesRepositoryData(t *testing.T) {
 	d := &driver{t: t, m: r}
 
 	d.send(RepoMsg(rr))
-	d.send(updateRefCmd(rr, r.gen)())
+	d.send(updateRefCmd(ctx, rr, r.gen)())
 
 	check := func(name string, want ...string) {
 		t.Helper()
