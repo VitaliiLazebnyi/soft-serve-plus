@@ -51,7 +51,7 @@ func TestDefaultRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref, err := defaultRef(r)
+	ref, err := defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "trunk" {
 		t.Fatalf("defaultRef with a valid HEAD = %v, %v; want trunk", ref, err)
 	}
@@ -65,7 +65,7 @@ func TestDefaultRef(t *testing.T) {
 	default:
 		t.Fatalf("UpdateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
 	}
-	ref, err = defaultRef(r)
+	ref, err = defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "dev" {
 		t.Fatalf("defaultRef with a dangling HEAD = %v, %v; want dev", ref, err)
 	}
@@ -74,7 +74,7 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "branch", "main", "trunk")
-	ref, err = defaultRef(r)
+	ref, err = defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "main" {
 		t.Fatalf("defaultRef with a dangling HEAD and a main branch = %v, %v; want main", ref, err)
 	}
@@ -173,6 +173,40 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 	default:
 		t.Fatalf("UpdateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
 	}
+}
+
+// A repository that only has tags is not empty: it shows the first tag.
+func TestUpdateRefCmdTagsOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+
+	if msg := UpdateRefCmd(openRepo{path: dir})(); msg != (EmptyRepoMsg{}) {
+		t.Fatalf("UpdateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
+	}
+
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "-a", "-m", "v1", "v1")
+	gitRun(t, dir, "tag", "v2")
+	gitRun(t, dir, "update-ref", "-d", "refs/heads/main")
+
+	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	case RefMsg:
+		if ref := (*git.Reference)(msg); ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
+			t.Fatalf("UpdateRefCmd with only tags = %v; want tag v1", msg)
+		}
+	default:
+		t.Fatalf("UpdateRefCmd with only tags = %T %v; want a RefMsg", msg, msg)
+	}
+}
+
+// refs returns the references of r and fails the test on error.
+func refs(t *testing.T, r *git.Repository) []*git.Reference {
+	t.Helper()
+	refs, err := r.References()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refs
 }
 
 // `l` and `→` open the highlighted branch or tag; they must not also turn
