@@ -358,15 +358,16 @@ func (b *limitedBuffer) String() string {
 }
 
 // fetchMirror fetches the named remotes of the mirror in dir and reports
-// whether the sync should go on to the lfs objects. A failed fetch is
-// logged. Once ctx is done it starts no further fetch and returns false
-// without logging: the server is stopping.
+// whether the sync should go on to the lfs objects. It returns false when
+// a fetch failed, after logging the error, so the lfs sync is skipped
+// until the next run. Once ctx is done it starts no further fetch and
+// returns false without logging: the server is stopping.
 func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) bool {
 	if err := syncMirror(ctx, dir, remotes, env); err != nil {
-		if ctx.Err() != nil {
-			return false
+		if ctx.Err() == nil {
+			logger.Error("error syncing mirror", "repo", name, "err", err)
 		}
-		logger.Error("error syncing mirror", "repo", name, "err", err)
+		return false
 	}
 	return ctx.Err() == nil
 }

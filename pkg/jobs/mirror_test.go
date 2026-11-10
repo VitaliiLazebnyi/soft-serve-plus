@@ -573,9 +573,9 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 	}
 }
 
-// A remote that fails to fetch is logged and does not stop the others or
-// the lfs sync.
-func TestFetchMirrorGoesOnAfterFailure(t *testing.T) {
+// A remote that fails to fetch is logged and does not stop the others,
+// but the lfs sync is skipped until the next run.
+func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
 	calls := stubMirrorGit(t, func(args []string) error {
 		if args[len(args)-1] == "origin" {
 			return errors.New("exit status 128")
@@ -584,8 +584,8 @@ func TestFetchMirrorGoesOnAfterFailure(t *testing.T) {
 	})
 	var logs bytes.Buffer
 
-	if !fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-		t.Fatal("fetchMirror stopped without being cancelled")
+	if fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+		t.Fatal("fetchMirror went on to the lfs sync after a failed fetch")
 	}
 	if len(*calls) != len(mirrorTestRemotes) {
 		t.Fatalf("ran %v, want a fetch of each of %v", *calls, mirrorTestRemotes)
