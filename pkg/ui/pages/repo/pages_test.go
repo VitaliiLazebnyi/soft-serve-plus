@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
@@ -47,17 +46,17 @@ func TestRenderCommitShowsAuthorDate(t *testing.T) {
 // References are sorted by the committer date they show, newest first.
 func TestRefItemsSortByCommitterDate(t *testing.T) {
 	t.Parallel()
-	day := func(d int) *gitm.Signature {
-		return &gitm.Signature{When: time.Date(2020, 1, d, 0, 0, 0, 0, time.UTC)}
+	day := func(d int) time.Time {
+		return time.Date(2020, 1, d, 0, 0, 0, 0, time.UTC)
 	}
 	// "old" was authored last but committed first.
-	old := RefItem{Commit: &gitm.Commit{Author: day(9), Committer: day(1)}}
-	recent := RefItem{Commit: &gitm.Commit{Author: day(2), Committer: day(5)}}
+	old := RefItem{&git.RefInfo{CommitID: "old", AuthorWhen: day(9), CommitterWhen: day(1)}}
+	recent := RefItem{&git.RefInfo{CommitID: "recent", AuthorWhen: day(2), CommitterWhen: day(5)}}
 	its := RefItems{old, recent}
 	sort.Stable(its)
-	if its[0].Commit != recent.Commit {
+	if its[0].CommitID != recent.CommitID {
 		t.Errorf("references sorted by author date: got committer dates %v, %v",
-			its[0].Commit.Committer.When, its[1].Commit.Committer.When)
+			its[0].CommitterWhen, its[1].CommitterWhen)
 	}
 }
 
