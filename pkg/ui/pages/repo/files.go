@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
@@ -257,10 +258,8 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if msg.load != f.load {
 			break
 		}
-		// Repo hands a FileContentMsg to the Files pane twice: once as the
-		// pane the message belongs to and once as the active tab. Start a
-		// new load so that the second delivery is dropped and the file's
-		// position is pushed only once.
+		// Start a new load so that a repeated delivery of this message is
+		// dropped and the file's position is pushed only once.
 		f.load++
 		f.path = msg.path
 		f.lastSelected = append(f.lastSelected, msg.index)
@@ -338,19 +337,9 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		f.SetSize(msg.Width, msg.Height)
-		switch f.activeView {
-		case filesViewFiles:
-			if f.repo != nil {
-				cmds = append(cmds, f.updateFilesCmd())
-			}
-		case filesViewContent:
-			if f.currentContent.content != "" {
-				m, cmd := f.code.Update(msg)
-				f.code = m.(*code.Code)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
+		// The content view re-renders through f.code.Update below.
+		if f.activeView == filesViewFiles && f.repo != nil {
+			cmds = append(cmds, f.updateFilesCmd())
 		}
 	case common.ErrorMsg:
 		// A listing or blame that failed to load never sends its result, so
@@ -485,6 +474,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load := f.repo, f.ref, f.load
 	ctx := f.common.Context()
+	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		if item.entry.IsTree() || item.Mode().IsDir() {
 			return common.ErrorMsg(errInvalidFile)
@@ -509,20 +499,19 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			}
 		}
 
-		if !bin {
-			bin, err = fi.IsBinary()
-			if err != nil {
-				return common.ErrorMsg(err)
-			}
-		}
-
 		if bin {
 			return common.ErrorMsg(errBinaryFile)
 		}
 
-		c, err := fi.Bytes()
+		// Read the file once, capped by the size limit, and sniff the
+		// bytes in hand rather than piping the blob a second time.
+		c, err := fi.ContentsLimit(limit)
 		if err != nil {
 			return common.ErrorMsg(err)
+		}
+
+		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
+			return common.ErrorMsg(errBinaryFile)
 		}
 
 		return FileContentMsg{

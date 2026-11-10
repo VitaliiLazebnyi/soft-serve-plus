@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	gopath "path"
 	"path/filepath"
@@ -150,6 +151,24 @@ func (r *Repository) HEAD() (*Reference, error) {
 	}, nil
 }
 
+// DetachedHEAD returns a reference named "HEAD" to the commit HEAD points
+// at. It is for a detached HEAD, which holds a commit rather than naming a
+// branch, so HEAD returns an error for it. It returns ErrRevisionNotExist
+// when HEAD does not resolve to a commit.
+func (r *Repository) DetachedHEAD() (*Reference, error) {
+	hash, err := r.RevParse(HEAD+"^{commit}", git.RevParseOptions{CommandOptions: r.cmdOpts()})
+	if err != nil {
+		return nil, err
+	}
+	return &Reference{
+		Reference: &git.Reference{
+			ID:      hash,
+			Refspec: HEAD,
+		},
+		path: r.Path,
+	}, nil
+}
+
 // References returns the references for a repository.
 func (r *Repository) References() ([]*Reference, error) {
 	refs, err := r.ShowRef(git.ShowRefOptions{CommandOptions: r.cmdOpts()})
@@ -233,31 +252,6 @@ func (r *Repository) TreePath(ref *Reference, path string) (*Tree, error) {
 	return t.SubTree(path)
 }
 
-// diffCommandOptions returns the options for git commands whose diff output
-// is parsed. User and system config must not change the output: an external
-// diff driver (diff.external) or forced color (color.ui=always) produce text
-// the parser does not understand, so both are turned off on the command line
-// too, which also covers the repository's own config.
-// The commands run under the repository's context.
-func (r *Repository) diffCommandOptions() git.CommandOptions {
-	return git.CommandOptions{
-		Args:    []string{"--no-ext-diff", "--no-color"},
-		Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
-		Context: r.Context(),
-	}
-}
-
-// Diff returns the diff for the given commit.
-func (r *Repository) Diff(commit *Commit) (*Diff, error) {
-	diff, err := r.Repository.Diff(commit.ID.String(), DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, git.DiffOptions{
-		CommandOptions: r.diffCommandOptions(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toDiff(diff), nil
-}
-
 // Patch returns the patch for the given commit against its first parent, or
 // against the empty tree for a root commit.
 //
@@ -338,4 +332,20 @@ func (r *Repository) SymbolicRef(name string, ref string, opts ...git.SymbolicRe
 	opt.Ref = ref
 	opt.CommandOptions = r.withCtx(opt.CommandOptions)
 	return r.Repository.SymbolicRef(opt)
+}
+
+// WriteBlob streams the blob with the given ID to w without holding it in
+// memory. It runs until ctx is done instead of git's default timeout, so a
+// slow reader does not cut a large blob short.
+func (r *Repository) WriteBlob(ctx context.Context, id *git.SHA1, w io.Writer) error {
+	cmd := git.NewCommandWithContext(ctx, "cat-file", "blob", id.String())
+	cmd.SetTimeout(-1)
+	stderr := new(bytes.Buffer)
+	if err := cmd.RunInDirPipeline(w, stderr, r.Path); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w - %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }

@@ -173,12 +173,13 @@ func (r *Readme) StatusBarInfo() string {
 func (r *Readme) updateReadmeCmd() tea.Cmd {
 	repo, ref := r.repo, r.ref
 	ctx := r.common.Context()
+	limit := r.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		m := ReadmeMsg{}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		rm, rp, _ := backend.Readme(ctx, repo, ref)
+		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
 		m.Content = rm
 		m.Path = rp
 		return m
