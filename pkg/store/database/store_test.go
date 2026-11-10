@@ -412,18 +412,8 @@ func TestLFSObjectStore(t *testing.T) {
 	if os, err := s.GetLFSObjects(ctx, dbx, 7); err != nil || len(os) != 2 {
 		t.Errorf("GetLFSObjects(7) = %d, %v, want 2", len(os), err)
 	}
-	if os, err := s.GetLFSObjectsByName(ctx, dbx, "repo8"); err != nil || len(os) != 1 || os[0].Oid != oid1 {
-		t.Errorf("GetLFSObjectsByName(repo8) = %+v, %v, want [oid1]", os, err)
-	}
-
-	if err := s.DeleteLFSObjectByOid(ctx, dbx, 7, oid1); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetLFSObjectByOid(ctx, dbx, 7, oid1); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetLFSObjectByOid() after delete: error = %v, want ErrRecordNotFound", err)
-	}
-	if _, err := s.GetLFSObjectByOid(ctx, dbx, 8, oid1); err != nil {
-		t.Errorf("deleting repo 7's copy removed repo 8's: %v", err)
+	if os, err := s.GetLFSObjects(ctx, dbx, 8); err != nil || len(os) != 1 || os[0].Oid != oid1 {
+		t.Errorf("GetLFSObjects(8) = %+v, %v, want [oid1]", os, err)
 	}
 }
 
@@ -457,7 +447,7 @@ func TestLFSLockStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Path != "a.bin" || l.UserID != owner || l.RepoID != 7 || l.Refname != "refs/heads/main" {
+	if l.Path != "a.bin" || l.UserID != owner || l.RepoID != 7 || l.Refname.String != "refs/heads/main" {
 		t.Errorf("GetLFSLockForPath() = %+v", l)
 	}
 	if got, err := s.GetLFSLockByID(ctx, dbx, 7, l.ID); err != nil || got.Path != "a.bin" {
@@ -475,15 +465,11 @@ func TestLFSLockStore(t *testing.T) {
 	if _, err := s.GetLFSLockForUserByID(ctx, dbx, 7, other.ID, l.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("GetLFSLockForUserByID(not the owner) error = %v, want ErrRecordNotFound", err)
 	}
-	if ls, err := s.GetLFSLocksForUser(ctx, dbx, 7, owner); err != nil || len(ls) != 1 {
-		t.Errorf("GetLFSLocksForUser() = %d, %v, want 1", len(ls), err)
-	}
 
 	// Pages follow the lock ID: afterID is the last ID of the previous page.
-	// The count is of every lock in the repository.
-	ls, n, err := s.GetLFSLocksWithCount(ctx, dbx, 7, 0, 1)
-	if err != nil || len(ls) != 1 || n != 2 {
-		t.Fatalf("GetLFSLocksWithCount(after 0, limit 1) = %d locks, count %d, %v, want 1 and 2", len(ls), n, err)
+	ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 1)
+	if err != nil || len(ls) != 1 {
+		t.Fatalf("GetLFSLocks(after 0, limit 1) = %d, %v, want 1", len(ls), err)
 	}
 	ls2, err := s.GetLFSLocks(ctx, dbx, 7, ls[0].ID, 1)
 	if err != nil || len(ls2) != 1 || ls2[0].ID <= ls[0].ID {

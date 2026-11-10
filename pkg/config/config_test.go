@@ -789,6 +789,29 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	}
 }
 
+func TestGitMaxConnectionsValidate(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		cfg := DefaultConfig()
+		cfg.DataPath = t.TempDir()
+		cfg.Git.MaxConnections = n
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "git.max_connections") {
+			t.Errorf("max_connections %d: Validate() = %v, want an error naming it", n, err)
+		}
+		// The limit does not matter while the daemon is off.
+		cfg.Git.Enabled = false
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("max_connections %d with the daemon disabled: Validate() = %v", n, err)
+		}
+	}
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.Git.MaxConnections = 1
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("max_connections 1: Validate() = %v", err)
+	}
+}
+
 // A misspelt key is ignored, so it is reported with its dotted path and line
 // for the server to warn about.
 func TestUnknownConfigKeys(t *testing.T) {
