@@ -344,31 +344,51 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	// anonymous clients.
 	stderr := d.logger.With("addr", c.RemoteAddr(), "service", service, "repo", name).
 		StandardLog(log.StandardLogOptions{ForceLevel: log.WarnLevel}).Writer()
-	stdout := &startedWriter{w: c}
 	cmd := git.ServiceCommand{
 		Stdin:  c,
-		Stdout: stdout,
+		Stdout: c,
 		Stderr: stderr,
 		Env:    envs,
 		Dir:    filepath.Join(reposDir, repo),
 	}
+	if ka := keepAlive(idleTimeout); ka > 0 {
+		// Neither side talks while pack-objects prepares the pack
+		// for a quiet fetch. Have upload-pack send keepalive
+		// packets often enough that the connection does not reach
+		// the idle timeout meanwhile.
+		cmd.Config = append(cmd.Config, fmt.Sprintf("uploadpack.keepAlive=%d", ka))
+	}
 
 	if err := service.Handler(ctx, cmd); err != nil {
 		d.logger.Debugf("git: error handling request: %v", err)
-		// Once git has answered, an ERR packet would land in the middle
-		// of its stream, so the connection is just closed. Before that,
-		// the client gets a fixed message rather than the error itself.
-		if !stdout.started.Load() {
-			if errors.Is(err, git.ErrInvalidRepo) {
-				d.fatal(c, git.ErrInvalidRepo)
-			} else {
-				d.fatal(c, git.ErrSystemMalfunction)
-			}
+		if c.Wrote() {
+			// The response has started, so an ERR packet would
+			// corrupt it. Closing the connection, which the
+			// deferred close does, is all that is left.
+			return
+		}
+		// Before that, the client gets a fixed message rather than
+		// the error itself.
+		if errors.Is(err, git.ErrInvalidRepo) {
+			d.fatal(c, git.ErrInvalidRepo)
+		} else {
+			d.fatal(c, git.ErrSystemMalfunction)
 		}
 		return
 	}
 
 	counter.WithLabelValues(name)
+}
+
+// keepAlive returns the uploadpack.keepAlive interval, in seconds, for a
+// connection closed after idle without traffic: half of it, and at least one
+// second, git's smallest interval. It returns 0, leaving git's default, when
+// there is no idle timeout.
+func keepAlive(idle time.Duration) int {
+	if idle <= 0 {
+		return 0
+	}
+	return max(int(idle/time.Second)/2, 1)
 }
 
 // Close closes the underlying listener.
