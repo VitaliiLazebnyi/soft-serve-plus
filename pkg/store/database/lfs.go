@@ -36,25 +36,27 @@ func (*lfsStore) CreateLFSLockForUser(ctx context.Context, tx db.Handler, repoID
 }
 
 // GetLFSLocks implements store.LFSStore.
-func (*lfsStore) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, page int, limit int) ([]models.LFSLock, error) {
-	if page <= 0 {
-		page = 1
-	}
-
+//
+// It returns up to limit locks with an ID above afterID, in ID order. Paging
+// by ID gives every lock one place in a stable order, unlike a row offset
+// over the one-second updated_at, so a lock is never skipped or listed twice,
+// even when locks are created or deleted between pages.
+func (*lfsStore) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, error) {
 	var locks []models.LFSLock
 	query := tx.Rebind(`
 		SELECT *
 		FROM lfs_locks
-		WHERE repo_id = ?
-		ORDER BY updated_at DESC
-		LIMIT ? OFFSET ?;
+		WHERE repo_id = ? AND id > ?
+		ORDER BY id ASC
+		LIMIT ?;
 	`)
-	err := tx.SelectContext(ctx, &locks, query, repoID, limit, (page-1)*limit)
+	err := tx.SelectContext(ctx, &locks, query, repoID, afterID, limit)
 	return locks, db.WrapError(err)
 }
 
-func (s *lfsStore) GetLFSLocksWithCount(ctx context.Context, tx db.Handler, repoID int64, page int, limit int) ([]models.LFSLock, int64, error) {
-	locks, err := s.GetLFSLocks(ctx, tx, repoID, page, limit)
+// GetLFSLocksWithCount implements store.LFSStore.
+func (s *lfsStore) GetLFSLocksWithCount(ctx context.Context, tx db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, int64, error) {
+	locks, err := s.GetLFSLocks(ctx, tx, repoID, afterID, limit)
 	if err != nil {
 		return nil, 0, err
 	}

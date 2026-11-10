@@ -204,7 +204,7 @@ func (s *Selection) Init() tea.Cmd {
 	for _, r := range repos {
 		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
 		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(r, nil)
+			readme, path, err := backend.Readme(r, nil, cfg.BlobSizeLimit())
 			if err != nil {
 				s.common.Logger.Debugf("ui: failed to read the about readme: %v", err)
 			} else {
@@ -241,8 +241,12 @@ func (s *Selection) Init() tea.Cmd {
 // Update implements tea.Model.
 func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// routed is set when the message has already been delivered to every
+	// pane, so that the active pane does not get it a second time.
+	routed := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		routed = true
 		r, cmd := s.readme.Update(msg)
 		s.readme = r.(*code.Code)
 		if cmd != nil {
@@ -268,6 +272,9 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
+	}
+	if routed {
+		return s, tea.Batch(cmds...)
 	}
 	switch s.activePane {
 	case readmePane:

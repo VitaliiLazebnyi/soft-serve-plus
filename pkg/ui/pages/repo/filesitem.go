@@ -144,13 +144,10 @@ func (d FileItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 		s.Selector.GetWidth())
 	//nolint:errcheck
 	fmt.Fprint(w,
-		d.common.Zone.Mark(
-			i.ID(),
-			truncate.Render(fmt.Sprintf("%s%s%s",
-				modeStr,
-				size,
-				name,
-			)),
-		),
+		truncate.Render(fmt.Sprintf("%s%s%s",
+			modeStr,
+			size,
+			name,
+		)),
 	)
 }
