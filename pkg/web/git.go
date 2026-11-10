@@ -447,7 +447,9 @@ func pathAncestors(p string) []string {
 // repository. A repository created by push-to-create is recorded in pending,
 // which removes it if the push fails, or never arrives, without any ref.
 func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	var serve http.HandlerFunc
+	serve = func(w http.ResponseWriter, r *http.Request) {
+		orig := r
 		r, err := identify(r, mux.Vars(r)["repo"])
 		if denyBusy(w, r, err) {
 			return
@@ -539,7 +541,14 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			return
 		}
 
-		ctx, done := pending.begin(ctx, repoName)
+		ctx, done, waited := pending.begin(ctx, repoName)
+		if waited {
+			// The repository was being removed, so repo and accessLevel
+			// may describe one that is gone. Start over, as a request
+			// arriving now would.
+			serve(w, orig)
+			return
+		}
 		if done != nil {
 			defer done()
 			r = r.WithContext(ctx)
@@ -547,6 +556,7 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 
 		next.ServeHTTP(w, r)
 	}
+	return serve
 }
 
 //nolint:revive
@@ -629,7 +639,12 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		}...)
 	}
 
+	// The service waits for its read of the body to end, so the body is not
+	// read after this handler returns or while the gzip reader is closed.
+	// The read is not cut short with a read deadline on the connection,
+	// which could cancel the context of this and later requests on it.
 	cmd.Stdin = reader
+	cmd.JoinStdin = true
 	cmd.Stdout = w
 
 	if err := service.Handler(ctx, cmd); err != nil {

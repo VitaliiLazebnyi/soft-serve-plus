@@ -31,7 +31,7 @@ const (
 	CollaboratorEventRemoved CollaboratorEventAction = "removed"
 )
 
-// NewCollaboratorEvent sends a collaborator event.
+// NewCollaboratorEvent builds the payload for a collaborator event.
 func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repository, collabUsername string, action CollaboratorEventAction) (CollaboratorEvent, error) {
 	event := EventCollaborator
 

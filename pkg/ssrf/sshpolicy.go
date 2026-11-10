@@ -183,19 +183,15 @@ func (f lookupFunc) resolve(ctx context.Context, host string) ([]net.IPAddr, err
 	return f(ctx, host)
 }
 
-// Match reports whether host (and port, "" meaning the ssh default) is
+// match reports whether host (and port, "" meaning the ssh default) is
 // covered by the allowlist. Hostnames match entries by name; otherwise the
 // host must resolve, and every address it resolves to must fall inside an
-// allowed range. A hostname that cannot be resolved fails closed.
+// allowed range. A hostname that cannot be resolved fails closed. ctx bounds
+// the lookup, which uses lookup for CIDR entries; nil means
+// net.DefaultResolver.
 //
 // ssh resolves the name again itself, so a CIDR match only says where the
 // name pointed at validation time. Hostname entries are the robust form.
-func (a AllowedHosts) Match(host, port string) error {
-	return a.match(context.Background(), host, port, nil)
-}
-
-// match is Match with any hostname lookup bounded by ctx, using lookup for
-// CIDR entries; nil means net.DefaultResolver.
 func (a AllowedHosts) match(ctx context.Context, host, port string, lookup lookupFunc) error {
 	if port == "" {
 		port = "22"
