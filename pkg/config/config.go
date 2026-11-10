@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
+	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/crypto/ssh"
 )
@@ -69,9 +71,25 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
-	// HandshakeTimeout is the number of seconds a client has to complete the
-	// key exchange and authenticate before the connection is closed.
+	// HandshakeTimeout is the number of seconds a client has to finish the
+	// SSH handshake and authenticate, like OpenSSH's LoginGraceTime. Until
+	// then the connection holds a place under MaxConnections and
+	// MaxConnectionsPerIP, so this bounds how long an idle, unauthenticated
+	// client can keep one. Zero means no limit.
 	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
+
+	// MaxConnections is the maximum number of SSH connections open at once.
+	// Zero means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
+	// MaxConnectionsPerIP is the maximum number of SSH connections open at
+	// once from one client address (one IPv4 address, or one IPv6 /64).
+	// Zero means no limit.
+	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
+
+	// MaxSessions is the maximum number of sessions open at once on one SSH
+	// connection, like OpenSSH's MaxSessions. Zero means no limit.
+	MaxSessions int `env:"MAX_SESSIONS" yaml:"max_sessions"`
 
 	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
 	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
@@ -405,6 +423,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS=%d", c.SSH.MaxConnections),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=%d", c.SSH.MaxConnectionsPerIP),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_SESSIONS=%d", c.SSH.MaxSessions),
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
@@ -722,6 +743,9 @@ func DefaultConfig() *Config {
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
 			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
+			MaxConnections:              256,
+			MaxConnectionsPerIP:         32,
+			MaxSessions:                 10,
 		},
 		Git: GitConfig{
 			Enabled:        true,
@@ -799,7 +823,39 @@ func (c *Config) Validate() error {
 	}
 
 	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimSuffix(c.Git.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
+
+	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
+	// value without a scheme or a host would hand clients unusable links.
+	if c.HTTP.PublicURL != "" {
+		u, err := url.Parse(c.HTTP.PublicURL)
+		if err != nil {
+			return fmt.Errorf("http.public_url: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http.public_url: %q must be an http:// or https:// URL with a host", c.HTTP.PublicURL)
+		}
+	}
+
+	// Setting only one of the pair would silently serve plain HTTP.
+	if (c.HTTP.TLSKeyPath == "") != (c.HTTP.TLSCertPath == "") {
+		return fmt.Errorf("http.tls_key_path and http.tls_cert_path must be set together")
+	}
+
+	switch strings.ToLower(c.Log.Format) {
+	case "", "json", "logfmt", "text":
+	default:
+		return fmt.Errorf("log.format: %q is not one of %q, %q, %q", c.Log.Format, "json", "logfmt", "text")
+	}
+
+	// The scheduler uses the standard parser; a spec it rejects would leave
+	// mirrors never syncing behind a startup warning.
+	if c.Jobs.MirrorPull != "" {
+		if _, err := cron.ParseStandard(c.Jobs.MirrorPull); err != nil {
+			return fmt.Errorf("jobs.mirror_pull: %q: %w", c.Jobs.MirrorPull, err)
+		}
+	}
 
 	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {
 		c.SSH.KeyPath = filepath.Join(c.DataPath, c.SSH.KeyPath)
@@ -825,6 +881,20 @@ func (c *Config) Validate() error {
 
 	if c.Git.Enabled && c.Git.MaxConnections < 1 {
 		return fmt.Errorf("git.max_connections: %d must be at least 1", c.Git.MaxConnections)
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.max_timeout", c.SSH.MaxTimeout},
+		{"ssh.idle_timeout", c.SSH.IdleTimeout},
+		{"git.max_timeout", c.Git.MaxTimeout},
+		{"git.idle_timeout", c.Git.IdleTimeout},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
+		}
 	}
 
 	for _, v := range []struct {
@@ -870,6 +940,20 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ssh.client_allowed_hosts: %w", err)
 	}
 	c.SSH.allowedHosts = allowed
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.handshake_timeout", c.SSH.HandshakeTimeout},
+		{"ssh.max_connections", c.SSH.MaxConnections},
+		{"ssh.max_connections_per_ip", c.SSH.MaxConnectionsPerIP},
+		{"ssh.max_sessions", c.SSH.MaxSessions},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
+		}
+	}
 
 	if err := c.SSH.validateAlgorithms(); err != nil {
 		return err
