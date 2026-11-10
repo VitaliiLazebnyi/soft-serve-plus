@@ -25,6 +25,10 @@ var (
 	// ErrInternalServerError indicates that an internal server error occurred.
 	ErrInternalServerError = errors.New("internal server error")
 
+	// ErrNoDataPath is returned when a hook runs without
+	// SOFT_SERVE_DATA_PATH, i.e. not from a Soft Serve Plus server.
+	ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server")
+
 	// Deprecated: this flag is ignored.
 	configPath string
 
@@ -36,6 +40,14 @@ var (
 		Hidden: true,
 		PersistentPreRunE: func(c *cobra.Command, args []string) error {
 			logger := log.FromContext(c.Context())
+			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
+			// in the working directory, which for a hook is the repository:
+			// opening the backend would create a data directory and an
+			// empty database inside it. The server always sets it.
+			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
+				logger.Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
+				return ErrNoDataPath
+			}
 			if err := cmd.InitBackendContext(c, args); err != nil {
 				logger.Error("failed to initialize backend context", "err", err)
 				return ErrInternalServerError

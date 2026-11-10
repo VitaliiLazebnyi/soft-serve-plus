@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"runtime/debug"
+	"slices"
+	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -34,6 +37,7 @@ func NewRouter(ctx context.Context) http.Handler {
 	cfg := config.FromContext(ctx)
 
 	h = corsHandler(cfg)(h)
+	h = varyOrigin(h)
 
 	return h
 }
@@ -45,7 +49,7 @@ func corsHandler(cfg *config.Config) func(http.Handler) http.Handler {
 		handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
 		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
 	}
-	if origins := cfg.CORSAllowedOrigins(); len(origins) > 0 {
+	if origins := corsOrigins(cfg.CORSAllowedOrigins()); len(origins) > 0 {
 		opts = append(opts, handlers.AllowedOrigins(origins))
 	} else {
 		// gorilla/handlers allows every origin when the list is empty, so
@@ -54,6 +58,52 @@ func corsHandler(cfg *config.Config) func(http.Handler) http.Handler {
 		opts = append(opts, handlers.AllowedOriginValidator(func(string) bool { return false }))
 	}
 	return handlers.CORS(opts...)
+}
+
+// varyOrigin marks every response as depending on the Origin request header.
+// The CORS handler only says so when more than one origin is allowed, yet
+// it answers an allowed origin differently from another one or from none,
+// so a shared cache could otherwise serve one origin's answer to another.
+func varyOrigin(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		h.ServeHTTP(w, r)
+	})
+}
+
+// corsOrigins returns the allowed origins with each URL reduced to the
+// origin a browser sends: scheme and host, lower-cased, without a default
+// port, path, query or fragment. The HTTP public URL is among the allowed
+// origins and may carry a path, as in "https://example.com/git", which no
+// Origin header ever matches. Entries that are not absolute URLs, such as
+// "*", are kept as they are.
+func corsOrigins(origins []string) []string {
+	out := make([]string, 0, len(origins))
+	for _, o := range origins {
+		o = corsOrigin(o)
+		if !slices.Contains(out, o) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// corsOrigin returns the serialized origin of s, or s when it is not an
+// absolute URL with a host.
+func corsOrigin(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return s
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
+		host += ":" + port
+	}
+	return scheme + "://" + host
 }
 
 // recoverPanics answers 500 to a request whose handler panicked, and logs

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
 	"go.yaml.in/yaml/v4"
 )
@@ -302,6 +303,21 @@ func TestCORSAllowedOriginsFollowPublicURL(t *testing.T) {
 	is.Equal(len(cfg.CORSAllowedOrigins()), 0)
 }
 
+// A trailing slash on any public URL is dropped, so URLs built from it, such
+// as the clone URLs in webhook payloads, have no "//".
+func TestValidateTrimsPublicURLs(t *testing.T) {
+	is := is.New(t)
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.PublicURL = "ssh://soft.example:23231/"
+	cfg.Git.PublicURL = "git://soft.example/"
+	cfg.HTTP.PublicURL = "https://soft.example/"
+	is.NoErr(cfg.Validate())
+	is.Equal(cfg.SSH.PublicURL, "ssh://soft.example:23231")
+	is.Equal(cfg.Git.PublicURL, "git://soft.example")
+	is.Equal(cfg.HTTP.PublicURL, "https://soft.example")
+}
+
 func TestParseMultipleMethods(t *testing.T) {
 	is := is.New(t)
 	is.NoErr(os.Setenv("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS", "GET,POST,PUT"))
@@ -493,7 +509,8 @@ func TestValidateParsesAllowedHosts(t *testing.T) {
 	if got := cfg.SSH.AllowedHosts(); len(got) != 2 {
 		t.Errorf("parsed %d entries, want 2", len(got))
 	}
-	if err := cfg.SSH.AllowedHosts().Match("git.internal.example", ""); err != nil {
+	policy := ssrf.GitRemotePolicy{AllowedSSHHosts: cfg.SSH.AllowedHosts()}
+	if _, err := ssrf.ValidateGitRemote("ssh://git@git.internal.example/x.git", policy); err != nil {
 		t.Errorf("parsed allowlist does not match its own entry: %v", err)
 	}
 
@@ -604,6 +621,36 @@ func TestMaxReposPerUser(t *testing.T) {
 	is.Equal(cfg.MaxReposPerUser, 5)
 
 	t.Setenv("SOFT_SERVE_MAX_REPOS_PER_USER", "-1")
+	cfg = DefaultConfig()
+	is.True(cfg.ParseEnv() != nil)
+}
+
+func TestMaxBlobSize(t *testing.T) {
+	is := is.New(t)
+	// Ignore any value exported in the environment running the tests.
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "")
+	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_BLOB_SIZE"))
+	cfg := DefaultConfig()
+	is.NoErr(cfg.ParseEnv())
+	is.Equal(cfg.MaxBlobSize, int64(DefaultMaxBlobSize))
+	is.Equal(cfg.BlobSizeLimit(), int64(DefaultMaxBlobSize))
+	is.Equal((*Config)(nil).BlobSizeLimit(), int64(DefaultMaxBlobSize))
+
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "0")
+	cfg = DefaultConfig()
+	is.NoErr(cfg.ParseEnv())
+	is.Equal(cfg.BlobSizeLimit(), int64(0)) // no limit
+	// Hooks re-read the config from the environment.
+	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_MAX_BLOB_SIZE=0"))
+
+	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_BLOB_SIZE"))
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	is.NoErr(os.WriteFile(path, []byte("max_blob_size: 4096\n"), 0o600))
+	cfg = DefaultConfig()
+	is.NoErr(parseFile(cfg, path))
+	is.Equal(cfg.MaxBlobSize, int64(4096))
+
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "-1")
 	cfg = DefaultConfig()
 	is.True(cfg.ParseEnv() != nil)
 }

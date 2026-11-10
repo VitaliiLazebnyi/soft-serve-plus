@@ -3,7 +3,7 @@ package webhook
 import (
 	"encoding"
 	"errors"
-	"strings"
+	"mime"
 )
 
 // ContentType is the type of content that will be sent in a webhook request.
@@ -35,11 +35,15 @@ var stringContentType = map[string]ContentType{
 var ErrInvalidContentType = errors.New("invalid content type")
 
 // ParseContentType parses a content type string and returns the content type.
+// The media type must match exactly, ignoring case; parameters such as
+// "; charset=utf-8" are allowed and ignored.
 func ParseContentType(s string) (ContentType, error) {
-	for k, v := range stringContentType {
-		if strings.HasPrefix(s, k) {
-			return v, nil
-		}
+	mt, _, err := mime.ParseMediaType(s)
+	if err != nil {
+		return -1, ErrInvalidContentType
+	}
+	if ct, ok := stringContentType[mt]; ok {
+		return ct, nil
 	}
 
 	return -1, ErrInvalidContentType
