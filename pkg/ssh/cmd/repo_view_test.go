@@ -48,6 +48,9 @@ func viewRepo(t *testing.T) (context.Context, string) {
 	git("add", "-A")
 	git("commit", "-q", "-m", "first")
 	git("push", "-q", bare, "main")
+	// The bare repository's HEAD follows the server git's init.defaultBranch,
+	// which may be master; point it at the pushed branch.
+	git("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
 	return ctx, git("rev-parse", "HEAD")
 }
 
