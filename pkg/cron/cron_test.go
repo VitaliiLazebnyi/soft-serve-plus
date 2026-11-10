@@ -3,6 +3,7 @@ package cron
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -84,6 +85,40 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 	// The skip is logged with the job it skipped.
 	if out := logs.String(); !strings.Contains(out, "skipping job run") || !strings.Contains(out, "job=mirror-pull") {
 		t.Errorf("skip not logged with the job name: %q", out)
+	}
+}
+
+// Shutdown waits for a running job to end, and gives up when ctx is done.
+func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
+	s := NewScheduler(context.TODO())
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	if _, err := s.AddFunc("slow", "@every 1s", func() {
+		select {
+		case started <- struct{}{}:
+		default:
+			return
+		}
+		<-release
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job did not run")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := s.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown returned %v while the job ran, want %v", err, context.DeadlineExceeded)
+	}
+
+	close(release)
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned %v once the job ended, want nil", err)
 	}
 }
 

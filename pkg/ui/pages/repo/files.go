@@ -437,7 +437,11 @@ func (f *Files) StatusBarValue() string {
 func (f *Files) StatusBarInfo() string {
 	switch f.activeView {
 	case filesViewFiles:
-		return fmt.Sprintf("# %d/%d", f.selector.Index()+1, len(f.selector.VisibleItems()))
+		total := len(f.selector.VisibleItems())
+		if total == 0 {
+			return "# 0/0"
+		}
+		return fmt.Sprintf("# %d/%d", f.selector.Index()+1, total)
 	case filesViewContent:
 		return common.ScrollPercent(f.code.ScrollPosition())
 	default:
