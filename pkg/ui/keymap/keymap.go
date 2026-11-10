@@ -4,16 +4,17 @@ import "charm.land/bubbles/v2/key"
 
 // KeyMap is a map of key bindings for the UI.
 type KeyMap struct {
-	Quit       key.Binding
-	UpDown     key.Binding
-	GotoTop    key.Binding
-	GotoBottom key.Binding
-	Select     key.Binding
-	Section    key.Binding
-	Back       key.Binding
-	PrevPage   key.Binding
-	NextPage   key.Binding
-	Help       key.Binding
+	Quit        key.Binding
+	UpDown      key.Binding
+	GotoTop     key.Binding
+	GotoBottom  key.Binding
+	Select      key.Binding
+	Section     key.Binding
+	PrevSection key.Binding
+	Back        key.Binding
+	PrevPage    key.Binding
+	NextPage    key.Binding
+	Help        key.Binding
 
 	SelectItem key.Binding
 	BackItem   key.Binding
@@ -84,11 +85,20 @@ func DefaultKeyMap() *KeyMap {
 	km.Section = key.NewBinding(
 		key.WithKeys(
 			"tab",
-			"shift+tab",
 		),
 		key.WithHelp(
 			"tab",
 			"section",
+		),
+	)
+
+	km.PrevSection = key.NewBinding(
+		key.WithKeys(
+			"shift+tab",
+		),
+		key.WithHelp(
+			"shift+tab",
+			"previous section",
 		),
 	)
 
@@ -159,10 +169,10 @@ func DefaultKeyMap() *KeyMap {
 		),
 	)
 
+	// ctrl+c is not a copy key: it always quits.
 	km.Copy = key.NewBinding(
 		key.WithKeys(
 			"c",
-			"ctrl+c",
 		),
 		key.WithHelp(
 			"c",

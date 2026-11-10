@@ -60,6 +60,9 @@ type Repo struct {
 	state        state
 	spinner      spinner.Model
 	panesReady   []bool
+	// noMenu is set when there is no repository menu to go back to, as in
+	// soft browse.
+	noMenu bool
 }
 
 // New returns a new Repo.
@@ -84,6 +87,12 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 		panesReady: make([]bool, len(comps)),
 	}
 	return r
+}
+
+// SetNoMenu tells the repository view that there is no repository menu to go
+// back to, so esc at the top of a tab does nothing.
+func (r *Repo) SetNoMenu(noMenu bool) {
+	r.noMenu = noMenu
 }
 
 func (r *Repo) getMargins() (int, int) {
@@ -120,10 +129,17 @@ func (r *Repo) Path() string {
 func (r *Repo) commonHelp() []key.Binding {
 	b := make([]key.Binding, 0)
 	back := r.common.KeyMap.Back
-	back.SetHelp("esc", "back to menu")
+	switch {
+	case r.Path() != "":
+		// esc leaves the current sub-view; the pane says what it goes back to.
+		back.SetHelp("esc", "back")
+		b = append(b, back)
+	case !r.noMenu:
+		back.SetHelp("esc", "back to menu")
+		b = append(b, back)
+	}
 	tab := r.common.KeyMap.Section
 	tab.SetHelp("tab", "switch tab")
-	b = append(b, back)
 	b = append(b, tab)
 	return b
 }

@@ -7,7 +7,6 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -180,56 +179,71 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
+// ReposMsg carries the repositories the selection page lists, loaded off
+// the UI goroutine by Init.
+type ReposMsg struct {
+	items      []selector.IdentifiableItem
+	readme     string
+	readmePath string
+	hasReadme  bool
+}
+
 // Init implements tea.Model.
 func (s *Selection) Init() tea.Cmd {
-	var readmeCmd tea.Cmd
-	cfg := s.common.Config()
-	if cfg == nil {
+	if s.common.Config() == nil {
 		return nil
 	}
+	return loadReposCmd(s.common)
+}
 
-	ctx := s.common.Context()
-	be := s.common.Backend()
-	pk := s.common.PublicKey()
+// loadReposCmd lists the repositories the caller may read, and the server
+// readme, without blocking the UI. bubbletea runs the command on its own
+// goroutine while Update keeps resizing the page, so it works on the copy
+// of common taken when Init returned and never reads the model.
+func loadReposCmd(c common.Common) tea.Cmd {
+	return func() tea.Msg {
+		return loadRepos(c)
+	}
+}
+
+func loadRepos(c common.Common) tea.Msg {
+	ctx := c.Context()
+	be := c.Backend()
+	pk := c.PublicKey()
 	if pk == nil && !be.AllowKeyless(ctx) {
 		return nil
 	}
 
-	repos, err := be.Repositories(ctx)
+	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
-	sortedItems := make(Items, 0)
+	var msg ReposMsg
+	sortedItems := make(Items, 0, len(repos))
 	for _, r := range repos {
-		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
-		if r.Name() == backend.AboutRepo && al >= access.ReadOnlyAccess && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(r, nil, cfg.BlobSizeLimit())
+		// Every repository here is readable by the caller.
+		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
+			readme, path, err := backend.Readme(r, nil, c.Config().BlobSizeLimit())
 			if err != nil {
-				s.common.Logger.Debugf("failed to read the about readme: %v", err)
+				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {
 				// The README comes from the repository; glamour passes
 				// escape sequences through to the terminal.
-				readmeCmd = s.readme.SetContent(utils.Sanitize(readme), path)
+				msg.readme, msg.readmePath, msg.hasReadme = utils.Sanitize(readme), path, true
 			}
 		}
 
 		if r.IsHidden() {
 			continue
 		}
-		if al >= access.ReadOnlyAccess {
-			sortedItems = append(sortedItems, NewItem(s.common, r))
-		}
+		sortedItems = append(sortedItems, NewItem(c, r))
 	}
 	sort.Stable(sortedItems)
-	items := make([]selector.IdentifiableItem, len(sortedItems))
+	msg.items = make([]selector.IdentifiableItem, len(sortedItems))
 	for i, it := range sortedItems {
-		items[i] = it
+		msg.items[i] = it
 	}
-	return tea.Batch(
-		s.selector.Init(),
-		s.selector.SetItems(items),
-		readmeCmd,
-	)
+	return msg
 }
 
 // Update implements tea.Model.
@@ -266,6 +280,12 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
+	case ReposMsg:
+		cmds = append(cmds, s.selector.SetItems(msg.items), s.selector.Init())
+		if msg.hasReadme {
+			cmds = append(cmds, s.readme.SetContent(msg.readme, msg.readmePath))
+		}
+		return s, tea.Batch(cmds...)
 	}
 	if routed {
 		return s, tea.Batch(cmds...)
