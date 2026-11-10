@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -88,7 +87,9 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			if _, err := be.Repository(ctx, repo); err == nil && be.AccessLevelForUser(ctx, repo, callerFor(ctx, repo)) >= access.ReadOnlyAccess {
+			// Readable loads the repository once and returns nil when it
+			// is missing or the caller may not read it.
+			if found, _ := be.Readable(ctx, repo, callerFor(ctx, repo)); found != nil {
 				break
 			}
 

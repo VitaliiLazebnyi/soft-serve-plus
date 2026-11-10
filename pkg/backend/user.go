@@ -124,6 +124,14 @@ func (d *Backend) BaseAccessLevelByPublicKey(ctx context.Context, pk ssh.PublicK
 	return d.baseAccessLevel(ctx, user)
 }
 
+// BaseAccessLevelForUser is BaseAccessLevelByPublicKey for a caller whose
+// user is already resolved, such as the user an SSH session stored in its
+// context, so the key is not looked up again. An admin key on ctx still
+// gets admin access (see isServerAdmin).
+func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
+	return d.baseAccessLevel(ctx, user)
+}
+
 // AccessLevelForUser returns the access level of a user for a repository.
 func (d *Backend) AccessLevelForUser(ctx context.Context, repo string, user proto.User) access.AccessLevel {
 	_, level := d.Readable(ctx, repo, user)
@@ -161,6 +169,25 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 	return d.Readable(ctx, name, user)
 }
 
+// ReadableForUser is ReadableByPublicKey for a caller whose user is already
+// resolved, such as the user an SSH session stored in its context, so the
+// key is not looked up again. An admin key on ctx still sees every
+// repository with admin access, as in ReadableByPublicKey.
+//
+// The session user is the one resolved when the session authenticated, as
+// for the account commands and BaseAccessLevelForUser: a key removed from
+// that account mid-session keeps the session's user until it reconnects.
+// Collaborator rows, the repository's privacy and ownership are still read
+// fresh on every call.
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+	if d.isAdminKey(sshutils.PublicKeyFromContext(ctx)) {
+		r, _ := d.Repository(ctx, name)
+		return r, access.AdminAccess
+	}
+
+	return d.Readable(ctx, name, user)
+}
+
 // baseAccessLevel is the level user holds for a repository that does not
 // exist.
 //
@@ -175,7 +202,12 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 // Without it, this is upstream behaviour: registered users get read-write on
 // a missing name, and anonymous users get the anonymous level.
 func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.AccessLevel {
-	anon := d.AnonAccess(ctx)
+	return d.baseAccessLevelWithAnon(ctx, user, d.AnonAccess(ctx))
+}
+
+// baseAccessLevelWithAnon is baseAccessLevel with the anonymous level
+// already read, so a caller that has it does not read the setting again.
+func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, anon access.AccessLevel) access.AccessLevel {
 	adminOnly := d.cfg.AdminOnlyCreate
 	switch {
 	case d.isServerAdmin(ctx, user):
@@ -214,7 +246,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
-		return d.baseAccessLevel(ctx, user)
+		return d.baseAccessLevelWithAnon(ctx, user, anon)
 	}
 
 	// If the user is the owner, they have admin access.
