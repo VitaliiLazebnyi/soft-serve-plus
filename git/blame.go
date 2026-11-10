@@ -32,10 +32,14 @@ func (r *Repository) BlameFile(rev, file string, opts ...git.BlameOptions) (*Bla
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
-	stdout, err := git.NewCommand("blame").
+	cmd := git.NewCommand("blame").
 		AddOptions(r.withCtx(opt.CommandOptions)).
-		AddArgs("-l", "-s", rev, "--", file).
-		RunInDirWithTimeout(opt.Timeout, r.Path) //nolint:staticcheck
+		AddArgs("-l", "-s", rev, "--", file)
+	// Honour the deprecated BlameOptions.Timeout the way git-module does.
+	if timeout := opt.Timeout; timeout != 0 { //nolint:staticcheck
+		cmd = cmd.WithTimeout(timeout)
+	}
+	stdout, err := cmd.RunInDir(r.Path)
 	if err != nil {
 		return nil, err
 	}
