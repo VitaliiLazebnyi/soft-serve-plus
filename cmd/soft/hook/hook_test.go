@@ -153,6 +153,18 @@ func TestHookErrorClosesDB(t *testing.T) {
 	}
 }
 
+// The ignored --config flag is marked deprecated, so cobra hides it and says
+// so when it is used.
+func TestConfigFlagDeprecated(t *testing.T) {
+	f := Command.PersistentFlags().Lookup("config")
+	if f == nil {
+		t.Fatal("no --config flag")
+	}
+	if f.Deprecated == "" {
+		t.Error("--config is not marked deprecated")
+	}
+}
+
 // A hook run without SOFT_SERVE_DATA_PATH, i.e. not from the server, is
 // refused before it opens the backend, which would otherwise create a data
 // directory and an empty database in the working directory (the repository).

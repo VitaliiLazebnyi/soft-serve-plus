@@ -51,8 +51,6 @@ var Command = &cobra.Command{
 
 // newModel returns the browse model for the repository r.
 func newModel(ctx context.Context, r *git.Repository) *model {
-	// Bubble Tea uses Termenv default output so we have to use the same
-	// thing here.
 	c := common.NewCommon(ctx, 0, 0)
 	c.HideCloneCmd = true
 	comps := []common.TabComponent{

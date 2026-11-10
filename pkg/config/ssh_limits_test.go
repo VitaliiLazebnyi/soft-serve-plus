@@ -47,7 +47,11 @@ func TestSSHLimitsConfigFileRoundTrip(t *testing.T) {
 	cfg.SSH.MaxSessions = 4
 	cfg.SSH.HandshakeTimeout = 9
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(newConfigFile(cfg)), 0o600); err != nil {
+	file, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := DefaultConfig()

@@ -199,7 +199,7 @@ type LogConfig struct {
 	// Valid values are "json", "logfmt", and "text".
 	Format string `env:"FORMAT" yaml:"format"`
 
-	// Time format for the log `ts` field.
+	// Time format for the log `time` field.
 	// Format must be described in Golang's time format.
 	TimeFormat string `env:"TIME_FORMAT" yaml:"time_format"`
 
@@ -612,7 +612,10 @@ func parseEnv(cfg *Config) error {
 	}); err != nil {
 		return fmt.Errorf("parse environment variables: %w", err)
 	}
-	if _, ok := os.LookupEnv("SOFT_SERVE_INITIAL_ADMIN_KEYS"); ok {
+	// The env parser leaves the list alone when the variable is set but
+	// blank, as in the Docker image, so it then still holds the file's keys,
+	// whose quotes are not the environment's to strip.
+	if v := os.Getenv("SOFT_SERVE_INITIAL_ADMIN_KEYS"); v != "" {
 		cfg.InitialAdminKeys = trimOuterQuotes(cfg.InitialAdminKeys)
 	}
 
@@ -663,7 +666,11 @@ func writeConfig(cfg *Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o600)
+	content, err := newConfigFile(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // WriteConfig writes the configuration to the default file.
@@ -769,7 +776,6 @@ func DefaultConfig() *Config {
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "Accept-Language", "Content-Language", "Content-Type", "Origin", "X-Requested-With", "User-Agent", "Authorization", "Access-Control-Request-Method", "Access-Control-Allow-Origin"},
 				AllowedMethods: []string{"GET", "HEAD", "POST", "PUT", "OPTIONS"},
-				AllowedOrigins: []string{"http://localhost:23232"},
 			},
 		},
 		Stats: StatsConfig{
@@ -826,9 +832,9 @@ func (c *Config) Validate() error {
 		c.DataPath = dp
 	}
 
-	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
-	c.Git.PublicURL = strings.TrimSuffix(c.Git.PublicURL, "/")
-	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
+	c.SSH.PublicURL = strings.TrimRight(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimRight(c.Git.PublicURL, "/")
+	c.HTTP.PublicURL = strings.TrimRight(c.HTTP.PublicURL, "/")
 
 	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
 	// value without a scheme or a host would hand clients unusable links.
@@ -1000,11 +1006,25 @@ func (c *Config) Validate() error {
 
 	c.InitialAdminKeys = pks
 
-	if !slices.Contains(c.HTTP.CORS.AllowedOrigins, c.HTTP.PublicURL) {
-		c.HTTP.CORS.AllowedOrigins = append([]string{c.HTTP.PublicURL}, c.HTTP.CORS.AllowedOrigins...)
-	}
+	// The public URL is allowed by CORSAllowedOrigins, not added here, so an
+	// environment override of it does not leave the file's URL allowed too.
+	c.HTTP.CORS.AllowedOrigins = slices.DeleteFunc(slices.Clone(c.HTTP.CORS.AllowedOrigins), func(s string) bool {
+		return strings.TrimSpace(s) == ""
+	})
 
 	return nil
+}
+
+// CORSAllowedOrigins returns the origins allowed to make cross-origin
+// requests: the HTTP public URL, which is always allowed, followed by the
+// configured allowed origins. The list is empty when neither is set, which
+// means no origin is allowed, not every one.
+func (c *Config) CORSAllowedOrigins() []string {
+	origins := slices.Clone(c.HTTP.CORS.AllowedOrigins)
+	if c.HTTP.PublicURL != "" && !slices.Contains(origins, c.HTTP.PublicURL) {
+		origins = append([]string{c.HTTP.PublicURL}, origins...)
+	}
+	return origins
 }
 
 // authKeys is the result of parseAuthKeys.
@@ -1136,13 +1156,11 @@ func trimOuterQuotes(aks []string) []string {
 
 // looksLikePath reports whether an entry that is not a key names a file. An
 // authorized key always has a space between its type and its data, so an
-// entry with a space is a malformed key; an entry without one is a path if
-// it has a directory separator or a file extension.
+// entry with a space is a malformed key; an entry without one is taken for a
+// path, even one with no directory or extension such as "admin_key", so that
+// a key file that is missing keeps the keys it may stand for.
 func looksLikePath(s string) bool {
-	if strings.ContainsFunc(s, unicode.IsSpace) {
-		return false
-	}
-	return strings.ContainsAny(s, `/\`) || filepath.Ext(s) != ""
+	return !strings.ContainsFunc(s, unicode.IsSpace)
 }
 
 // readKeyFile reads the admin key file named by path. A relative path is
