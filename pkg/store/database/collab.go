@@ -107,6 +107,13 @@ func (*collabStore) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler,
 	return m, err
 }
 
+// ListCollabsByUserID implements store.CollaboratorStore.
+func (*collabStore) ListCollabsByUserID(ctx context.Context, tx db.Handler, userID int64) ([]models.Collab, error) {
+	var m []models.Collab
+	err := tx.SelectContext(ctx, &m, tx.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
+	return m, err
+}
+
 // RemoveCollabByUsernameAndRepo implements store.CollaboratorStore.
 func (*collabStore) RemoveCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) error {
 	username = strings.ToLower(username)

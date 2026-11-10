@@ -158,7 +158,7 @@ func TestValidateURLAllowing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateURL(tt.url, tt.allowed, lookup)
+			err := validateURL(context.Background(), tt.url, tt.allowed, lookup)
 			if tt.wantErr == nil {
 				if err != nil {
 					t.Fatalf("validateURL(%q) = %v, want nil", tt.url, err)
