@@ -302,7 +302,16 @@ func sessionKeyError(ctx context.Context, base error, reason string) error {
 
 // userByPublicKey returns the user that owns the session's public key. When
 // no user owns it, the error is errUnknownKey.
+//
+// The SSH authentication middleware resolves the key once per session and
+// stores the user in the context, so that user is used when present. Only
+// when there is none (no key owner, a lookup error, or a context built
+// without the middleware) is the key looked up, which keeps the errors
+// below.
 func userByPublicKey(ctx context.Context) (proto.User, error) {
+	if user := proto.UserFromContext(ctx); user != nil {
+		return user, nil
+	}
 	be := backend.FromContext(ctx)
 	user, err := be.UserByPublicKey(ctx, sshutils.PublicKeyFromContext(ctx))
 	// ErrAdminKeyNonAdminOwner also matches proto.ErrUserNotFound, but the

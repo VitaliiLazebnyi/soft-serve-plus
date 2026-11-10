@@ -82,7 +82,7 @@ func TestLatestFile(t *testing.T) {
 		{"broken", "broken", "broken/readme9"},
 	} {
 		t.Run(tc.dir, func(t *testing.T) {
-			content, path, err := LatestFile(repo, ref, tc.dir+"/[rR][eE][aA][dD][mM][eE]*")
+			content, path, err := LatestFile(repo, ref, tc.dir+"/[rR][eE][aA][dD][mM][eE]*", 0)
 			if err != nil {
 				t.Fatalf("LatestFile: %v", err)
 			}

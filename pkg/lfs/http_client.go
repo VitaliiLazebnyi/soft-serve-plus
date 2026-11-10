@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -251,7 +252,20 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		return fmt.Errorf("TransferAdapter not found: %s", result.Transfer)
 	}
 
+	// Only act on objects that were asked for, once each, so a response
+	// listing other objects or the same one twice transfers nothing more.
+	requested := make(map[string]bool, len(objects))
+	for _, p := range objects {
+		requested[p.Oid] = true
+	}
+
 	for _, object := range result.Objects {
+		if !requested[object.Oid] {
+			logger.Debugf("Ignoring %v, which was not requested or was already handled", object.Pointer)
+			continue
+		}
+		delete(requested, object.Oid)
+
 		if object.Error != nil {
 			objectError := errors.New(object.Error.Message)
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
@@ -261,18 +275,34 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 			continue
 		}
 
+		// A download that fails because of the object, not the
+		// connection or the server, only fails its own object, like an
+		// error the server reports for it in the batch response. A
+		// download link that is null or has no href is a malformed
+		// response and still fails the whole transfer.
 		link, ok, err := actionLink(object, ActionDownload)
 		if err != nil {
 			return err
 		}
-		if !ok {
+		var content io.ReadCloser
+		if ok {
+			content, err = transferAdapter.Download(ctx, object.Pointer, link)
+		} else {
 			logger.Debugf("%v has no usable action", object.Pointer)
-			return errors.New("missing action 'download'")
+			err = errMissingDownload
 		}
-
-		content, err := transferAdapter.Download(ctx, object.Pointer, link)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !isObjectError(err) {
+				return err
+			}
+			logger.Debugf("Error on object %v: %v", object.Pointer, err)
+			if err := dc(object.Pointer, nil, err); err != nil {
+				return err
+			}
+			continue
 		}
 
 		if err := dc(object.Pointer, content, nil); err != nil {
@@ -281,4 +311,34 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 	}
 
 	return nil
+}
+
+// errMissingDownload is the error of an object the batch response gives no
+// download action for.
+var errMissingDownload = errors.New("missing action 'download'")
+
+// isObjectError reports whether err, the error of downloading one object,
+// is about that object rather than the connection or the server: the object
+// has no download action or an href that doesn't parse, or its href answers
+// 404 Not Found, 410 Gone or a redirect, which is refused. Trying again
+// won't change the outcome of those, so they only fail their own object.
+// Any other error, such as a connection that fails or times out, a 5xx, or
+// a 401 or 403 from an expired href, may well pass on a later try, so it
+// stops the download: a plain import that is told an object is unavailable
+// never fetches it again.
+func isObjectError(err error) bool {
+	if errors.Is(err, errMissingDownload) || errors.Is(err, errInvalidURL) {
+		return true
+	}
+	var serr *statusError
+	if !errors.As(err, &serr) {
+		return false
+	}
+	switch {
+	case serr.code == http.StatusNotFound, serr.code == http.StatusGone:
+		return true
+	case serr.code >= 300 && serr.code < 400:
+		return true
+	}
+	return false
 }
