@@ -44,8 +44,53 @@ func TestBadNewLogger(t *testing.T) {
 	}
 }
 
+func TestNewLoggerCreatesMissingLogDir(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "does", "not", "exist")
+	cfg := config.DefaultConfig()
+	cfg.DataPath = dataPath
+	cfg.Log.Path = filepath.Join("logs", "soft.log")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	want := filepath.Join(dataPath, "logs", "soft.log")
+	if cfg.Log.Path != want {
+		t.Fatalf("expected log path %q, got %q", want, cfg.Log.Path)
+	}
+
+	logger, f, err := NewLogger(cfg)
+	if err != nil {
+		t.Fatalf("expected nil got %v", err)
+	}
+	if logger == nil || f == nil {
+		t.Fatalf("expected logger and file, got %v %v", logger, f)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	logger.Info("hello")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected log file to exist: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return // unix permissions
+	}
+	for _, dir := range []string{dataPath, filepath.Dir(want)} {
+		fi, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode = %v, want 0700", dir, got)
+		}
+	}
+}
+
 func TestNewLoggerFallsBackToStderr(t *testing.T) {
-	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(t.TempDir(), "missing", "logfile.txt")}}
+	// The log file's parent is a regular file, so neither the directory
+	// nor the log file can be created.
+	parent := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(parent, "logfile.txt")}}
 	logger, f, err := NewLogger(c)
 	if err == nil {
 		t.Fatal("expected error got nil")

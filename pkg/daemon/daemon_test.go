@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -224,6 +226,97 @@ func TestInvalidRepo(t *testing.T) {
 	}
 }
 
+// readAll sends a request to the daemon and returns everything it answers
+// with until it closes the connection.
+func readAll(t *testing.T, request ...string) []byte {
+	t.Helper()
+	var dialer net.Dialer
+	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if err := c.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
+	for _, r := range request {
+		if _, err := io.WriteString(c, r); err != nil {
+			t.Fatalf("failed to write request: %v", err)
+		}
+	}
+	out, err := io.ReadAll(c)
+	if err != nil && !isReset(err) {
+		t.Fatalf("failed to read answer: %v", err)
+	}
+	return out
+}
+
+// isReset reports whether err is the connection being reset, which a server
+// that closes with unread input can cause instead of a clean end.
+func isReset(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || strings.Contains(err.Error(), "forcibly closed")
+}
+
+func pkt(s string) string {
+	return fmt.Sprintf("%04x%s", len(s)+4, s)
+}
+
+// TestGitStderrNotSentToClient verifies that git's stderr and its error are
+// kept out of the protocol stream. A protocol v2 request for an unknown
+// command makes git print "fatal: invalid command" and exit with an error
+// after it has advertised its capabilities.
+func TestGitStderrNotSentToClient(t *testing.T) {
+	if _, err := testBackend.CreateRepository(t.Context(), "stderr", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	out := readAll(t,
+		pkt("git-upload-pack /stderr.git\x00host=localhost\x00\x00version=2\x00"),
+		pkt("command=foobar\n"), "0000",
+	)
+	if !bytes.Contains(out, []byte("version 2")) {
+		t.Fatalf("expected a protocol v2 capability advertisement, got %q", out)
+	}
+	for _, s := range []string{"fatal", "invalid command", "ERR", "exit status"} {
+		if bytes.Contains(out, []byte(s)) {
+			t.Errorf("answer contains %q: %q", s, out)
+		}
+	}
+	// Everything the daemon sent must parse as pkt-lines.
+	sc := pktline.NewScanner(bytes.NewReader(out))
+	for sc.Scan() { //nolint:revive
+	}
+	if err := sc.Err(); err != nil {
+		t.Errorf("answer is not a valid pkt-line stream: %v: %q", err, out)
+	}
+}
+
+// TestGitFailureFixedMessage verifies that when git fails before answering,
+// the client gets a fixed error message instead of git's output and error.
+func TestGitFailureFixedMessage(t *testing.T) {
+	if _, err := testBackend.CreateRepository(t.Context(), "broken", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	// Leave an empty directory in place of the repository, which git
+	// refuses as not a git repository.
+	dir := filepath.Join(testDaemon.cfg.DataPath, "repos", "broken.git")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := readAll(t, pkt("git-upload-pack /broken.git\x00host=localhost\x00"))
+	want := pkt("ERR " + git.ErrSystemMalfunction.Error() + "\n")
+	if !bytes.HasPrefix(out, []byte(want)) {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+	for _, s := range []string{"fatal", "not a git repository", "exit status"} {
+		if bytes.Contains(out, []byte(s)) {
+			t.Errorf("answer contains %q: %q", s, out)
+		}
+	}
+}
+
 func readPktline(c net.Conn) (string, error) {
 	pktout := pktline.NewScanner(c)
 	if !pktout.Scan() {
@@ -323,6 +416,72 @@ func TestUploadPackCounted(t *testing.T) {
 		}
 	}
 	t.Errorf("metric %s is not registered", want)
+}
+
+// TestRequestTimeout checks that a client trickling its request line in a
+// byte at a time, each well within the idle timeout, is still dropped once
+// the request timeout passes, and is told why. Every read used to push the
+// deadline forward, so such clients could hold a connection slot
+// indefinitely.
+func TestRequestTimeout(t *testing.T) {
+	const (
+		requestTimeout = 2 * time.Second
+		idleTimeout    = 5 * time.Second
+	)
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = int(idleTimeout / time.Second)
+	ctx := config.WithContext(context.Background(), &cfg)
+	ctx = backend.WithContext(ctx, testBackend)
+	d, err := NewGitDaemon(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.requestTimeout = requestTimeout
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	// Start a request line whose declared length is more than is ever
+	// sent, a byte every 200ms for the first half of the request timeout.
+	// The client then stops writing well before the request deadline, so
+	// its writes cannot race the daemon closing the connection and turn
+	// the daemon's answer into a reset.
+	start := time.Now()
+	for _, b := range []byte("0fffgit") {
+		if time.Since(start) > requestTimeout/2 {
+			break
+		}
+		if _, err := c.Write([]byte{b}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err := c.SetReadDeadline(time.Now().Add(2 * idleTimeout)); err != nil {
+		t.Fatal(err)
+	}
+	// The scanner reports an ERR packet as an error carrying its message.
+	line, err := readPktline(c)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected a timeout error, got %q", line)
+	}
+	if !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+		t.Fatalf("expected the daemon to report %q, got %v", git.ErrTimeout, err)
+	}
+	// The idle deadline after the last byte would only pass at about
+	// requestTimeout/2 + idleTimeout.
+	if elapsed > requestTimeout+idleTimeout/2 {
+		t.Fatalf("connection was dropped only after %v, want about %v", elapsed, requestTimeout)
+	}
 }
 
 func TestKeepAlive(t *testing.T) {

@@ -64,8 +64,9 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 
-		ac := be.AllowKeyless(ctx)
-		if !ac && pk == nil {
+		// The keyless setting only matters without a key, so a keyed
+		// session does not look it up.
+		if pk == nil && !be.AllowKeyless(ctx) {
 			wish.Fatalln(s, ErrPermissionDenied)
 			return
 		}

@@ -432,6 +432,9 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			if err := gitAccess(user, repo, accessLevel, access.ReadWriteAccess); err != nil {
 				return err
 			}
+			if repo.IsMirror() {
+				return proto.ErrMirrorReadOnly
+			}
 			// Hold off the removal of a repository an HTTP push created
 			// and left without refs while this push may write some.
 			done, err := beginPush(ctx, be, repo)

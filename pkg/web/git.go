@@ -430,6 +430,10 @@ func withCaller(next http.Handler) http.HandlerFunc {
 	}
 }
 
+// testHookBeforePushCreate, when set, runs in withAccess after a push to a
+// missing name was authorized and before the repository is created.
+var testHookBeforePushCreate func()
+
 // pathAncestors returns p followed by each of its parent directories, each
 // spelled as a sanitized repository name, which is what `soft jwt` mints.
 func pathAncestors(p string) []string {
@@ -481,8 +485,14 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 		ctx = access.WithContext(ctx, accessLevel)
 		r = r.WithContext(ctx)
 
-		switch authorize(service, file, r.Method, repo != nil, accessLevel, user == nil, badCredentials(err)) {
-		case createThenServe:
+		v := authorize(service, file, r.Method, repo != nil, accessLevel, user == nil, badCredentials(err))
+		if v == createThenServe {
+			if verr := utils.ValidateRepo(utils.SanitizeRepo(repoName)); verr != nil {
+				logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
+				// git shows a text/plain error body to the user.
+				http.Error(w, verr.Error(), http.StatusBadRequest)
+				return
+			}
 			private, cerr := be.DefaultPrivate(ctx, user)
 			if errors.Is(cerr, proto.ErrAnonymousPrivate) {
 				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
@@ -495,9 +505,13 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 				return
 			}
 			if cerr == nil {
+				if testHookBeforePushCreate != nil {
+					testHookBeforePushCreate()
+				}
 				repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 			}
-			if errors.Is(cerr, proto.ErrUnauthorized) && user == nil {
+			switch {
+			case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
 				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
 				// As above: git sends credentials only after a 401, so ask
 				// for them. A signed-in admin then creates the repository; an
@@ -505,22 +519,38 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 				askCredentials(w, r)
 				http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
 				return
-			}
-			if errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized) {
+			case errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized):
 				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
-				// git shows a text/plain error body to the user.
 				http.Error(w, cerr.Error(), http.StatusForbidden)
 				return
-			}
-			if cerr != nil {
+			case errors.Is(cerr, proto.ErrRepoExist):
+				// Another request created the name since it was looked
+				// up. Authorize the caller for the repository now there,
+				// as if it had been there all along.
+				repo, accessLevel = be.Readable(ctx, repoName, user)
+				ctx = proto.WithRepositoryContext(ctx, repo)
+				ctx = access.WithContext(ctx, accessLevel)
+				r = r.WithContext(ctx)
+				v = authorize(service, file, r.Method, repo != nil, accessLevel, user == nil, false)
+				if v == createThenServe {
+					// The name was freed again before it could be looked
+					// up, by a creation that failed or a removal.
+					logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
+					http.Error(w, cerr.Error(), http.StatusConflict)
+					return
+				}
+			case cerr != nil:
 				logger.Error("failed to create repository", "repo", repoName, "err", cerr)
 				renderInternalServerError(w, r)
 				return
+			default:
+				ctx = proto.WithRepositoryContext(ctx, repo)
+				r = r.WithContext(ctx)
+				pending.add(ctx, repoName, repo, mux.Vars(r)["dir"])
 			}
+		}
 
-			ctx = proto.WithRepositoryContext(ctx, repo)
-			r = r.WithContext(ctx)
-			pending.add(ctx, repoName, repo, mux.Vars(r)["dir"])
+		switch v {
 		case denyUnreadable:
 			denyRead(w, r, err, lfsJSON)
 			return
@@ -538,6 +568,17 @@ func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
 			return
 		case forbidLFSWrite, unauthorizedLFS:
 			denyLFSWrite(w, r)
+			return
+		}
+
+		// A mirror sync would undo any ref a push changes, so refuse the
+		// push, ref advertisement included, before git asks for the pack.
+		// Only a caller allowed to write gets here, so the answer tells
+		// them nothing they could not read from the repository already.
+		if service == git.ReceivePackService && repo != nil && repo.IsMirror() {
+			logger.Info("refusing push to a mirror", "repo", repoName)
+			// git shows a text/plain error body to the user.
+			http.Error(w, proto.ErrMirrorReadOnly.Error(), http.StatusForbidden)
 			return
 		}
 
