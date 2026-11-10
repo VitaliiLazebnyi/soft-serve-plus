@@ -57,6 +57,13 @@ func commitCommand() *cobra.Command {
 			authorLine := "Author: " + utils.Sanitize(commit.Author.Name)
 			dateLine := "Date:   " + commit.Committer.When.UTC().Format(time.UnixDate)
 			msgLine := strings.ReplaceAll(utils.Sanitize(commit.Message), "\r\n", "\n")
+			// A plain --patch is meant for git apply and is printed byte
+			// for byte, as git prints it. Anything formatted for reading
+			// in a terminal is stripped of the escape sequences and
+			// control characters a commit can carry.
+			if !patchOnly || color {
+				patch = utils.Sanitize(patch)
+			}
 			statsLine := renderStats(diff, commonStyle, color)
 			diffLine := renderDiff(patch, color)
 
@@ -130,7 +137,8 @@ func renderDiff(patch string, color bool) string {
 
 func renderStats(diff *git.Diff, commonStyle *styles.Styles, color bool) string {
 	style := commonStyle.Log
-	c := diff.Stats().String()
+	// The stats name the changed files, which may hold control characters.
+	c := utils.Sanitize(diff.Stats().String())
 
 	if color {
 		s := strings.Split(c, "\n")

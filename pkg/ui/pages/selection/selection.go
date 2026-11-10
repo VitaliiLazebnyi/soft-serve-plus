@@ -190,6 +190,12 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
+// setReadme shows the server README. It comes from the about
+// repository, and glamour passes escape sequences through to the terminal.
+func (s *Selection) setReadme(readme, path string) tea.Cmd {
+	return s.readme.SetContent(utils.Sanitize(readme), path)
+}
+
 // ReposMsg carries the repositories the selection page lists, loaded off
 // the UI goroutine by Init.
 type ReposMsg struct {
@@ -238,9 +244,8 @@ func loadRepos(c common.Common) tea.Msg {
 			if err != nil {
 				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {
-				// The README comes from the repository; glamour passes
-				// escape sequences through to the terminal.
-				msg.readme, msg.readmePath, msg.hasReadme = utils.Sanitize(readme), path, true
+				// setReadme sanitises it when Update shows it.
+				msg.readme, msg.readmePath, msg.hasReadme = readme, path, true
 			}
 		}
 
@@ -318,7 +323,7 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case ReposMsg:
 		cmds = append(cmds, s.setItems(msg.items), s.selector.Init())
 		if msg.hasReadme {
-			cmds = append(cmds, s.readme.SetContent(msg.readme, msg.readmePath))
+			cmds = append(cmds, s.setReadme(msg.readme, msg.readmePath))
 		}
 		return s, tea.Batch(cmds...)
 	}

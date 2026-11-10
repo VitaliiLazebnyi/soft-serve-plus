@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -96,6 +97,13 @@ func blobCommand() *cobra.Command {
 			}
 
 			c := string(bts)
+			// Plain output is the file byte for byte, as git prints it.
+			// Highlighted or numbered output is for reading in a
+			// terminal, so it is stripped of the escape sequences and
+			// control characters a file can carry.
+			if (color && !noColor) || linenumber {
+				c = utils.Sanitize(c)
+			}
 			if color && !noColor {
 				c, err = common.FormatHighlight(fp, c)
 				if err != nil {

@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -37,18 +38,22 @@ func (s *Model) SetSize(width, height int) {
 
 // SetStatus sets the status bar status. Empty values clear the matching
 // part, and any transient message set with SetMessage is dropped.
+//
+// The values come from the repository (ref names, commit authors, paths), so
+// they are stripped of escape sequences and control characters here, whatever
+// pane they come from.
 func (s *Model) SetStatus(key, value, info, extra string) {
-	s.key = key
-	s.value = value
-	s.info = info
-	s.extra = extra
+	s.key = utils.Sanitize(key)
+	s.value = utils.Sanitize(value)
+	s.info = utils.Sanitize(info)
+	s.extra = utils.Sanitize(extra)
 	s.msg = ""
 }
 
 // SetMessage shows a transient message in place of the status value until
-// the next SetStatus call.
+// the next SetStatus call. It is sanitised like the status values.
 func (s *Model) SetMessage(msg string) {
-	s.msg = msg
+	s.msg = utils.Sanitize(msg)
 }
 
 // Init implements tea.Model.

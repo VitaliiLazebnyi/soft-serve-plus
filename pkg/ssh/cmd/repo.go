@@ -91,18 +91,18 @@ func RepoCommand() *cobra.Command {
 					cmd.Println(strings.TrimSpace(fmt.Sprint("Owner: ", owner.Username())))
 				}
 				if head != nil {
-					cmd.Println("Default Branch:", head.Name().Short())
+					cmd.Println("Default Branch:", utils.Sanitize(head.Name().Short()))
 				}
 				if len(branches) > 0 {
 					cmd.Println("Branches:")
 					for _, b := range branches {
-						cmd.Println("  -", b)
+						cmd.Println("  -", utils.Sanitize(b))
 					}
 				}
 				if len(tags) > 0 {
 					cmd.Println("Tags:")
 					for _, t := range tags {
-						cmd.Println("  -", t)
+						cmd.Println("  -", utils.Sanitize(t))
 					}
 				}
 

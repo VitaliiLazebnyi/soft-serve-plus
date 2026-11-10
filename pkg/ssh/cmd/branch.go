@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +50,9 @@ func branchListCommand() *cobra.Command {
 
 			branches, _ := r.Branches()
 			for _, b := range branches {
-				cmd.Println(b)
+				// A ref name cannot hold C0 controls, but it can hold
+				// C1 ones encoded as UTF-8.
+				cmd.Println(utils.Sanitize(b))
 			}
 
 			return nil
@@ -84,7 +87,7 @@ func branchDefaultCommand() *cobra.Command {
 					return err
 				}
 
-				cmd.Println(head.Name().Short())
+				cmd.Println(utils.Sanitize(head.Name().Short()))
 			case 2:
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err

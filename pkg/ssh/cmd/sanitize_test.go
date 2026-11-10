@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -75,3 +81,92 @@ func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
 		is.True(hasLine(stdout, want))
 	}
 }
+
+// hostile adds an OSC 8 hyperlink with a hidden target and a C1 CSI to
+// escapes. It has no slash, so it can be part of a path in a git tree, but
+// it holds control characters, ':', '|' and '\', which Windows does not
+// allow in a file name, so it never goes on disk.
+const hostile = escapes + "\x1b]8;;https:evil.example\x1b\\link\x1b]8;;\x1b\\" + "\u009b2J"
+
+// pushHostileRepo pushes to repository "hooks" a commit, an annotated tag
+// and a file name and contents that all carry hostile, and a branch and a tag
+// whose names hold a C1 control (the only kind git allows in a ref name).
+func pushHostileRepo(t *testing.T, ctx context.Context) {
+	t.Helper()
+	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git")
+	work := t.TempDir()
+	git := func(stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=eve" + hostile, "-c", "user.email=t@example.com"}, args...)...) //nolint:noctx
+		cmd.Dir = work
+		cmd.Stdin = strings.NewReader(stdin)
+		// Ignore the user's git config, which may sign or annotate tags.
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\n\n// go-comment"+hostile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("", "add", "main.go")
+	// The hostile file name goes straight into the index, so no file of that
+	// name is made; core.protectNTFS would reject the '\' in it on Windows.
+	blob := git("plain\n", "hash-object", "-w", "--stdin")
+	git("", "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", "100644,"+blob+",name"+hostile+"end.txt")
+	git("", "commit", "-q", "-m", "subject"+hostile+"\n\nbody"+hostile)
+	git("", "tag", "-a", "v1", "-m", "tag"+hostile)
+	git("", "tag", "tag\u009b2Jname")
+	git("", "push", "-q", bare, "main", "main:branch\u009b2Jname", "v1", "tag\u009b2Jname")
+	is.New(t).NoErr(exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run()) //nolint:noctx
+}
+
+// Every command that shows git data for reading in a terminal strips what
+// the repository carries, while the text around it stays.
+func TestRepoGitDataSanitised(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := whRepo(t, ctx, be)
+	pushHostileRepo(t, ownerCtx)
+
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"info", "hooks"}, []string{"branch2Jname", "main"}},
+		{[]string{"branch", "list", "hooks"}, []string{"branch2Jname"}},
+		{[]string{"branch", "default", "hooks"}, []string{"main"}},
+		{[]string{"tag", "list", "hooks"}, []string{"v1", "tag2Jname"}},
+		{[]string{"tree", "hooks"}, []string{"main.go", "name"}},
+		{[]string{"commit", "hooks", "main"}, []string{"subject", "body", "eve", "go-comment", "end.txt"}},
+		{[]string{"commit", "--color", "hooks", "main"}, []string{"subject", "go-comment"}},
+		{[]string{"commit", "--color", "--patch", "hooks", "main"}, []string{"go-comment"}},
+		{[]string{"blob", "--color", "hooks", "main.go"}, []string{"go-comment"}},
+		{[]string{"blob", "--linenumber", "hooks", "main.go"}, []string{"go-comment"}},
+	} {
+		stdout, stderr, err := runRepoOutput(t, ownerCtx, tc.args...)
+		is.NoErr(err)
+		out := csiSeq.ReplaceAllString(stdout+stderr, "")
+		assertNoControls(t, out)
+		for _, w := range tc.want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%v: output lacks %q: %q", tc.args, w, out)
+			}
+		}
+	}
+
+	// A plain patch and a plain blob are meant to be piped (git apply, a
+	// file) and stay byte for byte.
+	stdout, _, err := runRepoOutput(t, ownerCtx, "commit", "--patch", "hooks", "main")
+	is.NoErr(err)
+	is.True(strings.Contains(stdout, "go-comment"+hostile))
+	stdout, _, err = runRepoOutput(t, ownerCtx, "blob", "hooks", "main.go")
+	is.NoErr(err)
+	is.True(strings.Contains(stdout, "go-comment"+hostile))
+}
+
+// csiSeq matches the SGR styles the commands themselves emit with --color.
+var csiSeq = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
