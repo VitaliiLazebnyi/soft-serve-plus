@@ -88,3 +88,25 @@ func TestLFSLockBackendDownloadSessionRefusesWrites(t *testing.T) {
 		t.Errorf("Unlock: got %v, want ErrForbidden", err)
 	}
 }
+
+// The SSH lock backend must refuse the same paths the HTTP locks API does,
+// before it reaches the database: the backend has no store or database here,
+// so a path that got through would panic instead of creating a lock row.
+func TestLFSLockBackendRejectsInvalidPath(t *testing.T) {
+	l := &lfsLockBackend{lfsTransfer: &lfsTransfer{op: lfs.OperationUpload}, user: lfsTestUser{}}
+	for _, p := range []string{
+		"",
+		"./a.bin",
+		"dir/../a.bin",
+		"../a.bin",
+		"/etc/x",
+		"a//b.bin",
+		"a\x00b.bin",
+		strings.Repeat("a", lfs.MaxLockPathLength+1),
+	} {
+		_, err := l.Create(p, "refs/heads/main")
+		if !errors.Is(err, transfer.ErrParseError) || !errors.Is(err, lfs.ErrInvalidLockPath) {
+			t.Errorf("Create(%q): got %v, want ErrParseError wrapping ErrInvalidLockPath", p, err)
+		}
+	}
+}

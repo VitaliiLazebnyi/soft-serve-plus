@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strings"
 	"testing"
@@ -338,5 +342,142 @@ func TestRequestTimeout(t *testing.T) {
 	// requestTimeout/2 + idleTimeout.
 	if elapsed > requestTimeout+idleTimeout/2 {
 		t.Fatalf("connection was dropped only after %v, want about %v", elapsed, requestTimeout)
+	}
+}
+
+func TestKeepAlive(t *testing.T) {
+	for _, c := range []struct {
+		idle time.Duration
+		want int
+	}{
+		{0, 0},
+		{-time.Second, 0},
+		{time.Second, 1},
+		{2 * time.Second, 1},
+		{3 * time.Second, 1},
+		{10 * time.Second, 5},
+		{600 * time.Second, 300},
+	} {
+		if got := keepAlive(c.idle); got != c.want {
+			t.Errorf("keepAlive(%v) = %d, want %d", c.idle, got, c.want)
+		}
+	}
+}
+
+// ensureRepo creates the public repository name unless it exists, as it
+// does when the tests run more than once.
+func ensureRepo(t *testing.T, name string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testBackend.Repository(ctx, name); err == nil {
+		return
+	}
+	if _, err := testBackend.CreateRepository(ctx, name, nil, proto.RepositoryOptions{}); err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+}
+
+// runGit runs git with args in dir and fails the test if it fails.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestQuietCloneSlowPack clones quietly from a repository whose pack takes
+// longer than the idle timeout to start. Neither side talks meanwhile, so
+// the daemon has upload-pack send keepalives; without them the connection
+// was closed as idle, and the ERR packet written after it broke the clone
+// with "bad band".
+func TestQuietCloneSlowPack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the pack-objects hook needs a POSIX shell")
+	}
+	ctx := context.Background()
+	const name = "slowpack"
+	ensureRepo(t, name)
+	src := t.TempDir()
+	runGit(t, src, "init", "-q")
+	if err := os.WriteFile(filepath.Join(src, "README"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, src, "add", "README")
+	runGit(t, src, "commit", "-q", "-m", "init")
+	bare := filepath.Join(testDaemon.cfg.DataPath, "repos", name+".git")
+	head := runGit(t, bare, "symbolic-ref", "HEAD")
+	// Fetch into the repository rather than push, which would run the
+	// server's hooks.
+	runGit(t, bare, "fetch", "-q", src, "+HEAD:"+head)
+
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = 2
+	dctx := config.WithContext(context.Background(), &cfg)
+	dctx = backend.WithContext(dctx, testBackend)
+	d, err := NewGitDaemon(dctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+
+	// Delay the pack past the idle timeout. The hook is only honoured
+	// from protected configuration, which the command-line scope of
+	// GIT_CONFIG_COUNT is; the daemon passes its environment to git.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "uploadpack.packObjectsHook")
+	t.Setenv("GIT_CONFIG_VALUE_0", "sleep 3;")
+
+	dst := filepath.Join(t.TempDir(), "clone")
+	cmd := exec.CommandContext(t.Context(), "git", "clone", "-q", "git://"+l.Addr().String()+"/"+name, dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README")); err != nil {
+		t.Errorf("clone is missing README: %v", err)
+	}
+}
+
+// TestNoErrAfterOutput leaves a request idle after upload-pack answered with
+// its references. The daemon closes the connection, but must not write an
+// ERR packet: the client already reads the response, so it would take the
+// packet for part of it.
+func TestNoErrAfterOutput(t *testing.T) {
+	const name = "idleafteradvert"
+	ensureRepo(t, name)
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", testDaemon.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if err := pktline.NewEncoder(c).EncodeString("git-upload-pack /" + name + ".git\x00"); err != nil {
+		t.Fatal(err)
+	}
+	// Stay silent until the daemon gives up on the connection, then
+	// collect everything it sent.
+	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(c)
+	if err != nil {
+		t.Fatalf("reading the response: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected a response, got nothing")
+	}
+	if strings.Contains(string(out), "ERR ") {
+		t.Errorf("response has an ERR packet after output started:\n%q", out)
 	}
 }
