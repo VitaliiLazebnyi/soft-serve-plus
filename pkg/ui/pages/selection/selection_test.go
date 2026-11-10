@@ -227,11 +227,7 @@ func TestSelectionSetItemsKeepsHighlight(t *testing.T) {
 	items := func(names ...string) []selector.IdentifiableItem {
 		its := make([]selector.IdentifiableItem, len(names))
 		for i, n := range names {
-			it, err := NewItem(c, fakeRepo{name: n})
-			if err != nil {
-				t.Fatal(err)
-			}
-			its[i] = it
+			its[i] = NewItem(c, fakeRepo{name: n})
 		}
 		return its
 	}
@@ -267,10 +263,7 @@ func TestSelectionShortHelpRefreshKey(t *testing.T) {
 	c := common.NewCommon(context.Background(), 80, 40)
 	s := New(c)
 	s.SetSize(80, 40)
-	it, err := NewItem(c, fakeRepo{name: "bravo"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	it := NewItem(c, fakeRepo{name: "bravo"})
 	s.setItems([]selector.IdentifiableItem{it})
 	if !hasBinding(s.ShortHelp(), refreshKey) {
 		t.Error("short help does not list the refresh key")
