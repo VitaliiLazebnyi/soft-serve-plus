@@ -226,11 +226,7 @@ func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, 
 // accessLevel computes the access level of user for r, which is the
 // repository named name or nil when it does not exist.
 func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User) access.AccessLevel {
-	var username string
 	anon := d.AnonAccess(ctx)
-	if user != nil {
-		username = user.Username()
-	}
 
 	// If the user is an admin, they have admin access.
 	if user != nil && user.IsAdmin() {
@@ -249,6 +245,27 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return d.baseAccessLevelWithAnon(ctx, user, anon)
 	}
 
+	var username string
+	if user != nil {
+		username = user.Username()
+	}
+	collabAccess, isCollab, err := d.IsCollaborator(ctx, name, username)
+	if err != nil {
+		// Fall through to the non-collaborator rules, which deny access to
+		// a private repository, but leave a trace of the failed lookup.
+		d.logger.Error("error checking collaborator", "repo", name, "user", username, "err", err)
+	}
+	return repoAccessLevel(r, user, anon, collabAccess, isCollab)
+}
+
+// repoAccessLevel is accessLevel for an existing repository r once the
+// anonymous level and user's collaborator row for r, if any, are known.
+func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess access.AccessLevel, isCollab bool) access.AccessLevel {
+	// If the user is an admin, they have admin access.
+	if user != nil && user.IsAdmin() {
+		return access.AdminAccess
+	}
+
 	// If the user is the owner, they have admin access.
 	if user != nil && r.UserID() == user.ID() {
 		return access.AdminAccess
@@ -259,12 +276,6 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 	// anonymous caller could. On a private repository it does not apply.
 	//
 	// If the user is a collaborator, they have their access level.
-	collabAccess, isCollab, err := d.IsCollaborator(ctx, name, username)
-	if err != nil {
-		// Fall through to the non-collaborator rules, which deny access to
-		// a private repository, but leave a trace of the failed lookup.
-		d.logger.Error("error checking collaborator", "repo", name, "user", username, "err", err)
-	}
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
 			return anon
@@ -284,6 +295,63 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 	}
 
 	return access.ReadOnlyAccess
+}
+
+// ReadableRepositories returns every repository user may read. It gives
+// each the level Readable would, but loads the anonymous level and the
+// user's collaborations once for the whole list instead of once per
+// repository. Like Readable, it leaves out a row whose directory is gone
+// for everyone but admins, who are listed every row.
+func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]proto.Repository, error) {
+	repos, err := d.Repositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil && user.IsAdmin() {
+		return repos, nil
+	}
+
+	anon := d.AnonAccess(ctx)
+	var collabs map[int64]access.AccessLevel
+	if user != nil && user.ID() != 0 {
+		var ms []models.Collab
+		if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
+			var err error
+			ms, err = d.store.ListCollabsByUserID(ctx, tx, user.ID())
+			return err
+		}); err != nil {
+			return nil, db.WrapError(err)
+		}
+		collabs = make(map[int64]access.AccessLevel, len(ms))
+		for _, m := range ms {
+			collabs[m.RepoID] = m.AccessLevel
+		}
+	}
+
+	readable := make([]proto.Repository, 0, len(repos))
+	for _, r := range repos {
+		// A row with no directory is NoAccess for every non-admin, owner
+		// and collaborators included (see accessLevel).
+		if !d.repoPathExists(r.Name()) {
+			continue
+		}
+		collabAccess, isCollab := collabs[r.ID()]
+		if repoAccessLevel(r, user, anon, collabAccess, isCollab) >= access.ReadOnlyAccess {
+			readable = append(readable, r)
+		}
+	}
+	return readable, nil
+}
+
+// ReadableRepositoriesByPublicKey is ReadableRepositories for the holder of
+// a public key.
+func (d *Backend) ReadableRepositoriesByPublicKey(ctx context.Context, pk ssh.PublicKey) ([]proto.Repository, error) {
+	if d.isAdminKey(pk) {
+		return d.Repositories(ctx)
+	}
+
+	user, _ := d.UserByPublicKey(ctx, pk)
+	return d.ReadableRepositories(ctx, user)
 }
 
 // User finds a user by username.
