@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 )
 
 type stashState int
@@ -32,18 +32,19 @@ type StashPatchMsg struct{ *git.Diff }
 // Stash is the stash component page.
 type Stash struct {
 	common       common.Common
-	code         *code.Code
+	vp           *viewport.Viewport
 	ref          RefMsg
 	repo         proto.Repository
 	spinner      spinner.Model
 	list         *selector.Selector
 	state        stashState
 	currentPatch StashPatchMsg
+	currentTitle string
 }
 
 // NewStash creates a new stash model.
 func NewStash(common common.Common) *Stash {
-	code := code.New(common, "", "")
+	vp := viewport.New(common)
 	s := spinner.New(spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(common.Styles.Spinner))
 	selector := selector.New(common, []selector.IdentifiableItem{}, StashItemDelegate{&common})
@@ -57,7 +58,7 @@ func NewStash(common common.Common) *Stash {
 	selector.KeyMap.NextPage = common.KeyMap.NextPage
 	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
 	return &Stash{
-		code:    code,
+		vp:      vp,
 		common:  common,
 		spinner: s,
 		list:    selector,
@@ -77,7 +78,7 @@ func (s *Stash) TabName() string {
 // SetSize implements common.Component.
 func (s *Stash) SetSize(width, height int) {
 	s.common.SetSize(width, height)
-	s.code.SetSize(width, height)
+	s.vp.SetSize(width, height)
 	s.list.SetSize(width, height)
 }
 
@@ -99,8 +100,8 @@ func (s *Stash) FullHelp() [][]key.Binding {
 			s.common.KeyMap.Copy,
 		},
 		{
-			s.code.KeyMap.Down,
-			s.code.KeyMap.Up,
+			s.vp.KeyMap.Down,
+			s.vp.KeyMap.Up,
 			s.common.KeyMap.GotoTop,
 			s.common.KeyMap.GotoBottom,
 		},
@@ -128,7 +129,7 @@ func (s *Stash) StatusBarInfo() string {
 		}
 		return fmt.Sprintf("p. %d/%d", s.list.Page()+1, totalPages)
 	case stashStatePatch:
-		return common.ScrollPercent(s.code.ScrollPosition())
+		return common.ScrollPercent(s.vp.ScrollPosition())
 	default:
 		return ""
 	}
@@ -157,6 +158,9 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
 		s.SetSize(msg.Width, msg.Height)
+		if s.currentPatch.Diff != nil {
+			s.renderPatch()
+		}
 	case spinner.TickMsg:
 		if s.state == stashStateLoading && s.spinner.ID() == msg.ID {
 			sp, cmd := s.spinner.Update(msg)
@@ -196,19 +200,12 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		s.state = stashStatePatch
 		s.currentPatch = msg
 		if msg.Diff != nil {
-			var title string
+			s.currentTitle = ""
 			if item, ok := s.list.SelectedItem().(StashItem); ok {
-				title = item.Title()
+				s.currentTitle = item.Title()
 			}
-			title = s.common.Styles.Stash.Title.Render(title)
-			content := lipgloss.JoinVertical(lipgloss.Left,
-				title,
-				"",
-				renderSummary(msg.Diff, s.common.Styles, s.common.Width),
-				renderDiff(msg.Diff, s.common.Width),
-			)
-			cmds = append(cmds, s.code.SetContent(content, ".diff"))
-			s.code.GotoTop()
+			s.renderPatch()
+			s.vp.GotoTop()
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
@@ -229,8 +226,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case stashStatePatch:
-		c, cmd := s.code.Update(msg)
-		s.code = c.(*code.Code)
+		v, cmd := s.vp.Update(msg)
+		s.vp = v.(*viewport.Viewport)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -246,9 +243,21 @@ func (s *Stash) View() string {
 	case stashStateList:
 		return s.list.View()
 	case stashStatePatch:
-		return s.code.View()
+		return s.vp.View()
 	}
 	return ""
+}
+
+// renderPatch shows the current stash patch. The patch is already
+// highlighted by renderDiff, so it goes straight into the viewport rather
+// than through the code component, which would highlight it again.
+func (s *Stash) renderPatch() {
+	s.vp.SetContent(lipgloss.JoinVertical(lipgloss.Left,
+		s.common.Styles.Stash.Title.Render(s.currentTitle),
+		"",
+		renderSummary(s.currentPatch.Diff, s.common.Styles, s.common.Width),
+		renderDiff(s.currentPatch.Diff, s.common.Width),
+	))
 }
 
 // fetchStashCmd returns a command that lists the stashes of the repository.
