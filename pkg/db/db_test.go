@@ -2,14 +2,19 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestOpenUnknownDriver(t *testing.T) {
@@ -192,6 +197,132 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 		t.Fatal("Open() on a silent server did not return")
 	}
 }
+
+// A panic in the transaction function rolls the transaction back, so its
+// connection and SQLite's write lock are released, and the panic goes on.
+func TestTransactionPanicRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Errorf("recovered %v, want boom", p)
+			}
+		}()
+		_ = d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			panic("boom")
+		})
+	}()
+
+	if n := d.Stats().InUse; n != 0 {
+		t.Errorf("connections in use after panic = %d, want 0", n)
+	}
+	// Another write transaction can take the write lock.
+	if err := d.TransactionContext(ctx, func(tx *Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (2)")
+		return err
+	}); err != nil {
+		t.Fatalf("write after panic: %v", err)
+	}
+	var rows []int
+	if err := d.SelectContext(ctx, &rows, "SELECT n FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0] != 2 {
+		t.Errorf("rows = %v, want [2]", rows)
+	}
+}
+
+// A transaction whose fn calls runtime.Goexit, as t.FailNow does, is rolled
+// back too: recover sees nothing in that case.
+func TestTransactionGoexitRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			runtime.Goexit()
+			return nil
+		})
+	}()
+	<-done
+
+	if n := d.Stats().InUse; n != 0 {
+		t.Errorf("connections in use after Goexit = %d, want 0", n)
+	}
+	var rows []int
+	if err := d.SelectContext(ctx, &rows, "SELECT n FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows = %v, want none", rows)
+	}
+}
+
+// When the rollback fails too, both the error from fn and the rollback error
+// stay reachable with errors.Is.
+func TestRollbackErrorKeepsOriginal(t *testing.T) {
+	d := &DB{DB: sqlx.NewDb(sql.OpenDB(failingRollbackConnector{}), "sqlite")}
+	defer d.Close() //nolint:errcheck
+
+	fnErr := errors.New("fn failed")
+	err := d.TransactionContext(context.Background(), func(*Tx) error { return fnErr })
+	if !errors.Is(err, fnErr) {
+		t.Errorf("err = %v, want it to wrap %v", err, fnErr)
+	}
+	if !errors.Is(err, errRollback) {
+		t.Errorf("err = %v, want it to wrap %v", err, errRollback)
+	}
+}
+
+var errRollback = errors.New("rollback failed")
+
+// failingRollbackConnector opens connections whose transactions fail to
+// roll back.
+type failingRollbackConnector struct{}
+
+func (failingRollbackConnector) Connect(context.Context) (driver.Conn, error) {
+	return failingRollbackConn{}, nil
+}
+func (failingRollbackConnector) Driver() driver.Driver { return nil }
+
+type failingRollbackConn struct{}
+
+func (failingRollbackConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("not supported")
+}
+func (failingRollbackConn) Close() error              { return nil }
+func (failingRollbackConn) Begin() (driver.Tx, error) { return failingRollbackTx{}, nil }
+
+type failingRollbackTx struct{}
+
+func (failingRollbackTx) Commit() error   { return nil }
+func (failingRollbackTx) Rollback() error { return errRollback }
 
 // TestSqliteReadTransactionDoesNotWaitForWriter checks that a read-only
 // transaction does not take the write lock: it reads while another

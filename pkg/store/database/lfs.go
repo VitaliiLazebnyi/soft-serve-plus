@@ -60,40 +60,7 @@ func (*lfsStore) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, a
 	return locks, db.WrapError(err)
 }
 
-// GetLFSLocksWithCount implements store.LFSStore.
-func (s *lfsStore) GetLFSLocksWithCount(ctx context.Context, tx db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, int64, error) {
-	locks, err := s.GetLFSLocks(ctx, tx, repoID, afterID, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	var count int64
-	query := tx.Rebind(`
-		SELECT COUNT(*)
-		FROM lfs_locks
-		WHERE repo_id = ?;
-	`)
-	err = tx.GetContext(ctx, &count, query, repoID)
-	if err != nil {
-		return nil, 0, db.WrapError(err)
-	}
-
-	return locks, count, nil
-}
-
-// GetLFSLocksForUser implements store.LFSStore.
-func (*lfsStore) GetLFSLocksForUser(ctx context.Context, tx db.Handler, repoID int64, userID int64) ([]models.LFSLock, error) {
-	var locks []models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE repo_id = ? AND user_id = ?;
-	`)
-	err := tx.SelectContext(ctx, &locks, query, repoID, userID)
-	return locks, db.WrapError(err)
-}
-
-// GetLFSLocksForPath implements store.LFSStore.
+// GetLFSLockForPath implements store.LFSStore.
 func (*lfsStore) GetLFSLockForPath(ctx context.Context, tx db.Handler, repoID int64, path string) (models.LFSLock, error) {
 	path = sanitizePath(path)
 	var lock models.LFSLock
@@ -170,13 +137,6 @@ func (*lfsStore) CreateLFSObject(ctx context.Context, tx db.Handler, repoID int6
 	return db.WrapError(err)
 }
 
-// DeleteLFSObjectByOid implements store.LFSStore.
-func (*lfsStore) DeleteLFSObjectByOid(ctx context.Context, tx db.Handler, repoID int64, oid string) error {
-	query := tx.Rebind(`DELETE FROM lfs_objects WHERE repo_id = ? AND oid = ?;`)
-	_, err := tx.ExecContext(ctx, query, repoID, oid)
-	return db.WrapError(err)
-}
-
 // UpdateLFSObjectSize implements store.LFSStore.
 func (*lfsStore) UpdateLFSObjectSize(ctx context.Context, tx db.Handler, repoID int64, oid string, size int64) error {
 	query := tx.Rebind(`UPDATE lfs_objects SET size = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND oid = ?;`)
@@ -197,19 +157,5 @@ func (*lfsStore) GetLFSObjects(ctx context.Context, tx db.Handler, repoID int64)
 	var objs []models.LFSObject
 	query := tx.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? ORDER BY id;`)
 	err := tx.SelectContext(ctx, &objs, query, repoID)
-	return objs, db.WrapError(err)
-}
-
-// GetLFSObjectsByName implements store.LFSStore.
-func (*lfsStore) GetLFSObjectsByName(ctx context.Context, tx db.Handler, name string) ([]models.LFSObject, error) {
-	var objs []models.LFSObject
-	query := tx.Rebind(`
-		SELECT lfs_objects.*
-		FROM lfs_objects
-		INNER JOIN repos ON lfs_objects.repo_id = repos.id
-		WHERE repos.name = ?
-		ORDER BY lfs_objects.id;
-	`)
-	err := tx.SelectContext(ctx, &objs, query, name)
 	return objs, db.WrapError(err)
 }

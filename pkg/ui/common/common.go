@@ -7,22 +7,11 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/keymap"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	zone "github.com/lrstanley/bubblezone/v2"
-)
-
-type contextKey struct {
-	name string
-}
-
-// Keys to use for context.Context.
-var (
-	ConfigKey = &contextKey{"config"}
-	RepoKey   = &contextKey{"repo"}
 )
 
 // Common is a struct all components should embed.
@@ -56,11 +45,6 @@ func NewCommon(ctx context.Context, width, height int) Common {
 	}
 }
 
-// SetValue sets a value in the context.
-func (c *Common) SetValue(key, value interface{}) {
-	c.ctx = context.WithValue(c.ctx, key, value)
-}
-
 // SetSize sets the width and height of the common struct.
 func (c *Common) SetSize(width, height int) {
 	c.Width = width
@@ -80,15 +64,6 @@ func (c *Common) Config() *config.Config {
 // Backend returns the Soft Serve backend.
 func (c *Common) Backend() *backend.Backend {
 	return backend.FromContext(c.ctx)
-}
-
-// Repo returns the repository.
-func (c *Common) Repo() *git.Repository {
-	v := c.ctx.Value(RepoKey)
-	if r, ok := v.(*git.Repository); ok {
-		return r
-	}
-	return nil
 }
 
 // PublicKey returns the public key.
