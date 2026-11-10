@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,9 +66,7 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		// The keyless setting only matters without a key, so a keyed
 		// session does not look it up.
-		allowed := pk != nil || be.AllowKeyless(ctx)
-		publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
-		if !allowed {
+		if pk == nil && !be.AllowKeyless(ctx) {
 			wish.Fatalln(s, ErrPermissionDenied)
 			return
 		}
