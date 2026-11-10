@@ -60,20 +60,26 @@ var ErrServerClosed = fmt.Errorf("git: %w", net.ErrClosed)
 // ErrPushNotSupported is returned to clients that try to push over git://.
 var ErrPushNotSupported = errors.New("pushing over git:// is not supported, use ssh or http")
 
+// requestTimeout is how long a client has to send its request line, like
+// git-daemon's --init-timeout. Unlike the idle timeout, reading does not
+// extend it.
+const requestTimeout = 10 * time.Second
+
 // GitDaemon represents a Git daemon.
 type GitDaemon struct {
-	ctx       context.Context
-	addr      string
-	finished  chan struct{}
-	conns     connections
-	cfg       *config.Config
-	be        *backend.Backend
-	wg        sync.WaitGroup
-	once      sync.Once
-	logger    *log.Logger
-	done      atomic.Bool // indicates if the server has been closed
-	listeners []net.Listener
-	liMu      sync.Mutex
+	ctx            context.Context
+	addr           string
+	requestTimeout time.Duration
+	finished       chan struct{}
+	conns          connections
+	cfg            *config.Config
+	be             *backend.Backend
+	wg             sync.WaitGroup
+	once           sync.Once
+	logger         *log.Logger
+	done           atomic.Bool // indicates if the server has been closed
+	listeners      []net.Listener
+	liMu           sync.Mutex
 
 	// accessTimeout bounds the access checks of each request.
 	accessTimeout time.Duration
@@ -84,13 +90,14 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 	cfg := config.FromContext(ctx)
 	addr := cfg.Git.ListenAddr
 	d := &GitDaemon{
-		ctx:      ctx,
-		addr:     addr,
-		finished: make(chan struct{}, 1),
-		cfg:      cfg,
-		be:       backend.FromContext(ctx),
-		conns:    connections{m: make(map[net.Conn]struct{})},
-		logger:   log.FromContext(ctx).WithPrefix("gitdaemon"),
+		ctx:            ctx,
+		addr:           addr,
+		requestTimeout: requestTimeout,
+		finished:       make(chan struct{}, 1),
+		cfg:            cfg,
+		be:             backend.FromContext(ctx),
+		conns:          connections{m: make(map[net.Conn]struct{})},
+		logger:         log.FromContext(ctx).WithPrefix("gitdaemon"),
 
 		accessTimeout: defaultAccessTimeout,
 	}
@@ -201,6 +208,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	idleTimeout := time.Duration(d.cfg.Git.IdleTimeout) * time.Second
 	c := &serverConn{
 		Conn:          conn,
+		initDeadline:  time.Now().Add(d.requestTimeout),
 		idleTimeout:   idleTimeout,
 		closeCanceler: cancel,
 	}
@@ -213,22 +221,24 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		d.conns.Close(c) //nolint: errcheck
 	}()
 
-	// A client that has not sent its request yet is told the server timed
-	// out when the server's context ends, rather than holding the
-	// connection until the idle timeout. Only the server's context counts
-	// here: the request context also ends when a read on c fails, which the
-	// scan below answers itself.
-	stop := context.AfterFunc(d.ctx, func() {
-		d.logger.Debugf("git: server context ended before %s sent a request", c.RemoteAddr())
-		d.fatal(c, git.ErrTimeout)
+	// Read the request line on this goroutine. The connection's deadlines
+	// bound the read, and closing the connection on shutdown unblocks it, so
+	// there is nothing to wait on beside it. If the server's context ends
+	// first, the client gets the timeout answer and the connection is closed,
+	// which ends the read too.
+	stopRead := context.AfterFunc(d.ctx, func() {
+		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
+		d.fatal(conn, git.ErrTimeout)
 	})
 	s := pktline.NewScanner(c)
 	scanned := s.Scan()
-	if !stop() {
-		// The server's context ended while reading and the client has
-		// already been answered.
+	if !stopRead() {
+		// The server's context ended and the client has been answered.
 		return
 	}
+	// The read is over: from here on reads and writes only have to keep
+	// the connection from going idle.
+	c.initDeadline = time.Time{}
 	if !scanned {
 		err := s.Err()
 		var nerr net.Error
@@ -328,10 +338,16 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 
 	envs = append(envs, d.cfg.Environ()...)
 
+	// git's stderr goes to the log, as git-daemon does: the daemon has
+	// no side channel for it, and written to the connection it would
+	// corrupt the protocol stream and could show server details to
+	// anonymous clients.
+	stderr := d.logger.With("addr", c.RemoteAddr(), "service", service, "repo", name).
+		StandardLog(log.StandardLogOptions{ForceLevel: log.WarnLevel}).Writer()
 	cmd := git.ServiceCommand{
 		Stdin:  c,
 		Stdout: c,
-		Stderr: c,
+		Stderr: stderr,
 		Env:    envs,
 		Dir:    filepath.Join(reposDir, repo),
 	}
@@ -351,7 +367,13 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 			// deferred close does, is all that is left.
 			return
 		}
-		d.fatal(c, err)
+		// Before that, the client gets a fixed message rather than
+		// the error itself.
+		if errors.Is(err, git.ErrInvalidRepo) {
+			d.fatal(c, git.ErrInvalidRepo)
+		} else {
+			d.fatal(c, git.ErrSystemMalfunction)
+		}
 		return
 	}
 

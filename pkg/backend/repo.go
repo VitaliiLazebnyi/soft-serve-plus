@@ -770,7 +770,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // reason a retry may get past, such as a dropped connection or a 5xx, so
 // such objects are not dropped for good.
 func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
-	err := StoreRepoMissingLFSObjects(ctx, r, d.db, d.store, client)
+	err := d.StoreRepoMissingLFSObjects(ctx, r, client)
 	var unavailable *lfsObjectsUnavailableError
 	if errors.As(err, &unavailable) {
 		if r.IsMirror() {

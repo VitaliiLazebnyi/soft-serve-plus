@@ -119,6 +119,18 @@ func TestOpenReportsGitReason(t *testing.T) {
 	}
 }
 
+// A repository without references has an empty list of them, not an error.
+func TestReferencesEmpty(t *testing.T) {
+	repo, err := Init(filepath.Join(t.TempDir(), "empty"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := repo.References()
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("References of an empty repository = %v, %v; want none", refs, err)
+	}
+}
+
 func evalPath(t *testing.T, path string) string {
 	t.Helper()
 	p, err := filepath.EvalSymlinks(path)

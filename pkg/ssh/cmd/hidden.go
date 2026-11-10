@@ -28,7 +28,10 @@ func hiddenCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsHidden())
 			case 2:
-				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
+				// Hiding a repository takes it out of every listing, a
+				// visibility setting like private, so only repository
+				// admins may change it.
+				if err := requireLevel(ctx, access.AdminAccess); err != nil {
 					return err
 				}
 

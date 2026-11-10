@@ -16,7 +16,7 @@ soft repo collab list test
 # add collab
 soft repo collab add test foo
 soft repo collab list test
-stdout 'foo'
+stdout '^foo\tread-write$'
 
 # remove collab
 soft repo collab remove test foo
@@ -45,6 +45,41 @@ stderr '.*repository not found.*'
 soft repo collab remove secret foo
 soft repo collab add secret foo read-only
 usoft repo description secret
+
+# collab list shows each collaborator's access level
+soft user create bar
+soft repo collab add secret bar admin-access
+soft repo collab list secret
+stdout '^foo\tread-only$'
+stdout '^bar\tadmin-access$'
+
+# a read-write collaborator cannot manage collaborators; with anon-access
+# no-access they could otherwise lock a registered user out of a public
+# repository by adding them as no-access
+soft settings anon-access no-access
+soft user create baz
+soft repo create open
+soft repo collab add open foo read-write
+! usoft repo collab add open baz no-access
+stderr 'unauthorized'
+! usoft repo collab add open bar read-only
+stderr 'unauthorized'
+soft repo collab add open bar read-write
+! usoft repo collab remove open bar
+stderr 'unauthorized'
+usoft repo collab list open
+stdout '^bar\tread-write$'
+! stdout 'baz'
+
+# an admin-access collaborator can
+soft repo collab remove open foo
+soft repo collab add open foo admin-access
+usoft repo collab add open baz read-only
+usoft repo collab remove open bar
+usoft repo collab list open
+stdout '^baz\tread-only$'
+! stdout 'bar'
+soft settings anon-access read-only
 
 # stop the server
 [windows] stopserver
