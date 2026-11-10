@@ -55,6 +55,15 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A lock names one file in the working tree. Refuse a path that cannot,
+	// so "a.bin", "./a.bin" and "dir/../a.bin" do not lock one file thrice.
+	if err := lfs.ValidateLockPath(req.Path); err != nil {
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			Message: "invalid lock path",
+		})
+		return
+	}
+
 	repo, ok := lfsRepository(w, r)
 	if !ok {
 		return
@@ -320,7 +329,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	resp := lfs.LockListResponse{
 		Locks: lockList,
 	}
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
 	renderJSON(w, r, http.StatusOK, resp)
 }
@@ -417,7 +426,7 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	resp.Ours = ours
 	resp.Theirs = theirs
 
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
 	renderJSON(w, r, http.StatusOK, resp)
 }
