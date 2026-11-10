@@ -18,7 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/muesli/reflow/wrap"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var waitBeforeLoading = time.Millisecond * 100
@@ -96,19 +96,9 @@ func NewLog(common common.Common) *Log {
 		vp:         viewport.New(common),
 		activeView: logViewCommits,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, LogItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, LogItemDelegate{&common})
 	l.selector = selector
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	l.spinner = s
 	return l
 }
@@ -139,16 +129,14 @@ func (l *Log) SetSize(width, height int) {
 func (l *Log) ShortHelp() []key.Binding {
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.SelectItem,
 			copyKey,
 		}
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.BackItem,
@@ -167,8 +155,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 	b := make([][]key.Binding, 0)
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		b = append(b, []key.Binding{
 			l.common.KeyMap.SelectItem,
 		})
@@ -186,8 +173,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 			},
 		}...)
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		k := l.vp.KeyMap
 		b = append(b, []key.Binding{
 			l.common.KeyMap.BackItem,
@@ -577,7 +563,15 @@ func (l *Log) renderCommit(c *git.Commit) string {
 		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
 	)
-	return wrap.String(s.String(), l.common.Width-2)
+	return wrapText(s.String(), l.common.Width-2)
+}
+
+// wrapText hard-wraps s at width columns. It measures with x/ansi grapheme
+// widths, the same way lipgloss lays out the pane, so emoji and other wide
+// characters wrap where the layout expects them to. Tabs are expanded to four
+// spaces first, as reflow/wrap did, because x/ansi gives a tab no width.
+func wrapText(s string, width int) string {
+	return ansi.Hardwrap(strings.ReplaceAll(s, "\t", "    "), width, false)
 }
 
 func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
@@ -591,7 +585,7 @@ func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
 			stats[i] = strings.Join(ch[:len(ch)-1], "|") + "|" + adddel
 		}
 	}
-	return wrap.String(strings.Join(stats, "\n"), width-2)
+	return wrapText(strings.Join(stats, "\n"), width-2)
 }
 
 func renderDiff(diff *git.Diff, width int) string {
@@ -607,7 +601,7 @@ func renderDiff(diff *git.Diff, width int) string {
 	} else {
 		s.WriteString("\n" + pr.String())
 	}
-	return wrap.String(s.String(), width)
+	return wrapText(s.String(), width)
 }
 
 func (l *Log) setItems(items []selector.IdentifiableItem) tea.Cmd {

@@ -55,19 +55,9 @@ func NewRefs(common common.Common, refPrefix string) *Refs {
 		refPrefix: refPrefix,
 		isLoading: true,
 	}
-	s := selector.New(common, []selector.IdentifiableItem{}, RefItemDelegate{&common})
-	s.SetShowFilter(false)
-	s.SetShowHelp(false)
-	s.SetShowPagination(false)
-	s.SetShowStatusBar(false)
-	s.SetShowTitle(false)
-	s.SetFilteringEnabled(false)
-	s.DisableQuitKeybindings()
-	s.KeyMap.NextPage = common.KeyMap.NextPage
-	s.KeyMap.PrevPage = common.KeyMap.PrevPage
+	s := selector.NewPane(common, RefItemDelegate{&common})
 	r.selector = s
-	sp := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	sp := common.NewSpinner()
 	r.spinner = sp
 	return r
 }
@@ -96,8 +86,7 @@ func (r *Refs) SetSize(width, height int) {
 
 // ShortHelp implements help.KeyMap.
 func (r *Refs) ShortHelp() []key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return []key.Binding{
 		r.common.KeyMap.SelectItem,
@@ -109,8 +98,7 @@ func (r *Refs) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (r *Refs) FullHelp() [][]key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return [][]key.Binding{
 		{r.common.KeyMap.SelectItem},

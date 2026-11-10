@@ -9,15 +9,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/muesli/reflow/truncate"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// TruncateString is a convenient wrapper around truncate.TruncateString.
+// TruncateString truncates s to at most width terminal cells, ending it with
+// "…" when it is cut. It measures with x/ansi, as lipgloss does, so emoji and
+// other wide graphemes are counted the same way the layout counts them.
 func TruncateString(s string, width int) string {
-	if width < 0 {
-		width = 0
-	}
-	return truncate.StringWithTail(s, uint(width), "…") //nolint:gosec
+	return ansi.Truncate(s, max(width, 0), "…")
+}
+
+// TruncateWidth truncates s to at most width terminal cells without a tail.
+func TruncateWidth(s string, width int) string {
+	return ansi.Truncate(s, max(width, 0), "")
 }
 
 // RepoURL returns the URL of the repository.

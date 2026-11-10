@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/muesli/reflow/truncate"
 )
 
 // LogItem is a item in the log list that displays a git commit.
@@ -134,10 +133,7 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	fmt.Fprint(w, //nolint:errcheck
 		styles.Base.Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				truncate.String(fmt.Sprintf("%s%s",
-					title,
-					hash,
-				), uint(m.Width()-horizontalFrameSize)), //nolint:gosec
+				common.TruncateWidth(title+hash, m.Width()-horizontalFrameSize),
 				who,
 			),
 		),

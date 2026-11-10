@@ -34,6 +34,11 @@ type Code struct {
 	// resizes counts the window size messages the view has handled.
 	resizes int
 
+	// isMarkdown caches IsFileMarkdown for content and extension, which can
+	// mean running chroma's analysers over the whole content, while the
+	// content is rendered again on every resize. SetContent clears it.
+	isMarkdown *bool
+
 	SideNotePercent float64
 	TabWidth        int
 	ShowLineNumber  bool
@@ -69,7 +74,27 @@ func (r *Code) SetSize(width, height int) {
 func (r *Code) SetContent(c, ext string) tea.Cmd {
 	r.content = c
 	r.extension = ext
+	r.isMarkdown = nil
 	return r.Init()
+}
+
+// SetMarkdownContent is SetContent for callers that have already worked out
+// whether the content is markdown, so it is not worked out a second time.
+func (r *Code) SetMarkdownContent(c, ext string, isMarkdown bool) tea.Cmd {
+	r.content = c
+	r.extension = ext
+	r.isMarkdown = &isMarkdown
+	return r.Init()
+}
+
+// markdown reports whether the content is markdown, working it out only once
+// per SetContent.
+func (r *Code) markdown() bool {
+	if r.isMarkdown == nil {
+		md := common.IsFileMarkdown(r.content, r.extension)
+		r.isMarkdown = &md
+	}
+	return *r.isMarkdown
 }
 
 // SetSideNote sets the sidenote of the Code.
@@ -97,7 +122,7 @@ func (r *Code) Init() tea.Cmd {
 	// 4-spaces.
 	content = strings.ReplaceAll(content, "\t", strings.Repeat(" ", r.TabWidth))
 
-	if r.UseGlamour && common.IsFileMarkdown(content, r.extension) {
+	if r.UseGlamour && r.markdown() {
 		md, err := r.glamourize(w, content)
 		if err != nil {
 			return common.ErrorCmd(err)

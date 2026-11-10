@@ -40,8 +40,7 @@ func NewReadme(common common.Common) *Readme {
 	readme := code.New(common, "", "")
 	readme.NoContentStyle = readme.NoContentStyle.SetString("No readme found.")
 	readme.UseGlamour = true
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	return &Readme{
 		code:      readme,
 		common:    common,
