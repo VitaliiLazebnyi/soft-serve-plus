@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/gorilla/mux"
 	"github.com/matryer/is"
 )
 
@@ -165,6 +166,83 @@ func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
 
 	is.Equal(f.push(t, "shared", auth, "garbage"), http.StatusOK)
 	is.True(f.exists("shared"))
+}
+
+// A request that waits for a removal of a push-created repository resolves
+// the repository and the caller's access again once the removal is over: it
+// finds the repository gone if it was removed, rather than running against
+// the deleted one, and proceeds if it was kept.
+func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
+	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
+	is.NoErr(err)
+
+	pending := newPushCreates()
+	waits := make(chan string, 1)
+	pending.waiting = func(name string) { waits <- name }
+	var reached proto.Repository
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = proto.RepositoryFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
+	router := mux.NewRouter()
+	router.Handle("/{repo:.*}/info/refs", withParams(GitRoute{
+		method:  []string{http.MethodGet},
+		handler: next,
+		path:    "/info/refs",
+		pending: pending,
+		limits:  &requestLimits{},
+	}))
+	handler := NewContextHandler(f.ctx)(router)
+
+	// fetch sends the owner's ref advertisement request for name while a
+	// removal of name is running, and ends that removal with end once
+	// the request waits for it.
+	fetch := func(name string, end func()) int {
+		t.Helper()
+		ch := make(chan struct{})
+		pending.mu.Lock()
+		pending.repos[name] = &pushCreate{removing: ch}
+		pending.mu.Unlock()
+
+		w := httptest.NewRecorder()
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", nil)
+			req.Header.Set("Authorization", "Token "+token)
+			handler.ServeHTTP(w, req)
+		}()
+		select {
+		case got := <-waits:
+			is.Equal(got, name)
+		case <-served:
+			t.Fatalf("request for %q ended without waiting for the removal", name)
+		}
+		end()
+		pending.mu.Lock()
+		delete(pending.repos, name)
+		close(ch)
+		pending.mu.Unlock()
+		<-served
+		return w.Code
+	}
+
+	// Removed: the request finds the repository gone.
+	_, err = f.be.CreateRepository(ownerCtx, "removed", f.owner, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	code := fetch("removed", func() { is.NoErr(f.be.DeleteRepository(ownerCtx, "removed")) })
+	is.True(reached == nil)
+	is.Equal(code, http.StatusNotFound)
+
+	// Kept: the request proceeds.
+	kept, err := f.be.CreateRepository(ownerCtx, "kept", f.owner, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	is.Equal(fetch("kept", func() {}), http.StatusNoContent)
+	is.True(reached != nil)
+	is.Equal(reached.ID(), kept.ID())
 }
 
 // A repository whose refs cannot be listed counts as having refs, so the
