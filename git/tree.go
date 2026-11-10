@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	gopath "path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aymanbagabas/git-module"
@@ -29,6 +30,10 @@ type TreeEntry struct {
 	// repo is the repository the entry was read from. Its context bounds
 	// reading the entry's contents. It is nil for entries built elsewhere.
 	repo *Repository
+	// size is the object size, valid when sized is set. See
+	// Tree.EntriesWithSizes.
+	size  int64
+	sized bool
 }
 
 // Entries is a wrapper around git.Entries.
@@ -114,6 +119,65 @@ func (t *Tree) Entries() (Entries, error) {
 		}
 	}
 	return ret, nil
+}
+
+// EntriesWithSizes returns the entries in the tree with their sizes loaded
+// by one git process for the whole tree. Calling Size on an entry from
+// Entries runs a git process for that entry alone, which adds up when a
+// listing shows the size of every entry.
+func (t *Tree) EntriesWithSizes() (Entries, error) {
+	ents, err := t.Entries()
+	if err != nil {
+		return nil, err
+	}
+
+	var in bytes.Buffer
+	for _, e := range ents {
+		if e.IsBlob() || e.IsExec() || e.IsSymlink() {
+			in.WriteString(e.ID().String())
+			in.WriteByte('\n')
+		}
+	}
+
+	sizes := make(map[string]int64)
+	if in.Len() > 0 {
+		var out, stderr bytes.Buffer
+		if err := git.NewCommand("cat-file", "--batch-check=%(objectname) %(objectsize)").
+			RunInDirWithOptions(t.Repository.Path, git.RunInDirOptions{
+				Stdin:  &in,
+				Stdout: &out,
+				Stderr: &stderr,
+			}); err != nil {
+			return nil, fmt.Errorf("cat-file: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		// A missing object is reported as "<id> missing"; it is left
+		// out so its size reads as zero, which is what Size gives it.
+		for line := range strings.Lines(out.String()) {
+			id, size, ok := strings.Cut(strings.TrimSpace(line), " ")
+			if !ok {
+				continue
+			}
+			if n, err := strconv.ParseInt(size, 10, 64); err == nil {
+				sizes[id] = n
+			}
+		}
+	}
+
+	for _, e := range ents {
+		e.size = sizes[e.ID().String()]
+		e.sized = true
+	}
+	return ents, nil
+}
+
+// Size returns the size of the entry's object, or zero for a tree or a
+// submodule. Entries from EntriesWithSizes already hold it; any other entry
+// asks git.
+func (e *TreeEntry) Size() int64 {
+	if e.sized {
+		return e.size
+	}
+	return e.TreeEntry.Size()
 }
 
 // TreeEntry returns the TreeEntry for the file path.

@@ -1,0 +1,92 @@
+# vi: set ft=conf
+
+# A mirror sync makes the branches and tags match the remote again, so
+# pushes and ref deletes on a mirror are refused over SSH and HTTP instead
+# of being silently undone at the next sync.
+
+# FIXME: don't skip windows
+[windows] skip 'curl makes github actions hang'
+
+env SOFT_SERVE_HTTP_PUBLIC_URL=http://127.0.0.1:$HTTP_PORT
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+
+# a source repository on the server itself, so the import needs no network
+soft repo create src
+git clone ssh://localhost:$SSH_PORT/src src
+mkfile ./src/README.md '# Mirror'
+git -C src add -A
+git -C src commit -m 'first'
+git -C src tag v1
+git -C src push origin HEAD --tags
+
+soft repo import --mirror mirror ssh://git@127.0.0.1:$SSH_PORT/src
+soft repo mirror mirror
+stdout true
+soft repo branch list mirror
+stdout master
+soft repo tag list mirror
+stdout v1
+
+# pushing over SSH is refused, for an admin too
+git clone ssh://localhost:$SSH_PORT/mirror work
+mkfile ./work/new.txt 'new'
+git -C work add -A
+git -C work commit -m 'second'
+! git -C work push origin HEAD
+stderr 'repository is a mirror'
+! git -C work push origin :refs/tags/v1
+stderr 'repository is a mirror'
+
+# and over HTTP
+soft token create --expires-in '1h' 'mirror'
+cp stdout tokenfile
+envfile TOKEN=tokenfile
+git -C work remote add http http://127.0.0.1:$HTTP_PORT/mirror
+git -C work config credential.helper ''
+git -C work config --add credential.helper '!f() { echo username=soft; echo password='$TOKEN'; }; f'
+! git -C work push http HEAD
+stderr 'repository is a mirror'
+
+# reading the repository over HTTP still works
+git clone http://127.0.0.1:$HTTP_PORT/mirror httpclone
+exists httpclone/README.md
+
+# deleting a branch or a tag with the SSH commands is refused
+! soft repo branch delete mirror master
+stderr 'repository is a mirror'
+! soft repo tag delete mirror v1
+stderr 'repository is a mirror'
+soft repo tag list mirror
+stdout v1
+
+# a read-write collaborator may not turn mirroring off, or hide the repo
+soft repo collab add mirror user1 read-write
+! usoft repo mirror mirror false
+stderr 'unauthorized'
+! usoft repo hidden mirror true
+stderr 'unauthorized'
+usoft repo mirror mirror
+stdout true
+usoft repo hidden mirror
+stdout false
+
+# once an admin turns mirroring off, pushes and deletes go through
+soft repo mirror mirror false
+git -C work push origin HEAD
+git -C work push http :refs/tags/v1
+soft repo tag list mirror
+! stdout v1
+git -C work push origin HEAD:refs/heads/extra
+soft repo branch delete mirror extra
+soft repo branch list mirror
+! stdout extra
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .

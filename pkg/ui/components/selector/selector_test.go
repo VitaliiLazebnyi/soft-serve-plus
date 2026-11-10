@@ -243,6 +243,27 @@ func TestClickSelectedFilteredItemOpensIt(t *testing.T) {
 	}
 }
 
+// "?" typed while filtering goes into the filter.
+func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 24)
+	t.Cleanup(c.Zone.Close)
+	s := New(c, []IdentifiableItem{testItem("a?"), testItem("b")}, testDelegate{})
+	for _, k := range []tea.KeyPressMsg{
+		{Code: '/', Text: "/"},
+		{Code: 'a', Text: "a"},
+		{Code: '?', Text: "?"},
+	} {
+		s.Update(k)
+	}
+	if s.FilterState() != list.Filtering {
+		t.Fatalf("filter state = %v, want filtering", s.FilterState())
+	}
+	if got := s.FilterValue(); got != "a?" {
+		t.Errorf("filter = %q, want %q", got, "a?")
+	}
+}
+
 // The mouse wheel moves the cursor: bubbletea v2 reports it as a
 // MouseWheelMsg, never as a click.
 func TestMouseWheelMovesCursor(t *testing.T) {

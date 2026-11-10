@@ -3,9 +3,11 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	gopath "path"
 	"path/filepath"
 	"strconv"
@@ -169,10 +171,19 @@ func (r *Repository) DetachedHEAD() (*Reference, error) {
 	}, nil
 }
 
-// References returns the references for a repository.
+// References returns the references for a repository. It returns an empty
+// list when the repository has no references.
 func (r *Repository) References() ([]*Reference, error) {
 	refs, err := r.ShowRef(git.ShowRefOptions{CommandOptions: r.cmdOpts()})
 	if err != nil {
+		// git show-ref exits with status 1 and prints nothing when there
+		// are no references. Other failures print to stderr, which
+		// git-module folds into an error that is no longer an
+		// *exec.ExitError.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []*Reference{}, nil
+		}
 		return nil, err
 	}
 	rrefs := make([]*Reference, 0, len(refs))
