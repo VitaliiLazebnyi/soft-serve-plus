@@ -501,11 +501,13 @@ func TestUploadPackCounted(t *testing.T) {
 	served := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted"))
 	refused := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private"))
 	for range 2 {
-		if got := requestUploadPack(t, "counted"); got == git.ErrNotAuthed.Error() {
-			t.Fatalf("public repo was refused: %q", got)
+		if _, err := requestUploadPack(t, "counted"); err != nil {
+			t.Fatalf("public repo was refused: %v", err)
 		}
 	}
-	requestUploadPack(t, "counted-private")
+	if _, err := requestUploadPack(t, "counted-private"); err == nil {
+		t.Fatal("private repo was served")
+	}
 
 	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted")) - served; got != 2 {
 		t.Errorf("upload-pack counter for a served repo = %v, want 2", got)
