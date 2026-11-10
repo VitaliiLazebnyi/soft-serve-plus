@@ -62,8 +62,10 @@ func newModel(ctx context.Context, r *git.Repository) *model {
 		comps = append(comps, repo.NewStash(c))
 	}
 	comps = append(comps, repo.NewRefs(c, git.RefsHeads), repo.NewRefs(c, git.RefsTags))
+	rm := repo.New(c, comps...)
+	rm.SetNoMenu(true)
 	m := &model{
-		model:  repo.New(c, comps...),
+		model:  rm,
 		repo:   repository{r},
 		common: c,
 	}
@@ -113,7 +115,8 @@ func (m model) ShortHelp() []key.Binding {
 			m.common.KeyMap.Help,
 		}
 	default:
-		return m.model.ShortHelp()
+		b := m.model.ShortHelp()
+		return append(b, m.common.KeyMap.Quit, m.common.KeyMap.Help)
 	}
 }
 
@@ -131,7 +134,11 @@ func (m model) FullHelp() [][]key.Binding {
 			},
 		}
 	default:
-		return m.model.FullHelp()
+		b := m.model.FullHelp()
+		return append(b, []key.Binding{
+			m.common.KeyMap.Help,
+			m.common.KeyMap.Quit,
+		})
 	}
 }
 

@@ -191,7 +191,8 @@ log:
   # Time format for the log "time" field.
   # Should be described in Golang's time format.
   time_format: "2006-01-02 15:04:05"
-  # Path to the log file. Leave empty to write to stderr.
+  # Path to the log file. Leave empty to write to stderr. A relative path
+  # is relative to the data directory.
   #path: ""
 
 # The SSH server configuration.
@@ -335,6 +336,7 @@ git:
 
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
+  # Independently of it, a client has 10 seconds to send its request.
   # While a pack is prepared, keepalives are sent every idle_timeout/2
   # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
@@ -420,6 +422,9 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # Make sure foreign key support is enabled when using SQLite.
+  # A relative SQLite path, including the path in a relative "file:" URI, is
+  # relative to the data directory. ":memory:" and in-memory "file:" URIs
+  # are used as written.
   data_source: "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
@@ -443,7 +448,9 @@ lfs:
 # Cron job configuration
 jobs:
   # How often pull mirrors sync: a standard five-field cron spec or a
-  # descriptor such as "@hourly" or "@every 10m".
+  # descriptor such as "@hourly" or "@every 10m". Set to "" to disable
+  # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
+  # it; it keeps this value.
   mirror_pull: "@every 10m"
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
@@ -472,6 +479,8 @@ webhook:
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
 # or get an HTTP LFS token (git-lfs-authenticate): both need an account.
+# An entry may also be the path to a file in authorized_keys format; a
+# relative path is relative to the data directory.
 #initial_admin_keys:
 #  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
 
@@ -480,6 +489,9 @@ webhook:
 # set, these take precedence over the database on every read, not just on
 # first run. This is intended for scripted, non-production bootstrapping
 # (e.g. a throwaway server for local dev tooling), not for production use.
+# "admin-access" with allow_keyless: true gives anyone who can reach the
+# server full admin access. Valid anon_access values are "no-access",
+# "read-only", "read-write" and "admin-access".
 #anon_access: "read-only"
 #allow_keyless: true
 
@@ -1104,6 +1116,8 @@ Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is sy
 
 An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
+A mirror is read-only: its branches and tags follow the remote, so the next sync would undo any change made here. Pushes over SSH and HTTP, and `repo branch delete` / `repo tag delete`, are refused on a mirror, even for admins, until a repository admin turns mirroring off with `repo mirror <repo> false`. As with `repo private`, only repository admins can change the mirror and hidden flags (`repo mirror <repo> true|false`, `repo hidden <repo> true|false`); read-write collaborators get `unauthorized`.
+
 Imports and mirror syncs over http, https and `git://` connect to the remote
 directly. They ignore any proxy set for the server, whether through
 `http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
@@ -1149,14 +1163,14 @@ ssh -p 23231 localhost repo collab add soft-serve-plus beatrice read-only
 # Remove collaborator
 ssh -p 23231 localhost repo collab remove soft-serve-plus beatrice
 
-# List collaborators
+# List collaborators and their access levels
 ssh -p 23231 localhost repo collab list soft-serve-plus
 ```
 
 A `read-write` collaborator can push and edit the repo's branches, tags and
-metadata. Only the owner, server admins and `admin-access` collaborators can
-delete or rename the repo, change whether it is private, or manage its
-webhooks.
+metadata, and list its collaborators. Only the owner, server admins and
+`admin-access` collaborators can delete or rename the repo, change whether it
+is private, add or remove collaborators, or manage its webhooks.
 
 ### Repository Metadata
 
