@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -78,4 +79,26 @@ func TestWebhookAllowedHostsUpdate(t *testing.T) {
 	h, err := e.be.Webhook(e.ctx, e.repo, id)
 	is.NoErr(err)
 	is.Equal(h.URL, "http://10.1.2.3/hook")
+}
+
+// Create and update resolve the webhook's hostname with the caller's context,
+// so a caller that has gone away is not held by the resolver, and nothing is
+// stored or changed.
+func TestWebhookCreateAndUpdateStopWhenCancelled(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	id := e.createHook(t, whURL, webhook.EventPush)
+	events := []webhook.Event{webhook.EventPush}
+
+	ctx, cancel := context.WithCancel(e.ctx)
+	cancel()
+	err := e.be.CreateWebhook(ctx, e.repo, "https://hooks.example/new", webhook.ContentTypeJSON, "", events, true)
+	is.True(errors.Is(err, context.Canceled))
+	err = e.be.UpdateWebhook(ctx, e.repo, id, "https://hooks.example/changed", webhook.ContentTypeJSON, "", events, true)
+	is.True(errors.Is(err, context.Canceled))
+
+	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
+	is.NoErr(err)
+	is.Equal(len(hooks), 1)
+	is.Equal(hooks[0].URL, whURL)
 }
