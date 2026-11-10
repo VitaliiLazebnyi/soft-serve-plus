@@ -537,8 +537,6 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			return git.ErrSystemMalfunction
 		}
 
-		receivePackCounter.WithLabelValues(name).Inc()
-
 		return nil
 	case git.UploadPackService, git.UploadArchiveService:
 		if err := gitAccess(anonymous, repo, accessLevel, access.ReadOnlyAccess); err != nil {
