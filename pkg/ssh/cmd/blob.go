@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
@@ -75,39 +77,42 @@ func blobCommand() *cobra.Command {
 				return proto.ErrFileNotFound
 			}
 
-			bts, err := te.Contents()
+			if raw {
+				// Stream the exact bytes: nothing is held in memory, so no
+				// size limit applies.
+				return r.WriteBlob(ctx, te.ID(), cmd.OutOrStdout())
+			}
+
+			bts, err := te.File().ContentsLimit(config.FromContext(ctx).BlobSizeLimit())
+			if errors.Is(err, git.ErrFileTooLarge) {
+				return fmt.Errorf("%w: use --raw to print", err)
+			}
 			if err != nil {
 				return err
 			}
 
-			c := string(bts)
-			isBin, _ := te.File().IsBinary()
-			if isBin {
-				if raw {
-					// Byte for byte: no newline is added.
-					cmd.Print(c)
-				} else {
-					return fmt.Errorf("binary file: use --raw to print")
-				}
-			} else {
-				if color && !noColor {
-					c, err = common.FormatHighlight(fp, c)
-					if err != nil {
-						return err
-					}
-				}
-
-				if linenumber {
-					c, _ = common.FormatLineNumber(commonStyle, c, color && !noColor)
-				}
-
-				cmd.Println(c)
+			if isBin, _ := git.IsBinary(bytes.NewReader(bts)); isBin {
+				return fmt.Errorf("binary file: use --raw to print")
 			}
+
+			c := string(bts)
+			if color && !noColor {
+				c, err = common.FormatHighlight(fp, c)
+				if err != nil {
+					return err
+				}
+			}
+
+			if linenumber {
+				c, _ = common.FormatLineNumber(commonStyle, c, color && !noColor)
+			}
+
+			cmd.Println(c)
 			return nil
 		},
 	}
 
-	cmd.Flags().BoolVarP(&raw, "raw", "r", false, "Print raw contents")
+	cmd.Flags().BoolVarP(&raw, "raw", "r", false, "Print the raw contents, unformatted and without a size limit")
 	cmd.Flags().BoolVarP(&linenumber, "linenumber", "l", false, "Print line numbers")
 	cmd.Flags().BoolVarP(&color, "color", "c", false, "Colorize output")
 
