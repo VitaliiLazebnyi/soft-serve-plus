@@ -247,12 +247,16 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ui.showFooter = !ui.showFooter
 		}
 	case repo.RepoMsg:
-		ui.common.SetValue(common.RepoKey, msg)
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()
 		cmds = append(cmds, repo.UpdateRefCmd(msg))
 	case common.ErrorMsg:
+		if !common.IsUserError(msg) {
+			// The error screen shows a generic message for this error, which
+			// may carry git's output or paths on disk, so log it in full.
+			ui.common.Logger.Error("ui error", "err", msg)
+		}
 		ui.error = msg
 		ui.state = errorState
 		ui.showFooter = true
@@ -312,7 +316,7 @@ func (ui *UI) View() tea.View {
 		view = "Loading..."
 	case errorState:
 		err := ui.common.Styles.ErrorTitle.Render("Bummer")
-		err += ui.common.Styles.ErrorBody.Render(ui.error.Error())
+		err += ui.common.Styles.ErrorBody.Render(common.ErrorMessage(ui.error))
 		view = ui.common.Styles.Error.
 			Width(ui.common.Width -
 				wm -

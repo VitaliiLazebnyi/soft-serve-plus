@@ -78,7 +78,7 @@ func runCommandScript(t *testing.T, script string, env map[string]string) (bool,
 				"stopserver":             cmdStopserver,
 				"ui":                     cmdUI(signer),
 				"writestderr": func(ts *testscript.TestScript, _ bool, args []string) {
-					fmt.Fprint(ts.Stderr(), strings.Join(args, " "))
+					_, _ = fmt.Fprint(ts.Stderr(), strings.Join(args, " "))
 				},
 			},
 			Setup: func(e *testscript.Env) error {

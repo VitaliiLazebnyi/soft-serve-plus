@@ -37,9 +37,9 @@ var ErrUserLookupFailed = errors.New("could not look up your account, try again 
 // AuthenticationMiddleware handles authentication.
 func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		// XXX: The authentication key is set in the context but gossh doesn't
-		// validate the authentication. We need to verify that the _last_ key
-		// that was approved is the one that's being used.
+		// charm.land/ssh gives the session the key that authenticated it.
+		// As defense in depth, check it against the fingerprint
+		// PublicKeyHandler stored for the last key it approved.
 
 		ctx := s.Context()
 		be := backend.FromContext(ctx)
@@ -48,8 +48,8 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 		perms := s.Permissions().Permissions
 		pk := s.PublicKey()
 		if pk != nil {
-			// There is no public key stored in the context, public-key auth
-			// was never requested, skip
+			// A session with a key but no permissions block did not go
+			// through PublicKeyHandler: refuse it.
 			if perms == nil {
 				wish.Fatalln(s, ErrPermissionDenied)
 				return
@@ -231,8 +231,16 @@ func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
 		SilenceUsage: true,
+		// The root command has no name of its own: show the ssh
+		// invocation instead, so usage lines and errors such as
+		// "unknown command" read as what the user typed.
+		Annotations: map[string]string{
+			cobra.CommandDisplayNameAnnotation: cmd.SSHCommand(cfg),
+		},
 	}
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	// Cobra would describe the flag with the display name.
+	rootCmd.Flags().BoolP("help", "h", false, "help for this command")
 	// "Did you mean" suggestions compare an unknown command with every
 	// command name by edit distance, which costs milliseconds for a
 	// word near MaxCommandLength. No typo of a command name is that
