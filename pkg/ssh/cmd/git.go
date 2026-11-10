@@ -175,16 +175,17 @@ func GitLFSTransfer() *cobra.Command {
 var errLFSAuthNoAccount = errors.New("git-lfs-authenticate needs an account: register this SSH key or use an HTTP(S) remote for LFS")
 
 // gitDenyRead is denyReadAs for git services: ErrNotAuthed when anonymous,
-// ErrInvalidRepo when registered.
-func gitDenyRead(user proto.User) error {
-	return denyReadAs(user == nil, git.ErrNotAuthed, git.ErrInvalidRepo)
+// ErrInvalidRepo otherwise.
+func gitDenyRead(anonymous bool) error {
+	return denyReadAs(anonymous, git.ErrNotAuthed, git.ErrInvalidRepo)
 }
 
 // gitAccess authorizes a git service that needs level need on repo, which
-// is nil when the caller may not read it (see backend.Readable).
-func gitAccess(user proto.User, repo proto.Repository, have, need access.AccessLevel) error {
+// is nil when the caller may not read it (see backend.Readable). anonymous
+// is as for denyRead: no account and not a server admin.
+func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLevel) error {
 	if repo == nil || have < access.ReadOnlyAccess {
-		return gitDenyRead(user)
+		return gitDenyRead(anonymous)
 	}
 	if have < need {
 		return git.ErrNotAuthed
@@ -247,8 +248,13 @@ type failedPushRepoOps struct {
 var failedPushRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * time.Second}
 
 // retryPolicy waits first, doubles the wait after each attempt, and gives up
-// once the next wait would go past total. The time spent waiting is the sum
-// of the waits that fit, which can be well short of total.
+// once the sum of the waits would go past total. Only the waits count
+// toward total, not the time the attempts take or a sleep that runs over, so
+// the number of attempts is the same however slow the host is: on Windows
+// starting git for the refs check alone can take a large part of a short
+// budget, and a sleep can run past its wait by the timer resolution. The
+// time spent waiting is the sum of the waits that fit, which can be well
+// short of total.
 type retryPolicy struct {
 	first, total time.Duration
 }
@@ -264,22 +270,41 @@ type retryPolicy struct {
 // behind.
 //
 // The refs are checked again before each attempt as long as the repository's
-// row exists, since the surviving receive-pack could still write them. Once
+// row exists, since the surviving receive-pack could still write them, and
+// only while the directory is still the one this push created. Once
 // the row is gone the repository is deleted, and later attempts only remove
 // the leftover directory, and only while no repository with the name is
 // listed and the directory is still the one this push created: another
 // session may have removed the leftover and created a new repository with
 // the name, which must be left alone.
 func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir string, ops failedPushRepoOps, policy retryPolicy) {
-	deadline := time.Now().Add(policy.total)
+	var waited time.Duration
 	wait := policy.first
 	rowGone := false
 	// orig identifies the directory this push created, so a directory
 	// re-created at the same path is not removed as its leftover.
 	orig, _ := dirIdentity(dir)
-	for {
+	for attempt := 0; ; attempt++ {
 		var err error
 		if !rowGone {
+			// A delete that failed may have failed with no row left, as
+			// when DeleteRepository could not remove the directory as an
+			// orphan, so the directory is checked to be the one this push
+			// created before its refs are checked and it is deleted again:
+			// another session may have removed it and created a new
+			// repository with the name.
+			if attempt > 0 {
+				switch same, serr := sameDir(orig, dir); {
+				case errors.Is(serr, fs.ErrNotExist):
+					return
+				case serr != nil:
+					logger.Error("failed to identify directory of repo created by a failed push, keeping it", "err", serr, "repo", name)
+					return
+				case !same:
+					logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
+					return
+				}
+			}
 			// --git-dir keeps git from looking for a repository in the
 			// parent directories if this one is not one.
 			out, cerr := exec.CommandContext(ctx, "git", "--git-dir="+dir, "for-each-ref", "--count=1").Output()
@@ -309,15 +334,14 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 				logger.Warn("repo created by a failed push was re-created, leaving it", "repo", name)
 				return
 			}
-			fi, serr := dirIdentity(dir)
-			switch {
+			switch same, serr := sameDir(orig, dir); {
 			case errors.Is(serr, fs.ErrNotExist):
 				return
 			case serr != nil:
 				// The directory cannot be identified, so it is not removed
 				// on this attempt.
 				err = serr
-			case !os.SameFile(orig, fi):
+			case !same:
 				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
 				return
 			default:
@@ -331,7 +355,7 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 			}
 		}
 
-		if time.Now().Add(wait).After(deadline) {
+		if waited+wait > policy.total {
 			if err == nil {
 				err = errors.New("repository directory still exists")
 			}
@@ -339,8 +363,20 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 			return
 		}
 		time.Sleep(wait)
+		waited += wait
 		wait *= 2
 	}
+}
+
+// sameDir reports whether the directory at dir is the one orig identifies.
+// A nil orig, a directory that could not be identified at the start, matches
+// nothing.
+func sameDir(orig os.FileInfo, dir string) (bool, error) {
+	fi, err := dirIdentity(dir)
+	if err != nil {
+		return false, err
+	}
+	return orig != nil && os.SameFile(orig, fi), nil
 }
 
 // dirIdentity returns the FileInfo of the directory at dir with its identity
@@ -386,6 +422,9 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 	// account never gets this far: the SSH middleware refuses its session.)
 	repo, accessLevel := readableRepo(ctx, name)
 	ctx = proto.WithRepositoryContext(ctx, repo)
+	// As in denyRead, a server admin is never anonymous: nothing is hidden
+	// from them.
+	anonymous := user == nil && !isServerAdmin(ctx)
 
 	// Environment variables to pass down to git hooks.
 	envs := []string{
@@ -429,7 +468,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 	switch service {
 	case git.ReceivePackService:
 		if repo != nil {
-			if err := gitAccess(user, repo, accessLevel, access.ReadWriteAccess); err != nil {
+			if err := gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess); err != nil {
 				return err
 			}
 			if repo.IsMirror() {
@@ -468,12 +507,14 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			if _, err := be.CreateRepository(ctx, name, user, proto.RepositoryOptions{Private: private}); err != nil {
-				log.Errorf("failed to create repo: %s", err)
+				// Mostly a bad name or a limit, which the client is told;
+				// the backend logs its own failures.
+				logger.Debug("failed to create repo", "err", err, "repo", name)
 				return err
 			}
 			createRepoCounter.WithLabelValues(name).Inc()
 		} else if repo == nil {
-			return gitAccess(user, repo, accessLevel, access.ReadWriteAccess)
+			return gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess)
 		}
 
 		// Count only pushes that passed the access check, so a refused
@@ -498,7 +539,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 		return nil
 	case git.UploadPackService, git.UploadArchiveService:
-		if err := gitAccess(user, repo, accessLevel, access.ReadOnlyAccess); err != nil {
+		if err := gitAccess(anonymous, repo, accessLevel, access.ReadOnlyAccess); err != nil {
 			return err
 		}
 
@@ -541,12 +582,13 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			// git-lfs-transfer stays on SSH and keeps the admin key's
 			// access.
 			repo, accessLevel = be.Readable(ctx, name, user)
+			anonymous = user == nil
 			// Keep the context in step with the repo checked here, so the
 			// handler never sees the one readableRepo looked up.
 			ctx = proto.WithRepositoryContext(ctx, repo)
 		}
 
-		if err := gitAccess(user, repo, accessLevel, need); err != nil {
+		if err := gitAccess(anonymous, repo, accessLevel, need); err != nil {
 			return err
 		}
 

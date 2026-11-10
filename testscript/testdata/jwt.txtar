@@ -9,14 +9,16 @@ ensureserverrunning SSH_PORT
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 
 # generate jwt token
-soft jwt
-stdout '.*\..*\..*'
 soft jwt repo
-stdout '.*\..*\..*'
-usoft jwt
 stdout '.*\..*\..*'
 usoft jwt repo
 stdout '.*\..*\..*'
+
+# a token must name at least one repository: no endpoint accepts one that
+# names none
+! soft jwt
+! stdout .
+stderr 'requires at least 1 arg'
 
 # a token for a private repo the user cannot read and one for a missing
 # repo get the same answer, so the token cannot be used to probe names

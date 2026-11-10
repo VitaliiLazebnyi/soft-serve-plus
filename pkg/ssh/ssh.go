@@ -2,7 +2,9 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"strconv"
@@ -40,11 +42,8 @@ var (
 
 // SSHServer is a SSH server that implements the git protocol.
 type SSHServer struct { //nolint: revive
-	srv    *ssh.Server
-	cfg    *config.Config
-	be     *backend.Backend
-	ctx    context.Context
-	logger *log.Logger
+	srv *ssh.Server
+	be  *backend.Backend
 
 	limiter *connLimiter
 }
@@ -58,12 +57,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	be := backend.FromContext(ctx)
 
 	var err error
-	s := &SSHServer{
-		cfg:    cfg,
-		ctx:    ctx,
-		be:     be,
-		logger: logger,
-	}
+	s := &SSHServer{be: be}
 
 	mw := []wish.Middleware{
 		rm.MiddlewareWithLogger(
@@ -75,9 +69,10 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 			// Logging middleware.
 			LoggingMiddleware,
 			// Authentication middleware.
-			// gossh.PublicKeyHandler doesn't guarantee that the public key
-			// is in fact the one used for authentication, so we need to
-			// check it again here.
+			// charm.land/ssh already gives the session the key that
+			// authenticated it. This checks it against the fingerprint
+			// PublicKeyHandler stored, as defense in depth, and sets the
+			// session's user.
 			AuthenticationMiddleware,
 			// Command length middleware.
 			// Refuses overlong exec commands before anything parses them.
@@ -134,11 +129,13 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	}
 
 	// Create client ssh key
-	if _, err := os.Stat(cfg.SSH.ClientKeyPath); err != nil && os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
 		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
 		if err != nil {
 			return nil, fmt.Errorf("client ssh key: %w", err)
 		}
+	} else if err != nil {
+		return nil, fmt.Errorf("client ssh key: %w", err)
 	}
 
 	return s, nil
@@ -188,7 +185,9 @@ func (s *SSHServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
-func initializePermissions(ctx ssh.Context) {
+// initializePermissions returns the context's permissions, creating them
+// and their extensions map when missing.
+func initializePermissions(ctx ssh.Context) *ssh.Permissions {
 	perms := ctx.Permissions()
 	if perms == nil || perms.Permissions == nil {
 		perms = &ssh.Permissions{Permissions: &gossh.Permissions{}}
@@ -196,6 +195,7 @@ func initializePermissions(ctx ssh.Context) {
 	if perms.Extensions == nil {
 		perms.Extensions = make(map[string]string)
 	}
+	return perms
 }
 
 // PublicKeyHandler handles public key authentication.
@@ -210,10 +210,10 @@ func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed
 
 	allowed = true
 
-	// XXX: store the first "approved" public-key fingerprint in the
-	// permissions block to use for authentication later.
-	initializePermissions(ctx)
-	perms := ctx.Permissions()
+	// Store the offered key's fingerprint in the permissions block for
+	// AuthenticationMiddleware to check. Each attempt overwrites it, so it
+	// ends up naming the key that authenticated.
+	perms := initializePermissions(ctx)
 
 	// Set the public key fingerprint to be used for authentication.
 	perms.Extensions["pubkey-fp"] = gossh.FingerprintSHA256(pk)
@@ -222,19 +222,16 @@ func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed
 	return
 }
 
-// KeyboardInteractiveHandler handles keyboard interactive authentication.
-// This is used after all public key authentication has failed.
+// KeyboardInteractiveHandler handles keyboard interactive authentication,
+// which lets a client in without a key when keyless access is allowed.
 func (s *SSHServer) KeyboardInteractiveHandler(ctx ssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
 	ac := s.be.AllowKeyless(ctx)
 	keyboardInteractiveCounter.WithLabelValues(strconv.FormatBool(ac)).Inc()
 
-	// If we're allowing keyless access, reset the public key fingerprint
-	initializePermissions(ctx)
-	perms := ctx.Permissions()
-
+	perms := initializePermissions(ctx)
 	if ac {
-		// XXX: reset the public-key fingerprint. This is used to validate the
-		// public key being used to authenticate.
+		// Clear the fingerprint a failed public key attempt may have left,
+		// since no key authenticated this session.
 		perms.Extensions["pubkey-fp"] = ""
 		ctx.SetValue(ssh.ContextKeyPermissions, perms)
 	}

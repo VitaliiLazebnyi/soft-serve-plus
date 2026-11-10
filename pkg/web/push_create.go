@@ -33,7 +33,7 @@ var pushCreateTimeout = 10 * time.Minute
 // list once a request to it ends and it has a ref.
 //
 // The list is kept in memory, so a repository still on it when the server
-// stops is kept, empty, until someone deletes it. That errs on the side of
+// stops, or when close is called, is kept, empty, until someone deletes it. That errs on the side of
 // keeping: nothing on disk tells such a repository apart from one created
 // empty on purpose.
 type pushCreates struct {
@@ -42,6 +42,9 @@ type pushCreates struct {
 	// takes it.
 	mu    sync.Mutex
 	repos map[string]*pushCreate
+	// closed is set by close. No timer is started and no removal starts
+	// once it is set.
+	closed bool
 	// waiting, if set, is called when a request starts waiting for a
 	// removal. Tests use it to end the removal only once a request waits.
 	waiting func(name string)
@@ -169,6 +172,9 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 		delete(p.repos, name)
 		return
 	}
+	if p.closed {
+		return
+	}
 	pc.timer = time.AfterFunc(pushCreateTimeout, func() { p.remove(name, pc, gen) })
 }
 
@@ -177,7 +183,7 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 // request started since gen was taken.
 func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 	p.mu.Lock()
-	if p.repos[name] != pc || pc.gen != gen || pc.inflight > 0 || pc.removing != nil {
+	if p.closed || p.repos[name] != pc || pc.gen != gen || pc.inflight > 0 || pc.removing != nil {
 		p.mu.Unlock()
 		return
 	}
@@ -208,6 +214,38 @@ func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 	case removed:
 		logger.Info("removed repository created by a push that sent no refs", "repo", name)
 	}
+}
+
+// close stops the removal timers and keeps any removal from starting, so
+// none runs against a backend that is being closed. It then waits for the
+// removals already running to end, or for ctx to be done, and returns
+// ctx's error in that case.
+func (p *pushCreates) close(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	p.closed = true
+	var running []chan struct{}
+	for _, pc := range p.repos {
+		if pc.timer != nil {
+			pc.timer.Stop()
+			pc.timer = nil
+		}
+		if pc.removing != nil {
+			running = append(running, pc.removing)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, ch := range running {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // hasRefs reports whether the repository at dir has any ref. A repository

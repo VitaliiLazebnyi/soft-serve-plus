@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +56,9 @@ const defaultAccessTimeout = 10 * time.Second
 
 // ErrServerClosed indicates that the server has been closed.
 var ErrServerClosed = fmt.Errorf("git: %w", net.ErrClosed)
+
+// ErrPushNotSupported is returned to clients that try to push over git://.
+var ErrPushNotSupported = errors.New("pushing over git:// is not supported, use ssh or http")
 
 // requestTimeout is how long a client has to send its request line, like
 // git-daemon's --init-timeout. Unlike the idle timeout, reading does not
@@ -155,19 +159,44 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			return err
 		}
 
-		// Close connection if there are too many open connections.
-		if d.conns.Size()+1 >= d.cfg.Git.MaxConnections {
-			d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
-			d.fatal(conn, git.ErrMaxConnections)
+		// Count the connection here rather than in its goroutine, so that
+		// the limit holds for a burst of connections and a connection
+		// accepted while the daemon closes is closed with the rest.
+		ctx, cancel := d.requestContext()
+		c := d.newServerConn(conn, cancel)
+		if err := d.conns.Add(c, d.cfg.Git.MaxConnections); err != nil {
+			if errors.Is(err, git.ErrMaxConnections) {
+				// Close connection if there are too many open connections.
+				d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
+				d.fatal(c, err)
+			} else {
+				c.Close() //nolint: errcheck
+			}
 			continue
 		}
 
 		d.wg.Add(1)
 		go func() {
-			d.handleClient(conn)
+			d.handleClient(ctx, c)
 			d.wg.Done()
 		}()
 	}
+}
+
+// newServerConn wraps conn with the configured timeouts; cancel is called
+// when the connection fails or is closed.
+func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *serverConn {
+	c := &serverConn{
+		Conn:          conn,
+		initDeadline:  time.Now().Add(d.requestTimeout),
+		idleTimeout:   time.Duration(d.cfg.Git.IdleTimeout) * time.Second,
+		closeCanceler: cancel,
+	}
+	if d.cfg.Git.MaxTimeout > 0 {
+		dur := time.Duration(d.cfg.Git.MaxTimeout) * time.Second
+		c.maxDeadline = time.Now().Add(dur)
+	}
+	return c
 }
 
 func (d *GitDaemon) fatal(c net.Conn, err error) {
@@ -197,22 +226,9 @@ func (d *GitDaemon) readable(ctx context.Context, name string) bool {
 	return r != nil
 }
 
-// handleClient handles a git protocol client.
-func (d *GitDaemon) handleClient(conn net.Conn) {
-	ctx, cancel := d.requestContext()
-	defer cancel()
-	idleTimeout := time.Duration(d.cfg.Git.IdleTimeout) * time.Second
-	c := &serverConn{
-		Conn:          conn,
-		initDeadline:  time.Now().Add(d.requestTimeout),
-		idleTimeout:   idleTimeout,
-		closeCanceler: cancel,
-	}
-	if d.cfg.Git.MaxTimeout > 0 {
-		dur := time.Duration(d.cfg.Git.MaxTimeout) * time.Second
-		c.maxDeadline = time.Now().Add(dur)
-	}
-	d.conns.Add(c)
+// handleClient handles a git protocol client. c must already be in d.conns;
+// ctx is canceled when c fails or is closed.
+func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	defer func() {
 		d.conns.Close(c) //nolint: errcheck
 	}()
@@ -224,7 +240,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	// which ends the read too.
 	stopRead := context.AfterFunc(d.ctx, func() {
 		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
-		d.fatal(conn, git.ErrTimeout)
+		d.fatal(c, git.ErrTimeout)
 	})
 	s := pktline.NewScanner(c)
 	scanned := s.Scan()
@@ -236,16 +252,22 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 	// the connection from going idle.
 	c.initDeadline = time.Time{}
 	if !scanned {
-		if err := s.Err(); err != nil {
-			var nerr net.Error
-			if errors.As(err, &nerr) && nerr.Timeout() {
-				d.fatal(c, git.ErrTimeout)
-				return
-			}
-			d.logger.Debugf("git: error scanning pktline: %v", err)
-			d.fatal(c, git.ErrSystemMalfunction)
-			return
+		err := s.Err()
+		var nerr net.Error
+		switch {
+		case err == nil:
+			// The client hung up without sending a request.
+		case errors.As(err, &nerr) && nerr.Timeout():
+			d.fatal(c, git.ErrTimeout)
+		case errors.Is(err, pktline.ErrInvalidPktLen), isErrorLine(err):
+			d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
+			d.fatal(c, git.ErrInvalidRequest)
+		default:
+			// The connection was reset, cut short, or closed by the server:
+			// there is no one to answer.
+			d.logger.Debugf("git: error reading request from %s: %v", c.RemoteAddr(), err)
 		}
+		return
 	}
 
 	line := s.Bytes()
@@ -262,6 +284,9 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		counter = uploadPackGitCounter
 	case git.UploadArchiveService:
 		counter = uploadArchiveGitCounter
+	case git.ReceivePackService:
+		d.fatal(c, ErrPushNotSupported)
+		return
 	default:
 		d.fatal(c, git.ErrInvalidRequest)
 		return
@@ -269,31 +294,14 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 
 	opts := bytes.SplitN(split[1], []byte{0}, 3)
 	if len(opts) < 2 {
-		d.fatal(c, git.ErrInvalidRequest) //nolint: errcheck
+		d.fatal(c, git.ErrInvalidRequest)
 		return
 	}
 
 	host := strings.TrimPrefix(string(opts[1]), "host=")
-	extraParams := map[string]string{}
-
+	var version string
 	if len(opts) > 2 {
-		buf := bytes.TrimPrefix(opts[2], []byte{0})
-		for _, o := range bytes.Split(buf, []byte{0}) {
-			opt := string(o)
-			if opt == "" {
-				continue
-			}
-
-			kv := strings.SplitN(opt, "=", 2)
-			if len(kv) != 2 {
-				d.logger.Errorf("git: invalid option %q", opt)
-				continue
-			}
-
-			extraParams[kv[0]] = kv[1]
-		}
-
-		version := extraParams["version"]
+		version = protocolVersion(opts[2])
 		if version != "" {
 			d.logger.Debugf("git: protocol version %s", version)
 		}
@@ -337,16 +345,9 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
 	}
 
-	// Add git protocol environment variable.
-	if len(extraParams) > 0 {
-		var gitProto string
-		for k, v := range extraParams {
-			if len(gitProto) > 0 {
-				gitProto += ":"
-			}
-			gitProto += k + "=" + v
-		}
-		envs = append(envs, "GIT_PROTOCOL="+gitProto)
+	// Pass the requested protocol version down to git.
+	if version != "" {
+		envs = append(envs, "GIT_PROTOCOL=version="+version)
 	}
 
 	envs = append(envs, d.cfg.Environ()...)
@@ -364,7 +365,7 @@ func (d *GitDaemon) handleClient(conn net.Conn) {
 		Env:    envs,
 		Dir:    filepath.Join(reposDir, repo),
 	}
-	if ka := keepAlive(idleTimeout); ka > 0 {
+	if ka := keepAlive(c.idleTimeout); ka > 0 {
 		// Neither side talks while pack-objects prepares the pack
 		// for a quiet fetch. Have upload-pack send keepalive
 		// packets often enough that the connection does not reach
@@ -450,4 +451,33 @@ func (d *GitDaemon) Shutdown(ctx context.Context) error {
 	case <-finished:
 		return err
 	}
+}
+
+// isErrorLine reports whether err is an ERR packet the client sent.
+func isErrorLine(err error) bool {
+	var el *pktline.ErrorLine
+	return errors.As(err, &el)
+}
+
+// protocolVersion returns the protocol version the client asked for in the
+// extra parameters of its request, or "" if it asked for none. Like git, it
+// takes the highest "version=N" and ignores every other parameter, so nothing
+// else the client sends reaches GIT_PROTOCOL.
+func protocolVersion(params []byte) string {
+	version := -1
+	for p := range bytes.SplitSeq(params, []byte{0}) {
+		v, ok := bytes.CutPrefix(p, []byte("version="))
+		if !ok || len(v) == 0 || len(v) > 3 {
+			continue
+		}
+		n, err := strconv.Atoi(string(v))
+		if err != nil || n < 0 {
+			continue
+		}
+		version = max(version, n)
+	}
+	if version < 0 {
+		return ""
+	}
+	return strconv.Itoa(version)
 }

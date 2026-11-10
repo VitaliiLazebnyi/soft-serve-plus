@@ -110,10 +110,14 @@ var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
 // syncMirror fetches each named remote of the mirror at path, pruning refs
 // the remote no longer has. Naming every remote keeps git from choosing one
 // that was not validated. A remote that fails to fetch does not stop the
-// others; their errors are joined.
+// others; their errors are joined. Once ctx is done no further fetch starts,
+// but one already running is left to finish; see runMirrorGit.
 func syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name); err != nil {
 			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
 		}
@@ -142,13 +146,22 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		repos, err := b.Repositories(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			logger.Error("error getting repositories", "err", err)
 			return
 		}
 
 		// Divide the work up among the number of CPUs.
 		wq := sync.NewWorkPool(ctx, runtime.GOMAXPROCS(0),
-			sync.WithWorkPoolLogger(logger.Errorf),
+			sync.WithWorkPoolLogger(func(format string, args ...any) {
+				// The pool only fails to start work once ctx is done, which
+				// is an ordinary shutdown, not an error.
+				if ctx.Err() == nil {
+					logger.Errorf(format, args...)
+				}
+			}),
 		)
 
 		logger.Debug("updating mirror repos")
@@ -186,8 +199,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					// When a fetch fails the LFS sync is skipped too; the
 					// next run tries both again.
 					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
-					if err := syncMirror(ctx, r.Path, remotes.names, syncEnv); err != nil {
-						logger.Error("error syncing mirror", "repo", name, "err", err)
+					if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
 						return
 					}
 
@@ -230,6 +242,10 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 								logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
 								return
 							}
+							if ctx.Err() != nil {
+								// The server is stopping.
+								return
+							}
 							logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
 							return
 						}
@@ -263,9 +279,19 @@ const mirrorGitWaitDelay = 5 * time.Second
 const mirrorGitStderrLimit = 4 << 10
 
 // runMirrorGit runs one git command of a mirror sync in dir with env applied,
-// killing it after mirrorGitTimeout or when ctx is done.
-func runMirrorGit(ctx context.Context, dir string, env []string, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, mirrorGitTimeout)
+// killing it after mirrorGitTimeout. Tests replace it.
+//
+// The command does not get ctx's cancellation. Cancelling would kill git
+// (exec.CommandContext sends SIGKILL, or TerminateProcess on Windows), and a
+// killed git never removes the ref and packed-refs locks it holds, so every
+// later sync of the mirror would fail on "File exists" until someone deletes
+// them by hand. A git command that is already running is left to finish:
+// Server.Shutdown waits for it within its drain deadline, and if the server
+// exits first, git finishes on its own and cleans up after itself, as it
+// did before syncs were cancelled at all. Only a command stalled past
+// mirrorGitTimeout is killed.
+var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorGitTimeout)
 	defer cancel()
 
 	var stderr limitedBuffer
@@ -322,4 +348,19 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // String returns the bytes kept so far.
 func (b *limitedBuffer) String() string {
 	return b.buf.String()
+}
+
+// fetchMirror fetches the named remotes of the mirror in dir and reports
+// whether the sync should go on to the lfs objects. It returns false when
+// a fetch failed, after logging the error, so the lfs sync is skipped
+// until the next run. Once ctx is done it starts no further fetch and
+// returns false without logging: the server is stopping.
+func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) bool {
+	if err := syncMirror(ctx, dir, remotes, env); err != nil {
+		if ctx.Err() == nil {
+			logger.Error("error syncing mirror", "repo", name, "err", err)
+		}
+		return false
+	}
+	return ctx.Err() == nil
 }
