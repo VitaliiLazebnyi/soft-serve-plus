@@ -96,7 +96,7 @@ func newRepository(ctx context.Context, repo proto.Repository) (Repository, erro
 		CreatedAt:   repo.CreatedAt(),
 		UpdatedAt:   repo.UpdatedAt(),
 	}
-	r.DefaultBranch, _ = getDefaultBranch(repo)
+	r.DefaultBranch = defaultBranch(ctx, repo)
 
 	cfg := config.FromContext(ctx)
 	r.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())

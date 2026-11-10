@@ -17,14 +17,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// AccessLevel returns the access level of a user for a repository.
-//
-// It implements backend.Backend.
-func (d *Backend) AccessLevel(ctx context.Context, repo string, username string) access.AccessLevel {
-	user, _ := d.User(ctx, username)
-	return d.AccessLevelForUser(ctx, repo, user)
-}
-
 // adminKeyList returns the parsed initial_admin_keys. config.AdminKeys
 // parses every entry (trying each as a file first) on every call, and this
 // runs for every SSH session and access check, so the result is cached and
@@ -101,7 +93,8 @@ func (d *Backend) isAdminKey(pk ssh.PublicKey) bool {
 // admin flag, or the public key on ctx is one of the configured admin keys.
 // Admin keys are attached to an admin user on every start, but a key that a
 // non-admin account already owns stays on that account, and a key with no
-// unambiguous admin to go to is not attached, so the key is checked here too. It matches the SSH layer's isServerAdmin.
+// unambiguous admin to go to is not attached, so the key is checked here too.
+// It matches the SSH layer's isServerAdmin.
 func (d *Backend) isServerAdmin(ctx context.Context, user proto.User) bool {
 	if user != nil && user.IsAdmin() {
 		return true
@@ -110,8 +103,6 @@ func (d *Backend) isServerAdmin(ctx context.Context, user proto.User) bool {
 }
 
 // AccessLevelByPublicKey returns the access level of a user's public key for a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) AccessLevelByPublicKey(ctx context.Context, repo string, pk ssh.PublicKey) access.AccessLevel {
 	if d.isAdminKey(pk) {
 		return access.AdminAccess
@@ -130,6 +121,14 @@ func (d *Backend) BaseAccessLevelByPublicKey(ctx context.Context, pk ssh.PublicK
 	}
 
 	user, _ := d.UserByPublicKey(ctx, pk)
+	return d.baseAccessLevel(ctx, user)
+}
+
+// BaseAccessLevelForUser is BaseAccessLevelByPublicKey for a caller whose
+// user is already resolved, such as the user an SSH session stored in its
+// context, so the key is not looked up again. An admin key on ctx still
+// gets admin access (see isServerAdmin).
+func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
 	return d.baseAccessLevel(ctx, user)
 }
 
@@ -170,6 +169,25 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 	return d.Readable(ctx, name, user)
 }
 
+// ReadableForUser is ReadableByPublicKey for a caller whose user is already
+// resolved, such as the user an SSH session stored in its context, so the
+// key is not looked up again. An admin key on ctx still sees every
+// repository with admin access, as in ReadableByPublicKey.
+//
+// The session user is the one resolved when the session authenticated, as
+// for the account commands and BaseAccessLevelForUser: a key removed from
+// that account mid-session keeps the session's user until it reconnects.
+// Collaborator rows, the repository's privacy and ownership are still read
+// fresh on every call.
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+	if d.isAdminKey(sshutils.PublicKeyFromContext(ctx)) {
+		r, _ := d.Repository(ctx, name)
+		return r, access.AdminAccess
+	}
+
+	return d.Readable(ctx, name, user)
+}
+
 // baseAccessLevel is the level user holds for a repository that does not
 // exist.
 //
@@ -184,7 +202,12 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 // Without it, this is upstream behaviour: registered users get read-write on
 // a missing name, and anonymous users get the anonymous level.
 func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.AccessLevel {
-	anon := d.AnonAccess(ctx)
+	return d.baseAccessLevelWithAnon(ctx, user, d.AnonAccess(ctx))
+}
+
+// baseAccessLevelWithAnon is baseAccessLevel with the anonymous level
+// already read, so a caller that has it does not read the setting again.
+func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, anon access.AccessLevel) access.AccessLevel {
 	adminOnly := d.cfg.AdminOnlyCreate
 	switch {
 	case d.isServerAdmin(ctx, user):
@@ -202,7 +225,6 @@ func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.A
 
 // accessLevel computes the access level of user for r, which is the
 // repository named name or nil when it does not exist.
-// TODO: user repository ownership
 func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User) access.AccessLevel {
 	var username string
 	anon := d.AnonAccess(ctx)
@@ -224,7 +246,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
-		return d.baseAccessLevel(ctx, user)
+		return d.baseAccessLevelWithAnon(ctx, user, anon)
 	}
 
 	// If the user is the owner, they have admin access.
@@ -265,8 +287,6 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 }
 
 // User finds a user by username.
-//
-// It implements backend.Backend.
 func (d *Backend) User(ctx context.Context, username string) (proto.User, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -347,8 +367,6 @@ func (e *ErrAdminKeyNonAdminOwner) Error() string {
 func (e *ErrAdminKeyNonAdminOwner) Unwrap() error { return proto.ErrUserNotFound }
 
 // UserByPublicKey finds a user by public key.
-//
-// It implements backend.Backend.
 func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.User, error) {
 	var m models.User
 	var pks []ssh.PublicKey
@@ -445,8 +463,6 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 }
 
 // Users returns all users.
-//
-// It implements backend.Backend.
 func (d *Backend) Users(ctx context.Context) ([]string, error) {
 	var users []string
 	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
@@ -468,8 +484,6 @@ func (d *Backend) Users(ctx context.Context) ([]string, error) {
 }
 
 // AddPublicKey adds a public key to a user.
-//
-// It implements backend.Backend.
 func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -482,8 +496,6 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 }
 
 // CreateUser creates a new user.
-//
-// It implements backend.Backend.
 func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.UserOptions) (proto.User, error) {
 	username = utils.Sanitize(username)
 	username = strings.ToLower(username)
@@ -501,8 +513,6 @@ func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.Us
 }
 
 // DeleteUser deletes a user.
-//
-// It implements backend.Backend.
 func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -545,8 +555,6 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 }
 
 // RemovePublicKey removes a public key from a user.
-//
-// It implements backend.Backend.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
@@ -617,8 +625,6 @@ func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.Pu
 }
 
 // SetUsername sets the username of a user.
-//
-// It implements backend.Backend.
 func (d *Backend) SetUsername(ctx context.Context, username string, newUsername string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -631,8 +637,6 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 }
 
 // SetAdmin sets the admin flag of a user.
-//
-// It implements backend.Backend.
 func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {

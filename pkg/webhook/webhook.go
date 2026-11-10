@@ -123,8 +123,8 @@ const redactedURLPart = "[redacted]"
 
 // redactURL returns rawURL reduced to its scheme and host. Many receivers
 // (Slack, Discord, Teams and the like) put a token in the path or query, so
-// those parts, the fragment and any user info are replaced with
-// redactedURLPart. A URL that cannot be parsed is replaced entirely.
+// those parts and the fragment are replaced with redactedURLPart, and any
+// user info is dropped. A URL that cannot be parsed is replaced entirely.
 //
 // The host is kept on purpose, so an operator can tell which receiver failed.
 // A receiver that puts a token in the host name (a per-hook subdomain such as
@@ -382,29 +382,28 @@ const maxStoredHeaders = 64 << 10
 // maxStoredHeaders.
 const truncatedHeadersMarker = "[headers truncated by Soft Serve]\n"
 
-// formatHeaders renders h as "Key: value" lines, one per header with its
-// first value, sorted by key so a delivery reads the same on every view. It
-// stops before the line that would take it past maxStoredHeaders and marks
-// the cut with truncatedHeadersMarker. Each key and value goes through
-// storableText before it is measured, so the cap holds for the text that is
-// stored even when the receiver sent invalid UTF-8.
+// formatHeaders renders h as "Key: value" lines, one per value, sorted by key
+// so a delivery reads the same on every view. Every value of a repeated
+// header is kept, in the order it was sent. It stops before the line that
+// would take it past maxStoredHeaders and marks the cut with
+// truncatedHeadersMarker. Each key and value goes through storableText before
+// it is measured, so the cap holds for the text that is stored even when the
+// receiver sent invalid UTF-8.
 func formatHeaders(h http.Header) string {
-	keys := slices.Sorted(maps.Keys(h))
 	var b strings.Builder
-	for _, k := range keys {
-		v := h[k]
-		if len(v) == 0 {
-			continue
+	for _, k := range slices.Sorted(maps.Keys(h)) {
+		key := storableText(k)
+		for _, v := range h[k] {
+			value := storableText(v)
+			if b.Len()+len(key)+len(": ")+len(value)+len("\n") > maxStoredHeaders {
+				b.WriteString(truncatedHeadersMarker)
+				return b.String()
+			}
+			b.WriteString(key)
+			b.WriteString(": ")
+			b.WriteString(value)
+			b.WriteByte('\n')
 		}
-		key, value := storableText(k), storableText(v[0])
-		if b.Len()+len(key)+len(": ")+len(value)+len("\n") > maxStoredHeaders {
-			b.WriteString(truncatedHeadersMarker)
-			break
-		}
-		b.WriteString(key)
-		b.WriteString(": ")
-		b.WriteString(value)
-		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -632,6 +631,18 @@ func SendEvent(ctx context.Context, payload EventPayload) error {
 
 func repoURL(publicURL string, repo string) string {
 	return fmt.Sprintf("%s/%s.git", publicURL, utils.SanitizeRepo(repo))
+}
+
+// defaultBranch returns repo's default branch for an event payload. An error
+// is logged and leaves the branch empty: the event is still worth sending
+// without it.
+func defaultBranch(ctx context.Context, repo proto.Repository) string {
+	branch, err := getDefaultBranch(repo)
+	if err != nil {
+		log.FromContext(ctx).WithPrefix("webhook").Warn("cannot read the default branch for the webhook payload",
+			"repo", repo.Name(), "err", err)
+	}
+	return branch
 }
 
 func getDefaultBranch(repo proto.Repository) (string, error) {

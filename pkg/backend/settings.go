@@ -14,8 +14,6 @@ import (
 // default, matching how InitialAdminKeys behaves. Do not cache this: a
 // memoized/TTL'd copy would delay an admin's `settings allow-keyless false`
 // from taking effect, which is a fail-open risk on an access-control check.
-//
-// It implements backend.Backend.
 func (d *Backend) AllowKeyless(ctx context.Context) bool {
 	if d.cfg.AllowKeyless != nil {
 		return *d.cfg.AllowKeyless
@@ -35,8 +33,6 @@ func (d *Backend) AllowKeyless(ctx context.Context) bool {
 }
 
 // SetAllowKeyless sets whether or not keyless access is allowed.
-//
-// It implements backend.Backend.
 func (d *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.SetAllowKeylessAccess(ctx, tx, allow)
@@ -50,8 +46,6 @@ func (d *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
 // matching how InitialAdminKeys behaves. Do not cache this: a memoized/TTL'd
 // copy would delay an admin's `settings anon-access` change from taking
 // effect, which is a fail-open risk on an access-control check.
-//
-// It implements backend.Backend.
 func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 	if d.cfg.AnonAccess != nil {
 		return *d.cfg.AnonAccess
@@ -71,8 +65,6 @@ func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 }
 
 // SetAnonAccess sets the level of anonymous access.
-//
-// It implements backend.Backend.
 func (d *Backend) SetAnonAccess(ctx context.Context, level access.AccessLevel) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.SetAnonAccess(ctx, tx, level)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -34,6 +35,7 @@ func TestLFSAuthenticateDoesNotLogToken(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "host_key")
+	writeHostKey(t, cfg.SSH.KeyPath)
 
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, logger)
@@ -70,6 +72,7 @@ func TestLFSAuthenticateExpiresInSeconds(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "host_key")
+	writeHostKey(t, cfg.SSH.KeyPath)
 
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
@@ -90,5 +93,14 @@ func TestLFSAuthenticateExpiresInSeconds(t *testing.T) {
 	}
 	if res.ExpiresIn != 300 {
 		t.Errorf("expires_in = %d, want 300 seconds", res.ExpiresIn)
+	}
+}
+
+// writeHostKey writes the server's SSH host key, which the SSH server
+// otherwise creates on first start.
+func writeHostKey(t *testing.T, path string) {
+	t.Helper()
+	if _, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite()); err != nil {
+		t.Fatalf("write host key: %v", err)
 	}
 }

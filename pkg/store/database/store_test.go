@@ -479,20 +479,21 @@ func TestLFSLockStore(t *testing.T) {
 		t.Errorf("GetLFSLocksForUser() = %d, %v, want 1", len(ls), err)
 	}
 
-	// Pages: the count is of every lock in the repository.
-	ls, n, err := s.GetLFSLocksWithCount(ctx, dbx, 7, 1, 1)
+	// Pages follow the lock ID: afterID is the last ID of the previous page.
+	// The count is of every lock in the repository.
+	ls, n, err := s.GetLFSLocksWithCount(ctx, dbx, 7, 0, 1)
 	if err != nil || len(ls) != 1 || n != 2 {
-		t.Errorf("GetLFSLocksWithCount(page 1, limit 1) = %d locks, count %d, %v, want 1 and 2", len(ls), n, err)
+		t.Fatalf("GetLFSLocksWithCount(after 0, limit 1) = %d locks, count %d, %v, want 1 and 2", len(ls), n, err)
 	}
-	ls2, err := s.GetLFSLocks(ctx, dbx, 7, 2, 1)
-	if err != nil || len(ls2) != 1 || (len(ls) == 1 && ls2[0].ID == ls[0].ID) {
-		t.Errorf("GetLFSLocks(page 2, limit 1) = %+v, %v, want the other lock", ls2, err)
+	ls2, err := s.GetLFSLocks(ctx, dbx, 7, ls[0].ID, 1)
+	if err != nil || len(ls2) != 1 || ls2[0].ID <= ls[0].ID {
+		t.Fatalf("GetLFSLocks(after first, limit 1) = %+v, %v, want the other lock", ls2, err)
 	}
-	if ls, err := s.GetLFSLocks(ctx, dbx, 7, 3, 1); err != nil || len(ls) != 0 {
-		t.Errorf("GetLFSLocks(page 3, limit 1) = %d, %v, want 0", len(ls), err)
+	if ls, err := s.GetLFSLocks(ctx, dbx, 7, ls2[0].ID, 1); err != nil || len(ls) != 0 {
+		t.Errorf("GetLFSLocks(after last, limit 1) = %d, %v, want 0", len(ls), err)
 	}
 	if ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10); err != nil || len(ls) != 2 {
-		t.Errorf("GetLFSLocks(page 0) = %d, %v, want page 1 with 2 locks", len(ls), err)
+		t.Errorf("GetLFSLocks(after 0, limit 10) = %d, %v, want 2", len(ls), err)
 	}
 
 	// Only the owner's delete removes it; DeleteLFSLock (force) removes any.
@@ -515,7 +516,7 @@ func TestLFSLockStore(t *testing.T) {
 	if err := s.DeleteLFSLock(ctx, dbx, 7, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	if ls, err := s.GetLFSLocks(ctx, dbx, 7, 1, 10); err != nil || len(ls) != 0 {
+	if ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10); err != nil || len(ls) != 0 {
 		t.Errorf("GetLFSLocks(7) after deleting both = %d, %v, want 0", len(ls), err)
 	}
 }
