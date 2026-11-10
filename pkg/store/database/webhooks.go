@@ -266,6 +266,17 @@ func (*webhookStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Han
 	return whs, err
 }
 
+// GetActiveWebhookByIDWhereEvent implements store.WebhookStore.
+func (*webhookStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error) {
+	query := h.Rebind(`SELECT webhooks.*
+			FROM webhooks
+			INNER JOIN webhook_events ON webhooks.id = webhook_events.webhook_id
+			WHERE webhooks.repo_id = ? AND webhooks.id = ? AND webhooks.active = ? AND webhook_events.event = ?;`)
+	var wh models.Webhook
+	err := h.GetContext(ctx, &wh, query, repoID, id, true, event)
+	return wh, err
+}
+
 // ListWebhookDeliveriesByWebhookID implements store.WebhookStore.
 // Deliveries are returned oldest first, in the order they were recorded,
 // limited to the most recent maxListedWebhookDeliveries.

@@ -108,6 +108,16 @@ func NewFiles(common common.Common) *Files {
 	selector := selector.NewPane(common, FileItemDelegate{&common})
 	f.selector = selector
 	f.code.ShowLineNumber = f.lineNumber
+	// "b" toggles blame and "l" toggles line numbers in the content view, so
+	// they must not also page up or scroll right in the viewport.
+	f.code.KeyMap.PageUp = key.NewBinding(
+		key.WithKeys("pgup"),
+		key.WithHelp("pgup", "page up"),
+	)
+	f.code.KeyMap.Right = key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "move right"),
+	)
 	s := common.NewSpinner()
 	f.spinner = s
 	return f
@@ -443,7 +453,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		ents, err := t.Entries()
+		ents, err := t.EntriesWithSizes()
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
