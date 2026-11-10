@@ -873,6 +873,43 @@ func TestDeliverSkipsRemovedOrUnsubscribedWebhook(t *testing.T) {
 	is.Equal(len(e.deliveries(t, unsubscribed.ID)), 0)
 }
 
+// countingLookupStore counts the subscriber lookups made through it.
+type countingLookupStore struct {
+	store.Store
+	listCalls, hookCalls *atomic.Int32
+}
+
+func (s countingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
+	s.listCalls.Add(1)
+	return s.Store.GetWebhooksByRepoIDWhereEvent(ctx, h, repoID, events)
+}
+
+func (s countingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID, id int64, event int) (models.Webhook, error) {
+	s.hookCalls.Add(1)
+	return s.Store.GetActiveWebhookByIDWhereEvent(ctx, h, repoID, id, event)
+}
+
+// Re-reading a webhook before its send reads only that webhook, not every
+// subscriber of the repository once per webhook.
+func TestDeliverRereadsEachWebhookAlone(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	var hooks []models.Webhook
+	for i := range 3 {
+		hooks = append(hooks, e.newWebhook(t, fmt.Sprintf("%s/?%d", srv.URL, i), "", ContentTypeJSON, EventPush))
+	}
+	cs := countingLookupStore{Store: e.ds, listCalls: new(atomic.Int32), hookCalls: new(atomic.Int32)}
+	ctx := store.WithContext(e.ctx, cs)
+
+	is.NoErr(Deliver(ctx, hooks, samplePayloadFor(e)))
+
+	is.Equal(rec.calls, 3)
+	is.Equal(cs.listCalls.Load(), int32(0))
+	is.Equal(cs.hookCalls.Load(), int32(3))
+}
+
 // useRereadTiming shortens the re-read timeout and retry delay for the test.
 // It swaps package variables, so tests using it must not call t.Parallel.
 func useRereadTiming(t *testing.T, timeout, delay time.Duration) {
@@ -891,12 +928,12 @@ type failingLookupStore struct {
 	calls    *atomic.Int32
 }
 
-func (s failingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
+func (s failingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID, id int64, event int) (models.Webhook, error) {
 	n := s.calls.Add(1)
 	if s.failures == 0 || n <= s.failures {
-		return nil, errors.New("lookup failed: dial tcp 10.0.0.5:5432")
+		return models.Webhook{}, errors.New("lookup failed: dial tcp 10.0.0.5:5432")
 	}
-	return s.Store.GetWebhooksByRepoIDWhereEvent(ctx, h, repoID, events)
+	return s.Store.GetActiveWebhookByIDWhereEvent(ctx, h, repoID, id, event)
 }
 
 // A webhook that cannot be re-read before its send, even after a retry, may
@@ -963,10 +1000,10 @@ type hangingLookupStore struct {
 	calls *atomic.Int32
 }
 
-func (s hangingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, _ db.Handler, _ int64, _ []int) ([]models.Webhook, error) {
+func (s hangingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, _ db.Handler, _, _ int64, _ int) (models.Webhook, error) {
 	s.calls.Add(1)
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return models.Webhook{}, ctx.Err()
 }
 
 // A background delivery runs with a context that is never cancelled, so the

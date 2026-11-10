@@ -1112,6 +1112,8 @@ Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is sy
 
 An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
+A mirror is read-only: its branches and tags follow the remote, so the next sync would undo any change made here. Pushes over SSH and HTTP, and `repo branch delete` / `repo tag delete`, are refused on a mirror, even for admins, until a repository admin turns mirroring off with `repo mirror <repo> false`. As with `repo private`, only repository admins can change the mirror and hidden flags (`repo mirror <repo> true|false`, `repo hidden <repo> true|false`); read-write collaborators get `unauthorized`.
+
 Imports and mirror syncs over http, https and `git://` connect to the remote
 directly. They ignore any proxy set for the server, whether through
 `http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
@@ -1157,14 +1159,14 @@ ssh -p 23231 localhost repo collab add soft-serve-plus beatrice read-only
 # Remove collaborator
 ssh -p 23231 localhost repo collab remove soft-serve-plus beatrice
 
-# List collaborators
+# List collaborators and their access levels
 ssh -p 23231 localhost repo collab list soft-serve-plus
 ```
 
 A `read-write` collaborator can push and edit the repo's branches, tags and
-metadata. Only the owner, server admins and `admin-access` collaborators can
-delete or rename the repo, change whether it is private, or manage its
-webhooks.
+metadata, and list its collaborators. Only the owner, server admins and
+`admin-access` collaborators can delete or rename the repo, change whether it
+is private, add or remove collaborators, or manage its webhooks.
 
 ### Repository Metadata
 

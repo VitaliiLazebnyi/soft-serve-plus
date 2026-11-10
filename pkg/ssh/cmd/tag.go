@@ -68,6 +68,9 @@ func tagDeleteCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if rr.IsMirror() {
+				return proto.ErrMirrorReadOnly
+			}
 
 			logger := log.FromContext(ctx)
 			r, err := rr.Open()
