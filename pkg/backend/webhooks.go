@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -23,10 +24,10 @@ import (
 
 // CreateWebhook creates a webhook for a repository.
 func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, events); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
 	}
 	events = dedupeEvents(events)
@@ -69,8 +70,8 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 
 // Webhook returns a webhook for a repository.
 func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	var wh webhook.Hook
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
@@ -102,8 +103,8 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 
 // ListWebhooks lists webhooks for a repository.
 func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	var webhooks []models.Webhook
 	webhookEvents := map[int64][]models.WebhookEvent{}
@@ -146,11 +147,11 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 // UpdateWebhook updates a webhook.
 func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
 		return err
 	}
 	updatedEvents = dedupeEvents(updatedEvents)
@@ -216,8 +217,8 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 
 // DeleteWebhook deletes a webhook for a repository.
 func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
@@ -262,8 +263,8 @@ func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID i
 // The webhook is resolved scoped to the repository, so a caller authorized
 // only for repo A cannot read deliveries of a webhook owned by repo B.
 func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	var deliveries []models.WebhookDelivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
@@ -300,8 +301,8 @@ func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 // a receiver that was turned off is not sent to by mistake. Activate the
 // webhook first to redeliver.
 func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	var delivery models.WebhookDelivery
 	var wh models.Webhook
@@ -379,7 +380,18 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		}
 	}
 
-	return webhook.RedeliverWebhook(ctx, wh, webhook.Event(delivery.Event), payload, guid)
+	return webhook.RedeliverWebhook(d.webhookContext(ctx), wh, webhook.Event(delivery.Event), payload, guid)
+}
+
+// webhookContext returns ctx carrying the backend's own config, database and
+// store. The webhook package reads them from the context: the store and
+// database to record the delivery, and the config for webhook.allowed_hosts.
+// Without them a caller's bare context would panic while recording and
+// ignore the allowlist the webhook's URL was validated against.
+func (d *Backend) webhookContext(ctx context.Context) context.Context {
+	ctx = config.WithContext(ctx, d.cfg)
+	ctx = db.WithContext(ctx, d.db)
+	return store.WithContext(ctx, d.store)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
@@ -416,8 +428,8 @@ func storedHeader(headers, name string) (string, bool) {
 // Deliveries expose the full request URL, headers, and body, so this scoping
 // is what keeps them from leaking across repositories.
 func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := d.db
+	datastore := d.store
 
 	var delivery webhook.Delivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
@@ -454,10 +466,10 @@ func (d *Backend) webhookAllowedHosts() ssrf.AllowedHosts {
 
 // validateWebhookInput checks a webhook's URL, content type and events before
 // anything is stored. The URL may reach the private and internal
-// destinations allowed permits.
-func validateWebhookInput(allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
+// destinations allowed permits. The URL's hostname lookup ends with ctx.
+func validateWebhookInput(ctx context.Context, allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
 	// Validate webhook URL to prevent SSRF attacks.
-	if err := webhook.ValidateWebhookURLAllowing(url, allowed); err != nil {
+	if err := webhook.ValidateWebhookURLAllowing(ctx, url, allowed); err != nil {
 		return err //nolint:wrapcheck
 	}
 	if contentType.String() == "" {

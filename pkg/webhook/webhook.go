@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -586,36 +587,37 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 // Each try is bounded by rereadTimeout, and a failed try is retried once after
 // rereadRetryDelay unless ctx is done, so a short database hiccup does not
 // leave the event undelivered.
+//
+// Only w itself is read, so delivering to n webhooks costs n single-row
+// queries rather than n reads of every subscriber.
 func currentHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
-	hooks, err := lookupSubscribers(ctx, w.RepoID, event)
+	cur, ok, err := lookupHook(ctx, w, event)
 	if err != nil && ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
 		case <-time.After(rereadRetryDelay):
-			hooks, err = lookupSubscribers(ctx, w.RepoID, event)
+			cur, ok, err = lookupHook(ctx, w, event)
 		}
 	}
 	if err != nil {
 		return models.Webhook{}, false, err
 	}
-	for _, h := range hooks {
-		if h.ID == w.ID {
-			return h, true, nil
-		}
-	}
-	return models.Webhook{}, false, nil
+	return cur, ok, nil
 }
 
-// lookupSubscribers reads the active webhooks of a repository that subscribe
-// to event, giving up after rereadTimeout.
-func lookupSubscribers(ctx context.Context, repoID int64, event Event) ([]models.Webhook, error) {
+// lookupHook reads w as stored now if it is still active and subscribes to
+// event, giving up after rereadTimeout. It returns false when it is not.
+func lookupHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
 	lctx, cancel := context.WithTimeout(ctx, rereadTimeout)
 	defer cancel()
-	hooks, err := store.FromContext(ctx).GetWebhooksByRepoIDWhereEvent(lctx, db.FromContext(ctx), repoID, []int{int(event)})
-	if err != nil {
-		return nil, db.WrapError(err)
+	cur, err := store.FromContext(ctx).GetActiveWebhookByIDWhereEvent(lctx, db.FromContext(ctx), w.RepoID, w.ID, int(event))
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.Webhook{}, false, nil
 	}
-	return hooks, nil
+	if err != nil {
+		return models.Webhook{}, false, db.WrapError(err)
+	}
+	return cur, true, nil
 }
 
 // SendEvent sends a webhook event to the repository's subscribers.

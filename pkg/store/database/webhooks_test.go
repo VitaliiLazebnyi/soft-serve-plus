@@ -140,6 +140,27 @@ func TestWebhookStoreEvents(t *testing.T) {
 	is.Equal(len(whs), 1)
 	is.Equal(whs[0].ID, hook)
 
+	// The single-webhook lookup applies the same filters: the webhook must
+	// belong to the repository, be active and subscribe to the event.
+	wh, err := s.GetActiveWebhookByIDWhereEvent(ctx, dbx, 7, hook, 5)
+	is.NoErr(err)
+	is.Equal(wh.ID, hook)
+	is.Equal(wh.URL, "https://93.184.216.34/a")
+	for name, args := range map[string]struct {
+		repoID, id int64
+		event      int
+	}{
+		"inactive":       {7, inactive, 4},
+		"not subscribed": {7, hook, 6},
+		"other repo":     {8, hook, 4},
+		"missing":        {7, 424242, 4},
+	} {
+		_, err = s.GetActiveWebhookByIDWhereEvent(ctx, dbx, args.repoID, args.id, args.event)
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("%s: GetActiveWebhookByIDWhereEvent error = %v, want sql.ErrNoRows", name, err)
+		}
+	}
+
 	whs, err = s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{99})
 	is.NoErr(err)
 	is.Equal(len(whs), 0)
@@ -243,6 +264,7 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["GetWebhooksByRepoID"] = s.GetWebhooksByRepoID(ctx, dbx, 7)
 	_, checks["LockAndCountWebhooks"] = s.LockAndCountWebhooks(ctx, dbx, 7)
 	_, checks["GetWebhooksByRepoIDWhereEvent"] = s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{4})
+	_, checks["GetActiveWebhookByIDWhereEvent"] = s.GetActiveWebhookByIDWhereEvent(ctx, dbx, 7, id, 4)
 	_, checks["CreateWebhook"] = s.CreateWebhook(ctx, dbx, 7, "u", "", 0, true)
 	checks["UpdateWebhookByID"] = s.UpdateWebhookByID(ctx, dbx, 7, id, "u", "", 0, true)
 	checks["DeleteWebhookForRepoByID"] = s.DeleteWebhookForRepoByID(ctx, dbx, 7, id)

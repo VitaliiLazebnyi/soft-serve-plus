@@ -25,6 +25,10 @@ type WebhookStore interface {
 	// GetWebhooksByRepoIDWhereEvent returns the active webhooks for a repository where event is in the events.
 	// Inactive webhooks are left out, since events are not sent to them.
 	GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error)
+	// GetActiveWebhookByIDWhereEvent returns the webhook id of a repository if
+	// it is active and subscribes to event. It returns sql.ErrNoRows when the
+	// webhook does not exist, is inactive, or does not subscribe to event.
+	GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error)
 	// CreateWebhook creates a webhook.
 	CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url string, secret string, contentType int, active bool) (int64, error)
 	// UpdateWebhookByID updates a webhook by its ID.

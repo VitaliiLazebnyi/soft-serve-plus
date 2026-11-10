@@ -318,10 +318,7 @@ func curlResolvePin(u *url.URL, addr netip.Addr) []GitConfigEntry {
 
 	port := u.Port()
 	if port == "" {
-		port = "80"
-		if u.Scheme == "https" {
-			port = "443"
-		}
+		port = defaultHTTPPort(u.Scheme)
 	}
 
 	return []GitConfigEntry{{
