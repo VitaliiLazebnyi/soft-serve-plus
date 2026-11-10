@@ -145,7 +145,9 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RefMsg:
 		r.ref = msg.Ref
 		r.gen = msg.gen
-		if !r.loaded {
+		// A load still running carries the previous generation, so the
+		// repository page drops its result: start it again for this one.
+		if !r.loaded || r.isLoading {
 			r.loaded = true
 			cmds = append(cmds, r.Init())
 		}

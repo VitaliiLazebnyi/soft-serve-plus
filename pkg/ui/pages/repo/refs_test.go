@@ -140,6 +140,46 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 }
 
+// A branch switch while the refs are still loading lists them again for the
+// new generation: the repository page drops the result of the running load,
+// which carries the previous one.
+func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "v1")
+
+	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	repo := openRepo{path: dir}
+	r.Update(RepoMsg(repo))
+	ref, ok := updateRefCmd(repo, 1)().(RefMsg)
+	if !ok {
+		t.Fatal("updateRefCmd did not return a RefMsg")
+	}
+	r.Update(ref)
+	first := r.updateItemsCmd()().(RefItemsMsg)
+
+	// The user switches branches before the first load returns.
+	switched := RefMsg{Ref: ref.Ref, gen: 2}
+	_, cmd := r.Update(switched)
+	if cmd == nil || !r.isLoading {
+		t.Fatal("a branch switch during the load did not list the refs again")
+	}
+	second := r.updateItemsCmd()().(RefItemsMsg)
+	if first.gen != 1 || second.gen != 2 {
+		t.Fatalf("loads carry generations %d and %d; want 1 and 2", first.gen, second.gen)
+	}
+	r.Update(second)
+	if r.isLoading {
+		t.Fatal("the refs are still loading after the second RefItemsMsg")
+	}
+
+	// Once loaded, a branch switch leaves them alone.
+	if r.Update(RefMsg{Ref: ref.Ref, gen: 3}); r.isLoading {
+		t.Fatal("a branch switch after the load listed the refs again")
+	}
+}
+
 // A detached HEAD, as in a checkout during a rebase or bisect, shows the
 // commit it points at rather than an error.
 func TestDefaultRefDetachedHEAD(t *testing.T) {
