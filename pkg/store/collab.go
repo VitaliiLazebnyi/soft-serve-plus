@@ -15,4 +15,5 @@ type CollaboratorStore interface {
 	RemoveCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) error
 	ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) ([]models.Collab, error)
 	ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo string) ([]models.User, error)
+	ListCollabsByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.Collab, error)
 }
