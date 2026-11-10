@@ -55,13 +55,13 @@ func TestRedactURLErrorKeepsChain(t *testing.T) {
 	is.Equal(in.URL, "https://hooks.slack.com/services/T000/B000/XXXX") // the original is not changed
 
 	// A parse error's own message can quote part of the URL.
-	_, perr := url.Parse("https://example.com:SECRETPORT/x")
+	_, perr := url.Parse("https://example.com:SECRETPORT/x") //nolint:staticcheck // invalid on purpose
 	is.True(perr != nil)
 	is.True(strings.Contains(perr.Error(), "SECRETPORT"))
 	rerr := redactURLError(perr)
 	is.True(!strings.Contains(rerr.Error(), "SECRETPORT"))
 	is.True(errors.Is(rerr, errInvalidURL))
-	_, perr = url.Parse("https://example.com/%zzSECRET")
+	_, perr = url.Parse("https://example.com/%zzSECRET") //nolint:staticcheck // invalid on purpose
 	is.True(perr != nil)
 	is.True(!strings.Contains(redactURLError(perr).Error(), "zz"))
 

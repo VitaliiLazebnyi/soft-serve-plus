@@ -36,7 +36,7 @@ func TestUnknownKeyErrorNamesFingerprint(t *testing.T) {
 		{"pubkey list", PubkeyCommand, []string{"list"}},
 		{"set-username", SetUsernameCommand, []string{"bob"}},
 		{"token list", TokenCommand, []string{"list"}},
-		{"jwt", JWTCommand, nil},
+		{"jwt", JWTCommand, []string{"repo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := tc.cmd()
