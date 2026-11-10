@@ -444,10 +444,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 
 		// The limit is checked after the insert, in the same transaction,
 		// which rolls the insert back if the creator is over it. As with the
-		// webhook cap (see CreateWebhook), inserting first makes concurrent
-		// SQLite writers wait for each other, and on Postgres the owner's
-		// row is locked before counting, so creates racing at the limit
-		// take turns.
+		// webhook cap (see CreateWebhook), on SQLite the transaction holds
+		// the write lock through the count: from BEGIN IMMEDIATE (see
+		// db.Open), or, when the data source asks for deferred
+		// transactions, from the insert, which is why it comes first. On
+		// Postgres the owner's row is locked before counting, so creates
+		// racing at the limit take turns.
 		if limited {
 			if err := d.store.LockUserRepos(ctx, tx, userID); err != nil {
 				return err

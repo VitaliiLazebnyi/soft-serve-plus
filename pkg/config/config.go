@@ -136,7 +136,8 @@ type GitConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
-	// MaxConnections is the maximum number of concurrent connections.
+	// MaxConnections is the maximum number of concurrent connections. It must
+	// be at least 1 while the daemon is enabled.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
 }
 
@@ -886,6 +887,10 @@ func (c *Config) Validate() error {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for the default", v.name, v.value)
 		}
+	}
+
+	if c.Git.Enabled && c.Git.MaxConnections < 1 {
+		return fmt.Errorf("git.max_connections: %d must be at least 1", c.Git.MaxConnections)
 	}
 
 	for _, v := range []struct {

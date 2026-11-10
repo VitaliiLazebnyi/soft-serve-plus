@@ -50,7 +50,7 @@ func TestSSHPublicKeyAuthDefaultsExcludeSHA1(t *testing.T) {
 		t.Fatalf("public key auth algorithms set by default: %v", cfg.SSH.PublicKeyAuthAlgorithms)
 	}
 	got := cfg.SSH.SSHPublicKeyAuthAlgorithms()
-	for _, a := range []string{ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA} {
+	for _, a := range []string{ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA} { //nolint:staticcheck // checks the deprecated algorithm stays off
 		if slices.Contains(got, a) {
 			t.Errorf("default public key auth algorithms include %q", a)
 		}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"charm.land/log/v2"
 
@@ -41,6 +42,8 @@ type Server struct {
 
 	logger *log.Logger
 	ctx    context.Context
+	// stopJobs cancels the context the cron jobs run with.
+	stopJobs context.CancelFunc
 
 	// mu guards listeners and closed. Start keeps the listeners it bound
 	// so that Shutdown and Close can close them even if they run before the
@@ -59,12 +62,19 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	be := backend.FromContext(ctx)
 	db := db.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("server")
+	// The cron jobs run with a context Shutdown and Close cancel, so a
+	// running mirror sync starts no further git command or lfs request and
+	// ends rather than outlive the server and the database. A git command
+	// already running is left to finish, since killing git leaves its ref
+	// locks behind (see jobs.runMirrorGit).
+	jobCtx, stopJobs := context.WithCancel(ctx)
 	srv := &Server{
-		Config:  cfg,
-		Backend: be,
-		DB:      db,
-		logger:  logger,
-		ctx:     ctx,
+		Config:   cfg,
+		Backend:  be,
+		DB:       db,
+		logger:   logger,
+		ctx:      ctx,
+		stopJobs: stopJobs,
 	}
 
 	// If a later step fails, close what was already built rather than leave
@@ -77,7 +87,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 
 	// Add cron jobs.
 	sched := cron.NewScheduler(ctx)
-	scheduleJobs(ctx, sched, logger)
+	scheduleJobs(ctx, jobCtx, sched, logger)
 
 	srv.Cron = sched
 
@@ -344,7 +354,12 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 		for _, j := range jobs.List() {
 			s.Cron.Remove(j.ID)
 		}
-		s.Cron.Stop()
+		// Cancel the running jobs and wait for them to end, so none uses
+		// the database once the caller closes it.
+		s.stopJobs()
+		if err := s.Cron.Shutdown(ctx); err != nil {
+			return fmt.Errorf("wait for cron jobs: %w", err)
+		}
 		return nil
 	})
 	// defer s.DB.Close() // nolint: errcheck
@@ -367,6 +382,10 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 // Tests replace it to see which server NewServer closed.
 var closeFailedServer = func(s *Server) { _ = s.Close() }
 
+// closeJobsTimeout bounds how long Close waits for the cancelled cron jobs
+// to end.
+const closeJobsTimeout = 10 * time.Second
+
 // Close closes the servers and cancels the imports in flight. It skips the ones that were never built, so it
 // also closes a server NewServer failed to finish.
 func (s *Server) Close() error {
@@ -388,9 +407,17 @@ func (s *Server) Close() error {
 	if s.StatsServer != nil {
 		errg.Go(s.StatsServer.Close)
 	}
+	if s.stopJobs != nil {
+		s.stopJobs()
+	}
 	if s.Cron != nil {
 		errg.Go(func() error {
-			s.Cron.Stop()
+			// The jobs were cancelled above, so they end shortly.
+			ctx, cancel := context.WithTimeout(context.Background(), closeJobsTimeout)
+			defer cancel()
+			if err := s.Cron.Shutdown(ctx); err != nil {
+				return fmt.Errorf("wait for cron jobs: %w", err)
+			}
 			return nil
 		})
 	}
@@ -462,8 +489,8 @@ func (l *serveListener) markServing() {
 
 // scheduleJobs adds every registered job to sched. A job whose spec is empty,
 // such as mirror-pull with an empty jobs.mirror_pull, is disabled and not
-// scheduled.
-func scheduleJobs(ctx context.Context, sched *cron.Scheduler, logger *log.Logger) {
+// scheduled. The jobs run with jobCtx, which the server cancels when it stops.
+func scheduleJobs(ctx, jobCtx context.Context, sched *cron.Scheduler, logger *log.Logger) {
 	for n, j := range jobs.List() {
 		j.ID = 0
 		spec := j.Runner.Spec(ctx)
@@ -472,7 +499,7 @@ func scheduleJobs(ctx context.Context, sched *cron.Scheduler, logger *log.Logger
 			continue
 		}
 
-		id, err := sched.AddFunc(n, spec, j.Runner.Func(ctx))
+		id, err := sched.AddFunc(n, spec, j.Runner.Func(jobCtx))
 		if err != nil {
 			logger.Warn("error adding cron job", "job", n, "err", err)
 		}

@@ -49,9 +49,13 @@ func NewWorkPool(ctx context.Context, workers int, opts ...WorkPoolOption) *Work
 	return wq
 }
 
-// Run starts the workers and waits for them to finish. It may be called again
-// to run work added since.
+// Run starts the workers and waits for them to finish. Once the pool's
+// context is done no more work starts, but Run still waits for the work
+// already running, which is expected to wind down on the same context. It
+// may be called again to run work added since.
 func (wq *WorkPool) Run() {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	wq.work.Range(func(key, value any) bool {
 		id := key.(string)
 		fn := value.(func())
@@ -60,7 +64,9 @@ func (wq *WorkPool) Run() {
 			return false
 		}
 
+		wg.Add(1)
 		go func(id string, fn func()) {
+			defer wg.Done()
 			defer wq.sem.Release(1)
 			defer wq.work.Delete(id)
 			// A panicking job must not take the whole process down with it.
@@ -74,14 +80,6 @@ func (wq *WorkPool) Run() {
 
 		return true
 	})
-
-	// Taking every slot waits for the last job; hand them back so a later
-	// Run can start work again.
-	if err := wq.sem.Acquire(wq.ctx, int64(wq.workers)); err != nil {
-		wq.logf("workpool: %v", err)
-		return
-	}
-	wq.sem.Release(int64(wq.workers))
 }
 
 // Add adds a new job to the pool.

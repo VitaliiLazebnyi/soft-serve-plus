@@ -53,10 +53,15 @@ cmp stdout repo1/big.txt
 soft repo blob repo1 README.md -r
 cmp stdout repo1/README.md
 
-# print blob of folder that does not exist
+# print blob of a file that does not exist
 ! soft repo blob repo1 folder/nope.txt
 ! stdout .
-stderr 'revision does not exist'
+stderr 'file not found'
+
+# print blob of a folder
+! soft repo blob repo1 folder
+! stdout .
+stderr 'file not found'
 
 # print blob of bad revision
 ! soft repo blob repo1 badrev README.md

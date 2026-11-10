@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -35,7 +36,9 @@ func (*settingsStore) GetAnonAccess(ctx context.Context, tx db.Handler) (access.
 // SetAllowKeylessAccess implements store.SettingStore.
 func (*settingsStore) SetAllowKeylessAccess(ctx context.Context, tx db.Handler, allow bool) error {
 	query := tx.Rebind(`UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE "key" = 'allow_keyless'`)
-	_, err := tx.ExecContext(ctx, query, allow)
+	// Stored as text, the way migration 1 seeds it, so the value reads the
+	// same on SQLite and Postgres.
+	_, err := tx.ExecContext(ctx, query, strconv.FormatBool(allow))
 	return db.WrapError(err)
 }
 
