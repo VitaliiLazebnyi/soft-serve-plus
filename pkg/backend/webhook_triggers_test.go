@@ -623,16 +623,19 @@ func TestRenameRepositoryKeepsChangeWhenEventBuildFails(t *testing.T) {
 	is.True(strings.Contains(e.logs.String(), "rename committed but webhook event skipped"))
 }
 
-// Building the delete event fails before anything is removed, so the delete
-// returns the error and the repository is kept.
-func TestDeleteRepositoryReturnsEventBuildFailure(t *testing.T) {
+// A delete whose event cannot be built still removes the repository; the
+// skipped event is logged.
+func TestDeleteRepositoryKeepsGoingWhenEventBuildFails(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
 
-	is.True(e.be.DeleteRepository(e.ctx, "repo") != nil)
+	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
 	_, err := e.be.Repository(e.ctx, "repo")
-	is.NoErr(err)
+	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	_, err = os.Stat(e.be.repoPath("repo"))
+	is.True(errors.Is(err, os.ErrNotExist))
+	is.True(strings.Contains(e.logs.String(), "deleting repository without webhook event"))
 }
 
 // corruptOwner removes the repository owner's row with foreign keys switched
@@ -650,8 +653,8 @@ func corruptOwner(t *testing.T, e whEnv) {
 	is.NoErr(err)
 }
 
-// Adding a collaborator whose event cannot be built still commits and returns
-// nil. Removing one fails before any change, so it returns the error.
+// Adding or removing a collaborator whose event cannot be built still commits
+// and returns nil; the skipped event is logged.
 func TestCollaboratorEventBuildFailure(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
@@ -662,9 +665,14 @@ func TestCollaboratorEventBuildFailure(t *testing.T) {
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
 	is.Equal(e.be.AccessLevelForUser(e.ctx, "repo", bob), access.ReadWriteAccess)
 
-	is.True(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil)
-	is.Equal(e.be.AccessLevelForUser(e.ctx, "repo", bob), access.ReadWriteAccess)
+	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
+	// The repository is public, so a non-collaborator gets read-only.
+	is.Equal(e.be.AccessLevelForUser(e.ctx, "repo", bob), access.ReadOnlyAccess)
 	is.True(strings.Contains(e.logs.String(), "collaborator added but webhook event skipped"))
+	is.True(strings.Contains(e.logs.String(), "collaborator removed but webhook event skipped"))
+
+	// A missing collaborator is still reported as such.
+	is.True(errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound))
 }
 
 // A failing collaborator table makes both operations return the error.
