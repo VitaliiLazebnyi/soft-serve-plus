@@ -60,15 +60,15 @@ func TestGetLFSLocksNonPositiveLimit(t *testing.T) {
 	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"))
 
 	for _, limit := range []int{0, -1} {
-		locks, err := s.GetLFSLocks(ctx, dbx, 7, 1, limit)
+		locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, limit)
 		is.NoErr(err)
 		is.Equal(len(locks), 0)
 	}
 
-	locks, err := s.GetLFSLocks(ctx, dbx, 7, 1, 1)
+	locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, 1)
 	is.NoErr(err)
 	is.Equal(len(locks), 1)
-	locks, err = s.GetLFSLocks(ctx, dbx, 7, 1, 10)
+	locks, err = s.GetLFSLocks(ctx, dbx, 7, 0, 10)
 	is.NoErr(err)
 	is.Equal(len(locks), 2)
 }
