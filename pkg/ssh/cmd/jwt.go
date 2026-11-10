@@ -21,14 +21,14 @@ func JWTCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			cfg := config.FromContext(ctx)
-			kp, err := jwk.NewPair(cfg)
-			if err != nil {
-				return err
-			}
-
 			user := proto.UserFromContext(ctx)
 			if user == nil {
 				return errUnknownKey(ctx)
+			}
+
+			kp, err := jwk.NewPair(cfg)
+			if err != nil {
+				return err
 			}
 
 			// Mint the spelling the HTTP router checks against.

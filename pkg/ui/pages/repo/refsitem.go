@@ -192,13 +192,10 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 			Render(sha)
 	}
 	fmt.Fprint(w, //nolint:errcheck
-		d.common.Zone.Mark(
-			i.ID(),
-			st.Base.Render(
-				lipgloss.JoinHorizontal(lipgloss.Top,
-					common.TruncateWidth(selector+ref+desc+hash,
-						m.Width()-horizontalFrameSize),
-				),
+		st.Base.Render(
+			lipgloss.JoinHorizontal(lipgloss.Top,
+				common.TruncateWidth(selector+ref+desc+hash,
+					m.Width()-horizontalFrameSize),
 			),
 		),
 	)
