@@ -107,7 +107,7 @@ func TestLFSLockWithoutRefname(t *testing.T) {
 		VALUES (7, 100, 'a.bin', NULL, CURRENT_TIMESTAMP);`)
 	is.NoErr(err)
 	s := &lfsStore{}
-	locks, err := s.GetLFSLocks(ctx, dbx, 7, 1, 10)
+	locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10)
 	is.NoErr(err)
 	is.Equal(len(locks), 1)
 	is.True(!locks[0].Refname.Valid)
