@@ -221,14 +221,14 @@ func (r *Refs) updateItemsCmd() tea.Cmd {
 		}
 		refs, err := rr.RefInfos(prefix)
 		if err != nil {
-			logger.Debugf("ui: error getting references: %v", err)
+			logger.Debugf("error getting references: %v", err)
 			return common.ErrorMsg(err)
 		}
 		its := make(RefItems, len(refs))
 		for i, ref := range refs {
 			its[i] = RefItem{ref}
 		}
-		sort.Sort(its)
+		sort.Stable(its)
 		items := make([]selector.IdentifiableItem, len(its))
 		for i, it := range its {
 			items[i] = it

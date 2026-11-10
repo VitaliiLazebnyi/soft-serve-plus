@@ -16,20 +16,14 @@ var _ store.RepositoryStore = (*repoStore)(nil)
 
 // CreateRepo implements store.RepositoryStore.
 func (*repoStore) CreateRepo(ctx context.Context, tx db.Handler, name string, userID int64, projectName string, description string, isPrivate bool, isHidden bool, isMirror bool, isAnonymous bool) error {
+	if userID <= 0 {
+		// repos.user_id is NOT NULL and references users.
+		return fmt.Errorf("create repo %q: invalid owner user ID %d", name, userID)
+	}
 	name = utils.SanitizeRepo(name)
-	values := []interface{}{
-		name, projectName, description, isPrivate, isMirror, isHidden, isAnonymous,
-	}
-	query := `INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
-	if userID > 0 {
-		query = `INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at, user_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?);`
-		values = append(values, userID)
-	}
-
-	query = tx.Rebind(query)
-	_, err := tx.ExecContext(ctx, query, values...)
+	query := tx.Rebind(`INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at, user_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?);`)
+	_, err := tx.ExecContext(ctx, query, name, projectName, description, isPrivate, isMirror, isHidden, isAnonymous, userID)
 	return db.WrapError(err)
 }
 
@@ -85,7 +79,7 @@ func (*repoStore) LockUserRepos(ctx context.Context, h db.Handler, userID int64)
 	case "postgres":
 		_, err := h.ExecContext(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE;`, userID)
 		return db.WrapError(err)
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		return nil
 	default:
 		return fmt.Errorf("lock user repos: unsupported database driver %q", driver)
@@ -120,7 +114,7 @@ func (*repoStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name
 	switch driver := d.DriverName(); driver {
 	case "postgres":
 		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		query = "SELECT * FROM repos WHERE name = ?;"
 	default:
 		return models.Repo{}, fmt.Errorf("get repo for update: unsupported database driver %q", driver)
@@ -160,7 +154,7 @@ func (*repoStore) GetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name
 // SetRepoIsMirrorByName implements store.RepositoryStore.
 func (*repoStore) SetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name string, isMirror bool) error {
 	name = utils.SanitizeRepo(name)
-	query := tx.Rebind("UPDATE repos SET mirror = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET mirror = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, isMirror, name)
 	return db.WrapError(err)
 }
@@ -186,7 +180,7 @@ func (*repoStore) GetRepoProjectNameByName(ctx context.Context, tx db.Handler, n
 // SetRepoDescriptionByName implements store.RepositoryStore.
 func (*repoStore) SetRepoDescriptionByName(ctx context.Context, tx db.Handler, name string, description string) error {
 	name = utils.SanitizeRepo(name)
-	query := tx.Rebind("UPDATE repos SET description = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, description, name)
 	return db.WrapError(err)
 }
@@ -194,7 +188,7 @@ func (*repoStore) SetRepoDescriptionByName(ctx context.Context, tx db.Handler, n
 // SetRepoIsHiddenByName implements store.RepositoryStore.
 func (*repoStore) SetRepoIsHiddenByName(ctx context.Context, tx db.Handler, name string, isHidden bool) error {
 	name = utils.SanitizeRepo(name)
-	query := tx.Rebind("UPDATE repos SET hidden = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, isHidden, name)
 	return db.WrapError(err)
 }
@@ -202,7 +196,7 @@ func (*repoStore) SetRepoIsHiddenByName(ctx context.Context, tx db.Handler, name
 // SetRepoIsPrivateByName implements store.RepositoryStore.
 func (*repoStore) SetRepoIsPrivateByName(ctx context.Context, tx db.Handler, name string, isPrivate bool) error {
 	name = utils.SanitizeRepo(name)
-	query := tx.Rebind("UPDATE repos SET private = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, isPrivate, name)
 	return db.WrapError(err)
 }
@@ -211,7 +205,7 @@ func (*repoStore) SetRepoIsPrivateByName(ctx context.Context, tx db.Handler, nam
 func (*repoStore) SetRepoNameByName(ctx context.Context, tx db.Handler, name string, newName string) error {
 	name = utils.SanitizeRepo(name)
 	newName = utils.SanitizeRepo(newName)
-	query := tx.Rebind("UPDATE repos SET name = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	res, err := tx.ExecContext(ctx, query, newName, name)
 	if err != nil {
 		return db.WrapError(err)
@@ -231,7 +225,7 @@ func (*repoStore) SetRepoNameByName(ctx context.Context, tx db.Handler, name str
 // SetRepoProjectNameByName implements store.RepositoryStore.
 func (*repoStore) SetRepoProjectNameByName(ctx context.Context, tx db.Handler, name string, projectName string) error {
 	name = utils.SanitizeRepo(name)
-	query := tx.Rebind("UPDATE repos SET project_name = ? WHERE name = ?;")
+	query := tx.Rebind("UPDATE repos SET project_name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, projectName, name)
 	return db.WrapError(err)
 }
