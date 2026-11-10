@@ -93,7 +93,7 @@ func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
 	s := NewScheduler(context.TODO())
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	if _, err := s.AddFunc("@every 1s", func() {
+	if _, err := s.AddFunc("slow", "@every 1s", func() {
 		select {
 		case started <- struct{}{}:
 		default:
