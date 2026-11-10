@@ -229,12 +229,13 @@ func TestFilesNonASCIIName(t *testing.T) {
 	ctx := config.WithContext(t.Context(), config.DefaultConfig())
 	f := NewFiles(common.NewCommon(ctx, 80, 40))
 	f.Update(RepoMsg(openRepo{path: dir}))
-	f.Update(RefMsg(ref))
+	f.Update(RefMsg{Ref: ref})
 
 	// Walk into the directory, then onto the file, like selecting them.
 	selectOnly := func(want string) FileItem {
 		t.Helper()
-		items, ok := f.updateFilesCmd()().(FileItemsMsg)
+		msg, ok := f.updateFilesCmd()().(FileItemsMsg)
+		items := msg.items
 		if !ok || len(items) != 1 {
 			t.Fatalf("files at %q = %v, want one item", f.path, items)
 		}
