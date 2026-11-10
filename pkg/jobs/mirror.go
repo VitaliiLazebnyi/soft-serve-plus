@@ -16,10 +16,8 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/sync"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
@@ -127,13 +125,10 @@ func syncMirror(ctx context.Context, path string, names []string, env []string) 
 	return errors.Join(errs...)
 }
 
-// Spec derives the spec used for pull mirrors and implements Runner.
+// Spec derives the spec used for pull mirrors and implements Runner. An
+// empty jobs.mirror_pull disables mirror syncing.
 func (m mirrorPull) Spec(ctx context.Context) string {
-	cfg := config.FromContext(ctx)
-	if cfg.Jobs.MirrorPull != "" {
-		return cfg.Jobs.MirrorPull
-	}
-	return "@every 10m"
+	return config.FromContext(ctx).Jobs.MirrorPull
 }
 
 // Func runs the (pull) mirror job task and implements Runner.
@@ -141,8 +136,6 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("jobs.mirror")
 	b := backend.FromContext(ctx)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
 	return func() {
 		// The same guards that protect imports protect syncs, and the same
 		// too-old git ignores them.
@@ -243,7 +236,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 							return
 						}
 
-						if err := backend.SyncRepoLFSObjects(ctx, repo, dbx, datastore, client); err != nil {
+						if err := b.SyncRepoLFSObjects(ctx, repo, client); err != nil {
 							if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
 								// The next sync tries them again.
 								logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)

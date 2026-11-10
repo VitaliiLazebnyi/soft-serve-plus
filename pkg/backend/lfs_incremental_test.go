@@ -65,7 +65,7 @@ func recordLFSScans(t *testing.T) func() []lfsScan {
 // sync runs SyncRepoLFSObjects with the test's client.
 func (lt *lfsTest) sync() error {
 	lt.client.requested = nil
-	return SyncRepoLFSObjects(lt.ctx, lt.repo, lt.be.db, lt.be.store, lt.client)
+	return lt.be.SyncRepoLFSObjects(lt.ctx, lt.repo, lt.client)
 }
 
 // addObject commits a pointer to a new LFS object, which the client serves,

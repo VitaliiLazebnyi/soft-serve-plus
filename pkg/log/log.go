@@ -2,6 +2,7 @@ package log
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +43,15 @@ func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 
 	var f *os.File
 	if cfg.Log.Path != "" {
+		// A relative log path resolves into the data directory, which may
+		// not exist yet on a first run (the logger is created before
+		// anything else touches the data path). Create the parent
+		// directory private (0o700), the same mode the data path is
+		// created with, so a first run does not leave the data directory
+		// readable by other users.
+		if err := os.MkdirAll(filepath.Dir(cfg.Log.Path), 0o700); err != nil {
+			return logger, nil, err
+		}
 		var err error
 		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
 		if err != nil {

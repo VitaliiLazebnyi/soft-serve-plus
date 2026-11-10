@@ -25,57 +25,23 @@ func collabCommand() *cobra.Command {
 	return cmd
 }
 
-// checkCollabGrant reports whether the caller may set a collaborator's access
-// level on the gated repository to level.
+// checkCollabManage reports whether the caller may add or remove
+// collaborators on the gated repository. The command gate already requires
+// admin access to the repository; this additionally refuses an anonymous
+// caller, who only reaches admin access through anon-access, since managing
+// collaborators is an account-level decision.
 //
-// Server admins may grant anything. Everyone else is bounded by their own
-// access level on the repository, so a read-write collaborator cannot mint an
-// admin-access collaborator and escalate beyond their own permissions.
-func checkCollabGrant(ctx context.Context, level access.AccessLevel) error {
+// Collaborator management needs admin access rather than write access: a
+// read-write collaborator could otherwise remove or demote peers, or, with
+// anon-access set to no-access, lock any registered user out of a public
+// repository by adding them as a no-access collaborator.
+func checkCollabManage(ctx context.Context) error {
 	if isServerAdmin(ctx) {
 		return nil
 	}
 
 	if proto.UserFromContext(ctx) == nil {
 		return proto.ErrUnauthorized
-	}
-
-	if _, caller, _ := repoFromContext(ctx); level > caller {
-		return proto.ErrExceedsAccessLevel
-	}
-
-	return nil
-}
-
-// checkCollabDemote reports whether the caller may remove or overwrite an
-// existing collaborator on a repository.
-//
-// Removal is a privileged change in the same way granting is: without this,
-// a read-write collaborator could remove an admin-access collaborator and
-// then re-add them at a lower level, demoting someone above them.
-func checkCollabDemote(ctx context.Context, repo string, username string) error {
-	if isServerAdmin(ctx) {
-		return nil
-	}
-
-	if proto.UserFromContext(ctx) == nil {
-		return proto.ErrUnauthorized
-	}
-
-	be := backend.FromContext(ctx)
-	current, isCollab, err := be.IsCollaborator(ctx, repo, username)
-	if err != nil {
-		// IsCollaborator reports "not a collaborator" as isCollab false, so
-		// an error here is real and must fail closed.
-		return err
-	}
-
-	if !isCollab {
-		return nil
-	}
-
-	if _, caller, _ := repoFromContext(ctx); current > caller {
-		return proto.ErrExceedsAccessLevel
 	}
 
 	return nil
@@ -85,9 +51,9 @@ func collabAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "add REPOSITORY USERNAME [LEVEL]",
 		Short:             "Add a collaborator to a repo",
-		Long:              "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write.",
+		Long:              "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
 		Args:              cobra.RangeArgs(2, 3),
-		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
+		PersistentPreRunE: requireRepo(access.AdminAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
@@ -101,11 +67,7 @@ func collabAddCommand() *cobra.Command {
 				}
 			}
 
-			if err := checkCollabGrant(ctx, level); err != nil {
-				return err
-			}
-
-			if err := checkCollabDemote(ctx, repo, username); err != nil {
+			if err := checkCollabManage(ctx); err != nil {
 				return err
 			}
 
@@ -121,14 +83,14 @@ func collabRemoveCommand() *cobra.Command {
 		Use:               "remove REPOSITORY USERNAME",
 		Args:              cobra.ExactArgs(2),
 		Short:             "Remove a collaborator from a repo",
-		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
+		PersistentPreRunE: requireRepo(access.AdminAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			repo := repoArg(args)
 			username := args[1]
 
-			if err := checkCollabDemote(ctx, repo, username); err != nil {
+			if err := checkCollabManage(ctx); err != nil {
 				return err
 			}
 
@@ -142,7 +104,7 @@ func collabRemoveCommand() *cobra.Command {
 func collabListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "list REPOSITORY",
-		Short:             "List collaborators for a repo",
+		Short:             "List collaborators and their access levels for a repo",
 		Args:              cobra.ExactArgs(1),
 		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -155,7 +117,7 @@ func collabListCommand() *cobra.Command {
 			}
 
 			for _, c := range collabs {
-				cmd.Println(c)
+				cmd.Printf("%s\t%s\n", c.Username, c.AccessLevel)
 			}
 
 			return nil
