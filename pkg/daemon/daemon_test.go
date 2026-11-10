@@ -123,7 +123,10 @@ func TestBadRequests(t *testing.T) {
 		raw  []byte
 		want error
 	}{
-		{"invalid pkt-len", []byte("zzzzgit-upload-pack /repo.git\x00"), git.ErrInvalidRequest},
+		// Only the bad length prefix is sent: bytes the daemon never reads
+		// would make Windows reset the connection when the daemon closes it,
+		// discarding the reply before the client reads it.
+		{"invalid pkt-len", []byte("zzzz"), git.ErrInvalidRequest},
 		{"client error packet", pkt("ERR boom\n"), git.ErrInvalidRequest},
 		{"unknown service", pkt("git-frobnicate /repo.git\x00"), git.ErrInvalidRequest},
 		{"push", pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported},
