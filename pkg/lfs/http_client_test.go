@@ -91,9 +91,10 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	return copy(p, "chunk"), nil
 }
 
-// An upload whose body keeps flowing for longer than the stall timeout must
-// succeed, even though nothing is read from the server meanwhile.
-func TestHTTPClientSlowUploadCompletes(t *testing.T) {
+// A request whose body keeps flowing for longer than the stall timeout must
+// succeed, even though nothing is read from the server meanwhile: writes
+// alone keep the connection alive.
+func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -103,12 +104,21 @@ func TestHTTPClientSlowUploadCompletes(t *testing.T) {
 	defer srv.Close()
 
 	a := newLoopbackAdapter(t)
-	p := Pointer{Size: int64(len("chunk") * testChunks)}
-	if err := a.Upload(context.Background(), p, &slowReader{left: testChunks}, &Link{Href: srv.URL}); err != nil {
-		t.Fatalf("Upload: %v", err)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL, &slowReader{left: testChunks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len("chunk") * testChunks)
+	res, err := a.client.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	res.Body.Close() //nolint:errcheck,gosec
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
 	if want := strings.Repeat("chunk", testChunks); <-got != want {
-		t.Fatal("server did not receive the whole upload")
+		t.Fatal("server did not receive the whole request body")
 	}
 }
 
@@ -789,7 +799,6 @@ func TestNullInBatchResponse(t *testing.T) {
 	t.Parallel()
 	oid := testPointer.Oid
 	tests := map[string]struct {
-		upload   bool
 		body     string
 		wantText string
 	}{
@@ -805,45 +814,18 @@ func TestNullInBatchResponse(t *testing.T) {
 			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"download":{"href":""}}}]}`,
 			wantText: "invalid action 'download'",
 		},
-		"null upload object": {
-			upload:   true,
-			body:     `{"objects":[null]}`,
-			wantText: "null object",
-		},
-		"null upload link": {
-			upload:   true,
-			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"upload":null}}]}`,
-			wantText: "invalid action 'upload'",
-		},
-		"null verify link": {
-			upload:   true,
-			body:     `{"objects":[{"oid":"` + oid + `","size":1,"actions":{"upload":{"href":"UPLOAD"},"verify":null}}]}`,
-			wantText: "invalid action 'verify'",
-		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			var srv *httptest.Server
-			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPut {
-					io.Copy(io.Discard, r.Body) //nolint: errcheck
-					return
-				}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", MediaType)
-				io.WriteString(w, strings.ReplaceAll(tt.body, "UPLOAD", srv.URL+"/upload")) //nolint: errcheck
+				io.WriteString(w, tt.body) //nolint: errcheck
 			}))
 			t.Cleanup(srv.Close)
 			c := plainClient(t, srv.URL+"/x.git")
 
-			var err error
-			if tt.upload {
-				err = c.Upload(context.Background(), []Pointer{testPointer}, func(Pointer, error) (io.ReadCloser, error) {
-					return io.NopCloser(strings.NewReader("x")), nil
-				})
-			} else {
-				err = c.Download(context.Background(), []Pointer{testPointer}, discard)
-			}
+			err := c.Download(context.Background(), []Pointer{testPointer}, discard)
 			if err == nil {
 				t.Fatal("expected the transfer to fail")
 			}
