@@ -215,10 +215,13 @@ func gitServiceError(logger *log.Logger, service git.Service, repo string, err e
 // pointed at a pushed branch as after a push that finished, so it does not
 // name a branch that does not exist.
 //
+// orig identifies the directory the push created, taken right after
+// creating it (see dirIdentity); nil if it could not be identified.
+//
 // The push may have failed because the session context was cancelled, so ctx
 // must not be the cancelled one.
-func deleteFailedPushRepo(ctx context.Context, be *backend.Backend, logger *log.Logger, name, dir string) {
-	removeFailedPushRepo(ctx, logger, name, dir, failedPushRepoOps{
+func deleteFailedPushRepo(ctx context.Context, be *backend.Backend, logger *log.Logger, name, dir string, orig os.FileInfo) {
+	removeFailedPushRepo(ctx, logger, name, dir, orig, failedPushRepoOps{
 		del:       be.DeleteRepository,
 		removeDir: be.RemoveRepositoryDir,
 		rowExists: func(ctx context.Context, name string) (bool, error) {
@@ -269,6 +272,12 @@ type retryPolicy struct {
 // directory, and a failure to remove the directory leaves the directory
 // behind.
 //
+// orig identifies the directory the push created. It is taken when the
+// repository is created, not once the push has failed: by then another
+// session may have deleted the repository, while the push still ran, and
+// pushed a new one with the name, whose directory would pass for this
+// push's own. A nil orig matches no directory, so nothing is deleted.
+//
 // The refs are checked again before each attempt as long as the repository's
 // row exists, since the surviving receive-pack could still write them, and
 // only while the directory is still the one this push created. Once
@@ -277,33 +286,32 @@ type retryPolicy struct {
 // listed and the directory is still the one this push created: another
 // session may have removed the leftover and created a new repository with
 // the name, which must be left alone.
-func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir string, ops failedPushRepoOps, policy retryPolicy) {
+func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir string, orig os.FileInfo, ops failedPushRepoOps, policy retryPolicy) {
+	if orig == nil {
+		logger.Error("directory of repo created by a failed push was not identified, keeping it", "repo", name)
+		return
+	}
 	var waited time.Duration
 	wait := policy.first
 	rowGone := false
-	// orig identifies the directory this push created, so a directory
-	// re-created at the same path is not removed as its leftover.
-	orig, _ := dirIdentity(dir)
-	for attempt := 0; ; attempt++ {
+	for {
 		var err error
 		if !rowGone {
-			// A delete that failed may have failed with no row left, as
-			// when DeleteRepository could not remove the directory as an
-			// orphan, so the directory is checked to be the one this push
-			// created before its refs are checked and it is deleted again:
-			// another session may have removed it and created a new
-			// repository with the name.
-			if attempt > 0 {
-				switch same, serr := sameDir(orig, dir); {
-				case errors.Is(serr, fs.ErrNotExist):
-					return
-				case serr != nil:
-					logger.Error("failed to identify directory of repo created by a failed push, keeping it", "err", serr, "repo", name)
-					return
-				case !same:
-					logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
-					return
-				}
+			// The directory is checked to be the one this push created
+			// before its refs are checked and it is deleted: another
+			// session may have deleted the repository and created a new
+			// one with the name, during the push or, when a delete
+			// failed with no row left, as DeleteRepository can when it
+			// cannot remove the directory as an orphan, between attempts.
+			switch same, serr := sameDir(orig, dir); {
+			case errors.Is(serr, fs.ErrNotExist):
+				return
+			case serr != nil:
+				logger.Error("failed to identify directory of repo created by a failed push, keeping it", "err", serr, "repo", name)
+				return
+			case !same:
+				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
+				return
 			}
 			// --git-dir keeps git from looking for a repository in the
 			// parent directories if this one is not one.
@@ -369,8 +377,7 @@ func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir str
 }
 
 // sameDir reports whether the directory at dir is the one orig identifies.
-// A nil orig, a directory that could not be identified at the start, matches
-// nothing.
+// A nil orig matches nothing.
 func sameDir(orig os.FileInfo, dir string) (bool, error) {
 	fi, err := dirIdentity(dir)
 	if err != nil {
@@ -498,6 +505,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		// A missing name is created for a caller who may write; anything
 		// else goes through the same check as every other service.
 		created := repo == nil && accessLevel >= access.ReadWriteAccess
+		var createdDir os.FileInfo
 		if created {
 			private, err := be.DefaultPrivate(ctx, user)
 			if errors.Is(err, proto.ErrAnonymousPrivate) {
@@ -513,6 +521,12 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			createRepoCounter.WithLabelValues(name).Inc()
+			// Identify the new directory now, before the push runs, so a
+			// failed push removes only the repository it created.
+			var ierr error
+			if createdDir, ierr = dirIdentity(repoPath); ierr != nil {
+				logger.Error("failed to identify directory of repo created by push", "err", ierr, "repo", name)
+			}
 		} else if repo == nil {
 			return gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess)
 		}
@@ -526,7 +540,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 		if err := service.Handler(ctx, scmd); err != nil {
 			if created {
-				deleteFailedPushRepo(context.WithoutCancel(ctx), be, logger, name, repoPath)
+				deleteFailedPushRepo(context.WithoutCancel(ctx), be, logger, name, repoPath, createdDir)
 			}
 
 			return gitServiceError(logger, service, name, err)
