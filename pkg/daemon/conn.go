@@ -7,18 +7,32 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/pkg/git"
 )
 
 // connections is a net.Conn pool that is safe for concurrent use.
 type connections struct {
-	m  map[net.Conn]struct{}
-	mu sync.Mutex
+	m      map[net.Conn]struct{}
+	mu     sync.Mutex
+	closed bool // set by CloseAll; no connection is added after it
 }
 
-func (m *connections) Add(c net.Conn) {
+// Add adds c to the pool unless the pool already holds limit connections,
+// which returns git.ErrMaxConnections, or CloseAll has run, which returns
+// ErrServerClosed. Checking and adding under one lock keeps a burst of
+// connections from all passing the check before any of them is counted.
+func (m *connections) Add(c net.Conn, limit int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return ErrServerClosed
+	}
+	if len(m.m) >= limit {
+		return git.ErrMaxConnections
+	}
 	m.m[c] = struct{}{}
+	return nil
 }
 
 func (m *connections) Close(c net.Conn) error {
@@ -38,6 +52,7 @@ func (m *connections) Size() int {
 func (m *connections) CloseAll() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	var err error
 	for c := range m.m {
 		err = errors.Join(err, c.Close())

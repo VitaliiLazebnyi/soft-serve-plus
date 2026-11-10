@@ -336,7 +336,8 @@ git:
   # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
 
-  # The maximum number of concurrent connections.
+  # The maximum number of concurrent connections; at least 1. Connections
+  # beyond it are refused with "too many connections".
   max_connections: 32
 
 # The HTTP server configuration.
@@ -543,7 +544,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_SSH_KEY_PATH`: SSH host key-pair path
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
-- `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The number of simultaneous connections to git daemon
+- `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The maximum number of simultaneous connections to git daemon (at least 1)
 - `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS`: Seconds a git or LFS request over HTTP may take in all (default `0`, no limit) or go without reading the request body or writing the response (default `60`), and how many such requests are served at once (default `64`; more get 503). `0` means no limit
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))

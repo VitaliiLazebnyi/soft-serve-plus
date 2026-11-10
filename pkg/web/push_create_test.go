@@ -256,6 +256,33 @@ func TestHasRefsFailsSafe(t *testing.T) {
 	is.True(!hasRefs(dir))
 }
 
+// Once the list is closed, as the HTTP server does when it stops, no
+// repository created by a push is removed: the timers already armed are
+// stopped and none is armed, so no removal runs against a backend that is
+// being closed.
+func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	pending := newPushCreates()
+	f.handler = newRouter(f.ctx, pending)
+	auth := "Token " + f.token
+	advertise := func(name string) {
+		t.Helper()
+		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+		is.True(f.exists(name))
+	}
+	old := pushCreateTimeout
+	pushCreateTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { pushCreateTimeout = old })
+
+	advertise("armed")
+	is.NoErr(pending.close(t.Context()))
+	advertise("late")
+	time.Sleep(3 * pushCreateTimeout)
+	is.True(f.exists("armed"))
+	is.True(f.exists("late"))
+}
+
 // A push to a name that is not a valid repository name is refused with
 // 400 and the reason, rather than failing as a server error.
 func TestHTTPPushCreateInvalidName(t *testing.T) {

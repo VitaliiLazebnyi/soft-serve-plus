@@ -221,6 +221,55 @@ func TestRemoveFailedPushRepoRetries(t *testing.T) {
 	is.True(!dirExists(dir))
 }
 
+// Only the waits count toward the retry policy's total, so attempts that
+// take longer than the whole budget, as starting git for the refs check can
+// on Windows, still get every attempt the waits allow: here waits of 1ms and
+// 2ms fit within 3ms, for three attempts.
+func TestRemoveFailedPushRepoSlowAttemptsKeepRetries(t *testing.T) {
+	is := is.New(t)
+	dir := emptyBareRepo(t)
+	policy := retryPolicy{first: time.Millisecond, total: 3 * time.Millisecond}
+	calls := 0
+	del := func(context.Context, string) error {
+		calls++
+		time.Sleep(10 * policy.total) // an attempt slower than the budget
+		return errors.New("directory in use")
+	}
+
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), policy)
+	is.Equal(calls, 3)
+	is.True(dirExists(dir))
+}
+
+// A delete that failed with no row left, as when DeleteRepository could not
+// remove the directory as an orphan, is not tried again on a directory
+// re-created at its path: another session may have removed it and created a
+// new repository with the name, which has no refs yet.
+func TestRemoveFailedPushRepoLeavesRecreatedDirectoryBeforeRowGone(t *testing.T) {
+	is := is.New(t)
+	dir := emptyBareRepo(t)
+	calls := 0
+	del := func(context.Context, string) error {
+		calls++
+		if calls > 1 {
+			// Deleting again would delete the new repository.
+			return os.RemoveAll(dir)
+		}
+		// Another session replaces the directory with a new repository.
+		// The old one is moved away rather than removed, so the new
+		// directory cannot reuse its inode.
+		is.NoErr(os.Rename(dir, dir+".old"))
+		if out, err := exec.CommandContext(t.Context(), "git", "init", "--bare", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v: %s", err, out)
+		}
+		return errors.New("directory in use")
+	}
+
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	is.Equal(calls, 1)
+	is.True(dirExists(dir))
+}
+
 // A delete that removes the row but leaves the directory behind is followed
 // by removing the leftover directory, without checking refs on what is left
 // of it and without deleting the repository again.

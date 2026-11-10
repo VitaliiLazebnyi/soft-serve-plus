@@ -51,7 +51,7 @@ func TestStoreObjectRenameOntoFIFO(t *testing.T) {
 		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
 			f.Close() //nolint:errcheck
 		}
-		<-done
+		<-done //nolint:errcheck // the test fails below either way
 		t.Fatal("StoreObject blocked on a FIFO at the object path")
 	}
 }

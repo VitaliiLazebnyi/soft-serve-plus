@@ -24,11 +24,19 @@ linters:
     # - unparam
     - whitespace
     # - wrapcheck
-  disable:
-    - errcheck
-    - ineffassign
-    - unused
-    - staticcheck
+  settings:
+    staticcheck:
+      checks:
+        # golangci-lint's defaults.
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # Naming the embedded field is often clearer than relying on promotion.
+        - -QF1008
   exclusions:
     generated: lax
     presets:

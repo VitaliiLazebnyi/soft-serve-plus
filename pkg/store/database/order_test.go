@@ -85,11 +85,7 @@ func TestUserVisibleListsAreOrdered(t *testing.T) {
 	is.NoErr(ls.UpdateLFSObjectSize(ctx, dbx, 7, "oid1", 2))
 	objs, err := ls.GetLFSObjects(ctx, dbx, 7)
 	is.NoErr(err)
-	byName, err := ls.GetLFSObjectsByName(ctx, dbx, "repo7")
-	is.NoErr(err)
-	for _, list := range [][]string{lfsOids(objs), lfsOids(byName)} {
-		is.Equal(list, []string{"oid1", "oid2", "oid3"})
-	}
+	is.Equal(lfsOids(objs), []string{"oid1", "oid2", "oid3"})
 }
 
 func repoNames(repos []models.Repo) []string {

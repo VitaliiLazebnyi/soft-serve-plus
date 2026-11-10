@@ -1,9 +1,7 @@
 package lfs
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,55 +22,18 @@ func (a *BasicTransferAdapter) Name() string {
 
 // Download reads the download location and downloads the data
 func (a *BasicTransferAdapter) Download(ctx context.Context, _ Pointer, l *Link) (io.ReadCloser, error) {
-	resp, err := a.performRequest(ctx, "GET", l, nil, nil)
+	resp, err := a.performRequest(ctx, http.MethodGet, l)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Body, nil
 }
 
-// Upload sends the content to the LFS server
-func (a *BasicTransferAdapter) Upload(ctx context.Context, p Pointer, r io.Reader, l *Link) error {
-	res, err := a.performRequest(ctx, "PUT", l, r, func(req *http.Request) {
-		if len(req.Header.Get("Content-Type")) == 0 {
-			req.Header.Set("Content-Type", "application/octet-stream")
-		}
-
-		if req.Header.Get("Transfer-Encoding") == "chunked" {
-			req.TransferEncoding = []string{"chunked"}
-		}
-
-		req.ContentLength = p.Size
-	})
-	if err != nil {
-		return err
-	}
-	return res.Body.Close()
-}
-
-// Verify calls the verify handler on the LFS server
-func (a *BasicTransferAdapter) Verify(ctx context.Context, p Pointer, l *Link) error {
-	logger := log.FromContext(ctx).WithPrefix("lfs")
-	b, err := json.Marshal(p)
-	if err != nil {
-		logger.Errorf("Error encoding json: %v", err)
-		return err
-	}
-
-	res, err := a.performRequest(ctx, "POST", l, bytes.NewReader(b), func(req *http.Request) {
-		req.Header.Set("Content-Type", MediaType)
-	})
-	if err != nil {
-		return err
-	}
-	return res.Body.Close()
-}
-
-func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string, l *Link, body io.Reader, callback func(*http.Request)) (*http.Response, error) {
+func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string, l *Link) (*http.Response, error) {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	logger.Debugf("Calling: %s %s", method, utils.RedactURL(l.Href))
 
-	req, err := http.NewRequestWithContext(ctx, method, l.Href, body)
+	req, err := http.NewRequestWithContext(ctx, method, l.Href, nil)
 	if err != nil {
 		err = redactURLError(err)
 		logger.Errorf("Error creating request: %v", err)
@@ -82,10 +43,6 @@ func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string
 		req.Header.Set(key, value)
 	}
 	req.Header.Set("Accept", MediaType)
-
-	if callback != nil {
-		callback(req)
-	}
 
 	res, err := a.client.Do(req)
 	if err != nil {

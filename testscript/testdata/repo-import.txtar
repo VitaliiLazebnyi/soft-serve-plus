@@ -16,8 +16,10 @@ git -C src add -A
 git -C src commit -m 'first'
 git -C src push origin HEAD
 
-# import private
+# import private; like create, it prints the clone URL
 soft repo import --private repo1 ssh://git@127.0.0.1:$SSH_PORT/src
+stdout 'ssh://localhost:'$SSH_PORT'/repo1.git'
+stderr 'Imported repository repo1'
 soft repo private repo1
 stdout 'true'
 

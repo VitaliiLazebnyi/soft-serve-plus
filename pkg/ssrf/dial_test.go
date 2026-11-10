@@ -48,7 +48,7 @@ func newFakeDialer(t *testing.T, up ...string) *fakeDialer {
 			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused: " + addr)}
 		}
 		client, server := net.Pipe()
-		t.Cleanup(func() { server.Close() })
+		t.Cleanup(func() { _ = server.Close() })
 		return client, nil
 	}
 	t.Cleanup(func() { dialContext = orig })
@@ -70,7 +70,7 @@ func TestSecureDialRefusesMixedAnswers(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			conn, err := secureDial(context.Background(), "tcp", net.JoinHostPort(host, "443"))
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 			if !errors.Is(err, ErrPrivateIP) {
 				t.Fatalf("secureDial(%s) error = %v, want ErrPrivateIP", host, err)
@@ -94,7 +94,7 @@ func TestSecureDialFailsOverToNextAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secureDial() error = %v, want failover to the second address", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	want := []string{"140.82.112.3:443", "[2606:4700::1111]:443"}
 	if strings.Join(f.dialed, " ") != strings.Join(want, " ") {
@@ -181,7 +181,7 @@ func TestSecureDialInterleavesFamilies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("secureDial() error = %v, want the IPv4 address reached", err)
 		}
-		conn.Close()
+		_ = conn.Close()
 		if want := "[2606:4700::1]:443 140.82.112.3:443"; strings.Join(f.dialed, " ") != want {
 			t.Errorf("dialed %v, want %s", f.dialed, want)
 		}
@@ -263,7 +263,7 @@ func TestSecureDialAddressFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tcp4 dial error = %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	if len(f.dialed) != 1 || f.dialed[0] != "140.82.112.3:443" {
 		t.Errorf("tcp4 dialed %v, want only the IPv4 address", f.dialed)
 	}
@@ -419,7 +419,7 @@ func TestSecureClientFailover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v, want failover to the second address", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
@@ -449,7 +449,7 @@ func TestSecureClientDialBudget(t *testing.T) {
 	}
 	resp, err := NewSecureClient().Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatal("Do() succeeded with every address down")
 	}
 	if len(f.dialed) != maxDialAddrs {

@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,5 +63,18 @@ func TestMigrateLfsObjects(t *testing.T) {
 	}
 	if b, err := os.ReadFile(newpath); err != nil || string(b) != "data" {
 		t.Errorf("new object path = %q, %v; want %q", b, err, "data")
+	}
+}
+
+// Migrations that read the server configuration fail with an error, rather
+// than panic, when the context carries none.
+func TestMigrateWithoutConfig(t *testing.T) {
+	ctx := context.TODO()
+	dbx, err := test.OpenSqlite(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, dbx); !errors.Is(err, errNoConfig) {
+		t.Errorf("Migrate() without config => %v, want %v", err, errNoConfig)
 	}
 }

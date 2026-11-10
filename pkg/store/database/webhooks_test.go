@@ -52,7 +52,7 @@ func newWebhookTestDB(t *testing.T) (context.Context, *db.DB) {
 
 func isSqlite(dbx *db.DB) bool {
 	d := dbx.DriverName()
-	return d == "sqlite" || d == "sqlite3"
+	return d == "sqlite"
 }
 
 func TestWebhookStoreRoundTrip(t *testing.T) {
@@ -102,12 +102,6 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, id))
 	_, err = s.GetWebhookByID(ctx, dbx, 7, id)
 	is.True(errors.Is(err, sql.ErrNoRows))
-
-	id2, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.37/d", "", 0, true)
-	is.NoErr(err)
-	is.NoErr(s.DeleteWebhookByID(ctx, dbx, id2))
-	_, err = s.GetWebhookByID(ctx, dbx, 7, id2)
-	is.True(errors.Is(err, sql.ErrNoRows))
 }
 
 func TestWebhookStoreEvents(t *testing.T) {
@@ -128,12 +122,7 @@ func TestWebhookStoreEvents(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(evs), 2)
 
-	ev, err := s.GetWebhookEventByID(ctx, dbx, evs[0].ID)
-	is.NoErr(err)
-	is.Equal(ev.WebhookID, hook)
-
-	_, err = s.GetWebhookEventByID(ctx, dbx, 424242)
-	is.True(errors.Is(err, sql.ErrNoRows))
+	is.Equal(evs[0].WebhookID, hook)
 
 	// Filter by event: push (4) matches hook only; an event with no match
 	// returns nothing; an empty filter returns nothing and no error.
@@ -240,13 +229,6 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(list), 2)
 
-	is.NoErr(s.DeleteWebhookDeliveryByID(ctx, dbx, other, okID)) // wrong webhook: no-op
-	_, err = s.GetWebhookDeliveryByID(ctx, dbx, hook, okID)
-	is.NoErr(err)
-	is.NoErr(s.DeleteWebhookDeliveryByID(ctx, dbx, hook, okID))
-	_, err = s.GetWebhookDeliveryByID(ctx, dbx, hook, okID)
-	is.True(errors.Is(err, sql.ErrNoRows))
-
 	is.NoErr(s.DeleteWebhookDeliveriesByWebhookID(ctx, dbx, hook))
 	all, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
@@ -254,6 +236,15 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 	all, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, other)
 	is.NoErr(err)
 	is.Equal(len(all), 1)
+}
+
+// deleteWebhookDelivery deletes one delivery row directly; the store has no
+// method for it.
+func deleteWebhookDelivery(t *testing.T, ctx context.Context, dbx *db.DB, id uuid.UUID) {
+	t.Helper()
+	if _, err := dbx.ExecContext(ctx, dbx.Rebind(`DELETE FROM webhook_deliveries WHERE id = ?;`), id); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Once the database is closed every store call must return an error rather
@@ -276,11 +267,9 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["GetActiveWebhookByIDWhereEvent"] = s.GetActiveWebhookByIDWhereEvent(ctx, dbx, 7, id, 4)
 	_, checks["CreateWebhook"] = s.CreateWebhook(ctx, dbx, 7, "u", "", 0, true)
 	checks["UpdateWebhookByID"] = s.UpdateWebhookByID(ctx, dbx, 7, id, "u", "", 0, true)
-	checks["DeleteWebhookByID"] = s.DeleteWebhookByID(ctx, dbx, id)
 	checks["DeleteWebhookForRepoByID"] = s.DeleteWebhookForRepoByID(ctx, dbx, 7, id)
 	checks["DeleteWebhookEventsByWebhookID"] = s.DeleteWebhookEventsByWebhookID(ctx, dbx, id)
 	checks["DeleteWebhookDeliveriesByWebhookID"] = s.DeleteWebhookDeliveriesByWebhookID(ctx, dbx, id)
-	_, checks["GetWebhookEventByID"] = s.GetWebhookEventByID(ctx, dbx, 7)
 	_, checks["GetWebhookEventsByWebhookID"] = s.GetWebhookEventsByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookEvents"] = s.CreateWebhookEvents(ctx, dbx, id, []int{4})
 	checks["DeleteWebhookEventsByID"] = s.DeleteWebhookEventsByID(ctx, dbx, []int64{1})
@@ -288,7 +277,6 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["GetWebhookDeliveriesByWebhookID"] = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["ListWebhookDeliveriesByWebhookID"] = s.ListWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookDelivery"] = s.CreateWebhookDelivery(ctx, dbx, uuid.New(), id, 4, "u", "POST", nil, "", "", 0, "", "")
-	checks["DeleteWebhookDeliveryByID"] = s.DeleteWebhookDeliveryByID(ctx, dbx, id, did)
 	checks["PruneWebhookDeliveries"] = s.PruneWebhookDeliveries(ctx, dbx, id, 1)
 
 	for name, err := range checks {
@@ -308,20 +296,7 @@ func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
 	s := &webhookStore{}
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
 	is.NoErr(err)
-	triggers := []string{`CREATE TRIGGER vanish BEFORE INSERT ON webhook_deliveries
-		BEGIN DELETE FROM webhooks WHERE id = NEW.webhook_id; END;`}
-	if !isSqlite(dbx) {
-		triggers = []string{
-			`CREATE FUNCTION vanish() RETURNS trigger LANGUAGE plpgsql AS $$
-			BEGIN DELETE FROM webhooks WHERE id = NEW.webhook_id; RETURN NEW; END $$;`,
-			`CREATE TRIGGER vanish BEFORE INSERT ON webhook_deliveries
-			FOR EACH ROW EXECUTE FUNCTION vanish();`,
-		}
-	}
-	for _, q := range triggers {
-		_, err = dbx.ExecContext(ctx, q)
-		is.NoErr(err)
-	}
+	vanishOnInsert(t, ctx, dbx, id)
 
 	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, uuid.New(), id, 1, "https://93.184.216.34/a", "POST", nil, "", "{}", 200, "", ""))
 
@@ -422,7 +397,7 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 
 	// Deleting the newest delivery does not let a later one sort before
 	// older ones.
-	is.NoErr(s.DeleteWebhookDeliveryByID(ctx, dbx, hook, want[len(want)-1]))
+	deleteWebhookDelivery(t, ctx, dbx, want[len(want)-1])
 	want = want[:len(want)-1]
 	want = append(want, insert(hook))
 	check()
