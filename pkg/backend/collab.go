@@ -27,11 +27,9 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		return err
 	}
 
-	if err := db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
-		}),
-	); err != nil {
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
+	}); err != nil {
 		// A repository deleted meanwhile fails the insert on a
 		// constraint; report it as gone.
 		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
@@ -122,7 +120,6 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return -1, false, nil
 		}
@@ -151,11 +148,9 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 	// is logged once the removal is done.
 	wh, whErr := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
 
-	if err := db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.RemoveCollabByUsernameAndRepo(ctx, tx, username, repo)
-		}),
-	); err != nil {
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.RemoveCollabByUsernameAndRepo(ctx, tx, username, repo)
+	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return proto.ErrCollaboratorNotFound
 		}

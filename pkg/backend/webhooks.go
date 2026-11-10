@@ -35,7 +35,7 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 	err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		lastID, err := datastore.CreateWebhook(ctx, tx, repo.ID(), url, secret, int(contentType), active)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// The cap is checked after the insert, in the same transaction, which
@@ -47,7 +47,7 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 		// at the cap take turns.
 		total, err := datastore.LockAndCountWebhooks(ctx, tx, repo.ID())
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		if total > webhook.MaxWebhooksPerRepo {
 			return webhook.ErrTooManyWebhooks
@@ -58,7 +58,7 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 			evs[i] = int(e)
 		}
 		if err := datastore.CreateWebhookEvents(ctx, tx, lastID, evs); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
@@ -77,11 +77,11 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		h, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		events, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		wh = webhook.Hook{
@@ -95,7 +95,7 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 
 		return nil
 	}); err != nil {
-		return webhook.Hook{}, db.WrapError(err)
+		return webhook.Hook{}, err
 	}
 
 	return wh, nil
@@ -125,7 +125,7 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	hooks := make([]webhook.Hook, len(webhooks))
@@ -161,16 +161,16 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		// event rewrite below from touching another repository's webhook, and
 		// makes an unknown ID an error instead of a silent no-op.
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := datastore.UpdateWebhookByID(ctx, tx, repo.ID(), id, url, secret, int(contentType), active); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		currentEvents, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// Delete events that are no longer in the list.
@@ -189,7 +189,7 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		}
 
 		if err := datastore.DeleteWebhookEventsByID(ctx, tx, id, toBeDeleted); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// Prune events that are already in the list.
@@ -208,7 +208,7 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		}
 
 		if err := datastore.CreateWebhookEvents(ctx, tx, id, newEvents); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
@@ -223,9 +223,9 @@ func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id i
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
-		return db.WrapError(d.deleteWebhookRows(ctx, tx, repo.ID(), id))
+		return d.deleteWebhookRows(ctx, tx, repo.ID(), id)
 	})
 }
 
@@ -269,18 +269,18 @@ func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 	var deliveries []models.WebhookDelivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		var err error
 		deliveries, err = datastore.ListWebhookDeliveriesByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	ds := make([]webhook.Delivery, len(deliveries))
@@ -311,12 +311,12 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
 			d.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
-			return db.WrapError(err)
+			return err
 		}
 
 		delivery, err = datastore.GetWebhookDeliveryByID(ctx, tx, id, delID)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// Checked after the lookup, so an unknown delivery is reported as
@@ -327,7 +327,7 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 
 		return nil
 	}); err != nil {
-		return db.WrapError(err)
+		return err
 	}
 
 	// Log identifiers only: the stored body, headers and signature carry repo,
@@ -434,12 +434,12 @@ func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 	var delivery webhook.Delivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), webhookID); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		del, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		delivery = webhook.Delivery{
@@ -449,7 +449,7 @@ func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 
 		return nil
 	}); err != nil {
-		return webhook.Delivery{}, db.WrapError(err)
+		return webhook.Delivery{}, err
 	}
 
 	return delivery, nil

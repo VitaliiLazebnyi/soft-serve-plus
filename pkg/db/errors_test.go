@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/lib/pq"
+	sqlite "modernc.org/sqlite"
 )
 
 func TestWrapErrorBadNoRows(t *testing.T) {
@@ -25,6 +26,26 @@ func TestWrapErrorBadNoRows(t *testing.T) {
 func TestWrapErrorGoodNoRows(t *testing.T) {
 	if err := WrapError(sql.ErrNoRows); err != ErrRecordNotFound {
 		t.Errorf("WrapError(sql.ErrNoRows) => %v, want %v", err, ErrRecordNotFound)
+	}
+}
+
+// A mapped constraint violation keeps the driver error in its chain, so code
+// that needs the driver's own code can still find it.
+func TestWrapErrorKeepsDriverError(t *testing.T) {
+	drv := &pq.Error{Code: "23505"}
+	err := WrapError(drv)
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Errorf("WrapError(%v) = %v, want ErrDuplicateKey", drv, err)
+	}
+	if err.Error() != ErrDuplicateKey.Error() {
+		t.Errorf("WrapError(%v).Error() = %q, want %q", drv, err.Error(), ErrDuplicateKey.Error())
+	}
+	var pgErr *pq.Error
+	if !errors.As(err, &pgErr) || pgErr != drv {
+		t.Errorf("errors.As(WrapError(%v)) = %v, want the driver error", drv, pgErr)
+	}
+	if again := WrapError(err); again != err {
+		t.Errorf("WrapError of a mapped error = %v, want it unchanged", again)
 	}
 }
 
@@ -75,11 +96,21 @@ func TestWrapErrorSqliteConstraints(t *testing.T) {
 			if err == nil {
 				t.Fatal("no error")
 			}
-			if got := WrapError(err); got != tc.want {
+			// The handler has mapped the error already; check that,
+			// then map the bare driver error.
+			if !errors.Is(err, tc.want) {
+				t.Errorf("ExecContext(%q) => %v, want %v", tc.query, err, tc.want)
+			}
+			var liteErr *sqlite.Error
+			if !errors.As(err, &liteErr) {
+				t.Fatalf("ExecContext(%q) => %v, want a driver error in its chain", tc.query, err)
+			}
+			err = liteErr
+			if got := WrapError(err); !errors.Is(got, tc.want) || got.Error() != tc.want.Error() {
 				t.Errorf("WrapError(%v) => %v, want %v", err, got, tc.want)
 			}
 			wrapped := fmt.Errorf("insert: %w", err)
-			if got := WrapError(wrapped); got != tc.want {
+			if got := WrapError(wrapped); !errors.Is(got, tc.want) || got.Error() != tc.want.Error() {
 				t.Errorf("WrapError(%v) => %v, want %v", wrapped, got, tc.want)
 			}
 		})
@@ -98,11 +129,11 @@ func TestWrapErrorPostgresConstraints(t *testing.T) {
 		{&pq.Error{Code: "23502"}, ErrNotNull},
 		{&pq.Error{Code: "23514"}, ErrCheck},
 	} {
-		if got := WrapError(tc.err); got != tc.want {
+		if got := WrapError(tc.err); !errors.Is(got, tc.want) || got.Error() != tc.want.Error() {
 			t.Errorf("WrapError(%s) => %v, want %v", tc.err.Code, got, tc.want)
 		}
 		wrapped := fmt.Errorf("insert: %w", tc.err)
-		if got := WrapError(wrapped); got != tc.want {
+		if got := WrapError(wrapped); !errors.Is(got, tc.want) || got.Error() != tc.want.Error() {
 			t.Errorf("WrapError(wrapped %s) => %v, want %v", tc.err.Code, got, tc.want)
 		}
 	}

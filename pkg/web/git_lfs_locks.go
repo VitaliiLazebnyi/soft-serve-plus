@@ -84,7 +84,6 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 	if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name); err != nil {
-		err = db.WrapError(err)
 		// A repository deleted meanwhile fails the insert on its foreign
 		// key; report it as gone.
 		if errors.Is(store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err), proto.ErrRepoNotFound) {

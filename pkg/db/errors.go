@@ -28,13 +28,27 @@ var (
 	ErrRecordNotFound = sql.ErrNoRows
 )
 
-// WrapError is a convenient function that unite various database driver
-// errors to consistent errors. It finds driver errors in err's chain, so
-// err may be a driver error wrapped with fmt.Errorf and %w.
+// WrapError maps database driver errors to the errors of this package. It
+// finds driver errors in err's chain, so err may be a driver error wrapped
+// with fmt.Errorf and %w. A constraint violation becomes an error that
+// errors.Is reports as ErrDuplicateKey, ErrForeignKey, ErrNotNull or ErrCheck
+// and whose message is that error's; the driver error stays in its chain, so
+// errors.As still finds it. sql.ErrNoRows becomes ErrRecordNotFound. An error
+// that is already mapped, and any other error, is returned unchanged.
+//
+// The methods of DB and Tx already apply WrapError, so errors from a Handler
+// need no further mapping.
 func WrapError(err error) error {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrRecordNotFound
+		}
+
+		// An already mapped error still has the driver error in its chain;
+		// mapping it again would only wrap it once more.
+		var me *mappedError
+		if errors.As(err, &me) {
+			return err
 		}
 
 		// Handle sqlite constraint error.
@@ -43,13 +57,13 @@ func WrapError(err error) error {
 			switch liteErr.Code() {
 			case sqlitelib.SQLITE_CONSTRAINT_PRIMARYKEY,
 				sqlitelib.SQLITE_CONSTRAINT_UNIQUE:
-				return ErrDuplicateKey
+				return &mappedError{ErrDuplicateKey, err}
 			case sqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY:
-				return ErrForeignKey
+				return &mappedError{ErrForeignKey, err}
 			case sqlitelib.SQLITE_CONSTRAINT_NOTNULL:
-				return ErrNotNull
+				return &mappedError{ErrNotNull, err}
 			case sqlitelib.SQLITE_CONSTRAINT_CHECK:
-				return ErrCheck
+				return &mappedError{ErrCheck, err}
 			}
 		}
 
@@ -58,15 +72,25 @@ func WrapError(err error) error {
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
 			case "23505": // unique_violation
-				return ErrDuplicateKey
+				return &mappedError{ErrDuplicateKey, err}
 			case "23503": // foreign_key_violation
-				return ErrForeignKey
+				return &mappedError{ErrForeignKey, err}
 			case "23502": // not_null_violation
-				return ErrNotNull
+				return &mappedError{ErrNotNull, err}
 			case "23514": // check_violation
-				return ErrCheck
+				return &mappedError{ErrCheck, err}
 			}
 		}
 	}
 	return err
 }
+
+// mappedError is a driver error mapped to one of this package's errors.
+type mappedError struct {
+	mapped error
+	driver error
+}
+
+func (e *mappedError) Error() string { return e.mapped.Error() }
+
+func (e *mappedError) Unwrap() []error { return []error{e.mapped, e.driver} }

@@ -487,7 +487,6 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
 		d.removeRepoDir(rp) //nolint:errcheck
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrDuplicateKey) {
 			return nil, proto.ErrRepoExist
 		}
@@ -523,7 +522,7 @@ func (d *Backend) DefaultAdmin(ctx context.Context) (proto.User, error) {
 		if errors.Is(err, errNoAdminUser) {
 			return nil, proto.ErrUserNotFound
 		}
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return d.UserByID(ctx, adminID)
@@ -866,7 +865,6 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		}
 		repom, dberr := getRepo(ctx, tx, name)
 		if dberr != nil {
-			dberr = db.WrapError(dberr)
 			noRow = errors.Is(dberr, db.ErrRecordNotFound)
 			return dberr
 		}
@@ -886,11 +884,11 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		// other rows (collaborators, LFS objects and locks) go with it by
 		// ON DELETE CASCADE, which relies on foreign keys being enforced.
 		if err := d.deleteRepoWebhookRows(ctx, tx, repom.ID); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := d.store.DeleteRepoByName(ctx, tx, name); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		rowDeleted = true
@@ -1075,7 +1073,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return repos, nil
@@ -1124,7 +1122,6 @@ var errRepoUpdate = errors.New("failed to update repository")
 // callers never see the raw driver error for a repository that does not
 // exist.
 func wrapRepoError(err error) error {
-	err = db.WrapError(err)
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrRepoNotFound
 	}
@@ -1359,7 +1356,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 		um, err := d.store.GetUserByID(ctx, d.db, m.UserID.Int64)
 		if err == nil {
 			owner = &user{user: um}
-		} else if !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		} else if !errors.Is(err, db.ErrRecordNotFound) {
 			return err
 		}
 	}
@@ -1523,7 +1520,7 @@ func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) 
 	}
 	repos, err := d.store.GetAllRepos(ctx, tx)
 	if err != nil {
-		return false, db.WrapError(err)
+		return false, err
 	}
 	for _, r := range repos {
 		rfi, err := os.Lstat(d.repoPath(r.Name))
@@ -1549,7 +1546,7 @@ func (d *Backend) repoRowExists(ctx context.Context, name string) bool {
 	if err == nil {
 		return true
 	}
-	if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+	if errors.Is(err, db.ErrRecordNotFound) {
 		return false
 	}
 	d.logger.Error("failed to look up repository row", "repo", name, "err", err)

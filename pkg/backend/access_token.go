@@ -19,7 +19,7 @@ func (d *Backend) CreateAccessToken(ctx context.Context, user proto.User, name s
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := d.store.CreateAccessToken(ctx, tx, name, user.ID(), tokenHash, expiresAt)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
@@ -36,7 +36,7 @@ func (d *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int
 		// Report another user's token exactly like a missing one so the
 		// command cannot be used to tell which token IDs exist.
 		if err := d.store.DeleteAccessTokenForUser(ctx, tx, user.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		return nil
 	})
@@ -54,7 +54,7 @@ func (d *Backend) DeleteAccessToken(ctx context.Context, user proto.User, id int
 func (d *Backend) ListAccessTokens(ctx context.Context, user proto.User) ([]proto.AccessToken, error) {
 	accessTokens, err := d.store.GetAccessTokensByUserID(ctx, d.db, user.ID())
 	if err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	var tokens []proto.AccessToken

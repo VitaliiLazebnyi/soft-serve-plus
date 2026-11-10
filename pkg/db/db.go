@@ -20,7 +20,8 @@ import (
 // DB is a Soft Serve database connection pool.
 type DB struct {
 	*sqlx.DB
-	logger *log.Logger
+	logger *log.Logger // query trace, set only in verbose mode
+	errLog *log.Logger // constraint violation detail, see mapError
 	// writeSlot, on SQLite, is held by the one write transaction of this
 	// handle that may be open at a time. See transaction.
 	writeSlot chan struct{}
@@ -45,7 +46,8 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 	}
 
 	d := &DB{
-		DB: db,
+		DB:     db,
+		errLog: log.FromContext(ctx).WithPrefix("db"),
 	}
 	if driverName == "sqlite" {
 		d.writeSlot = make(chan struct{}, 1)
@@ -186,6 +188,7 @@ func (d *DB) Close() error {
 type Tx struct {
 	*sqlx.Tx
 	logger *log.Logger
+	errLog *log.Logger
 }
 
 // TransactionContext runs fn in a transaction. The transaction is committed
@@ -237,7 +240,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	tx := &Tx{txx, d.logger}
+	tx := &Tx{txx, d.logger, d.errLog}
 	returned := false
 	defer func() {
 		if !returned {

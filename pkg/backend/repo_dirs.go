@@ -91,8 +91,8 @@ func (d *Backend) removeOrphanRepoDir(ctx context.Context, name string, own int)
 		switch {
 		case err == nil:
 			return proto.ErrRepoNotFound
-		case !errors.Is(db.WrapError(err), db.ErrRecordNotFound):
-			return db.WrapError(err)
+		case !errors.Is(err, db.ErrRecordNotFound):
+			return err
 		}
 		if !d.repoPathExact(name) {
 			return proto.ErrRepoNotFound
