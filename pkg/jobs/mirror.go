@@ -1,11 +1,16 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -85,7 +90,9 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 			if err != nil {
 				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
 			}
-			remotes.validated = append(remotes.validated, v)
+			// fetch and remote update reach each remote by name, so a
+			// remote.<name>.proxy must be cleared too.
+			remotes.validated = append(remotes.validated, v.Named(name))
 		}
 		remotes.names = append(remotes.names, name)
 	}
@@ -175,8 +182,6 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 				name := repo.Name()
 				wq.Add(name, func() {
-					repo := repo
-
 					// Re-validate every configured remote before syncing.
 					// The sync fetches all of them, and a remote may
 					// predate the import-time guard or have been written out
@@ -198,6 +203,8 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 						return
 					}
 
+					// When a fetch fails the LFS sync is skipped too; the
+					// next run tries both again.
 					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
 					if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
 						return
@@ -219,7 +226,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 						// The endpoint is stored in the repo config and may
 						// predate validation, so check it before dialing.
-						if _, err := ssrf.ValidateGitRemote(lfsEndpoint, policy); err != nil {
+						if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
 							logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
 							return
 						}
@@ -258,7 +265,28 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 	}
 }
 
-// runMirrorGit runs one mirror sync git command in dir. Tests replace it.
+// mirrorGitTimeout bounds a single git command of a mirror sync.
+//
+// The job waits for every repository before it finishes, and the scheduler
+// skips its runs while one is still going, so a command that never returns
+// stops every mirror on the server from syncing. Stalls are caught much
+// sooner by the low-speed and keepalive settings in RemoteGitEnv; this is the
+// backstop for what those miss, such as git:// remotes, which git dials itself
+// with no read timeout, and remotes that trickle data just fast enough.
+var mirrorGitTimeout = time.Hour
+
+// mirrorGitWaitDelay is how long, once git is killed, the sync waits for the
+// helpers git started (git-remote-http, ssh) to let go of its output.
+// They inherit git's stderr and outlive it when killed; past this the output
+// is closed and the sync moves on.
+const mirrorGitWaitDelay = 5 * time.Second
+
+// mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
+// The remote can write to it (remote: lines), so it is not kept in full.
+const mirrorGitStderrLimit = 4 << 10
+
+// runMirrorGit runs one git command of a mirror sync in dir with env applied,
+// killing it after mirrorGitTimeout. Tests replace it.
 //
 // The command does not get ctx's cancellation. Cancelling would kill git
 // (exec.CommandContext sends SIGKILL, or TerminateProcess on Windows), and a
@@ -267,12 +295,66 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 // them by hand. A git command that is already running is left to finish:
 // Server.Shutdown waits for it within its drain deadline, and if the server
 // exits first, git finishes on its own and cleans up after itself, as it
-// did before syncs were cancelled at all.
+// did before syncs were cancelled at all. Only a command stalled past
+// mirrorGitTimeout is killed.
 var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
-	cmd := git.NewCommand(args...).WithContext(context.WithoutCancel(ctx)).WithTimeout(-1)
-	cmd.AddEnvs(env...)
-	_, err := cmd.RunInDir(dir)
-	return err
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorGitTimeout)
+	defer cancel()
+
+	var stderr limitedBuffer
+	stderr.limit = mirrorGitStderrLimit
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = mirrorGitWaitDelay
+
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		if msg := redactURLs(strings.TrimSpace(stderr.String())); msg != "" {
+			err = fmt.Errorf("%w: %s", err, msg)
+		}
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// urlPattern matches a URL as git and remotes print it in messages: a scheme
+// and everything up to the next space or quote.
+var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
+
+// redactURLs strips the user info and query from every URL in msg. git leaves
+// out the user info of the remote URLs it prints but keeps their query, which
+// can hold a token, and the remote's own lines can hold any URL.
+func redactURLs(msg string) string {
+	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
+}
+
+// limitedBuffer keeps the first limit bytes written to it and discards the
+// rest, reporting every write as complete so the writer is not cut off.
+//
+// The buffer is a named field rather than embedded so that limitedBuffer has
+// no ReadFrom: os/exec copies a pipe into a non-file Stderr with io.Copy,
+// which would call an embedded bytes.Buffer.ReadFrom and bypass the cap.
+type limitedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+// Write implements io.Writer.
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// String returns the bytes kept so far.
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
 }
 
 // fetchMirror fetches the named remotes of the mirror in dir and reports
