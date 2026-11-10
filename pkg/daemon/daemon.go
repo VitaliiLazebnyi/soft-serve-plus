@@ -357,7 +357,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		Env:    envs,
 		Dir:    filepath.Join(reposDir, repo),
 	}
-	if ka := keepAlive(idleTimeout); ka > 0 {
+	if ka := keepAlive(c.idleTimeout); ka > 0 {
 		// Neither side talks while pack-objects prepares the pack
 		// for a quiet fetch. Have upload-pack send keepalive
 		// packets often enough that the connection does not reach
