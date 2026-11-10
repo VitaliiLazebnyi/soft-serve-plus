@@ -800,6 +800,7 @@ func (c *Config) Validate() error {
 	}
 
 	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimSuffix(c.Git.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
 
 	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
