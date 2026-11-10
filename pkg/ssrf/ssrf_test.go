@@ -182,6 +182,20 @@ func TestIsPrivateOrInternal(t *testing.T) {
 		{"2001:0000:4136:e378:8000:63bf:8001:5601", true}, // Teredo
 		{"::7f00:1", true},                                // IPv4-compatible -> 127.0.0.1
 		{"192.88.99.1", true},                             // 6to4 relay anycast
+		{"::ffff:0:7f00:1", true},                         // IPv4-translated -> 127.0.0.1
+		{"::ffff:0:a9fe:a9fe", true},                      // IPv4-translated -> 169.254.169.254
+		{"::ffff:0:808:808", true},                        // IPv4-translated -> 8.8.8.8, still blocked
+
+		// Other special-purpose IPv6 ranges no request should reach.
+		{"2001:2::1", true},     // benchmarking
+		{"2001:10::1", true},    // ORCHID
+		{"2001:2f::1", true},    // ORCHIDv2
+		{"3fff::1", true},       // documentation
+		{"3fff:fff::1", true},   // documentation, end of the range
+		{"5f00::1", true},       // SRv6 SIDs
+		{"2001:3::1", false},    // next to benchmarking, public
+		{"2001:30::1", false},   // past ORCHIDv2, public
+		{"3fff:1000::1", false}, // past the documentation range
 
 		// Public IPv6 must stay reachable: the transition prefixes are narrow
 		// and must not swallow ordinary global unicast.
@@ -278,7 +292,10 @@ func TestIsLocalhost(t *testing.T) {
 	}{
 		{"localhost", true},
 		{"LOCALHOST", true},
+		{"localhost.", true},
+		{"localhost.localdomain.", true},
 		{"test.localhost", true},
+		{"test.localhost.", true},
 		{"example.com", false},
 		{"localhost.com", false},
 	}

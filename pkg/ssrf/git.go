@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -70,8 +71,9 @@ type ValidatedGitRemote struct {
 // Validation alone is not sufficient for a subprocess: git resolves hostnames
 // again itself, and follows the first HTTP redirect by default. Both walk
 // straight through a validate-then-exec check, so this environment disables
-// redirects and pins each validated address. Callers MUST apply it to every
-// git command that touches the remote, or the validation means nothing.
+// redirects, turns off any proxy, and pins each validated address. Callers
+// MUST apply it to every git command that touches the remote, after the
+// server's own environment so that it wins, or the validation means nothing.
 //
 // It also aborts an http transfer that stalls (see GitLowSpeedLimit), so a
 // remote that stops sending cannot hold the git process open forever.
@@ -81,14 +83,25 @@ type ValidatedGitRemote struct {
 // what it does not know without an error, so it would fetch unpinned. Callers
 // must refuse to run git below that version rather than rely on this.
 func GitEnv(remotes ...ValidatedGitRemote) []string {
-	// git follows the first HTTP redirect by default, which lets a public URL
-	// hand off to an internal one after validation has already passed. This
-	// costs imports of moved repositories, which is the right trade for a
-	// user-supplied remote.
 	entries := []GitConfigEntry{
+		// git follows the first HTTP redirect by default, which lets a public
+		// URL hand off to an internal one after validation has already
+		// passed. This costs imports of moved repositories, which is the
+		// right trade for a user-supplied remote.
 		{Key: "http.followRedirects", Value: "false"},
 		{Key: "http.lowSpeedLimit", Value: strconv.Itoa(GitLowSpeedLimit)},
 		{Key: "http.lowSpeedTime", Value: strconv.Itoa(GitLowSpeedTime)},
+		// A proxy resolves the remote's hostname itself (curl sends CONNECT
+		// host:443), so the pin below never applies, and a proxy usually
+		// reaches the very internal networks validation keeps out. An empty
+		// http.proxy makes git set CURLOPT_PROXY to "", which overrides
+		// http.proxy from any gitconfig and the http_proxy, https_proxy and
+		// all_proxy variables curl would otherwise read. A proxy set for one
+		// URL or one named remote outranks this key; each validated remote
+		// carries the overrides for those (see urlProxyOverride and Named).
+		// The server's own Go clients (webhooks, LFS) never use a proxy
+		// either.
+		{Key: "http.proxy", Value: ""},
 	}
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
@@ -101,7 +114,11 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, e.Value),
 		)
 	}
-	return env
+	// git:// remotes go through GIT_PROXY_COMMAND or core.gitProxy when one
+	// is set, which likewise resolves and connects on its own. An empty
+	// GIT_PROXY_COMMAND disables both, since git reads core.gitProxy only
+	// when the variable is unset.
+	return append(env, "GIT_PROXY_COMMAND=")
 }
 
 // ValidateGitRemote validates a git remote URL against private, internal, and
@@ -176,12 +193,7 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 		if err != nil {
 			return ValidatedGitRemote{}, err
 		}
-		// Pin the validated address so git's own resolution cannot return a
-		// different (private) one than the address we just checked.
-		return ValidatedGitRemote{
-			Transport: GitTransportHTTP,
-			Config:    curlResolvePin(u, addr),
-		}, nil
+		return validatedHTTPRemote(u, addr), nil
 
 	default:
 		// file://, ext::, and bare local paths land here. None are network
@@ -285,6 +297,17 @@ func isDNSName(host string) bool {
 	return true
 }
 
+// validatedHTTPRemote returns an http/https remote whose host was validated
+// as addr. The address is pinned so git's own resolution cannot return a
+// different (private) one, and any proxy configured for the URL is cleared
+// (see GitEnv).
+func validatedHTTPRemote(u *url.URL, addr netip.Addr) ValidatedGitRemote {
+	return ValidatedGitRemote{
+		Transport: GitTransportHTTP,
+		Config:    append(curlResolvePin(u, addr), urlProxyOverride(u)),
+	}
+}
+
 // curlResolvePin returns git configuration pinning the URL's host to the
 // validated address, or nothing if the URL needs no pinning.
 func curlResolvePin(u *url.URL, addr netip.Addr) []GitConfigEntry {
@@ -302,6 +325,51 @@ func curlResolvePin(u *url.URL, addr netip.Addr) []GitConfigEntry {
 		Key:   "http.curloptResolve",
 		Value: fmt.Sprintf("%s:%s:%s", u.Hostname(), port, addr.String()),
 	}}
+}
+
+// urlProxyOverride returns git configuration clearing any proxy configured
+// for the URL itself. git picks among http.<url>.* keys by how specifically
+// they match, not by order, so the plain empty http.proxy GitEnv sets loses
+// to an operator's [http "https://*.example.com"] proxy. The remote's own
+// URL is the most specific match there is, and the later of two equally
+// specific keys wins, which is GIT_CONFIG_* over any configuration file.
+//
+// The user name stays in the key, since a key naming the user outranks one
+// that does not; the password is dropped, since git ignores it for matching
+// and it has no business in the environment.
+func urlProxyOverride(u *url.URL) GitConfigEntry {
+	key := *u
+	if key.User != nil {
+		key.User = url.User(key.User.Username())
+	}
+	return GitConfigEntry{Key: "http." + key.String() + ".proxy", Value: ""}
+}
+
+// Named returns the remote with configuration clearing remote.<name>.proxy,
+// which git reads for an http remote it knows by name (a clone's "origin",
+// or each remote a mirror sync fetches) and which overrides every http.proxy
+// key. Callers that run git against a named remote must use it.
+func (v ValidatedGitRemote) Named(name string) ValidatedGitRemote {
+	if v.Transport != GitTransportHTTP || name == "" {
+		return v
+	}
+	v.Config = append(slices.Clip(v.Config), GitConfigEntry{Key: "remote." + name + ".proxy", Value: ""})
+	return v
+}
+
+// cloneRemoteName is the name ForClone has git clone give the remote.
+const cloneRemoteName = "origin"
+
+// ForClone returns the remote ready for git clone, which knows it by the
+// name in clone.defaultRemoteName: that name is fixed to "origin" so that
+// the remote.origin.proxy Named clears is the one clone reads.
+func (v ValidatedGitRemote) ForClone() ValidatedGitRemote {
+	if v.Transport != GitTransportHTTP {
+		return v
+	}
+	v = v.Named(cloneRemoteName)
+	v.Config = append(v.Config, GitConfigEntry{Key: "clone.defaultRemoteName", Value: cloneRemoteName})
+	return v
 }
 
 // isIPLiteral reports whether a host is already a canonical IP address.

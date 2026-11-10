@@ -176,7 +176,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch mouse.Button {
 		case tea.MouseLeft:
 			switch {
-			case m.common.Zone.Get("footer").InBounds(msg):
+			case m.common.Zone.Get(m.footer.ZoneID()).InBounds(msg):
 				cmds = append(cmds, footer.ToggleFooterCmd)
 			}
 		}
