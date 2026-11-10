@@ -35,13 +35,13 @@ func TestLFSTransferRejectsMalformedOid(t *testing.T) {
 			if err := backend.Upload(oid, 1, strings.NewReader("x"), nil); !errors.Is(err, errInvalidOid) {
 				t.Errorf("Upload: got %v, want errInvalidOid", err)
 			}
-			// Verify answers in-band with a conflict status rather than
-			// tearing down the session.
+			// Verify answers in-band with a bad request status: a malformed
+			// object ID is a client error, not a conflict.
 			status, err := backend.Verify(oid, 1, nil)
 			if err != nil {
 				t.Errorf("Verify: unexpected error %v", err)
-			} else if status == nil || status.Code() != transfer.StatusConflict {
-				t.Errorf("Verify: got %v, want a conflict status", status)
+			} else if status == nil || status.Code() != transfer.StatusBadRequest {
+				t.Errorf("Verify: got %v, want a bad request status", status)
 			}
 
 			items := []transfer.BatchItem{{Pointer: transfer.Pointer{Oid: oid, Size: 1}}}

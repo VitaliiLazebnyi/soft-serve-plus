@@ -360,7 +360,7 @@ func fingerprint(ak string) string {
 // on both sqlite (3.24 and later) and postgres, unlike INSERT OR IGNORE.
 func insertIgnore(tx *db.Tx, rest, column string) string {
 	switch tx.DriverName() {
-	case "sqlite3", "sqlite", "postgres":
+	case "sqlite", "postgres":
 		return tx.Rebind("INSERT " + rest + " ON CONFLICT (" + column + ") DO NOTHING")
 	default:
 		return tx.Rebind("INSERT " + rest)

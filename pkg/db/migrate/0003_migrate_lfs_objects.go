@@ -24,6 +24,9 @@ var migrateLfsObjects = Migration{
 	Version: migrateLfsObjectsVersion,
 	Migrate: func(ctx context.Context, tx *db.Tx) error {
 		cfg := config.FromContext(ctx)
+		if cfg == nil {
+			return errNoConfig
+		}
 		logger := log.FromContext(ctx).WithPrefix("migrate_lfs_objects")
 
 		var repoIDs []int64

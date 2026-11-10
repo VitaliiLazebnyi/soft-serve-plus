@@ -79,7 +79,7 @@ func KeyPair(cfg *Config) (*HostKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssh host key: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	fi, err := f.Stat()
 	if err != nil {
