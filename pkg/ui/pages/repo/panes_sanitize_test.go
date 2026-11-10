@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +82,10 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 	// The stash is limited to main.go, so it neither records the missing
 	// hostile file as deleted nor checks it out when it resets the tree.
 	gitRun(t, dir, "stash", "push", "-q", "-m", "stash-message"+hostile, "--", "main.go")
-	if _, err := os.Lstat(filepath.Join(dir, hostileName)); !os.IsNotExist(err) {
+	// Windows rejects the name itself (ERROR_INVALID_NAME) rather than
+	// reporting it missing; either way no such file is on disk.
+	if _, err := os.Lstat(filepath.Join(dir, hostileName)); err == nil ||
+		(!os.IsNotExist(err) && runtime.GOOS != "windows") {
 		t.Fatalf("hostile file name reached the disk: %v", err)
 	}
 	return escapedRepo{
