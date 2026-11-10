@@ -32,7 +32,7 @@ tasks:
     desc: Create and push a new tag following semver
     vars:
       NEXT:
-        sh: svu next --always || go run github.com/caarlos0/svu/v3@latest next --always
+        sh: svu next --always || go run github.com/caarlos0/svu/v3@v3.4.4 next --always
     prompt: "This will release {{.NEXT}}. Continue?"
     preconditions:
       - sh: '[ $(git symbolic-ref --short HEAD) = "main" ]'

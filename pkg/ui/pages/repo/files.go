@@ -442,9 +442,8 @@ func (f *Files) StatusBarValue() string {
 	if p == "." || p == "" {
 		return " "
 	}
-	// Quote the path the way the file list quotes names, as file names may
-	// contain control characters.
-	return common.UnquoteFilename(p)
+	// File names may contain control characters; escape them for display.
+	return common.DisplayFilename(p)
 }
 
 // StatusBarInfo returns the status bar info.

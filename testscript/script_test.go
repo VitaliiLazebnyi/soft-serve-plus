@@ -403,7 +403,7 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 
 func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
-		const usage = "usage: ui [-wait text] <quoted string input> [repository]"
+		const usage = "usage: ui [-wait text] <quoted string input> [repository | command...]"
 		// -wait holds the input back until the screen shows text, for
 		// content the TUI loads in the background.
 		waitFor := ""
@@ -421,12 +421,10 @@ func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []stri
 		if err != nil {
 			ts.Fatalf("ui: input must be a quoted string: %v", err)
 		}
-		// An optional repository name opens the TUI on that repository.
-		initialRepo := ""
-		if len(args) > 1 {
-			initialRepo = args[1]
-		}
-		check(ts, runUI(ts, key, in, initialRepo, waitFor), neg)
+		// An optional repository name opens the TUI on that repository;
+		// a command (more words, a flag, or a top-level command name that
+		// is no readable repository) runs with the pty instead.
+		check(ts, runUI(ts, key, in, strings.Join(args[1:], " "), waitFor), neg)
 	}
 }
 
@@ -462,11 +460,11 @@ func (w *outputWatcher) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// runUI opens the TUI over SSH, types in one rune at a time and waits for
-// the session to end. With waitFor set, it starts typing only once the
+// runUI opens a session with a pty over SSH running command (empty for the
+// TUI), types in one rune at a time and waits for the session to end. With waitFor set, it starts typing only once the
 // output shows waitFor. Every failure is returned, so that "! ui" stops at
 // the first one instead of going on with what failed to open.
-func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo, waitFor string) error {
+func runUI(ts *testscript.TestScript, key ssh.Signer, in, command, waitFor string) error {
 	cli, err := ssh.Dial(
 		"tcp",
 		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
@@ -508,7 +506,7 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo, waitFor s
 	if err := sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{}); err != nil {
 		return err
 	}
-	if err := sess.Start(initialRepo); err != nil {
+	if err := sess.Start(command); err != nil {
 		return err
 	}
 

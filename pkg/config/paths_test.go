@@ -167,7 +167,10 @@ func TestNewConfigFileAnonAccessAllowKeylessCommented(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("anon_access: admin-access\nallow_keyless: false\n"), cfg); err != nil {
 		t.Fatal(err)
 	}
-	s := newConfigFile(cfg)
+	s, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"\n#anon_access: ", "\n#allow_keyless: "} {
 		if !strings.Contains(s, want) {
 			t.Errorf("written config lacks %q", want)
@@ -206,7 +209,11 @@ func TestParseEmptyMirrorPull(t *testing.T) {
 		// The written config keeps an empty spec empty.
 		var back Config
 		back.Jobs.MirrorPull = "@every 10m"
-		if err := yaml.Unmarshal([]byte(newConfigFile(cfg)), &back); err != nil {
+		written, err := newConfigFile(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal([]byte(written), &back); err != nil {
 			t.Fatal(err)
 		}
 		if back.Jobs.MirrorPull != c.want {

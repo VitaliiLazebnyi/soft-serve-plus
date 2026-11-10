@@ -3,7 +3,7 @@ Set Height 900
 Set FontSize 22
 
 Output soft-serve-browse.gif
-Output soft-serve-frames/
+Output soft-serve-browse-frames/
 
 Type@300ms "soft"
 Enter
