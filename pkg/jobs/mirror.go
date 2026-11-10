@@ -1,11 +1,16 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -85,7 +90,9 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 			if err != nil {
 				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
 			}
-			remotes.validated = append(remotes.validated, v)
+			// fetch and remote update reach each remote by name, so a
+			// remote.<name>.proxy must be cleared too.
+			remotes.validated = append(remotes.validated, v.Named(name))
 		}
 		remotes.names = append(remotes.names, name)
 	}
@@ -109,9 +116,7 @@ var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
 func syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
-		cmd := git.NewCommand("fetch", "--prune", "--", name).WithContext(ctx).WithTimeout(-1)
-		cmd.AddEnvs(env...)
-		if _, err := cmd.RunInDir(path); err != nil {
+		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name); err != nil {
 			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
 		}
 	}
@@ -242,4 +247,86 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		wq.Run()
 	}
+}
+
+// mirrorGitTimeout bounds a single git command of a mirror sync.
+//
+// The job waits for every repository before it finishes, and the scheduler
+// skips its runs while one is still going, so a command that never returns
+// stops every mirror on the server from syncing. Stalls are caught much
+// sooner by the low-speed and keepalive settings in RemoteGitEnv; this is the
+// backstop for what those miss, such as git:// remotes, which git dials itself
+// with no read timeout, and remotes that trickle data just fast enough.
+var mirrorGitTimeout = time.Hour
+
+// mirrorGitWaitDelay is how long, once git is killed, the sync waits for the
+// helpers git started (git-remote-http, ssh) to let go of its output.
+// They inherit git's stderr and outlive it when killed; past this the output
+// is closed and the sync moves on.
+const mirrorGitWaitDelay = 5 * time.Second
+
+// mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
+// The remote can write to it (remote: lines), so it is not kept in full.
+const mirrorGitStderrLimit = 4 << 10
+
+// runMirrorGit runs one git command of a mirror sync in dir with env applied,
+// killing it after mirrorGitTimeout or when ctx is done.
+func runMirrorGit(ctx context.Context, dir string, env []string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, mirrorGitTimeout)
+	defer cancel()
+
+	var stderr limitedBuffer
+	stderr.limit = mirrorGitStderrLimit
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = mirrorGitWaitDelay
+
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		if msg := redactURLs(strings.TrimSpace(stderr.String())); msg != "" {
+			err = fmt.Errorf("%w: %s", err, msg)
+		}
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// urlPattern matches a URL as git and remotes print it in messages: a scheme
+// and everything up to the next space or quote.
+var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
+
+// redactURLs strips the user info and query from every URL in msg. git leaves
+// out the user info of the remote URLs it prints but keeps their query, which
+// can hold a token, and the remote's own lines can hold any URL.
+func redactURLs(msg string) string {
+	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
+}
+
+// limitedBuffer keeps the first limit bytes written to it and discards the
+// rest, reporting every write as complete so the writer is not cut off.
+//
+// The buffer is a named field rather than embedded so that limitedBuffer has
+// no ReadFrom: os/exec copies a pipe into a non-file Stderr with io.Copy,
+// which would call an embedded bytes.Buffer.ReadFrom and bypass the cap.
+type limitedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+// Write implements io.Writer.
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// String returns the bytes kept so far.
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
 }

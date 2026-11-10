@@ -315,6 +315,8 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
 
   # The maximum number of concurrent connections.
@@ -331,7 +333,8 @@ http:
   # The path to the TLS private key.
   tls_key_path: ""
 
-  # The path to the TLS certificate.
+  # The path to the TLS certificate. Set both paths to serve HTTPS, or
+  # neither to serve plain HTTP.
   tls_cert_path: ""
 
   # The public URL of the HTTP server.
@@ -420,6 +423,8 @@ lfs:
 
 # Cron job configuration
 jobs:
+  # How often pull mirrors sync: a standard five-field cron spec or a
+  # descriptor such as "@hourly" or "@every 10m".
   mirror_pull: "@every 10m"
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
@@ -475,6 +480,14 @@ webhook:
 # count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
+# Largest file, in bytes, that the TUI and "repo blob" read into memory to
+# display. Larger files are refused ("repo blob --raw" streams them instead),
+# and a larger README is not shown. The TUI highlights and wraps a file
+# while handling input, so this limit is also what keeps one file view from
+# stalling a session: raising it, or 0 for no limit, makes large files slow
+# to open and costly in memory. Defaults to 1048576 (1 MiB).
+#max_blob_size: 1048576
+
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without
 # --private, and default_repo. "repo create --private=false" still creates a
@@ -509,6 +522,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.
 - `SOFT_SERVE_MAX_REPOS_PER_USER`: Maximum number of repositories each user may create. Server admins are exempt, and repositories created without an account count together as one user. Defaults to `0` (no limit).
+- `SOFT_SERVE_MAX_BLOB_SIZE`: Largest file, in bytes, that the TUI and `repo blob` read into memory to display. Larger files are refused (`repo blob --raw` streams them instead), and a larger README is not shown. Defaults to `1048576` (1 MiB); `0` means no limit.
 - `SOFT_SERVE_DEFAULT_PRIVATE`: Make repositories created without an explicit visibility (push-to-create, `repo create` and `repo import` without `--private`, `default_repo`) private. Defaults to `false`. When set, anonymous push-to-create is refused, and anonymous `repo create` and `repo import` need `--private=false`, since an anonymous user could not access the private repository.
 - `SOFT_SERVE_DEFAULT_REPO`: Repository name to create on boot if missing
 - `SOFT_SERVE_SSH_KEX_ALGORITHMS`, `SOFT_SERVE_SSH_CIPHERS`, `SOFT_SERVE_SSH_MACS`: Comma-separated lists of the SSH key exchange algorithms, ciphers and MACs to offer. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
@@ -1070,6 +1084,14 @@ ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLaz
 Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way.
 
 An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
+
+Imports and mirror syncs over http, https and `git://` connect to the remote
+directly. They ignore any proxy set for the server, whether through
+`http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
+(including URL-scoped `http.<url>.proxy`), `remote.<name>.proxy` and
+`core.gitProxy` in its git configuration, since a proxy would resolve the
+remote's host name itself and could reach internal addresses the import check
+refuses. Webhooks and Git LFS transfers never use a proxy either.
 
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
