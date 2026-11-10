@@ -72,12 +72,13 @@ func TestServerConnDeadlineSubSecond(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
+		read bool
 		conn func(time.Time) *serverConn
 	}{
-		{"init", func(maxDeadline time.Time) *serverConn {
-			return &serverConn{initTimeout: time.Nanosecond, maxDeadline: maxDeadline}
+		{"init", true, func(maxDeadline time.Time) *serverConn {
+			return &serverConn{initDeadline: time.Now().Add(time.Nanosecond), maxDeadline: maxDeadline}
 		}},
-		{"idle", func(maxDeadline time.Time) *serverConn {
+		{"idle", false, func(maxDeadline time.Time) *serverConn {
 			return &serverConn{idleTimeout: time.Nanosecond, maxDeadline: maxDeadline}
 		}},
 	} {
@@ -89,7 +90,7 @@ func TestServerConnDeadlineSubSecond(t *testing.T) {
 			dc := &deadlineConn{}
 			c := tc.conn(maxDeadline)
 			c.Conn = dc
-			c.updateDeadline()
+			c.updateDeadline(tc.read)
 			if !dc.deadline.Before(maxDeadline) {
 				t.Fatalf("deadline = %v, want before max deadline %v", dc.deadline, maxDeadline)
 			}
