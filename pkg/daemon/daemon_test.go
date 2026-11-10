@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -219,6 +221,97 @@ func TestInvalidRepo(t *testing.T) {
 	public := requestUploadPack(t, "public")
 	if public == want || public == git.ErrInvalidRepo.Error() {
 		t.Errorf("public repo was refused: %q", public)
+	}
+}
+
+// readAll sends a request to the daemon and returns everything it answers
+// with until it closes the connection.
+func readAll(t *testing.T, request ...string) []byte {
+	t.Helper()
+	var dialer net.Dialer
+	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if err := c.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set deadline: %v", err)
+	}
+	for _, r := range request {
+		if _, err := io.WriteString(c, r); err != nil {
+			t.Fatalf("failed to write request: %v", err)
+		}
+	}
+	out, err := io.ReadAll(c)
+	if err != nil && !isReset(err) {
+		t.Fatalf("failed to read answer: %v", err)
+	}
+	return out
+}
+
+// isReset reports whether err is the connection being reset, which a server
+// that closes with unread input can cause instead of a clean end.
+func isReset(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || strings.Contains(err.Error(), "forcibly closed")
+}
+
+func pkt(s string) string {
+	return fmt.Sprintf("%04x%s", len(s)+4, s)
+}
+
+// TestGitStderrNotSentToClient verifies that git's stderr and its error are
+// kept out of the protocol stream. A protocol v2 request for an unknown
+// command makes git print "fatal: invalid command" and exit with an error
+// after it has advertised its capabilities.
+func TestGitStderrNotSentToClient(t *testing.T) {
+	if _, err := testBackend.CreateRepository(t.Context(), "stderr", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	out := readAll(t,
+		pkt("git-upload-pack /stderr.git\x00host=localhost\x00\x00version=2\x00"),
+		pkt("command=foobar\n"), "0000",
+	)
+	if !bytes.Contains(out, []byte("version 2")) {
+		t.Fatalf("expected a protocol v2 capability advertisement, got %q", out)
+	}
+	for _, s := range []string{"fatal", "invalid command", "ERR", "exit status"} {
+		if bytes.Contains(out, []byte(s)) {
+			t.Errorf("answer contains %q: %q", s, out)
+		}
+	}
+	// Everything the daemon sent must parse as pkt-lines.
+	sc := pktline.NewScanner(bytes.NewReader(out))
+	for sc.Scan() { //nolint:revive
+	}
+	if err := sc.Err(); err != nil {
+		t.Errorf("answer is not a valid pkt-line stream: %v: %q", err, out)
+	}
+}
+
+// TestGitFailureFixedMessage verifies that when git fails before answering,
+// the client gets a fixed error message instead of git's output and error.
+func TestGitFailureFixedMessage(t *testing.T) {
+	if _, err := testBackend.CreateRepository(t.Context(), "broken", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	// Leave an empty directory in place of the repository, which git
+	// refuses as not a git repository.
+	dir := filepath.Join(testDaemon.cfg.DataPath, "repos", "broken.git")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := readAll(t, pkt("git-upload-pack /broken.git\x00host=localhost\x00"))
+	want := pkt("ERR " + git.ErrSystemMalfunction.Error() + "\n")
+	if !bytes.HasPrefix(out, []byte(want)) {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+	for _, s := range []string{"fatal", "not a git repository", "exit status"} {
+		if bytes.Contains(out, []byte(s)) {
+			t.Errorf("answer contains %q: %q", s, out)
+		}
 	}
 }
 
