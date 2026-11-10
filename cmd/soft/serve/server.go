@@ -78,6 +78,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	// Add cron jobs.
 	sched := cron.NewScheduler(ctx)
 	scheduleJobs(ctx, sched, logger)
+
 	srv.Cron = sched
 
 	ensureDefaultRepo(ctx, cfg, be, logger)
@@ -465,7 +466,7 @@ func scheduleJobs(ctx context.Context, sched *cron.Scheduler, logger *log.Logger
 			continue
 		}
 
-		id, err := sched.AddFunc(spec, j.Runner.Func(ctx))
+		id, err := sched.AddFunc(n, spec, j.Runner.Func(ctx))
 		if err != nil {
 			logger.Warn("error adding cron job", "job", n, "err", err)
 		}
