@@ -448,9 +448,7 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	}
 
 	// The delivery is recorded and the older ones pruned in one transaction,
-	// so SQLite takes its write lock and syncs once. Recording comes first:
-	// a SQLite transaction that writes first waits for other writers rather
-	// than failing with SQLITE_BUSY.
+	// so SQLite takes its write lock and syncs once.
 	//
 	// On Postgres seq is taken from its sequence when a row is inserted, not
 	// when it commits. Deliveries of one webhook are recorded by separate

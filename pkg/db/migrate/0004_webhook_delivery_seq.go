@@ -43,7 +43,7 @@ var webhookDeliverySeq = Migration{
 // data source is relative to the data path, and sqlite3 run from another
 // directory would create a new, empty file instead.
 func suggestSqliteVacuum(ctx context.Context, tx *db.Tx) {
-	if d := tx.DriverName(); d != "sqlite" && d != "sqlite3" {
+	if tx.DriverName() != "sqlite" {
 		return
 	}
 	var hasRows bool
