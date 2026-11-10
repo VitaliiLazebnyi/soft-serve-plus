@@ -34,7 +34,7 @@ const (
 	// UsageTemplate is the template used for the help output.
 	UsageTemplate = `Usage:{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
-  {{.SSHCommand}}{{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
 
 Aliases:
   {{.NameAndAliases}}{{end}}{{if .HasExample}}
@@ -60,21 +60,28 @@ Global Flags:
 Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
   {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
 
-Use "{{.SSHCommand}}{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
 `
 )
 
 // UsageFunc is a function that can be used as a cobra.Command's
 // UsageFunc to render the help output.
 func UsageFunc(c *cobra.Command) error {
-	ctx := c.Context()
-	cfg := config.FromContext(ctx)
+	t := template.New("usage")
+	t.Funcs(templateFuncs)
+	template.Must(t.Parse(c.UsageTemplate()))
+	return t.Execute(c.OutOrStderr(), c)
+}
+
+// SSHCommand returns the ssh invocation that reaches the server, such as
+// "ssh -p 23231 localhost", for help and error output. The root command
+// shows it as its name, so every command path starts with it.
+func SSHCommand(cfg *config.Config) string {
 	hostname := "localhost"
 	port := "23231"
-	url, err := url.Parse(cfg.SSH.PublicURL)
-	if err == nil {
-		hostname = url.Hostname()
-		port = url.Port()
+	if u, err := url.Parse(cfg.SSH.PublicURL); err == nil {
+		hostname = u.Hostname()
+		port = u.Port()
 	}
 
 	sshCmd := "ssh"
@@ -82,17 +89,7 @@ func UsageFunc(c *cobra.Command) error {
 		sshCmd += " -p " + port
 	}
 
-	sshCmd += " " + hostname
-	t := template.New("usage")
-	t.Funcs(templateFuncs)
-	template.Must(t.Parse(c.UsageTemplate()))
-	return t.Execute(c.OutOrStderr(), struct {
-		*cobra.Command
-		SSHCommand string
-	}{
-		Command:    c,
-		SSHCommand: sshCmd,
-	})
+	return sshCmd + " " + hostname
 }
 
 func trimRightSpace(s string) string {
@@ -129,7 +126,6 @@ type repoContextKey struct{}
 // caller's access level on it. repo is nil only for server admins acting
 // on a name with no repository behind it.
 type repoStash struct {
-	name  string
 	repo  proto.Repository
 	level access.AccessLevel
 }
@@ -148,7 +144,7 @@ func requireRepo(need access.AccessLevel) func(*cobra.Command, []string) error {
 			return denyRead(ctx)
 		}
 
-		cmd.SetContext(context.WithValue(ctx, repoContextKey{}, repoStash{name: name, repo: repo, level: level}))
+		cmd.SetContext(context.WithValue(ctx, repoContextKey{}, repoStash{repo: repo, level: level}))
 		return requireLevel(cmd.Context(), need)
 	}
 }

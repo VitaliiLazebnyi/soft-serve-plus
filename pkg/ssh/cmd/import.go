@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
-// importCommand is the command for creating a new repository.
+// importCommand is the command for importing a repository from a remote.
 func importCommand() *cobra.Command {
 	var private bool
 	var description string
@@ -31,7 +32,7 @@ func importCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := be.ImportRepository(ctx, name, user, remote, proto.RepositoryOptions{
+			r, err := be.ImportRepository(ctx, name, user, remote, proto.RepositoryOptions{
 				Private:     private,
 				Description: description,
 				ProjectName: projectName,
@@ -39,9 +40,15 @@ func importCommand() *cobra.Command {
 				Hidden:      hidden,
 				LFS:         lfs,
 				LFSEndpoint: lfsEndpoint,
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+
+			// Like create: the clone URL on stdout, the rest on stderr.
+			cfg := config.FromContext(ctx)
+			cmd.PrintErrf("Imported repository %s\n", r.Name())
+			cmd.Printf("%s/%s.git\n", cfg.SSH.PublicURL, r.Name())
 
 			return nil
 		},

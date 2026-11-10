@@ -175,16 +175,17 @@ func GitLFSTransfer() *cobra.Command {
 var errLFSAuthNoAccount = errors.New("git-lfs-authenticate needs an account: register this SSH key or use an HTTP(S) remote for LFS")
 
 // gitDenyRead is denyReadAs for git services: ErrNotAuthed when anonymous,
-// ErrInvalidRepo when registered.
-func gitDenyRead(user proto.User) error {
-	return denyReadAs(user == nil, git.ErrNotAuthed, git.ErrInvalidRepo)
+// ErrInvalidRepo otherwise.
+func gitDenyRead(anonymous bool) error {
+	return denyReadAs(anonymous, git.ErrNotAuthed, git.ErrInvalidRepo)
 }
 
 // gitAccess authorizes a git service that needs level need on repo, which
-// is nil when the caller may not read it (see backend.Readable).
-func gitAccess(user proto.User, repo proto.Repository, have, need access.AccessLevel) error {
+// is nil when the caller may not read it (see backend.Readable). anonymous
+// is as for denyRead: no account and not a server admin.
+func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLevel) error {
 	if repo == nil || have < access.ReadOnlyAccess {
-		return gitDenyRead(user)
+		return gitDenyRead(anonymous)
 	}
 	if have < need {
 		return git.ErrNotAuthed
@@ -421,6 +422,9 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 	// account never gets this far: the SSH middleware refuses its session.)
 	repo, accessLevel := readableRepo(ctx, name)
 	ctx = proto.WithRepositoryContext(ctx, repo)
+	// As in denyRead, a server admin is never anonymous: nothing is hidden
+	// from them.
+	anonymous := user == nil && !isServerAdmin(ctx)
 
 	// Environment variables to pass down to git hooks.
 	envs := []string{
@@ -464,7 +468,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 	switch service {
 	case git.ReceivePackService:
 		if repo != nil {
-			if err := gitAccess(user, repo, accessLevel, access.ReadWriteAccess); err != nil {
+			if err := gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess); err != nil {
 				return err
 			}
 			if repo.IsMirror() {
@@ -503,12 +507,14 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			if _, err := be.CreateRepository(ctx, name, user, proto.RepositoryOptions{Private: private}); err != nil {
-				log.Errorf("failed to create repo: %s", err)
+				// Mostly a bad name or a limit, which the client is told;
+				// the backend logs its own failures.
+				logger.Debug("failed to create repo", "err", err, "repo", name)
 				return err
 			}
 			createRepoCounter.WithLabelValues(name).Inc()
 		} else if repo == nil {
-			return gitAccess(user, repo, accessLevel, access.ReadWriteAccess)
+			return gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess)
 		}
 
 		// Count only pushes that passed the access check, so a refused
@@ -535,7 +541,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 		return nil
 	case git.UploadPackService, git.UploadArchiveService:
-		if err := gitAccess(user, repo, accessLevel, access.ReadOnlyAccess); err != nil {
+		if err := gitAccess(anonymous, repo, accessLevel, access.ReadOnlyAccess); err != nil {
 			return err
 		}
 
@@ -578,12 +584,13 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			// git-lfs-transfer stays on SSH and keeps the admin key's
 			// access.
 			repo, accessLevel = be.Readable(ctx, name, user)
+			anonymous = user == nil
 			// Keep the context in step with the repo checked here, so the
 			// handler never sees the one readableRepo looked up.
 			ctx = proto.WithRepositoryContext(ctx, repo)
 		}
 
-		if err := gitAccess(user, repo, accessLevel, need); err != nil {
+		if err := gitAccess(anonymous, repo, accessLevel, need); err != nil {
 			return err
 		}
 
