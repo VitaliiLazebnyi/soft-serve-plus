@@ -88,8 +88,8 @@ func shownRepo(t *testing.T, ui *UI) string {
 func TestUIDropsLateRepoOpen(t *testing.T) {
 	ui := newRepoTestUI(t)
 
-	openA := ui.openRepoCmd("a", false)
-	openB := ui.openRepoCmd("b", false)
+	openA := ui.openRepoCmd("a")
+	openB := ui.openRepoCmd("b")
 	msgB := openB()
 	msgA := openA()
 
@@ -108,8 +108,8 @@ func TestUIDropsLateRepoOpen(t *testing.T) {
 func TestUIDropsLateRepoOpenError(t *testing.T) {
 	ui := newRepoTestUI(t)
 
-	openMissing := ui.openRepoCmd("missing", false)
-	openB := ui.openRepoCmd("b", false)
+	openMissing := ui.openRepoCmd("missing")
+	openB := ui.openRepoCmd("b")
 	ui.Update(openB())
 	ui.Update(openMissing())
 	if ui.state == errorState {
@@ -120,31 +120,31 @@ func TestUIDropsLateRepoOpenError(t *testing.T) {
 	}
 
 	// The newest open still reports its error.
-	ui.Update(ui.openRepoCmd("missing", false)())
+	ui.Update(ui.openRepoCmd("missing")())
 	if ui.state != errorState || !errors.Is(ui.error, common.ErrMissingRepo) {
 		t.Fatalf("state %v, error %v; want the missing repository error", ui.state, ui.error)
 	}
 }
 
 // TestUIInitialRepoOpen checks the initial repository: it is shown when it
-// opens, a missing one leaves the selection page without an error, and one
+// opens, a missing one shows the missing repository error, and one
 // that finishes after the user picked another repository is dropped.
 func TestUIInitialRepoOpen(t *testing.T) {
 	ui := newRepoTestUI(t)
-	ui.Update(ui.openRepoCmd("a", true)())
+	ui.Update(ui.openRepoCmd("a")())
 	if got := shownRepo(t, ui); got != "a" {
 		t.Fatalf("initial repository: the UI shows %q, want a", got)
 	}
 
 	ui = newRepoTestUI(t)
-	ui.Update(ui.openRepoCmd("missing", true)())
-	if ui.state == errorState || ui.activePage != selectionPage {
-		t.Fatalf("a missing initial repository changed the UI: state %v, page %v", ui.state, ui.activePage)
+	ui.Update(ui.openRepoCmd("missing")())
+	if ui.state != errorState || !errors.Is(ui.error, common.ErrMissingRepo) {
+		t.Fatalf("a missing initial repository: state %v, error %v; want the missing repository error", ui.state, ui.error)
 	}
 
 	ui = newRepoTestUI(t)
-	initial := ui.openRepoCmd("a", true)
-	ui.Update(ui.openRepoCmd("b", false)())
+	initial := ui.openRepoCmd("a")
+	ui.Update(ui.openRepoCmd("b")())
 	ui.Update(initial())
 	if got := shownRepo(t, ui); got != "b" {
 		t.Fatalf("a late initial repository replaced b: the UI shows %q", got)
@@ -163,7 +163,7 @@ func TestUIRepoOpenDoesNotReadModel(t *testing.T) {
 	}
 
 	for range 20 {
-		open := ui.openRepoCmd("a", false)
+		open := ui.openRepoCmd("a")
 		var wg sync.WaitGroup
 		var msg any
 		wg.Add(1)
