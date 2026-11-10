@@ -80,9 +80,12 @@ func (e *lfsScanError) Unwrap() error { return e.err }
 // StoreRepoMissingLFSObjects stores missing LFS objects for a repository. It
 // scans the whole history of the repository.
 //
-// Objects the remote can't provide are logged and skipped, and counted in an
-// error wrapping ErrLFSObjectsUnavailable once every other object is stored.
-// Any other error stops the sync.
+// Objects the remote can't provide (an error for the object in the batch
+// response, a download that answers 404 or a redirect, content that doesn't
+// match) are logged and skipped, and counted in an error wrapping
+// ErrLFSObjectsUnavailable once every other object is stored. Any other
+// error stops the sync, including a download that fails or breaks off for a
+// reason that may pass on a later try, such as a dropped connection or a 5xx.
 func (d *Backend) StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client) error {
 	return d.storeRepoLFSObjects(ctx, repo, lfsClient, false)
 }
@@ -326,9 +329,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			// Stream the object to a temporary file outside of any database
 			// transaction, so a slow download doesn't hold the write lock.
 			randBytes := make([]byte, 12)
-			if _, err := rand.Read(randBytes); err != nil {
-				return err
-			}
+			_, _ = rand.Read(randBytes) // crypto/rand.Read never fails.
 
 			tempName := path.Join("incomplete", fmt.Sprintf("%s%x", p.Oid, randBytes))
 			// Read one byte past the expected size, enough to tell that

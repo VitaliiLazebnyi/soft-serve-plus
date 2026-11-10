@@ -32,7 +32,7 @@ import (
 
 // RemotePolicy returns the policy for git remotes supplied on behalf of user:
 // the operator's ssh allowlist, and, for server admins, leave to pick any ssh
-// host when no allowlist is configured. A nil user gets neither.
+// host when no allowlist is configured. A nil user gets only the allowlist.
 //
 // Only the user's stored admin flag counts. It is meant for callers with no
 // live session, such as the mirror job acting for a repository's owner. A
@@ -224,8 +224,6 @@ func (d *Backend) DefaultPrivate(ctx context.Context, user proto.User) (bool, er
 }
 
 // CreateRepository creates a new repository.
-//
-// It implements backend.Backend.
 func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
 	if err := d.checkCanClaim(ctx, user, utils.SanitizeRepo(name)); err != nil {
 		return nil, err
@@ -413,6 +411,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 	}
 	anonymous := userID == 0
 
+	var m models.Repo
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if anonymous {
 			// Anonymous callers (e.g. an anon-access/allow-keyless
@@ -474,7 +473,15 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		return hooks.GenerateHooks(ctx, d.cfg, name)
+		if err := hooks.GenerateHooks(ctx, d.cfg, name); err != nil {
+			return err
+		}
+
+		// Read the row back here rather than after the commit, so nothing
+		// can fail once the repository is recorded and leave it behind.
+		var err error
+		m, err = d.store.GetRepoByName(ctx, tx, name)
+		return err
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
 		d.removeRepoDir(rp) //nolint:errcheck
@@ -493,7 +500,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 		d.afterRegister()
 	}
 
-	return d.Repository(ctx, name)
+	return &repo{
+		name:   name,
+		path:   rp,
+		repo:   m,
+		logger: d.logger,
+	}, nil
 }
 
 // DefaultAdmin returns the lowest-ID admin user, the account that owns
@@ -585,7 +597,7 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		path:      d.repoPath(name),
 		remote:    remote,
 		logRemote: redactRemote(remote),
-		env:       RemoteGitEnv(d.cfg, v),
+		env:       RemoteGitEnv(d.cfg, v.ForClone()),
 		opts:      opts,
 		limited:   limited,
 		committed: slot.markRegistered,
@@ -754,7 +766,9 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // so one missing object doesn't throw the whole import away. For a mirror,
 // the mirror job tries them again on every sync; a plain import never
 // fetches them again, so they stay missing until someone pushes them. Any
-// other failure fails the import.
+// other failure fails the import, including a transfer that fails for a
+// reason a retry may get past, such as a dropped connection or a 5xx, so
+// such objects are not dropped for good.
 func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
 	err := d.StoreRepoMissingLFSObjects(ctx, r, client)
 	var unavailable *lfsObjectsUnavailableError
@@ -772,8 +786,6 @@ func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository,
 }
 
 // DeleteRepository deletes a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) DeleteRepository(ctx context.Context, name string) error {
 	return d.deleteRepository(ctx, name, nil)
 }
@@ -804,14 +816,17 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	defer d.repoDirs.hold(name)()
 
 	// Build the webhook event before deleting. A repository whose directory is
-	// gone has no event, but its database row still has to go.
+	// gone has no event, but its database row still has to go. An event that
+	// cannot be built (its owner lookup failed) is logged and skipped rather
+	// than stopping the delete.
 	var wh *webhook.RepositoryEvent
 	r, err := d.Repository(ctx, name)
 	switch {
 	case err == nil:
 		ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
 		if err != nil {
-			return err
+			d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
+			break
 		}
 		wh = &ev
 	case !errors.Is(err, proto.ErrRepoNotFound):
@@ -865,8 +880,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 
 		repoID = repom.ID
 
-		// Remove the webhooks and their rows explicitly, so none are left
-		// behind whether or not the connection enforces foreign keys.
+		// Remove the webhooks and their rows explicitly. The repository's
+		// other rows (collaborators, LFS objects and locks) go with it by
+		// ON DELETE CASCADE, which relies on foreign keys being enforced.
 		if err := d.deleteRepoWebhookRows(ctx, tx, repom.ID); err != nil {
 			return db.WrapError(err)
 		}
@@ -930,8 +946,6 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 }
 
 // RenameRepository renames a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName string) error {
 	oldName = utils.SanitizeRepo(oldName)
 	if err := utils.ValidateRepo(oldName); err != nil {
@@ -1035,9 +1049,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	return nil
 }
 
-// Repositories returns a list of repositories per page.
-//
-// It implements backend.Backend.
+// Repositories returns every repository.
 func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) {
 	repos := make([]proto.Repository, 0)
 
@@ -1050,7 +1062,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 		for _, m := range ms {
 			r := &repo{
 				name:   m.Name,
-				path:   filepath.Join(d.repoPath(m.Name)),
+				path:   d.repoPath(m.Name),
 				repo:   m,
 				logger: d.logger,
 			}
@@ -1067,8 +1079,6 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 }
 
 // Repository returns a repository by name.
-//
-// It implements backend.Backend.
 func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository, error) {
 	var m models.Repo
 	name = utils.SanitizeRepo(name)
@@ -1119,8 +1129,6 @@ func wrapRepoError(err error) error {
 }
 
 // Description returns the description of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) Description(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var desc string
@@ -1136,8 +1144,6 @@ func (d *Backend) Description(ctx context.Context, name string) (string, error) 
 }
 
 // IsMirror returns true if the repository is a mirror.
-//
-// It implements backend.Backend.
 func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var mirror bool
@@ -1152,8 +1158,6 @@ func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 }
 
 // IsPrivate returns true if the repository is private.
-//
-// It implements backend.Backend.
 func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var private bool
@@ -1169,8 +1173,6 @@ func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 }
 
 // IsHidden returns true if the repository is hidden.
-//
-// It implements backend.Backend.
 func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var hidden bool
@@ -1186,8 +1188,6 @@ func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 }
 
 // ProjectName returns the project name of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var pname string
@@ -1203,8 +1203,6 @@ func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) 
 }
 
 // SetHidden sets the hidden flag of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetHidden(ctx context.Context, name string, hidden bool) error {
 	name = utils.SanitizeRepo(name)
 
@@ -1386,8 +1384,6 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 }
 
 // SetDescription sets the description of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetDescription(ctx context.Context, name string, desc string) error {
 	name = utils.SanitizeRepo(name)
 	desc = utils.Sanitize(desc)
@@ -1403,20 +1399,23 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 			return err
 		}
 
+		// The row is written first and the file last, so a failure writing
+		// the file rolls the row back and the two stay in step.
+		if err := d.store.SetRepoDescriptionByName(ctx, tx, name, desc); err != nil {
+			return err
+		}
+
 		// The raw error carries the server data path, so log it and return
 		// a generic one.
 		if err := os.WriteFile(filepath.Join(rp, "description"), []byte(desc), fs.ModePerm); err != nil {
 			d.logger.Error("failed to write description", "repo", name, "err", err)
 			return errRepoUpdate
 		}
-
-		return d.store.SetRepoDescriptionByName(ctx, tx, name, desc)
+		return nil
 	}))
 }
 
 // SetPrivate sets the private flag of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
@@ -1436,6 +1435,12 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 			}
 			changed = m.Private != private
 
+			// The flag is written first and the file last, so a failure
+			// writing the file rolls the flag back and the two stay in step.
+			if err := d.store.SetRepoIsPrivateByName(ctx, tx, name, private); err != nil {
+				return err
+			}
+
 			fp := filepath.Join(rp, "git-daemon-export-ok")
 			if !private {
 				if err := os.WriteFile(fp, []byte{}, fs.ModePerm); err != nil {
@@ -1451,7 +1456,7 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 				}
 			}
 
-			return d.store.SetRepoIsPrivateByName(ctx, tx, name, private)
+			return nil
 		}),
 	); err != nil {
 		return err
@@ -1481,8 +1486,6 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 }
 
 // SetProjectName sets the project name of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetProjectName(ctx context.Context, repo string, name string) error {
 	repo = utils.SanitizeRepo(repo)
 	name = utils.Sanitize(name)
@@ -1568,7 +1571,6 @@ func (r *repo) ID() int64 {
 }
 
 // UserID returns the repository's owner's user ID.
-// If the repository is not owned by anyone, it returns 0.
 //
 // It implements proto.Repository.
 func (r *repo) UserID() int64 {
@@ -1580,35 +1582,35 @@ func (r *repo) UserID() int64 {
 
 // Description returns the repository's description.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Description() string {
 	return r.repo.Description
 }
 
 // IsMirror returns whether the repository is a mirror.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsMirror() bool {
 	return r.repo.Mirror
 }
 
 // IsPrivate returns whether the repository is private.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsPrivate() bool {
 	return r.repo.Private
 }
 
 // Name returns the repository's name.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Name() string {
 	return r.name
 }
 
 // Open opens the repository.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Open() (*git.Repository, error) {
 	gr, err := git.Open(r.path)
 	if err != nil {
@@ -1634,14 +1636,14 @@ func openRepoError(logger *log.Logger, err error, path string) error {
 
 // ProjectName returns the repository's project name.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) ProjectName() string {
 	return r.repo.ProjectName
 }
 
 // IsHidden returns whether the repository is hidden.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsHidden() bool {
 	return r.repo.Hidden
 }
