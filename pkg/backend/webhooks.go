@@ -27,7 +27,7 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 	dbx := d.db
 	datastore := d.store
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, events); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
 	}
 	events = dedupeEvents(events)
@@ -151,7 +151,7 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 	datastore := d.store
 
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
 		return err
 	}
 	updatedEvents = dedupeEvents(updatedEvents)
@@ -466,10 +466,10 @@ func (d *Backend) webhookAllowedHosts() ssrf.AllowedHosts {
 
 // validateWebhookInput checks a webhook's URL, content type and events before
 // anything is stored. The URL may reach the private and internal
-// destinations allowed permits.
-func validateWebhookInput(allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
+// destinations allowed permits. The URL's hostname lookup ends with ctx.
+func validateWebhookInput(ctx context.Context, allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
 	// Validate webhook URL to prevent SSRF attacks.
-	if err := webhook.ValidateWebhookURLAllowing(url, allowed); err != nil {
+	if err := webhook.ValidateWebhookURLAllowing(ctx, url, allowed); err != nil {
 		return err //nolint:wrapcheck
 	}
 	if contentType.String() == "" {

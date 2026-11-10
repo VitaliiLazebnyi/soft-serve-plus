@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -153,5 +155,121 @@ func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("read transaction saw %d rows, want 1", n)
+	}
+}
+
+// TestSqliteWritersTakeTurns checks that concurrent write transactions of
+// one process all succeed when between them they hold the write lock far
+// longer than busy_timeout, as a burst of writes does on a slow disk:
+// they wait for their turn instead of failing at BEGIN with "database is
+// locked".
+func TestSqliteWritersTakeTurns(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(50)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 16
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			<-start
+			errs <- d.TransactionContext(ctx, func(tx *Tx) error {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (?)", i); err != nil {
+					return err
+				}
+				// Hold the write lock as a slow commit would; all the
+				// writers together hold it for several busy_timeouts.
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			})
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("writer: %v", err)
+		}
+	}
+
+	var n int
+	if err := d.GetContext(ctx, &n, "SELECT COUNT(*) FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if n != writers {
+		t.Errorf("rows = %d, want %d", n, writers)
+	}
+}
+
+// TestSqliteWriterWaitEndsWithContext checks that a write transaction
+// waiting for its turn gives up when its context ends, and that reads do
+// not wait for the turn at all.
+func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	written := make(chan struct{})
+	release := make(chan struct{})
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			close(written)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-written:
+	case err := <-writerErr:
+		t.Fatalf("writer: %v", err)
+	}
+
+	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	called := false
+	err = d.TransactionContext(wctx, func(*Tx) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiting writer = %v, want context.DeadlineExceeded", err)
+	}
+	if called {
+		t.Error("waiting writer ran fn without its turn")
+	}
+
+	rctx, rcancel := context.WithTimeout(ctx, 2*time.Second)
+	defer rcancel()
+	var n int
+	if err := d.ReadTransactionContext(rctx, func(tx *Tx) error {
+		return tx.GetContext(rctx, &n, "SELECT COUNT(*) FROM t")
+	}); err != nil {
+		t.Errorf("read transaction: %v", err)
+	}
+
+	close(release)
+	if err := <-writerErr; err != nil {
+		t.Fatalf("writer: %v", err)
 	}
 }
