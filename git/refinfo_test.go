@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // RefInfos lists branches and tags with the commit each points to, peeling
@@ -29,8 +30,18 @@ func TestRefInfos(t *testing.T) {
 	run("tag", "-a", "-m", "release one\n\nbody line", "annotated")
 	run("tag", "tree", "HEAD^{tree}")
 	run("tag", "-a", "-m", "a tree", "annotated-tree", "HEAD^{tree}")
-	authorDate := run("log", "-1", "--format=%aI")
-	committerDate := run("log", "-1", "--format=%cI")
+	// Git prints a UTC date as "Z" or "+00:00" depending on its version, so
+	// the dates are compared as instants rather than as text.
+	parseDate := func(s string) time.Time {
+		t.Helper()
+		d, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	authorDate := parseDate(run("log", "-1", "--format=%aI"))
+	committerDate := parseDate(run("log", "-1", "--format=%cI"))
 
 	tags, err := repo.RefInfos(RefsTags)
 	if err != nil {
@@ -68,9 +79,9 @@ func TestRefInfos(t *testing.T) {
 			}
 			continue
 		}
-		if a, c := info.AuthorWhen.Format("2006-01-02T15:04:05-07:00"),
-			info.CommitterWhen.Format("2006-01-02T15:04:05-07:00"); a != authorDate || c != committerDate {
-			t.Errorf("tag %q has dates %s, %s; want the commit's %s, %s", name, a, c, authorDate, committerDate)
+		if !info.AuthorWhen.Equal(authorDate) || !info.CommitterWhen.Equal(committerDate) {
+			t.Errorf("tag %q has dates %v, %v; want the commit's %v, %v",
+				name, info.AuthorWhen, info.CommitterWhen, authorDate, committerDate)
 		}
 	}
 	if got["annotated"].ID == head.ID {
