@@ -316,14 +316,22 @@ func (w *sniffWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Mode returns the mode of the file in fs.FileMode format.
+// Mode returns the mode of the file in fs.FileMode format. Git modes are not
+// fs.FileMode bits, so each kind of entry is mapped to its equivalent: a
+// symlink is fs.ModeSymlink, and a submodule, which has no equivalent, is
+// fs.ModeIrregular.
 func (e *TreeEntry) Mode() fs.FileMode {
-	m := e.Blob().Mode()
-	switch m {
+	switch e.TreeEntry.Mode() {
 	case git.EntryTree:
 		return fs.ModeDir | fs.ModePerm
+	case git.EntryBlob:
+		return 0o644
+	case git.EntryExec:
+		return 0o755
+	case git.EntrySymlink:
+		return fs.ModeSymlink | fs.ModePerm
 	default:
-		return fs.FileMode(m) //nolint:gosec
+		return fs.ModeIrregular
 	}
 }
 

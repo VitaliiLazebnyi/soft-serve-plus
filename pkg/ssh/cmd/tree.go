@@ -82,11 +82,8 @@ func treeCommand() *cobra.Command {
 			}
 			ents.Sort()
 			for _, ent := range ents {
-				size := ent.Size()
-				ssize := ""
-				if size == 0 {
-					ssize = "-"
-				} else {
+				ssize := "-"
+				if size := ent.Size(); size != 0 {
 					ssize = humanize.Bytes(uint64(size)) //nolint:gosec
 				}
 				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))

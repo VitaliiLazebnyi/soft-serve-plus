@@ -72,8 +72,12 @@ func shownRepo(t *testing.T, ui *UI) string {
 	if ui.activePage != repoPage {
 		return ""
 	}
-	r, ok := ui.common.Context().Value(common.RepoKey).(repo.RepoMsg)
-	if !ok || r == nil {
+	rp, ok := ui.pages[repoPage].(*repo.Repo)
+	if !ok {
+		t.Fatalf("repository page is %T", ui.pages[repoPage])
+	}
+	r := rp.Repository()
+	if r == nil {
 		t.Fatal("repository page shown without a repository")
 	}
 	return r.Name()

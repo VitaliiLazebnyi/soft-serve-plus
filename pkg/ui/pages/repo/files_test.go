@@ -65,6 +65,8 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	}
 	if msg, ok := sel("big.txt").(common.ErrorMsg); !ok || !errors.Is(msg, git.ErrFileTooLarge) {
 		t.Errorf("big.txt: got %#v, want ErrFileTooLarge", msg)
+	} else if got := common.ErrorMessage(msg); got != "file too large" {
+		t.Errorf("big.txt: error screen shows %q, want %q", got, "file too large")
 	}
 	if msg, ok := sel("bin.dat").(common.ErrorMsg); !ok || !errors.Is(msg, errBinaryFile) {
 		t.Errorf("bin.dat: got %#v, want errBinaryFile", msg)

@@ -128,12 +128,7 @@ func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 
 // Download implements Client.
 func (c *httpClient) Download(ctx context.Context, objects []Pointer, callback DownloadCallback) error {
-	return c.performOperation(ctx, objects, callback, nil)
-}
-
-// Upload implements Client.
-func (c *httpClient) Upload(ctx context.Context, objects []Pointer, callback UploadCallback) error {
-	return c.performOperation(ctx, objects, nil, callback)
+	return c.performOperation(ctx, objects, callback)
 }
 
 func (c *httpClient) transferNames() []string {
@@ -241,18 +236,13 @@ func actionLink(object *ObjectResponse, action string) (link *Link, ok bool, err
 	return link, true, nil
 }
 
-func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback, uc UploadCallback) error {
+func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	if len(objects) == 0 {
 		return nil
 	}
 
-	operation := OperationDownload
-	if uc != nil {
-		operation = OperationUpload
-	}
-
-	result, err := c.batch(ctx, operation, objects)
+	result, err := c.batch(ctx, OperationDownload, objects)
 	if err != nil {
 		return err
 	}
@@ -279,89 +269,44 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		if object.Error != nil {
 			objectError := errors.New(object.Error.Message)
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
-			if uc != nil {
-				if _, err := uc(object.Pointer, objectError); err != nil {
-					return err
-				}
-			} else {
-				if err := dc(object.Pointer, nil, objectError); err != nil {
-					return err
-				}
+			if err := dc(object.Pointer, nil, objectError); err != nil {
+				return err
 			}
 			continue
 		}
 
-		if uc != nil {
-			if len(object.Actions) == 0 {
-				logger.Debugf("%v already present on server", object.Pointer)
-				continue
-			}
-
-			link, ok, err := actionLink(object, ActionUpload)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'upload'")
-			}
-
-			content, err := uc(object.Pointer, nil)
-			if err != nil {
-				return err
-			}
-
-			err = transferAdapter.Upload(ctx, object.Pointer, content, link)
-
-			content.Close() //nolint: errcheck
-
-			if err != nil {
-				return err
-			}
-
-			link, ok, err = actionLink(object, ActionVerify)
-			if err != nil {
-				return err
-			}
-			if ok {
-				if err := transferAdapter.Verify(ctx, object.Pointer, link); err != nil {
-					return err
-				}
-			}
+		// A download that fails because of the object, not the
+		// connection or the server, only fails its own object, like an
+		// error the server reports for it in the batch response. A
+		// download link that is null or has no href is a malformed
+		// response and still fails the whole transfer.
+		link, ok, err := actionLink(object, ActionDownload)
+		if err != nil {
+			return err
+		}
+		var content io.ReadCloser
+		if ok {
+			content, err = transferAdapter.Download(ctx, object.Pointer, link)
 		} else {
-			// A download that fails because of the object, not the
-			// connection or the server, only fails its own object, like an
-			// error the server reports for it in the batch response. A
-			// download link that is null or has no href is a malformed
-			// response and still fails the whole transfer.
-			link, ok, err := actionLink(object, ActionDownload)
-			if err != nil {
+			logger.Debugf("%v has no usable action", object.Pointer)
+			err = errMissingDownload
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !isObjectError(err) {
 				return err
 			}
-			var content io.ReadCloser
-			if ok {
-				content, err = transferAdapter.Download(ctx, object.Pointer, link)
-			} else {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				err = errMissingDownload
+			logger.Debugf("Error on object %v: %v", object.Pointer, err)
+			if err := dc(object.Pointer, nil, err); err != nil {
+				return err
 			}
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if !isObjectError(err) {
-					return err
-				}
-				logger.Debugf("Error on object %v: %v", object.Pointer, err)
-				if err := dc(object.Pointer, nil, err); err != nil {
-					return err
-				}
-				continue
-			}
+			continue
+		}
 
-			if err := dc(object.Pointer, content, nil); err != nil {
-				return err
-			}
+		if err := dc(object.Pointer, content, nil); err != nil {
+			return err
 		}
 	}
 
