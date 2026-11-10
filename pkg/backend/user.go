@@ -320,7 +320,7 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 			ms, err = d.store.ListCollabsByUserID(ctx, tx, user.ID())
 			return err
 		}); err != nil {
-			return nil, db.WrapError(err)
+			return nil, err
 		}
 		collabs = make(map[int64]access.AccessLevel, len(ms))
 		for _, m := range ms {
