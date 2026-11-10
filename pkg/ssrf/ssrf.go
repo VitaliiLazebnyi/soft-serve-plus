@@ -342,8 +342,13 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("64:ff9b:1::/48"), // RFC8215 NAT64 local-use prefix
 	netip.MustParsePrefix("100::/64"),       // RFC6666 discard-only
 	netip.MustParsePrefix("2001::/32"),      // RFC4380 Teredo
+	netip.MustParsePrefix("2001:2::/48"),    // RFC5180 benchmarking
+	netip.MustParsePrefix("2001:10::/28"),   // RFC4843 ORCHID (deprecated)
+	netip.MustParsePrefix("2001:20::/28"),   // RFC7343 ORCHIDv2
 	netip.MustParsePrefix("2001:db8::/32"),  // documentation
 	netip.MustParsePrefix("2002::/16"),      // RFC3056 6to4
+	netip.MustParsePrefix("3fff::/20"),      // RFC9637 documentation
+	netip.MustParsePrefix("5f00::/16"),      // RFC9602 SRv6 SIDs
 	netip.MustParsePrefix("fc00::/7"),       // unique local
 	netip.MustParsePrefix("fe80::/10"),      // link-local
 	netip.MustParsePrefix("ff00::/8"),       // multicast
@@ -352,6 +357,11 @@ var blockedPrefixes = []netip.Prefix{
 	// parsed. Unmap leaves this form alone, so the IPv4 prefixes above do not
 	// apply to it. Covers the unspecified address too.
 	netip.MustParsePrefix("::/96"),
+
+	// IPv4-translated IPv6 (::ffff:0:x.x.x.x), RFC2765 SIIT. Like the
+	// IPv4-compatible form, Unmap does not turn it into the IPv4 address it
+	// carries, so it is blocked in full with the other transition ranges.
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
 }
 
 // isPrivateOrInternal reports whether an IP address is private, internal, or
@@ -446,18 +456,10 @@ func validateURL(rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 	return nil
 }
 
-// ValidateIPBeforeDial validates an IP address before establishing a connection.
-// This prevents DNS rebinding attacks by checking the resolved IP at dial time.
-func ValidateIPBeforeDial(ip net.IP) error {
-	if isPrivateOrInternal(ip) {
-		return ErrPrivateIP
-	}
-	return nil
-}
-
-// isLocalhost checks if the hostname is localhost or similar.
+// isLocalhost checks if the hostname is localhost or similar. A trailing dot
+// (the fully qualified form, "localhost.") names the same host.
 func isLocalhost(hostname string) bool {
-	hostname = strings.ToLower(hostname)
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
 	return hostname == "localhost" ||
 		hostname == "localhost.localdomain" ||
 		strings.HasSuffix(hostname, ".localhost")

@@ -570,6 +570,29 @@ func TestSendWebhookRecordsEveryHeader(t *testing.T) {
 	is.Equal(ds[0].ResponseStatus, http.StatusAccepted)
 }
 
+// A stored header block is sorted by key, so the same headers are always
+// stored the same way, and keeps every value of a repeated header.
+func TestFormatHeadersKeepsEveryValue(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	h := http.Header{}
+	h.Add("X-B", "1")
+	h.Add("Set-Cookie", "a=1")
+	h.Add("Set-Cookie", "b=2")
+	h.Add("Content-Type", "text/plain")
+	h.Add("X-A", "0")
+
+	want := "Content-Type: text/plain\n" +
+		"Set-Cookie: a=1\n" +
+		"Set-Cookie: b=2\n" +
+		"X-A: 0\n" +
+		"X-B: 1\n"
+	for range 10 { // map order varies between runs
+		is.Equal(formatHeaders(h), want)
+	}
+	is.Equal(formatHeaders(nil), "")
+}
+
 // useSendTimeout shortens the per-webhook send timeout for the test. Like
 // useHTTPClient it swaps a package variable, so tests using it must not call
 // t.Parallel.
@@ -1042,18 +1065,18 @@ func TestReadResponseBodyKeepsPartialReadOnError(t *testing.T) {
 	is.Equal(got, long[:maxResponseBody]+truncatedMarker)
 }
 
-// formatHeaders lists headers sorted by key with their first value, skips
+// formatHeaders lists headers sorted by key with every value, skips
 // keys without a value, and stops at maxStoredHeaders with a marker.
 func TestFormatHeaders(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 
 	is.Equal(formatHeaders(http.Header{
-		"X-B":     {"two", "ignored"},
+		"X-B":     {"two", "three"},
 		"X-A":     {"one"},
 		"X-Empty": {},
 		"X-C":     {""},
-	}), "X-A: one\nX-B: two\nX-C: \n")
+	}), "X-A: one\nX-B: two\nX-B: three\nX-C: \n")
 	is.Equal(formatHeaders(nil), "")
 
 	big := http.Header{}
