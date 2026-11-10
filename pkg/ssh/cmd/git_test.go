@@ -198,6 +198,17 @@ func noRowOps(del func(context.Context, string) error) failedPushRepoOps {
 	}
 }
 
+// identify returns the identity of the directory dir, as gitRunE takes it
+// when a push creates a repository.
+func identify(t *testing.T, dir string) os.FileInfo {
+	t.Helper()
+	fi, err := dirIdentity(dir)
+	if err != nil {
+		t.Fatalf("identify %s: %v", dir, err)
+	}
+	return fi
+}
+
 func dirExists(dir string) bool {
 	_, err := os.Lstat(dir)
 	return err == nil
@@ -216,7 +227,7 @@ func TestRemoveFailedPushRepoRetries(t *testing.T) {
 		return os.RemoveAll(dir)
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.Equal(calls, 3)
 	is.True(!dirExists(dir))
 }
@@ -236,7 +247,7 @@ func TestRemoveFailedPushRepoSlowAttemptsKeepRetries(t *testing.T) {
 		return errors.New("directory in use")
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), policy)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), policy)
 	is.Equal(calls, 3)
 	is.True(dirExists(dir))
 }
@@ -265,7 +276,7 @@ func TestRemoveFailedPushRepoLeavesRecreatedDirectoryBeforeRowGone(t *testing.T)
 		return errors.New("directory in use")
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.Equal(calls, 1)
 	is.True(dirExists(dir))
 }
@@ -283,7 +294,7 @@ func TestRemoveFailedPushRepoRemovesLeftoverDirectory(t *testing.T) {
 		return os.Remove(filepath.Join(dir, "HEAD"))
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.Equal(calls, 1)
 	is.True(!dirExists(dir))
 }
@@ -310,11 +321,53 @@ func TestRemoveFailedPushRepoRemovesEmptyGroupOfLeftover(t *testing.T) {
 	ops := noRowOps(del)
 	ops.removeDir = be.RemoveRepositoryDir
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "a/b", dir, ops, fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "a/b", dir, identify(t, dir), ops, fastRetry)
 	is.Equal(calls, 1)
 	is.True(!dirExists(dir))
 	is.True(!dirExists(group)) // the empty group directory is removed too
 	is.True(dirExists(root))   // the repos directory is kept
+}
+
+// The directory is identified when the push creates the repository, not
+// once the push failed. Another session may delete the repository while the
+// push runs and push a new one with the name; that one has no refs yet and
+// must not be deleted as this push's leftover.
+func TestRemoveFailedPushRepoLeavesDirectoryReplacedDuringPush(t *testing.T) {
+	is := is.New(t)
+	dir := emptyBareRepo(t)
+	orig := identify(t, dir)
+	// The old directory is moved away rather than removed, so the new one
+	// cannot reuse its inode.
+	is.NoErr(os.Rename(dir, dir+".old"))
+	if out, err := exec.CommandContext(t.Context(), "git", "init", "--bare", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	calls := 0
+	del := func(context.Context, string) error {
+		calls++
+		return os.RemoveAll(dir)
+	}
+
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, orig, noRowOps(del), fastRetry)
+	is.Equal(calls, 0)
+	is.True(dirExists(dir))
+}
+
+// A repository whose directory could not be identified when the push
+// created it is kept: nothing tells it apart from one another session
+// created with the name.
+func TestRemoveFailedPushRepoKeepsUnidentifiedDirectory(t *testing.T) {
+	is := is.New(t)
+	dir := emptyBareRepo(t)
+	calls := 0
+	del := func(context.Context, string) error {
+		calls++
+		return os.RemoveAll(dir)
+	}
+
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, nil, noRowOps(del), fastRetry)
+	is.Equal(calls, 0)
+	is.True(dirExists(dir))
 }
 
 // Once the repository was deleted, a new repository created with the same
@@ -346,7 +399,7 @@ func TestRemoveFailedPushRepoLeavesRecreatedRepository(t *testing.T) {
 		removeDir: os.RemoveAll,
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, ops, fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), ops, fastRetry)
 	is.Equal(calls, 1)
 	is.True(dirExists(dir))
 	out, err := exec.CommandContext(t.Context(), "git", "--git-dir="+dir, "for-each-ref").Output()
@@ -365,7 +418,7 @@ func TestRemoveFailedPushRepoKeepsRefsWrittenBetweenAttempts(t *testing.T) {
 		return errors.New("directory in use")
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.Equal(calls, 1)
 	is.True(dirExists(dir))
 }
@@ -387,7 +440,7 @@ func TestRemoveFailedPushRepoLeavesRecreatedDirectory(t *testing.T) {
 		return nil
 	}
 
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.Equal(calls, 1)
 	is.True(dirExists(dir))
 }
@@ -403,7 +456,7 @@ func TestRemoveFailedPushRepoGivesUp(t *testing.T) {
 	}
 
 	start := time.Now()
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, noRowOps(del), fastRetry)
+	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
 	is.True(calls > 1)
 	is.True(time.Since(start) < 5*time.Second)
 	is.True(dirExists(dir))
