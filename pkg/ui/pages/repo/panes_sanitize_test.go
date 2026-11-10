@@ -62,13 +62,13 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 	gitRun(t, dir, "add", "-A")
 	// The hostile file name goes straight into the index, so no file of that
 	// name is made; core.protectNTFS would reject the '\' in it on Windows.
-	// Marking it skip-worktree keeps the stash below from recording it as
-	// deleted, and git from checking it out when the stash resets the tree.
+	// No git command below takes the name as a path argument: Git for
+	// Windows turns the '\' in such an argument into '/' and then cannot
+	// find the entry.
 	hostileName := "name" + hostile + "end.txt"
 	blob := gitStdin(t, dir, "plain-text\n", "hash-object", "-w", "--stdin")
 	gitRun(t, dir, "-c", "core.protectNTFS=false", "update-index", "--add",
 		"--cacheinfo", "100644,"+blob+","+hostileName)
-	gitRun(t, dir, "-c", "core.protectNTFS=false", "update-index", "--skip-worktree", "--", hostileName)
 	gitRun(t, dir, "-c", "user.name=eve-author"+hostile,
 		"commit", "-q", "--author", "eve-author"+hostile+" <eve@example.com>",
 		"-m", "commit-subject"+hostile+"\n\ncommit-body"+hostile)
@@ -78,7 +78,9 @@ func newEscapedRepo(t *testing.T) escapedRepo {
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, dir, "stash", "push", "-q", "-m", "stash-message"+hostile)
+	// The stash is limited to main.go, so it neither records the missing
+	// hostile file as deleted nor checks it out when it resets the tree.
+	gitRun(t, dir, "stash", "push", "-q", "-m", "stash-message"+hostile, "--", "main.go")
 	if _, err := os.Lstat(filepath.Join(dir, hostileName)); !os.IsNotExist(err) {
 		t.Fatalf("hostile file name reached the disk: %v", err)
 	}
