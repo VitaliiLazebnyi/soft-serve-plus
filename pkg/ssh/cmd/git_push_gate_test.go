@@ -55,7 +55,7 @@ func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 	_, err = stdinW.Write([]byte("0000"))
 	is.NoErr(err)
 	is.NoErr(stdinW.Close())
-	<-errc
+	<-errc //nolint:errcheck // only that the command returned matters here
 
 	removed, err = be.RemovePushCreatedRepository(ctx, repo)
 	is.NoErr(err)
@@ -99,7 +99,7 @@ func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
 	is.True(!removed) // the LFS upload is running
 
 	is.NoErr(stdinW.Close())
-	<-errc
+	<-errc //nolint:errcheck // only that the command returned matters here
 
 	removed, err = be.RemovePushCreatedRepository(ctx, repo)
 	is.NoErr(err)

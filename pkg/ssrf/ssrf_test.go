@@ -35,7 +35,7 @@ func TestNewSecureClientBlocksPrivateIPs(t *testing.T) {
 
 			conn, err := transport.DialContext(ctx, "tcp", tt.addr)
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 
 			if tt.wantErr {
@@ -63,7 +63,7 @@ func TestNewSecureClientBlocksPrivateHostnames(t *testing.T) {
 	// net.LookupIP("localhost") -> 127.0.0.1 -> isPrivateOrInternal -> blocked.
 	conn, err := transport.DialContext(ctx, "tcp", "localhost:80")
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if !errors.Is(err, ErrPrivateIP) {
 		t.Errorf("expected ErrPrivateIP for hostname resolving to loopback, got: %v", err)
@@ -79,7 +79,7 @@ func TestNewSecureClientNilIPNotErrPrivateIP(t *testing.T) {
 
 	conn, err := transport.DialContext(ctx, "tcp", "not-an-ip:80")
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if err == nil {
 		t.Fatal("expected error for non-IP address, got none")
@@ -109,7 +109,7 @@ func TestNewSecureClientBlocksRedirects(t *testing.T) {
 		}
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("Expected redirect response (302), got %d", resp.StatusCode)
