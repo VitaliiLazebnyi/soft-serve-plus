@@ -67,7 +67,7 @@ func treeCommand() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					ents, err = tree.Entries()
+					ents, err = tree.EntriesWithSizes()
 					if err != nil {
 						return err
 					}
@@ -75,7 +75,7 @@ func treeCommand() *cobra.Command {
 					ents = append(ents, te)
 				}
 			} else {
-				ents, err = tree.Entries()
+				ents, err = tree.EntriesWithSizes()
 				if err != nil {
 					return err
 				}
