@@ -1,7 +1,6 @@
 package selection
 
 import (
-	"fmt"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
@@ -232,7 +231,7 @@ func loadRepos(c common.Common) tea.Msg {
 		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
 			readme, path, err := backend.Readme(r, nil, c.Config().BlobSizeLimit())
 			if err != nil {
-				c.Logger.Debugf("ui: failed to read the about readme: %v", err)
+				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {
 				// setReadme sanitises it when Update shows it.
 				msg.readme, msg.readmePath, msg.hasReadme = readme, path, true
@@ -242,14 +241,9 @@ func loadRepos(c common.Common) tea.Msg {
 		if r.IsHidden() {
 			continue
 		}
-		item, err := NewItem(c, r)
-		if err != nil {
-			c.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
-			continue
-		}
-		sortedItems = append(sortedItems, item)
+		sortedItems = append(sortedItems, NewItem(c, r))
 	}
-	sort.Sort(sortedItems)
+	sort.Stable(sortedItems)
 	msg.items = make([]selector.IdentifiableItem, len(sortedItems))
 	for i, it := range sortedItems {
 		msg.items[i] = it
@@ -331,7 +325,7 @@ func (s *Selection) View() string {
 	case readmePane:
 		rs := lipgloss.NewStyle().
 			Height(s.common.Height - hm)
-		status := fmt.Sprintf("☰ %.f%%", s.readme.ScrollPercent()*100)
+		status := common.ScrollPercent(s.readme.ScrollPosition())
 		readmeStatus := lipgloss.NewStyle().
 			Align(lipgloss.Right).
 			Width(s.common.Width - wm).

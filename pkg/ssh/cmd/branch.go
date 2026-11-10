@@ -130,7 +130,7 @@ func branchDefaultCommand() *cobra.Command {
 				defer cancel()
 				wh, err := webhook.NewDefaultBranchChangeEvent(ctx, user, rr, oldBranch)
 				if err != nil {
-					log.Error("default branch changed but webhook event skipped", "err", err)
+					log.FromContext(ctx).Error("default branch changed but webhook event skipped", "err", err, "repo", rr.Name())
 					return nil
 				}
 
@@ -210,7 +210,7 @@ func branchDeleteCommand() *cobra.Command {
 			defer cancel()
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsHeads+branch, branchCommit.ID.String(), git.ZeroID)
 			if err != nil {
-				log.Error("branch deleted but webhook event skipped", "err", err)
+				log.FromContext(ctx).Error("branch deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil
 			}
 

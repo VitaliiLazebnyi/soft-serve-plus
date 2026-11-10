@@ -20,13 +20,13 @@ func commitCommand() *cobra.Command {
 	var patchOnly bool
 
 	cmd := &cobra.Command{
-		Use:               "commit repo SHA",
-		Short:             "Print out the contents of a diff",
+		Use:               "commit REPOSITORY REVISION",
+		Short:             "Print out a commit and its diff",
 		Args:              cobra.ExactArgs(2),
 		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			commitSHA := args[1]
+			rev := args[1]
 
 			rr, _, err := repoFromContext(ctx)
 			if err != nil {
@@ -38,12 +38,7 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 
-			commit, err := r.CommitByRevision(commitSHA)
-			if err != nil {
-				return err
-			}
-
-			patch, err := r.Patch(commit)
+			commit, err := r.CommitByRevision(rev)
 			if err != nil {
 				return err
 			}
@@ -52,12 +47,13 @@ func commitCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			patch := diff.Patch()
 
 			commonStyle := styles.DefaultStyles()
 			style := commonStyle.Log
 
 			s := strings.Builder{}
-			commitLine := "commit " + commitSHA
+			commitLine := "commit " + commit.ID.String()
 			authorLine := "Author: " + utils.Sanitize(commit.Author.Name)
 			dateLine := "Date:   " + commit.Committer.When.UTC().Format(time.UnixDate)
 			msgLine := strings.ReplaceAll(utils.Sanitize(commit.Message), "\r\n", "\n")
@@ -79,25 +75,25 @@ func commitCommand() *cobra.Command {
 			}
 
 			if color {
-				s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+				fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 					style.CommitHash.Render(commitLine),
 					style.CommitAuthor.Render(authorLine),
 					style.CommitDate.Render(dateLine),
 					style.CommitBody.Render(msgLine),
-				))
+				)
 			} else {
-				s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+				fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 					commitLine,
 					authorLine,
 					dateLine,
 					msgLine,
-				))
+				)
 			}
 
-			s.WriteString(fmt.Sprintf("\n%s\n%s",
+			fmt.Fprintf(&s, "\n%s\n%s",
 				statsLine,
 				diffLine,
-			))
+			)
 
 			cmd.Println(
 				s.String(),
@@ -128,9 +124,9 @@ func renderDiff(patch string, color bool) string {
 		err := diffChroma.Render(&pr, common.StyleRenderer())
 
 		if err != nil {
-			s.WriteString(fmt.Sprintf("\n%s", err.Error()))
+			s.WriteString("\n" + err.Error())
 		} else {
-			s.WriteString(fmt.Sprintf("\n%s", pr.String()))
+			s.WriteString("\n" + pr.String())
 		}
 
 		c = s.String()

@@ -37,7 +37,7 @@ func TestScheduleJobsMirrorPull(t *testing.T) {
 		ctx = log.WithContext(ctx, logger)
 
 		sched := cron.NewScheduler(ctx)
-		scheduleJobs(ctx, sched, logger)
+		scheduleJobs(ctx, ctx, sched, logger)
 
 		want := len(jobs.List()) - 1 + c.entries
 		if got := len(sched.Entries()); got != want {

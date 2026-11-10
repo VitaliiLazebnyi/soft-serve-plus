@@ -132,7 +132,7 @@ func TokenCommand() *cobra.Command {
 
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return err
+				return fmt.Errorf("invalid token ID: %w", err)
 			}
 
 			if err := be.DeleteAccessToken(ctx, user, id); err != nil {

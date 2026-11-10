@@ -249,14 +249,14 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 		// Redeliveries pass the stored form body as url.Values, which is
 		// already encoded; query.Values only accepts structs.
 		if v, ok := payload.(neturl.Values); ok {
-			buf.WriteString(v.Encode()) //nolint: errcheck
+			buf.WriteString(v.Encode())
 			break
 		}
 		v, err := query.Values(payload)
 		if err != nil {
 			return request{}, err
 		}
-		buf.WriteString(v.Encode()) //nolint: errcheck
+		buf.WriteString(v.Encode())
 	default:
 		return request{}, ErrInvalidContentType
 	}
@@ -291,7 +291,7 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 // sign returns "sha256=" and the hex HMAC-SHA256 of content keyed with secret.
 func sign(secret, content string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(content)) //nolint: errcheck
+	mac.Write([]byte(content))
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -448,9 +448,7 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	}
 
 	// The delivery is recorded and the older ones pruned in one transaction,
-	// so SQLite takes its write lock and syncs once. Recording comes first:
-	// a SQLite transaction that writes first waits for other writers rather
-	// than failing with SQLITE_BUSY.
+	// so SQLite takes its write lock and syncs once.
 	//
 	// On Postgres seq is taken from its sequence when a row is inserted, not
 	// when it commits. Deliveries of one webhook are recorded by separate

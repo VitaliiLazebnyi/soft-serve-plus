@@ -298,7 +298,7 @@ func TestRollbackAllThenMigrate(t *testing.T) {
 	}
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		for _, table := range tables {
-			ok, err := tableExists(tx, table)
+			ok, err := tableExists(ctx, tx, table)
 			if err != nil {
 				return err
 			}
@@ -346,7 +346,7 @@ func TestMigrateOverLeftoverTables(t *testing.T) {
 			t.Fatalf("Rollback() => %v, want nil error", err)
 		}
 	}
-	if _, err := dbx.Exec("DELETE FROM migrations"); err != nil {
+	if _, err := dbx.ExecContext(ctx, "DELETE FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, dbx); err != nil {
