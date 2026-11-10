@@ -259,6 +259,17 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ui.error = msg
 		ui.state = errorState
 		ui.showFooter = true
+	case selection.ReposMsg:
+		// The list loads in the background and may arrive after an
+		// initial repository opened, so it goes to the selection page
+		// whichever page is active.
+		if ui.activePage != selectionPage {
+			m, cmd := ui.pages[selectionPage].Update(msg)
+			ui.pages[selectionPage] = m.(common.Component)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case selection.Item:

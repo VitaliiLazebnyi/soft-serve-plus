@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -34,6 +33,10 @@ type Refs struct {
 	refPrefix string
 	spinner   spinner.Model
 	isLoading bool
+	// loaded reports whether the references of repo were requested. They
+	// do not depend on the selected reference, so switching branches does
+	// not list them again.
+	loaded bool
 }
 
 // NewRefs creates a new Refs component.
@@ -129,9 +132,13 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.selector.Select(0)
 		r.repo = msg
+		r.loaded = false
 	case RefMsg:
 		r.ref = msg
-		cmds = append(cmds, r.Init())
+		if !r.loaded {
+			r.loaded = true
+			cmds = append(cmds, r.Init())
+		}
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case RefItemsMsg:
@@ -220,32 +227,18 @@ func (r *Refs) updateItemsCmd() tea.Cmd {
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		its := make(RefItems, 0)
 		rr, err := repo.Open()
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		refs, err := rr.References()
+		refs, err := rr.RefInfos(prefix)
 		if err != nil {
 			logger.Debugf("ui: error getting references: %v", err)
 			return common.ErrorMsg(err)
 		}
-		for _, ref := range refs {
-			if strings.HasPrefix(ref.Name().String(), prefix) {
-				refItem := RefItem{
-					Reference: ref,
-				}
-
-				if ref.IsTag() {
-					refItem.Tag, _ = rr.Tag(ref.Name().Short())
-					if refItem.Tag != nil {
-						refItem.Commit, _ = refItem.Tag.Commit()
-					}
-				} else {
-					refItem.Commit, _ = rr.CatFileCommit(ref.ID)
-				}
-				its = append(its, refItem)
-			}
+		its := make(RefItems, len(refs))
+		for i, ref := range refs {
+			its[i] = RefItem{ref}
 		}
 		sort.Sort(its)
 		items := make([]selector.IdentifiableItem, len(its))
