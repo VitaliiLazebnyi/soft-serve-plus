@@ -1,88 +1,17 @@
 package git
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"strings"
-	"sync"
 
 	"github.com/aymanbagabas/git-module"
 	"github.com/dustin/go-humanize/english"
-	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // DiffSection is a wrapper to git.DiffSection with helper methods.
 type DiffSection struct {
 	*git.DiffSection
-
-	initOnce sync.Once
-	dmp      *diffmatchpatch.DiffMatchPatch
-}
-
-// diffFor computes inline diff for the given line.
-func (s *DiffSection) diffFor(line *git.DiffLine) string {
-	fallback := line.Content
-
-	// Find equivalent diff line, ignore when not found.
-	var diff1, diff2 string
-	switch line.Type {
-	case git.DiffLineAdd:
-		compareLine := s.Line(git.DiffLineDelete, line.RightLine)
-		if compareLine == nil {
-			return fallback
-		}
-
-		diff1 = compareLine.Content
-		diff2 = line.Content
-
-	case git.DiffLineDelete:
-		compareLine := s.Line(git.DiffLineAdd, line.LeftLine)
-		if compareLine == nil {
-			return fallback
-		}
-
-		diff1 = line.Content
-		diff2 = compareLine.Content
-
-	default:
-		return fallback
-	}
-
-	s.initOnce.Do(func() {
-		s.dmp = diffmatchpatch.New()
-		s.dmp.DiffEditCost = 100
-	})
-
-	diffs := s.dmp.DiffMain(diff1[1:], diff2[1:], true)
-	diffs = s.dmp.DiffCleanupEfficiency(diffs)
-
-	return diffsToString(diffs, line.Type)
-}
-
-func diffsToString(diffs []diffmatchpatch.Diff, lineType git.DiffLineType) string {
-	buf := bytes.NewBuffer(nil)
-
-	// Reproduce signs that were cut off for inline diff before.
-	switch lineType {
-	case git.DiffLineAdd:
-		buf.WriteByte('+')
-	case git.DiffLineDelete:
-		buf.WriteByte('-')
-	}
-
-	for i := range diffs {
-		switch {
-		case diffs[i].Type == diffmatchpatch.DiffInsert && lineType == git.DiffLineAdd:
-			buf.WriteString(diffs[i].Text)
-		case diffs[i].Type == diffmatchpatch.DiffDelete && lineType == git.DiffLineDelete:
-			buf.WriteString(diffs[i].Text)
-		case diffs[i].Type == diffmatchpatch.DiffEqual:
-			buf.WriteString(diffs[i].Text)
-		}
-	}
-
-	return buf.String()
 }
 
 // DiffFile is a wrapper to git.DiffFile with helper methods.
@@ -140,6 +69,9 @@ func (fs FileStats) String() string {
 	return printStats(fs)
 }
 
+// minHistogramWidth is the fewest columns printStats gives the +/- histogram.
+const minHistogramWidth = 10.0
+
 func printStats(stats FileStats) string {
 	padLength := float64(len(" "))
 	newlineLength := float64(len("\n"))
@@ -174,7 +106,10 @@ func printStats(stats FileStats) string {
 	rightTextLength := padLength + padLength + newlineLength
 
 	totalTextArea := leftTextLength + separatorLength + rightTextLength
-	heightOfHistogram := lineLength - totalTextArea
+	// Long file names leave little or no room on the line; keep a minimum
+	// width for the histogram rather than scaling it by a zero or negative
+	// width.
+	heightOfHistogram := max(lineLength-totalTextArea, minHistogramWidth)
 
 	// Scale the histogram.
 	var scaleFactor float64
@@ -331,7 +266,7 @@ func (d *Diff) Patch() string {
 		writeFilePatchHeader(&p, f)
 		for _, s := range f.Sections {
 			for _, l := range s.Lines {
-				p.WriteString(s.diffFor(l))
+				p.WriteString(l.Content)
 				p.WriteString("\n")
 			}
 		}

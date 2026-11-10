@@ -137,7 +137,7 @@ func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler,
 	switch driver := d.DriverName(); driver {
 	case "postgres":
 		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
-	case "sqlite", "sqlite3":
+	case "sqlite":
 		query = `SELECT * FROM users WHERE username = ?;`
 	default:
 		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
@@ -166,7 +166,7 @@ func (*userStore) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (in
 	return id, err
 }
 
-// ListPublicKeysByUserID implements store.UserStore..
+// ListPublicKeysByUserID implements store.UserStore.
 func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
 	query := tx.Rebind(`SELECT public_key FROM public_keys
@@ -248,7 +248,7 @@ func (*userStore) SetAdminByUsername(ctx context.Context, tx db.Handler, usernam
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET admin = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET admin = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	_, err := tx.ExecContext(ctx, query, isAdmin, username)
 	return err
 }
@@ -265,15 +265,8 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET username = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	_, err := tx.ExecContext(ctx, query, newUsername, username)
-	return err
-}
-
-// SetUserPassword implements store.UserStore.
-func (*userStore) SetUserPassword(ctx context.Context, tx db.Handler, userID int64, password string) error {
-	query := tx.Rebind(`UPDATE users SET password = ? WHERE id = ?;`)
-	_, err := tx.ExecContext(ctx, query, password, userID)
 	return err
 }
 
@@ -284,7 +277,7 @@ func (*userStore) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, 
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET password = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	_, err := tx.ExecContext(ctx, query, password, username)
 	return err
 }

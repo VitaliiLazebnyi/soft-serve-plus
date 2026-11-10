@@ -387,7 +387,7 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 		t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
 	}
 	select {
-	case <-errc:
+	case <-errc: //nolint:errcheck // only the write ending matters, not its error
 	case <-time.After(10 * time.Second):
 		t.Fatal("writing to a client that does not read was not cut off")
 	}

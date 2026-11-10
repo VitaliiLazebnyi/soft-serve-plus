@@ -314,13 +314,6 @@ func DefaultStyles() *Styles {
 		}, false, false, false, true).
 		BorderForeground(selectorColor)
 
-	s.LogItem.Active.Hash = s.LogItem.Normal.Hash.
-		Foreground(hashColor)
-
-	s.LogItem.Active.Hash = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(highlightColor)
-
 	s.LogItem.Normal.Title = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("105"))
 
@@ -371,9 +364,6 @@ func DefaultStyles() *Styles {
 	s.Ref.ItemSelector = lipgloss.NewStyle().
 		Foreground(selectorColor).
 		SetString("> ")
-
-	s.Ref.Active.Item = lipgloss.NewStyle().
-		Foreground(highlightColorDim)
 
 	s.Ref.Normal.Base = lipgloss.NewStyle()
 

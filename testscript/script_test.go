@@ -350,11 +350,11 @@ func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, ne
 			},
 		)
 		ts.Check(err)
-		defer cli.Close()
+		defer cli.Close() //nolint:errcheck
 
 		sess, err := cli.NewSession()
 		ts.Check(err)
-		defer sess.Close()
+		defer sess.Close() //nolint:errcheck
 
 		sess.Stdout = ts.Stdout()
 		sess.Stderr = ts.Stderr()
@@ -389,11 +389,11 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 		},
 	)
 	ts.Check(err)
-	defer cli.Close()
+	defer cli.Close() //nolint:errcheck
 
 	sess, err := cli.NewSession()
 	ts.Check(err)
-	defer sess.Close()
+	defer sess.Close() //nolint:errcheck
 
 	sess.Stdout = ts.Stdout()
 	sess.Stderr = ts.Stderr()
@@ -479,18 +479,18 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo, waitFor s
 	if err != nil {
 		return err
 	}
-	defer cli.Close()
+	defer cli.Close() //nolint:errcheck
 
 	sess, err := cli.NewSession()
 	if err != nil {
 		return err
 	}
-	defer sess.Close()
+	defer sess.Close() //nolint:errcheck
 
 	// XXX: this is a hack to make the UI tests work
 	// cmp command always complains about an extra newline
 	// in the output
-	defer ts.Stdout().Write([]byte("\n"))
+	defer ts.Stdout().Write([]byte("\n")) //nolint:errcheck
 
 	sess.Stdout = ts.Stdout()
 	sess.Stderr = ts.Stderr()
@@ -514,7 +514,7 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo, waitFor s
 
 	waitErr := make(chan error, 1)
 	go func() {
-		defer stdin.Close()
+		defer stdin.Close() //nolint:errcheck
 		if watcher != nil {
 			select {
 			case <-watcher.found:
@@ -654,7 +654,7 @@ func cmdReadfile(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Fatalf("usage: readfile path [content]")
 	}
 	got := ts.ReadFile(args[0])
-	ts.Stdout().Write([]byte(got))
+	_, _ = ts.Stdout().Write([]byte(got))
 	if len(args) == 1 {
 		if neg {
 			ts.Fatalf("unsupported: ! readfile without content")
@@ -754,7 +754,7 @@ func cmdWebhookReceived(ts *testscript.TestScript, neg bool, args []string) {
 	rcv.mu.Lock()
 	defer rcv.mu.Unlock()
 	for _, line := range rcv.received {
-		fmt.Fprintln(ts.Stdout(), line)
+		_, _ = fmt.Fprintln(ts.Stdout(), line)
 	}
 }
 
@@ -783,7 +783,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
 			}
 
 			for _, header := range headers {
@@ -802,7 +802,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			if verbose {
 				for key, values := range req.Header {
 					for _, value := range values {
-						fmt.Fprintf(cmd.ErrOrStderr(), "< %s: %s\n", key, value)
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s: %s\n", key, value)
 					}
 				}
 			}
@@ -813,15 +813,15 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				fmt.Fprintf(ts.Stderr(), "> %s\n", resp.Status)
+				_, _ = fmt.Fprintf(ts.Stderr(), "> %s\n", resp.Status)
 				for key, values := range resp.Header {
 					for _, value := range values {
-						fmt.Fprintf(cmd.ErrOrStderr(), "> %s: %s\n", key, value)
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "> %s: %s\n", key, value)
 					}
 				}
 			}
 
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck
 			buf, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
@@ -869,7 +869,7 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 		)
 		if err == nil {
 			ts.Logf("Server is running on port: %s", port)
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		if time.Now().After(deadline) {
@@ -901,7 +901,7 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 		5*time.Second,
 	)
 	if err == nil {
-		conn.Close()
+		_ = conn.Close()
 		ts.Fatalf("server is running on port %s while it should not be running", port)
 	}
 	if !connRefused(err) {
@@ -923,14 +923,14 @@ func cmdOccupyIPv6(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Logf("not occupying ::1: %v", err)
 		return
 	}
-	ts.Defer(func() { l.Close() })
+	ts.Defer(func() { _ = l.Close() })
 	go func() {
 		for {
 			conn, err := l.Accept()
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 }
@@ -947,7 +947,7 @@ func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
 	if err != nil {
 		return // only reached under "! stopserver", where failing is expected
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Wait for the server process to exit. A fixed sleep was not always long
 	// enough under load, and a server that is still shutting down when the
@@ -1015,7 +1015,7 @@ func waitClosed(addr string, timeout time.Duration) error {
 	for {
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second) //nolint:noctx
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 		} else if connRefused(err) {
 			return nil
 		}

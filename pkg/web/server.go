@@ -17,6 +17,12 @@ import (
 
 // NewRouter returns a new HTTP router.
 func NewRouter(ctx context.Context) http.Handler {
+	return newRouter(ctx, newPushCreates())
+}
+
+// newRouter returns a new HTTP router that tracks the repositories HTTP
+// pushes create in pending.
+func newRouter(ctx context.Context, pending *pushCreates) http.Handler {
 	logger := log.FromContext(ctx).WithPrefix("http")
 	router := mux.NewRouter()
 
@@ -24,7 +30,7 @@ func NewRouter(ctx context.Context) http.Handler {
 	HealthController(ctx, router)
 
 	// Git routes
-	GitController(ctx, router)
+	gitController(ctx, router, pending)
 
 	router.PathPrefix("/").HandlerFunc(renderNotFound)
 
@@ -85,7 +91,7 @@ func corsOrigin(s string) string {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	if port := u.Port(); port != "" && !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
+	if port := u.Port(); port != "" && (scheme != "http" || port != "80") && (scheme != "https" || port != "443") {
 		host += ":" + port
 	}
 	return scheme + "://" + host

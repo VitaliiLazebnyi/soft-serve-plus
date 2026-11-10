@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	// blobSizeCutoff is the largest blob size, in bytes, that is read to
+	// check whether it is an LFS pointer. Real pointers are much smaller.
 	blobSizeCutoff = 1024
 
 	// HashAlgorithmSHA256 is the hash algorithm used for Git LFS.
@@ -39,18 +41,6 @@ var (
 	// ErrInvalidSize occurs if the size is not a non-negative decimal integer
 	ErrInvalidSize = errors.New("size has an invalid format")
 )
-
-// ReadPointer tries to read LFS pointer data from the reader
-func ReadPointer(reader io.Reader) (Pointer, error) {
-	buf := make([]byte, blobSizeCutoff)
-	n, err := io.ReadFull(reader, buf)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return Pointer{}, err
-	}
-	buf = buf[:n]
-
-	return ReadPointerFromBuffer(buf)
-}
 
 var (
 	oidPattern  = regexp.MustCompile(`^[a-f\d]{64}$`)
@@ -155,7 +145,13 @@ func (p Pointer) RelativePath() string {
 	return path.Join(p.Oid[0:2], p.Oid[2:4], p.Oid)
 }
 
-// GeneratePointer generates a pointer for arbitrary content
+// GeneratePointer generates a pointer for arbitrary content.
+//
+// No production code calls it: tests in this package and in pkg/backend use
+// it to build pointers for fixture objects. It stays exported here, rather
+// than in a _test.go file, because tests in other packages cannot import a
+// _test.go helper, and a separate helper package could not be imported by
+// this package's own internal tests without an import cycle.
 func GeneratePointer(content io.Reader) (Pointer, error) {
 	h := sha256.New()
 	c, err := io.Copy(h, content)

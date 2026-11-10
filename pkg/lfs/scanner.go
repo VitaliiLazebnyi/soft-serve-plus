@@ -59,8 +59,9 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 	// 3. Take the shas of the blobs and batch read them
 	go catFileBatch(ctx, shasToBatchReader, catFileBatchWriter, &wg, basePath, errChan)
 
-	// 2. From the provided objects restrict to blobs <=1k
-	go blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader, shasToBatchWriter, &wg)
+	// 2. From the provided objects restrict to blobs of at most
+	// blobSizeCutoff bytes
+	go smallBlobsFromCatFileBatchCheck(catFileCheckReader, shasToBatchWriter, &wg)
 
 	// 1. Run batch-check on all objects in the repository
 	revListReader, revListWriter := io.Pipe()
@@ -104,7 +105,8 @@ func createPointerResultsFromCatFileBatch(ctx context.Context, catFileBatchReade
 	defer catFileBatchReader.Close() //nolint: errcheck
 
 	bufferedReader := bufio.NewReader(catFileBatchReader)
-	buf := make([]byte, 1025)
+	// Room for the largest blob passed on, plus its trailing newline.
+	buf := make([]byte, blobSizeCutoff+1)
 
 	fail := func(err error) {
 		err = fmt.Errorf("reading git cat-file --batch output: %w", err)
@@ -185,7 +187,9 @@ func catFileBatch(ctx context.Context, shasToBatchReader *io.PipeReader, catFile
 	}
 }
 
-func blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader *io.PipeReader, shasToBatchWriter *io.PipeWriter, wg *sync.WaitGroup) {
+// smallBlobsFromCatFileBatchCheck passes on the blobs of at most
+// blobSizeCutoff bytes, the only ones that can be LFS pointers.
+func smallBlobsFromCatFileBatchCheck(catFileCheckReader *io.PipeReader, shasToBatchWriter *io.PipeWriter, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer catFileCheckReader.Close() //nolint: errcheck
 	scanner := bufio.NewScanner(catFileCheckReader)
@@ -202,7 +206,7 @@ func blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader *io.PipeReader, s
 			continue
 		}
 		size, _ := strconv.Atoi(fields[2])
-		if size > 1024 {
+		if size > blobSizeCutoff {
 			continue
 		}
 		toWrite := []byte(fields[0] + "\n")
