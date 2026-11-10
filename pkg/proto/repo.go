@@ -22,8 +22,9 @@ type Repository interface {
 	IsMirror() bool
 	// IsHidden returns whether the repository is hidden.
 	IsHidden() bool
-	// UserID returns the ID of the user who owns the repository.
-	// It returns 0 if the repository is not owned by a user.
+	// UserID returns the ID of the user who owns the repository. Every
+	// repository has an owner: one created without a user belongs to the
+	// default admin.
 	UserID() int64
 	// CreatedAt returns the time the repository was created.
 	CreatedAt() time.Time

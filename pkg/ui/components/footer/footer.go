@@ -13,9 +13,10 @@ type ToggleFooterMsg struct{}
 
 // Footer is a Bubble Tea model that displays help and other info.
 type Footer struct {
-	common common.Common
-	help   help.Model
-	keymap help.KeyMap
+	common     common.Common
+	zonePrefix string
+	help       help.Model
+	keymap     help.KeyMap
 }
 
 // New creates a new Footer.
@@ -26,9 +27,10 @@ func New(c common.Common, keymap help.KeyMap) *Footer {
 	h.Styles.FullKey = c.Styles.HelpKey
 	h.Styles.FullDesc = c.Styles.HelpValue
 	f := &Footer{
-		common: c,
-		help:   h,
-		keymap: keymap,
+		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
+		help:       h,
+		keymap:     keymap,
 	}
 	f.SetSize(c.Width, c.Height)
 	return f
@@ -60,9 +62,14 @@ func (f *Footer) View() string {
 		Width(f.common.Width)
 	helpView := f.help.View(f.keymap)
 	return f.common.Zone.Mark(
-		"footer",
+		f.ZoneID(),
 		s.Render(helpView),
 	)
+}
+
+// ZoneID returns the mouse zone ID the footer is marked with.
+func (f *Footer) ZoneID() string {
+	return f.zonePrefix + "footer"
 }
 
 // ShortHelp returns the short help key bindings.
