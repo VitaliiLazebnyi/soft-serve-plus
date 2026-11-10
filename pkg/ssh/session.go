@@ -76,7 +76,11 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	// Gate the TUI on the caller's baseline access only. Whether they may
 	// open the requested repository is decided by the UI, which treats a
 	// private and a missing repository the same way.
-	if be.BaseAccessLevelByPublicKey(ctx, s.PublicKey()) < access.ReadOnlyAccess {
+	//
+	// AuthenticationMiddleware has already resolved the session's key to a
+	// user (or to nobody) and stored it in the context, so it is not looked
+	// up again here. Admin keys are still recognised from the context's key.
+	if be.BaseAccessLevelForUser(ctx, proto.UserFromContext(ctx)) < access.ReadOnlyAccess {
 		wish.Fatalln(s, proto.ErrUnauthorized)
 		return nil, nil
 	}

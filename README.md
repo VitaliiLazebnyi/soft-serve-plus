@@ -243,10 +243,25 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
-  # The number of seconds a client has to complete the key exchange and
-  # authenticate before the connection is closed.
-  # A value of 0 means no timeout.
+  # The number of seconds a client has to finish the SSH handshake and
+  # authenticate before the connection is closed, like OpenSSH's
+  # LoginGraceTime. A value of 0 means no limit.
   handshake_timeout: 120
+
+  # The maximum number of SSH connections open at once, in total and from
+  # one client address (one IPv4 address or one IPv6 /64). Connections over
+  # a limit are closed straight away. A connection holds its place from the
+  # moment it is accepted, so handshake_timeout bounds how long a client
+  # that never authenticates can keep one. A value of 0 means no limit.
+  # Many clients behind one NAT or CI egress address share the per-address
+  # limit; raise max_connections_per_ip, or set it to 0, for such setups.
+  max_connections: 256
+  max_connections_per_ip: 32
+
+  # The maximum number of sessions open at once on one SSH connection, like
+  # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
+  # value of 0 means no limit.
+  max_sessions: 10
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
@@ -315,6 +330,8 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
 
   # The maximum number of concurrent connections.
@@ -331,7 +348,8 @@ http:
   # The path to the TLS private key.
   tls_key_path: ""
 
-  # The path to the TLS certificate.
+  # The path to the TLS certificate. Set both paths to serve HTTPS, or
+  # neither to serve plain HTTP.
   tls_cert_path: ""
 
   # The public URL of the HTTP server.
@@ -420,6 +438,8 @@ lfs:
 
 # Cron job configuration
 jobs:
+  # How often pull mirrors sync: a standard five-field cron spec or a
+  # descriptor such as "@hourly" or "@every 10m".
   mirror_pull: "@every 10m"
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
@@ -1080,6 +1100,14 @@ Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is sy
 
 An import runs while the `repo import` command does: closing the session, or stopping the server, stops it and removes what it had created. An import is also given up after an hour, and is aborted by the same transfer limits as a mirror sync (see above). The server runs at most 16 imports at once, and each user at most 2 (server admins are exempt from the per-user cap); beyond that `repo import` is refused until one finishes.
 
+Imports and mirror syncs over http, https and `git://` connect to the remote
+directly. They ignore any proxy set for the server, whether through
+`http_proxy`, `https_proxy`, `all_proxy`, `GIT_PROXY_COMMAND`, or `http.proxy`
+(including URL-scoped `http.<url>.proxy`), `remote.<name>.proxy` and
+`core.gitProxy` in its git configuration, since a proxy would resolve the
+remote's host name itself and could reach internal addresses the import check
+refuses. Webhooks and Git LFS transfers never use a proxy either.
+
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
@@ -1192,7 +1220,7 @@ repository instead.
 
 Soft Serve Plus supports repository webhooks using the `repo webhook` command. You
 can create and manage webhooks for different repository events such as _push_,
-_collaborators_, and _branch_tag_create_ events.
+_collaborator_, and _branch_tag_create_ events.
 
 ```
 Manage repository webhooks

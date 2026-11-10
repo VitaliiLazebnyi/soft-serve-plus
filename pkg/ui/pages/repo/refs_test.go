@@ -140,6 +140,41 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 }
 
+// A detached HEAD, as in a checkout during a rebase or bisect, shows the
+// commit it points at rather than an error.
+func TestDefaultRefDetachedHEAD(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "second")
+	gitRun(t, dir, "checkout", "-q", "--detach", "HEAD~1")
+
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := r.RevParse("HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	case RefMsg:
+		ref := (*git.Reference)(msg)
+		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
+			t.Fatalf("UpdateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
+		}
+		if _, err := r.TreePath(ref, ""); err != nil {
+			t.Fatalf("TreePath at a detached HEAD: %v", err)
+		}
+		if n, err := r.CountCommits(ref); err != nil || n != 1 {
+			t.Fatalf("CountCommits at a detached HEAD = %d, %v; want 1", n, err)
+		}
+	default:
+		t.Fatalf("UpdateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
+	}
+}
+
 // `l` and `→` open the highlighted branch or tag; they must not also turn
 // the page, which would open an item on the next page instead.
 func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {

@@ -3,11 +3,14 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"unicode/utf8"
 
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/google/go-querystring/query"
 )
 
 // PushEvent is a push event.
@@ -34,10 +37,41 @@ type PushEvent struct {
 	// first. For a new branch or tag these are only the commits no other
 	// branch or tag already had. It is empty when the push deleted the
 	// branch or tag.
-	Commits []Commit `json:"commits" url:"commits"`
+	Commits Commits `json:"commits" url:"commits"`
 }
 
-// NewPushEvent sends a push event.
+// Commits is a list of commits.
+type Commits []Commit
+
+var _ query.Encoder = Commits(nil)
+
+// EncodeValues implements query.Encoder. Each commit is form-encoded with its
+// index, as key[0][id], key[0][author][name] and so on, the same bracket
+// notation used for the other nested fields. Without it each commit would be
+// written as a Go struct dump that receivers cannot parse.
+func (cs Commits) EncodeValues(key string, v *url.Values) error {
+	for i, c := range cs {
+		cv, err := query.Values(c)
+		if err != nil {
+			return err
+		}
+		for k, vals := range cv {
+			// k is a field name, possibly with its own nested keys, such as
+			// author[name]: only the leading name needs brackets.
+			field, nested, _ := strings.Cut(k, "[")
+			name := fmt.Sprintf("%s[%d][%s]", key, i, field)
+			if nested != "" {
+				name += "[" + nested
+			}
+			for _, val := range vals {
+				v.Add(name, val)
+			}
+		}
+	}
+	return nil
+}
+
+// NewPushEvent builds the payload for a push event.
 func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
 	event := EventPush
 

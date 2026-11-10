@@ -57,6 +57,19 @@ git -C repo2 push origin HEAD --tags
 # dumb http git
 curl -XGET http://localhost:$HTTP_PORT/repo2.git/info/refs
 stdout '^[0-9a-f]{40}	refs/heads/master\n[0-9a-f]{40}	refs/tags/v0.1.0$'
+! exists $DATA_PATH/repos/repo2.git/info/refs
+curl -XGET http://localhost:$HTTP_PORT/repo2.git/objects/info/packs
+! exists $DATA_PATH/repos/repo2.git/objects/info/packs
+
+# dumb http clone, served without writing the info files
+env GIT_SMART_HTTP=0
+git clone --bare http://127.0.0.1:$HTTP_PORT/repo2 repo2-dumb.git
+env GIT_SMART_HTTP=1
+git -C repo2-dumb.git rev-parse refs/tags/v0.1.0
+git -C repo2 rev-parse HEAD
+cp stdout head.txt
+git -C repo2-dumb.git rev-parse refs/heads/master
+cmp stdout head.txt
 
 # http errors
 curl -v -XGET http://localhost:$HTTP_PORT/repo2111foobar.git/foo/bar

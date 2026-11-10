@@ -411,6 +411,12 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 		return nil, errReadOnlySession
 	}
 
+	// Same rule as the HTTP locks API: a lock names one file in the working
+	// tree, so "a.bin", "./a.bin" and "dir/../a.bin" cannot hold three locks.
+	if err := lfs.ValidateLockPath(path); err != nil {
+		return nil, fmt.Errorf("%w: %w", transfer.ErrParseError, err)
+	}
+
 	var lock LFSLock
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		if err := l.store.CreateLFSLockForUser(l.ctx, tx, l.repo.ID(), l.user.ID(), path, refname); err != nil {
