@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,6 +56,9 @@ type serverConn struct {
 	idleTimeout   time.Duration
 	maxDeadline   time.Time
 	closeCanceler context.CancelFunc
+
+	// wrote records that some output reached the client.
+	wrote atomic.Bool
 }
 
 var _ net.Conn = (*serverConn)(nil)
@@ -62,6 +66,9 @@ var _ net.Conn = (*serverConn)(nil)
 func (c *serverConn) Write(p []byte) (n int, err error) {
 	c.updateDeadline()
 	n, err = c.Conn.Write(p)
+	if n > 0 {
+		c.wrote.Store(true)
+	}
 	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
@@ -75,6 +82,13 @@ func (c *serverConn) Read(b []byte) (n int, err error) {
 		c.closeCanceler()
 	}
 	return
+}
+
+// Wrote reports whether any output was written to the client. Once it was,
+// an ERR packet can no longer be sent: the client would read it as part of
+// the stream, for example as a sideband packet of the pack.
+func (c *serverConn) Wrote() bool {
+	return c.wrote.Load()
 }
 
 func (c *serverConn) Close() (err error) {

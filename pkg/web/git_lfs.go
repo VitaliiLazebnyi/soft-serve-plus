@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,6 +282,22 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "invalid object",
 					},
 				})
+				continue
+			}
+
+			// The batch API omits actions for objects the server already
+			// has, so the client does not send them again.
+			// https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md#successful-responses
+			present, err := lfsObjectPresent(ctx, strg, dbx, datastore, repo.ID(), o)
+			if err != nil {
+				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+					Message: "internal server error",
+				})
+				return
+			}
+			if present {
+				objects = append(objects, &lfs.ObjectResponse{Pointer: o})
 			} else {
 				upload := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), map[string]string{
 					// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
@@ -311,6 +328,32 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	renderJSON(w, r, http.StatusOK, batchResponse)
 }
 
+// lfsObjectPresent reports whether the repository already stores the object
+// with the given size: it has a database row of that size and its file is a
+// regular file of that size in storage. A missing, truncated or overgrown file
+// is not present, so the client sends it again and the upload handler restores
+// it. The content is not hashed here, to keep batch requests cheap.
+func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) (bool, error) {
+	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid)
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if obj.Size != p.Size {
+		return false, nil
+	}
+	stat, err := strg.Stat(path.Join("objects", p.RelativePath()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return stat.Mode().IsRegular() && stat.Size() == p.Size, nil
+}
+
 // serviceLfsBasic implements Git LFS basic transfer API
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md
 func serviceLfsBasic(w http.ResponseWriter, r *http.Request) {
@@ -336,41 +379,32 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 
+	// The object's database row may be missing (the batch API creates it
+	// lazily), so the stored file, not the row, is the source of truth for
+	// the size. http.ServeContent takes the length from the file and
+	// handles Range and HEAD requests, so interrupted downloads can resume.
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			logger.Info("object not found", "oid", oid)
-		} else {
-			logger.Error("error opening object", "oid", oid, "err", err)
+			logger.Debug("object not found", "oid", oid, "repo", repo.Name())
+			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+				Message: "object not found",
+			})
+			return
 		}
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "object not found",
+		logger.Error("error opening object", "oid", oid, "repo", repo.Name(), "err", err)
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+			Message: "internal server error",
 		})
 		return
 	}
 	defer f.Close() //nolint: errcheck
 
-	// Send the length of the file being sent, which an object not recorded
-	// yet has too.
-	stat, err := f.Stat()
-	if err != nil {
-		logger.Error("error getting object stat", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
-	if _, err := io.Copy(w, f); err != nil {
-		logger.Error("error copying object to response", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
+	// Objects are content addressed, so the oid is a strong validator.
+	w.Header().Set("ETag", `"`+oid+`"`)
+	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
