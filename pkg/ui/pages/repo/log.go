@@ -542,12 +542,12 @@ func (l *Log) renderCommit(c *git.Commit) string {
 	// Strip escape sequences and control characters, CR included since
 	// lipgloss prints empty lines when CRLF is used.
 	msg := utils.Sanitize(c.Message)
-	s.WriteString(fmt.Sprintf("%s\n%s\n%s\n%s\n",
+	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
 		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
 		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
-	))
+	)
 	return wrap.String(s.String(), l.common.Width-2)
 }
 
@@ -574,9 +574,9 @@ func renderDiff(diff *git.Diff, width int) string {
 	}
 	err := diffChroma.Render(&pr, common.StyleRenderer())
 	if err != nil {
-		s.WriteString(fmt.Sprintf("\n%s", err.Error()))
+		s.WriteString("\n" + err.Error())
 	} else {
-		s.WriteString(fmt.Sprintf("\n%s", pr.String()))
+		s.WriteString("\n" + pr.String())
 	}
 	return wrap.String(s.String(), width)
 }
