@@ -264,7 +264,10 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 
 	// The generated config file has it as comment lines after
 	// "append the legacy algorithm".
-	file := newConfigFile(DefaultConfig())
+	file, err := newConfigFile(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var b strings.Builder
 	b.WriteString("ssh:\n")
 	lines := strings.Split(file[strings.Index(file, "append the legacy algorithm"):], "\n")[2:]

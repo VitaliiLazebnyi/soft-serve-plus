@@ -57,13 +57,13 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
-	switch msg := UpdateRefCmd(context.Background(), openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		if ref := (*git.Reference)(msg); ref == nil || ref.Name().Short() != "dev" {
-			t.Fatalf("UpdateRefCmd with a dangling HEAD = %v; want dev", msg)
+		if ref := msg.Ref; ref == nil || ref.Name().Short() != "dev" {
+			t.Fatalf("updateRefCmd with a dangling HEAD = %v; want dev", msg)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
 	}
 	ref, err = defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "dev" {
@@ -93,9 +93,9 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
 
-	ref, ok := UpdateRefCmd(t.Context(), repo)().(RefMsg)
+	ref, ok := updateRefCmd(t.Context(), repo, 0)().(RefMsg)
 	if !ok {
-		t.Fatal("UpdateRefCmd did not return a RefMsg")
+		t.Fatal("updateRefCmd did not return a RefMsg")
 	}
 	r.Update(ref)
 	if !r.isLoading || !r.loaded {
@@ -110,8 +110,8 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 	for _, it := range msg.items {
 		item := it.(RefItem)
-		if item.CommitID != ref.ID {
-			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.ID)
+		if item.CommitID != ref.Ref.ID {
+			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.Ref.ID)
 		}
 		if want := map[string]string{"v1": "release notes", "v0": ""}[item.Short()]; item.TagSubject != want {
 			t.Errorf("tag %s has subject %q; want %q", item.Short(), item.TagSubject, want)
@@ -122,7 +122,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	if r.isLoading {
 		t.Fatal("the tags are still loading after RefItemsMsg")
 	}
-	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.ID[:7]) {
+	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.Ref.ID[:7]) {
 		t.Errorf("the Tags pane %q lacks the tag subject or the commit", view)
 	}
 
@@ -137,6 +137,46 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	r.Update(ref)
 	if !r.isLoading {
 		t.Fatal("reopening the repository did not list the tags again")
+	}
+}
+
+// A branch switch while the refs are still loading lists them again for the
+// new generation: the repository page drops the result of the running load,
+// which carries the previous one.
+func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "v1")
+
+	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	repo := openRepo{path: dir}
+	r.Update(RepoMsg(repo))
+	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
+	if !ok {
+		t.Fatal("updateRefCmd did not return a RefMsg")
+	}
+	r.Update(ref)
+	first := r.updateItemsCmd()().(RefItemsMsg)
+
+	// The user switches branches before the first load returns.
+	switched := RefMsg{Ref: ref.Ref, gen: 2}
+	_, cmd := r.Update(switched)
+	if cmd == nil || !r.isLoading {
+		t.Fatal("a branch switch during the load did not list the refs again")
+	}
+	second := r.updateItemsCmd()().(RefItemsMsg)
+	if first.gen != 1 || second.gen != 2 {
+		t.Fatalf("loads carry generations %d and %d; want 1 and 2", first.gen, second.gen)
+	}
+	r.Update(second)
+	if r.isLoading {
+		t.Fatal("the refs are still loading after the second RefItemsMsg")
+	}
+
+	// Once loaded, a branch switch leaves them alone.
+	if r.Update(RefMsg{Ref: ref.Ref, gen: 3}); r.isLoading {
+		t.Fatal("a branch switch after the load listed the refs again")
 	}
 }
 
@@ -158,11 +198,11 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	switch msg := UpdateRefCmd(t.Context(), openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		ref := (*git.Reference)(msg)
+		ref := msg.Ref
 		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
-			t.Fatalf("UpdateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
+			t.Fatalf("updateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
 		}
 		if _, err := r.TreePath(ref, ""); err != nil {
 			t.Fatalf("TreePath at a detached HEAD: %v", err)
@@ -171,7 +211,7 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 			t.Fatalf("CountCommits at a detached HEAD = %d, %v; want 1", n, err)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
 	}
 }
 
@@ -180,8 +220,8 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 
-	if msg := UpdateRefCmd(t.Context(), openRepo{path: dir})(); msg != (EmptyRepoMsg{}) {
-		t.Fatalf("UpdateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
+	if msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)(); msg != (EmptyRepoMsg{}) {
+		t.Fatalf("updateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
 	}
 
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -189,13 +229,13 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	gitRun(t, dir, "tag", "v2")
 	gitRun(t, dir, "update-ref", "-d", "refs/heads/main")
 
-	switch msg := UpdateRefCmd(t.Context(), openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		if ref := (*git.Reference)(msg); ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
-			t.Fatalf("UpdateRefCmd with only tags = %v; want tag v1", msg)
+		if ref := msg.Ref; ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
+			t.Fatalf("updateRefCmd with only tags = %v; want tag v1", msg)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with only tags = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with only tags = %T %v; want a RefMsg", msg, msg)
 	}
 }
 

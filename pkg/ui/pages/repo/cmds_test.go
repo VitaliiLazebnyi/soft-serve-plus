@@ -83,15 +83,15 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	repo, ref := cmdTestRepo(t)
 	f := NewFiles(cmdTestCommon())
 	f.Update(RepoMsg(repo))
-	_, cmd := f.Update(RefMsg(ref))
+	_, cmd := f.Update(RefMsg{Ref: ref})
 	items := findMsg[FileItemsMsg](t, runCmd(cmd))
 	f.Update(items)
-	if len(items) != 1 {
-		t.Fatalf("got %d files, want 1", len(items))
+	if len(items.items) != 1 {
+		t.Fatalf("got %d files, want 1", len(items.items))
 	}
 
 	// Select the file, then clear the model before its command runs.
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
+	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
 	f.Update(EmptyRepoMsg{})
 	content := findMsg[FileContentMsg](t, runCmd(cmd))
 	if content.content != "hello\n" {
@@ -105,9 +105,9 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	}
 
 	// Content requested before a ref change is dropped too.
-	f.Update(RefMsg(ref))
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
-	f.Update(RefMsg(ref))
+	f.Update(RefMsg{Ref: ref})
+	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	f.Update(RefMsg{Ref: ref})
 	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
 	if f.activeView == filesViewContent || f.Path() != "" {
 		t.Fatalf("stale content opened %q", f.Path())
@@ -115,7 +115,7 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 
 	// Open the file and toggle the blame view, then clear the model before
 	// the blame command runs.
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items[0]})
+	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
 	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
 	if got := f.Path(); got != "file.txt" {
 		t.Fatalf("path = %q, want file.txt", got)
@@ -141,26 +141,26 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	l.Update(RepoMsg(repo))
 
 	// A new ref, then an empty repository, before the count command runs.
-	_, cmd := l.Update(RefMsg(ref))
+	_, cmd := l.Update(RefMsg{Ref: ref})
 	l.Update(EmptyRepoMsg{})
 	count := findMsg[LogCountMsg](t, runCmd(cmd))
-	if count != 1 {
-		t.Fatalf("count = %d, want 1", count)
+	if count.count != 1 {
+		t.Fatalf("count = %d, want 1", count.count)
 	}
 
-	l.Update(RefMsg(ref))
+	l.Update(RefMsg{Ref: ref})
 	_, cmd = l.Update(count)
 	l.Update(EmptyRepoMsg{})
 	commits := findMsg[LogItemsMsg](t, runCmd(cmd))
-	if len(commits) != 1 || commits[0] == nil {
+	if len(commits.items) != 1 || commits.items[0] == nil {
 		t.Fatalf("commits = %#v, want one commit", commits)
 	}
 
 	// Open a commit, then switch the ref before the diff command runs.
-	commit := commits[0].(LogItem).Commit
-	l.Update(RefMsg(ref))
+	commit := commits.items[0].(LogItem).Commit
+	l.Update(RefMsg{Ref: ref})
 	_, cmd = l.Update(LogCommitMsg(commit))
-	l.Update(RefMsg(ref))
+	l.Update(RefMsg{Ref: ref})
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
 	// The diff of a commit that is no longer selected is dropped.
@@ -173,7 +173,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	// diff of the selected commit is shown.
 	// Loading the commits again gives another *git.Commit.
 	_, cmd = l.Update(count)
-	other := findMsg[LogItemsMsg](t, runCmd(cmd))[0].(LogItem).Commit
+	other := findMsg[LogItemsMsg](t, runCmd(cmd)).items[0].(LogItem).Commit
 	if other == commit {
 		t.Fatal("reloading the commits returned the same commit")
 	}
@@ -227,7 +227,7 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 	// Give the pane its repository and ref directly: Repo itself only needs
 	// them for the status bar.
 	f.Update(RepoMsg(openRepo{path: dir}))
-	_, cmd := f.Update(RefMsg(ref))
+	_, cmd := f.Update(RefMsg{Ref: ref})
 	update(findMsg[FileItemsMsg](t, runCmd(cmd)))
 
 	// Open "sub", the third directory of the root.

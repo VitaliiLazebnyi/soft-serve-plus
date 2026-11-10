@@ -360,3 +360,20 @@ func (s *Selector) activeFilterCmd() tea.Cmd {
 		return ActiveMsg{i}
 	}
 }
+
+// NewPane returns a selector for a list inside a repository pane: no title,
+// filter, help, pagination or status bar of its own, filtering and the quit
+// keys disabled, and the shared page keys so every pane pages the same way.
+func NewPane(c common.Common, delegate ItemDelegate) *Selector {
+	s := New(c, []IdentifiableItem{}, delegate)
+	s.SetShowFilter(false)
+	s.SetShowHelp(false)
+	s.SetShowPagination(false)
+	s.SetShowStatusBar(false)
+	s.SetShowTitle(false)
+	s.SetFilteringEnabled(false)
+	s.DisableQuitKeybindings()
+	s.KeyMap.NextPage = c.KeyMap.NextPage
+	s.KeyMap.PrevPage = c.KeyMap.PrevPage
+	return s
+}

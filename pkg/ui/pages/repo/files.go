@@ -49,7 +49,12 @@ var (
 )
 
 // FileItemsMsg is a message that contains a list of files.
-type FileItemsMsg []selector.IdentifiableItem
+type FileItemsMsg struct {
+	items []selector.IdentifiableItem
+	gen   uint64
+}
+
+func (m FileItemsMsg) generation() uint64 { return m.gen }
 
 // FileContentMsg is a message that contains the content of a file.
 type FileContentMsg struct {
@@ -61,14 +66,23 @@ type FileContentMsg struct {
 	index int
 	// load is the Files load the content was requested in.
 	load int
+	// isMarkdown is worked out once, when the file is loaded, because chroma
+	// may have to analyse the whole content to tell.
+	isMarkdown bool
+	gen        uint64
 }
+
+func (m FileContentMsg) generation() uint64 { return m.gen }
 
 // FileBlameMsg is a message that contains the blame of a file.
 type FileBlameMsg struct {
 	blame *git.Blame
 	// load is the Files load the blame was requested in.
 	load int
+	gen  uint64
 }
+
+func (m FileBlameMsg) generation() uint64 { return m.gen }
 
 // Files is the model for the files view.
 type Files struct {
@@ -91,6 +105,7 @@ type Files struct {
 	// from an earlier load arrived after the user or a ref change moved on,
 	// and is dropped.
 	load int
+	gen  uint64
 }
 
 // NewFiles creates a new files model.
@@ -102,16 +117,7 @@ func NewFiles(common common.Common) *Files {
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, FileItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, FileItemDelegate{&common})
 	f.selector = selector
 	f.code.ShowLineNumber = f.lineNumber
 	// "b" toggles blame and "l" toggles line numbers in the content view, so
@@ -124,8 +130,7 @@ func NewFiles(common common.Common) *Files {
 		key.WithKeys("right"),
 		key.WithHelp("→", "move right"),
 	)
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	f.spinner = s
 	return f
 }
@@ -180,7 +185,7 @@ func (f *Files) FullHelp() [][]key.Binding {
 	actionKeys := []key.Binding{}
 	switch f.activeView {
 	case filesViewFiles:
-		copyKey.SetHelp("c", "copy name")
+		copyKey = f.common.CopyKey("copy name")
 		k := f.selector.KeyMap
 		b = append(b, [][]key.Binding{
 			{
@@ -203,11 +208,10 @@ func (f *Files) FullHelp() [][]key.Binding {
 			actionKeys = append(actionKeys, lineNo)
 		}
 		actionKeys = append(actionKeys, blameView)
-		if common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) &&
-			!f.blameView {
+		if f.currentContent.isMarkdown && !f.blameView {
 			actionKeys = append(actionKeys, preview)
 		}
-		copyKey.SetHelp("c", "copy content")
+		copyKey = f.common.CopyKey("copy content")
 		k := f.code.KeyMap
 		b = append(b, []key.Binding{
 			f.common.KeyMap.BackItem,
@@ -253,12 +257,13 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		f.repo = msg
 	case RefMsg:
-		f.ref = msg
+		f.ref = msg.Ref
+		f.gen = msg.gen
 		f.selector.Select(0)
 		cmds = append(cmds, f.Init())
 	case FileItemsMsg:
 		cmds = append(cmds,
-			f.selector.SetItems(msg),
+			f.selector.SetItems(msg.items),
 		)
 		f.activeView = filesViewFiles
 		if f.cursor >= 0 {
@@ -276,11 +281,11 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
 		f.currentContent = msg
-		f.code.UseGlamour = common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext)
+		f.code.UseGlamour = msg.isMarkdown
 		// File contents come from the repository and must not reach the
 		// terminal as escape sequences; chroma and glamour pass them
 		// through. currentContent keeps the raw bytes for copying.
-		cmds = append(cmds, f.code.SetContent(utils.Sanitize(msg.content), msg.ext))
+		cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(msg.content), msg.ext, msg.isMarkdown))
 		f.code.GotoTop()
 	case FileBlameMsg:
 		if msg.load != f.load || !f.blameView {
@@ -328,7 +333,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
@@ -341,9 +346,9 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				}
 				cmds = append(cmds, f.spinner.Tick)
 			case key.Matches(msg, preview) &&
-				common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) && !f.blameView:
+				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -369,6 +374,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case EmptyRepoMsg:
 		f.ref = nil
+		f.gen = msg.gen
 		f.load++
 		f.path = ""
 		f.currentItem = nil
@@ -427,9 +433,8 @@ func (f *Files) StatusBarValue() string {
 	if p == "." || p == "" {
 		return " "
 	}
-	// Quote the path the way the file list quotes names, as file names may
-	// contain control characters.
-	return common.UnquoteFilename(p)
+	// File names may contain control characters; escape them for display.
+	return common.DisplayFilename(p)
 }
 
 // StatusBarInfo returns the status bar info.
@@ -452,7 +457,7 @@ func (f *Files) StatusBarInfo() string {
 // directory. Commands run in their own goroutines, so it captures the model
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
-	repo, ref, path := f.repo, f.ref, f.path
+	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
 	ctx := f.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
@@ -480,14 +485,14 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg(append(dirs, files...))
+		return FileItemsMsg{items: append(dirs, files...), gen: gen}
 	}
 }
 
 // selectFileCmd returns a command that loads the content of item, which is at
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
-	repo, ref, load := f.repo, f.ref, f.load
+	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
 	ctx := f.common.Context()
 	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
@@ -533,19 +538,22 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			return common.ErrorMsg(errBinaryFile)
 		}
 
+		content, name := string(c), item.entry.Name()
 		return FileContentMsg{
-			content: string(c),
-			ext:     item.entry.Name(),
-			path:    filePath,
-			index:   index,
-			load:    load,
+			content:    content,
+			ext:        name,
+			path:       filePath,
+			index:      index,
+			load:       load,
+			isMarkdown: common.IsFileMarkdown(content, name),
+			gen:        gen,
 		}
 	}
 }
 
 // fetchBlameCmd returns a command that loads the blame of the current file.
 func (f *Files) fetchBlameCmd() tea.Cmd {
-	repo, ref, item, load := f.repo, f.ref, f.currentItem, f.load
+	repo, ref, item, load, gen := f.repo, f.ref, f.currentItem, f.load, f.gen
 	ctx := f.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
@@ -561,7 +569,7 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 			return common.ErrorMsg(err)
 		}
 
-		return FileBlameMsg{blame: b, load: load}
+		return FileBlameMsg{blame: b, load: load, gen: gen}
 	}
 }
 
@@ -614,7 +622,8 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	gen := f.gen
 	return func() tea.Msg {
-		return FileItemsMsg(items)
+		return FileItemsMsg{items: items, gen: gen}
 	}
 }

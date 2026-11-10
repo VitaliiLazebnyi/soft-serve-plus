@@ -72,7 +72,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		Config:   cfg,
 		Backend:  be,
 		DB:       db,
-		logger:   log.FromContext(ctx).WithPrefix("server"),
+		logger:   logger,
 		ctx:      ctx,
 		stopJobs: stopJobs,
 	}
@@ -114,7 +114,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}
 
 	if cfg.HTTP.TLSKeyPath != "" && cfg.HTTP.TLSCertPath != "" {
-		srv.CertLoader, err = NewCertReloader(cfg.HTTP.TLSCertPath, cfg.HTTP.TLSKeyPath, logger)
+		srv.CertLoader, err = NewCertReloader(cfg.HTTP.TLSCertPath, cfg.HTTP.TLSKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("create cert reloader: %w", err)
 		}
@@ -219,7 +219,8 @@ func (s *Server) ReloadCertificates() error {
 // without waiting for the others to stop. The caller should then shut the
 // server down.
 //
-// Start returns nil without serving if Shutdown or Close has been called.
+// Start returns nil without serving if Shutdown or Close has been called, and
+// an error if no server is enabled.
 func (s *Server) Start() error {
 	type service struct {
 		name   string
@@ -239,6 +240,11 @@ func (s *Server) Start() error {
 	}
 	if s.Config.Stats.Enabled {
 		services = append(services, service{"Stats server", s.Config.Stats.ListenAddr, s.StatsServer.Serve, http.ErrServerClosed})
+	}
+	if len(services) == 0 {
+		// Otherwise Start would return at once and the process would exit
+		// successfully without having served anything.
+		return errors.New("no server is enabled; enable at least one of ssh, git, http or stats")
 	}
 
 	listeners := make([]*serveListener, 0, len(services))

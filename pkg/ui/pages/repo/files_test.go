@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,7 +102,7 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := NewFiles(common.NewCommon(ctx, 80, 40))
 			f.Update(RepoMsg(tc.repo))
-			f.Update(RefMsg(ref))
+			f.Update(RefMsg{Ref: ref})
 			if f.activeView != filesViewLoading {
 				t.Fatalf("after RefMsg activeView = %v; want filesViewLoading", f.activeView)
 			}
@@ -173,14 +174,14 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	ctx := config.WithContext(t.Context(), config.DefaultConfig())
 	f := NewFiles(common.NewCommon(ctx, 80, 40))
 	f.Update(RepoMsg(openRepo{path: dir}))
-	f.Update(RefMsg(ref))
+	f.Update(RefMsg{Ref: ref})
 	f.Update(f.updateFilesCmd()())
 	if n := len(f.selector.Items()); n != 1 {
 		t.Fatalf("after the first listing items = %d; want 1", n)
 	}
 
 	f.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
-	f.Update(RefMsg(ref))
+	f.Update(RefMsg{Ref: ref})
 	msg := f.updateFilesCmd()()
 	if _, ok := msg.(common.ErrorMsg); !ok {
 		t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
@@ -192,4 +193,79 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	if n := len(f.selector.Items()); n != 0 {
 		t.Errorf("after the failed reload items = %d; want 0", n)
 	}
+}
+
+// A file with a non-ASCII name, which git C-quotes in ls-tree output, must be
+// listed, shown and blamed under its real name.
+func TestFilesNonASCIIName(t *testing.T) {
+	// Pin core.quotePath=true, git's default, for every git process the test
+	// starts, including the ls-tree that git-module runs, so the name is
+	// C-quoted even on a machine whose config sets core.quotePath=false.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.quotePath")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+
+	const dirName, fileName = "dossier é", "café.txt"
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
+	if err := os.MkdirAll(filepath.Join(dir, dirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, dirName, fileName), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-q", "-m", "first")
+
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := r.HEAD()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := config.WithContext(t.Context(), config.DefaultConfig())
+	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(RefMsg{Ref: ref})
+
+	// Walk into the directory, then onto the file, like selecting them.
+	selectOnly := func(want string) FileItem {
+		t.Helper()
+		msg, ok := f.updateFilesCmd()().(FileItemsMsg)
+		items := msg.items
+		if !ok || len(items) != 1 {
+			t.Fatalf("files at %q = %v, want one item", f.path, items)
+		}
+		item := items[0].(FileItem)
+		if item.Title() != want {
+			t.Fatalf("item title = %q, want %q", item.Title(), want)
+		}
+		f.currentItem = &item
+		return item
+	}
+	dirItem := selectOnly(dirName)
+	f.path = path.Join(f.path, dirItem.entry.Name())
+	fileItem := selectOnly(fileName)
+
+	msg := f.selectFileCmd(fileItem, path.Join(f.path, fileItem.entry.Name()), 0)()
+	content, ok := msg.(FileContentMsg)
+	if !ok {
+		t.Fatalf("selectFileCmd = %T %v, want FileContentMsg", msg, msg)
+	}
+	f.Update(content)
+	if want := dirName + "/" + fileName; f.StatusBarValue() != want {
+		t.Errorf("status bar = %q, want %q", f.StatusBarValue(), want)
+	}
+
+	if msg := f.fetchBlameCmd()(); !isBlame(msg) {
+		t.Fatalf("fetchBlame = %T %v, want FileBlameMsg", msg, msg)
+	}
+}
+
+func isBlame(msg any) bool {
+	_, ok := msg.(FileBlameMsg)
+	return ok
 }

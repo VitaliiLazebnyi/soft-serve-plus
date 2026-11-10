@@ -33,7 +33,7 @@ func TestOpenWithContext(t *testing.T) {
 	if _, err := r.HEAD(); err == nil {
 		t.Fatal("HEAD with a cancelled context succeeded; want an error")
 	}
-	if msg, ok := UpdateRefCmd(ctx, openRepo{path: dir})().(RefMsg); ok {
-		t.Fatalf("UpdateRefCmd with a cancelled context = %v; want no reference", msg)
+	if msg, ok := updateRefCmd(ctx, openRepo{path: dir}, 0)().(RefMsg); ok {
+		t.Fatalf("updateRefCmd with a cancelled context = %v; want no reference", msg)
 	}
 }

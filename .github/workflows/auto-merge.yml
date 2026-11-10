@@ -35,8 +35,11 @@ on:
       - synchronize
       - edited
 
-# Runs for the same PR one at a time, in order, so a check of a new push never
-# overlaps with an earlier run that is enabling auto-merge.
+# Runs for the same PR one at a time, so a check of a new push never overlaps
+# with an earlier run that is enabling auto-merge. GitHub keeps only the newest
+# pending run of a group and cancels older pending ones; every run reads the
+# PR's current files, and a skipped "opened" run only leaves the PR for a
+# manual merge.
 concurrency:
   group: auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: false

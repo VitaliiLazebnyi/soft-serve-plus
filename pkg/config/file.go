@@ -18,7 +18,7 @@ name: {{ q .Name }}
 log:
   # Log format to use. Valid values are "json", "logfmt", and "text".
   format: {{ q .Log.Format }}
-  # Time format for the log "timestamp" field.
+  # Time format for the log "time" field.
   # Should be described in Golang's time format.
   time_format: {{ q .Log.TimeFormat }}
   # Path to the log file. Leave empty to write to stderr. A relative path
@@ -185,6 +185,7 @@ git:
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
+  # A value of 0 means no timeout.
   # Independently of it, a client has 10 seconds to send its request.
   # While a pack is prepared, keepalives are sent every idle_timeout/2
   # seconds (at least 1) so that the connection does not go idle.
@@ -243,10 +244,13 @@ http:
       - "Authorization"
       - "Access-Control-Request-Method"
       - "Access-Control-Allow-Origin"
-    # The allowed cross-origin URLs
+    # The allowed cross-origin URLs. The public URL is always allowed.
     allowed_origins:
-      - {{ q .HTTP.PublicURL }} # always allowed
+{{- range .HTTP.CORS.AllowedOrigins }}
+      - {{ q . }}
+{{- else }} []
       # - "https://example.com"
+{{- end }}
     # The allowed cross-origin methods
     allowed_methods:
       - "GET"
@@ -293,7 +297,7 @@ db:
 lfs:
   # Enable Git LFS.
   enabled: {{ .LFS.Enabled }}
-  # Enable Git SSH transfer.
+  # Enable Git LFS over SSH (the git-lfs-transfer protocol).
   ssh_enabled: {{ .LFS.SSHEnabled }}
 
 # Cron job configuration
@@ -416,8 +420,12 @@ func yamlQuote(s string) string {
 	return b.String()
 }
 
-func newConfigFile(cfg *Config) string {
+// newConfigFile renders cfg as a config file. It fails rather than return
+// a file cut short where the template stopped.
+func newConfigFile(cfg *Config) (string, error) {
 	var b bytes.Buffer
-	configFileTmpl.Execute(&b, cfg) //nolint: errcheck
-	return b.String()
+	if err := configFileTmpl.Execute(&b, cfg); err != nil {
+		return "", fmt.Errorf("render config file: %w", err)
+	}
+	return b.String(), nil
 }

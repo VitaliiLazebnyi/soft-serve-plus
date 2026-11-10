@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/pprof"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -81,32 +84,70 @@ func runTests(m *testing.M) int {
 		log.Fatal(err)
 	}
 	testDaemon = d
-	defer d.Close()       //nolint:errcheck
-	go d.ListenAndServe() //nolint:errcheck
+	defer d.Close() //nolint:errcheck
+	// Bind before running the tests so the first dial cannot race the
+	// listener and be refused.
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", cfg.Git.ListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
 	return m.Run()
 }
 
-func TestIdleTimeout(t *testing.T) {
-	var err error
-	var c net.Conn
-	var tries int
+// dialDaemon connects to the test daemon. The connection is closed when the
+// test ends, and reads give up after a deadline so a daemon that never
+// answers fails the test instead of hanging it.
+func dialDaemon(t *testing.T) net.Conn {
+	t.Helper()
 	var dialer net.Dialer
-	for {
-		c, err = dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
-		if err != nil && tries >= 3 {
-			t.Fatalf("failed to connect to daemon after %d tries: %v", tries, err)
-		}
-		tries++
-		if testDaemon.conns.Size() != 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
 	}
-	time.Sleep(2 * time.Second)
-	_, err = readPktline(c)
-	if err == nil || err.Error() != git.ErrTimeout.Error() {
-		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
 	}
+	return c
+}
+
+// readPktline reads one pkt-line. An ERR packet is returned as a
+// *pktline.ErrorLine carrying the daemon's message.
+func readPktline(c net.Conn) (string, error) {
+	pktout := pktline.NewScanner(c)
+	if !pktout.Scan() {
+		if err := pktout.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}
+	return strings.TrimSpace(string(pktout.Bytes())), nil
+}
+
+// wantErrLine fails the test unless err is an ERR packet carrying want.
+func wantErrLine(t *testing.T, what string, err error, want error) {
+	t.Helper()
+	var errLine *pktline.ErrorLine
+	if !errors.As(err, &errLine) {
+		t.Errorf("%s: expected ERR %q, got %v", what, want, err)
+		return
+	}
+	if errLine.Text != want.Error() {
+		t.Errorf("%s: expected ERR %q, got ERR %q", what, want, errLine.Text)
+	}
+}
+
+// TestIdleTimeout verifies a client that connects and never sends a request
+// is told it timed out once the idle timeout passes.
+func TestIdleTimeout(t *testing.T) {
+	c := dialDaemon(t)
+	line, err := readPktline(c)
+	if err == nil {
+		t.Fatalf("expected a timeout, got line %q", line)
+	}
+	wantErrLine(t, "idle connection", err, git.ErrTimeout)
 }
 
 // TestBadRequests verifies the daemon answers malformed requests and pushes
@@ -133,9 +174,12 @@ func TestBadRequests(t *testing.T) {
 		{"push", pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported},
 	}
 	for _, tc := range cases {
-		if got := rawRequest(t, tc.raw); got != tc.want.Error() {
-			t.Errorf("%s: expected %q, got %q", tc.name, tc.want, got)
+		line, err := rawRequest(t, tc.raw)
+		if err == nil {
+			t.Errorf("%s: expected ERR %q, got line %q", tc.name, tc.want, line)
+			continue
 		}
+		wantErrLine(t, tc.name, err, tc.want)
 	}
 }
 
@@ -227,8 +271,8 @@ func TestFailedRequestDoesNotLeak(t *testing.T) {
 }
 
 // requestUploadPack asks the daemon for a repository and returns the first
-// line it answers with.
-func requestUploadPack(t *testing.T, repo string) string {
+// line it answers with, or the error it answers with.
+func requestUploadPack(t *testing.T, repo string) (string, error) {
 	t.Helper()
 	var b bytes.Buffer
 	if err := pktline.NewEncoder(&b).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
@@ -238,27 +282,24 @@ func requestUploadPack(t *testing.T, repo string) string {
 }
 
 // rawRequest sends raw bytes to the daemon and returns the first line it
-// answers with.
-func rawRequest(t *testing.T, raw []byte) string {
+// answers with, or the error it answers with.
+func rawRequest(t *testing.T, raw []byte) (string, error) {
 	t.Helper()
-	c, err := net.Dial("tcp", testDaemon.addr) //nolint:noctx
-	if err != nil {
-		t.Fatalf("failed to connect to daemon: %v", err)
-	}
-	defer c.Close() //nolint:errcheck
+	c := dialDaemon(t)
 	if _, err := c.Write(raw); err != nil {
 		t.Fatalf("failed to write request: %v", err)
 	}
-	// The scanner reports an ERR packet as an error carrying its message.
-	line, err := readPktline(c)
-	if err != nil {
-		return err.Error()
-	}
-	return line
+	return readPktline(c)
 }
 
+// refAdvertisement matches the first line of an upload-pack reference
+// advertisement: an object id, a space, and a ref name (or capabilities^{}
+// for an empty repository).
+var refAdvertisement = regexp.MustCompile(`^[0-9a-f]{40} \S+\x00`)
+
 // TestInvalidRepo verifies the daemon, which is always anonymous, answers a
-// missing repository and a private one identically so neither is revealed.
+// missing repository and a private one identically so neither is revealed,
+// and serves a public one.
 func TestInvalidRepo(t *testing.T) {
 	ctx := context.Background()
 	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil {
@@ -269,25 +310,36 @@ func TestInvalidRepo(t *testing.T) {
 		t.Fatalf("failed to create public repo: %v", err)
 	}
 
-	want := git.ErrNotAuthed.Error()
-	missing := requestUploadPack(t, "test")
-	private := requestUploadPack(t, "private")
-	if missing != want {
-		t.Errorf("missing repo: expected %q, got %q", want, missing)
-	}
-	if private != want {
-		t.Errorf("private repo: expected %q, got %q", want, private)
+	for _, tc := range []struct {
+		what, repo string
+	}{
+		{"missing repo", "test"},
+		{"private repo", "private"},
+		// Dot-dot segments are resolved inside the repositories
+		// directory, so this names the missing repository "escape".
+		{"dot-dot path", "../escape"},
+		// ... and this one names "private".
+		{"dot-dot path to a private repo", "x/../../private"},
+	} {
+		line, err := requestUploadPack(t, tc.repo)
+		if err == nil {
+			t.Errorf("%s: expected ERR %q, got line %q", tc.what, git.ErrNotAuthed, line)
+			continue
+		}
+		wantErrLine(t, tc.what, err, git.ErrNotAuthed)
 	}
 
-	// A path that escapes the repositories directory gets the same answer.
-	if got := requestUploadPack(t, "../escape"); got != want {
-		t.Errorf("escaping path: expected %q, got %q", want, got)
-	}
-
-	// A public repository is served: the first line is not a refusal.
-	public := requestUploadPack(t, "public")
-	if public == want || public == git.ErrInvalidRepo.Error() {
-		t.Errorf("public repo was refused: %q", public)
+	// A public repository is served: the daemon advertises its references,
+	// also when the path reaches it through dot-dot segments.
+	for _, repo := range []string{"public", "../public", "x/../../public"} {
+		line, err := requestUploadPack(t, repo)
+		if err != nil {
+			t.Errorf("public repo %q was refused: %v", repo, err)
+			continue
+		}
+		if !refAdvertisement.MatchString(line) {
+			t.Errorf("public repo %q: expected a reference advertisement, got %q", repo, line)
+		}
 	}
 }
 
@@ -382,14 +434,6 @@ func TestGitFailureFixedMessage(t *testing.T) {
 	}
 }
 
-func readPktline(c net.Conn) (string, error) {
-	pktout := pktline.NewScanner(c)
-	if !pktout.Scan() {
-		return "", pktout.Err()
-	}
-	return strings.TrimSpace(string(pktout.Bytes())), nil
-}
-
 // Serve and Shutdown can run at the same time: Serve either sees the daemon
 // closed or is waited for. Serve used to start counting on the WaitGroup
 // that Shutdown might already be waiting on, which the race detector reports.
@@ -437,6 +481,52 @@ func TestListensOnLoopback(t *testing.T) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		t.Fatalf("daemon listens on %q, want a loopback address", testDaemon.addr)
 	}
+}
+
+// TestUploadPackCounted checks that the daemon counts each upload-pack
+// request it serves once, under its own metric name, and does not count a
+// request it refuses.
+func TestUploadPackCounted(t *testing.T) {
+	ctx := context.Background()
+	// The daemon and its backend are shared by every run of the test, so
+	// the repositories may exist already, and counters are compared with
+	// their values before the requests.
+	if _, err := testBackend.CreateRepository(ctx, "counted", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	if _, err := testBackend.CreateRepository(ctx, "counted-private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create private repo: %v", err)
+	}
+
+	served := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted"))
+	refused := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private"))
+	for range 2 {
+		if _, err := requestUploadPack(t, "counted"); err != nil {
+			t.Fatalf("public repo was refused: %v", err)
+		}
+	}
+	if _, err := requestUploadPack(t, "counted-private"); err == nil {
+		t.Fatal("private repo was served")
+	}
+
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted")) - served; got != 2 {
+		t.Errorf("upload-pack counter for a served repo = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(uploadPackGitCounter.WithLabelValues("counted-private")) - refused; got != 0 {
+		t.Errorf("upload-pack counter for a refused repo = %v, want 0", got)
+	}
+
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "soft_serve_daemon_git_upload_pack_total"
+	for _, mf := range mfs {
+		if mf.GetName() == want {
+			return
+		}
+	}
+	t.Errorf("metric %s is not registered", want)
 }
 
 // startLimitedDaemon serves a daemon allowing limit connections that never
