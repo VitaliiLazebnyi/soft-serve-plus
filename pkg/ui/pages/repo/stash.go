@@ -271,12 +271,13 @@ func (s *Stash) renderPatch() {
 // needs here instead of reading the model later.
 func (s *Stash) fetchStashCmd() tea.Cmd {
 	repo, gen := s.repo, s.gen
+	ctx := s.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
 			return StashListMsg{gen: gen}
 		}
 
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -294,12 +295,13 @@ func (s *Stash) fetchStashCmd() tea.Cmd {
 // stash.
 func (s *Stash) fetchStashPatchCmd() tea.Cmd {
 	repo, index, gen := s.repo, s.list.Index(), s.gen
+	ctx := s.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
 			return StashPatchMsg{gen: gen}
 		}
 
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}

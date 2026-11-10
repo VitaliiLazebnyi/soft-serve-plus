@@ -57,7 +57,7 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
-	switch msg := updateRefCmd(openRepo{path: dir}, 0)().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
 		if ref := msg.Ref; ref == nil || ref.Name().Short() != "dev" {
 			t.Fatalf("updateRefCmd with a dangling HEAD = %v; want dev", msg)
@@ -93,7 +93,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
 
-	ref, ok := updateRefCmd(repo, 0)().(RefMsg)
+	ref, ok := updateRefCmd(t.Context(), repo, 0)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not return a RefMsg")
 	}
@@ -152,7 +152,7 @@ func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
 	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
-	ref, ok := updateRefCmd(repo, 1)().(RefMsg)
+	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not return a RefMsg")
 	}
@@ -198,7 +198,7 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	switch msg := updateRefCmd(openRepo{path: dir}, 0)().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
 		ref := msg.Ref
 		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
@@ -220,7 +220,7 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 
-	if msg := updateRefCmd(openRepo{path: dir}, 0)(); msg != (EmptyRepoMsg{}) {
+	if msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)(); msg != (EmptyRepoMsg{}) {
 		t.Fatalf("updateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
 	}
 
@@ -229,7 +229,7 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	gitRun(t, dir, "tag", "v2")
 	gitRun(t, dir, "update-ref", "-d", "refs/heads/main")
 
-	switch msg := updateRefCmd(openRepo{path: dir}, 0)().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
 		if ref := msg.Ref; ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
 			t.Fatalf("updateRefCmd with only tags = %v; want tag v1", msg)

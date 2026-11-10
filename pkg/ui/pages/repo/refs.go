@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -224,11 +225,12 @@ func (r *Refs) StatusBarInfo() string {
 // needs here instead of reading the model later.
 func (r *Refs) updateItemsCmd() tea.Cmd {
 	repo, prefix, logger, gen := r.repo, r.refPrefix, r.common.Logger, r.gen
+	ctx := r.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		rr, err := repo.Open()
+		rr, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -274,10 +276,11 @@ func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 // updateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
 // fallback branch or tag when HEAD names a branch that does not exist (see
 // defaultRef). It sends EmptyRepoMsg when the repository has no branches or
-// tags. gen is the generation the repository page started for repo.
-func updateRefCmd(repo proto.Repository, gen uint64) tea.Cmd {
+// tags. gen is the generation the repository page started for repo. Its git
+// commands stop when ctx is done.
+func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}

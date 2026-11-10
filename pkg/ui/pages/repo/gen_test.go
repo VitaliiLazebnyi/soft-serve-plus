@@ -58,14 +58,14 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	// Open A; its ref and loads start, but the user leaves before they
 	// arrive.
 	r.Update(RepoMsg(a))
-	refA := updateRefCmd(a, r.gen)()
+	refA := updateRefCmd(t.Context(), a, r.gen)()
 	r.Update(refA)
 	lateReadmeA := readme.updateReadmeCmd()
 	lateFilesA := files.updateFilesCmd()
 
 	// Open B.
 	r.Update(RepoMsg(b))
-	refB := updateRefCmd(b, r.gen)()
+	refB := updateRefCmd(t.Context(), b, r.gen)()
 
 	r.Update(refA)
 	if r.ref != nil {

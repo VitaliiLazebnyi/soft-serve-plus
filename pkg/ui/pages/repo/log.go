@@ -472,11 +472,12 @@ func (l *Log) goBack() {
 // needs here instead of reading the model later.
 func (l *Log) countCommitsCmd() tea.Cmd {
 	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -492,12 +493,13 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 // updateCommitsCmd returns a command that loads the commits of the next page.
 func (l *Log) updateCommitsCmd() tea.Cmd {
 	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	count, page, limit := l.count, l.nextPage, l.selector.PerPage()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -534,11 +536,12 @@ func (l *Log) selectCommitCmd(commit *git.Commit) tea.Cmd {
 // loadDiffCmd returns a command that loads the diff of the selected commit.
 func (l *Log) loadDiffCmd() tea.Cmd {
 	repo, commit, logger, gen := l.repo, l.selectedCommit, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	return func() tea.Msg {
 		if repo == nil || commit == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			logger.Debugf("error loading diff repository: %v", err)
 			return LogDiffErrorMsg{commit: commit, err: err, gen: gen}

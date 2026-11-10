@@ -178,13 +178,14 @@ func (r *Readme) StatusBarInfo() string {
 // needs here instead of reading the model later.
 func (r *Readme) updateReadmeCmd() tea.Cmd {
 	repo, ref, gen := r.repo, r.ref, r.gen
+	ctx := r.common.Context()
 	limit := r.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		m := ReadmeMsg{gen: gen}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		rm, rp, _ := backend.Readme(repo, ref, limit)
+		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
 		m.Content = rm
 		m.Path = rp
 		return m

@@ -234,7 +234,7 @@ func loadRepos(c common.Common) tea.Msg {
 	for _, r := range repos {
 		// Every repository here is readable by the caller.
 		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(r, nil, c.Config().BlobSizeLimit())
+			readme, path, err := backend.Readme(ctx, r, nil, c.Config().BlobSizeLimit())
 			if err != nil {
 				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {

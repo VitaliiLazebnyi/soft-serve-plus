@@ -10,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -77,7 +76,7 @@ func (m FileContentMsg) generation() uint64 { return m.gen }
 
 // FileBlameMsg is a message that contains the blame of a file.
 type FileBlameMsg struct {
-	blame *gitm.Blame
+	blame *git.Blame
 	// load is the Files load the blame was requested in.
 	load int
 	gen  uint64
@@ -96,7 +95,7 @@ type Files struct {
 	path           string
 	currentItem    *FileItem
 	currentContent FileContentMsg
-	currentBlame   *gitm.Blame
+	currentBlame   *git.Blame
 	lastSelected   []int
 	lineNumber     bool
 	spinner        spinner.Model
@@ -459,11 +458,12 @@ func (f *Files) StatusBarInfo() string {
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
 	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
+	ctx := f.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -493,6 +493,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
+	ctx := f.common.Context()
 	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		if item.entry.IsTree() || item.Mode().IsDir() {
@@ -504,7 +505,7 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		fi := item.entry.File()
 
 		var bin bool
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err == nil {
 			attrs, err := r.CheckAttributes(ref, fi.Path())
 			if err == nil {
@@ -553,11 +554,12 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 // fetchBlameCmd returns a command that loads the blame of the current file.
 func (f *Files) fetchBlameCmd() tea.Cmd {
 	repo, ref, item, load, gen := f.repo, f.ref, f.currentItem, f.load, f.gen
+	ctx := f.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
 			return common.ErrorMsg(errNoFileSelected)
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -571,7 +573,7 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 	}
 }
 
-func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
+func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
 	if f == nil || f.entry.IsTree() || b == nil {
 		return ""
 	}

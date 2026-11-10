@@ -220,7 +220,7 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			r.Init(),
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
-			updateRefCmd(msg, r.gen),
+			updateRefCmd(r.common.Context(), msg, r.gen),
 		)
 		routed = true
 	case RefMsg:
