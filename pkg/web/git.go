@@ -112,8 +112,13 @@ func withParams(next http.Handler) http.Handler {
 
 // GitController is a router for git services.
 func GitController(ctx context.Context, r *mux.Router) {
+	gitController(ctx, r, newPushCreates())
+}
+
+// gitController routes git services, tracking the repositories HTTP pushes
+// create in pending.
+func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
-	pending := newPushCreates()
 	limits := newRequestLimits(config.FromContext(ctx).HTTP)
 	for _, route := range gitRoutes {
 		route.pending = pending

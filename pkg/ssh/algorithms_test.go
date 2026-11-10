@@ -55,7 +55,7 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 	if len(sc.PublicKeyAuthAlgorithms) == 0 {
 		t.Fatal("serverConfig leaves public key auth algorithms to x/crypto defaults")
 	}
-	for _, a := range []string{gossh.KeyAlgoRSA, gossh.InsecureKeyAlgoDSA} {
+	for _, a := range []string{gossh.KeyAlgoRSA, gossh.InsecureKeyAlgoDSA} { //nolint:staticcheck // checks the deprecated algorithm stays off
 		if slices.Contains(sc.PublicKeyAuthAlgorithms, a) {
 			t.Errorf("serverConfig accepts %q signatures by default", a)
 		}

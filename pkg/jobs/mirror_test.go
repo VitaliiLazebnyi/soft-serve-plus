@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
@@ -183,11 +184,11 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 		conns []net.Conn
 	)
 	closeRemote := func() {
-		ln.Close()
+		ln.Close() //nolint:errcheck
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range conns {
-			c.Close()
+			c.Close() //nolint:errcheck
 		}
 	}
 	t.Cleanup(closeRemote)
@@ -276,11 +277,11 @@ func TestLimitedBufferCopyFromPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer r.Close() //nolint:errcheck
 
 	const total = 1 << 20
 	go func() {
-		defer w.Close()
+		defer w.Close() //nolint:errcheck
 		_, _ = w.Write(bytes.Repeat([]byte("x"), total))
 	}()
 
@@ -306,7 +307,7 @@ func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	ln.Close() //nolint:errcheck
 
 	r := newRepoWithRemotes(t, map[string]string{
 		"origin": "http://user:secret@" + addr + "/x.git?token=abc",
@@ -533,5 +534,119 @@ func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 		if strings.Contains(string(fetchHead), other.commit) || strings.Contains(string(fetchHead), filepath.Base(other.path)) {
 			t.Errorf("FETCH_HEAD mentions %s, which was not named:\n%s", other.name, fetchHead)
 		}
+	}
+}
+
+// stubMirrorGit replaces runMirrorGit for the test and records the commands
+// it was asked to run.
+func stubMirrorGit(t *testing.T, fn func(args []string) error) *[][]string {
+	t.Helper()
+	var calls [][]string
+	orig := runMirrorGit
+	runMirrorGit = func(_ context.Context, _ string, _ []string, args ...string) error {
+		calls = append(calls, args)
+		return fn(args)
+	}
+	t.Cleanup(func() { runMirrorGit = orig })
+	return &calls
+}
+
+// mirrorTestRemotes are the remotes the fetchMirror tests sync.
+var mirrorTestRemotes = []string{"origin", "backup"}
+
+func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
+	calls := stubMirrorGit(t, func([]string) error { return nil })
+	var logs bytes.Buffer
+
+	if !fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+		t.Fatal("fetchMirror stopped without being cancelled")
+	}
+	want := [][]string{
+		{"fetch", "--prune", "--", "origin"},
+		{"fetch", "--prune", "--", "backup"},
+	}
+	if !slices.EqualFunc(*calls, want, slices.Equal[[]string]) {
+		t.Fatalf("ran %v, want %v", *calls, want)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("unexpected logs: %s", logs.String())
+	}
+}
+
+// A remote that fails to fetch is logged and does not stop the others,
+// but the lfs sync is skipped until the next run.
+func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
+	calls := stubMirrorGit(t, func(args []string) error {
+		if args[len(args)-1] == "origin" {
+			return errors.New("exit status 128")
+		}
+		return nil
+	})
+	var logs bytes.Buffer
+
+	if fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+		t.Fatal("fetchMirror went on to the lfs sync after a failed fetch")
+	}
+	if len(*calls) != len(mirrorTestRemotes) {
+		t.Fatalf("ran %v, want a fetch of each of %v", *calls, mirrorTestRemotes)
+	}
+	if !strings.Contains(logs.String(), "exit status 128") {
+		t.Fatalf("the failed fetch was not logged: %s", logs.String())
+	}
+}
+
+// A shutdown during a fetch lets it finish, then starts nothing else: not
+// the next remote's fetch and not the lfs sync. It logs nothing either way.
+func TestFetchMirrorStopsAfterCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"fetch finished", nil},
+		{"fetch failed", errors.New("exit status 128")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			calls := stubMirrorGit(t, func([]string) error {
+				cancel()
+				return tc.err
+			})
+			var logs bytes.Buffer
+
+			if fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+				t.Fatal("fetchMirror went on after it was cancelled")
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("ran %v, want only the first fetch", *calls)
+			}
+			if logs.Len() != 0 {
+				t.Fatalf("a cancelled sync logged: %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	calls := stubMirrorGit(t, func([]string) error { return nil })
+
+	if fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+		t.Fatal("fetchMirror went on after it was cancelled")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("ran %v after cancellation", *calls)
+	}
+}
+
+// The git command does not take the cancellation: killing git would leave
+// its ref locks behind.
+func TestRunMirrorGitIgnoresCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := runMirrorGit(ctx, t.TempDir(), nil, "version"); err != nil {
+		t.Fatalf("git did not run under a cancelled context: %v", err)
 	}
 }
