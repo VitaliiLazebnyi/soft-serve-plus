@@ -38,6 +38,32 @@ func TestWorkPool(t *testing.T) {
 	}
 }
 
+// Run waits for the work already running when the pool's context is
+// cancelled, and starts no more.
+func TestWorkPoolRunWaitsAfterCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wp := NewWorkPool(ctx, 1)
+	var finished, ran atomic.Int32
+	for i := 0; i < 2; i++ {
+		wp.Add(strconv.Itoa(i), func() {
+			if ran.Add(1) > 1 {
+				return
+			}
+			cancel()
+			time.Sleep(200 * time.Millisecond)
+			finished.Add(1)
+		})
+	}
+	wp.Run()
+	if finished.Load() != 1 {
+		t.Fatal("Run returned before the running work ended")
+	}
+	if n := ran.Load(); n != 1 {
+		t.Fatalf("%d pieces of work ran, want 1", n)
+	}
+}
+
 // A pool can be run again: the second Run must not block on the workers the
 // first one waited for, and runs the work added since.
 func TestWorkPoolRunTwice(t *testing.T) {

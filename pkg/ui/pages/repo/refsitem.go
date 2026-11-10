@@ -54,10 +54,11 @@ func (cl RefItems) Len() int { return len(cl) }
 // Swap implements sort.Interface.
 func (cl RefItems) Swap(i, j int) { cl[i], cl[j] = cl[j], cl[i] }
 
-// Less implements sort.Interface.
+// Less implements sort.Interface. References are sorted by the committer
+// date, the date shown next to them, newest first.
 func (cl RefItems) Less(i, j int) bool {
 	if cl[i].CommitID != "" && cl[j].CommitID != "" {
-		return cl[i].AuthorWhen.After(cl[j].AuthorWhen)
+		return cl[i].CommitterWhen.After(cl[j].CommitterWhen)
 	}
 	return cl[i].CommitID != "" && cl[j].CommitID == ""
 }
@@ -107,15 +108,9 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	}
 
 	horizontalFrameSize := st.Base.GetHorizontalFrameSize()
-	var itemSt lipgloss.Style
-	if isTag && isActive {
+	itemSt := st.Item
+	if isTag {
 		itemSt = st.ItemTag
-	} else if isTag {
-		itemSt = st.ItemTag
-	} else if isActive {
-		itemSt = st.Item
-	} else {
-		itemSt = st.Item
 	}
 
 	var sha string

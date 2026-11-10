@@ -439,7 +439,7 @@ func (l *Log) StatusBarInfo() string {
 		// of the paginator hack above.
 		return fmt.Sprintf("p. %d/%d", l.nextPage+1, l.selector.TotalPages())
 	case logViewDiff:
-		return fmt.Sprintf("☰ %.f%%", l.vp.ScrollPercent()*100)
+		return common.ScrollPercent(l.vp.ScrollPosition())
 	default:
 		return ""
 	}
@@ -467,7 +467,7 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 		}
 		count, err := r.CountCommits(ref)
 		if err != nil {
-			logger.Debugf("ui: error counting commits: %v", err)
+			logger.Debugf("error counting commits: %v", err)
 			return common.ErrorMsg(err)
 		}
 		return LogCountMsg(count)
@@ -496,7 +496,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 		// CommitsByPage pages start at 1
 		cc, err := r.CommitsByPage(ref, page+1, limit)
 		if err != nil {
-			logger.Debugf("ui: error loading commits: %v", err)
+			logger.Debugf("error loading commits: %v", err)
 			return common.ErrorMsg(err)
 		}
 		for i, c := range cc {
@@ -525,12 +525,12 @@ func (l *Log) loadDiffCmd() tea.Cmd {
 		}
 		r, err := repo.Open()
 		if err != nil {
-			logger.Debugf("ui: error loading diff repository: %v", err)
+			logger.Debugf("error loading diff repository: %v", err)
 			return LogDiffErrorMsg{commit: commit, err: err}
 		}
 		diff, err := r.Diff(commit)
 		if err != nil {
-			logger.Debugf("ui: error loading diff: %v", err)
+			logger.Debugf("error loading diff: %v", err)
 			return LogDiffErrorMsg{commit: commit, err: err}
 		}
 		return LogDiffMsg{commit: commit, diff: diff}
@@ -545,7 +545,7 @@ func (l *Log) renderCommit(c *git.Commit) string {
 	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
 		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
-		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Committer.When.Format(time.UnixDate)),
+		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
 	)
 	return wrap.String(s.String(), l.common.Width-2)
