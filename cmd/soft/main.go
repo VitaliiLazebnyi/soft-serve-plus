@@ -64,6 +64,7 @@ var (
 			}
 
 			manPage = manPage.WithSection("Copyright", "(C) 2021-2023 Charmbracelet, Inc.\n"+
+				"Soft Serve Plus changes (C) their contributors.\n"+
 				"Released under MIT license.")
 			fmt.Println(manPage.Build(roff.NewDocument()))
 			return nil
@@ -122,8 +123,6 @@ func init() {
 	rootCmd.Version = Version
 
 	version.Version = Version
-	version.CommitSHA = CommitSHA
-	version.CommitDate = CommitDate
 }
 
 func main() {
@@ -132,13 +131,12 @@ func main() {
 	if err := cfg.CheckConfigLocation(); err != nil {
 		log.Fatal(err)
 	}
+	// Parse reads the file and then the environment.
+	parse := cfg.ParseEnv
 	if cfg.Exist() {
-		if err := cfg.Parse(); err != nil {
-			log.Fatal(err)
-		}
+		parse = cfg.Parse
 	}
-
-	if err := cfg.ParseEnv(); err != nil {
+	if err := parse(); err != nil {
 		log.Fatal(err)
 	}
 

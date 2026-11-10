@@ -50,7 +50,7 @@ func forgetSyncedAdminKey(ctx context.Context, tx db.Handler, ak string) error {
 // CreateUser implements store.UserStore.
 func (*userStore) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := utils.ValidateNewUsername(username); err != nil {
 		return err
 	}
 
@@ -261,7 +261,7 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 	}
 
 	newUsername = strings.ToLower(newUsername)
-	if err := utils.ValidateUsername(newUsername); err != nil {
+	if err := utils.ValidateNewUsername(newUsername); err != nil {
 		return err
 	}
 

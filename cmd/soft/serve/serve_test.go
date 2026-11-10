@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -195,6 +196,11 @@ func TestServeUsesContextConfig(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(cfg.DataPath, p)); err != nil {
 			t.Errorf("%s not created under the context data path: %v", p, err)
 		}
+	}
+	// The sample hook is not run until it is renamed and made executable.
+	if info, err := os.Stat(filepath.Join(cfg.DataPath, "hooks", "update.sample")); err == nil &&
+		runtime.GOOS != "windows" && info.Mode()&0o111 != 0 {
+		t.Errorf("update.sample mode = %v, want it not executable", info.Mode())
 	}
 	entries, err := os.ReadDir(envPath)
 	is.NoErr(err)

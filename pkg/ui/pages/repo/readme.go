@@ -6,6 +6,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -17,17 +18,21 @@ import (
 type ReadmeMsg struct {
 	Content string
 	Path    string
+	gen     uint64
 }
+
+func (m ReadmeMsg) generation() uint64 { return m.gen }
 
 // Readme is the readme component page.
 type Readme struct {
 	common     common.Common
 	code       *code.Code
-	ref        RefMsg
+	ref        *git.Reference
 	repo       proto.Repository
 	readmePath string
 	spinner    spinner.Model
 	isLoading  bool
+	gen        uint64
 }
 
 // NewReadme creates a new readme model.
@@ -102,13 +107,15 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.repo = msg
 	case RefMsg:
-		r.ref = msg
+		r.ref = msg.Ref
+		r.gen = msg.gen
 		cmds = append(cmds, r.Init())
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.
+		r.gen = msg.gen
 		r.isLoading = false
 		r.readmePath = ""
 		r.code.GotoTop()
@@ -171,10 +178,10 @@ func (r *Readme) StatusBarInfo() string {
 // Commands run in their own goroutines, so it captures the model state it
 // needs here instead of reading the model later.
 func (r *Readme) updateReadmeCmd() tea.Cmd {
-	repo, ref := r.repo, r.ref
+	repo, ref, gen := r.repo, r.ref, r.gen
 	limit := r.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
-		m := ReadmeMsg{}
+		m := ReadmeMsg{gen: gen}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
