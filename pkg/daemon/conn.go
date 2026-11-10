@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/git"
 )
 
-// connections is a synchronizes access to to a net.Conn pool.
+// connections is a net.Conn pool that is safe for concurrent use.
 type connections struct {
 	m      map[net.Conn]struct{}
 	mu     sync.Mutex
@@ -63,7 +63,7 @@ func (m *connections) CloseAll() error {
 }
 
 // serverConn is a wrapper around a net.Conn that closes the connection when
-// the one of the timeouts is reached.
+// one of its timeouts is reached.
 type serverConn struct {
 	net.Conn
 

@@ -26,14 +26,14 @@ import (
 var (
 	uploadPackGitCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
-		Subsystem: "git",
+		Subsystem: "daemon",
 		Name:      "git_upload_pack_total",
 		Help:      "The total number of git-upload-pack requests",
 	}, []string{"repo"})
 
 	uploadArchiveGitCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
-		Subsystem: "git",
+		Subsystem: "daemon",
 		Name:      "git_upload_archive_total",
 		Help:      "The total number of git-upload-archive requests",
 	}, []string{"repo"})
@@ -117,7 +117,7 @@ func (d *GitDaemon) ListenAndServe() error {
 	return d.Serve(listener)
 }
 
-// Serve listens on the TCP network address and serves Git requests.
+// Serve accepts connections on the listener and serves Git requests.
 func (d *GitDaemon) Serve(listener net.Listener) error {
 	// Register under liMu, which closeListener holds while it marks the
 	// daemon done, so that Serve either sees it done or is counted before
@@ -327,6 +327,8 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		return
 	}
 
+	counter.WithLabelValues(name).Inc()
+
 	start := time.Now()
 	d.logger.Info("git: accepted request", "remote", c.RemoteAddr(), "service", service, "repo", name)
 	defer func() {
@@ -388,8 +390,6 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		}
 		return
 	}
-
-	counter.WithLabelValues(name)
 }
 
 // keepAlive returns the uploadpack.keepAlive interval, in seconds, for a
@@ -403,7 +403,7 @@ func keepAlive(idle time.Duration) int {
 	return max(int(idle/time.Second)/2, 1)
 }
 
-// Close closes the underlying listener.
+// Close closes the listeners and all open connections.
 func (d *GitDaemon) Close() error {
 	err := d.closeListener()
 	d.conns.CloseAll() //nolint: errcheck

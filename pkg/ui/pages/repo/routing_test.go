@@ -50,32 +50,35 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 	log := newCountingPane((&Log{}).TabName())
 	r := New(c, readme, files, log)
 
+	// Each message is built for the generation that is current when it is
+	// sent, since the repository page drops messages from an older one.
 	for _, tc := range []struct {
-		msg  tea.Msg
+		msg  func(gen uint64) tea.Msg
 		want map[*countingPane]int
 	}{
-		{tea.WindowSizeMsg{Width: 100, Height: 50}, map[*countingPane]int{readme: 1, files: 1, log: 1}},
-		{RepoMsg(fakeRepo{}), map[*countingPane]int{readme: 1, files: 1, log: 1}},
-		{RefMsg(nil), map[*countingPane]int{readme: 1, files: 1, log: 1}},
-		{EmptyRepoMsg{}, map[*countingPane]int{readme: 1, files: 1, log: 1}},
-		{ReadmeMsg{}, map[*countingPane]int{readme: 1}},
-		{FileContentMsg{}, map[*countingPane]int{files: 1}},
-		{LogCountMsg(1), map[*countingPane]int{log: 1}},
-		{spinner.TickMsg{ID: -2}, map[*countingPane]int{}},
+		{func(uint64) tea.Msg { return tea.WindowSizeMsg{Width: 100, Height: 50} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{func(uint64) tea.Msg { return RepoMsg(fakeRepo{}) }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{func(g uint64) tea.Msg { return RefMsg{gen: g} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{func(g uint64) tea.Msg { return EmptyRepoMsg{gen: g} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{func(g uint64) tea.Msg { return ReadmeMsg{gen: g} }, map[*countingPane]int{readme: 1}},
+		{func(g uint64) tea.Msg { return FileContentMsg{gen: g} }, map[*countingPane]int{files: 1}},
+		{func(g uint64) tea.Msg { return LogCountMsg{count: 1, gen: g} }, map[*countingPane]int{log: 1}},
+		{func(uint64) tea.Msg { return spinner.TickMsg{ID: -2} }, map[*countingPane]int{}},
 	} {
 		// Each tab takes a turn as the active one, so that the tab a message is
 		// addressed to is active as well as inactive.
 		for a := range r.panes {
 			r.activeTab = a
+			msg := tc.msg(r.gen)
 			before := map[*countingPane]int{}
 			for _, p := range []*countingPane{readme, files, log} {
-				before[p] = p.count(tc.msg)
+				before[p] = p.count(msg)
 			}
-			r.Update(tc.msg)
+			r.Update(msg)
 			for _, p := range []*countingPane{readme, files, log} {
-				if got := p.count(tc.msg) - before[p]; got != tc.want[p] {
+				if got := p.count(msg) - before[p]; got != tc.want[p] {
 					t.Errorf("%T with tab %d active: pane %q got it %d times, want %d",
-						tc.msg, a, p.name, got, tc.want[p])
+						msg, a, p.name, got, tc.want[p])
 				}
 			}
 		}

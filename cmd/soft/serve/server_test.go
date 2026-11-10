@@ -465,6 +465,20 @@ func TestStartRejectsEmptyListenAddr(t *testing.T) {
 	requireBindable(t, sshAddr)
 }
 
+// With every server disabled, Start fails instead of returning nil at once,
+// which made "soft serve" exit successfully without serving anything.
+func TestStartFailsWithNoServerEnabled(t *testing.T) {
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	s.Config.SSH.Enabled = false
+	s.Config.Git.Enabled = false
+	s.Config.HTTP.Enabled = false
+	s.Config.Stats.Enabled = false
+	err := waitStart(t, startAsync(s), "with no server enabled")
+	if err == nil || !strings.Contains(err.Error(), "no server is enabled") {
+		t.Fatalf("Start returned %v, want a no server enabled error", err)
+	}
+}
+
 // A Shutdown that comes right after Start bound its listeners, while the
 // servers are only starting to serve on them, still stops them all within
 // its deadline. The SSH server used to wait for a listener it started serving

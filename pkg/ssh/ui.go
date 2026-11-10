@@ -54,10 +54,9 @@ type UI struct {
 // repoOpenedMsg is the result of opening a repository the user picked (or the
 // initial repository). gen is the repoGen the open started with.
 type repoOpenedMsg struct {
-	gen     uint64
-	repo    proto.Repository
-	err     error
-	initial bool
+	gen  uint64
+	repo proto.Repository
+	err  error
 }
 
 // NewUI returns a new UI model.
@@ -160,7 +159,9 @@ func (ui *UI) Init() tea.Cmd {
 		ui.pages[repoPage].Init(),
 	)
 	if ui.initialRepo != "" {
-		cmds = append(cmds, ui.openRepoCmd(ui.initialRepo, true))
+		// A deep link to a repository that is missing, or that the caller
+		// cannot read, shows the same error as picking one from the list.
+		cmds = append(cmds, ui.openRepoCmd(ui.initialRepo))
 	}
 	ui.state = readyState
 	ui.SetSize(ui.common.Width, ui.common.Height)
@@ -186,13 +187,11 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.gen != ui.repoGen {
 			return ui, nil
 		}
-		switch {
-		case m.err != nil && m.initial:
-			// A missing initial repository leaves the selection page shown.
-			return ui, nil
-		case m.err != nil:
+		// The initial repository and a picked one report a failed open
+		// the same way.
+		if m.err != nil {
 			msg = common.ErrorMsg(m.err)
-		default:
+		} else {
 			msg = repo.RepoMsg(m.repo)
 		}
 	}
@@ -251,7 +250,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()
-		cmds = append(cmds, repo.UpdateRefCmd(msg))
+		// The repository page loads the ref to show itself.
 	case common.ErrorMsg:
 		if !common.IsUserError(msg) {
 			// The error screen shows a generic message for this error, which
@@ -276,7 +275,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.IdentifiableItem.(type) {
 		case selection.Item:
 			if ui.activePage == selectionPage {
-				cmds = append(cmds, ui.openRepoCmd(msg.ID(), false))
+				cmds = append(cmds, ui.openRepoCmd(msg.ID()))
 			}
 		}
 	}
@@ -347,7 +346,7 @@ func (ui *UI) View() tea.View {
 // Update: it takes the next repoGen and copies the context, backend and session
 // user there, so the command never reads the UI, whose context Update replaces
 // when a repository is shown.
-func (ui *UI) openRepoCmd(rn string, initial bool) tea.Cmd {
+func (ui *UI) openRepoCmd(rn string) tea.Cmd {
 	ui.repoGen++
 	gen := ui.repoGen
 	ctx := ui.common.Context()
@@ -356,7 +355,7 @@ func (ui *UI) openRepoCmd(rn string, initial bool) tea.Cmd {
 	user := proto.UserFromContext(ctx)
 	return func() tea.Msg {
 		r, err := openRepo(ctx, cfg, be, user, rn)
-		return repoOpenedMsg{gen: gen, repo: r, err: err, initial: initial}
+		return repoOpenedMsg{gen: gen, repo: r, err: err}
 	}
 }
 

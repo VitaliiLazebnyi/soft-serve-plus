@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"runtime"
@@ -20,6 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
+	dto "github.com/prometheus/client_model/go"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
@@ -185,4 +187,71 @@ func zoneWorkers() map[string]bool {
 		}
 	}
 	return ids
+}
+
+// The time spent in the TUI is counted when the TUI session ends, not when
+// the connection it ran on closes.
+func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
+	srv, closeDB := setupServer(t)
+	t.Cleanup(func() { _ = closeDB() })
+	addr := testsession.Listen(t, srv)
+
+	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		User:            "test",
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := tuiSeconds(t)
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	// Quit the TUI, retrying until the program reads the key.
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(10 * time.Second)
+wait:
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("session: %v", err)
+			}
+			break wait
+		case <-tick.C:
+			_, _ = io.WriteString(stdin, "q")
+		case <-timeout:
+			t.Fatal("TUI did not quit")
+		}
+	}
+
+	// The connection is still open.
+	if after := tuiSeconds(t); after <= before {
+		t.Fatalf("tui_session_seconds_total = %v after the session ended, want more than %v", after, before)
+	}
+}
+
+func tuiSeconds(t *testing.T) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := tuiSessionDuration.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetCounter().GetValue()
 }

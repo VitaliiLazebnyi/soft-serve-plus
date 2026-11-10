@@ -44,8 +44,9 @@ type WebhookStore interface {
 	GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error)
 	// CreateWebhookEvents creates webhook events for a webhook.
 	CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID int64, events []int) error
-	// DeleteWebhookEventsByID deletes webhook events by their IDs.
-	DeleteWebhookEventsByID(ctx context.Context, h db.Handler, ids []int64) error
+	// DeleteWebhookEventsByID deletes the webhook events with the given IDs
+	// that belong to webhookID. IDs of other webhooks' events are ignored.
+	DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhookID int64, ids []int64) error
 
 	// GetWebhookDeliveryByID returns a webhook delivery by its ID.
 	GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) (models.WebhookDelivery, error)

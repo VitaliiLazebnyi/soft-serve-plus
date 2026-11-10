@@ -3,11 +3,10 @@ package serve
 import (
 	"crypto/tls"
 	"sync"
-
-	"charm.land/log/v2"
 )
 
-// CertReloader is responsible for reloading TLS certificates when a SIGHUP signal is received.
+// CertReloader holds the TLS certificate and key the HTTP server presents and
+// reloads them from disk when asked. "soft serve" calls Reload on SIGHUP.
 type CertReloader struct {
 	certMu   sync.RWMutex
 	cert     *tls.Certificate
@@ -15,8 +14,9 @@ type CertReloader struct {
 	keyPath  string
 }
 
-// NewCertReloader creates a new CertReloader that watches for SIGHUP signals.
-func NewCertReloader(certPath, keyPath string, logger *log.Logger) (*CertReloader, error) {
+// NewCertReloader creates a new CertReloader and loads the certificate and
+// key.
+func NewCertReloader(certPath, keyPath string) (*CertReloader, error) {
 	reloader := &CertReloader{
 		certPath: certPath,
 		keyPath:  keyPath,
