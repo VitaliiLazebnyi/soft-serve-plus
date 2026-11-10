@@ -240,7 +240,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if i != nil {
 			l.activeCommit = i.(LogItem).Commit
 		}
-	case tea.KeyPressMsg, tea.MouseClickMsg:
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
 		switch l.activeView {
 		case logViewCommits:
 			switch kmsg := msg.(type) {

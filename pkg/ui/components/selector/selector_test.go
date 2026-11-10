@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
@@ -81,14 +82,54 @@ func TestSelectItemCmdDoesNotReadModel(t *testing.T) {
 	}
 }
 
-type testDelegate struct{ common *common.Common }
+type testDelegate struct{}
 
-func (d testDelegate) Height() int                         { return 1 }
-func (d testDelegate) Spacing() int                        { return 0 }
-func (d testDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-func (d testDelegate) Render(w io.Writer, _ list.Model, _ int, item list.Item) {
-	i := item.(testItem)
-	fmt.Fprint(w, d.common.Zone.Mark(i.ID(), i.Title())) //nolint:errcheck
+func (testDelegate) Height() int                         { return 1 }
+func (testDelegate) Spacing() int                        { return 0 }
+func (testDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+func (testDelegate) Render(w io.Writer, _ list.Model, _ int, item list.Item) {
+	fmt.Fprint(w, item.(testItem).Title()) //nolint:errcheck
+}
+
+// waitZone waits for the zone manager to store the zone with the given ID,
+// since Scan hands zones to a background worker.
+func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if z := c.Zone.Get(id); z != nil && !z.IsZero() {
+			return z.StartX, z.StartY
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("zone %q was never stored", id)
+	return 0, 0
+}
+
+// Items are marked with zone IDs of their own, so an item named like another
+// component's zone (e.g. a file named "footer") neither takes over that zone
+// nor gets selected by clicks on it.
+func TestItemZoneIgnoresSameNamedZone(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 10)
+	t.Cleanup(c.Zone.Close)
+	s := New(c, []IdentifiableItem{testItem("one"), testItem("footer")}, testDelegate{})
+	c.Zone.Scan(lipgloss.JoinVertical(lipgloss.Left,
+		s.View(),
+		c.Zone.Mark("footer", "the footer"),
+	))
+
+	x, y := waitZone(t, c, "footer")
+	s.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if got := s.Index(); got != 0 {
+		t.Fatalf("clicking a zone named %q selected item %d", "footer", got)
+	}
+
+	x, y = waitZone(t, c, s.zonePrefix+"footer")
+	s.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if got := s.Index(); got != 1 {
+		t.Fatalf("clicking the footer item left item %d selected", got)
+	}
 }
 
 func newTestSelector(t *testing.T, names ...string) *Selector {
@@ -99,7 +140,7 @@ func newTestSelector(t *testing.T, names ...string) *Selector {
 	for i, n := range names {
 		items[i] = testItem(n)
 	}
-	s := New(c, items, testDelegate{&c})
+	s := New(c, items, testDelegate{})
 	s.SetShowTitle(false)
 	s.SetShowHelp(false)
 	s.SetShowStatusBar(false)
@@ -109,13 +150,13 @@ func newTestSelector(t *testing.T, names ...string) *Selector {
 }
 
 // render draws the selector, as the program would, and waits until the zone
-// of want has been recorded at row y.
+// of the item want has been recorded at row y.
 func render(t *testing.T, s *Selector, want string, y int) {
 	t.Helper()
 	s.common.Zone.Scan(s.View())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if z := s.common.Zone.Get(want); !z.IsZero() && z.StartY == y {
+		if z := s.common.Zone.Get(s.zonePrefix + want); !z.IsZero() && z.StartY == y {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -207,7 +248,7 @@ func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
 	t.Parallel()
 	c := common.NewCommon(context.Background(), 80, 24)
 	t.Cleanup(c.Zone.Close)
-	s := New(c, []IdentifiableItem{testItem("a?"), testItem("b")}, testDelegate{&c})
+	s := New(c, []IdentifiableItem{testItem("a?"), testItem("b")}, testDelegate{})
 	for _, k := range []tea.KeyPressMsg{
 		{Code: '/', Text: "/"},
 		{Code: 'a', Text: "a"},
@@ -220,5 +261,28 @@ func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
 	}
 	if got := s.FilterValue(); got != "a?" {
 		t.Errorf("filter = %q, want %q", got, "a?")
+	}
+}
+
+// The mouse wheel moves the cursor: bubbletea v2 reports it as a
+// MouseWheelMsg, never as a click.
+func TestMouseWheelMovesCursor(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 24)
+	s := New(c, []IdentifiableItem{testItem("a"), testItem("b"), testItem("c")}, list.NewDefaultDelegate())
+
+	for _, step := range []struct {
+		button tea.MouseButton
+		want   int
+	}{
+		{tea.MouseWheelDown, 1},
+		{tea.MouseWheelDown, 2},
+		{tea.MouseWheelUp, 1},
+	} {
+		m, _ := s.Update(tea.MouseWheelMsg{Button: step.button})
+		s = m.(*Selector)
+		if got := s.Index(); got != step.want {
+			t.Fatalf("after %v: index = %d; want %d", step.button, got, step.want)
+		}
 	}
 }

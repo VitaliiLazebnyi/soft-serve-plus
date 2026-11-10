@@ -50,6 +50,7 @@ type SwitchTabMsg common.TabComponent
 // Repo is a view for a git repository.
 type Repo struct {
 	common       common.Common
+	zonePrefix   string
 	selectedRepo proto.Repository
 	activeTab    int
 	tabs         *tabs.Tabs
@@ -78,6 +79,7 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 		spinner.WithStyle(c.Styles.Spinner))
 	r := &Repo{
 		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
 		tabs:       tb,
 		statusbar:  sb,
 		panes:      comps,
@@ -166,6 +168,9 @@ func (r *Repo) Init() tea.Cmd {
 // Update implements tea.Model.
 func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// routed is set when the message has already been delivered to the panes
+	// it is meant for, so that the active pane does not get it a second time.
+	routed := false
 	switch msg := msg.(type) {
 	case RepoMsg:
 		// Set the state to loading when we get a new repository.
@@ -175,9 +180,11 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
 		)
+		routed = true
 	case RefMsg:
 		r.ref = msg
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 		r.state = readyState
 	case tabs.SelectTabMsg:
 		r.activeTab = int(msg)
@@ -195,9 +202,8 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if r.selectedRepo != nil {
-			urlID := fmt.Sprintf("%s-url", r.selectedRepo.Name())
 			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
-			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(urlID).InBounds(msg) {
+			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
 				cmds = append(cmds, copyCmd(cmd, "Command copied to clipboard"))
 			}
 		}
@@ -206,12 +212,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch msg.Button {
 			case tea.MouseLeft:
 				switch {
-				case r.common.Zone.Get("repo-help").InBounds(msg):
+				case r.common.Zone.Get(r.statusbar.HelpZoneID()).InBounds(msg):
 					cmds = append(cmds, footer.ToggleFooterCmd)
 				}
 			case tea.MouseRight:
 				switch {
-				case r.common.Zone.Get("repo-main").InBounds(msg):
+				case r.common.Zone.Get(r.zonePrefix + "main").InBounds(msg):
 					cmds = append(cmds, goBackCmd)
 				}
 			}
@@ -231,18 +237,26 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
+		routed = true
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		routed = true
 	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
+		routed = true
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
+		routed = true
 	case StashListMsg, StashPatchMsg:
 		cmds = append(cmds, r.updateTabComponent(&Stash{}, msg))
+		routed = true
 	// We have two spinners, one is used to when loading the repository and the
 	// other is used when loading the log.
 	// Check if the spinner ID matches the spinner model.
 	case spinner.TickMsg:
+		// A tick belongs to exactly one spinner, so it never goes to the
+		// active pane unless that pane owns it.
+		routed = true
 		if r.state == loadingState && r.spinner.ID() == msg.ID {
 			s, cmd := r.spinner.Update(msg)
 			r.spinner = s
@@ -264,10 +278,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case EmptyRepoMsg:
 		r.ref = nil
 		r.state = readyState
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case common.ErrorMsg:
 		r.state = readyState
 		// The file listing loads on every ref change, usually while another
@@ -284,11 +300,13 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		}
 	}
-	active := r.panes[r.activeTab]
-	m, cmd := active.Update(msg)
-	r.panes[r.activeTab] = m.(common.TabComponent)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	if !routed {
+		active := r.panes[r.activeTab]
+		m, cmd := active.Update(msg)
+		r.panes[r.activeTab] = m.(common.TabComponent)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Update the status bar on these events
@@ -330,7 +348,7 @@ func (r *Repo) View() string {
 		statusbar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
-		"repo-main",
+		r.zonePrefix+"main",
 		mainStyle.Render(main),
 	)
 	view := lipgloss.JoinVertical(lipgloss.Left,
@@ -369,7 +387,7 @@ func (r *Repo) headerView() string {
 	}
 	url = common.TruncateString(url, r.common.Width-lipgloss.Width(header)-1)
 	url = r.common.Zone.Mark(
-		fmt.Sprintf("%s-url", r.selectedRepo.Name()),
+		r.zonePrefix+"url",
 		urlStyle.Render(url),
 	)
 
