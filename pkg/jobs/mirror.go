@@ -169,8 +169,6 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 				name := repo.Name()
 				wq.Add(name, func() {
-					repo := repo
-
 					// Re-validate every configured remote before syncing.
 					// The sync fetches all of them, and a remote may
 					// predate the import-time guard or have been written out
@@ -192,9 +190,12 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 						return
 					}
 
+					// When a fetch fails the LFS sync is skipped too; the
+					// next run tries both again.
 					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
 					if err := syncMirror(ctx, r.Path, remotes.names, syncEnv); err != nil {
 						logger.Error("error syncing mirror", "repo", name, "err", err)
+						return
 					}
 
 					if cfg.LFS.Enabled {
@@ -213,7 +214,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 						// The endpoint is stored in the repo config and may
 						// predate validation, so check it before dialing.
-						if _, err := ssrf.ValidateGitRemote(lfsEndpoint, policy); err != nil {
+						if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
 							logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
 							return
 						}
