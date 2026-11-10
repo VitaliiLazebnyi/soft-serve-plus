@@ -26,6 +26,12 @@ var (
 // including reading the response body.
 const ClientTimeout = 30 * time.Second
 
+// ResponseHeaderTimeout bounds the wait for a response's headers once the
+// request has been written, on every client from NewSecureClient. It is set
+// on the transport, so it still holds for a caller that drops the client's
+// whole-request timeout to let long transfers run, as the LFS client does.
+const ResponseHeaderTimeout = ClientTimeout
+
 // MaxResponseHeaderBytes caps the response headers the client from
 // NewSecureClient reads, status line included. The destinations it talks to
 // are chosen by users, so the net/http default of 10 MiB would let one
@@ -85,6 +91,7 @@ func NewSecureClientAllowing(allowed AllowedHosts) *http.Client {
 			TLSHandshakeTimeout:    10 * time.Second,
 			ExpectContinueTimeout:  1 * time.Second,
 			MaxResponseHeaderBytes: MaxResponseHeaderBytes,
+			ResponseHeaderTimeout:  ResponseHeaderTimeout,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -386,7 +393,13 @@ func isPrivateOrInternal(ip net.IP) bool {
 // It checks that the scheme is http/https, the hostname is not localhost,
 // and all resolved IPs are public.
 func ValidateURL(rawURL string) error {
-	return validateURL(rawURL, nil, nil)
+	return ValidateURLContext(context.Background(), rawURL)
+}
+
+// ValidateURLContext is ValidateURL with the hostname lookup bound to ctx, so
+// a caller that goes away stops waiting for the resolver.
+func ValidateURLContext(ctx context.Context, rawURL string) error {
+	return validateURL(ctx, rawURL, nil, nil)
 }
 
 // ValidateURLAllowing is ValidateURL with the private and internal
@@ -394,12 +407,18 @@ func ValidateURL(rawURL string) error {
 // AllowedHosts.permitsHTTP). With an empty allowed it is ValidateURL. Every
 // address the hostname resolves to must be public or permitted.
 func ValidateURLAllowing(rawURL string, allowed AllowedHosts) error {
-	return validateURL(rawURL, allowed, nil)
+	return ValidateURLAllowingContext(context.Background(), rawURL, allowed)
 }
 
-// validateURL is ValidateURLAllowing with the resolver used for hostnames;
-// nil means net.DefaultResolver.
-func validateURL(rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
+// ValidateURLAllowingContext is ValidateURLAllowing with the hostname lookup
+// bound to ctx, so a caller that goes away stops waiting for the resolver.
+func ValidateURLAllowingContext(ctx context.Context, rawURL string, allowed AllowedHosts) error {
+	return validateURL(ctx, rawURL, allowed, nil)
+}
+
+// validateURL is ValidateURLAllowingContext with the resolver used for
+// hostnames; nil means net.DefaultResolver.
+func validateURL(ctx context.Context, rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 	if rawURL == "" {
 		return ErrInvalidURL
 	}
@@ -438,8 +457,12 @@ func validateURL(rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 		return nil
 	}
 
-	ips, err := lookup.resolve(context.Background(), hostname)
+	ips, err := lookup.resolve(ctx, hostname)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Cancelled or out of time; say so rather than blame DNS.
+			return fmt.Errorf("resolve hostname: %w", ctxErr)
+		}
 		// See validateRemoteHost: the resolver error names the resolver.
 		return fmt.Errorf("%w: cannot resolve hostname", ErrInvalidURL)
 	}
