@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -43,6 +42,10 @@ type Refs struct {
 	spinner   spinner.Model
 	isLoading bool
 	gen       uint64
+	// loaded reports whether the references of repo were requested. They
+	// do not depend on the selected reference, so switching branches does
+	// not list them again.
+	loaded bool
 }
 
 // NewRefs creates a new Refs component.
@@ -138,10 +141,14 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.selector.Select(0)
 		r.repo = msg
+		r.loaded = false
 	case RefMsg:
 		r.ref = msg.Ref
 		r.gen = msg.gen
-		cmds = append(cmds, r.Init())
+		if !r.loaded {
+			r.loaded = true
+			cmds = append(cmds, r.Init())
+		}
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case RefItemsMsg:
@@ -231,32 +238,18 @@ func (r *Refs) updateItemsCmd() tea.Cmd {
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		its := make(RefItems, 0)
 		rr, err := repo.Open()
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		refs, err := rr.References()
+		refs, err := rr.RefInfos(prefix)
 		if err != nil {
 			logger.Debugf("ui: error getting references: %v", err)
 			return common.ErrorMsg(err)
 		}
-		for _, ref := range refs {
-			if strings.HasPrefix(ref.Name().String(), prefix) {
-				refItem := RefItem{
-					Reference: ref,
-				}
-
-				if ref.IsTag() {
-					refItem.Tag, _ = rr.Tag(ref.Name().Short())
-					if refItem.Tag != nil {
-						refItem.Commit, _ = refItem.Tag.Commit()
-					}
-				} else {
-					refItem.Commit, _ = rr.CatFileCommit(ref.ID)
-				}
-				its = append(its, refItem)
-			}
+		its := make(RefItems, len(refs))
+		for i, ref := range refs {
+			its[i] = RefItem{ref}
 		}
 		sort.Sort(its)
 		items := make([]selector.IdentifiableItem, len(its))
@@ -289,20 +282,23 @@ func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 }
 
 // updateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
-// fallback branch when HEAD names a branch that does not exist (see
-// defaultRef). It sends EmptyRepoMsg when the repository has no branches.
-// gen is the generation the repository page started for repo.
+// fallback branch or tag when HEAD names a branch that does not exist (see
+// defaultRef). It sends EmptyRepoMsg when the repository has no branches or
+// tags. gen is the generation the repository page started for repo.
 func updateRefCmd(repo proto.Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		r, err := repo.Open()
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		bs, _ := r.Branches()
-		if len(bs) == 0 {
+		refs, err := r.References()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		if len(refs) == 0 {
 			return EmptyRepoMsg{gen: gen}
 		}
-		ref, err := defaultRef(r)
+		ref, err := defaultRef(r, refs)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -314,11 +310,12 @@ func updateRefCmd(repo proto.Repository, gen uint64) tea.Cmd {
 }
 
 // defaultRef returns the reference to show first: HEAD, the commit a
-// detached HEAD points at, or a branch when HEAD names a branch that does not
-// exist, such as in a mirror whose remote renamed its default branch. It
-// prefers "main" or "master", like EnsureDefaultBranch does, and then the
-// first branch. It returns nil when there is no branch to show.
-func defaultRef(r *git.Repository) (*git.Reference, error) {
+// detached HEAD points at, or another ref from refs when HEAD names a branch
+// that does not exist, such as in a mirror whose remote renamed its default
+// branch or a repository that only has tags. It prefers "main" or "master",
+// like EnsureDefaultBranch does, then the first branch, and then the first
+// tag. It returns nil when there is no branch or tag to show.
+func defaultRef(r *git.Repository, refs []*git.Reference) (*git.Reference, error) {
 	ref, err := r.HEAD()
 	if err == nil {
 		return ref, nil
@@ -330,18 +327,24 @@ func defaultRef(r *git.Repository) (*git.Reference, error) {
 		}
 		return nil, err
 	}
-	refs, _ := r.References()
-	var first *git.Reference
+	var branch, tag *git.Reference
 	for _, ref := range refs {
-		if !ref.IsBranch() {
-			continue
-		}
-		if b := ref.Name().Short(); b == "main" || b == "master" {
-			return ref, nil
-		}
-		if first == nil {
-			first = ref
+		switch {
+		case ref.IsBranch():
+			if b := ref.Name().Short(); b == "main" || b == "master" {
+				return ref, nil
+			}
+			if branch == nil {
+				branch = ref
+			}
+		case ref.IsTag():
+			if tag == nil {
+				tag = ref
+			}
 		}
 	}
-	return first, nil
+	if branch != nil {
+		return branch, nil
+	}
+	return tag, nil
 }

@@ -20,7 +20,6 @@ import (
 	"charm.land/log/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -87,8 +86,8 @@ func (e *lfsScanError) Unwrap() error { return e.err }
 // ErrLFSObjectsUnavailable once every other object is stored. Any other
 // error stops the sync, including a download that fails or breaks off for a
 // reason that may pass on a later try, such as a dropped connection or a 5xx.
-func StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, dbx *db.DB, store store.Store, lfsClient lfs.Client) error {
-	return storeRepoLFSObjects(ctx, repo, dbx, store, lfsClient, false)
+func (d *Backend) StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client) error {
+	return d.storeRepoLFSObjects(ctx, repo, lfsClient, false)
 }
 
 // SyncRepoLFSObjects is StoreRepoMissingLFSObjects for mirror syncs. It only
@@ -99,14 +98,13 @@ func StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, dbx 
 // was removed, or when the shorter scan fails. Objects that were unavailable
 // keep the history they are in scanned on later syncs, until a sync stores
 // them all.
-func SyncRepoLFSObjects(ctx context.Context, repo proto.Repository, dbx *db.DB, store store.Store, lfsClient lfs.Client) error {
-	return storeRepoLFSObjects(ctx, repo, dbx, store, lfsClient, true)
+func (d *Backend) SyncRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client) error {
+	return d.storeRepoLFSObjects(ctx, repo, lfsClient, true)
 }
 
-func storeRepoLFSObjects(ctx context.Context, repo proto.Repository, dbx *db.DB, store store.Store, lfsClient lfs.Client, incremental bool) error {
-	cfg := config.FromContext(ctx)
+func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client, incremental bool) error {
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	lfsRoot := filepath.Join(cfg.DataPath, "lfs", repoID)
+	lfsRoot := filepath.Join(d.cfg.DataPath, "lfs", repoID)
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 
 	r, err := repo.Open()
@@ -137,18 +135,18 @@ func storeRepoLFSObjects(ctx context.Context, repo proto.Repository, dbx *db.DB,
 	start := time.Now()
 	switch {
 	case since == nil:
-		err = storeMissingLFSObjects(ctx, repo, r, dbx, store, lfsClient, lfsRoot, tips, nil)
+		err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, nil)
 		fullScan = start
 	case slices.Equal(since, tips):
 		// Nothing changed since the last complete sync.
 		return nil
 	default:
-		err = storeMissingLFSObjects(ctx, repo, r, dbx, store, lfsClient, lfsRoot, tips, since)
+		err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, since)
 		var scanErr *lfsScanError
 		if errors.As(err, &scanErr) && ctx.Err() == nil {
 			// For example, an old tip was pruned since the last sync.
 			logger.Warn("scanning the whole repository for lfs objects, scanning the new history failed", "repo", repo.Name(), "err", err)
-			err = storeMissingLFSObjects(ctx, repo, r, dbx, store, lfsClient, lfsRoot, tips, nil)
+			err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, nil)
 			fullScan = start
 		}
 	}
@@ -255,7 +253,7 @@ func isObjectID(s string) bool {
 // storeMissingLFSObjects stores the missing LFS objects of the pointers
 // reachable from include but not from exclude. Errors of the scan itself are
 // returned as an *lfsScanError.
-func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, dbx *db.DB, store store.Store, lfsClient lfs.Client, lfsRoot string, include, exclude []string) error {
+func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, dbx *db.DB, datastore store.Store, lfsClient lfs.Client, lfsRoot string, include, exclude []string) error {
 	// TODO: support S3 storage
 	strg := storage.NewLocalStorage(lfsRoot)
 
@@ -362,12 +360,12 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 				}
 				// Older versions could record the size of a malformed
 				// pointer; the content now proves this one right.
-				return db.WrapError(store.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size))
+				return db.WrapError(datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size))
 			}
 
 			// If recording fails, the object stays on disk and the next sync
 			// records it.
-			return recordLFSObject(ctx, dbx, store, repo.ID(), p)
+			return recordLFSObject(ctx, dbx, datastore, repo.ID(), p)
 		}); err != nil {
 			return err
 		}
@@ -381,7 +379,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 	// missing reports whether the object of pointer has to be downloaded.
 	// An object already on disk is recorded if it isn't yet.
 	missing := func(pointer lfs.Pointer) (bool, error) {
-		obj, err := store.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)
+		obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)
 		if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
 			return false, db.WrapError(err)
 		}
@@ -394,7 +392,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 		case err == nil && fi.Size() == pointer.Size && (obj.ID == 0 || obj.Size == pointer.Size):
 			// The object is on disk, make sure it's recorded.
 			if obj.ID == 0 {
-				if err := recordLFSObject(ctx, dbx, store, repo.ID(), pointer); err != nil {
+				if err := recordLFSObject(ctx, dbx, datastore, repo.ID(), pointer); err != nil {
 					return false, err
 				}
 			}
@@ -409,7 +407,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			}
 			if ok {
 				logger.Info("correcting the recorded size of lfs object", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "recorded", obj.Size)
-				return false, db.WrapError(store.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
+				return false, db.WrapError(datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
 			}
 		case err == nil && obj.ID != 0 && obj.Size == fi.Size():
 			// The file and its record agree on another size. If the file is
@@ -531,8 +529,8 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 
 // recordLFSObject records an LFS object of a repository. An object someone
 // else recorded in the meantime is not an error.
-func recordLFSObject(ctx context.Context, dbx *db.DB, store store.Store, repoID int64, p lfs.Pointer) error {
-	err := db.WrapError(store.CreateLFSObject(ctx, dbx, repoID, p.Oid, p.Size))
+func recordLFSObject(ctx context.Context, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) error {
+	err := db.WrapError(datastore.CreateLFSObject(ctx, dbx, repoID, p.Oid, p.Size))
 	if errors.Is(err, db.ErrDuplicateKey) {
 		return nil
 	}
