@@ -2,7 +2,6 @@ package cron
 
 import (
 	"context"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/robfig/cron/v3"
@@ -58,11 +57,16 @@ func NewScheduler(ctx context.Context) *Scheduler {
 	}
 }
 
-// Shutdonw gracefully shuts down the Scheduler.
-func (s *Scheduler) Shutdown() {
-	ctx, cancel := context.WithTimeout(s.Cron.Stop(), 30*time.Second)
-	defer func() { cancel() }()
-	<-ctx.Done()
+// Shutdown stops the Scheduler from starting jobs and waits for the running
+// ones to end, or for ctx to be done, and returns ctx's error in that case.
+// Running jobs are not interrupted: give them a context to cancel first.
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	select {
+	case <-s.Cron.Stop().Done():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Start starts the Scheduler.

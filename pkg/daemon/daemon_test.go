@@ -439,6 +439,156 @@ func TestListensOnLoopback(t *testing.T) {
 	}
 }
 
+// startLimitedDaemon serves a daemon allowing limit connections that never
+// time out, and returns it with its address.
+func startLimitedDaemon(t *testing.T, limit int) (*GitDaemon, string) {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	cfg.DataPath = testDaemon.cfg.DataPath
+	cfg.Git.MaxConnections = limit
+	cfg.Git.MaxTimeout = 0
+	cfg.Git.IdleTimeout = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(context.Background(), cfg)
+	ctx = backend.WithContext(ctx, testBackend)
+	d, err := NewGitDaemon(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Kept connections send no request line; do not drop them for that.
+	d.requestTimeout = time.Hour
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- d.Serve(l) }()
+	t.Cleanup(func() {
+		_ = d.Close()
+		if err := <-served; !errors.Is(err, ErrServerClosed) {
+			t.Errorf("Serve returned %v, want ErrServerClosed", err)
+		}
+	})
+	return d, l.Addr().String()
+}
+
+// refused dials addr and reports whether the daemon turns the connection away
+// as over the limit. A connection it keeps open sends nothing, so it counts as
+// kept once wait passes without an answer.
+func refused(t *testing.T, addr string, wait time.Duration) (bool, net.Conn) {
+	t.Helper()
+	var dialer net.Dialer
+	c, err := dialer.DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(wait))
+	_, err = readPktline(c)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return false, c
+	}
+	if err == nil || err.Error() != git.ErrMaxConnections.Error() {
+		t.Fatalf("got %v, want %q or no answer", err, git.ErrMaxConnections)
+	}
+	return true, c
+}
+
+// TestMaxConnections checks that max_connections N lets N connections in and
+// refuses the next. It used to let only N-1 in, and a limit of 1 none.
+func TestMaxConnections(t *testing.T) {
+	for _, limit := range []int{1, 3} {
+		d, addr := startLimitedDaemon(t, limit)
+		for i := range limit {
+			if r, _ := refused(t, addr, 200*time.Millisecond); r {
+				t.Fatalf("limit %d: connection %d refused", limit, i+1)
+			}
+		}
+		if r, _ := refused(t, addr, 5*time.Second); !r {
+			t.Fatalf("limit %d: connection %d kept, want it refused", limit, limit+1)
+		}
+		if got := d.conns.Size(); got != limit {
+			t.Fatalf("limit %d: %d connections open", limit, got)
+		}
+	}
+}
+
+// TestMaxConnectionsBurst dials many connections at once: exactly limit of
+// them are kept. Connections used to be counted in their own goroutines, so
+// a burst passed the check before any was counted.
+func TestMaxConnectionsBurst(t *testing.T) {
+	const limit, dials = 3, 64
+	d, addr := startLimitedDaemon(t, limit)
+	// Each refused connection gets an answer; wait long enough for all of
+	// them before counting the silent ones as kept.
+	type result struct {
+		c       net.Conn
+		err     error
+		refused bool
+	}
+	results := make(chan result, dials)
+	for range dials {
+		go func() {
+			var dialer net.Dialer
+			c, err := dialer.DialContext(t.Context(), "tcp", addr)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, err = readPktline(c)
+			results <- result{c: c, refused: err != nil && err.Error() == git.ErrMaxConnections.Error()}
+		}()
+	}
+	// A burst of loopback dials can time out on macOS when the listen
+	// backlog drops SYNs, without the daemon being involved. Such a dial
+	// never reaches the daemon, so skip it and check the limit over the
+	// connections that did get through.
+	var kept, connected int
+	for range dials {
+		r := <-results
+		if r.err != nil {
+			t.Logf("dial: %v", r.err)
+			continue
+		}
+		connected++
+		t.Cleanup(func() { _ = r.c.Close() })
+		if !r.refused {
+			kept++
+		}
+	}
+	if connected <= limit {
+		t.Skipf("only %d of %d dials connected, need more than %d", connected, dials, limit)
+	}
+	if kept != limit {
+		t.Errorf("%d of %d connections kept, want %d", kept, connected, limit)
+	}
+	if got := d.conns.Size(); got != limit {
+		t.Errorf("%d connections open, want %d", got, limit)
+	}
+}
+
+// TestConnectionsAddAfterCloseAll checks that a connection accepted while the
+// daemon closes is not added after CloseAll and so escapes the forced close.
+func TestConnectionsAddAfterCloseAll(t *testing.T) {
+	m := connections{m: make(map[net.Conn]struct{})}
+	a, b := net.Pipe()
+	defer a.Close() //nolint:errcheck
+	defer b.Close() //nolint:errcheck
+	if err := m.CloseAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Add(a, 10); !errors.Is(err, ErrServerClosed) {
+		t.Fatalf("Add after CloseAll = %v, want ErrServerClosed", err)
+	}
+	if got := m.Size(); got != 0 {
+		t.Fatalf("%d connections after CloseAll, want 0", got)
+	}
+}
+
 // TestRequestTimeout checks that a client trickling its request line in a
 // byte at a time, each well within the idle timeout, is still dropped once
 // the request timeout passes, and is told why. Every read used to push the

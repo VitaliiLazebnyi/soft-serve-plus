@@ -1,6 +1,8 @@
 package viewport
 
 import (
+	"math"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -63,12 +65,12 @@ func (v *Viewport) SetContent(content string) {
 	v.Model.SetContent(content)
 }
 
-// GotoTop moves the viewport to the top of the log.
+// GotoTop moves the viewport to the top of the content.
 func (v *Viewport) GotoTop() {
 	v.Model.GotoTop()
 }
 
-// GotoBottom moves the viewport to the bottom of the log.
+// GotoBottom moves the viewport to the bottom of the content.
 func (v *Viewport) GotoBottom() {
 	v.Model.GotoBottom()
 }
@@ -86,4 +88,14 @@ func (v *Viewport) HalfViewUp() {
 // ScrollPercent returns the viewport's scroll percentage.
 func (v *Viewport) ScrollPercent() float64 {
 	return v.Model.ScrollPercent()
+}
+
+// ScrollPosition returns the viewport's scroll percentage as a whole number
+// between 0 and 100.
+func (v *Viewport) ScrollPosition() int {
+	scroll := v.ScrollPercent() * 100
+	if scroll < 0 || math.IsNaN(scroll) {
+		scroll = 0
+	}
+	return int(scroll)
 }
