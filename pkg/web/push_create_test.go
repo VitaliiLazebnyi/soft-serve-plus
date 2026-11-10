@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -253,4 +254,86 @@ func TestHasRefsFailsSafe(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "empty.git")
 	gitRun(t, "init", "-q", "--bare", dir)
 	is.True(!hasRefs(dir))
+}
+
+// A push to a name that is not a valid repository name is refused with
+// 400 and the reason, rather than failing as a server error.
+func TestHTTPPushCreateInvalidName(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	auth := "Token " + f.token
+
+	w := f.do(http.MethodGet, "/bad%20name.git/info/refs?service=git-receive-pack", auth)
+	is.Equal(w.Code, http.StatusBadRequest)
+	is.True(strings.Contains(w.Body.String(), "repo can only contain"))
+	is.Equal(f.push(t, "bad%20name", auth, "0000"), http.StatusBadRequest)
+	is.True(!f.exists("bad name"))
+}
+
+// A push to a missing name that another request creates first is
+// authorized for the repository now there, rather than failing as a
+// server error.
+func TestHTTPPushCreateRace(t *testing.T) {
+	f := newOracleFixture(t)
+	auth := "Token " + f.token
+	stranger, err := f.be.User(f.ctx, "stranger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := pushCreateTimeout
+	pushCreateTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		pushCreateTimeout = old
+		testHookBeforePushCreate = nil
+	})
+	advertise := func(name string) int {
+		t.Helper()
+		return f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code
+	}
+	createFirst := func(name string, owner proto.User, private bool) {
+		testHookBeforePushCreate = func() {
+			testHookBeforePushCreate = nil
+			_, err := f.be.CreateRepository(f.ctx, name, owner, proto.RepositoryOptions{Private: private})
+			if err != nil {
+				t.Error(err)
+			}
+		}
+	}
+
+	t.Run("same user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("mine", stranger, false)
+		is.Equal(advertise("mine"), http.StatusOK)
+		// This request did not create it, so it does not remove it.
+		time.Sleep(3 * pushCreateTimeout)
+		is.True(f.exists("mine"))
+	})
+
+	t.Run("public repository of another user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("theirs", f.owner, false)
+		is.Equal(advertise("theirs"), http.StatusForbidden)
+	})
+
+	t.Run("private repository of another user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("hidden", f.owner, true)
+		is.Equal(advertise("hidden"), http.StatusNotFound)
+	})
+
+	// A creation still in progress, which has claimed the directory but
+	// not yet registered the repository, is a taken name like any other
+	// the caller cannot read.
+	t.Run("creation in progress", func(t *testing.T) {
+		is := is.New(t)
+		testHookBeforePushCreate = func() {
+			testHookBeforePushCreate = nil
+			dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "claimed.git")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Error(err)
+			}
+		}
+		is.Equal(advertise("claimed"), http.StatusNotFound)
+		is.True(!f.exists("claimed"))
+	})
 }

@@ -19,9 +19,7 @@ import (
 
 // RefItem is a git reference item.
 type RefItem struct {
-	*git.Reference
-	*git.Tag
-	*git.Commit
+	*git.RefInfo
 }
 
 // ID implements selector.IdentifiableItem.
@@ -58,12 +56,10 @@ func (cl RefItems) Swap(i, j int) { cl[i], cl[j] = cl[j], cl[i] }
 
 // Less implements sort.Interface.
 func (cl RefItems) Less(i, j int) bool {
-	if cl[i].Commit != nil && cl[j].Commit != nil {
-		return cl[i].Commit.Author.When.After(cl[j].Commit.Author.When)
-	} else if cl[i].Commit != nil && cl[j].Commit == nil {
-		return true
+	if cl[i].CommitID != "" && cl[j].CommitID != "" {
+		return cl[i].AuthorWhen.After(cl[j].AuthorWhen)
 	}
-	return false
+	return cl[i].CommitID != "" && cl[j].CommitID == ""
 }
 
 // RefItemDelegate is the delegate for the ref item.
@@ -123,9 +119,9 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	}
 
 	var sha string
-	c := i.Commit
-	if c != nil {
-		sha = c.ID.String()[:7]
+	hasCommit := len(i.CommitID) >= 7
+	if hasCommit {
+		sha = i.CommitID[:7]
 	}
 
 	// A ref name cannot hold C0 controls, but it can hold C1 ones encoded
@@ -134,38 +130,29 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 
 	var desc string
 	if isTag {
-		if c != nil {
-			date := c.Committer.When.Format("Jan 02")
-			if c.Committer.When.Year() != time.Now().Year() {
-				date += fmt.Sprintf(" %d", c.Committer.When.Year())
+		if hasCommit {
+			date := i.CommitterWhen.Format("Jan 02")
+			if i.CommitterWhen.Year() != time.Now().Year() {
+				date += fmt.Sprintf(" %d", i.CommitterWhen.Year())
 			}
 			desc += " " + st.ItemDesc.Render(date)
 		}
 
-		t := i.Tag
-		if t != nil {
+		if msg := strings.TrimSpace(utils.Sanitize(i.TagSubject)); msg != "" {
 			msgSt := st.ItemDesc.Faint(false)
-			msg := utils.Sanitize(t.Message())
-			nl := strings.Index(msg, "\n")
-			if nl > 0 {
-				msg = msg[:nl]
-			}
-			msg = strings.TrimSpace(msg)
-			if msg != "" {
-				msgMargin := m.Width() -
-					horizontalFrameSize -
-					lipgloss.Width(selector) -
-					lipgloss.Width(ref) -
-					lipgloss.Width(desc) -
-					lipgloss.Width(sha) -
-					3 // 3 is for the paddings and truncation symbol
-				if msgMargin >= 0 {
-					msg = common.TruncateString(msg, msgMargin)
-					desc = " " + msgSt.Render(msg) + desc
-				}
+			msgMargin := m.Width() -
+				horizontalFrameSize -
+				lipgloss.Width(selector) -
+				lipgloss.Width(ref) -
+				lipgloss.Width(desc) -
+				lipgloss.Width(sha) -
+				3 // 3 is for the paddings and truncation symbol
+			if msgMargin >= 0 {
+				msg = common.TruncateString(msg, msgMargin)
+				desc = " " + msgSt.Render(msg) + desc
 			}
 		}
-	} else if c != nil {
+	} else if hasCommit {
 		onMargin := m.Width() -
 			horizontalFrameSize -
 			lipgloss.Width(selector) -
@@ -174,7 +161,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 			lipgloss.Width(sha) -
 			2 // 2 is for the padding and truncation symbol
 		if onMargin >= 0 {
-			on := common.TruncateString("updated "+humanize.Time(c.Committer.When), onMargin)
+			on := common.TruncateString("updated "+humanize.Time(i.CommitterWhen), onMargin)
 			desc += " " + st.ItemDesc.Render(on)
 		}
 	}
