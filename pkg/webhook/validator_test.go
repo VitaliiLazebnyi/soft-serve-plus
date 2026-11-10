@@ -25,14 +25,14 @@ func TestValidateWebhookURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateWebhookURL(tt.url)
+			err := ValidateWebhookURLAllowing(tt.url, nil)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateWebhookURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+				t.Errorf("ValidateWebhookURLAllowing(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
 				return
 			}
 			if tt.wantErr && tt.errType != nil {
 				if !errors.Is(err, tt.errType) {
-					t.Errorf("ValidateWebhookURL(%q) error = %v, want %v", tt.url, err, tt.errType)
+					t.Errorf("ValidateWebhookURLAllowing(%q) error = %v, want %v", tt.url, err, tt.errType)
 				}
 			}
 		})
