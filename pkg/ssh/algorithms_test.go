@@ -55,7 +55,7 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 	if len(sc.PublicKeyAuthAlgorithms) == 0 {
 		t.Fatal("serverConfig leaves public key auth algorithms to x/crypto defaults")
 	}
-	for _, a := range []string{gossh.KeyAlgoRSA, gossh.InsecureKeyAlgoDSA} {
+	for _, a := range []string{gossh.KeyAlgoRSA, gossh.InsecureKeyAlgoDSA} { //nolint:staticcheck // checks the deprecated algorithm stays off
 		if slices.Contains(sc.PublicKeyAuthAlgorithms, a) {
 			t.Errorf("serverConfig accepts %q signatures by default", a)
 		}
@@ -115,6 +115,24 @@ func startServer(t *testing.T, cfg *config.Config) (string, context.Context, *SS
 // port and returns its address, the context it runs with and the server.
 func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context, *SSHServer) {
 	t.Helper()
+	ctx := serverContext(t, cfg, logger)
+	s, err := NewSSHServer(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve(l) //nolint: errcheck
+	t.Cleanup(func() { _ = s.Close() })
+	return l.Addr().String(), ctx, s
+}
+
+// serverContext validates cfg and returns a context with what NewSSHServer
+// needs: the config, logger, and a migrated database, store and backend.
+func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context.Context {
+	t.Helper()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -132,19 +150,7 @@ func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger)
 	dbstore := database.New(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
-	ctx = backend.WithContext(ctx, be)
-
-	s, err := NewSSHServer(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Serve(l) //nolint: errcheck
-	t.Cleanup(func() { _ = s.Close() })
-	return l.Addr().String(), ctx, s
+	return backend.WithContext(ctx, be)
 }
 
 // dialWith connects to addr with a client limited to the given algorithms

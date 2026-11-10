@@ -47,7 +47,7 @@ type genMsg interface {
 // CopyURLMsg is a message to copy the URL of the current repository.
 type CopyURLMsg struct{}
 
-// RepoMsg is a message that contains a git.Repository.
+// RepoMsg is a message that contains a repository.
 type RepoMsg proto.Repository //nolint:revive
 
 // GoBackMsg is a message to go back to the previous view.
@@ -91,7 +91,6 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 	}
 	c.Logger = c.Logger.WithPrefix("ui.repo")
 	tb := tabs.New(c, ts)
-	// Make sure the order matches the order of tab constants above.
 	s := spinner.New(spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(c.Styles.Spinner))
 	r := &Repo{
@@ -133,6 +132,12 @@ func (r *Repo) SetSize(width, height int) {
 	}
 }
 
+// Repository returns the repository the page shows, or nil before one is
+// selected.
+func (r *Repo) Repository() proto.Repository {
+	return r.selectedRepo
+}
+
 // Path returns the current component path.
 func (r *Repo) Path() string {
 	return r.panes[r.activeTab].Path()
@@ -171,7 +176,7 @@ func (r *Repo) FullHelp() [][]key.Binding {
 	return b
 }
 
-// Init implements tea.View.
+// Init implements tea.Model.
 func (r *Repo) Init() tea.Cmd {
 	r.state = loadingState
 	r.activeTab = 0

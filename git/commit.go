@@ -9,10 +9,11 @@ import (
 // ZeroID is the zero hash.
 const ZeroID = git.EmptyID
 
+var zeroHashPattern = regexp.MustCompile(`^0{40,}$`)
+
 // IsZeroHash returns whether the hash is a zero hash.
 func IsZeroHash(h string) bool {
-	pattern := regexp.MustCompile(`^0{40,}$`)
-	return pattern.MatchString(h)
+	return zeroHashPattern.MatchString(h)
 }
 
 // Commit is a wrapper around git.Commit with helper methods.

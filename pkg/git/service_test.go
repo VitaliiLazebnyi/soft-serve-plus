@@ -417,7 +417,7 @@ func TestTailBuffer(t *testing.T) {
 	if got := b.String(); got != "" {
 		t.Errorf("empty buffer = %q", got)
 	}
-	fmt.Fprint(b, "\n  warning: one \n\n")
+	_, _ = fmt.Fprint(b, "\n  warning: one \n\n")
 	if got, want := b.String(), "warning: one"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
