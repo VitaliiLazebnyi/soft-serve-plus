@@ -32,17 +32,32 @@ var tuiSessionDuration = promauto.NewCounter(prometheus.CounterOpts{
 	Help:      "The total time spent in TUI sessions",
 })
 
-// BubbleTeaMiddleware runs the soft-serve TUI for sessions with a pty.
+// BubbleTeaMiddleware runs the soft-serve TUI for sessions with a pty, and
+// counts the time each one spends in it.
 // This middleware must be run after the ContextMiddleware.
 //
 // It releases the session's UI resources once the program has exited,
 // however the session ended: quit, disconnect or idle timeout. They cannot
 // be released any earlier, as the program renders one last frame after the
 // model quits, and that render needs them.
+//
+// The time runs until the program exits, which ends the session. The
+// connection may outlive it, for example when a client multiplexes several
+// sessions over one connection, so its close is not the TUI's end.
 func BubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		var c *common.Common
+		var start time.Time
+		stop := func() {
+			if !start.IsZero() {
+				tuiSessionDuration.Add(time.Since(start).Seconds())
+				start = time.Time{}
+			}
+		}
 		defer func() {
+			// A panic skips the handler below; count that session's time
+			// too.
+			stop()
 			if c != nil {
 				c.Zone.Close()
 			}
@@ -50,8 +65,16 @@ func BubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
 		bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
 			p, pc := newSessionProgram(s)
 			c = pc
+			if p != nil {
+				start = time.Now()
+			}
 			return p
-		})(next)(s)
+		})(func(s ssh.Session) {
+			// The program has exited: stop the clock before handing the
+			// session on.
+			stop()
+			next(s)
+		})(s)
 	}
 }
 
@@ -94,12 +117,6 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	p := tea.NewProgram(m, opts...)
 
 	tuiSessionCounter.Inc()
-
-	start := time.Now()
-	go func() {
-		<-ctx.Done()
-		tuiSessionDuration.Add(time.Since(start).Seconds())
-	}()
 
 	return p, &c
 }

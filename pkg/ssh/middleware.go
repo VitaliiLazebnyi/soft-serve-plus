@@ -157,63 +157,17 @@ var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 // This middleware must be run after the ContextMiddleware.
 func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		_, _, ptyReq := s.Pty()
-		if ptyReq {
-			sh(s)
-			return
-		}
-
 		ctx := sessionContext(s)
 		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		rootCmd := &cobra.Command{
-			Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
-			SilenceUsage: true,
-			// The root command has no name of its own: show the ssh
-			// invocation instead, so usage lines and errors such as
-			// "unknown command" read as what the user typed.
-			Annotations: map[string]string{
-				cobra.CommandDisplayNameAnnotation: cmd.SSHCommand(cfg),
-			},
-		}
-		rootCmd.CompletionOptions.DisableDefaultCmd = true
-		// Cobra would describe the flag with the display name.
-		rootCmd.Flags().BoolP("help", "h", false, "help for this command")
-		// "Did you mean" suggestions compare an unknown command with every
-		// command name by edit distance, which costs milliseconds for a
-		// word near MaxCommandLength. No typo of a command name is that
-		// long, so leave suggestions out for long arguments.
-		rootCmd.DisableSuggestions = slices.ContainsFunc(args, func(a string) bool {
-			return len(a) > maxSuggestionArgLength
-		})
+		rootCmd := newRootCommand(cfg, args)
 
-		rootCmd.SetUsageTemplate(cmd.UsageTemplate)
-		rootCmd.SetUsageFunc(cmd.UsageFunc)
-		rootCmd.AddCommand(
-			cmd.GitUploadPackCommand(),
-			cmd.GitUploadArchiveCommand(),
-			cmd.GitReceivePackCommand(),
-			cmd.RepoCommand(),
-			cmd.SettingsCommand(),
-			cmd.UserCommand(),
-			cmd.InfoCommand(),
-			cmd.PubkeyCommand(),
-			cmd.SetUsernameCommand(),
-			cmd.JWTCommand(),
-			cmd.TokenCommand(),
-		)
-
-		if cfg.LFS.Enabled {
-			rootCmd.AddCommand(
-				cmd.GitLFSAuthenticateCommand(),
-			)
-
-			if cfg.LFS.SSHEnabled {
-				rootCmd.AddCommand(
-					cmd.GitLFSTransfer(),
-				)
-			}
+		// A session with a pty opens the TUI unless its command is one to
+		// run (see runWithPty).
+		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(ctx, rootCmd, args) {
+			sh(s)
+			return
 		}
 
 		cliCommandCounter.WithLabelValues(commandLabel(rootCmd, args)).Inc()
@@ -233,6 +187,94 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 			return
 		}
 	}
+}
+
+// runWithPty reports whether args, sent by a session with a pty, are a CLI
+// command to run rather than the TUI to open.
+//
+// No command opens the TUI, and more than one word cannot be a repository
+// name, so it is a command (e.g. `ssh -t host repo list`). A single word is a
+// repository to open the TUI on, unless it is a flag or names a top-level
+// command (e.g. `ssh -t host info` or `ssh -t host --help`) and the caller
+// can read no repository of that name. A repository the caller cannot read
+// is treated as missing, so a private repository named like a command and a
+// missing one give the same answer.
+func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
+	switch {
+	case len(args) == 0:
+		return false
+	case len(args) > 1:
+		return true
+	}
+	word := args[0]
+	if !strings.HasPrefix(word, "-") {
+		if l := commandLabel(root, args); l == "" || l == unknownCommand {
+			return false
+		}
+	}
+	be := backend.FromContext(ctx)
+	if be == nil {
+		return true
+	}
+	// The auth middleware has already resolved the session user, so reuse
+	// it rather than looking the key up again (as the TUI does in openRepo).
+	r, _ := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	return r == nil
+}
+
+// newRootCommand returns the CLI command tree for a session on a server
+// with cfg running args.
+func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
+		SilenceUsage: true,
+		// The root command has no name of its own: show the ssh
+		// invocation instead, so usage lines and errors such as
+		// "unknown command" read as what the user typed.
+		Annotations: map[string]string{
+			cobra.CommandDisplayNameAnnotation: cmd.SSHCommand(cfg),
+		},
+	}
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	// Cobra would describe the flag with the display name.
+	rootCmd.Flags().BoolP("help", "h", false, "help for this command")
+	// "Did you mean" suggestions compare an unknown command with every
+	// command name by edit distance, which costs milliseconds for a
+	// word near MaxCommandLength. No typo of a command name is that
+	// long, so leave suggestions out for long arguments.
+	rootCmd.DisableSuggestions = slices.ContainsFunc(args, func(a string) bool {
+		return len(a) > maxSuggestionArgLength
+	})
+
+	rootCmd.SetUsageTemplate(cmd.UsageTemplate)
+	rootCmd.SetUsageFunc(cmd.UsageFunc)
+	rootCmd.AddCommand(
+		cmd.GitUploadPackCommand(),
+		cmd.GitUploadArchiveCommand(),
+		cmd.GitReceivePackCommand(),
+		cmd.RepoCommand(),
+		cmd.SettingsCommand(),
+		cmd.UserCommand(),
+		cmd.InfoCommand(),
+		cmd.PubkeyCommand(),
+		cmd.SetUsernameCommand(),
+		cmd.JWTCommand(),
+		cmd.TokenCommand(),
+	)
+
+	if cfg.LFS.Enabled {
+		rootCmd.AddCommand(
+			cmd.GitLFSAuthenticateCommand(),
+		)
+
+		if cfg.LFS.SSHEnabled {
+			rootCmd.AddCommand(
+				cmd.GitLFSTransfer(),
+			)
+		}
+	}
+
+	return rootCmd
 }
 
 // redacted replaces a secret in a logged command line.
