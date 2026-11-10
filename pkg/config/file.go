@@ -21,7 +21,8 @@ log:
   # Time format for the log "timestamp" field.
   # Should be described in Golang's time format.
   time_format: {{ q .Log.TimeFormat }}
-  # Path to the log file. Leave empty to write to stderr.
+  # Path to the log file. Leave empty to write to stderr. A relative path
+  # is relative to the data directory.
   #path: {{ q .Log.Path }}
 
 # The SSH server configuration.
@@ -270,6 +271,9 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # Make sure foreign key support is enabled when using SQLite.
+  # A relative SQLite path, including the path in a relative "file:" URI, is
+  # relative to the data directory. ":memory:" and in-memory "file:" URIs
+  # are used as written.
   data_source: {{ q .DB.DataSource }}
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
@@ -293,7 +297,9 @@ lfs:
 # Cron job configuration
 jobs:
   # How often pull mirrors sync: a standard five-field cron spec or a
-  # descriptor such as "@hourly" or "@every 10m".
+  # descriptor such as "@hourly" or "@every 10m". Set to "" to disable
+  # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
+  # it; it keeps this value.
   mirror_pull: {{ q .Jobs.MirrorPull }}
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
@@ -326,6 +332,8 @@ webhook:
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
 # or get an HTTP LFS token (git-lfs-authenticate): both need an account.
+# An entry may also be the path to a file in authorized_keys format; a
+# relative path is relative to the data directory.
 #initial_admin_keys:
 #  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
 
@@ -334,6 +342,9 @@ webhook:
 # set, these take precedence over the database on every read, not just on
 # first run. This is intended for scripted, non-production bootstrapping
 # (e.g. a throwaway server for local dev tooling), not for production use.
+# "admin-access" with allow_keyless: true gives anyone who can reach the
+# server full admin access. Valid anon_access values are "no-access",
+# "read-only", "read-write" and "admin-access".
 #anon_access: "read-only"
 #allow_keyless: true
 
