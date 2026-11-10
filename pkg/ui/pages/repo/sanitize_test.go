@@ -152,8 +152,8 @@ func TestStashPatchKeepsStyling(t *testing.T) {
 
 	s := NewStash(c)
 	s.SetSize(120, 40)
-	s.Update(StashListMsg{&gitm.Stash{Message: "stash title"}})
-	s.Update(StashPatchMsg{diff})
+	s.Update(StashListMsg{stashes: []*gitm.Stash{{Message: "stash title"}}})
+	s.Update(StashPatchMsg{Diff: diff})
 	out := s.vp.View()
 	for _, want := range []string{
 		c.Styles.Stash.Title.Render("stash title"),

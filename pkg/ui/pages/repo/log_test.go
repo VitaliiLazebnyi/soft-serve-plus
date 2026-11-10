@@ -12,6 +12,52 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
+// Toggling the footer resizes the commit list only after the Log pane has
+// built its load, so a load paged by the old size is loaded again by the size
+// the list has when it arrives, or the page shown after the resize has rows
+// that were never loaded.
+func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
+	repo := newDiskRepo(t, "r", "main", "# r\n")
+	for range 40 {
+		gitRun(t, repo.path, "commit", "-q", "--allow-empty", "-m", "c")
+	}
+
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 80, 40)
+	l := NewLog(c)
+	l.SetSize(80, 40)
+	l.Update(RepoMsg(repo))
+	ref := updateRefCmd(repo, 1)()
+	refMsg, ok := ref.(RefMsg)
+	if !ok {
+		t.Fatalf("updateRefCmd = %T %v; want a RefMsg", ref, ref)
+	}
+	l.Update(refMsg)
+	l.Update(l.countCommitsCmd()())
+
+	// Go to the second page.
+	l.nextPage = 1
+	l.Update(l.updateCommitsCmd()())
+
+	// The footer is toggled: the load is built, then the list shrinks.
+	load := l.updateCommitsCmd()
+	before := l.selector.PerPage()
+	l.SetSize(80, 20)
+	after := l.selector.PerPage()
+	if after >= before {
+		t.Fatalf("per page %d after shrinking, %d before; want fewer", after, before)
+	}
+	_, cmd := l.Update(load())
+	l.Update(findMsg[LogItemsMsg](t, runCmd(cmd)))
+
+	items := l.selector.Items()
+	for i := l.nextPage * after; i < (l.nextPage+1)*after && i < len(items); i++ {
+		if it, ok := items[i].(LogItem); !ok || it.Commit == nil {
+			t.Fatalf("row %d on page %d is not loaded after the resize", i, l.nextPage+1)
+		}
+	}
+}
+
 // newTestLog returns a Log showing the commit list of a new two-commit
 // repository at dir.
 func newTestLog(t *testing.T, dir string) *Log {
@@ -32,7 +78,7 @@ func newTestLog(t *testing.T, dir string) *Log {
 	l := NewLog(common.NewCommon(ctx, 80, 40))
 	l.SetSize(80, 40)
 	l.Update(RepoMsg(openRepo{path: dir}))
-	l.Update(RefMsg(ref))
+	l.Update(RefMsg{Ref: ref})
 	l.Update(l.countCommitsCmd()())
 	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {

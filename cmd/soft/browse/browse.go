@@ -147,6 +147,7 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.model.Init(),
 		m.footer.Init(),
+		// The repository page loads the ref to show itself.
 		func() tea.Msg {
 			return repo.RepoMsg(m.repo)
 		},
@@ -188,11 +189,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case footer.ToggleFooterMsg:
 		m.footer.SetShowAll(!m.footer.ShowAll())
 		m.showFooter = !m.showFooter
-	case repo.RepoMsg:
-		// Load the reference only once the tabs have the repository, as
-		// batched commands run concurrently and a RefMsg handled first would
-		// find no repository to read from.
-		cmds = append(cmds, repo.UpdateRefCmd(msg))
 	case common.ErrorMsg:
 		m.error = msg
 		m.state = errorState
