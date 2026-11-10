@@ -234,7 +234,9 @@ func TestCreateWebhookCapsWebhooksPerRepo(t *testing.T) {
 // Concurrent creates on SQLite must not fail with "database is locked". A
 // transaction that reads before it writes cannot wait for another writer
 // (SQLite returns SQLITE_BUSY at once, without busy_timeout), so the cap is
-// checked after the insert.
+// checked after the insert. The creates together hold the write lock for
+// longer than busy_timeout on a slow disk (Windows), so they also rely on
+// the write transactions of one process taking turns (see db.transaction).
 func TestCreateWebhookConcurrentSQLite(t *testing.T) {
 	testConcurrentCreates(t, newWebhookEnv(t))
 }
