@@ -183,11 +183,11 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 		conns []net.Conn
 	)
 	closeRemote := func() {
-		ln.Close()
+		ln.Close() //nolint:errcheck
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range conns {
-			c.Close()
+			c.Close() //nolint:errcheck
 		}
 	}
 	t.Cleanup(closeRemote)
@@ -276,11 +276,11 @@ func TestLimitedBufferCopyFromPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer r.Close() //nolint:errcheck
 
 	const total = 1 << 20
 	go func() {
-		defer w.Close()
+		defer w.Close() //nolint:errcheck
 		_, _ = w.Write(bytes.Repeat([]byte("x"), total))
 	}()
 
@@ -306,7 +306,7 @@ func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	ln.Close() //nolint:errcheck
 
 	r := newRepoWithRemotes(t, map[string]string{
 		"origin": "http://user:secret@" + addr + "/x.git?token=abc",
