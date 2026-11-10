@@ -29,6 +29,10 @@ var (
 	// set. The repository would be private and owned by the default admin,
 	// so its creator could not reach it.
 	ErrAnonymousPrivate = errors.New("new repositories are private by default on this server, and an anonymous user cannot access a private repository")
+	// ErrMirrorReadOnly is returned for a push, branch delete or tag delete
+	// on a mirror. A mirror sync makes the repository's branches and tags
+	// match the remote again, so the change would be silently undone.
+	ErrMirrorReadOnly = errors.New("repository is a mirror; its branches and tags follow the remote and the next sync would undo this change, so turn mirroring off first")
 	// ErrFileNotFound is returned when the file is not found.
 	ErrFileNotFound = errors.New("file not found")
 	// ErrRepoNotFound is returned when a repository is not found.
@@ -48,7 +52,4 @@ var (
 	ErrCollaboratorNotFound = errors.New("collaborator not found")
 	// ErrCollaboratorExist is returned when a collaborator already exists.
 	ErrCollaboratorExist = errors.New("collaborator already exists")
-	// ErrExceedsAccessLevel is returned when an action would grant or revoke
-	// access above the caller's own access level.
-	ErrExceedsAccessLevel = errors.New("cannot change access above your own access level")
 )

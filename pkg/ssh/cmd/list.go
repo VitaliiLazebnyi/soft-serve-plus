@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/spf13/cobra"
@@ -20,15 +19,13 @@ func listCommand() *cobra.Command {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			pk := sshutils.PublicKeyFromContext(ctx)
-			repos, err := be.Repositories(ctx)
+			repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
 			if err != nil {
 				return err
 			}
 			for _, r := range repos {
-				if be.AccessLevelByPublicKey(ctx, r.Name(), pk) >= access.ReadOnlyAccess {
-					if !r.IsHidden() || all {
-						cmd.Println(r.Name())
-					}
+				if !r.IsHidden() || all {
+					cmd.Println(r.Name())
 				}
 			}
 			return nil
