@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -240,7 +239,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Button {
 		case tea.MouseLeft:
 			switch {
-			case ui.common.Zone.Get("footer").InBounds(msg):
+			case ui.common.Zone.Get(ui.footer.ZoneID()).InBounds(msg):
 				cmds = append(cmds, footer.ToggleFooterCmd)
 			}
 		}
@@ -278,7 +277,9 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
+	// A window size message has already been delivered to every page above.
+	_, resized := msg.(tea.WindowSizeMsg)
+	if !resized && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		m, cmd := ui.pages[ui.activePage].Update(msg)
 		ui.pages[ui.activePage] = m.(common.Component)
 		if cmd != nil {
@@ -330,8 +331,8 @@ func (ui *UI) View() tea.View {
 }
 
 // openRepoCmd starts opening repository rn. It must be called from Init or
-// Update: it takes the next repoGen and copies the context, backend and public
-// key there, so the command never reads the UI, whose context Update replaces
+// Update: it takes the next repoGen and copies the context, backend and session
+// user there, so the command never reads the UI, whose context Update replaces
 // when a repository is shown.
 func (ui *UI) openRepoCmd(rn string, initial bool) tea.Cmd {
 	ui.repoGen++
@@ -339,15 +340,16 @@ func (ui *UI) openRepoCmd(rn string, initial bool) tea.Cmd {
 	ctx := ui.common.Context()
 	cfg := ui.common.Config()
 	be := ui.common.Backend()
-	pk := ui.common.PublicKey()
+	user := proto.UserFromContext(ctx)
 	return func() tea.Msg {
-		r, err := openRepo(ctx, cfg, be, pk, rn)
+		r, err := openRepo(ctx, cfg, be, user, rn)
 		return repoOpenedMsg{gen: gen, repo: r, err: err, initial: initial}
 	}
 }
 
-// openRepo opens repository rn for the holder of pk.
-func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, pk ssh.PublicKey, rn string) (proto.Repository, error) {
+// openRepo opens repository rn for user, the session user. An admin key on
+// ctx still opens every repository.
+func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, user proto.User, rn string) (proto.Repository, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil")
 	}
@@ -356,8 +358,11 @@ func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, pk s
 	}
 
 	// A repository the caller cannot read is reported as missing, so a
-	// private repository and a missing one behave the same.
-	r, _ := be.ReadableByPublicKey(ctx, rn, pk)
+	// private repository and a missing one behave the same. The user is
+	// the one AuthenticationMiddleware put on the session context, so
+	// opening a repository does not look the key up again; an admin key
+	// on the context still gets admin access.
+	r, _ := be.ReadableForUser(ctx, rn, user)
 	if r == nil {
 		return nil, common.ErrMissingRepo
 	}

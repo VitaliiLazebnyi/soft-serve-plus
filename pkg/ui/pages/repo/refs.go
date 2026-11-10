@@ -313,15 +313,22 @@ func updateRefCmd(repo proto.Repository, gen uint64) tea.Cmd {
 	}
 }
 
-// defaultRef returns the reference to show first: HEAD, or a branch when
-// HEAD names a branch that does not exist, such as in a mirror whose remote
-// renamed its default branch. It prefers "main" or "master", like
-// EnsureDefaultBranch does, and then the first branch. It returns nil when
-// there is no branch to show.
+// defaultRef returns the reference to show first: HEAD, the commit a
+// detached HEAD points at, or a branch when HEAD names a branch that does not
+// exist, such as in a mirror whose remote renamed its default branch. It
+// prefers "main" or "master", like EnsureDefaultBranch does, and then the
+// first branch. It returns nil when there is no branch to show.
 func defaultRef(r *git.Repository) (*git.Reference, error) {
 	ref, err := r.HEAD()
+	if err == nil {
+		return ref, nil
+	}
 	if !errors.Is(err, git.ErrReferenceNotExist) {
-		return ref, err
+		// A detached HEAD is not a symbolic ref, so HEAD fails for it.
+		if ref, derr := r.DetachedHEAD(); derr == nil {
+			return ref, nil
+		}
+		return nil, err
 	}
 	refs, _ := r.References()
 	var first *git.Reference
