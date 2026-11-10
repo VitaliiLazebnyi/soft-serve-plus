@@ -331,6 +331,7 @@ git:
   max_timeout: 0
 
   # The number of seconds a connection can be idle before it is closed.
+  # Independently of it, a client has 10 seconds to send its request.
   # While a pack is prepared, keepalives are sent every idle_timeout/2
   # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
