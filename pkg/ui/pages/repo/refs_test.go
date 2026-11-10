@@ -97,7 +97,7 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := UpdateRefCmd(t.Context(), openRepo{path: dir})().(type) {
 	case RefMsg:
 		ref := (*git.Reference)(msg)
 		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
