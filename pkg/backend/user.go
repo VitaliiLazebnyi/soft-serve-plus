@@ -567,7 +567,7 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.UserOptions) (proto.User, error) {
 	username = utils.Sanitize(username)
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := utils.ValidateNewUsername(username); err != nil {
 		return nil, err
 	}
 

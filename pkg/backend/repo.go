@@ -948,7 +948,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 // RenameRepository renames a repository.
 func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName string) error {
 	oldName = utils.SanitizeRepo(oldName)
-	if err := utils.ValidateRepo(oldName); err != nil {
+	// The repository may predate the rules for new names.
+	if err := utils.ValidateExistingRepo(oldName); err != nil {
 		return err
 	}
 

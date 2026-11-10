@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	gopath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/aymanbagabas/git-module"
@@ -29,6 +30,9 @@ type Repository struct {
 	*git.Repository
 	Path   string
 	IsBare bool
+
+	// ctx is the context git commands run under; see WithContext.
+	ctx context.Context
 }
 
 // Clone clones a repository.
@@ -132,11 +136,11 @@ func OpenLocal(path string) (*Repository, error) {
 
 // HEAD returns the HEAD reference for a repository.
 func (r *Repository) HEAD() (*Reference, error) {
-	rn, err := r.Repository.SymbolicRef(git.SymbolicRefOptions{Name: "HEAD"})
+	rn, err := r.Repository.SymbolicRef(git.SymbolicRefOptions{Name: "HEAD", CommandOptions: r.cmdOpts()})
 	if err != nil {
 		return nil, err
 	}
-	hash, err := r.ShowRefVerify(rn)
+	hash, err := r.ShowRefVerify(rn, git.ShowRefVerifyOptions{CommandOptions: r.cmdOpts()})
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +158,7 @@ func (r *Repository) HEAD() (*Reference, error) {
 // branch, so HEAD returns an error for it. It returns ErrRevisionNotExist
 // when HEAD does not resolve to a commit.
 func (r *Repository) DetachedHEAD() (*Reference, error) {
-	hash, err := r.RevParse(HEAD + "^{commit}")
+	hash, err := r.RevParse(HEAD+"^{commit}", git.RevParseOptions{CommandOptions: r.cmdOpts()})
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +174,7 @@ func (r *Repository) DetachedHEAD() (*Reference, error) {
 // References returns the references for a repository. It returns an empty
 // list when the repository has no references.
 func (r *Repository) References() ([]*Reference, error) {
-	refs, err := r.ShowRef()
+	refs, err := r.ShowRef(git.ShowRefOptions{CommandOptions: r.cmdOpts()})
 	if err != nil {
 		// git show-ref exits with status 1 and prints nothing when there
 		// are no references. Other failures print to stderr, which
@@ -199,7 +203,7 @@ func (r *Repository) References() ([]*Reference, error) {
 // parsed strictly: a ref git cannot resolve, or one that does not resolve to
 // a single object ID, is an ErrRevisionNotExist.
 func (r *Repository) treeID(ref string) (string, error) {
-	out, err := git.NewCommand("rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
+	out, err := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
 	if err != nil {
 		if strings.Contains(err.Error(), "exit status 128") {
 			return "", ErrRevisionNotExist
@@ -219,7 +223,7 @@ func (r *Repository) LsTree(ref string) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := r.Repository.LsTree(id)
+	tree, err := r.Repository.LsTree(id, git.LsTreeOptions{CommandOptions: r.cmdOpts()})
 	if err != nil {
 		return nil, err
 	}
@@ -288,17 +292,42 @@ func (r *Repository) Patch(commit *Commit) (string, error) {
 
 // CountCommits returns the number of commits in the repository.
 func (r *Repository) CountCommits(ref *Reference) (int64, error) {
-	return r.RevListCount([]string{ref.Name().String()})
+	return r.RevListCount([]string{ref.Name().String()}, git.RevListCountOptions{CommandOptions: r.cmdOpts()})
 }
 
 // CommitsByPage returns the commits for a given page and size.
+//
+// It lists the page itself rather than calling git-module's CommitsByPage,
+// which reads each commit without a context, so that a cancelled context
+// also stops the per-commit reads.
 func (r *Repository) CommitsByPage(ref *Reference, page, size int) (Commits, error) {
-	cs, err := r.Repository.CommitsByPage(ref.Name().String(), page, size)
+	cmd := git.NewCommand("log", "--pretty="+git.LogFormatHashOnly).AddOptions(r.cmdOpts())
+	if size > 0 {
+		cmd.AddArgs("--max-count=" + strconv.Itoa(size))
+	}
+	if skip := (page - 1) * size; skip > 0 {
+		cmd.AddArgs("--skip=" + strconv.Itoa(skip))
+	}
+	out, err := cmd.AddArgs("--end-of-options", ref.Name().String(), "--").RunInDir(r.Path)
 	if err != nil {
 		return nil, err
 	}
-	commits := make(Commits, len(cs))
-	copy(commits, cs)
+	out = bytes.TrimSpace(out)
+	if len(out) == 0 {
+		return Commits{}, nil
+	}
+	ids := bytes.Split(out, []byte{'\n'})
+	commits := make(Commits, 0, len(ids))
+	for _, id := range ids {
+		if err := r.Context().Err(); err != nil {
+			return nil, err
+		}
+		c, err := r.CatFileCommit(string(id))
+		if err != nil {
+			return nil, err
+		}
+		commits = append(commits, c)
+	}
 	return commits, nil
 }
 
@@ -312,6 +341,7 @@ func (r *Repository) SymbolicRef(name string, ref string, opts ...git.SymbolicRe
 
 	opt.Name = name
 	opt.Ref = ref
+	opt.CommandOptions = r.withCtx(opt.CommandOptions)
 	return r.Repository.SymbolicRef(opt)
 }
 

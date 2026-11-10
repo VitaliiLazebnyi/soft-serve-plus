@@ -18,7 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/muesli/reflow/wrap"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var waitBeforeLoading = time.Millisecond * 100
@@ -32,10 +32,23 @@ const (
 )
 
 // LogCountMsg is a message that contains the number of commits in a repo.
-type LogCountMsg int64
+type LogCountMsg struct {
+	count int64
+	gen   uint64
+}
+
+func (m LogCountMsg) generation() uint64 { return m.gen }
 
 // LogItemsMsg is a message that contains a slice of LogItem.
-type LogItemsMsg []selector.IdentifiableItem
+type LogItemsMsg struct {
+	items []selector.IdentifiableItem
+	// limit is the page size the items were loaded for, or 0 when they
+	// were not loaded by page.
+	limit int
+	gen   uint64
+}
+
+func (m LogItemsMsg) generation() uint64 { return m.gen }
 
 // LogCommitMsg is a message that contains a git commit.
 type LogCommitMsg *git.Commit
@@ -44,13 +57,19 @@ type LogCommitMsg *git.Commit
 type LogDiffMsg struct {
 	commit *git.Commit
 	diff   *git.Diff
+	gen    uint64
 }
+
+func (m LogDiffMsg) generation() uint64 { return m.gen }
 
 // LogDiffErrorMsg reports that a selected commit's diff failed to load.
 type LogDiffErrorMsg struct {
 	commit *git.Commit
 	err    error
+	gen    uint64
 }
+
+func (m LogDiffErrorMsg) generation() uint64 { return m.gen }
 
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
@@ -67,6 +86,7 @@ type Log struct {
 	currentDiff    *git.Diff
 	loadingTime    time.Time
 	spinner        spinner.Model
+	gen            uint64
 }
 
 // NewLog creates a new Log model.
@@ -76,19 +96,9 @@ func NewLog(common common.Common) *Log {
 		vp:         viewport.New(common),
 		activeView: logViewCommits,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, LogItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, LogItemDelegate{&common})
 	l.selector = selector
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	l.spinner = s
 	return l
 }
@@ -119,16 +129,14 @@ func (l *Log) SetSize(width, height int) {
 func (l *Log) ShortHelp() []key.Binding {
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.SelectItem,
 			copyKey,
 		}
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		return []key.Binding{
 			l.common.KeyMap.UpDown,
 			l.common.KeyMap.BackItem,
@@ -147,8 +155,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 	b := make([][]key.Binding, 0)
 	switch l.activeView {
 	case logViewCommits:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy hash")
+		copyKey := l.common.CopyKey("copy hash")
 		b = append(b, []key.Binding{
 			l.common.KeyMap.SelectItem,
 		})
@@ -166,8 +173,7 @@ func (l *Log) FullHelp() [][]key.Binding {
 			},
 		}...)
 	case logViewDiff:
-		copyKey := l.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy diff")
+		copyKey := l.common.CopyKey("copy diff")
 		k := l.vp.KeyMap
 		b = append(b, []key.Binding{
 			l.common.KeyMap.BackItem,
@@ -218,12 +224,13 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		l.repo = msg
 	case RefMsg:
-		l.ref = msg
+		l.ref = msg.Ref
+		l.gen = msg.gen
 		l.selector.Select(0)
 		cmds = append(cmds, l.Init())
 	case LogCountMsg:
-		l.count = int64(msg)
-		l.selector.SetTotalPages(int(msg))
+		l.count = msg.count
+		l.selector.SetTotalPages(int(msg.count))
 		l.selector.SetItems(make([]selector.IdentifiableItem, l.count))
 		cmds = append(cmds, l.updateCommitsCmd())
 	case LogItemsMsg:
@@ -233,9 +240,16 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if l.selectedCommit == nil {
 			l.activeView = logViewCommits
 		}
-		cmds = append(cmds, l.selector.SetItems(msg))
+		cmds = append(cmds, l.selector.SetItems(msg.items))
 		l.selector.SetPage(l.nextPage)
 		l.SetSize(l.common.Width, l.common.Height)
+		if msg.limit > 0 && msg.limit != l.selector.PerPage() {
+			// The list was resized after the load was built: on
+			// footer.ToggleFooterMsg the page is resized only after the
+			// Log pane builds its load. Load the page again by the size
+			// the list has now, or it shows rows that were never loaded.
+			cmds = append(cmds, l.updateCommitsCmd())
+		}
 		i := l.selector.SelectedItem()
 		if i != nil {
 			l.activeCommit = i.(LogItem).Commit
@@ -348,6 +362,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case EmptyRepoMsg:
 		l.ref = nil
+		l.gen = msg.gen
 		l.activeView = logViewCommits
 		l.nextPage = 0
 		l.count = 0
@@ -456,12 +471,13 @@ func (l *Log) goBack() {
 // ref. Commands run in their own goroutines, so it captures the model state it
 // needs here instead of reading the model later.
 func (l *Log) countCommitsCmd() tea.Cmd {
-	repo, ref, logger := l.repo, l.ref, l.common.Logger
+	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -470,25 +486,26 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 			logger.Debugf("error counting commits: %v", err)
 			return common.ErrorMsg(err)
 		}
-		return LogCountMsg(count)
+		return LogCountMsg{count: count, gen: gen}
 	}
 }
 
 // updateCommitsCmd returns a command that loads the commits of the next page.
 func (l *Log) updateCommitsCmd() tea.Cmd {
-	repo, ref, logger := l.repo, l.ref, l.common.Logger
+	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	count, page, limit := l.count, l.nextPage, l.selector.PerPage()
 	return func() tea.Msg {
 		if repo == nil || ref == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
 
 		if count == 0 {
-			return LogItemsMsg([]selector.IdentifiableItem{})
+			return LogItemsMsg{items: []selector.IdentifiableItem{}, gen: gen}
 		}
 
 		skip := page * limit
@@ -506,7 +523,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 			}
 			items[idx] = LogItem{Commit: c}
 		}
-		return LogItemsMsg(items)
+		return LogItemsMsg{items: items, limit: limit, gen: gen}
 	}
 }
 
@@ -518,22 +535,23 @@ func (l *Log) selectCommitCmd(commit *git.Commit) tea.Cmd {
 
 // loadDiffCmd returns a command that loads the diff of the selected commit.
 func (l *Log) loadDiffCmd() tea.Cmd {
-	repo, commit, logger := l.repo, l.selectedCommit, l.common.Logger
+	repo, commit, logger, gen := l.repo, l.selectedCommit, l.common.Logger, l.gen
+	ctx := l.common.Context()
 	return func() tea.Msg {
 		if repo == nil || commit == nil {
 			return nil
 		}
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			logger.Debugf("error loading diff repository: %v", err)
-			return LogDiffErrorMsg{commit: commit, err: err}
+			return LogDiffErrorMsg{commit: commit, err: err, gen: gen}
 		}
 		diff, err := r.Diff(commit)
 		if err != nil {
 			logger.Debugf("error loading diff: %v", err)
-			return LogDiffErrorMsg{commit: commit, err: err}
+			return LogDiffErrorMsg{commit: commit, err: err, gen: gen}
 		}
-		return LogDiffMsg{commit: commit, diff: diff}
+		return LogDiffMsg{commit: commit, diff: diff, gen: gen}
 	}
 }
 
@@ -548,7 +566,15 @@ func (l *Log) renderCommit(c *git.Commit) string {
 		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		l.common.Styles.Log.CommitBody.Render(msg),
 	)
-	return wrap.String(s.String(), l.common.Width-2)
+	return wrapText(s.String(), l.common.Width-2)
+}
+
+// wrapText hard-wraps s at width columns. It measures with x/ansi grapheme
+// widths, the same way lipgloss lays out the pane, so emoji and other wide
+// characters wrap where the layout expects them to. Tabs are expanded to four
+// spaces first, as reflow/wrap did, because x/ansi gives a tab no width.
+func wrapText(s string, width int) string {
+	return ansi.Hardwrap(strings.ReplaceAll(s, "\t", "    "), width, false)
 }
 
 func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
@@ -562,7 +588,7 @@ func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
 			stats[i] = strings.Join(ch[:len(ch)-1], "|") + "|" + adddel
 		}
 	}
-	return wrap.String(strings.Join(stats, "\n"), width-2)
+	return wrapText(strings.Join(stats, "\n"), width-2)
 }
 
 func renderDiff(diff *git.Diff, width int) string {
@@ -578,11 +604,12 @@ func renderDiff(diff *git.Diff, width int) string {
 	} else {
 		s.WriteString("\n" + pr.String())
 	}
-	return wrap.String(s.String(), width)
+	return wrapText(s.String(), width)
 }
 
 func (l *Log) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	gen := l.gen
 	return func() tea.Msg {
-		return LogItemsMsg(items)
+		return LogItemsMsg{items: items, gen: gen}
 	}
 }

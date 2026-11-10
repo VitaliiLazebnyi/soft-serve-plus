@@ -38,7 +38,7 @@ func uiTestKey(t *testing.T) gossh.PublicKey {
 // opened, and an admin key on the context still opens every repository.
 func TestOpenRepoUsesSessionUser(t *testing.T) {
 	open := func(ui *UI, rn string) (proto.Repository, error) {
-		msg, ok := ui.openRepoCmd(rn, false)().(repoOpenedMsg)
+		msg, ok := ui.openRepoCmd(rn)().(repoOpenedMsg)
 		if !ok {
 			t.Fatal("openRepoCmd did not return a repoOpenedMsg")
 		}

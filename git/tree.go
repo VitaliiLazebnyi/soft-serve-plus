@@ -25,12 +25,47 @@ type Tree struct {
 // TreeEntry is a wrapper around git.TreeEntry with helper methods.
 type TreeEntry struct {
 	*git.TreeEntry
+	// name is the file name, unquoted
+	name string
 	// path is the full path of the file
 	path string
+	// repo is the repository the entry was read from. Its context bounds
+	// reading the entry's contents. It is nil for entries built elsewhere.
+	repo *Repository
 	// size is the object size, valid when sized is set. See
 	// Tree.EntriesWithSizes.
 	size  int64
 	sized bool
+}
+
+func newTreeEntry(repo *Repository, dir string, e *git.TreeEntry) *TreeEntry {
+	name := unquoteName(e.Name())
+	return &TreeEntry{
+		TreeEntry: e,
+		name:      name,
+		path:      gopath.Join(dir, name),
+		repo:      repo,
+	}
+}
+
+// unquoteName returns the real name of a tree entry. git ls-tree C-quotes
+// names that contain special characters (and, with core.quotePath, non-ASCII
+// bytes), e.g. "caf\303\251.txt", and git-module strips the surrounding
+// double quotes but keeps the escapes. A name git did not quote never
+// contains a backslash, so only names with one need unquoting.
+func unquoteName(name string) string {
+	if !strings.Contains(name, `\`) {
+		return name
+	}
+	if n, err := strconv.Unquote(`"` + name + `"`); err == nil {
+		return n
+	}
+	return name
+}
+
+// Name returns the name of the entry, unquoted.
+func (e *TreeEntry) Name() string {
+	return e.name
 }
 
 // Entries is a wrapper around git.Entries.
@@ -88,31 +123,58 @@ func (f *File) Path() string {
 	return f.Entry.path
 }
 
-// SubTree returns the sub-tree at the given path.
+// SubTree returns the sub-tree at the given path, relative to t. The path
+// uses real (unquoted) names.
 func (t *Tree) SubTree(path string) (*Tree, error) {
-	tree, err := t.Subtree(path)
+	path = gopath.Clean(path)
+	if path == "." || path == "/" {
+		return t, nil
+	}
+	cur := t
+	for _, name := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		e, err := cur.entry(name)
+		if err != nil {
+			return nil, err
+		}
+		if !e.IsTree() {
+			return nil, ErrRevisionNotExist
+		}
+		tree, err := t.Repository.Repository.LsTree(e.ID().String(), t.lsTreeOpts())
+		if err != nil {
+			return nil, err
+		}
+		cur = &Tree{
+			Tree:       tree,
+			Path:       e.path,
+			Repository: t.Repository,
+		}
+	}
+	return cur, nil
+}
+
+// entry returns the direct child of t with the given name.
+func (t *Tree) entry(name string) (*TreeEntry, error) {
+	entries, err := t.Entries()
 	if err != nil {
 		return nil, err
 	}
-	return &Tree{
-		Tree:       tree,
-		Path:       path,
-		Repository: t.Repository,
-	}, nil
+	for _, e := range entries {
+		if e.Name() == name {
+			return e, nil
+		}
+	}
+	return nil, ErrRevisionNotExist
 }
 
 // Entries returns the entries in the tree.
 func (t *Tree) Entries() (Entries, error) {
-	entries, err := t.Tree.Entries()
+	entries, err := t.Tree.Entries(t.lsTreeOpts())
 	if err != nil {
 		return nil, err
 	}
 	ret := make(Entries, len(entries))
 	for i, e := range entries {
-		ret[i] = &TreeEntry{
-			TreeEntry: e,
-			path:      gopath.Join(t.Path, e.Name()),
-		}
+		ret[i] = newTreeEntry(t.Repository, t.Path, e)
 	}
 	return ret, nil
 }
@@ -138,7 +200,7 @@ func (t *Tree) EntriesWithSizes() (Entries, error) {
 	sizes := make(map[string]int64)
 	if in.Len() > 0 {
 		var out, stderr bytes.Buffer
-		if err := git.NewCommand("cat-file", "--batch-check=%(objectname) %(objectsize)").
+		if err := git.NewCommandWithContext(t.Repository.Context(), "cat-file", "--batch-check=%(objectname) %(objectsize)").
 			RunInDirWithOptions(t.Repository.Path, git.RunInDirOptions{
 				Stdin:  &in,
 				Stdout: &out,
@@ -176,17 +238,33 @@ func (e *TreeEntry) Size() int64 {
 	return e.TreeEntry.Size()
 }
 
-// TreeEntry returns the TreeEntry for the file path, which is relative to
-// the tree and may name a file in a subdirectory.
+// TreeEntry returns the TreeEntry for the file path, relative to t. The path
+// uses real (unquoted) names.
 func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
-	entry, err := t.Tree.TreeEntry(path)
-	if err != nil {
-		return nil, err
+	path = gopath.Clean(path)
+	if path == "." || path == "/" {
+		entry, err := t.Tree.TreeEntry("", t.lsTreeOpts())
+		if err != nil {
+			return nil, err
+		}
+		return &TreeEntry{TreeEntry: entry, path: t.Path, repo: t.Repository}, nil
 	}
-	return &TreeEntry{
-		TreeEntry: entry,
-		path:      gopath.Join(t.Path, path),
-	}, nil
+	dir, name := gopath.Split(path)
+	tree := t
+	if dir != "" {
+		var err error
+		tree, err = t.SubTree(dir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return tree.entry(name)
+}
+
+// lsTreeOpts returns options that run ls-tree under the context of the
+// tree's repository.
+func (t *Tree) lsTreeOpts() git.LsTreeOptions {
+	return git.LsTreeOptions{CommandOptions: t.Repository.cmdOpts()}
 }
 
 const sniffLen = 8000
@@ -213,6 +291,18 @@ func IsBinary(r io.Reader) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// Pipeline writes the contents of the file to stdout and git's errors to
+// stderr. Unlike git-module's Blob.Pipeline it runs under the context of the
+// repository the file was read from.
+func (f *File) Pipeline(stdout, stderr io.Writer) error {
+	if f.Entry == nil || f.Entry.repo == nil {
+		return f.Blob.Pipeline(stdout, stderr)
+	}
+	r := f.Entry.repo
+	return git.NewCommandWithContext(r.Context(), "show", f.ID().String()).
+		RunInDirPipeline(stdout, stderr, r.Path)
 }
 
 // IsBinary returns true if the file is binary. Only the first sniffLen bytes
@@ -283,7 +373,29 @@ func (e *TreeEntry) Contents() ([]byte, error) {
 
 // Contents returns the contents of the file.
 func (f *File) Contents() ([]byte, error) {
-	return f.Blob.Bytes()
+	if f.Entry == nil || f.Entry.repo == nil {
+		return f.Blob.Bytes()
+	}
+	if err := f.Entry.repo.Context().Err(); err != nil {
+		return nil, err
+	}
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	// Preallocate the buffer, as git-module's Blob.Bytes does, so that a big
+	// file is not read through repeated doubling. Size runs a short
+	// `cat-file -s` without a context (git-module caches the size per entry
+	// and this version does not take it from ls-tree), which is why the
+	// context is checked first.
+	if size := f.Blob.Size(); size > 0 {
+		stdout.Grow(int(size))
+	}
+	if err := f.Pipeline(stdout, stderr); err != nil {
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("%w - %s", err, stderr.String())
+		}
+		return nil, err
+	}
+	return stdout.Bytes(), nil
 }
 
 // ContentsLimit returns the contents of the file, or an error wrapping

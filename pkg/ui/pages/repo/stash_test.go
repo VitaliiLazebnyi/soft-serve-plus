@@ -41,12 +41,12 @@ func TestStashCopy(t *testing.T) {
 		stashes StashListMsg
 		want    int
 	}{
-		{name: "no stashes", stashes: nil, want: 0},
-		{name: "one stash", stashes: StashListMsg{{Index: 0, Message: "WIP on main"}}, want: 1},
-		{name: "two stashes", stashes: StashListMsg{
+		{name: "no stashes", stashes: StashListMsg{}, want: 0},
+		{name: "one stash", stashes: StashListMsg{stashes: []*gitm.Stash{{Index: 0, Message: "WIP on main"}}}, want: 1},
+		{name: "two stashes", stashes: StashListMsg{stashes: []*gitm.Stash{
 			{Index: 0, Message: "WIP on main"},
 			{Index: 1, Message: "older"},
-		}, want: 1},
+		}}, want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStash(common.NewCommon(ctx, 80, 40))
@@ -59,8 +59,8 @@ func TestStashCopy(t *testing.T) {
 				t.Fatalf("copy produced %d CopyMsgs, want %d: %v", len(msgs), tc.want, msgs)
 			}
 			for _, msg := range msgs {
-				if msg.Text != tc.stashes[0].Message {
-					t.Errorf("copied %q, want %q", msg.Text, tc.stashes[0].Message)
+				if msg.Text != tc.stashes.stashes[0].Message {
+					t.Errorf("copied %q, want %q", msg.Text, tc.stashes.stashes[0].Message)
 				}
 			}
 		})
@@ -73,8 +73,8 @@ func TestStashPatchWithoutSelection(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
 	s := NewStash(common.NewCommon(ctx, 80, 40))
 	s.Init()
-	s.Update(StashListMsg(nil))
-	s.Update(StashPatchMsg{&git.Diff{Diff: &gitm.Diff{}}})
+	s.Update(StashListMsg{})
+	s.Update(StashPatchMsg{Diff: &git.Diff{Diff: &gitm.Diff{}}})
 	if s.state != stashStatePatch {
 		t.Fatalf("state = %v, want the patch view", s.state)
 	}

@@ -24,16 +24,27 @@ const (
 )
 
 // StashListMsg is a message sent when the stash list is loaded.
-type StashListMsg []*gitm.Stash
+type StashListMsg struct {
+	stashes []*gitm.Stash
+	gen     uint64
+}
+
+func (m StashListMsg) generation() uint64 { return m.gen }
 
 // StashPatchMsg is a message sent when the stash patch is loaded.
-type StashPatchMsg struct{ *git.Diff }
+type StashPatchMsg struct {
+	*git.Diff
+	gen uint64
+}
+
+func (m StashPatchMsg) generation() uint64 { return m.gen }
 
 // Stash is the stash component page.
 type Stash struct {
 	common       common.Common
 	vp           *viewport.Viewport
-	ref          RefMsg
+	ref          *git.Reference
+	gen          uint64
 	repo         proto.Repository
 	spinner      spinner.Model
 	list         *selector.Selector
@@ -45,18 +56,8 @@ type Stash struct {
 // NewStash creates a new stash model.
 func NewStash(common common.Common) *Stash {
 	vp := viewport.New(common)
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
-	selector := selector.New(common, []selector.IdentifiableItem{}, StashItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	s := common.NewSpinner()
+	selector := selector.NewPane(common, StashItemDelegate{&common})
 	return &Stash{
 		vp:      vp,
 		common:  common,
@@ -93,11 +94,15 @@ func (s *Stash) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (s *Stash) FullHelp() [][]key.Binding {
+	copyKey := s.common.CopyKey("copy message")
+	if s.state == stashStatePatch {
+		copyKey = s.common.CopyKey("copy patch")
+	}
 	b := [][]key.Binding{
 		{
 			s.common.KeyMap.Select,
 			s.common.KeyMap.Back,
-			s.common.KeyMap.Copy,
+			copyKey,
 		},
 		{
 			s.vp.KeyMap.Down,
@@ -153,7 +158,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		s.repo = msg
 	case RefMsg:
-		s.ref = msg
+		s.ref = msg.Ref
+		s.gen = msg.gen
 		s.list.Select(0)
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
@@ -191,8 +197,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case StashListMsg:
 		s.state = stashStateList
-		items := make([]selector.IdentifiableItem, len(msg))
-		for i, stash := range msg {
+		items := make([]selector.IdentifiableItem, len(msg.stashes))
+		for i, stash := range msg.stashes {
 			items[i] = StashItem{stash}
 		}
 		cmds = append(cmds, s.list.SetItems(items))
@@ -264,13 +270,14 @@ func (s *Stash) renderPatch() {
 // Commands run in their own goroutines, so it captures the model state it
 // needs here instead of reading the model later.
 func (s *Stash) fetchStashCmd() tea.Cmd {
-	repo := s.repo
+	repo, gen := s.repo, s.gen
+	ctx := s.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
-			return StashListMsg(nil)
+			return StashListMsg{gen: gen}
 		}
 
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -280,20 +287,21 @@ func (s *Stash) fetchStashCmd() tea.Cmd {
 			return common.ErrorMsg(err)
 		}
 
-		return StashListMsg(stash)
+		return StashListMsg{stashes: stash, gen: gen}
 	}
 }
 
 // fetchStashPatchCmd returns a command that loads the patch of the selected
 // stash.
 func (s *Stash) fetchStashPatchCmd() tea.Cmd {
-	repo, index := s.repo, s.list.Index()
+	repo, index, gen := s.repo, s.list.Index(), s.gen
+	ctx := s.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
-			return StashPatchMsg{nil}
+			return StashPatchMsg{gen: gen}
 		}
 
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -303,6 +311,6 @@ func (s *Stash) fetchStashPatchCmd() tea.Cmd {
 			return common.ErrorMsg(err)
 		}
 
-		return StashPatchMsg{diff}
+		return StashPatchMsg{Diff: diff, gen: gen}
 	}
 }

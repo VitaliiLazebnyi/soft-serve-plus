@@ -42,6 +42,12 @@ func (*lfsStore) CreateLFSLockForUser(ctx context.Context, tx db.Handler, repoID
 // over the one-second updated_at, so a lock is never skipped or listed twice,
 // even when locks are created or deleted between pages.
 func (*lfsStore) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, error) {
+	// SQLite treats a negative LIMIT as no limit and Postgres rejects it, so
+	// a non-positive limit returns no locks on both, as LIMIT 0 would.
+	if limit <= 0 {
+		return []models.LFSLock{}, nil
+	}
+
 	var locks []models.LFSLock
 	query := tx.Rebind(`
 		SELECT *

@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,14 +15,22 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
-// RefMsg is a message that contains a git.Reference.
-type RefMsg *git.Reference
+// RefMsg is a message that contains the git.Reference to show.
+type RefMsg struct {
+	Ref *git.Reference
+	gen uint64
+}
+
+func (m RefMsg) generation() uint64 { return m.gen }
 
 // RefItemsMsg is a message that contains a list of RefItem.
 type RefItemsMsg struct {
 	prefix string
 	items  []selector.IdentifiableItem
+	gen    uint64
 }
+
+func (m RefItemsMsg) generation() uint64 { return m.gen }
 
 // Refs is a component that displays a list of references.
 type Refs struct {
@@ -33,6 +42,7 @@ type Refs struct {
 	refPrefix string
 	spinner   spinner.Model
 	isLoading bool
+	gen       uint64
 	// loaded reports whether the references of repo were requested. They
 	// do not depend on the selected reference, so switching branches does
 	// not list them again.
@@ -46,19 +56,9 @@ func NewRefs(common common.Common, refPrefix string) *Refs {
 		refPrefix: refPrefix,
 		isLoading: true,
 	}
-	s := selector.New(common, []selector.IdentifiableItem{}, RefItemDelegate{&common})
-	s.SetShowFilter(false)
-	s.SetShowHelp(false)
-	s.SetShowPagination(false)
-	s.SetShowStatusBar(false)
-	s.SetShowTitle(false)
-	s.SetFilteringEnabled(false)
-	s.DisableQuitKeybindings()
-	s.KeyMap.NextPage = common.KeyMap.NextPage
-	s.KeyMap.PrevPage = common.KeyMap.PrevPage
+	s := selector.NewPane(common, RefItemDelegate{&common})
 	r.selector = s
-	sp := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	sp := common.NewSpinner()
 	r.spinner = sp
 	return r
 }
@@ -87,8 +87,7 @@ func (r *Refs) SetSize(width, height int) {
 
 // ShortHelp implements help.KeyMap.
 func (r *Refs) ShortHelp() []key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return []key.Binding{
 		r.common.KeyMap.SelectItem,
@@ -100,8 +99,7 @@ func (r *Refs) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (r *Refs) FullHelp() [][]key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return [][]key.Binding{
 		{r.common.KeyMap.SelectItem},
@@ -134,8 +132,11 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.repo = msg
 		r.loaded = false
 	case RefMsg:
-		r.ref = msg
-		if !r.loaded {
+		r.ref = msg.Ref
+		r.gen = msg.gen
+		// A load still running carries the previous generation, so the
+		// repository page drops its result: start it again for this one.
+		if !r.loaded || r.isLoading {
 			r.loaded = true
 			cmds = append(cmds, r.Init())
 		}
@@ -159,7 +160,7 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		switch i := msg.IdentifiableItem.(type) {
 		case RefItem:
 			cmds = append(cmds,
-				switchRefCmd(i.Reference),
+				switchRefCmd(i.Reference, r.gen),
 				switchTabCmd(&Files{}),
 			)
 		}
@@ -170,6 +171,7 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case EmptyRepoMsg:
 		r.ref = nil
+		r.gen = msg.gen
 		cmds = append(cmds, r.setItems([]selector.IdentifiableItem{}))
 	case spinner.TickMsg:
 		if r.isLoading && r.spinner.ID() == msg.ID {
@@ -222,12 +224,13 @@ func (r *Refs) StatusBarInfo() string {
 // Commands run in their own goroutines, so it captures the model state it
 // needs here instead of reading the model later.
 func (r *Refs) updateItemsCmd() tea.Cmd {
-	repo, prefix, logger := r.repo, r.refPrefix, r.common.Logger
+	repo, prefix, logger, gen := r.repo, r.refPrefix, r.common.Logger, r.gen
+	ctx := r.common.Context()
 	return func() tea.Msg {
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-		rr, err := repo.Open()
+		rr, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -248,32 +251,36 @@ func (r *Refs) updateItemsCmd() tea.Cmd {
 		return RefItemsMsg{
 			items:  items,
 			prefix: prefix,
+			gen:    gen,
 		}
 	}
 }
 
 func (r *Refs) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	prefix, gen := r.refPrefix, r.gen
 	return func() tea.Msg {
 		return RefItemsMsg{
 			items:  items,
-			prefix: r.refPrefix,
+			prefix: prefix,
+			gen:    gen,
 		}
 	}
 }
 
-func switchRefCmd(ref *git.Reference) tea.Cmd {
+func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		return RefMsg(ref)
+		return RefMsg{Ref: ref, gen: gen}
 	}
 }
 
-// UpdateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
+// updateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
 // fallback branch or tag when HEAD names a branch that does not exist (see
 // defaultRef). It sends EmptyRepoMsg when the repository has no branches or
-// tags.
-func UpdateRefCmd(repo proto.Repository) tea.Cmd {
+// tags. gen is the generation the repository page started for repo. Its git
+// commands stop when ctx is done.
+func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
@@ -282,16 +289,16 @@ func UpdateRefCmd(repo proto.Repository) tea.Cmd {
 			return common.ErrorMsg(err)
 		}
 		if len(refs) == 0 {
-			return EmptyRepoMsg{}
+			return EmptyRepoMsg{gen: gen}
 		}
 		ref, err := defaultRef(r, refs)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
 		if ref == nil {
-			return EmptyRepoMsg{}
+			return EmptyRepoMsg{gen: gen}
 		}
-		return RefMsg(ref)
+		return RefMsg{Ref: ref, gen: gen}
 	}
 }
 

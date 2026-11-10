@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -50,7 +51,7 @@ func forgetSyncedAdminKey(ctx context.Context, tx db.Handler, ak string) error {
 // CreateUser implements store.UserStore.
 func (*userStore) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := utils.ValidateNewUsername(username); err != nil {
 		return err
 	}
 
@@ -173,16 +174,7 @@ func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id 
 		return nil, err
 	}
 
-	pks := make([]ssh.PublicKey, len(aks))
-	for i, ak := range aks {
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
-		if err != nil {
-			return nil, err
-		}
-		pks[i] = pk
-	}
-
-	return pks, nil
+	return parseStoredKeys(ctx, aks, "user_id", id), nil
 }
 
 // ListPublicKeysByUsername implements store.UserStore.
@@ -202,16 +194,7 @@ func (*userStore) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, u
 		return nil, err
 	}
 
-	pks := make([]ssh.PublicKey, len(aks))
-	for i, ak := range aks {
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
-		if err != nil {
-			return nil, err
-		}
-		pks[i] = pk
-	}
-
-	return pks, nil
+	return parseStoredKeys(ctx, aks, "username", username), nil
 }
 
 // RemovePublicKeyByUsername implements store.UserStore.
@@ -257,7 +240,7 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 	}
 
 	newUsername = strings.ToLower(newUsername)
-	if err := utils.ValidateUsername(newUsername); err != nil {
+	if err := utils.ValidateNewUsername(newUsername); err != nil {
 		return err
 	}
 
@@ -276,4 +259,22 @@ func (*userStore) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, 
 	query := tx.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	_, err := tx.ExecContext(ctx, query, password, username)
 	return err
+}
+
+// parseStoredKeys parses the stored authorized keys of one user. A key that
+// does not parse (stored by an older version, or edited in the database) is
+// skipped and logged, so it cannot fail every lookup of that user's keys and
+// lock them out with their other, valid keys. keyvals name the user in the
+// log entry.
+func parseStoredKeys(ctx context.Context, aks []string, keyvals ...any) []ssh.PublicKey {
+	pks := make([]ssh.PublicKey, 0, len(aks))
+	for _, ak := range aks {
+		pk, _, err := sshutils.ParseAuthorizedKey(ak)
+		if err != nil {
+			log.FromContext(ctx).WithPrefix("store").Warn("skipping unparsable stored public key", append(keyvals, "err", err)...)
+			continue
+		}
+		pks = append(pks, pk)
+	}
+	return pks
 }

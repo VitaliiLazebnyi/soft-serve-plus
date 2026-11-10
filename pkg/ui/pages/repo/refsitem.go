@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/dustin/go-humanize"
-	"github.com/muesli/reflow/truncate"
 )
 
 // RefItem is a git reference item.
@@ -177,8 +176,8 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	fmt.Fprint(w, //nolint:errcheck
 		st.Base.Render(
 			lipgloss.JoinHorizontal(lipgloss.Top,
-				truncate.String(selector+ref+desc+hash,
-					uint(m.Width()-horizontalFrameSize)), //nolint:gosec
+				common.TruncateWidth(selector+ref+desc+hash,
+					m.Width()-horizontalFrameSize),
 			),
 		),
 	)
