@@ -15,8 +15,6 @@ import (
 )
 
 // AddCollaborator adds a collaborator to a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) AddCollaborator(ctx context.Context, repo string, username string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -67,8 +65,6 @@ type Collaborator struct {
 
 // Collaborators returns the collaborators of a repository with their access
 // levels.
-//
-// It implements backend.Backend.
 func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborator, error) {
 	repo = utils.SanitizeRepo(repo)
 	var users []models.User
@@ -114,8 +110,6 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 // IsCollaborator returns the access level and true if the user is a collaborator of the repository.
 // A user who is not a collaborator gives (-1, false, nil); the error is only
 // set when the lookup itself fails.
-//
-// It implements backend.Backend.
 func (d *Backend) IsCollaborator(ctx context.Context, repo string, username string) (access.AccessLevel, bool, error) {
 	if username == "" {
 		return -1, false, nil
@@ -139,23 +133,23 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 }
 
 // RemoveCollaborator removes a collaborator from a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username string) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
 	repo = utils.SanitizeRepo(repo)
 	r, err := d.Repository(ctx, repo)
 	if err != nil {
 		return err
 	}
 
-	wh, err := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
-	if err != nil {
-		// The event looks up the collaborator row, so a missing row shows up here.
-		if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
-			return proto.ErrCollaboratorNotFound
-		}
-		return err
-	}
+	// The event reads the collaborator row, so it is built before the
+	// removal. Failing to build it does not stop the removal: a missing
+	// collaborator is reported by the removal itself, and any other failure
+	// is logged once the removal is done.
+	wh, whErr := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
 
 	if err := db.WrapError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
@@ -170,6 +164,10 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 	}
 
 	// The removal is committed, so the event is sent without affecting the result.
+	if whErr != nil {
+		d.logger.Error("collaborator removed but webhook event skipped", "repo", repo, "user", username, "err", whErr)
+		return nil
+	}
 	d.sendAfterChange(ctx, wh)
 	return nil
 }

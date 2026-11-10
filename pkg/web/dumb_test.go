@@ -51,17 +51,21 @@ func TestDumbHTTPServesOnlyRegularFiles(t *testing.T) {
 }
 
 // TestDumbHTTPInfoPacksIsNotCached checks that objects/info/packs reaches
-// its own handler and is served uncached, as git http-backend does.
+// its own handler, which lists the packs on disk rather than a stale
+// objects/info/packs file, and is served uncached, as git http-backend does.
 func TestDumbHTTPInfoPacksIsNotCached(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
+	pack := "pack-" + strings.Repeat("a", 40)
+	writeRepoFile(t, f, "pub", "objects/pack/"+pack+".pack", "x")
+	writeRepoFile(t, f, "pub", "objects/pack/"+pack+".idx", "x")
 	writeRepoFile(t, f, "pub", "objects/info/packs", "P pack-x.pack\n")
 
 	w := f.do(http.MethodGet, "/pub.git/objects/info/packs", "")
 	is.Equal(w.Code, http.StatusOK)
-	is.Equal(w.Body.String(), "P pack-x.pack\n")
+	is.Equal(w.Body.String(), "P "+pack+".pack\n\n")
 	is.Equal(w.Header().Get("Content-Type"), "text/plain; charset=utf-8")
 	is.True(strings.HasPrefix(w.Header().Get("Cache-Control"), "no-cache"))
 }

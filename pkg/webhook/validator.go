@@ -11,16 +11,11 @@ var (
 	ErrInvalidURL    = ssrf.ErrInvalidURL
 )
 
-// ValidateWebhookURL validates that a webhook URL is safe to use.
-func ValidateWebhookURL(rawURL string) error {
-	return ssrf.ValidateURL(rawURL) //nolint:wrapcheck
-}
-
-// ValidateWebhookURLAllowing is ValidateWebhookURL with the private and
-// internal destinations allowed permits (webhook.allowed_hosts) let through.
+// ValidateWebhookURLAllowing validates that a webhook URL is safe to use: it
+// must be http or https and reach only public addresses, apart from the
+// private and internal destinations allowed permits (webhook.allowed_hosts).
+// The same check runs again on every address at dial time; see
+// ssrf.NewSecureClientAllowing.
 func ValidateWebhookURLAllowing(rawURL string, allowed ssrf.AllowedHosts) error {
 	return ssrf.ValidateURLAllowing(rawURL, allowed) //nolint:wrapcheck
 }
-
-// ValidateIPBeforeDial validates an IP address before establishing a connection.
-var ValidateIPBeforeDial = ssrf.ValidateIPBeforeDial
