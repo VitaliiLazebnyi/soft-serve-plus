@@ -231,11 +231,7 @@ func (*webhookStore) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repo
 // database's write lock until it ends, from BEGIN IMMEDIATE (see db.Open) or
 // from its first write, so callers that insert before they count take turns.
 func (*webhookStore) LockAndCountWebhooks(ctx context.Context, h db.Handler, repoID int64) (int, error) {
-	d, ok := h.(interface{ DriverName() string })
-	if !ok {
-		return 0, fmt.Errorf("lock and count webhooks: handler %T does not report its driver", h)
-	}
-	switch driver := d.DriverName(); driver {
+	switch driver := h.DriverName(); driver {
 	case "postgres":
 		if _, err := h.ExecContext(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR NO KEY UPDATE;`, repoID); err != nil {
 			return 0, err

@@ -130,12 +130,8 @@ func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler,
 		return models.User{}, err
 	}
 
-	d, ok := h.(interface{ DriverName() string })
-	if !ok {
-		return models.User{}, fmt.Errorf("find user for update: handler %T does not report its driver", h)
-	}
 	var query string
-	switch driver := d.DriverName(); driver {
+	switch driver := h.DriverName(); driver {
 	case "postgres":
 		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
 	case "sqlite":

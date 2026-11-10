@@ -27,7 +27,7 @@ func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
 	l := NewLog(c)
 	l.SetSize(80, 40)
 	l.Update(RepoMsg(repo))
-	ref := updateRefCmd(repo, 1)()
+	ref := updateRefCmd(t.Context(), repo, 1)()
 	refMsg, ok := ref.(RefMsg)
 	if !ok {
 		t.Fatalf("updateRefCmd = %T %v; want a RefMsg", ref, ref)

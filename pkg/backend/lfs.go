@@ -360,7 +360,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 				}
 				// Older versions could record the size of a malformed
 				// pointer; the content now proves this one right.
-				return db.WrapError(datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size))
+				return datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size)
 			}
 
 			// If recording fails, the object stays on disk and the next sync
@@ -381,7 +381,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 	missing := func(pointer lfs.Pointer) (bool, error) {
 		obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)
 		if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-			return false, db.WrapError(err)
+			return false, err
 		}
 
 		// A file of the wrong size, such as one an interrupted download left
@@ -407,7 +407,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			}
 			if ok {
 				logger.Info("correcting the recorded size of lfs object", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "recorded", obj.Size)
-				return false, db.WrapError(datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
+				return false, datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size)
 			}
 		case err == nil && obj.ID != 0 && obj.Size == fi.Size():
 			// The file and its record agree on another size. If the file is
@@ -530,7 +530,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 // recordLFSObject records an LFS object of a repository. An object someone
 // else recorded in the meantime is not an error.
 func recordLFSObject(ctx context.Context, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) error {
-	err := db.WrapError(datastore.CreateLFSObject(ctx, dbx, repoID, p.Oid, p.Size))
+	err := datastore.CreateLFSObject(ctx, dbx, repoID, p.Oid, p.Size)
 	if errors.Is(err, db.ErrDuplicateKey) {
 		return nil
 	}

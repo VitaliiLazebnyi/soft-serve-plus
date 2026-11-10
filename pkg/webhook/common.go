@@ -83,7 +83,7 @@ func newRepository(ctx context.Context, repo proto.Repository) (Repository, erro
 	datastore := store.FromContext(ctx)
 	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
 	if err != nil {
-		return Repository{}, db.WrapError(err)
+		return Repository{}, err
 	}
 
 	r := Repository{

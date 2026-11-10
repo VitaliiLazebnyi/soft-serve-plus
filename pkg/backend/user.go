@@ -320,7 +320,7 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 			ms, err = d.store.ListCollabsByUserID(ctx, tx, user.ID())
 			return err
 		}); err != nil {
-			return nil, db.WrapError(err)
+			return nil, err
 		}
 		collabs = make(map[int64]access.AccessLevel, len(ms))
 		for _, m := range ms {
@@ -373,7 +373,6 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -401,7 +400,6 @@ func (d *Backend) UserByID(ctx context.Context, id int64) (proto.User, error) {
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -444,13 +442,12 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 		var err error
 		m, err = d.store.FindUserByPublicKey(ctx, tx, pk)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			// The key left the account it was logged as owned by.
 			if d.isAdminKey(pk) {
@@ -499,7 +496,7 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		t, err := d.store.GetAccessTokenByToken(ctx, tx, token)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if t.ExpiresAt.Valid && t.ExpiresAt.Time.Before(time.Now()) {
@@ -510,13 +507,12 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 		// of matching the token a second time.
 		m, err = d.store.GetUserByID(ctx, tx, t.UserID)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -549,7 +545,7 @@ func (d *Backend) Users(ctx context.Context) ([]string, error) {
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return users, nil
@@ -562,11 +558,9 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 		return err
 	}
 
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.AddPublicKeyByUsername(ctx, tx, username, pk)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.AddPublicKeyByUsername(ctx, tx, username, pk)
+	})
 }
 
 // CreateUser creates a new user.
@@ -580,7 +574,7 @@ func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.Us
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.CreateUser(ctx, tx, username, opts.Admin, opts.PublicKeys)
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return d.User(ctx, username)
@@ -625,16 +619,14 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrUserNotFound
 	}
-	return db.WrapError(err)
+	return err
 }
 
 // RemovePublicKey removes a public key from a user.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+	})
 }
 
 // ErrLastPublicKey is returned by RemoveOwnPublicKey when the key is the
@@ -678,7 +670,7 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ss
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrUserNotFound
 	}
-	return db.WrapError(err)
+	return err
 }
 
 // ListPublicKeys lists the public keys of a user.
@@ -694,7 +686,7 @@ func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.Pu
 		keys, err = d.store.ListPublicKeysByUsername(ctx, tx, username)
 		return err
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return keys, nil
@@ -707,11 +699,9 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 		return err
 	}
 
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
+	})
 }
 
 // SetAdmin sets the admin flag of a user.
@@ -721,11 +711,9 @@ func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) err
 		return err
 	}
 
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.SetAdminByUsername(ctx, tx, username, admin)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.SetAdminByUsername(ctx, tx, username, admin)
+	})
 }
 
 // SetPassword sets the password of a user.
@@ -740,11 +728,9 @@ func (d *Backend) SetPassword(ctx context.Context, username string, rawPassword 
 		return err
 	}
 
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
+	})
 }
 
 type user struct {

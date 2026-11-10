@@ -27,6 +27,13 @@ const (
 	lastPane
 )
 
+// refreshKey reloads the repository list, so repositories created, removed
+// or shared since the page opened show up without reconnecting.
+var refreshKey = key.NewBinding(
+	key.WithKeys("r"),
+	key.WithHelp("r", "refresh"),
+)
+
 func (p pane) String() string {
 	return []string{
 		"Repositories",
@@ -115,14 +122,18 @@ func (s *Selection) ShortHelp() []key.Binding {
 		s.common.KeyMap.Section,
 	)
 	if s.activePane == selectorPane {
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		kb = append(kb,
 			s.common.KeyMap.Select,
 			k.Filter,
 			k.ClearFilter,
 			copyKey,
 		)
+		// While the filter is typed, r goes into the filter text, so the
+		// refresh key is only offered outside of filtering.
+		if !s.IsFiltering() {
+			kb = append(kb, refreshKey)
+		}
 	}
 	return kb
 }
@@ -150,13 +161,13 @@ func (s *Selection) FullHelp() [][]key.Binding {
 			k.Up,
 		})
 	case selectorPane:
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		k := s.selector.KeyMap
 		if !s.IsFiltering() {
 			b[0] = append(b[0],
 				s.common.KeyMap.Select,
 				copyKey,
+				refreshKey,
 			)
 		}
 		b = append(b, []key.Binding{
@@ -229,7 +240,7 @@ func loadRepos(c common.Common) tea.Msg {
 	for _, r := range repos {
 		// Every repository here is readable by the caller.
 		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(r, nil, c.Config().BlobSizeLimit())
+			readme, path, err := backend.Readme(ctx, r, nil, c.Config().BlobSizeLimit())
 			if err != nil {
 				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {
@@ -249,6 +260,27 @@ func loadRepos(c common.Common) tea.Msg {
 		msg.items[i] = it
 	}
 	return msg
+}
+
+// setItems replaces the listed repositories and keeps the highlighted one
+// highlighted when it is still listed, so a refresh does not move the cursor.
+func (s *Selection) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	var id string
+	if s.selector.FilterState() == list.Unfiltered {
+		if it := s.selector.SelectedItem(); it != nil {
+			id = it.ID()
+		}
+	}
+	cmd := s.selector.SetItems(items)
+	if id != "" {
+		for i, it := range items {
+			if it.ID() == id {
+				s.selector.Select(i)
+				break
+			}
+		}
+	}
+	return cmd
 }
 
 // Update implements tea.Model.
@@ -276,6 +308,9 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, s.common.KeyMap.Back):
 				cmds = append(cmds, s.selector.Init())
+			case key.Matches(msg, refreshKey) && s.activePane == selectorPane &&
+				s.FilterState() != list.Filtering:
+				cmds = append(cmds, s.Init())
 			}
 		}
 		t, cmd := s.tabs.Update(msg)
@@ -286,7 +321,7 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
 	case ReposMsg:
-		cmds = append(cmds, s.selector.SetItems(msg.items), s.selector.Init())
+		cmds = append(cmds, s.setItems(msg.items), s.selector.Init())
 		if msg.hasReadme {
 			cmds = append(cmds, s.setReadme(msg.readme, msg.readmePath))
 		}
