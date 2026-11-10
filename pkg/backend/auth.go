@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"sync"
 
-	"charm.land/log/v2"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -49,10 +48,7 @@ func VerifyPassword(password, hash string) bool {
 // GenerateToken returns a random unique token.
 func GenerateToken() string {
 	buf := make([]byte, 20)
-	if _, err := rand.Read(buf); err != nil {
-		log.Error("unable to generate access token")
-		return ""
-	}
+	_, _ = rand.Read(buf) // crypto/rand.Read never fails.
 
 	return "ss_" + hex.EncodeToString(buf)
 }
