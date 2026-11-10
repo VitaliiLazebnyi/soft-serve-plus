@@ -403,8 +403,18 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 
 func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
+		const usage = "usage: ui [-wait text] <quoted string input> [repository]"
+		// -wait holds the input back until the screen shows text, for
+		// content the TUI loads in the background.
+		waitFor := ""
+		if len(args) > 0 && args[0] == "-wait" {
+			if len(args) < 2 {
+				ts.Fatalf(usage)
+			}
+			waitFor, args = args[1], args[2:]
+		}
 		if len(args) < 1 {
-			ts.Fatalf("usage: ui <quoted string input> [repository]")
+			ts.Fatalf(usage)
 			return
 		}
 		in, err := strconv.Unquote(args[0])
@@ -416,14 +426,47 @@ func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []stri
 		if len(args) > 1 {
 			initialRepo = args[1]
 		}
-		check(ts, runUI(ts, key, in, initialRepo), neg)
+		check(ts, runUI(ts, key, in, initialRepo, waitFor), neg)
 	}
 }
 
+// uiWaitTimeout bounds how long "ui -wait" waits for its text.
+const uiWaitTimeout = time.Minute
+
+// outputWatcher records what the TUI writes and closes found once the output
+// contains text.
+type outputWatcher struct {
+	mu    sync.Mutex
+	text  []byte
+	buf   []byte
+	found chan struct{}
+	done  bool
+}
+
+func newOutputWatcher(text string) *outputWatcher {
+	return &outputWatcher{text: []byte(text), found: make(chan struct{})}
+}
+
+func (w *outputWatcher) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.done {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	if bytes.Contains(w.buf, w.text) {
+		w.done = true
+		w.buf = nil
+		close(w.found)
+	}
+	return len(p), nil
+}
+
 // runUI opens the TUI over SSH, types in one rune at a time and waits for
-// the session to end. Every failure is returned, so that "! ui" stops at the
-// first one instead of going on with what failed to open.
-func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo string) error {
+// the session to end. With waitFor set, it starts typing only once the
+// output shows waitFor. Every failure is returned, so that "! ui" stops at
+// the first one instead of going on with what failed to open.
+func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo, waitFor string) error {
 	cli, err := ssh.Dial(
 		"tcp",
 		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
@@ -451,6 +494,11 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo string) er
 
 	sess.Stdout = ts.Stdout()
 	sess.Stderr = ts.Stderr()
+	var watcher *outputWatcher
+	if waitFor != "" {
+		watcher = newOutputWatcher(waitFor)
+		sess.Stdout = io.MultiWriter(ts.Stdout(), watcher)
+	}
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
@@ -464,8 +512,20 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo string) er
 		return err
 	}
 
+	waitErr := make(chan error, 1)
 	go func() {
 		defer stdin.Close()
+		if watcher != nil {
+			select {
+			case <-watcher.found:
+				waitErr <- nil
+			case <-time.After(uiWaitTimeout):
+				// Type the input anyway, so that it can still quit the TUI.
+				waitErr <- fmt.Errorf("ui: %q did not appear within %v", waitFor, uiWaitTimeout)
+			}
+		} else {
+			waitErr <- nil
+		}
 		for _, r := range in {
 			_, _ = io.WriteString(stdin, string(r))
 
@@ -474,7 +534,19 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, initialRepo string) er
 		}
 	}()
 
-	return sess.Wait()
+	if err := sess.Wait(); err != nil {
+		return err
+	}
+	select {
+	case err := <-waitErr:
+		return err
+	default:
+		// The session ended before the input started.
+		if watcher != nil {
+			return fmt.Errorf("ui: the session ended before %q appeared", waitFor)
+		}
+		return nil
+	}
 }
 
 func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {

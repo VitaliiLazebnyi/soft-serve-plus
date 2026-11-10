@@ -9,9 +9,14 @@ exec soft serve &
 # wait for SSH server to start
 ensureserverrunning SSH_PORT
 
+# The TUI loads its list and the About readme in the background, so every
+# ui call below waits for this public repository, which everyone can read,
+# to be listed before it types anything.
+soft repo create loaded
+
 # an empty .soft-serve is still listed for those who can read it
 soft repo create .soft-serve -n 'Config'
-ui '"    q"'
+ui -wait loaded '"    q"'
 cp stdout empty.txt
 grep 'Config' empty.txt
 soft repo delete .soft-serve
@@ -25,25 +30,25 @@ git -C config commit -m 'first'
 git -C config push origin HEAD
 
 # the admin sees it
-ui '"\t    q"'
+ui -wait loaded '"\t    q"'
 cp stdout admin-about.txt
 grep 'Admin Banner' admin-about.txt
 
 # an anonymous user, who cannot read it, does not
-uui '"\t    q"'
+uui -wait loaded '"\t    q"'
 cp stdout anon-about.txt
 ! grep 'Admin Banner' anon-about.txt
 grep 'An admin can create a `.soft-serve` repository' anon-about.txt
 
 # nor does a registered user without access
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
-uui '"\t    q"'
+uui -wait loaded '"\t    q"'
 cp stdout user-about.txt
 ! grep 'Admin Banner' user-about.txt
 
 # once it is public, they do
 soft repo private .soft-serve false
-uui '"\t    q"'
+uui -wait loaded '"\t    q"'
 cp stdout user-about2.txt
 grep 'Admin Banner' user-about2.txt
 soft repo delete .soft-serve
@@ -70,11 +75,11 @@ soft repo list
 soft user set-admin user1 true
 usoft repo create .soft-serve
 ugit -C push push ssh://localhost:$SSH_PORT/.soft-serve HEAD:refs/heads/main
-ui '"\t    q"'
+ui -wait loaded '"\t    q"'
 cp stdout owner-admin.txt
 grep 'User Banner' owner-admin.txt
 soft user set-admin user1 false
-ui '"\t    q"'
+ui -wait loaded '"\t    q"'
 cp stdout owner-demoted.txt
 ! grep 'User Banner' owner-demoted.txt
 
