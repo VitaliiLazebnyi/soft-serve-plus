@@ -1157,14 +1157,14 @@ ssh -p 23231 localhost repo collab add soft-serve-plus beatrice read-only
 # Remove collaborator
 ssh -p 23231 localhost repo collab remove soft-serve-plus beatrice
 
-# List collaborators
+# List collaborators and their access levels
 ssh -p 23231 localhost repo collab list soft-serve-plus
 ```
 
 A `read-write` collaborator can push and edit the repo's branches, tags and
-metadata. Only the owner, server admins and `admin-access` collaborators can
-delete or rename the repo, change whether it is private, or manage its
-webhooks.
+metadata, and list its collaborators. Only the owner, server admins and
+`admin-access` collaborators can delete or rename the repo, change whether it
+is private, add or remove collaborators, or manage its webhooks.
 
 ### Repository Metadata
 
