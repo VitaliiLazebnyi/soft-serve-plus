@@ -170,12 +170,26 @@ func TestWebhookStoreEvents(t *testing.T) {
 	is.Equal(len(whs), 0)
 
 	// Deleting no IDs is a no-op; deleting some removes only those.
-	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, nil))
+	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, hook, nil))
 	evs, err = s.GetWebhookEventsByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(evs), 2)
 
-	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, []int64{evs[0].ID}))
+	// The deletion is scoped to the webhook: another webhook's ID leaves
+	// these events alone.
+	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, other, []int64{evs[0].ID, evs[1].ID}))
+	evs, err = s.GetWebhookEventsByWebhookID(ctx, dbx, hook)
+	is.NoErr(err)
+	is.Equal(len(evs), 2)
+	otherEvs, err := s.GetWebhookEventsByWebhookID(ctx, dbx, other)
+	is.NoErr(err)
+	is.Equal(len(otherEvs), 1)
+	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, hook, []int64{otherEvs[0].ID}))
+	otherEvs, err = s.GetWebhookEventsByWebhookID(ctx, dbx, other)
+	is.NoErr(err)
+	is.Equal(len(otherEvs), 1)
+
+	is.NoErr(s.DeleteWebhookEventsByID(ctx, dbx, hook, []int64{evs[0].ID}))
 	evs, err = s.GetWebhookEventsByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(evs), 1)
@@ -272,7 +286,7 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	checks["DeleteWebhookDeliveriesByWebhookID"] = s.DeleteWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["GetWebhookEventsByWebhookID"] = s.GetWebhookEventsByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookEvents"] = s.CreateWebhookEvents(ctx, dbx, id, []int{4})
-	checks["DeleteWebhookEventsByID"] = s.DeleteWebhookEventsByID(ctx, dbx, []int64{1})
+	checks["DeleteWebhookEventsByID"] = s.DeleteWebhookEventsByID(ctx, dbx, id, []int64{1})
 	_, checks["GetWebhookDeliveryByID"] = s.GetWebhookDeliveryByID(ctx, dbx, id, did)
 	_, checks["GetWebhookDeliveriesByWebhookID"] = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["ListWebhookDeliveriesByWebhookID"] = s.ListWebhookDeliveriesByWebhookID(ctx, dbx, id)

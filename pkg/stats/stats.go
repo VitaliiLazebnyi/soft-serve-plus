@@ -12,8 +12,6 @@ import (
 
 // StatsServer is a server for collecting and reporting statistics.
 type StatsServer struct { //nolint:revive
-	ctx    context.Context
-	cfg    *config.Config
 	server *http.Server
 }
 
@@ -23,8 +21,6 @@ func NewStatsServer(ctx context.Context) (*StatsServer, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	return &StatsServer{
-		ctx: ctx,
-		cfg: cfg,
 		server: &http.Server{
 			Addr:              cfg.Stats.ListenAddr,
 			Handler:           mux,
@@ -34,11 +30,6 @@ func NewStatsServer(ctx context.Context) (*StatsServer, error) {
 			MaxHeaderBytes:    http.DefaultMaxHeaderBytes,
 		},
 	}, nil
-}
-
-// ListenAndServe starts the StatsServer.
-func (s *StatsServer) ListenAndServe() error {
-	return s.server.ListenAndServe()
 }
 
 // Serve serves the StatsServer on l.
