@@ -77,14 +77,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 
 	// Add cron jobs.
 	sched := cron.NewScheduler(ctx)
-	for n, j := range jobs.List() {
-		id, err := sched.AddFunc(n, j.Runner.Spec(ctx), j.Runner.Func(ctx))
-		if err != nil {
-			logger.Warn("error adding cron job", "job", n, "err", err)
-		}
-
-		j.ID = id
-	}
+	scheduleJobs(ctx, sched, logger)
 
 	srv.Cron = sched
 
@@ -459,4 +452,25 @@ func (l *serveListener) Close() error {
 
 func (l *serveListener) markServing() {
 	l.servingOnce.Do(func() { close(l.serving) })
+}
+
+// scheduleJobs adds every registered job to sched. A job whose spec is empty,
+// such as mirror-pull with an empty jobs.mirror_pull, is disabled and not
+// scheduled.
+func scheduleJobs(ctx context.Context, sched *cron.Scheduler, logger *log.Logger) {
+	for n, j := range jobs.List() {
+		j.ID = 0
+		spec := j.Runner.Spec(ctx)
+		if spec == "" {
+			logger.Info("cron job disabled", "job", n)
+			continue
+		}
+
+		id, err := sched.AddFunc(n, spec, j.Runner.Func(ctx))
+		if err != nil {
+			logger.Warn("error adding cron job", "job", n, "err", err)
+		}
+
+		j.ID = id
+	}
 }
