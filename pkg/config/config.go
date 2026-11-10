@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
+	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/crypto/ssh"
 )
@@ -345,6 +347,14 @@ type Config struct {
 	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
+	// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
+	// "repo blob" command read into memory to display. Larger files are
+	// refused ("repo blob --raw" streams them instead), and a larger README
+	// is not shown. 0 means no limit. The TUI renders a file synchronously,
+	// so this limit is also what bounds the time and memory one file view
+	// takes.
+	MaxBlobSize int64 `env:"MAX_BLOB_SIZE" yaml:"max_blob_size"`
+
 	// DefaultPrivate makes repositories created without an explicit
 	// visibility private: push-to-create over SSH and HTTP, repo create and
 	// repo import without --private, and default_repo on boot. An explicit
@@ -393,7 +403,9 @@ func (c *Config) Environ() []string {
 		return envs
 	}
 
-	// TODO: do this dynamically
+	// TestEnvironRoundTrip checks that ParseEnv reads every field back, so
+	// a new field must be added here. Log.Path is left out on purpose: the
+	// server gives hooks their own log file.
 	envs = append(envs, []string{
 		fmt.Sprintf("SOFT_SERVE_CONFIG_LOCATION=%s", c.ConfigPath()),
 		fmt.Sprintf("SOFT_SERVE_DATA_PATH=%s", c.DataPath),
@@ -464,6 +476,7 @@ func (c *Config) Environ() []string {
 
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_ADMIN_ONLY_CREATE=%t", c.AdminOnlyCreate))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_REPOS_PER_USER=%d", c.MaxReposPerUser))
+	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_BLOB_SIZE=%d", c.MaxBlobSize))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_DEFAULT_PRIVATE=%t", c.DefaultPrivate))
 
 	return envs
@@ -775,7 +788,19 @@ func DefaultConfig() *Config {
 			MirrorPull: "@every 10m",
 			LFSSweep:   "@every 1h",
 		},
+		MaxBlobSize: DefaultMaxBlobSize,
 	}
+}
+
+// DefaultMaxBlobSize is the default MaxBlobSize: 1 MiB.
+const DefaultMaxBlobSize = 1 << 20
+
+// BlobSizeLimit returns MaxBlobSize, or DefaultMaxBlobSize for a nil config.
+func (c *Config) BlobSizeLimit() int64 {
+	if c == nil {
+		return DefaultMaxBlobSize
+	}
+	return c.MaxBlobSize
 }
 
 // Validate validates the configuration.
@@ -797,7 +822,39 @@ func (c *Config) Validate() error {
 	}
 
 	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimSuffix(c.Git.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
+
+	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
+	// value without a scheme or a host would hand clients unusable links.
+	if c.HTTP.PublicURL != "" {
+		u, err := url.Parse(c.HTTP.PublicURL)
+		if err != nil {
+			return fmt.Errorf("http.public_url: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http.public_url: %q must be an http:// or https:// URL with a host", c.HTTP.PublicURL)
+		}
+	}
+
+	// Setting only one of the pair would silently serve plain HTTP.
+	if (c.HTTP.TLSKeyPath == "") != (c.HTTP.TLSCertPath == "") {
+		return fmt.Errorf("http.tls_key_path and http.tls_cert_path must be set together")
+	}
+
+	switch strings.ToLower(c.Log.Format) {
+	case "", "json", "logfmt", "text":
+	default:
+		return fmt.Errorf("log.format: %q is not one of %q, %q, %q", c.Log.Format, "json", "logfmt", "text")
+	}
+
+	// The scheduler uses the standard parser; a spec it rejects would leave
+	// mirrors never syncing behind a startup warning.
+	if c.Jobs.MirrorPull != "" {
+		if _, err := cron.ParseStandard(c.Jobs.MirrorPull); err != nil {
+			return fmt.Errorf("jobs.mirror_pull: %q: %w", c.Jobs.MirrorPull, err)
+		}
+	}
 
 	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {
 		c.SSH.KeyPath = filepath.Join(c.DataPath, c.SSH.KeyPath)
@@ -825,6 +882,20 @@ func (c *Config) Validate() error {
 		name  string
 		value int
 	}{
+		{"ssh.max_timeout", c.SSH.MaxTimeout},
+		{"ssh.idle_timeout", c.SSH.IdleTimeout},
+		{"git.max_timeout", c.Git.MaxTimeout},
+		{"git.idle_timeout", c.Git.IdleTimeout},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
+		}
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
 		{"http.max_timeout", c.HTTP.MaxTimeout},
 		{"http.idle_timeout", c.HTTP.IdleTimeout},
 		{"http.max_connections", c.HTTP.MaxConnections},
@@ -836,6 +907,10 @@ func (c *Config) Validate() error {
 
 	if c.MaxReposPerUser < 0 {
 		return fmt.Errorf("max_repos_per_user: %d is negative; use 0 for no limit", c.MaxReposPerUser)
+	}
+
+	if c.MaxBlobSize < 0 {
+		return fmt.Errorf("max_blob_size: %d is negative; use 0 for no limit", c.MaxBlobSize)
 	}
 
 	switch c.SSH.ClientStrictHostKeyChecking {
