@@ -21,6 +21,9 @@ import (
 type DB struct {
 	*sqlx.DB
 	logger *log.Logger
+	// writeSlot, on SQLite, is held by the one write transaction of this
+	// handle that may be open at a time. See transaction.
+	writeSlot chan struct{}
 }
 
 // Open opens a database connection.
@@ -43,6 +46,9 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 
 	d := &DB{
 		DB: db,
+	}
+	if driverName == "sqlite" {
+		d.writeSlot = make(chan struct{}, 1)
 	}
 
 	if config.IsVerbose() {
@@ -204,6 +210,30 @@ func (d *DB) ReadTransactionContext(ctx context.Context, fn func(tx *Tx) error) 
 }
 
 func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *Tx) error) error {
+	// SQLite lets one transaction write at a time, and write transactions
+	// begin IMMEDIATE (see sqliteImmediateTx), so each one waits at BEGIN
+	// for the write lock. SQLite waits by polling with growing sleeps, for
+	// busy_timeout in all, and then fails with "database is locked". The
+	// lock goes to whichever waiter polls when it is free, not to the one
+	// that has waited longest, so when a burst of writers between them
+	// hold the lock longer than busy_timeout, the ones left behind fail,
+	// however short each write is. On Windows, where file locking and
+	// syncing are slow, a few dozen small writes are enough. The write
+	// transactions of this process therefore take turns here first, in
+	// the order they arrive and for as long as ctx allows, so BEGIN waits
+	// only for other processes, such as git hooks, for which busy_timeout
+	// still applies. Read-only transactions begin deferred and do not
+	// take a turn. A write transaction must not start another one from fn:
+	// it would wait for its own turn until ctx ends.
+	if d.writeSlot != nil && (opts == nil || !opts.ReadOnly) {
+		select {
+		case d.writeSlot <- struct{}{}:
+		case <-ctx.Done():
+			return fmt.Errorf("failed to begin transaction: %w", ctx.Err())
+		}
+		defer func() { <-d.writeSlot }()
+	}
+
 	txx, err := d.DB.BeginTxx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
