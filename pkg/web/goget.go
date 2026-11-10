@@ -1,10 +1,12 @@
 package web
 
 import (
+	"bytes"
+	"html/template"
 	"net/http"
 	"net/url"
 	"path"
-	"text/template"
+	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -26,14 +28,21 @@ var repoIndexHTMLTpl = template.Must(template.New("index").Parse(`<!DOCTYPE html
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-    <meta http-equiv="refresh" content="0; url=https://pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}">
+    <meta http-equiv="refresh" content="0; url={{ .DocURL }}">
     <meta name="go-import" content="{{ .ImportRoot }}/{{ .Repo }} git {{ .Config.HTTP.PublicURL }}/{{ .Repo }}.git">
 </head>
 <body>
-Redirecting to docs at <a href="https://pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}">pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}</a>...
+Redirecting to docs at <a href="{{ .DocURL }}">pkg.go.dev/{{ .ImportRoot }}/{{ .Repo }}</a>...
 </body>
 </html>
 `))
+
+// goImportRoot returns the import path prefix of the repositories served at
+// the public URL u: its host followed by its path, so a server published
+// under "https://example.com/git" serves "example.com/git/<repo>".
+func goImportRoot(u *url.URL) string {
+	return u.Host + strings.TrimRight(u.Path, "/")
+}
 
 // maxGoGetPathLen bounds the import path a go get request may walk. Each
 // step of the walk costs one filesystem lookup, and a step per segment of an
@@ -92,19 +101,30 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 			repo = path.Dir(repo)
 		}
 
-		if err := repoIndexHTMLTpl.Execute(w, struct {
+		// Render into a buffer so a failure can still answer with a 500.
+		var buf bytes.Buffer
+		name := utils.SanitizeRepo(repo)
+		root := goImportRoot(importRoot)
+		// html/template refuses a URL it cannot vet inside the refresh
+		// content attribute, so hand it one built and escaped here.
+		docURL := (&url.URL{Scheme: "https", Host: "pkg.go.dev", Path: "/" + root + "/" + name}).String()
+		if err := repoIndexHTMLTpl.Execute(&buf, struct {
 			Repo       string
 			Config     *config.Config
 			ImportRoot string
+			DocURL     template.URL
 		}{
-			Repo:       utils.SanitizeRepo(repo),
+			Repo:       name,
 			Config:     cfg,
-			ImportRoot: importRoot.Host,
+			ImportRoot: root,
+			DocURL:     template.URL(docURL), //nolint:gosec // built from a parsed URL above
 		}); err != nil {
 			logger.Error("failed to render go get template", "err", err)
 			renderInternalServerError(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		buf.WriteTo(w) //nolint: errcheck
 
 		goGetCounter.WithLabelValues(repo).Inc()
 		return

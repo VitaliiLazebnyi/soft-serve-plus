@@ -107,8 +107,9 @@ type deadlines struct {
 	// belongs to the server again: over HTTP/2 the stream's state is
 	// gone, and setting a deadline through rc panics; over HTTP/1 it
 	// would undo the deadline the server set for the next request. A
-	// goroutine the handler left reading the body (git's stdin copy
-	// is not waited for) may still return from a read after that.
+	// goroutine the handler left reading the body (an LFS or other
+	// handler's leftover reader) may still return from a read after
+	// that.
 	done bool
 }
 

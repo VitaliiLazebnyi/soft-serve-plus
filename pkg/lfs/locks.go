@@ -2,37 +2,37 @@ package lfs
 
 import (
 	"errors"
-	"math"
 	"strconv"
+
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
-const (
-	// MaxLocksLimit is the largest page of locks returned at once. A larger
-	// limit is lowered to it.
-	MaxLocksLimit = 100
-
-	// MaxLocksCursor bounds the page number so the row offset,
-	// (cursor-1)*limit, stays well within an int on any platform.
-	MaxLocksCursor = math.MaxInt32 / MaxLocksLimit
-)
+// MaxLocksLimit is the largest page of locks returned at once. A larger
+// limit is lowered to it.
+const MaxLocksLimit = 100
 
 // ErrInvalidLocksCursor is returned by ParseLocksCursor for a cursor that is
-// not a page number the server hands out.
+// not a lock ID the server hands out.
 var ErrInvalidLocksCursor = errors.New("invalid cursor")
 
 // ParseLocksCursor parses the cursor of a lock list or verify request. The
-// cursor is a page number between 1 and MaxLocksCursor, as handed out by
-// NextLocksCursor; empty means the first page. Anything else is refused with
+// cursor is the ID of the last lock of the previous page, as handed out by
+// NextLocksCursor, and the next page starts after it; empty means the first
+// page and returns 0. Anything but a positive ID is refused with
 // ErrInvalidLocksCursor.
-func ParseLocksCursor(cursor string) (int, error) {
+//
+// Paging by ID rather than by row offset keeps every page in a stable order:
+// locks created or deleted between pages do not shift the pages after them,
+// so no lock is skipped or listed twice.
+func ParseLocksCursor(cursor string) (int64, error) {
 	if cursor == "" {
-		return 1, nil
+		return 0, nil
 	}
-	page, err := strconv.Atoi(cursor)
-	if err != nil || page < 1 || page > MaxLocksCursor {
+	id, err := strconv.ParseInt(cursor, 10, 64)
+	if err != nil || id < 1 {
 		return 0, ErrInvalidLocksCursor
 	}
-	return page, nil
+	return id, nil
 }
 
 // ClampLocksLimit returns the page size to use for a requested limit. Zero or
@@ -48,13 +48,12 @@ func ClampLocksLimit(limit int) int {
 	return limit
 }
 
-// NextLocksCursor returns the cursor of the page after page, given that n
-// locks were returned with the page size limit. It is empty when there is no
-// next page: the page was not full, or page is already MaxLocksCursor, past
-// which ParseLocksCursor refuses the cursor.
-func NextLocksCursor(page, limit, n int) string {
-	if n < limit || page >= MaxLocksCursor {
+// NextLocksCursor returns the cursor of the page after locks, a page fetched
+// with the page size limit: the ID of its last lock. It is empty when there
+// is no next page: the page was not full.
+func NextLocksCursor(limit int, locks []models.LFSLock) string {
+	if len(locks) == 0 || len(locks) < limit {
 		return ""
 	}
-	return strconv.Itoa(page + 1)
+	return strconv.FormatInt(locks[len(locks)-1].ID, 10)
 }
