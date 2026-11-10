@@ -93,7 +93,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
 
-	ref, ok := UpdateRefCmd(repo)().(RefMsg)
+	ref, ok := UpdateRefCmd(t.Context(), repo)().(RefMsg)
 	if !ok {
 		t.Fatal("UpdateRefCmd did not return a RefMsg")
 	}
@@ -180,7 +180,7 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 
-	if msg := UpdateRefCmd(openRepo{path: dir})(); msg != (EmptyRepoMsg{}) {
+	if msg := UpdateRefCmd(t.Context(), openRepo{path: dir})(); msg != (EmptyRepoMsg{}) {
 		t.Fatalf("UpdateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
 	}
 
@@ -189,7 +189,7 @@ func TestUpdateRefCmdTagsOnly(t *testing.T) {
 	gitRun(t, dir, "tag", "v2")
 	gitRun(t, dir, "update-ref", "-d", "refs/heads/main")
 
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := UpdateRefCmd(t.Context(), openRepo{path: dir})().(type) {
 	case RefMsg:
 		if ref := (*git.Reference)(msg); ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
 			t.Fatalf("UpdateRefCmd with only tags = %v; want tag v1", msg)

@@ -142,7 +142,7 @@ func (t *Tree) EntriesWithSizes() (Entries, error) {
 	sizes := make(map[string]int64)
 	if in.Len() > 0 {
 		var out, stderr bytes.Buffer
-		if err := git.NewCommand("cat-file", "--batch-check=%(objectname) %(objectsize)").
+		if err := git.NewCommandWithContext(t.Repository.Context(), "cat-file", "--batch-check=%(objectname) %(objectsize)").
 			RunInDirWithOptions(t.Repository.Path, git.RunInDirOptions{
 				Stdin:  &in,
 				Stdout: &out,

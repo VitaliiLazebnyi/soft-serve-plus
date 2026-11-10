@@ -69,6 +69,7 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 		"HEAD":         func(r *Repository) error { _, err := r.HEAD(); return err },
 		"References":   func(r *Repository) error { _, err := r.References(); return err },
 		"Branches":     func(r *Repository) error { _, err := r.Branches(); return err },
+		"RefInfos":     func(r *Repository) error { _, err := r.RefInfos(RefsHeads); return err },
 		"Tree":         func(r *Repository) error { _, err := r.Tree(head); return err },
 		"CountCommits": func(r *Repository) error { _, err := r.CountCommits(head); return err },
 		"CommitsByPage": func(r *Repository) error {
