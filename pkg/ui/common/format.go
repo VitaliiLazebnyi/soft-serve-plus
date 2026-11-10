@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	gansi "charm.land/glamour/v2/ansi"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -56,18 +57,14 @@ func FormatHighlight(p, c string) (string, error) {
 	return r.String(), nil
 }
 
-// UnquoteFilename unquotes a filename.
-// When Git is with "core.quotePath" set to "true" (default), it will quote
-// the filename with double quotes if it contains control characters or unicode.
-// this function will unquote the filename.
-func UnquoteFilename(s string) string {
-	name := s
-	if n, err := strconv.Unquote(`"` + s + `"`); err == nil {
-		name = n
+// DisplayFilename returns a file name that is safe to print in a terminal.
+// Tree entry names are real (unquoted) names, so a name made of printable
+// characters, including non-ASCII ones, is returned as is; one with control
+// characters or invalid UTF-8 is escaped like a Go string literal.
+func DisplayFilename(s string) string {
+	if utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) < 0 {
+		return s
 	}
-
-	// Strip only the surrounding quotes: trimming every quote would also eat
-	// the last character of an escaped quote at the end of the name.
-	name = strconv.Quote(name)
-	return name[1 : len(name)-1]
+	q := strconv.Quote(s)
+	return q[1 : len(q)-1]
 }

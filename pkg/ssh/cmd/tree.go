@@ -86,7 +86,7 @@ func treeCommand() *cobra.Command {
 				if size := ent.Size(); size != 0 {
 					ssize = humanize.Bytes(uint64(size)) //nolint:gosec
 				}
-				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.UnquoteFilename(ent.Name()))
+				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))
 			}
 			return nil
 		},
