@@ -97,11 +97,11 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		ref := (*git.Reference)(msg)
+		ref := msg.Ref
 		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
-			t.Fatalf("UpdateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
+			t.Fatalf("updateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
 		}
 		if _, err := r.TreePath(ref, ""); err != nil {
 			t.Fatalf("TreePath at a detached HEAD: %v", err)
@@ -110,7 +110,7 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 			t.Fatalf("CountCommits at a detached HEAD = %d, %v; want 1", n, err)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
 	}
 }
 
