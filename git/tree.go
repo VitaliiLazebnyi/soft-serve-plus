@@ -3,6 +3,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -213,16 +214,37 @@ func IsBinary(r io.Reader) (bool, error) {
 	return false, nil
 }
 
-// IsBinary returns true if the file is binary.
+// IsBinary returns true if the file is binary. Only the first sniffLen bytes
+// of the file are read.
 func (f *File) IsBinary() (bool, error) {
-	stdout := new(bytes.Buffer)
-	stderr := new(bytes.Buffer)
-	err := f.Pipeline(stdout, stderr)
-	if err != nil {
+	w := &sniffWriter{}
+	err := f.Pipeline(w, io.Discard)
+	if err != nil && !w.full() {
 		return false, err
 	}
-	r := bufio.NewReader(stdout)
-	return IsBinary(r)
+	// Once enough bytes are in, git is stopped by the write error, so err
+	// does not matter.
+	return IsBinary(bytes.NewReader(w.buf))
+}
+
+// errSniffDone stops a blob read once sniffWriter has enough bytes.
+var errSniffDone = errors.New("sniffed enough bytes")
+
+// sniffWriter keeps the first sniffLen bytes written to it and then fails,
+// which stops the git process feeding it.
+type sniffWriter struct {
+	buf []byte
+}
+
+func (w *sniffWriter) full() bool { return len(w.buf) >= sniffLen }
+
+func (w *sniffWriter) Write(p []byte) (int, error) {
+	n := min(len(p), sniffLen-len(w.buf))
+	w.buf = append(w.buf, p[:n]...)
+	if n < len(p) {
+		return n, errSniffDone
+	}
+	return n, nil
 }
 
 // Mode returns the mode of the file in fs.FileMode format.
@@ -253,4 +275,45 @@ func (e *TreeEntry) Contents() ([]byte, error) {
 // Contents returns the contents of the file.
 func (f *File) Contents() ([]byte, error) {
 	return f.Blob.Bytes()
+}
+
+// ContentsLimit returns the contents of the file, or an error wrapping
+// ErrFileTooLarge without reading it when the file is larger than limit
+// bytes. A limit of 0 or less means no limit.
+func (f *File) ContentsLimit(limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return f.Contents()
+	}
+	if size := f.Size(); size > limit {
+		return nil, fmt.Errorf("%w: %d bytes, limit is %d", ErrFileTooLarge, size, limit)
+	}
+	// Size is looked up separately and is 0 when the lookup fails, so cap
+	// the read as well.
+	w := &limitWriter{limit: limit}
+	stderr := new(bytes.Buffer)
+	if err := f.Pipeline(w, stderr); err != nil {
+		if w.over {
+			return nil, fmt.Errorf("%w: limit is %d bytes", ErrFileTooLarge, limit)
+		}
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("%w - %s", err, strings.TrimSpace(stderr.String()))
+		}
+		return nil, err
+	}
+	return w.buf.Bytes(), nil
+}
+
+// limitWriter buffers up to limit bytes and fails on any byte past it.
+type limitWriter struct {
+	buf   bytes.Buffer
+	limit int64
+	over  bool
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	if int64(w.buf.Len())+int64(len(p)) > w.limit {
+		w.over = true
+		return 0, ErrFileTooLarge
+	}
+	return w.buf.Write(p)
 }

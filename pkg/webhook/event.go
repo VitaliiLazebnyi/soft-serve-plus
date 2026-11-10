@@ -21,7 +21,8 @@ const (
 	// EventPush is a push event.
 	EventPush Event = 4
 
-	// EventRepository is a repository create, delete, rename event.
+	// EventRepository is a repository delete, rename or default branch change
+	// event.
 	EventRepository Event = 5
 
 	// EventRepositoryVisibilityChange is a repository visibility change event.

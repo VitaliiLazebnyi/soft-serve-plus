@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -228,6 +230,98 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
+// redacted replaces a secret in a logged command line.
+const redacted = "[redacted]"
+
+// redactCommand returns a copy of args that is safe to log: the value of a
+// --secret (-s) flag is replaced, and any URL is reduced to its scheme and
+// host. Webhook secrets are passed with --secret, and import and webhook URLs
+// can carry a token as user info, in the path (Slack, Discord and the like)
+// or in the query.
+func redactCommand(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, len(args))
+	secretNext := false
+	for i, arg := range args {
+		switch {
+		case secretNext:
+			out[i] = redacted
+			secretNext = false
+		case arg == "--secret":
+			out[i] = arg
+			secretNext = true
+		case strings.HasPrefix(arg, "--secret="):
+			out[i] = "--secret=" + redacted
+		default:
+			if n := shorthandSecret(arg); n > 0 {
+				// -s, -as and the like take the next argument as the
+				// value; -sVALUE, -s=VALUE, -asVALUE and -as=VALUE carry it.
+				out[i] = arg[:n]
+				if n < len(arg) {
+					out[i] += redacted
+				} else {
+					secretNext = true
+				}
+				continue
+			}
+			out[i] = redactURLArg(arg)
+		}
+	}
+	return out
+}
+
+// shorthandSecret reports where the value of a -s flag starts in a group of
+// short flags such as -s, -sVALUE, -as or -as=VALUE: it returns the index just
+// past the "s", or 0 when arg holds no -s. Short flags can be grouped, so an
+// "s" after any run of letters counts. This may also match a letter inside
+// the value of another short flag (-uhttps://...), which only redacts more
+// than needed.
+func shorthandSecret(arg string) int {
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return 0
+	}
+	for j := 1; j < len(arg); j++ {
+		c := arg[j]
+		if c == 's' {
+			return j + 1
+		}
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return 0
+		}
+	}
+	return 0
+}
+
+// redactURLArg redacts a URL given as a positional argument or as a flag
+// value (--url=URL, -uURL, -u=URL). Any other argument is returned unchanged.
+func redactURLArg(arg string) string {
+	prefix, value := "", arg
+	if strings.HasPrefix(arg, "--") {
+		if k, v, ok := strings.Cut(arg, "="); ok {
+			prefix, value = k+"=", v
+		}
+	} else if strings.HasPrefix(arg, "-") && len(arg) > 2 {
+		prefix, value = arg[:2], arg[2:]
+		if strings.HasPrefix(value, "=") {
+			prefix, value = prefix+"=", value[1:]
+		}
+	}
+	if !strings.Contains(value, "://") {
+		return arg
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return prefix + redacted
+	}
+	r := u.Scheme + "://" + u.Host
+	if u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		r += "/" + redacted
+	}
+	return prefix + r
+}
+
 // sessionContext returns a context derived from the session's context that
 // carries the session itself. The session's context belongs to the
 // connection, and a client multiplexing sessions over one connection (such as
@@ -284,7 +378,7 @@ func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
 			"addr",
 			addr,
 			"cmd",
-			s.Command(),
+			redactCommand(s.Command()),
 		}
 
 		if user != nil {

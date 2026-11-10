@@ -139,10 +139,10 @@ func TestAllowedHostsMatchResolved(t *testing.T) {
 	}
 
 	// localhost resolves to loopback on every platform this runs on.
-	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").Match("localhost", ""); err != nil {
+	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").match(context.Background(), "localhost", "", nil); err != nil {
 		t.Errorf("localhost should resolve inside loopback: %v", err)
 	}
-	if err := mustAllowedHosts(t, "10.0.0.0/8").Match("localhost", ""); !errors.Is(err, ErrSSHHostNotAllowed) {
+	if err := mustAllowedHosts(t, "10.0.0.0/8").match(context.Background(), "localhost", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
 		t.Errorf("localhost resolved outside 10/8 but was allowed: %v", err)
 	}
 }
@@ -366,7 +366,7 @@ func TestAllowedHostsMappedNetworks(t *testing.T) {
 	if got := all.String(); got != "0.0.0.0/0" {
 		t.Errorf("::ffff:0:0/96 parsed as %q, want 0.0.0.0/0", got)
 	}
-	if err := all.Match("203.0.113.9", ""); err != nil {
+	if err := all.match(context.Background(), "203.0.113.9", "", nil); err != nil {
 		t.Errorf("::ffff:0:0/96 does not match an IPv4 address: %v", err)
 	}
 
@@ -375,10 +375,10 @@ func TestAllowedHostsMappedNetworks(t *testing.T) {
 	if got := v6.String(); got != "::/0" {
 		t.Errorf("::/0 parsed as %q", got)
 	}
-	if err := v6.Match("fd00::1", ""); err != nil {
+	if err := v6.match(context.Background(), "fd00::1", "", nil); err != nil {
 		t.Errorf("::/0 does not match an IPv6 address: %v", err)
 	}
-	if err := v6.Match("10.1.2.3", ""); !errors.Is(err, ErrSSHHostNotAllowed) {
+	if err := v6.match(context.Background(), "10.1.2.3", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
 		t.Errorf("::/0 matched an IPv4 address: %v", err)
 	}
 }
