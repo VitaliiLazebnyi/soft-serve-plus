@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -110,75 +111,120 @@ func TestSettingsSubcommandsAreGatedByParent(t *testing.T) {
 	}
 }
 
-// TestCollabAddCannotExceedCallerAccess verifies a read-write collaborator
-// cannot grant admin-access, which would escalate beyond their own level.
-func TestCollabAddCannotExceedCallerAccess(t *testing.T) {
+// TestCollabManagementRequiresAdmin verifies a read-write collaborator cannot
+// add, remove or demote collaborators. Before, they could remove or demote
+// peers and, with anon-access set to no-access, lock any registered user out
+// of a public repository by adding them as a no-access collaborator.
+func TestCollabManagementRequiresAdmin(t *testing.T) {
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
+	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
-	owner := proto.UserFromContext(ownerCtx)
-	_, err := be.CreateRepository(ownerCtx, "repo", owner, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	collabCtx := withUser(t, ctx, be, "collab", false)
-	_ = withUser(t, ctx, be, "puppet", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "collab", access.ReadWriteAccess))
-	is.Equal(be.AccessLevelForUser(collabCtx, "repo", proto.UserFromContext(collabCtx)), access.ReadWriteAccess)
+	writerCtx := withUser(t, ctx, be, "writer", false)
+	victimCtx := withUser(t, ctx, be, "victim", false)
+	_ = withUser(t, ctx, be, "peer", false)
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "writer", access.ReadWriteAccess))
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess))
+	victim := proto.UserFromContext(victimCtx)
+	is.Equal(be.AccessLevelForUser(victimCtx, "repo", victim), access.ReadOnlyAccess)
 
-	// Granting above the caller's own level must be refused.
-	err = runRepo(t, collabCtx, "collab", "add", "repo", "puppet", "admin-access")
-	if !errors.Is(err, proto.ErrExceedsAccessLevel) {
-		t.Fatalf("expected ErrExceedsAccessLevel, got %v", err)
+	for _, args := range [][]string{
+		{"collab", "add", "repo", "victim", "no-access"},
+		{"collab", "add", "repo", "victim", "read-only"},
+		{"collab", "add", "repo", "victim"},
+		{"collab", "remove", "repo", "peer"},
+		{"collab", "add", "repo", "peer", "read-only"},
+	} {
+		if err := runRepo(t, writerCtx, args...); !errors.Is(err, proto.ErrUnauthorized) {
+			t.Errorf("%v: expected ErrUnauthorized, got %v", args, err)
+		}
 	}
 
-	_, isCollab, _ := be.IsCollaborator(ctx, "repo", "puppet")
+	// Nothing changed: the victim can still read and the peer keeps write.
+	_, isCollab, _ := be.IsCollaborator(ctx, "repo", "victim")
 	is.Equal(isCollab, false)
-
-	// Granting at or below the caller's own level is still allowed.
-	is.NoErr(runRepo(t, collabCtx, "collab", "add", "repo", "puppet", "read-only"))
-	level, isCollab, err := be.IsCollaborator(ctx, "repo", "puppet")
+	is.Equal(be.AccessLevelForUser(victimCtx, "repo", victim), access.ReadOnlyAccess)
+	level, isCollab, err := be.IsCollaborator(ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
-	is.Equal(level, access.ReadOnlyAccess)
+	is.Equal(level, access.ReadWriteAccess)
+
+	// A read-write collaborator can still list collaborators.
+	is.NoErr(runRepo(t, writerCtx, "collab", "list", "repo"))
 }
 
-// TestCollabRemoveCannotDemoteHigherAccess verifies a read-write collaborator
-// cannot remove an admin-access collaborator. Without this, removal plus
-// re-adding at a lower level is a demotion primitive that sidesteps the cap
-// on granting.
-func TestCollabRemoveCannotDemoteHigherAccess(t *testing.T) {
+// TestCollabManagementByRepoAdmin verifies an admin-access collaborator, who
+// is not the owner or a server admin, can add, remove and re-add
+// collaborators at any level.
+func TestCollabManagementByRepoAdmin(t *testing.T) {
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
-	owner := proto.UserFromContext(ownerCtx)
-	_, err := be.CreateRepository(ownerCtx, "repo", owner, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	collabCtx := withUser(t, ctx, be, "collab", false)
-	_ = withUser(t, ctx, be, "boss", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "collab", access.ReadWriteAccess))
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "boss", access.AdminAccess))
+	adminCtx := withUser(t, ctx, be, "maintainer", false)
+	_ = withUser(t, ctx, be, "peer", false)
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "maintainer", access.AdminAccess))
 
-	err = runRepo(t, collabCtx, "collab", "remove", "repo", "boss")
-	if !errors.Is(err, proto.ErrExceedsAccessLevel) {
-		t.Fatalf("expected ErrExceedsAccessLevel, got %v", err)
-	}
-
-	level, isCollab, err := be.IsCollaborator(ctx, "repo", "boss")
+	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "admin-access"))
+	level, isCollab, err := be.IsCollaborator(ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
 	is.Equal(level, access.AdminAccess)
 
-	// Overwriting a higher-level collaborator via `add` is refused too.
-	err = runRepo(t, collabCtx, "collab", "add", "repo", "boss", "read-only")
-	if !errors.Is(err, proto.ErrExceedsAccessLevel) {
-		t.Fatalf("expected ErrExceedsAccessLevel on add-overwrite, got %v", err)
-	}
+	is.NoErr(runRepo(t, adminCtx, "collab", "remove", "repo", "peer"))
+	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "no-access"))
+	level, isCollab, err = be.IsCollaborator(ctx, "repo", "peer")
+	is.NoErr(err)
+	is.True(isCollab)
+	is.Equal(level, access.NoAccess)
+}
 
-	// Removing a peer at or below the caller's level still works.
+// TestCollabManagementRefusesAnonymous verifies that anon-access set to
+// admin-access does not let an anonymous caller manage collaborators.
+func TestCollabManagementRefusesAnonymous(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+
+	ownerCtx := withUser(t, ctx, be, "owner", false)
+	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
+	is.NoErr(err)
 	_ = withUser(t, ctx, be, "peer", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadOnlyAccess))
-	is.NoErr(runRepo(t, collabCtx, "collab", "remove", "repo", "peer"))
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess))
+	is.NoErr(be.SetAnonAccess(ctx, access.AdminAccess))
+
+	for _, args := range [][]string{
+		{"collab", "add", "repo", "stranger"},
+		{"collab", "remove", "repo", "peer"},
+	} {
+		if err := runRepo(t, ctx, args...); !errors.Is(err, proto.ErrUnauthorized) {
+			t.Errorf("%v: expected ErrUnauthorized, got %v", args, err)
+		}
+	}
+}
+
+// TestCollabListShowsLevels verifies `collab list` prints each
+// collaborator's access level next to their name.
+func TestCollabListShowsLevels(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+
+	ownerCtx := withUser(t, ctx, be, "owner", false)
+	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
+	is.NoErr(err)
+	_ = withUser(t, ctx, be, "alice", false)
+	_ = withUser(t, ctx, be, "bob", false)
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "alice", access.AdminAccess))
+	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "bob", access.NoAccess))
+
+	out, _, err := runRepoOutput(t, ownerCtx, "collab", "list", "repo")
+	is.NoErr(err)
+	is.True(strings.Contains(out, "alice\tadmin-access\n"))
+	is.True(strings.Contains(out, "bob\tno-access\n"))
 }
