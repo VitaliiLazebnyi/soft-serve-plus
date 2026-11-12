@@ -632,7 +632,10 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 	}
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		if _, err := d.store.FindUserByUsername(ctx, tx, username); err != nil {
+		// The row lock keeps the user from being renamed or deleted before
+		// the removal by username, which would then report the key, not
+		// the user, as missing.
+		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
 			return userNotFound(err)
 		}
 		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
@@ -648,10 +651,12 @@ var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
 // only key, which would leave no way to sign in over SSH.
 //
 // The count and the removal happen in one transaction that holds the user's
-// row (LockUserRepos takes the row lock on Postgres; SQLite transactions
-// begin IMMEDIATE and take turns), so two sessions of one user that each
-// remove the other's key at once cannot both pass the check and leave the
-// account with no keys: the second sees one key left and is refused.
+// row (FindUserByUsernameForUpdate takes the row lock on Postgres; SQLite
+// transactions begin IMMEDIATE and take turns), so two sessions of one user
+// that each remove the other's key at once cannot both pass the check and
+// leave the account with no keys: the second sees one key left and is
+// refused. The lock also keeps the user from being renamed or deleted before
+// the removal by username.
 func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -659,12 +664,9 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ss
 	}
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return userNotFound(err)
-		}
-		if err := d.store.LockUserRepos(ctx, tx, user.ID); err != nil {
-			return err
 		}
 		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
 		if err != nil {
