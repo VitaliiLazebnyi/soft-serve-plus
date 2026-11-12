@@ -35,6 +35,12 @@ stderr '.*already exists.*'
 # a placeholder to reset stderr
 soft help
 
+# a missing user cannot be added
+! soft repo collab add test ghost
+stderr 'user not found'
+# a placeholder to reset stderr
+soft help
+
 # a no-access collaborator cannot read a private repo (GHSA-pmgj-8mr6-9rff)
 soft repo create secret -p
 ! usoft repo description secret

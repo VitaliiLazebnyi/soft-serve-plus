@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -610,7 +611,10 @@ func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 			return err
 		}
 		// Removing other from a user that does not own it changes nothing.
-		return st.RemovePublicKeyByUsername(ctx, tx, "erin", pk(other))
+		if err := st.RemovePublicKeyByUsername(ctx, tx, "erin", pk(other)); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("removing a key erin lacks: err = %v, want %v", err, db.ErrRecordNotFound)
+		}
+		return nil
 	})
 
 	cfg.InitialAdminKeys = nil

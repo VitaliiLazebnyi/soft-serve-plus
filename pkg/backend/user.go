@@ -559,7 +559,12 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 	}
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return d.store.AddPublicKeyByUsername(ctx, tx, username, pk)
+		// The row lock keeps the user from being deleted before the insert,
+		// which would then fail on its foreign key.
+		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+			return userNotFound(err)
+		}
+		return userNotFound(d.store.AddPublicKeyByUsername(ctx, tx, username, pk))
 	})
 }
 
@@ -624,8 +629,19 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 
 // RemovePublicKey removes a public key from a user.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+		// The row lock keeps the user from being renamed or deleted before
+		// the removal by username, which would then report the key, not
+		// the user, as missing.
+		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+			return userNotFound(err)
+		}
+		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
 	})
 }
 
@@ -638,23 +654,22 @@ var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
 // only key, which would leave no way to sign in over SSH.
 //
 // The count and the removal happen in one transaction that holds the user's
-// row (LockUserRepos takes the row lock on Postgres; SQLite transactions
-// begin IMMEDIATE and take turns), so two sessions of one user that each
-// remove the other's key at once cannot both pass the check and leave the
-// account with no keys: the second sees one key left and is refused.
+// row (FindUserByUsernameForUpdate takes the row lock on Postgres; SQLite
+// transactions begin IMMEDIATE and take turns), so two sessions of one user
+// that each remove the other's key at once cannot both pass the check and
+// leave the account with no keys: the second sees one key left and is
+// refused. The lock also keeps the user from being renamed or deleted before
+// the removal by username.
 func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
-			return err
-		}
-		if err := d.store.LockUserRepos(ctx, tx, user.ID); err != nil {
-			return err
+			return userNotFound(err)
 		}
 		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
 		if err != nil {
@@ -665,12 +680,8 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ss
 		}) {
 			return ErrLastPublicKey
 		}
-		return d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
+		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
 	})
-	if errors.Is(err, db.ErrRecordNotFound) {
-		return proto.ErrUserNotFound
-	}
-	return err
 }
 
 // ListPublicKeys lists the public keys of a user.
@@ -699,9 +710,11 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 		return err
 	}
 
-	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
-	})
+	return userNotFound(
+		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
+		}),
+	)
 }
 
 // SetAdmin sets the admin flag of a user.
@@ -711,9 +724,11 @@ func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) err
 		return err
 	}
 
-	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return d.store.SetAdminByUsername(ctx, tx, username, admin)
-	})
+	return userNotFound(
+		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			return d.store.SetAdminByUsername(ctx, tx, username, admin)
+		}),
+	)
 }
 
 // SetPassword sets the password of a user.
@@ -728,9 +743,11 @@ func (d *Backend) SetPassword(ctx context.Context, username string, rawPassword 
 		return err
 	}
 
-	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
-	})
+	return userNotFound(
+		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
+		}),
+	)
 }
 
 type user struct {
@@ -767,4 +784,23 @@ func (u *user) Password() string {
 	}
 
 	return ""
+}
+
+// userNotFound reports a missing row as proto.ErrUserNotFound.
+// It is for changes made by username, where the user is the only row that
+// can be missing.
+func userNotFound(err error) error {
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrUserNotFound
+	}
+	return err
+}
+
+// publicKeyNotFound maps the error of removing a key the user does not have
+// to proto.ErrPublicKeyNotFound.
+func publicKeyNotFound(err error) error {
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrPublicKeyNotFound
+	}
+	return err
 }

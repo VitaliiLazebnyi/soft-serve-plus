@@ -28,9 +28,9 @@ func TestRemoveOwnPublicKey(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(keys), 1)
 
-	// A key the account does not hold is not "the last key": nothing to
-	// remove, nothing refused.
-	is.NoErr(be.RemoveOwnPublicKey(ctx, "alice", k2))
+	// A key the account does not hold is not "the last key": it is reported
+	// as not found rather than refused.
+	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "alice", k2), proto.ErrPublicKeyNotFound))
 	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "nobody", k1), proto.ErrUserNotFound))
 
 	is.NoErr(be.RemovePublicKey(ctx, "alice", k1))

@@ -28,6 +28,11 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 	}
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// Without the user, the insert fails on a NOT NULL constraint. The
+		// row lock keeps the user from being deleted before the insert.
+		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+			return userNotFound(err)
+		}
 		return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on a

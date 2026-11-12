@@ -69,6 +69,22 @@ soft user delete foo2
 soft user list
 cmpenv stdout list1.txt
 
+# changes to a missing user or key fail
+! soft user set-admin ghost true
+stderr 'user not found'
+! soft user set-username ghost phantom
+stderr 'user not found'
+! soft user add-pubkey ghost "$USER1_AUTHORIZED_KEY"
+stderr 'user not found'
+! soft user remove-pubkey ghost "$USER1_AUTHORIZED_KEY"
+stderr 'user not found'
+! soft user remove-pubkey admin "$USER1_AUTHORIZED_KEY"
+stderr 'public key not found'
+! soft pubkey remove "$USER1_AUTHORIZED_KEY"
+stderr 'public key not found'
+# a placeholder to reset stderr
+soft help
+
 # stop the server
 [windows] stopserver
 [windows] ! stderr .

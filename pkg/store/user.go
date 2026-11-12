@@ -19,7 +19,8 @@ type UserStore interface {
 	// meanwhile, and one inserted before the lock was taken is committed (or
 	// rolled back) by the time it is granted. On SQLite a writing
 	// transaction already excludes other writers, and it is
-	// FindUserByUsername.
+	// FindUserByUsername. Backend.RemoveOwnPublicKey takes it so that
+	// removals of a user's keys count the remaining keys in turn.
 	FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error)
 	FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error)
 	GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error)
