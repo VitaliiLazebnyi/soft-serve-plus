@@ -558,11 +558,14 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 		return err
 	}
 
-	return userNotFound(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.AddPublicKeyByUsername(ctx, tx, username, pk)
-		}),
-	)
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The row lock keeps the user from being deleted before the insert,
+		// which would then fail on its foreign key.
+		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+			return userNotFound(err)
+		}
+		return userNotFound(d.store.AddPublicKeyByUsername(ctx, tx, username, pk))
+	})
 }
 
 // CreateUser creates a new user.
