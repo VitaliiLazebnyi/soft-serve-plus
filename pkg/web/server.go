@@ -2,7 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/url"
+	"runtime/debug"
+	"slices"
+	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -12,6 +17,12 @@ import (
 
 // NewRouter returns a new HTTP router.
 func NewRouter(ctx context.Context) http.Handler {
+	return newRouter(ctx, newPushCreates())
+}
+
+// newRouter returns a new HTTP router that tracks the repositories HTTP
+// pushes create in pending.
+func newRouter(ctx context.Context, pending *pushCreates) http.Handler {
 	logger := log.FromContext(ctx).WithPrefix("http")
 	router := mux.NewRouter()
 
@@ -19,22 +30,104 @@ func NewRouter(ctx context.Context) http.Handler {
 	HealthController(ctx, router)
 
 	// Git routes
-	GitController(ctx, router)
+	gitController(ctx, router, pending)
 
 	router.PathPrefix("/").HandlerFunc(renderNotFound)
 
 	// Context handler
 	// Adds context to the request
-	h := NewLoggingMiddleware(router, logger)
+	h := recoverPanics(router)
+	h = NewLoggingMiddleware(h, logger)
 	h = NewContextHandler(ctx)(h)
-	h = handlers.RecoveryHandler()(h)
 
 	cfg := config.FromContext(ctx)
 
-	h = handlers.CORS(handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
-		handlers.AllowedOrigins(cfg.HTTP.CORS.AllowedOrigins),
-		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
-	)(h)
+	h = corsHandler(cfg)(h)
+	h = varyOrigin(h)
 
 	return h
+}
+
+// corsHandler returns the CORS middleware for cfg's allowed headers, origins
+// and methods.
+func corsHandler(cfg *config.Config) func(http.Handler) http.Handler {
+	opts := []handlers.CORSOption{
+		handlers.AllowedHeaders(cfg.HTTP.CORS.AllowedHeaders),
+		handlers.AllowedMethods(cfg.HTTP.CORS.AllowedMethods),
+	}
+	if origins := corsOrigins(cfg.CORSAllowedOrigins()); len(origins) > 0 {
+		opts = append(opts, handlers.AllowedOrigins(origins))
+	} else {
+		// gorilla/handlers allows every origin when the list is empty, so
+		// with no public URL and no allowed origins, reject them all
+		// explicitly. Use "*" in allowed_origins to allow every origin.
+		opts = append(opts, handlers.AllowedOriginValidator(func(string) bool { return false }))
+	}
+	return handlers.CORS(opts...)
+}
+
+// varyOrigin marks every response as depending on the Origin request header.
+// The CORS handler only says so when more than one origin is allowed, yet
+// it answers an allowed origin differently from another one or from none,
+// so a shared cache could otherwise serve one origin's answer to another.
+func varyOrigin(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		h.ServeHTTP(w, r)
+	})
+}
+
+// corsOrigins returns the allowed origins with each URL reduced to the
+// origin a browser sends: scheme and host, lower-cased, without a default
+// port, path, query or fragment. The HTTP public URL is among the allowed
+// origins and may carry a path, as in "https://example.com/git", which no
+// Origin header ever matches. Entries that are not absolute URLs, such as
+// "*", are kept as they are.
+func corsOrigins(origins []string) []string {
+	out := make([]string, 0, len(origins))
+	for _, o := range origins {
+		o = corsOrigin(o)
+		if !slices.Contains(out, o) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// corsOrigin returns the serialized origin of s, or s when it is not an
+// absolute URL with a host.
+func corsOrigin(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return s
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && (scheme != "http" || port != "80") && (scheme != "https" || port != "443") {
+		host += ":" + port
+	}
+	return scheme + "://" + host
+}
+
+// recoverPanics answers 500 to a request whose handler panicked, and logs
+// the panic with its stack on the request logger.
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			v := recover()
+			if v == nil {
+				return
+			}
+			// net/http aborts the response quietly on this one.
+			if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				panic(v)
+			}
+			log.FromContext(r.Context()).Error("panic serving request", "panic", v, "stack", string(debug.Stack()))
+			renderInternalServerError(w, r)
+		}()
+		next.ServeHTTP(w, r)
+	})
 }

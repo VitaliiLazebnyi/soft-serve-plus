@@ -1,0 +1,58 @@
+# vi: set ft=conf
+
+# Clone and archive over the git:// daemon with a real git client.
+
+# start soft serve
+exec soft serve &
+# wait for SSH and the git daemon to start
+ensureserverrunning SSH_PORT
+ensureserverrunning GIT_PORT
+
+# create a public and a private repo with a commit each
+soft repo create repo1
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md '# Hello\n\nwelcome'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+git -C repo1 rev-parse HEAD
+cp stdout head.txt
+
+soft repo create private -p
+git -C repo1 push ssh://localhost:$SSH_PORT/private HEAD
+
+# clone the public repo anonymously over git://
+git clone git://127.0.0.1:$GIT_PORT/repo1 grepo1
+exists grepo1/README.md
+git -C grepo1 rev-parse HEAD
+cmp stdout head.txt
+
+# fetch it again with protocol v2
+git -C grepo1 -c protocol.version=2 fetch origin
+git -C grepo1 -c protocol.version=2 ls-remote origin HEAD
+stdout '^[0-9a-f]{40}\tHEAD$'
+
+# archive the public repo over git://; the tar carries the commit id
+git archive --remote=git://127.0.0.1:$GIT_PORT/repo1 --format=tar --output=repo1.tar HEAD
+stdin repo1.tar
+git get-tar-commit-id
+cmp stdout head.txt
+
+# the private repo is refused like a missing one
+! git clone git://127.0.0.1:$GIT_PORT/private gprivate
+stderr 'you are not authorized to do this'
+! exists gprivate
+! git clone git://127.0.0.1:$GIT_PORT/missing gmissing
+stderr 'you are not authorized to do this'
+! git archive --remote=git://127.0.0.1:$GIT_PORT/private --format=tar HEAD
+stderr 'you are not authorized to do this'
+
+# with anonymous access off, the public repo is refused too
+soft settings anon-access no-access
+! git clone git://127.0.0.1:$GIT_PORT/repo1 grepo1-noaccess
+stderr 'you are not authorized to do this'
+! git archive --remote=git://127.0.0.1:$GIT_PORT/repo1 --format=tar HEAD
+stderr 'you are not authorized to do this'
+
+# stop the server
+[windows] stopserver

@@ -34,14 +34,12 @@ require (
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/matryer/is v1.4.1
 	github.com/muesli/mango-cobra v1.3.0
-	github.com/muesli/reflow v0.3.0
 	github.com/muesli/roff v0.1.0
 	github.com/prometheus/client_golang v1.25.0
+	github.com/prometheus/client_model v0.6.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rogpeppe/go-internal v1.16.0
-	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.2
-	go.uber.org/automaxprocs v1.6.0
 	go.yaml.in/yaml/v4 v4.0.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.24.0
@@ -71,6 +69,7 @@ require (
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
@@ -83,7 +82,6 @@ require (
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/pandatix/go-abnf v0.5.5 // indirect
 	github.com/pires/go-proxyproto v0.16.0 // indirect
-	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.73.1 // indirect
 	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

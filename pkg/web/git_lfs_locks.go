@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -18,20 +17,18 @@ import (
 )
 
 func serviceLfsLocks(w http.ResponseWriter, r *http.Request) {
+	// GitRoute has already refused any other method.
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		serviceLfsLocksGet(w, r)
 	case http.MethodPost:
 		serviceLfsLocksCreate(w, r)
-	default:
-		renderMethodNotAllowed(w, r)
 	}
 }
 
-// POST: /<repo>.git/info/lfs/objects/locks
+// POST: /<repo>.git/info/lfs/locks
 func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
-	if !isLfs(r) {
-		renderNotAcceptable(w)
+	if !lfsMediaTypes(w, r) {
 		return
 	}
 
@@ -48,12 +45,21 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 	var req lfs.LockCreateRequest
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		if lfsBodyTooLarge(w, logger, err) {
+		if lfsBodyTooLarge(w, r, logger, err) {
 			return
 		}
-		logger.Error("error decoding json", "err", err)
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("error decoding json", "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// A lock names one file in the working tree. Refuse a path that cannot,
+	// so "a.bin", "./a.bin" and "dir/../a.bin" do not lock one file thrice.
+	if err := lfs.ValidateLockPath(req.Path); err != nil {
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			Message: "invalid lock path",
 		})
 		return
 	}
@@ -63,11 +69,14 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A lock has an owner, so even with anonymous write access the caller
+	// must sign in. git-lfs only asks for credentials after a 401.
 	user := proto.UserFromContext(ctx)
 	if user == nil {
-		logger.Error("error getting user from context")
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "user not found",
+		logger.Info("anonymous caller cannot create a lock")
+		askCredentials(w, r)
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{
+			Message: "credentials needed",
 		})
 		return
 	}
@@ -75,11 +84,10 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 	dbx := db.FromContext(ctx)
 	datastore := store.FromContext(ctx)
 	if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name); err != nil {
-		err = db.WrapError(err)
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if errors.Is(store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err), proto.ErrRepoNotFound) {
-			renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
+			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
 			return
 		}
 		if errors.Is(err, db.ErrDuplicateKey) {
@@ -88,7 +96,8 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 					Message: "lock already exists",
 				},
 			}
-			lock, err := datastore.GetLFSLockForUserPath(ctx, dbx, repo.ID(), user.ID(), req.Path)
+			// The conflicting lock may be anyone's; the spec returns it.
+			lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), req.Path)
 			if err == nil {
 				errResp.Lock = lfs.Lock{
 					ID:       strconv.FormatInt(lock.ID, 10),
@@ -102,7 +111,7 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 					owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
 					if err != nil {
 						logger.Error("error getting lock owner", "err", err)
-						renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+						renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 							Message: "internal server error",
 						})
 						return
@@ -111,11 +120,11 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 				}
 				errResp.Lock.Owner = lockOwner
 			}
-			renderJSON(w, http.StatusConflict, errResp)
+			renderJSON(w, r, http.StatusConflict, errResp)
 			return
 		}
 		logger.Error("error creating lock", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -124,13 +133,13 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 	lock, err := datastore.GetLFSLockForUserPath(ctx, dbx, repo.ID(), user.ID(), req.Path)
 	if err != nil {
 		logger.Error("error getting lock", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
 	}
 
-	renderJSON(w, http.StatusCreated, lfs.LockResponse{
+	renderJSON(w, r, http.StatusCreated, lfs.LockResponse{
 		Lock: lfs.Lock{
 			ID:       strconv.FormatInt(lock.ID, 10),
 			Path:     lock.Path,
@@ -151,11 +160,9 @@ func locksLimit(limit int) (int, error) {
 	return lfs.ClampLocksLimit(limit), nil
 }
 
-// GET: /<repo>.git/info/lfs/objects/locks
+// GET: /<repo>.git/info/lfs/locks
 func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
-	accept := r.Header.Get("Accept")
-	if !strings.HasPrefix(accept, lfs.MediaType) {
-		renderNotAcceptable(w)
+	if !lfsAccepts(w, r) {
 		return
 	}
 
@@ -168,7 +175,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		var err error
 		id, err = strconv.ParseInt(idStr, 10, 64)
 		if err != nil || id <= 0 {
-			renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 				Message: "invalid lock id",
 			})
 			return
@@ -176,7 +183,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	}
 	cursor, err := lfs.ParseLocksCursor(values.Get("cursor"))
 	if err != nil {
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: err.Error(),
 		})
 		return
@@ -185,7 +192,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	if limitStr := values.Get("limit"); limitStr != "" {
 		limit, err = strconv.Atoi(limitStr)
 		if err != nil {
-			renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 				Message: "invalid limit",
 			})
 			return
@@ -193,7 +200,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, err = locksLimit(limit)
 	if err != nil {
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: err.Error(),
 		})
 		return
@@ -211,13 +218,12 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		lock, err := datastore.GetLFSLockByID(ctx, dbx, repo.ID(), id)
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
-				renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
-					Message: "lock not found",
-				})
+				// A filter that matches nothing is an empty list.
+				renderJSON(w, r, http.StatusOK, lfs.LockListResponse{Locks: []lfs.Lock{}})
 				return
 			}
 			logger.Error("error getting lock", "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
@@ -226,13 +232,13 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
 		if err != nil {
 			logger.Error("error getting lock owner", "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
 		}
 
-		renderJSON(w, http.StatusOK, lfs.LockListResponse{
+		renderJSON(w, r, http.StatusOK, lfs.LockListResponse{
 			Locks: []lfs.Lock{
 				{
 					ID:       strconv.FormatInt(lock.ID, 10),
@@ -249,13 +255,12 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), path)
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
-				renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
-					Message: "lock not found",
-				})
+				// A filter that matches nothing is an empty list.
+				renderJSON(w, r, http.StatusOK, lfs.LockListResponse{Locks: []lfs.Lock{}})
 				return
 			}
 			logger.Error("error getting lock", "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
@@ -264,13 +269,13 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 		owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
 		if err != nil {
 			logger.Error("error getting lock owner", "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
 		}
 
-		renderJSON(w, http.StatusOK, lfs.LockListResponse{
+		renderJSON(w, r, http.StatusOK, lfs.LockListResponse{
 			Locks: []lfs.Lock{
 				{
 					ID:       strconv.FormatInt(lock.ID, 10),
@@ -288,7 +293,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	locks, err := datastore.GetLFSLocks(ctx, dbx, repo.ID(), cursor, limit)
 	if err != nil {
 		logger.Error("error getting locks", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -302,7 +307,7 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 			owner, err = datastore.GetUserByID(ctx, dbx, lock.UserID)
 			if err != nil {
 				logger.Error("error getting lock owner", "err", err)
-				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
@@ -323,15 +328,14 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	resp := lfs.LockListResponse{
 		Locks: lockList,
 	}
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
-	renderJSON(w, http.StatusOK, resp)
+	renderJSON(w, r, http.StatusOK, resp)
 }
 
-// POST: /<repo>.git/info/lfs/objects/locks/verify
+// POST: /<repo>.git/info/lfs/locks/verify
 func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
-	if !isLfs(r) {
-		renderNotAcceptable(w)
+	if !lfsMediaTypes(w, r) {
 		return
 	}
 
@@ -345,11 +349,11 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	var req lfs.LockVerifyRequest
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		if lfsBodyTooLarge(w, logger, err) {
+		if lfsBodyTooLarge(w, r, logger, err) {
 			return
 		}
-		logger.Error("error decoding request", "err", err)
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("error decoding request", "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request: " + err.Error(),
 		})
 		return
@@ -358,14 +362,14 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	// TODO: refspec
 	cursor, err := lfs.ParseLocksCursor(req.Cursor)
 	if err != nil {
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: err.Error(),
 		})
 		return
 	}
 	limit, err := locksLimit(req.Limit)
 	if err != nil {
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: err.Error(),
 		})
 		return
@@ -381,7 +385,7 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	locks, err := datastore.GetLFSLocks(ctx, dbx, repo.ID(), cursor, limit)
 	if err != nil {
 		logger.Error("error getting locks", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -394,7 +398,7 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 			owner, err = datastore.GetUserByID(ctx, dbx, lock.UserID)
 			if err != nil {
 				logger.Error("error getting lock owner", "err", err)
-				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
@@ -421,15 +425,14 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 	resp.Ours = ours
 	resp.Theirs = theirs
 
-	resp.NextCursor = lfs.NextLocksCursor(cursor, limit, len(locks))
+	resp.NextCursor = lfs.NextLocksCursor(limit, locks)
 
-	renderJSON(w, http.StatusOK, resp)
+	renderJSON(w, r, http.StatusOK, resp)
 }
 
-// POST: /<repo>.git/info/lfs/objects/locks/:lockID/unlock
+// POST: /<repo>.git/info/lfs/locks/:lockID/unlock
 func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
-	if !isLfs(r) {
-		renderNotAcceptable(w)
+	if !lfsMediaTypes(w, r) {
 		return
 	}
 
@@ -437,8 +440,8 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-locks")
 	lockIDStr := mux.Vars(r)["lock_id"]
 	if lockIDStr == "" {
-		logger.Error("error getting lock id")
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("missing lock id")
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request",
 		})
 		return
@@ -446,8 +449,8 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 
 	lockID, err := strconv.ParseInt(lockIDStr, 10, 64)
 	if err != nil {
-		logger.Error("error parsing lock id", "err", err)
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("error parsing lock id", "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request",
 		})
 		return
@@ -456,12 +459,25 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 	var req lfs.LockDeleteRequest
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		if lfsBodyTooLarge(w, logger, err) {
+		if lfsBodyTooLarge(w, r, logger, err) {
 			return
 		}
-		logger.Error("error decoding request", "err", err)
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("error decoding request", "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Only a lock's owner or an admin may unlock, so even with anonymous
+	// write access the caller must sign in. git-lfs only asks for
+	// credentials after a 401.
+	user := proto.UserFromContext(ctx)
+	if user == nil {
+		logger.Info("anonymous caller cannot delete a lock")
+		askCredentials(w, r)
+		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{
+			Message: "credentials needed",
 		})
 		return
 	}
@@ -477,8 +493,12 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 	// lock ID belonging to another repository cannot be read through it.
 	lock, err := datastore.GetLFSLockByID(ctx, dbx, repo.ID(), lockID)
 	if err != nil {
-		logger.Error("error getting lock", "err", err)
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
+		if errors.Is(err, db.ErrRecordNotFound) {
+			logger.Info("lock not found", "id", lockID)
+		} else {
+			logger.Error("error getting lock", "err", err)
+		}
+		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
 			Message: "lock not found",
 		})
 		return
@@ -487,7 +507,7 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 	owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
 	if err != nil {
 		logger.Error("error getting lock owner", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -502,21 +522,11 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Retrieve user context first for authorization checks
-	user := proto.UserFromContext(ctx)
-	if user == nil {
-		logger.Error("error getting user from context")
-		renderJSON(w, http.StatusUnauthorized, lfs.ErrorResponse{
-			Message: "unauthorized",
-		})
-		return
-	}
-
 	// Force delete another user's lock (requires admin privileges)
 	if req.Force {
 		if !user.IsAdmin() {
-			logger.Error("non-admin user attempted force delete", "user", user.Username())
-			renderJSON(w, http.StatusForbidden, lfs.ErrorResponse{
+			logger.Info("non-admin user attempted force delete", "user", user.Username())
+			renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{
 				Message: "admin access required for force delete",
 			})
 			return
@@ -524,20 +534,20 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 
 		if err := datastore.DeleteLFSLock(ctx, dbx, repo.ID(), lockID); err != nil {
 			logger.Error("error deleting lock", "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
 		}
 
-		renderJSON(w, http.StatusOK, l)
+		renderJSON(w, r, http.StatusOK, lfs.LockResponse{Lock: l})
 		return
 	}
 
 	// Delete our own lock - verify ownership
 	if owner.ID != user.ID() {
-		logger.Error("error deleting another user's lock")
-		renderJSON(w, http.StatusForbidden, lfs.ErrorResponse{
+		logger.Info("refusing to delete another user's lock", "user", user.Username(), "id", lockID)
+		renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{
 			Message: "lock belongs to another user",
 		})
 		return
@@ -545,11 +555,11 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 
 	if err := datastore.DeleteLFSLock(ctx, dbx, repo.ID(), lockID); err != nil {
 		logger.Error("error deleting lock", "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
 	}
 
-	renderJSON(w, http.StatusOK, lfs.LockResponse{Lock: l})
+	renderJSON(w, r, http.StatusOK, lfs.LockResponse{Lock: l})
 }

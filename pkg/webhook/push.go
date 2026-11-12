@@ -3,13 +3,14 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
+	"unicode/utf8"
 
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/google/go-querystring/query"
 )
 
 // PushEvent is a push event.
@@ -22,48 +23,76 @@ type PushEvent struct {
 	Before string `json:"before" url:"before"`
 	// After is the current commit SHA.
 	After string `json:"after" url:"after"`
-	// Commits is the list of commits.
-	Commits []Commit `json:"commits" url:"commits"`
+	// Created is whether the push created the branch or tag.
+	Created bool `json:"created" url:"created"`
+	// Deleted is whether the push deleted the branch or tag.
+	Deleted bool `json:"deleted" url:"deleted"`
+	// Forced is whether the push moved the ref to a commit that does not
+	// descend from the one it pointed at, dropping commits from it.
+	Forced bool `json:"forced" url:"forced"`
+	// Pusher is the user who pushed. It is empty for a push made without a
+	// user, such as an anonymous or keyless one.
+	Pusher User `json:"pusher" url:"pusher"`
+	// Commits is the list of commits the push brought to the ref, newest
+	// first. For a new branch or tag these are only the commits no other
+	// branch or tag already had. It is empty when the push deleted the
+	// branch or tag.
+	Commits Commits `json:"commits" url:"commits"`
 }
 
-// NewPushEvent sends a push event.
+// Commits is a list of commits.
+type Commits []Commit
+
+var _ query.Encoder = Commits(nil)
+
+// EncodeValues implements query.Encoder. Each commit is form-encoded with its
+// index, as key[0][id], key[0][author][name] and so on, the same bracket
+// notation used for the other nested fields. Without it each commit would be
+// written as a Go struct dump that receivers cannot parse.
+func (cs Commits) EncodeValues(key string, v *url.Values) error {
+	for i, c := range cs {
+		cv, err := query.Values(c)
+		if err != nil {
+			return err
+		}
+		for k, vals := range cv {
+			// k is a field name, possibly with its own nested keys, such as
+			// author[name]: only the leading name needs brackets.
+			field, nested, _ := strings.Cut(k, "[")
+			name := fmt.Sprintf("%s[%d][%s]", key, i, field)
+			if nested != "" {
+				name += "[" + nested
+			}
+			for _, val := range vals {
+				v.Add(name, val)
+			}
+		}
+	}
+	return nil
+}
+
+// NewPushEvent builds the payload for a push event.
 func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
 	event := EventPush
 
-	payload := PushEvent{
-		Ref:    ref,
-		Before: before,
-		After:  after,
-		Common: Common{
-			EventType: event,
-			Repository: Repository{
-				ID:          repo.ID(),
-				Name:        repo.Name(),
-				Description: repo.Description(),
-				ProjectName: repo.ProjectName(),
-				Private:     repo.IsPrivate(),
-				CreatedAt:   repo.CreatedAt(),
-				UpdatedAt:   repo.UpdatedAt(),
-			},
-			Sender: senderOf(user),
-		},
-	}
-
-	cfg := config.FromContext(ctx)
-	payload.Repository.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	payload.Repository.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	payload.Repository.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
-
-	// Find repo owner.
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
+	repository, err := newRepository(ctx, repo)
 	if err != nil {
-		return PushEvent{}, db.WrapError(err)
+		return PushEvent{}, err
 	}
 
-	payload.Repository.Owner.ID = owner.ID
-	payload.Repository.Owner.Username = owner.Username
+	payload := PushEvent{
+		Ref:     ref,
+		Before:  before,
+		After:   after,
+		Created: git.IsZeroHash(before),
+		Deleted: git.IsZeroHash(after),
+		Common: Common{
+			EventType:  event,
+			Repository: repository,
+			Sender:     senderOf(user),
+		},
+		Pusher: senderOf(user),
+	}
 
 	// Find commits.
 	r, err := repo.Open()
@@ -71,41 +100,126 @@ func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, r
 		return PushEvent{}, err
 	}
 
-	payload.Repository.DefaultBranch, _ = getDefaultBranch(repo)
+	// A deleted branch or tag has no new commits, and "before..0000" is not
+	// a revision git can list.
+	if payload.Deleted {
+		payload.Commits = []Commit{}
+		return payload, nil
+	}
 
 	rev := after
-	if !git.IsZeroHash(before) {
+	var args []string
+	if git.IsZeroHash(before) {
+		// A new ref lists only the commits it brings: those not reachable
+		// from any other branch or tag. The pushed ref itself is left out of
+		// that set, since it may already point at after when the event is
+		// built. Each --exclude only applies to the --glob after it (which
+		// takes nested refs too), and the second --not turns the revision
+		// after it back into a positive one. Ref names cannot hold glob
+		// characters, so ref matches only itself.
+		args = []string{
+			"--not",
+			"--exclude=" + ref, "--glob=refs/heads",
+			"--exclude=" + ref, "--glob=refs/tags",
+			"--not",
+		}
+	} else {
 		rev = fmt.Sprintf("%s..%s", before, after)
+		payload.Forced, err = isForced(r, before, after)
+		if err != nil {
+			return PushEvent{}, err
+		}
 	}
 
 	commits, err := r.Log(rev, gitm.LogOptions{
 		// XXX: limit to 20 commits for now
 		// TODO: implement a commits api
-		MaxCount: 20,
+		MaxCount:       20,
+		CommandOptions: gitm.CommandOptions{Args: args},
 	})
 	if err != nil {
 		return PushEvent{}, err
 	}
 
-	payload.Commits = make([]Commit, len(commits))
-	for i, c := range commits {
-		payload.Commits[i] = Commit{
+	payload.Commits = make([]Commit, 0, len(commits))
+	size := 0
+	for _, c := range commits {
+		commit := Commit{
 			ID:      c.ID.String(),
-			Message: c.Message,
-			Title:   c.Summary(),
+			Message: truncate(c.Message, maxCommitMessage, truncatedMessageMarker),
+			Title:   truncate(c.Summary(), maxCommitTitle, ""),
 			Author: Author{
-				Name:  c.Author.Name,
-				Email: c.Author.Email,
+				Name:  truncate(c.Author.Name, maxCommitIdentity, ""),
+				Email: truncate(c.Author.Email, maxCommitIdentity, ""),
 				Date:  c.Author.When,
 			},
 			Committer: Author{
-				Name:  c.Committer.Name,
-				Email: c.Committer.Email,
+				Name:  truncate(c.Committer.Name, maxCommitIdentity, ""),
+				Email: truncate(c.Committer.Email, maxCommitIdentity, ""),
 				Date:  c.Committer.When,
 			},
 			Timestamp: c.Committer.When,
 		}
+		// Commits are newest first. Keep the newest one whatever its size and
+		// leave out older ones once the list would grow past its budget.
+		size += commitSize(commit)
+		if len(payload.Commits) > 0 && size > maxPushCommitsSize {
+			break
+		}
+		payload.Commits = append(payload.Commits, commit)
 	}
 
 	return payload, nil
+}
+
+// Limits on the commits a push event lists. The payload is sent to every
+// webhook of the repository and stored with each delivery, so a push of
+// commits with huge messages or identities must not make it unbounded.
+const (
+	// maxCommitMessage is how many bytes of a commit message are kept.
+	maxCommitMessage = 4 << 10
+	// maxCommitTitle is how many bytes of a commit title are kept.
+	maxCommitTitle = 1 << 10
+	// maxCommitIdentity is how many bytes of an author or committer name or
+	// email are kept.
+	maxCommitIdentity = 256
+	// maxPushCommitsSize is roughly how many bytes of commit text a push
+	// event carries. Older commits past it are left out.
+	maxPushCommitsSize = 64 << 10
+)
+
+// truncatedMessageMarker is appended to a commit message that was cut off at
+// maxCommitMessage.
+const truncatedMessageMarker = "\n[message truncated by Soft Serve]"
+
+// truncate returns s cut to at most n bytes, followed by marker, when s is
+// longer than n. It never cuts a UTF-8 character in half.
+func truncate(s string, n int, marker string) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + marker
+}
+
+// commitSize is the number of bytes of variable-length text in c.
+func commitSize(c Commit) int {
+	return len(c.ID) + len(c.Message) + len(c.Title) +
+		len(c.Author.Name) + len(c.Author.Email) +
+		len(c.Committer.Name) + len(c.Committer.Email)
+}
+
+// isForced reports whether moving a ref from before to after drops commits:
+// whether before has a commit that after does not. Tag objects are peeled to
+// the commits they point at.
+func isForced(r *git.Repository, before, after string) (bool, error) {
+	n, err := r.RevListCount([]string{after + ".." + before}, gitm.RevListCountOptions{
+		CommandOptions: gitm.CommandOptions{Args: []string{"--max-count=1"}},
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }

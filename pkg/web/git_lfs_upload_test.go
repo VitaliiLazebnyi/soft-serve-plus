@@ -1,9 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
@@ -245,9 +249,7 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 }
 
 // TestLFSUploadRepoDeletedMidUpload checks that a foreign key violation is
-// not mistaken for a duplicate upload. db.WrapError maps both to
-// ErrDuplicateKey, so the handler must confirm the row exists before it
-// reports success.
+// not mistaken for a duplicate upload, which the handler reports as success.
 func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 	e := newLFSUploadEnv(t)
 	const content = "orphan object"
@@ -261,6 +263,180 @@ func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
 	w := e.upload(oid, int64(len(content)), body)
 	if w.Code == http.StatusOK {
 		t.Fatalf("got 200 for an object whose repository was deleted")
+	}
+	e.assertNoTempFiles(t)
+}
+
+// batchUpload asks the batch endpoint to upload the given objects and returns
+// the decoded response.
+func (e *lfsUploadEnv) batchUpload(t *testing.T, objects ...lfs.Pointer) lfs.BatchResponse {
+	t.Helper()
+	body, err := json.Marshal(lfs.BatchRequest{Operation: lfs.OperationUpload, Objects: objects})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(e.ctx, http.MethodPost,
+		"/repo.git/info/lfs/objects/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", lfs.MediaType)
+	req.Header.Set("Accept", lfs.MediaType)
+	req.Header.Set("Authorization", "token "+e.token)
+	w := httptest.NewRecorder()
+	e.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch: got status %d: %s", w.Code, w.Body.String())
+	}
+	var resp lfs.BatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Objects) != len(objects) {
+		t.Fatalf("batch: got %d objects, want %d", len(resp.Objects), len(objects))
+	}
+	return resp
+}
+
+// TestLFSBatchUploadOmitsActionsForPresentObjects checks that an upload batch
+// leaves out actions for objects the server already stores, as the batch API
+// asks, so the client does not send them again. Objects that are missing, or
+// whose row or file is incomplete or truncated, still get upload and verify
+// actions.
+func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
+	e := newLFSUploadEnv(t)
+
+	stored := "stored object"
+	storedOid := sha256Hex(stored)
+	if w := e.upload(storedOid, int64(len(stored)), strings.NewReader(stored)); w.Code != http.StatusOK {
+		t.Fatalf("upload: got status %d: %s", w.Code, w.Body.String())
+	}
+
+	// A row without its file, as left by a lost or deleted file.
+	noFile := "row only"
+	noFileOid := sha256Hex(noFile)
+	if err := e.datastore.CreateLFSObject(e.ctx, db.FromContext(e.ctx), e.repo.ID(), noFileOid, int64(len(noFile))); err != nil {
+		t.Fatal(err)
+	}
+
+	// A row whose file was truncated: the upload handler restores such a
+	// file, so the client must be asked to send it again.
+	truncated := "truncated object"
+	truncatedOid := sha256Hex(truncated)
+	if w := e.upload(truncatedOid, int64(len(truncated)), strings.NewReader(truncated)); w.Code != http.StatusOK {
+		t.Fatalf("upload: got status %d: %s", w.Code, w.Body.String())
+	}
+	if err := os.WriteFile(e.objectPath(truncatedOid), []byte(truncated[:4]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	missingOid := sha256Hex("not uploaded")
+
+	resp := e.batchUpload(t,
+		lfs.Pointer{Oid: storedOid, Size: int64(len(stored))},
+		lfs.Pointer{Oid: storedOid, Size: int64(len(stored)) + 1},
+		lfs.Pointer{Oid: noFileOid, Size: int64(len(noFile))},
+		lfs.Pointer{Oid: truncatedOid, Size: int64(len(truncated))},
+		lfs.Pointer{Oid: missingOid, Size: 12},
+	)
+
+	wantActions := []bool{false, true, true, true, true}
+	for i, o := range resp.Objects {
+		if o.Error != nil {
+			t.Errorf("object %d: unexpected error %+v", i, o.Error)
+		}
+		_, hasUpload := o.Actions[lfs.ActionUpload]
+		_, hasVerify := o.Actions[lfs.ActionVerify]
+		if hasUpload != wantActions[i] || hasVerify != wantActions[i] {
+			t.Errorf("object %d (%s, size %d): upload=%v verify=%v, want %v",
+				i, o.Oid, o.Size, hasUpload, hasVerify, wantActions[i])
+		}
+	}
+}
+
+// TestLFSUploadRestoresMissingObject checks that an upload of an object that
+// is recorded but whose file is gone or damaged stores it again. The handler
+// used to skip any upload of a recorded object, so the file could never be
+// restored.
+func TestLFSUploadRestoresMissingObject(t *testing.T) {
+	const content = "restore me"
+	oid := sha256Hex(content)
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, objPath string)
+	}{
+		{"file removed", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.Remove(objPath); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file truncated", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.WriteFile(objPath, []byte(content[:3]), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file corrupted", func(t *testing.T, objPath string) {
+			t.Helper()
+			if err := os.WriteFile(objPath, []byte(strings.ToUpper(content)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLFSUploadEnv(t)
+			if w := e.upload(oid, int64(len(content)), strings.NewReader(content)); w.Code != http.StatusOK {
+				t.Fatalf("first upload: got status %d, want 200: %s", w.Code, w.Body.String())
+			}
+			tc.damage(t, e.objectPath(oid))
+
+			if w := e.upload(oid, int64(len(content)), strings.NewReader(content)); w.Code != http.StatusOK {
+				t.Fatalf("second upload: got status %d, want 200: %s", w.Code, w.Body.String())
+			}
+			got, err := os.ReadFile(e.objectPath(oid))
+			if err != nil {
+				t.Fatalf("object not restored: %v", err)
+			}
+			if string(got) != content {
+				t.Errorf("stored content %q, want %q", got, content)
+			}
+			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err != nil {
+				t.Errorf("object no longer recorded: %v", err)
+			}
+			e.assertNoTempFiles(t)
+		})
+	}
+}
+
+// TestLFSUploadAbortedBody checks an upload whose body cannot be read to the
+// end, as when the client aborts it: that is the client's doing, so it gets
+// a 400 and an info log line rather than a 500 and an error, and nothing is
+// stored. It replaces the global default logger and must not run in
+// parallel.
+func TestLFSUploadAbortedBody(t *testing.T) {
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	e := newLFSUploadEnv(t)
+	e.ctx = log.WithContext(e.ctx, logger)
+	const content = "hello lfs"
+	oid := sha256Hex(content)
+
+	body := io.MultiReader(strings.NewReader(content[:4]), iotest.ErrReader(io.ErrUnexpectedEOF))
+	w := e.upload(oid, int64(len(content)), body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, lfs.MediaType) {
+		t.Errorf("Content-Type = %q, want an LFS JSON error", ct)
+	}
+	if out := logs.String(); strings.Contains(out, "ERRO") || !strings.Contains(out, "error reading object") {
+		t.Errorf("aborted upload not logged at info level:\n%s", out)
+	}
+	if _, err := os.Stat(e.objectPath(oid)); !os.IsNotExist(err) {
+		t.Errorf("object stored from an aborted upload (stat err: %v)", err)
 	}
 	e.assertNoTempFiles(t)
 }

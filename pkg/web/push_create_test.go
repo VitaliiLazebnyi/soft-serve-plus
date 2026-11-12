@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/gorilla/mux"
 	"github.com/matryer/is"
 )
 
@@ -166,6 +168,83 @@ func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
 	is.True(f.exists("shared"))
 }
 
+// A request that waits for a removal of a push-created repository resolves
+// the repository and the caller's access again once the removal is over: it
+// finds the repository gone if it was removed, rather than running against
+// the deleted one, and proceeds if it was kept.
+func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
+	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
+	is.NoErr(err)
+
+	pending := newPushCreates()
+	waits := make(chan string, 1)
+	pending.waiting = func(name string) { waits <- name }
+	var reached proto.Repository
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = proto.RepositoryFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
+	router := mux.NewRouter()
+	router.Handle("/{repo:.*}/info/refs", withParams(GitRoute{
+		method:  []string{http.MethodGet},
+		handler: next,
+		path:    "/info/refs",
+		pending: pending,
+		limits:  &requestLimits{},
+	}))
+	handler := NewContextHandler(f.ctx)(router)
+
+	// fetch sends the owner's ref advertisement request for name while a
+	// removal of name is running, and ends that removal with end once
+	// the request waits for it.
+	fetch := func(name string, end func()) int {
+		t.Helper()
+		ch := make(chan struct{})
+		pending.mu.Lock()
+		pending.repos[name] = &pushCreate{removing: ch}
+		pending.mu.Unlock()
+
+		w := httptest.NewRecorder()
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", nil)
+			req.Header.Set("Authorization", "Token "+token)
+			handler.ServeHTTP(w, req)
+		}()
+		select {
+		case got := <-waits:
+			is.Equal(got, name)
+		case <-served:
+			t.Fatalf("request for %q ended without waiting for the removal", name)
+		}
+		end()
+		pending.mu.Lock()
+		delete(pending.repos, name)
+		close(ch)
+		pending.mu.Unlock()
+		<-served
+		return w.Code
+	}
+
+	// Removed: the request finds the repository gone.
+	_, err = f.be.CreateRepository(ownerCtx, "removed", f.owner, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	code := fetch("removed", func() { is.NoErr(f.be.DeleteRepository(ownerCtx, "removed")) })
+	is.True(reached == nil)
+	is.Equal(code, http.StatusNotFound)
+
+	// Kept: the request proceeds.
+	kept, err := f.be.CreateRepository(ownerCtx, "kept", f.owner, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	is.Equal(fetch("kept", func() {}), http.StatusNoContent)
+	is.True(reached != nil)
+	is.Equal(reached.ID(), kept.ID())
+}
+
 // A repository whose refs cannot be listed counts as having refs, so the
 // cleanup never removes one it could not check.
 func TestHasRefsFailsSafe(t *testing.T) {
@@ -175,4 +254,113 @@ func TestHasRefsFailsSafe(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "empty.git")
 	gitRun(t, "init", "-q", "--bare", dir)
 	is.True(!hasRefs(dir))
+}
+
+// Once the list is closed, as the HTTP server does when it stops, no
+// repository created by a push is removed: the timers already armed are
+// stopped and none is armed, so no removal runs against a backend that is
+// being closed.
+func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	pending := newPushCreates()
+	f.handler = newRouter(f.ctx, pending)
+	auth := "Token " + f.token
+	advertise := func(name string) {
+		t.Helper()
+		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+		is.True(f.exists(name))
+	}
+	old := pushCreateTimeout
+	pushCreateTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { pushCreateTimeout = old })
+
+	advertise("armed")
+	is.NoErr(pending.close(t.Context()))
+	advertise("late")
+	time.Sleep(3 * pushCreateTimeout)
+	is.True(f.exists("armed"))
+	is.True(f.exists("late"))
+}
+
+// A push to a name that is not a valid repository name is refused with
+// 400 and the reason, rather than failing as a server error.
+func TestHTTPPushCreateInvalidName(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	auth := "Token " + f.token
+
+	w := f.do(http.MethodGet, "/bad%20name.git/info/refs?service=git-receive-pack", auth)
+	is.Equal(w.Code, http.StatusBadRequest)
+	is.True(strings.Contains(w.Body.String(), "repo can only contain"))
+	is.Equal(f.push(t, "bad%20name", auth, "0000"), http.StatusBadRequest)
+	is.True(!f.exists("bad name"))
+}
+
+// A push to a missing name that another request creates first is
+// authorized for the repository now there, rather than failing as a
+// server error.
+func TestHTTPPushCreateRace(t *testing.T) {
+	f := newOracleFixture(t)
+	auth := "Token " + f.token
+	stranger, err := f.be.User(f.ctx, "stranger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := pushCreateTimeout
+	pushCreateTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		pushCreateTimeout = old
+		testHookBeforePushCreate = nil
+	})
+	advertise := func(name string) int {
+		t.Helper()
+		return f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code
+	}
+	createFirst := func(name string, owner proto.User, private bool) {
+		testHookBeforePushCreate = func() {
+			testHookBeforePushCreate = nil
+			_, err := f.be.CreateRepository(f.ctx, name, owner, proto.RepositoryOptions{Private: private})
+			if err != nil {
+				t.Error(err)
+			}
+		}
+	}
+
+	t.Run("same user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("mine", stranger, false)
+		is.Equal(advertise("mine"), http.StatusOK)
+		// This request did not create it, so it does not remove it.
+		time.Sleep(3 * pushCreateTimeout)
+		is.True(f.exists("mine"))
+	})
+
+	t.Run("public repository of another user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("theirs", f.owner, false)
+		is.Equal(advertise("theirs"), http.StatusForbidden)
+	})
+
+	t.Run("private repository of another user", func(t *testing.T) {
+		is := is.New(t)
+		createFirst("hidden", f.owner, true)
+		is.Equal(advertise("hidden"), http.StatusNotFound)
+	})
+
+	// A creation still in progress, which has claimed the directory but
+	// not yet registered the repository, is a taken name like any other
+	// the caller cannot read.
+	t.Run("creation in progress", func(t *testing.T) {
+		is := is.New(t)
+		testHookBeforePushCreate = func() {
+			testHookBeforePushCreate = nil
+			dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "claimed.git")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Error(err)
+			}
+		}
+		is.Equal(advertise("claimed"), http.StatusNotFound)
+		is.True(!f.exists("claimed"))
+	})
 }

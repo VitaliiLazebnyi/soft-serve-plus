@@ -33,7 +33,10 @@ type fakeLFSClient struct {
 	omit map[string]bool
 	// extra holds objects the remote sends without being asked for them,
 	// with their content.
-	extra     map[lfs.Pointer][]byte
+	extra map[lfs.Pointer][]byte
+	// readErrs holds objects whose content fails with the error part way
+	// through, like a download that breaks off.
+	readErrs  map[string]error
 	requested []string
 	// onRead, if set, runs when an object's content is first read, standing
 	// in for the time spent receiving it from the network.
@@ -59,6 +62,9 @@ func (c *fakeLFSClient) Download(_ context.Context, pointers []lfs.Pointer, cb l
 		if c.onRead != nil {
 			r = &hookReader{r: r, hook: c.onRead}
 		}
+		if err := c.readErrs[p.Oid]; err != nil {
+			r = io.MultiReader(io.LimitReader(r, 1), &failReader{err})
+		}
 		if err := cb(p, io.NopCloser(r), nil); err != nil {
 			return err
 		}
@@ -68,10 +74,6 @@ func (c *fakeLFSClient) Download(_ context.Context, pointers []lfs.Pointer, cb l
 			return err
 		}
 	}
-	return nil
-}
-
-func (c *fakeLFSClient) Upload(context.Context, []lfs.Pointer, lfs.UploadCallback) error {
 	return nil
 }
 
@@ -89,6 +91,11 @@ func (h *hookReader) Read(p []byte) (int, error) {
 	}
 	return h.r.Read(p)
 }
+
+// failReader fails every Read with err.
+type failReader struct{ err error }
+
+func (f *failReader) Read([]byte) (int, error) { return 0, f.err }
 
 // lfsTest is a repository whose history holds LFS pointers, and a client
 // that serves their content.
@@ -166,12 +173,23 @@ func newLFSTestWith(t *testing.T, objects int, extra func(work string, pointers 
 
 // store runs StoreRepoMissingLFSObjects with the test's client.
 func (lt *lfsTest) store() error {
-	return StoreRepoMissingLFSObjects(lt.ctx, lt.repo, lt.be.db, lt.be.store, lt.client)
+	return lt.be.StoreRepoMissingLFSObjects(lt.ctx, lt.repo, lt.client)
 }
 
 // path returns where the object of p is stored.
 func (lt *lfsTest) path(p lfs.Pointer) string {
 	return filepath.Join(lt.be.cfg.DataPath, "lfs", strconv.FormatInt(lt.repo.ID(), 10), "objects", p.RelativePath())
+}
+
+// incompleteFiles returns how many temporary files are in the repository's
+// incomplete directory, which storing an object creates.
+func (lt *lfsTest) incompleteFiles(t *testing.T) int {
+	t.Helper()
+	files, err := os.ReadDir(filepath.Join(lt.be.cfg.DataPath, "lfs", strconv.FormatInt(lt.repo.ID(), 10), "incomplete"))
+	if err != nil {
+		t.Fatalf("reading the incomplete directory: %v", err)
+	}
+	return len(files)
 }
 
 // TestStoreRepoMissingLFSObjects verifies that every LFS object is downloaded
@@ -236,8 +254,8 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 
 // TestStoreRepoMissingLFSObjectsRepoDeleted verifies that a sync fails, rather
 // than keep storing objects, once the repository's database row is gone.
-// Recording an object then violates the foreign key, which db.WrapError
-// reports as a duplicate key.
+// Recording an object then violates the foreign key, which must not be taken
+// for an object recorded already.
 func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 	for _, onDisk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("on disk %v", onDisk), func(t *testing.T) {
@@ -279,6 +297,25 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 	is.True(err != nil) // the missing object is not recorded
 }
 
+// TestStoreRepoMissingLFSObjectsReadError verifies that a download that
+// breaks off part way, which a later try may get past, stops the sync
+// instead of being counted as an unavailable object, and leaves neither the
+// object nor a temporary file behind.
+func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
+	is := is.New(t)
+	lt := newLFSTest(t, 1)
+	broken := lt.pointers[0]
+	lt.client.readErrs = map[string]error{broken.Oid: errors.New("connection reset")}
+
+	err := lt.store()
+	is.True(err != nil)                                        // the sync fails
+	is.True(!errors.Is(err, ErrLFSObjectsUnavailable))         // rather than skipping the object
+	is.True(strings.Contains(err.Error(), "connection reset")) // with the download's error
+	_, err = os.Stat(lt.path(broken))
+	is.True(os.IsNotExist(err))        // the object is not stored
+	is.Equal(lt.incompleteFiles(t), 0) // and no temporary file is left behind
+}
+
 // TestFetchImportLFSObjects verifies that an import succeeds when the remote
 // lacks some LFS objects, and fails when fetching them fails otherwise.
 func TestFetchImportLFSObjects(t *testing.T) {
@@ -294,6 +331,10 @@ func TestFetchImportLFSObjects(t *testing.T) {
 
 	lt.client.err = errors.New("batch request failed")
 	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // other errors fail the import
+
+	lt.client.err, lt.client.errs = nil, nil
+	lt.client.readErrs = map[string]error{lt.pointers[0].Oid: errors.New("connection reset")}
+	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // as does a download that breaks off
 }
 
 // TestStoreRepoMissingLFSObjectsBadContent verifies that content which
@@ -314,9 +355,8 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 			_, err := os.Stat(lt.path(p))
 			is.True(os.IsNotExist(err)) // the content is not stored
 			_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.True(err != nil) // nor recorded
-			tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(lt.path(p)), "..", "..", "..", "incomplete"))
-			is.Equal(len(tmp), 0) // no temporary file is left behind
+			is.True(err != nil)                // nor recorded
+			is.Equal(lt.incompleteFiles(t), 0) // no temporary file is left behind
 		})
 	}
 }

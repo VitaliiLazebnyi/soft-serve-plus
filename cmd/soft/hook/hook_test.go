@@ -56,12 +56,51 @@ func TestRunCustomHookIgnoresMissingOrNonExecutableHook(t *testing.T) {
 		t.Fatalf("runCustomHook(missing) error = %v", err)
 	}
 
+	if runtime.GOOS == "windows" {
+		// Windows has no execute bit: every hook file runs.
+		return
+	}
 	nonExecutable := filepath.Join(t.TempDir(), "non-executable-hook")
 	if err := os.WriteFile(nonExecutable, []byte("exit 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := runCustomHook(context.Background(), nonExecutable, nil, io.Discard, io.Discard); err != nil {
 		t.Fatalf("runCustomHook(non-executable) error = %v", err)
+	}
+}
+
+// On Windows a hook file has no execute bit and is run with sh. Regression:
+// global custom hooks never ran there, as the execute bit was required.
+func TestCustomHookCommandWindows(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not found")
+	}
+	hook := filepath.Join(t.TempDir(), "post-update")
+	if err := os.WriteFile(hook, []byte("echo \"ran $1\"\nexit 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	name, args, ok, err := customHookCommand("windows", hook)
+	if err != nil || !ok {
+		t.Fatalf("customHookCommand(windows) = ok %v, err %v; want a command", ok, err)
+	}
+	var out strings.Builder
+	err = runCommand(context.Background(), nil, &out, io.Discard, name, append(args, "main")...)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Fatalf("hook error = %v, want exit status 3", err)
+	}
+	if got := out.String(); got != "ran main\n" {
+		t.Fatalf("hook output = %q, want %q", got, "ran main\n")
+	}
+
+	if _, _, ok, err := customHookCommand("windows", filepath.Dir(hook)); ok || err != nil {
+		t.Fatalf("customHookCommand(windows, dir) = ok %v, err %v; want no command", ok, err)
+	}
+	if runtime.GOOS != "windows" {
+		if _, _, ok, err := customHookCommand(runtime.GOOS, hook); ok || err != nil {
+			t.Fatalf("customHookCommand(%s, non-executable) = ok %v, err %v; want no command", runtime.GOOS, ok, err)
+		}
 	}
 }
 
@@ -78,8 +117,8 @@ func TestCustomHookHelperProcess(t *testing.T) {
 // When a hook fails, the hook command still closes the database: cobra
 // skips the command's PersistentPostRunE, which closes it otherwise.
 func TestHookErrorClosesDB(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("custom hook is a shell script")
+	if _, err := exec.LookPath("sh"); err != nil && runtime.GOOS == "windows" {
+		t.Skip("custom hook is a shell script and sh is not found")
 	}
 	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 	cfg := config.DefaultConfig()
@@ -111,5 +150,48 @@ func TestHookErrorClosesDB(t *testing.T) {
 	}
 	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("database ping returned %v, want it closed", err)
+	}
+}
+
+// The ignored --config flag is marked deprecated, so cobra hides it and says
+// so when it is used.
+func TestConfigFlagDeprecated(t *testing.T) {
+	f := Command.PersistentFlags().Lookup("config")
+	if f == nil {
+		t.Fatal("no --config flag")
+	}
+	if f.Deprecated == "" {
+		t.Error("--config is not marked deprecated")
+	}
+}
+
+// A hook run without SOFT_SERVE_DATA_PATH, i.e. not from the server, is
+// refused before it opens the backend, which would otherwise create a data
+// directory and an empty database in the working directory (the repository).
+func TestHookRefusesWithoutDataPath(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	t.Setenv("SOFT_SERVE_DATA_PATH", "")
+	cfg := config.DefaultConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(context.Background(), cfg)
+	ctx = log.WithContext(ctx, log.New(io.Discard))
+
+	Command.SetArgs([]string{"pre-receive"})
+	Command.SetIn(strings.NewReader(""))
+	Command.SetOut(io.Discard)
+	Command.SetErr(io.Discard)
+	if err := Command.ExecuteContext(ctx); !errors.Is(err, ErrNoDataPath) {
+		t.Fatalf("hook returned %v, want %v", err, ErrNoDataPath)
+	}
+
+	entries, err := os.ReadDir(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Errorf("hook created %s in the working directory", e.Name())
 	}
 }

@@ -52,22 +52,41 @@ func (l *LocalStorage) Stat(name string) (fs.FileInfo, error) {
 	return os.Stat(name)
 }
 
+// Object files and the directories created for them are only accessible to
+// the server's user: LFS objects can hold private repository content.
+const (
+	objectFileMode = 0o600
+	objectDirMode  = 0o700
+)
+
 // Put implements Storage.
 func (l *LocalStorage) Put(name string, r io.Reader) (int64, error) {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(name), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(name), objectDirMode); err != nil {
 		return 0, err
 	}
 
-	f, err := os.Create(name)
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, objectFileMode)
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close() //nolint: errcheck
-	return io.Copy(f, r)
+	n, err := io.Copy(f, r)
+	if err != nil {
+		_ = f.Close()
+		return n, err
+	}
+	// Callers rename the file into place once Put returns, after which its
+	// presence alone marks the object as stored. Flush it to disk first, and
+	// report a failed close, so a crash or a late write error cannot leave a
+	// short file there.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return n, err
+	}
+	return n, f.Close()
 }
 
 // Exists implements Storage.
@@ -96,7 +115,7 @@ func (l *LocalStorage) Rename(oldName, newName string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(newName), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(newName), objectDirMode); err != nil {
 		return err
 	}
 

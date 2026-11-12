@@ -1,12 +1,14 @@
 package webhook
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
+	"github.com/google/uuid"
 	"github.com/matryer/is"
 )
 
@@ -52,7 +54,7 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 	// Removed from the list again: the stored webhook is refused, since
 	// the current config applies to every delivery.
 	e.setAllowedHosts(t, "10.0.0.0/8")
-	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
+	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), uuid.Nil, false)
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 	is.Equal(rec.calls, 1)
 }
@@ -64,7 +66,7 @@ func TestSendWebhookAllowedHostsKeepsMetadataBlocked(t *testing.T) {
 	e := newTestEnv(t)
 	e.setAllowedHosts(t, "0.0.0.0/0")
 	w := e.newWebhook(t, "http://169.254.169.254/latest/meta-data/", "", ContentTypeJSON, EventBranchTagCreate)
-	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
+	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), uuid.Nil, false)
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 }
 
@@ -72,7 +74,7 @@ func TestValidateWebhookURLAllowing(t *testing.T) {
 	is := is.New(t)
 	allowed, err := ssrf.ParseAllowedHosts([]string{"127.0.0.1"})
 	is.NoErr(err)
-	is.NoErr(ValidateWebhookURLAllowing("http://127.0.0.1:8080/hook", allowed))
-	is.True(errors.Is(ValidateWebhookURLAllowing("http://127.0.0.1:8080/hook", nil), ErrPrivateIP))
-	is.True(errors.Is(ValidateWebhookURLAllowing("http://169.254.169.254/", allowed), ErrPrivateIP))
+	is.NoErr(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", allowed))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", nil), ErrPrivateIP))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://169.254.169.254/", allowed), ErrPrivateIP))
 }

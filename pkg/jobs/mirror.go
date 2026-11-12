@@ -1,20 +1,23 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/sync"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
@@ -25,48 +28,107 @@ func init() {
 
 type mirrorPull struct{}
 
+// mirrorRemotes are the remotes of a mirror that passed validation: their
+// names, which are what the sync fetches, and their validated urls, which
+// render the environment the sync must run with.
+type mirrorRemotes struct {
+	names     []string
+	validated []ssrf.ValidatedGitRemote
+}
+
 // validateMirrorRemotes validates every remote configured on a mirror
 // repository against address ranges and the operator's ssh host policy, and
-// returns them so the caller can render the git environment that must be
-// applied to the sync commands.
+// returns them so the caller can fetch exactly those remotes, with the git
+// environment their validation requires.
 //
-// `git remote update` fetches from all remotes, not just origin, so every one
-// of them has to pass. Any failure to read or validate skips the sync: a
-// remote that cannot be checked is not one to fetch from.
-func validateMirrorRemotes(r *git.Repository, policy ssrf.GitRemotePolicy) ([]ssrf.ValidatedGitRemote, error) {
-	cfg, err := r.Config()
+// Every remote has to pass, and any failure to read or validate skips the
+// sync: a remote that cannot be checked is not one to fetch from.
+//
+// The remotes and their URLs come from git itself rather than from parsing
+// the config: only git knows which of several `url` entries it fetches from,
+// how `url.<base>.insteadOf` rewrites them, and which spellings of a remote
+// section it accepts. Every URL of a remote is checked, not only the one
+// fetched from.
+//
+// Only fetching each remote by name keeps git to the remotes checked here.
+// Without a name git picks for itself: `git fetch` takes the url-or-name in
+// `branch.<HEAD>.remote`, and `git remote update` follows the
+// `remotes.default` group, either of which can lead to a url or a legacy
+// `branches/` or `remotes/` file remote that `git remote` does not list. A
+// remote group named like a remote also takes the place of that remote when
+// it is fetched by name, so a repository with any remote group is refused.
+func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) (mirrorRemotes, error) {
+	keys, err := git.NewCommand("config", "--list", "--name-only").WithContext(ctx).RunInDir(r.Path)
 	if err != nil {
-		return nil, fmt.Errorf("reading git config: %w", err)
+		return mirrorRemotes{}, fmt.Errorf("reading config: %w", err)
+	}
+	for _, key := range strings.Split(string(keys), "\n") {
+		if strings.HasPrefix(key, "remotes.") {
+			return mirrorRemotes{}, fmt.Errorf("remote group %q: %w", strings.TrimPrefix(key, "remotes."), errRemoteGroup)
+		}
 	}
 
-	var remotes []ssrf.ValidatedGitRemote
-	for _, sub := range cfg.Section("remote").Subsections {
-		url := sub.Option("url")
-		if url == "" {
-			continue
-		}
+	out, err := git.NewCommand("remote").WithContext(ctx).RunInDir(r.Path)
+	if err != nil {
+		return mirrorRemotes{}, fmt.Errorf("listing remotes: %w", err)
+	}
 
-		v, err := ssrf.ValidateGitRemote(url, policy)
+	var remotes mirrorRemotes
+	for _, name := range strings.Fields(string(out)) {
+		// A remote without a url is printed as its own name, which git
+		// would fetch from as a local path. That fails validation, as it
+		// should.
+		out, err := git.NewCommand("remote", "get-url", "--all", "--", name).WithContext(ctx).RunInDir(r.Path)
 		if err != nil {
-			return nil, fmt.Errorf("remote %q: %w", sub.Name, err)
+			return mirrorRemotes{}, fmt.Errorf("remote %q: reading url: %w", name, err)
 		}
-		remotes = append(remotes, v)
+
+		for _, url := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+			v, err := ssrf.ValidateGitRemoteContext(ctx, url, policy)
+			if err != nil {
+				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
+			}
+			// fetch and remote update reach each remote by name, so a
+			// remote.<name>.proxy must be cleared too.
+			remotes.validated = append(remotes.validated, v.Named(name))
+		}
+		remotes.names = append(remotes.names, name)
 	}
 
-	if len(remotes) == 0 {
-		return nil, fmt.Errorf("no remote url configured")
+	if len(remotes.validated) == 0 {
+		return mirrorRemotes{}, fmt.Errorf("no remote url configured")
 	}
 
 	return remotes, nil
 }
 
-// Spec derives the spec used for pull mirrors and implements Runner.
-func (m mirrorPull) Spec(ctx context.Context) string {
-	cfg := config.FromContext(ctx)
-	if cfg.Jobs.MirrorPull != "" {
-		return cfg.Jobs.MirrorPull
+// errRemoteGroup refuses a mirror with a remote group: a group named like a
+// remote is fetched in its place, and its members need not be remotes that
+// `git remote` lists.
+var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
+
+// syncMirror fetches each named remote of the mirror at path, pruning refs
+// the remote no longer has. Naming every remote keeps git from choosing one
+// that was not validated. A remote that fails to fetch does not stop the
+// others; their errors are joined. Once ctx is done no further fetch starts,
+// but one already running is left to finish; see runMirrorGit.
+func syncMirror(ctx context.Context, path string, names []string, env []string) error {
+	var errs []error
+	for _, name := range names {
+		if ctx.Err() != nil {
+			break
+		}
+		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name); err != nil {
+			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
+		}
 	}
-	return "@every 10m"
+	return errors.Join(errs...)
+}
+
+// Spec derives the spec used for pull mirrors and implements Runner. An
+// empty jobs.mirror_pull disables mirror syncing.
+func (m mirrorPull) Spec(ctx context.Context) string {
+	return config.FromContext(ctx).Jobs.MirrorPull
 }
 
 // Func runs the (pull) mirror job task and implements Runner.
@@ -74,8 +136,6 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("jobs.mirror")
 	b := backend.FromContext(ctx)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
 	return func() {
 		// The same guards that protect imports protect syncs, and the same
 		// too-old git ignores them.
@@ -86,13 +146,22 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		repos, err := b.Repositories(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			logger.Error("error getting repositories", "err", err)
 			return
 		}
 
 		// Divide the work up among the number of CPUs.
 		wq := sync.NewWorkPool(ctx, runtime.GOMAXPROCS(0),
-			sync.WithWorkPoolLogger(logger.Errorf),
+			sync.WithWorkPoolLogger(func(format string, args ...any) {
+				// The pool only fails to start work once ctx is done, which
+				// is an ordinary shutdown, not an error.
+				if ctx.Err() == nil {
+					logger.Errorf(format, args...)
+				}
+			}),
 		)
 
 		logger.Debug("updating mirror repos")
@@ -106,10 +175,8 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 				name := repo.Name()
 				wq.Add(name, func() {
-					repo := repo
-
 					// Re-validate every configured remote before syncing.
-					// `remote update` touches all of them, and a remote may
+					// The sync fetches all of them, and a remote may
 					// predate the import-time guard or have been written out
 					// of band. Validation failure skips the repo entirely.
 					// No user acts here, so the owner stands in for the
@@ -123,27 +190,17 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					}
 					policy := backend.RemotePolicy(cfg, owner)
 
-					remotes, err := validateMirrorRemotes(r, policy)
+					remotes, err := validateMirrorRemotes(ctx, r, policy)
 					if err != nil {
 						logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
 						return
 					}
 
-					syncEnv := backend.RemoteGitEnv(cfg, remotes...)
-
-					cmds := []string{
-						"fetch --prune",         // fetch prune before updating remote
-						"remote update --prune", // update remote and prune remote refs
-					}
-
-					for _, c := range cmds {
-						args := strings.Split(c, " ")
-						cmd := git.NewCommand(args...).WithContext(ctx).WithTimeout(-1)
-						cmd.AddEnvs(syncEnv...)
-
-						if _, err := cmd.RunInDir(r.Path); err != nil {
-							logger.Error("error running git remote update", "repo", name, "err", err)
-						}
+					// When a fetch fails the LFS sync is skipped too; the
+					// next run tries both again.
+					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
+					if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
+						return
 					}
 
 					if cfg.LFS.Enabled {
@@ -162,7 +219,7 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 						// The endpoint is stored in the repo config and may
 						// predate validation, so check it before dialing.
-						if _, err := ssrf.ValidateGitRemote(lfsEndpoint, policy); err != nil {
+						if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
 							logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
 							return
 						}
@@ -179,10 +236,14 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 							return
 						}
 
-						if err := backend.SyncRepoLFSObjects(ctx, repo, dbx, datastore, client); err != nil {
+						if err := b.SyncRepoLFSObjects(ctx, repo, client); err != nil {
 							if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
 								// The next sync tries them again.
 								logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
+								return
+							}
+							if ctx.Err() != nil {
+								// The server is stopping.
 								return
 							}
 							logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
@@ -195,4 +256,111 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 
 		wq.Run()
 	}
+}
+
+// mirrorGitTimeout bounds a single git command of a mirror sync.
+//
+// The job waits for every repository before it finishes, and the scheduler
+// skips its runs while one is still going, so a command that never returns
+// stops every mirror on the server from syncing. Stalls are caught much
+// sooner by the low-speed and keepalive settings in RemoteGitEnv; this is the
+// backstop for what those miss, such as git:// remotes, which git dials itself
+// with no read timeout, and remotes that trickle data just fast enough.
+var mirrorGitTimeout = time.Hour
+
+// mirrorGitWaitDelay is how long, once git is killed, the sync waits for the
+// helpers git started (git-remote-http, ssh) to let go of its output.
+// They inherit git's stderr and outlive it when killed; past this the output
+// is closed and the sync moves on.
+const mirrorGitWaitDelay = 5 * time.Second
+
+// mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
+// The remote can write to it (remote: lines), so it is not kept in full.
+const mirrorGitStderrLimit = 4 << 10
+
+// runMirrorGit runs one git command of a mirror sync in dir with env applied,
+// killing it after mirrorGitTimeout. Tests replace it.
+//
+// The command does not get ctx's cancellation. Cancelling would kill git
+// (exec.CommandContext sends SIGKILL, or TerminateProcess on Windows), and a
+// killed git never removes the ref and packed-refs locks it holds, so every
+// later sync of the mirror would fail on "File exists" until someone deletes
+// them by hand. A git command that is already running is left to finish:
+// Server.Shutdown waits for it within its drain deadline, and if the server
+// exits first, git finishes on its own and cleans up after itself, as it
+// did before syncs were cancelled at all. Only a command stalled past
+// mirrorGitTimeout is killed.
+var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorGitTimeout)
+	defer cancel()
+
+	var stderr limitedBuffer
+	stderr.limit = mirrorGitStderrLimit
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = mirrorGitWaitDelay
+
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
+		if msg := redactURLs(strings.TrimSpace(stderr.String())); msg != "" {
+			err = fmt.Errorf("%w: %s", err, msg)
+		}
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// urlPattern matches a URL as git and remotes print it in messages: a scheme
+// and everything up to the next space or quote.
+var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
+
+// redactURLs strips the user info and query from every URL in msg. git leaves
+// out the user info of the remote URLs it prints but keeps their query, which
+// can hold a token, and the remote's own lines can hold any URL.
+func redactURLs(msg string) string {
+	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
+}
+
+// limitedBuffer keeps the first limit bytes written to it and discards the
+// rest, reporting every write as complete so the writer is not cut off.
+//
+// The buffer is a named field rather than embedded so that limitedBuffer has
+// no ReadFrom: os/exec copies a pipe into a non-file Stderr with io.Copy,
+// which would call an embedded bytes.Buffer.ReadFrom and bypass the cap.
+type limitedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+// Write implements io.Writer.
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// String returns the bytes kept so far.
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
+}
+
+// fetchMirror fetches the named remotes of the mirror in dir and reports
+// whether the sync should go on to the lfs objects. It returns false when
+// a fetch failed, after logging the error, so the lfs sync is skipped
+// until the next run. Once ctx is done it starts no further fetch and
+// returns false without logging: the server is stopping.
+func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) bool {
+	if err := syncMirror(ctx, dir, remotes, env); err != nil {
+		if ctx.Err() == nil {
+			logger.Error("error syncing mirror", "repo", name, "err", err)
+		}
+		return false
+	}
+	return ctx.Err() == nil
 }

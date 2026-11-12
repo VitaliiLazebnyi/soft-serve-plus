@@ -9,10 +9,17 @@ name: auto-merge
 # Security notes:
 # - pull_request_target runs this file as it is on the default branch, never
 #   the copy in the pull request. The job never checks out or runs PR code.
-# - Acts only when the owner opened the PR from a branch of this repository,
-#   the owner triggered the event, and the PR targets the default branch.
-#   `gh pr merge --auto` merges at once if the PR is already mergeable, so a PR
-#   into an unprotected branch would merge with no checks.
+# - Turns auto-merge on only when the owner opened the PR from a branch of this
+#   repository, the owner both caused the event and started this run (a re-run
+#   by someone else keeps github.actor but changes github.triggering_actor),
+#   and the PR targets the default branch. `gh pr merge --auto` merges at once
+#   if the PR is already mergeable, so a PR into an unprotected branch would
+#   merge with no checks. The changed files are checked at the head commit of
+#   the event, and auto-merge is enabled only for that commit.
+# - Once auto-merge is on, GitHub keeps it on across new pushes. So a push by
+#   anyone but the owner, a push that adds sensitive files, or a change of the
+#   base branch away from the default branch turns it off; the owner can turn
+#   it on again by hand after a review.
 # - AUTOMERGE_TOKEN is a secret of the `automerge` environment, which only
 #   deploys from main. It is a fine-grained token of the owner for this
 #   repository only, with "Contents" and "Pull requests" read and write.
@@ -26,9 +33,13 @@ on:
       - reopened
       - ready_for_review
       - synchronize
+      - edited
 
-# Runs for the same PR one at a time, in order, so a check of a new push never
-# overlaps with an earlier run that is enabling auto-merge.
+# Runs for the same PR one at a time, so a check of a new push never overlaps
+# with an earlier run that is enabling auto-merge. GitHub keeps only the newest
+# pending run of a group and cancels older pending ones; every run reads the
+# PR's current files, and a skipped "opened" run only leaves the PR for a
+# manual merge.
 concurrency:
   group: auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -37,12 +48,15 @@ permissions: {} # the job uses AUTOMERGE_TOKEN, not GITHUB_TOKEN
 
 jobs:
   auto-merge:
+    # Runs for pushes by anyone, so that it can turn auto-merge off. An `edited`
+    # event counts only when it changed the base branch.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.base.ref == github.event.repository.default_branch &&
       github.event.pull_request.user.login == github.repository_owner &&
-      github.actor == github.repository_owner &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
+      (github.event.action == 'edited' ||
+       github.event.pull_request.base.ref == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     environment: automerge
     timeout-minutes: 5
@@ -51,9 +65,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           ACTION: ${{ github.event.action }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -71,7 +91,8 @@ jobs:
           fi
           while IFS= read -r f; do
             case "$f" in
-              .github/* | .golangci.yml | .goreleaser* | \
+              .github/* | .golangci.yml | .goreleaser* | .nfpm/* | \
+              Taskfile.yml | Taskfile.yaml | codecov.yml | \
               go.mod | */go.mod | go.sum | */go.sum | \
               Dockerfile* | */Dockerfile* | Makefile | */Makefile)
                 sensitive="$sensitive $f"
@@ -79,22 +100,46 @@ jobs:
             esac
           done <<< "$files"
 
-          if [ "$ACTION" = "synchronize" ]; then
-            # A new push only turns auto-merge off. It never turns it on, so
-            # a choice the owner made by hand stays in place; a PR that was
-            # left for a manual merge stays that way.
-            if [ -n "$sensitive" ]; then
+          untrusted=""
+          if [ "$ACTOR" != "$OWNER" ] || [ "$TRIGGERING_ACTOR" != "$OWNER" ]; then
+            untrusted="event by $ACTOR, run started by $TRIGGERING_ACTOR"
+          fi
+
+          if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "edited" ]; then
+            # A new push or a new base branch only turns auto-merge off. It
+            # never turns it on, so a choice the owner made by hand stays in
+            # place; a PR that was left for a manual merge stays that way.
+            reason=""
+            if [ "$BASE_REF" != "$DEFAULT_BRANCH" ]; then
+              reason="the PR now targets $BASE_REF, not $DEFAULT_BRANCH"
+            elif [ -n "$untrusted" ]; then
+              reason="the PR was changed by someone other than $OWNER ($untrusted)"
+            elif [ -n "$sensitive" ]; then
+              reason="the PR now changes sensitive files:$sensitive"
+            fi
+            if [ -n "$reason" ]; then
               enabled=$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')
               if [ "$enabled" = "true" ]; then
                 gh pr merge "$PR_URL" --disable-auto
-                echo "::notice::Auto-merge disabled: the PR now changes sensitive files and needs a manual merge:$sensitive"
+                echo "::notice::Auto-merge disabled and needs a manual review: $reason"
               fi
             fi
             exit 0
           fi
 
+          if [ -n "$untrusted" ]; then
+            echo "::notice::Auto-merge not enabled: only $OWNER can enable it ($untrusted)."
+            exit 0
+          fi
           if [ -n "$sensitive" ]; then
             echo "::notice::Auto-merge not enabled: the PR changes sensitive files and needs a manual merge:$sensitive"
             exit 0
           fi
-          gh pr merge "$PR_URL" --auto --squash
+          # The file list is for the current head. If that is no longer the
+          # commit of this event, a newer push came in and was not checked here.
+          head=$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)
+          if [ "$head" != "$HEAD_SHA" ]; then
+            echo "::notice::Auto-merge not enabled: the PR head moved from $HEAD_SHA to $head during the check."
+            exit 0
+          fi
+          gh pr merge "$PR_URL" --auto --squash --match-head-commit "$HEAD_SHA"

@@ -40,9 +40,34 @@ func TestSSHAlgorithmDefaultsExcludeSHA1(t *testing.T) {
 	}
 }
 
+func TestSSHPublicKeyAuthDefaultsExcludeSHA1(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.SSH.PublicKeyAuthAlgorithms) != 0 {
+		t.Fatalf("public key auth algorithms set by default: %v", cfg.SSH.PublicKeyAuthAlgorithms)
+	}
+	got := cfg.SSH.SSHPublicKeyAuthAlgorithms()
+	for _, a := range []string{ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA} { //nolint:staticcheck // checks the deprecated algorithm stays off
+		if slices.Contains(got, a) {
+			t.Errorf("default public key auth algorithms include %q", a)
+		}
+	}
+	for _, a := range []string{ssh.KeyAlgoED25519, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoECDSA256} {
+		if !slices.Contains(got, a) {
+			t.Errorf("default public key auth algorithms %v lack %q", got, a)
+		}
+	}
+}
+
 func TestParseSSHAlgorithms(t *testing.T) {
 	is := is.New(t)
-	for _, k := range []string{"SOFT_SERVE_SSH_KEX_ALGORITHMS", "SOFT_SERVE_SSH_CIPHERS", "SOFT_SERVE_SSH_MACS"} {
+	for _, k := range []string{
+		"SOFT_SERVE_SSH_KEX_ALGORITHMS", "SOFT_SERVE_SSH_CIPHERS", "SOFT_SERVE_SSH_MACS",
+		"SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS",
+	} {
 		t.Setenv(k, "")
 		is.NoErr(os.Unsetenv(k))
 	}
@@ -53,6 +78,7 @@ func TestParseSSHAlgorithms(t *testing.T) {
   kex_algorithms: ["curve25519-sha256", "diffie-hellman-group14-sha1"]
   ciphers: ["aes256-gcm@openssh.com"]
   macs: ["hmac-sha2-512", "hmac-sha1"]
+  public_key_auth_algorithms: ["ssh-ed25519", "ssh-rsa"]
 `), 0o600))
 	cfg := DefaultConfig()
 	cfg.DataPath = dir
@@ -61,22 +87,26 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	is.Equal(cfg.SSH.SSHKexAlgorithms(), []string{"curve25519-sha256", "diffie-hellman-group14-sha1"})
 	is.Equal(cfg.SSH.SSHCiphers(), []string{"aes256-gcm@openssh.com"})
 	is.Equal(cfg.SSH.SSHMACs(), []string{"hmac-sha2-512", "hmac-sha1"})
+	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"ssh-ed25519", "ssh-rsa"})
 
 	t.Setenv("SOFT_SERVE_SSH_KEX_ALGORITHMS", "curve25519-sha256@libssh.org, curve25519-sha256")
 	t.Setenv("SOFT_SERVE_SSH_CIPHERS", "aes128-ctr,aes256-ctr")
 	t.Setenv("SOFT_SERVE_SSH_MACS", "hmac-sha2-256-etm@openssh.com")
+	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "rsa-sha2-512, ssh-dss")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
 	is.NoErr(cfg.ParseEnv())
 	is.Equal(cfg.SSH.SSHKexAlgorithms(), []string{"curve25519-sha256@libssh.org", "curve25519-sha256"})
 	is.Equal(cfg.SSH.SSHCiphers(), []string{"aes128-ctr", "aes256-ctr"})
 	is.Equal(cfg.SSH.SSHMACs(), []string{"hmac-sha2-256-etm@openssh.com"})
+	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"rsa-sha2-512", "ssh-dss"})
 
 	// Hooks re-read the config from the environment.
 	env := cfg.Environ()
 	is.True(slices.Contains(env, "SOFT_SERVE_SSH_KEX_ALGORITHMS=curve25519-sha256@libssh.org,curve25519-sha256"))
 	is.True(slices.Contains(env, "SOFT_SERVE_SSH_CIPHERS=aes128-ctr,aes256-ctr"))
 	is.True(slices.Contains(env, "SOFT_SERVE_SSH_MACS=hmac-sha2-256-etm@openssh.com"))
+	is.True(slices.Contains(env, "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss"))
 
 	// An empty variable, as Environ writes for an unset list, keeps the
 	// default rather than reading as one empty name.
@@ -86,6 +116,13 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	is.NoErr(cfg.ParseEnv())
 	is.Equal(len(cfg.SSH.MACs), 0)
 	is.Equal(cfg.SSH.SSHMACs(), DefaultSSHMACs())
+
+	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
+	cfg = DefaultConfig()
+	cfg.DataPath = dir
+	is.NoErr(cfg.ParseEnv())
+	is.Equal(len(cfg.SSH.PublicKeyAuthAlgorithms), 0)
+	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms())
 }
 
 func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
@@ -98,6 +135,11 @@ func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
 		{"ssh.macs", func(c *SSHConfig) { c.MACs = []string{"hmac-md5"} }},
 		// A name valid in one list is not valid in another.
 		{"ssh.macs", func(c *SSHConfig) { c.MACs = []string{"aes128-ctr"} }},
+		{"ssh.public_key_auth_algorithms", func(c *SSHConfig) { c.PublicKeyAuthAlgorithms = []string{"rsa-sha2-384"} }},
+		// Certificate algorithms are checked by their underlying key.
+		{"ssh.public_key_auth_algorithms", func(c *SSHConfig) {
+			c.PublicKeyAuthAlgorithms = []string{ssh.CertAlgoED25519v01}
+		}},
 	} {
 		cfg := DefaultConfig()
 		cfg.DataPath = t.TempDir()
@@ -119,6 +161,7 @@ func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
 	cfg.SSH.KexAlgorithms = ssh.InsecureAlgorithms().KeyExchanges
 	cfg.SSH.Ciphers = ssh.InsecureAlgorithms().Ciphers
 	cfg.SSH.MACs = ssh.InsecureAlgorithms().MACs
+	cfg.SSH.PublicKeyAuthAlgorithms = ssh.InsecureAlgorithms().PublicKeyAuths
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate rejected legacy algorithms: %v", err)
 	}
@@ -138,6 +181,7 @@ func TestSSHAlgorithmsConfigFileRoundTrip(t *testing.T) {
 		is.NoErr(parseFile(got, path))
 		is.Equal(len(got.SSH.KexAlgorithms), 0)
 		is.Equal(len(got.SSH.Ciphers), 0)
+		is.Equal(len(got.SSH.PublicKeyAuthAlgorithms), 0)
 		is.Equal(len(got.SSH.MACs), len(want))
 		if len(want) > 0 {
 			is.Equal(got.SSH.MACs, want)
@@ -165,6 +209,7 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 		{"- key exchange: ", DefaultSSHKexAlgorithms()},
 		{"- ciphers: ", DefaultSSHCiphers()},
 		{"- MACs: ", DefaultSSHMACs()},
+		{"- public key authentication: ", withoutMLDSA(DefaultSSHPublicKeyAuthAlgorithms())},
 	} {
 		i := strings.Index(doc, l.prefix)
 		if i < 0 {
@@ -184,6 +229,7 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 
 	wantKex := append(DefaultSSHKexAlgorithms(), ssh.InsecureKeyExchangeDH14SHA1)
 	wantMACs := append(DefaultSSHMACs(), ssh.HMACSHA1)
+	wantPubKeyAuths := append(withoutMLDSA(DefaultSSHPublicKeyAuthAlgorithms()), ssh.KeyAlgoRSA)
 	check := func(name, example string) {
 		t.Helper()
 		var cfg Config
@@ -197,15 +243,31 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 			t.Errorf("%s legacy example macs = %v, want %v", name, cfg.SSH.MACs, wantMACs)
 		}
 	}
+	checkPubKeyAuths := func(name, example string) {
+		t.Helper()
+		var cfg Config
+		if err := yaml.Unmarshal([]byte(example), &cfg); err != nil {
+			t.Fatalf("%s legacy example: %v", name, err)
+		}
+		if !slices.Equal(cfg.SSH.PublicKeyAuthAlgorithms, wantPubKeyAuths) {
+			t.Errorf("%s legacy example public_key_auth_algorithms = %v, want %v",
+				name, cfg.SSH.PublicKeyAuthAlgorithms, wantPubKeyAuths)
+		}
+	}
 
 	// The README legacy example is the yaml block after "Older clients".
 	rest := doc[strings.Index(doc, "**Older clients.**"):]
 	start := strings.Index(rest, "```yaml\n") + len("```yaml\n")
-	check("README", rest[start:start+strings.Index(rest[start:], "```")])
+	readmeExample := rest[start : start+strings.Index(rest[start:], "```")]
+	check("README", readmeExample)
+	checkPubKeyAuths("README", readmeExample)
 
 	// The generated config file has it as comment lines after
 	// "append the legacy algorithm".
-	file := newConfigFile(DefaultConfig())
+	file, err := newConfigFile(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var b strings.Builder
 	b.WriteString("ssh:\n")
 	lines := strings.Split(file[strings.Index(file, "append the legacy algorithm"):], "\n")[2:]
@@ -216,4 +278,28 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 		b.WriteString("  " + strings.TrimPrefix(l, "  #   ") + "\n")
 	}
 	check("config file", b.String())
+
+	// And the public key authentication example after "only signs with
+	// ssh-rsa".
+	b.Reset()
+	b.WriteString("ssh:\n")
+	lines = strings.Split(file[strings.Index(file, "only signs with ssh-rsa"):], "\n")
+	for len(lines) > 0 && !strings.HasPrefix(lines[0], "  #   ") {
+		lines = lines[1:]
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "  #   ") {
+			break
+		}
+		b.WriteString("  " + strings.TrimPrefix(l, "  #   ") + "\n")
+	}
+	checkPubKeyAuths("config file", b.String())
+}
+
+// withoutMLDSA drops the ML-DSA algorithms, which x/crypto supports only
+// when built with Go 1.27 or later. The docs list them separately.
+func withoutMLDSA(algos []string) []string {
+	return slices.DeleteFunc(algos, func(a string) bool {
+		return a == ssh.KeyAlgoMLDSA44 || a == ssh.KeyAlgoMLDSA65 || a == ssh.KeyAlgoMLDSA87
+	})
 }

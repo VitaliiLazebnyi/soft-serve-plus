@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -36,6 +34,9 @@ var (
 			// Use the config the database and backend were set up with,
 			// so hooks and directories land under the same data path.
 			cfg := config.FromContext(ctx)
+			for _, k := range cfg.UnknownKeys() {
+				log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+			}
 			if !cfg.Exist() {
 				// Write the defaults, not cfg, so environment overrides
 				// are not saved to the file.
@@ -49,19 +50,21 @@ var (
 			// Create custom hooks directory if it doesn't exist
 			customHooksPath := filepath.Join(cfg.DataPath, "hooks")
 			if _, err := os.Stat(customHooksPath); err != nil && os.IsNotExist(err) {
-				os.MkdirAll(customHooksPath, os.ModePerm) //nolint: errcheck
+				if err := os.MkdirAll(customHooksPath, 0o700); err != nil {
+					return fmt.Errorf("create hooks directory: %w", err)
+				}
 				// Generate update hook example without executable permissions
 				hookPath := filepath.Join(customHooksPath, "update.sample")
 				//nolint: gosec
-				if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o744); err != nil {
+				if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil {
 					return fmt.Errorf("failed to generate update hook example: %w", err)
 				}
 			}
 
 			// Create log directory if it doesn't exist
 			logPath := filepath.Join(cfg.DataPath, "log")
-			if _, err := os.Stat(logPath); err != nil && os.IsNotExist(err) {
-				os.MkdirAll(logPath, os.ModePerm) //nolint: errcheck
+			if err := os.MkdirAll(logPath, 0o700); err != nil {
+				return fmt.Errorf("create log directory: %w", err)
 			}
 
 			db := db.FromContext(ctx)
@@ -92,21 +95,11 @@ var (
 			done := make(chan os.Signal, 1)
 			testStop := make(chan struct{})
 
-			signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+			signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
-			// This endpoint is added for testing purposes
-			// It allows us to stop the server from the test suite.
-			// This is needed since Windows doesn't support signals.
-			if testRun, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_TESTRUN")); testRun {
-				h := s.HTTPServer.Server.Handler
-				s.HTTPServer.Server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/__stop" && r.Method == http.MethodHead {
-						close(testStop)
-						return
-					}
-					h.ServeHTTP(w, r)
-				})
-			}
+			// Test builds add an endpoint that stops the server, since
+			// Windows doesn't support signals. Release builds don't have it.
+			s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
 
 			go func() {
 				lch <- s.Start()

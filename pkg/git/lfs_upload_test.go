@@ -159,9 +159,8 @@ func TestLFSTransferUploadDuplicate(t *testing.T) {
 	assertNoLFSTempFiles(t, tr.cfg)
 }
 
-// A foreign key violation is not a duplicate upload. db.WrapError maps both
-// to ErrDuplicateKey, so Upload must confirm the row exists before it
-// reports success.
+// A foreign key violation is not a duplicate upload, which Upload reports as
+// success.
 func TestLFSTransferUploadRepoDeleted(t *testing.T) {
 	tr, _ := newLFSUploadTransfer(t)
 	if err := tr.store.DeleteRepoByName(tr.ctx, tr.dbx, "repo1"); err != nil {
@@ -213,6 +212,40 @@ func TestLFSTransferPutObjectOversized(t *testing.T) {
 	assertNoLFSTempFiles(t, tr.cfg)
 }
 
+// A put-object with an invalid oid is refused with a 400 and its data is
+// drained, so the next command is still read from the right place in the
+// stream. The data packet and flush used to be read as commands.
+func TestLFSTransferPutObjectInvalidOid(t *testing.T) {
+	_, ctx := newLFSUploadTransfer(t)
+	data := "hello"
+
+	var in strings.Builder
+	in.WriteString(pkt("version 1\n") + "0000")
+	in.WriteString(pkt("put-object not-an-oid\n") + pkt(fmt.Sprintf("size=%d\n", len(data))) + "0001")
+	in.WriteString(pkt(data) + "0000")
+	in.WriteString(pkt("quit\n") + "0000")
+
+	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
+	ctx = proto.WithUserContext(ctx, lfsTestUser{})
+	var out bytes.Buffer
+	if err := LFSTransfer(ctx, ServiceCommand{
+		Stdin:  strings.NewReader(in.String()),
+		Stdout: &out,
+		Args:   []string{"repo1", lfs.OperationUpload},
+	}); err != nil {
+		t.Fatalf("LFSTransfer: %v", err)
+	}
+
+	var got []string
+	for _, m := range regexp.MustCompile(`status (\d{3})`).FindAllStringSubmatch(out.String(), -1) {
+		got = append(got, m[1])
+	}
+	want := []string{"200", "400", "200"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("statuses = %v, want %v\noutput: %q", got, want, out.String())
+	}
+}
+
 // failRenameStorage is a storage whose Rename always fails, as renaming onto
 // a file another upload is renaming or has open does on Windows.
 type failRenameStorage struct{ storage.Storage }
@@ -261,5 +294,48 @@ func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
 			}
 			assertNoLFSTempFiles(t, tr.cfg)
 		})
+	}
+}
+
+// Batch reports a recorded object present only if its file has the
+// pointer's size. A short file, such as one a failed write left behind, used
+// to be reported present, so the client skipped the upload and downloads
+// served it short.
+func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
+	tr, _ := newLFSUploadTransfer(t)
+	const content = "hello lfs"
+	oid := oidOf(content)
+	size := int64(len(content))
+	objPath := lfsObjectPath(tr.cfg, oid)
+	if err := os.MkdirAll(filepath.Dir(objPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Record the object at its real size, so only the file on disk decides
+	// whether it is present.
+	if err := tr.store.CreateLFSObject(tr.ctx, tr.dbx, 1, oid, size); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := func() bool {
+		t.Helper()
+		items, err := tr.Batch("upload", []transfer.BatchItem{{Pointer: transfer.Pointer{Oid: oid, Size: size}}}, nil)
+		if err != nil {
+			t.Fatalf("Batch: %v", err)
+		}
+		return items[0].Present
+	}
+
+	if err := os.WriteFile(objPath, []byte(content[:4]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if batch() {
+		t.Error("short object reported present")
+	}
+
+	if err := os.WriteFile(objPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !batch() {
+		t.Error("complete object reported missing")
 	}
 }

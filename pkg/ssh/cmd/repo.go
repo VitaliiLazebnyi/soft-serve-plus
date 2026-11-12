@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -80,9 +81,9 @@ func RepoCommand() *cobra.Command {
 
 				// project name and description are optional, handle trailing
 				// whitespace to avoid breaking tests.
-				cmd.Println(strings.TrimSpace(fmt.Sprint("Project Name: ", rr.ProjectName())))
+				cmd.Println(strings.TrimSpace(fmt.Sprint("Project Name: ", utils.Sanitize(rr.ProjectName()))))
 				cmd.Println("Repository:", rr.Name())
-				cmd.Println(strings.TrimSpace(fmt.Sprint("Description: ", rr.Description())))
+				cmd.Println(strings.TrimSpace(fmt.Sprint("Description: ", utils.Sanitize(rr.Description()))))
 				cmd.Println("Private:", rr.IsPrivate())
 				cmd.Println("Hidden:", rr.IsHidden())
 				cmd.Println("Mirror:", rr.IsMirror())
@@ -90,18 +91,18 @@ func RepoCommand() *cobra.Command {
 					cmd.Println(strings.TrimSpace(fmt.Sprint("Owner: ", owner.Username())))
 				}
 				if head != nil {
-					cmd.Println("Default Branch:", head.Name().Short())
+					cmd.Println("Default Branch:", utils.Sanitize(head.Name().Short()))
 				}
 				if len(branches) > 0 {
 					cmd.Println("Branches:")
 					for _, b := range branches {
-						cmd.Println("  -", b)
+						cmd.Println("  -", utils.Sanitize(b))
 					}
 				}
 				if len(tags) > 0 {
 					cmd.Println("Tags:")
 					for _, t := range tags {
-						cmd.Println("  -", t)
+						cmd.Println("  -", utils.Sanitize(t))
 					}
 				}
 
@@ -129,6 +130,9 @@ func repoHead(r *git.Repository) (*git.Reference, error) {
 	if bs, _ := r.Branches(); len(bs) == 0 {
 		return nil, errRepoEmpty
 	}
-	name, _ := r.SymbolicRef(git.HEAD, "")
+	name, err := r.SymbolicRef(git.HEAD, "")
+	if err != nil {
+		return nil, fmt.Errorf("default branch does not exist: %w", err)
+	}
 	return nil, fmt.Errorf("default branch %q does not exist", git.ReferenceName(name).Short())
 }

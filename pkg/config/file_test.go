@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -8,13 +11,21 @@ import (
 
 func TestNewConfigFile(t *testing.T) {
 	for _, cfg := range []*Config{
-		nil,
 		DefaultConfig(),
 		{},
 	} {
-		if s := newConfigFile(cfg); s == "" {
-			t.Errorf("newConfigFile(nil) => %q, want non-empty string", s)
+		if s, err := newConfigFile(cfg); err != nil || s == "" {
+			t.Errorf("newConfigFile(%+v) => %q, %v, want non-empty string", cfg, s, err)
 		}
+	}
+
+	// A template error is returned rather than a file cut short where the
+	// template stopped.
+	if s, err := newConfigFile(nil); err == nil {
+		t.Errorf("newConfigFile(nil) => %q, nil, want an error", s)
+	}
+	if err := writeConfig(nil, filepath.Join(t.TempDir(), "config.yaml")); err == nil {
+		t.Error("writeConfig(nil) => nil, want an error")
 	}
 }
 
@@ -39,6 +50,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.SSH.KexAlgorithms = []string{odd, `C:\k`}
 	cfg.SSH.Ciphers = []string{odd, `C:\c`}
 	cfg.SSH.MACs = []string{odd, `C:\m`}
+	cfg.SSH.PublicKeyAuthAlgorithms = []string{odd, `C:\p`}
 	cfg.Git.ListenAddr = odd
 	cfg.Git.PublicURL = odd
 	cfg.HTTP.ListenAddr = odd
@@ -49,10 +61,17 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 	cfg.DB.Driver = odd
 	cfg.DB.DataSource = winPath
 	cfg.Jobs.MirrorPull = odd
+	cfg.Jobs.LFSSweep = odd
 	cfg.Webhook.AllowedHosts = []string{odd, `C:\y`}
 
+	cfg.HTTP.CORS.AllowedOrigins = []string{odd, "https://example.com"}
+
+	file, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got Config
-	if err := yaml.Unmarshal([]byte(newConfigFile(cfg)), &got); err != nil {
+	if err := yaml.Unmarshal([]byte(file), &got); err != nil {
 		t.Fatalf("decode written config: %v", err)
 	}
 
@@ -75,6 +94,7 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"db.driver", got.DB.Driver, cfg.DB.Driver},
 		{"db.data_source", got.DB.DataSource, cfg.DB.DataSource},
 		{"jobs.mirror_pull", got.Jobs.MirrorPull, cfg.Jobs.MirrorPull},
+		{"jobs.lfs_sweep", got.Jobs.LFSSweep, cfg.Jobs.LFSSweep},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
@@ -89,7 +109,8 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 		{"ssh.kex_algorithms", got.SSH.KexAlgorithms, cfg.SSH.KexAlgorithms},
 		{"ssh.ciphers", got.SSH.Ciphers, cfg.SSH.Ciphers},
 		{"ssh.macs", got.SSH.MACs, cfg.SSH.MACs},
-		{"http.cors.allowed_origins", got.HTTP.CORS.AllowedOrigins, []string{cfg.HTTP.PublicURL}},
+		{"ssh.public_key_auth_algorithms", got.SSH.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms},
+		{"http.cors.allowed_origins", got.HTTP.CORS.AllowedOrigins, cfg.HTTP.CORS.AllowedOrigins},
 	} {
 		if len(c.got) != len(c.want) {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
@@ -99,6 +120,55 @@ func TestNewConfigFileRoundTrip(t *testing.T) {
 			if c.got[i] != c.want[i] {
 				t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
 				break
+			}
+		}
+	}
+}
+
+// TestReadmeConfigMatchesGenerated keeps the sample config.yaml in the
+// README identical to the file the server writes on first start.
+func TestReadmeConfigMatchesGenerated(t *testing.T) {
+	t.Parallel()
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Git may check README.md out with CRLF line endings (the windows CI
+	// runner does).
+	doc := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	i := strings.Index(doc, "### Server Configuration")
+	if i < 0 {
+		t.Fatal("README has no Server Configuration section")
+	}
+	doc = doc[i:]
+	start := strings.Index(doc, "```yaml\n")
+	if start < 0 {
+		t.Fatal("README Server Configuration has no yaml block")
+	}
+	doc = doc[start+len("```yaml\n"):]
+	got := doc[:strings.Index(doc, "```")]
+
+	// The default key paths are joined with the OS separator; the README
+	// shows them as written on Unix.
+	cfg := DefaultConfig()
+	cfg.SSH.KeyPath = filepath.ToSlash(cfg.SSH.KeyPath)
+	cfg.SSH.ClientKeyPath = filepath.ToSlash(cfg.SSH.ClientKeyPath)
+	want, err := newConfigFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		gl, wl := strings.Split(got, "\n"), strings.Split(want, "\n")
+		for n := 0; n < len(gl) || n < len(wl); n++ {
+			var g, w string
+			if n < len(gl) {
+				g = gl[n]
+			}
+			if n < len(wl) {
+				w = wl[n]
+			}
+			if g != w {
+				t.Fatalf("README sample config differs from the generated file at line %d:\nREADME:    %q\ngenerated: %q\nRegenerate it from newConfigFile(DefaultConfig()).", n+1, g, w)
 			}
 		}
 	}

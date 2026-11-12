@@ -3,14 +3,17 @@ package backend
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/log/v2"
@@ -29,7 +32,7 @@ import (
 
 // RemotePolicy returns the policy for git remotes supplied on behalf of user:
 // the operator's ssh allowlist, and, for server admins, leave to pick any ssh
-// host when no allowlist is configured. A nil user gets neither.
+// host when no allowlist is configured. A nil user gets only the allowlist.
 //
 // Only the user's stored admin flag counts. It is meant for callers with no
 // live session, such as the mirror job acting for a repository's owner. A
@@ -118,6 +121,44 @@ func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
 	return proto.ErrUnauthorized
 }
 
+// AboutRepo is the repository whose README the TUI shows on its About tab
+// (see pkg/ui/pages/selection). It speaks for the server to every TUI user,
+// so only a server admin may create it or rename a repository to it, and the
+// TUI shows it only while a server admin owns it.
+const AboutRepo = ".soft-serve"
+
+// AboutRepoOwnedByAdmin reports whether r, the AboutRepo, is owned by a
+// server admin who created it. The TUI shows its README only then. A
+// repository an anonymous caller created is recorded with the default admin
+// as owner (see registerRepository), so it is refused here: one created
+// before the name was reserved for admins, while anon-access allowed
+// creating repositories, would otherwise still be shown. So is one whose
+// owner is no longer an admin.
+func (d *Backend) AboutRepoOwnedByAdmin(ctx context.Context, r proto.Repository) bool {
+	rr, ok := r.(*repo)
+	if !ok || rr.repo.Anonymous || r.UserID() == 0 {
+		return false
+	}
+	owner, err := d.UserByID(ctx, r.UserID())
+	return err == nil && owner.IsAdmin()
+}
+
+// errAboutRepoReserved refuses a non-admin's claim on AboutRepo.
+var errAboutRepoReserved = fmt.Errorf("%w: only an admin can create the %s repository", proto.ErrUnauthorized, AboutRepo)
+
+// checkCanClaim refuses user taking the new repository name: the
+// AdminOnlyCreate check (see checkCanCreate), and AboutRepo, which only a
+// server admin (see isServerAdmin) may take whatever that setting says.
+// AboutRepo is matched ignoring case: on a case-insensitive filesystem
+// (default macOS and Windows) a variant such as ".Soft-Serve" claims the
+// same directory, which would lock the admin out of the real name.
+func (d *Backend) checkCanClaim(ctx context.Context, user proto.User, name string) error {
+	if strings.EqualFold(name, AboutRepo) && !d.isServerAdmin(ctx, user) {
+		return errAboutRepoReserved
+	}
+	return d.checkCanCreate(ctx, user)
+}
+
 // repoLimited reports whether max_repos_per_user applies to user creating
 // a repository: a limit is set and the caller is not a server admin (see
 // isServerAdmin). Decide it on the caller's own context, which carries the
@@ -133,6 +174,22 @@ func (d *Backend) countRepos(ctx context.Context, h db.Handler, user proto.User)
 		return d.store.CountAnonymousRepos(ctx, h)
 	}
 	return d.store.CountUserRepos(ctx, h, user.ID())
+}
+
+// checkRepoLimit refuses user, already at max_repos_per_user, before
+// anything is created for a new repository: no directory, git init or
+// hooks to undo. It is an early answer only: the count is not locked, so
+// registerRepository checks again in the transaction that records the
+// repository, which is what keeps concurrent creates within the limit.
+func (d *Backend) checkRepoLimit(ctx context.Context, user proto.User) error {
+	n, err := d.countRepos(ctx, d.db, user)
+	if err != nil {
+		return err
+	}
+	if n >= int64(d.cfg.MaxReposPerUser) {
+		return d.errRepoLimit(user)
+	}
+	return nil
 }
 
 // errRepoLimit is the error for user being at max_repos_per_user.
@@ -167,13 +224,23 @@ func (d *Backend) DefaultPrivate(ctx context.Context, user proto.User) (bool, er
 }
 
 // CreateRepository creates a new repository.
-//
-// It implements backend.Backend.
 func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
-	if err := d.checkCanCreate(ctx, user); err != nil {
+	if err := d.checkCanClaim(ctx, user, utils.SanitizeRepo(name)); err != nil {
 		return nil, err
 	}
-	return d.createRepository(ctx, name, user, opts, d.repoLimited(ctx, user))
+	// Report an invalid name before the limit, as ImportRepository does.
+	// createRepository sanitizes and validates again; both are idempotent.
+	name = utils.SanitizeRepo(name)
+	if err := utils.ValidateRepo(name); err != nil {
+		return nil, err
+	}
+	limited := d.repoLimited(ctx, user)
+	if limited {
+		if err := d.checkRepoLimit(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+	return d.createRepository(ctx, name, user, opts, limited)
 }
 
 // CreateSystemRepository creates a repository on the server's own behalf,
@@ -192,9 +259,15 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
+	// The directory has no row until registerRepository records it.
+	defer d.repoDirs.hold(name)()
+
 	rp := d.repoPath(name)
 	if err := claimRepoPath(rp); err != nil {
 		return nil, err
+	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
 	}
 
 	if _, err := git.Init(rp, true); err != nil {
@@ -202,35 +275,135 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 			// openRepoError logs the other case.
 			d.logger.Debug("failed to create repository", "err", err)
 		}
-		os.RemoveAll(rp) //nolint:errcheck
+		d.removeRepoDir(rp) //nolint:errcheck
 		return nil, openRepoError(d.logger, err, rp)
 	}
 
-	return d.registerRepository(ctx, name, user, opts, limited)
+	return d.registerRepository(ctx, name, user, opts, limited, nil)
 }
 
 // claimRepoPath creates the repository directory, failing if anything already
 // occupies it. The filesystem decides what "already" means, which is what
 // makes this safe on case- and normalization-insensitive volumes.
 func claimRepoPath(rp string) error {
-	if err := os.MkdirAll(filepath.Dir(rp), os.ModePerm); err != nil {
-		return err
-	}
-	if err := os.Mkdir(rp, os.ModePerm); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return proto.ErrRepoExist
+	return withRepoParent(rp, func() error {
+		if err := os.Mkdir(rp, os.ModePerm); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return proto.ErrRepoExist
+			}
+			return err
 		}
+		return nil
+	})
+}
+
+// repoParentAttempts bounds how often withRepoParent recreates a parent
+// directory that a concurrent delete or rename removed.
+const repoParentAttempts = 5
+
+// withRepoParent creates the parent directories of the repository path p and
+// then runs place, which puts something at p. A delete or rename of another
+// repository in the same group removes parents it leaves empty (see
+// removeEmptyRepoParents), so a parent can vanish between its creation and
+// place; place then fails with fs.ErrNotExist and is tried again with the
+// parents recreated.
+func withRepoParent(p string, place func() error) error {
+	var err error
+	for range repoParentAttempts {
+		if err = os.MkdirAll(filepath.Dir(p), os.ModePerm); err != nil {
+			return err
+		}
+		if err = place(); !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return err
+}
+
+// removeRepoDir removes the repository directory rp and then the parent
+// directories it leaves empty.
+func (d *Backend) removeRepoDir(rp string) error {
+	if err := os.RemoveAll(rp); err != nil {
 		return err
 	}
+	d.removeEmptyRepoParents(rp)
+	return nil
+}
+
+// RemoveRepositoryDir removes the leftover directory dir of a repository
+// whose row is already gone, and then the group directories it leaves empty,
+// as deleting the repository does. It is for a caller that retries removing a
+// directory the delete could not remove, such as one still held open by a
+// git process on Windows.
+func (d *Backend) RemoveRepositoryDir(dir string) error {
+	return d.removeRepoDir(dir)
+}
+
+// removeEmptyRepoParents removes the directories between the repository path
+// rp and the repos directory that are empty, deepest first, so deleting or
+// renaming away a nested repository such as "a/b" does not leave an empty
+// repos/a behind. It stops at the first directory that is not empty or cannot
+// be removed, and never touches the repos directory itself. Only real
+// directories are removed: a symlink an administrator put in the tree is
+// left alone even when what it points to is empty. Failures are not errors:
+// an empty directory left behind is harmless.
+func (d *Backend) removeEmptyRepoParents(rp string) {
+	root := filepath.Join(d.cfg.DataPath, "repos")
+	for dir := filepath.Dir(rp); ; dir = filepath.Dir(dir) {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return
+		}
+		fi, err := os.Lstat(dir)
+		if err != nil || !fi.IsDir() {
+			return
+		}
+		// Remove fails on a directory that is not empty, which is what
+		// keeps the other repositories of the group, and anything else in
+		// the directory, in place.
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
+}
+
+// renameOntoClaim moves the repository at op onto np, the empty directory
+// claimRepoPath made for it. *claimed is cleared once that directory is no
+// longer the caller's to remove.
+func renameOntoClaim(op, np string, claimed *bool) error {
+	if runtime.GOOS == "windows" {
+		// Windows does not rename onto an existing directory, so the
+		// claim is given up first. A create that claims the path in
+		// between makes the rename fail rather than be replaced, and
+		// withRepoParent does not retry that. With the claim gone, np's
+		// group directories may be empty, so a concurrent delete or
+		// rename can remove them before the rename; withRepoParent
+		// recreates them and retries.
+		if err := os.Remove(np); err != nil {
+			return err
+		}
+		*claimed = false
+		return withRepoParent(np, func() error { return os.Rename(op, np) })
+	}
+	// os.Rename refuses an existing directory as the target, but rename(2)
+	// replaces an empty one atomically, which is what the claim is.
+	if err := syscall.Rename(op, np); err != nil {
+		return &os.LinkError{Op: "rename", Old: op, New: np, Err: err}
+	}
+	*claimed = false
 	return nil
 }
 
 // registerRepository records a bare repository that already exists at the
 // name's path and finishes setting it up. The directory is removed on failure.
 // When limited, max_repos_per_user is checked in the same transaction that
-// records the repository.
-func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
+// records the repository. committed, if not nil, runs right after that
+// transaction commits.
+func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool, committed func()) (proto.Repository, error) {
 	rp := d.repoPath(name)
+	opts.ProjectName = utils.Sanitize(opts.ProjectName)
+	opts.Description = utils.Sanitize(opts.Description)
 
 	var userID int64
 	if user != nil {
@@ -238,6 +411,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 	}
 	anonymous := userID == 0
 
+	var m models.Repo
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if anonymous {
 			// Anonymous callers (e.g. an anon-access/allow-keyless
@@ -270,10 +444,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 
 		// The limit is checked after the insert, in the same transaction,
 		// which rolls the insert back if the creator is over it. As with the
-		// webhook cap (see CreateWebhook), inserting first makes concurrent
-		// SQLite writers wait for each other, and on Postgres the owner's
-		// row is locked before counting, so creates racing at the limit
-		// take turns.
+		// webhook cap (see CreateWebhook), on SQLite the transaction holds
+		// the write lock through the count: from BEGIN IMMEDIATE (see
+		// db.Open), or, when the data source asks for deferred
+		// transactions, from the insert, which is why it comes first. On
+		// Postgres the owner's row is locked before counting, so creates
+		// racing at the limit take turns.
 		if limited {
 			if err := d.store.LockUserRepos(ctx, tx, userID); err != nil {
 				return err
@@ -299,11 +475,18 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		return hooks.GenerateHooks(ctx, d.cfg, name)
+		if err := hooks.GenerateHooks(ctx, d.cfg, name); err != nil {
+			return err
+		}
+
+		// Read the row back here rather than after the commit, so nothing
+		// can fail once the repository is recorded and leave it behind.
+		var err error
+		m, err = d.store.GetRepoByName(ctx, tx, name)
+		return err
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
-		os.RemoveAll(rp) //nolint:errcheck
-		err = db.WrapError(err)
+		d.removeRepoDir(rp) //nolint:errcheck
 		if errors.Is(err, db.ErrDuplicateKey) {
 			return nil, proto.ErrRepoExist
 		}
@@ -311,8 +494,42 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 		return nil, err
 	}
 
-	return d.Repository(ctx, name)
+	if committed != nil {
+		committed()
+	}
+	if d.afterRegister != nil {
+		d.afterRegister()
+	}
+
+	return &repo{
+		name:   name,
+		path:   rp,
+		repo:   m,
+		logger: d.logger,
+	}, nil
 }
+
+// DefaultAdmin returns the lowest-ID admin user, the account that owns
+// repositories the server creates on its own behalf, such as default_repo.
+// It returns proto.ErrUserNotFound if there is no admin user.
+func (d *Backend) DefaultAdmin(ctx context.Context) (proto.User, error) {
+	var adminID int64
+	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		var err error
+		adminID, err = d.defaultAdminUserID(ctx, tx)
+		return err
+	}); err != nil {
+		if errors.Is(err, errNoAdminUser) {
+			return nil, proto.ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	return d.UserByID(ctx, adminID)
+}
+
+// errNoAdminUser is returned by defaultAdminUserID when no user is an admin.
+var errNoAdminUser = errors.New("no admin user found")
 
 // defaultAdminUserID returns the ID of the lowest-ID admin user, used to
 // own repositories created by callers with no user of their own (anonymous
@@ -320,20 +537,12 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 // seeds the initial database always creates an admin user, so this should
 // never fail to find one in practice.
 func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, error) {
-	users, err := d.store.GetAllUsers(ctx, tx)
+	adminID, err := d.store.FindDefaultAdminUserID(ctx, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w to own anonymous repository", errNoAdminUser)
+	}
 	if err != nil {
 		return 0, err
-	}
-
-	var adminID int64
-	for _, u := range users {
-		if u.Admin && (adminID == 0 || u.ID < adminID) {
-			adminID = u.ID
-		}
-	}
-
-	if adminID == 0 {
-		return 0, errors.New("no admin user found to own anonymous repository")
 	}
 
 	return adminID, nil
@@ -346,22 +555,20 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
-	if err := d.checkCanCreate(ctx, user); err != nil {
+	if err := d.checkCanClaim(ctx, user, name); err != nil {
 		return nil, err
 	}
 
-	// Refuse at the limit before cloning anything. registerRepository
-	// checks again when it records the repository.
-	limited := d.repoLimited(ctx, user)
-	if limited {
-		n, err := d.countRepos(ctx, d.db, user)
-		if err != nil {
-			return nil, err
-		}
-		if n >= int64(d.cfg.MaxReposPerUser) {
-			return nil, d.errRepoLimit(user)
-		}
+	// Refuse at the limit before cloning anything, counting the user's
+	// imports still in flight, which have not registered their repository
+	// yet. registerRepository checks again when it records the repository.
+	admin := d.isServerAdmin(ctx, user)
+	limited := d.cfg.MaxReposPerUser > 0 && !admin // as repoLimited
+	slot, err := d.reserveImport(ctx, user, admin, limited)
+	if err != nil {
+		return nil, err
 	}
+	defer slot.release()
 
 	if reason := d.ImportsDisabledReason(); reason != "" {
 		d.logger.Warn("refusing import", "name", name, "reason", reason)
@@ -391,9 +598,10 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		path:      d.repoPath(name),
 		remote:    remote,
 		logRemote: redactRemote(remote),
-		env:       RemoteGitEnv(d.cfg, v),
+		env:       RemoteGitEnv(d.cfg, v.ForClone()),
 		opts:      opts,
 		limited:   limited,
+		committed: slot.markRegistered,
 	}
 
 	// LFS objects are fetched only when asked for (--lfs or --lfs-endpoint);
@@ -421,17 +629,28 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		}
 	}
 
+	// The directory has no row until importRepository records it, which
+	// is after the clone.
+	defer d.repoDirs.hold(name)()
+
 	// Claiming the directory is what serializes concurrent imports of one
 	// name: the second one fails here with ErrRepoExist.
 	if err := claimRepoPath(imp.path); err != nil {
 		return nil, err
 	}
+	if testHookRepoDirUnrecorded != nil {
+		testHookRepoDirUnrecorded(name)
+	}
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
 
-	// The import runs on the backend's context rather than the caller's so a
-	// dropped session does not leave a half-cloned repository behind.
-	importCtx := proto.WithUserContext(d.ctx, user)
+	// The import runs on the backend's context, for its values, but stops
+	// when the caller goes away, when the server shuts down, or after
+	// importTimeout, whichever comes first. A stopped import removes what it
+	// had created.
+	importCtx, cancel := context.WithTimeout(proto.WithUserContext(d.imports.ctx, user), importTimeout)
+	defer cancel()
+	defer context.AfterFunc(ctx, cancel)()
 	r, err := d.importRepository(importCtx, user, imp)
 	if err != nil {
 		// A concurrent create can take the last slot while the clone runs.
@@ -459,32 +678,38 @@ type importSpec struct {
 	opts        proto.RepositoryOptions
 	// limited says whether max_repos_per_user applies (see repoLimited).
 	limited bool
+	// committed, if set, runs once the repository row is committed, so the
+	// import stops counting against max_repos_per_user (see importSlot).
+	committed func()
 }
 
 // importRepository clones the remote into the claimed directory, registers
 // the repository, and fetches LFS objects if asked. On failure nothing is
 // left behind.
 func (d *Backend) importRepository(ctx context.Context, user proto.User, imp importSpec) (_ proto.Repository, err error) {
-	copts := git.CloneOptions{
-		Bare:   true,
-		Mirror: imp.opts.Mirror,
-		Quiet:  true,
-		CommandOptions: git.CommandOptions{
-			Timeout: -1,
-			Context: ctx,
-			Envs:    imp.env,
-		},
+	if err := cloneImport(ctx, imp); err != nil {
+		d.logger.Error("failed to clone repository", "err", err, "mirror", imp.opts.Mirror, "remote", imp.logRemote, "path", imp.path)
+		if rerr := d.removeRepoDir(imp.path); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+		return nil, err
 	}
 
-	if err := git.Clone(imp.remote, imp.path, copts); err != nil {
-		d.logger.Error("failed to clone repository", "err", err, "mirror", imp.opts.Mirror, "remote", imp.logRemote, "path", imp.path)
+	// An import stopped while the clone finished is not registered.
+	if err := ctx.Err(); err != nil {
+		d.logger.Error("import stopped after clone", "err", err, "name", imp.name)
 		if rerr := os.RemoveAll(imp.path); rerr != nil {
 			err = errors.Join(err, rerr)
 		}
 		return nil, err
 	}
 
-	r, err := d.registerRepository(ctx, imp.name, user, imp.opts, imp.limited)
+	// Registering is a short database and filesystem step, run to the end
+	// even if ctx is cancelled meanwhile: stopping it once the row is
+	// committed would leave a registered repository behind with no cleanup
+	// to remove it. A stopped import still ends at the LFS fetch below,
+	// whose failure removes the repository.
+	r, err := d.registerRepository(context.WithoutCancel(ctx), imp.name, user, imp.opts, imp.limited, imp.committed)
 	if err != nil {
 		d.logger.Error("failed to create repository", "err", err, "name", imp.name)
 		return nil, err
@@ -492,7 +717,9 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 
 	defer func() {
 		if err != nil {
-			if rerr := d.DeleteRepository(ctx, imp.name); rerr != nil {
+			// ctx may be what stopped the import, so the cleanup must
+			// not depend on it.
+			if rerr := d.DeleteRepository(context.WithoutCancel(ctx), imp.name); rerr != nil {
 				d.logger.Error("failed to delete repository", "err", rerr, "name", imp.name)
 			}
 		}
@@ -540,9 +767,11 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // so one missing object doesn't throw the whole import away. For a mirror,
 // the mirror job tries them again on every sync; a plain import never
 // fetches them again, so they stay missing until someone pushes them. Any
-// other failure fails the import.
+// other failure fails the import, including a transfer that fails for a
+// reason a retry may get past, such as a dropped connection or a 5xx, so
+// such objects are not dropped for good.
 func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
-	err := StoreRepoMissingLFSObjects(ctx, r, d.db, d.store, client)
+	err := d.StoreRepoMissingLFSObjects(ctx, r, client)
 	var unavailable *lfsObjectsUnavailableError
 	if errors.As(err, &unavailable) {
 		if r.IsMirror() {
@@ -558,8 +787,6 @@ func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository,
 }
 
 // DeleteRepository deletes a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) DeleteRepository(ctx context.Context, name string) error {
 	return d.deleteRepository(ctx, name, nil)
 }
@@ -583,15 +810,24 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
 
+	// Once the row is gone the directory is still there until it is removed
+	// below; the hold keeps a concurrent delete from taking it for an orphan
+	// and reporting a second successful delete. It is taken before the
+	// transaction: see removeOrphanRepoDir.
+	defer d.repoDirs.hold(name)()
+
 	// Build the webhook event before deleting. A repository whose directory is
-	// gone has no event, but its database row still has to go.
+	// gone has no event, but its database row still has to go. An event that
+	// cannot be built (its owner lookup failed) is logged and skipped rather
+	// than stopping the delete.
 	var wh *webhook.RepositoryEvent
 	r, err := d.Repository(ctx, name)
 	switch {
 	case err == nil:
 		ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
 		if err != nil {
-			return err
+			d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
+			break
 		}
 		wh = &ev
 	case !errors.Is(err, proto.ErrRepoNotFound):
@@ -617,6 +853,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// rowDeleted is set once the repository's row is deleted, and says the
 	// directory is to be removed after the commit.
 	var rowDeleted bool
+	// noRow is set when no row has the name.
+	var noRow bool
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// With a keep check, the row is locked before the check, so
 		// nothing can be added for the repository between the check and
@@ -627,14 +865,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		}
 		repom, dberr := getRepo(ctx, tx, name)
 		if dberr != nil {
-			// A directory with no row is an orphan; remove it.
-			if keep == nil && d.repoPathExists(name) {
-				return os.RemoveAll(rp)
-			}
-			if errors.Is(db.WrapError(dberr), db.ErrRecordNotFound) {
-				return proto.ErrRepoNotFound
-			}
-			return db.WrapError(dberr)
+			noRow = errors.Is(dberr, db.ErrRecordNotFound)
+			return dberr
 		}
 		if keep != nil {
 			kept, err := keep(tx, repom)
@@ -648,19 +880,26 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 
 		repoID = repom.ID
 
-		// Remove the webhooks and their rows explicitly, so none are left
-		// behind whether or not the connection enforces foreign keys.
+		// Remove the webhooks and their rows explicitly. The repository's
+		// other rows (collaborators, LFS objects and locks) go with it by
+		// ON DELETE CASCADE, which relies on foreign keys being enforced.
 		if err := d.deleteRepoWebhookRows(ctx, tx, repom.ID); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := d.store.DeleteRepoByName(ctx, tx, name); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		rowDeleted = true
 		return nil
 	}); err != nil {
+		// A directory with no row is an orphan; remove it. Only a missing
+		// row says so: on any other error, such as a cancelled context,
+		// the repository may well exist.
+		if noRow && keep == nil && d.repoPathExists(name) {
+			return d.removeOrphanRepoDir(ctx, name, 1)
+		}
 		return wrapRepoError(err)
 	}
 
@@ -672,7 +911,10 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// directory has no row: it cannot be created, imported or renamed over,
 	// and deleting the repository again removes it.
 	if rowDeleted {
-		if err := os.RemoveAll(rp); err != nil {
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(name)
+		}
+		if err := d.removeRepoDir(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}
 	}
@@ -704,11 +946,10 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 }
 
 // RenameRepository renames a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName string) error {
 	oldName = utils.SanitizeRepo(oldName)
-	if err := utils.ValidateRepo(oldName); err != nil {
+	// The repository may predate the rules for new names.
+	if err := utils.ValidateExistingRepo(oldName); err != nil {
 		return err
 	}
 
@@ -723,9 +964,13 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 
 	// Renaming onto a new name creates it, so it needs the same permission.
 	// The caller is the user and public key on the context.
-	if err := d.checkCanCreate(ctx, proto.UserFromContext(ctx)); err != nil {
+	if err := d.checkCanClaim(ctx, proto.UserFromContext(ctx), newName); err != nil {
 		return err
 	}
+
+	// The moved directory has the new name before the row does, which is
+	// only once the transaction commits.
+	defer d.repoDirs.hold(newName)()
 
 	op := d.repoPath(oldName)
 	np := d.repoPath(newName)
@@ -733,32 +978,61 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return proto.ErrRepoNotFound
 	}
 
-	if d.repoPathExists(newName) {
-		return proto.ErrRepoExist
+	// Claim the new path the way a create or import does, so that whichever
+	// comes second fails instead of this rename replacing the other's empty
+	// directory (rename(2) replaces an empty one) and that one's cleanup then
+	// deleting the moved repository.
+	if err := claimRepoPath(np); err != nil {
+		if errors.Is(err, proto.ErrRepoExist) {
+			return err
+		}
+		d.logger.Error("failed to claim repository path", "repo", newName, "err", err)
+		d.removeEmptyRepoParents(np)
+		return errRepoUpdate
 	}
+	claimed := true
+
+	// The directory is moved inside the transaction, and the move is not
+	// undone if the transaction fails. Cancelling ctx after the move, as a
+	// client disconnecting does, would roll the new name back under the moved
+	// directory, so the rename and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The directory checks above find a repository whose name differs
+		// only in case on a case-insensitive filesystem, so the row decides:
+		// with no row named oldName this fails before the directory moves.
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
 
-		// Make sure the new repository parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(np), os.ModePerm); err != nil {
-			d.logger.Error("failed to create repository parent directory", "repo", newName, "err", err)
-			return errRepoUpdate
-		}
-
-		if err := os.Rename(op, np); err != nil {
+		if err := renameOntoClaim(op, np, &claimed); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
+		}
+		if testHookRepoDirUnrecorded != nil {
+			testHookRepoDirUnrecorded(newName)
 		}
 
 		return nil
 	}); err != nil {
+		if claimed {
+			os.Remove(np) //nolint:errcheck
+		}
+		// claimRepoPath may have created the new name's group
+		// directories; do not leave them behind empty. Only empty
+		// directories are removed, and a concurrent create or rename into
+		// the group recreates them through withRepoParent.
+		d.removeEmptyRepoParents(np)
 		return wrapRepoError(err)
 	}
 
+	// The old name's group directories may now be empty.
+	d.removeEmptyRepoParents(op)
+
 	// The rename is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	user := proto.UserFromContext(ctx)
 	repo, err := d.Repository(ctx, newName)
 	if err != nil {
@@ -766,7 +1040,7 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return nil
 	}
 
-	wh, err := webhook.NewRepositoryEvent(ctx, user, repo, webhook.RepositoryEventActionRename)
+	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
 		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
 		return nil
@@ -776,13 +1050,11 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	return nil
 }
 
-// Repositories returns a list of repositories per page.
-//
-// It implements backend.Backend.
+// Repositories returns every repository.
 func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) {
 	repos := make([]proto.Repository, 0)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		ms, err := d.store.GetAllRepos(ctx, tx)
 		if err != nil {
 			return err
@@ -791,7 +1063,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 		for _, m := range ms {
 			r := &repo{
 				name:   m.Name,
-				path:   filepath.Join(d.repoPath(m.Name)),
+				path:   d.repoPath(m.Name),
 				repo:   m,
 				logger: d.logger,
 			}
@@ -801,28 +1073,30 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return repos, nil
 }
 
 // Repository returns a repository by name.
-//
-// It implements backend.Backend.
 func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository, error) {
 	var m models.Repo
 	name = utils.SanitizeRepo(name)
 
 	rp := d.repoPath(name)
 	if _, err := os.Stat(rp); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case isInvalidName(err):
+			d.logger.Debug("invalid repository name", "err", err)
+		default:
 			d.logger.Errorf("failed to stat repository path: %v", err)
 		}
 		return nil, proto.ErrRepoNotFound
 	}
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetRepoByName(ctx, tx, name)
 		return err
@@ -848,7 +1122,6 @@ var errRepoUpdate = errors.New("failed to update repository")
 // callers never see the raw driver error for a repository that does not
 // exist.
 func wrapRepoError(err error) error {
-	err = db.WrapError(err)
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrRepoNotFound
 	}
@@ -856,12 +1129,10 @@ func wrapRepoError(err error) error {
 }
 
 // Description returns the description of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) Description(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var desc string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		desc, err = d.store.GetRepoDescriptionByName(ctx, tx, name)
 		return err
@@ -873,12 +1144,10 @@ func (d *Backend) Description(ctx context.Context, name string) (string, error) 
 }
 
 // IsMirror returns true if the repository is a mirror.
-//
-// It implements backend.Backend.
 func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var mirror bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		mirror, err = d.store.GetRepoIsMirrorByName(ctx, tx, name)
 		return err
@@ -889,12 +1158,10 @@ func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 }
 
 // IsPrivate returns true if the repository is private.
-//
-// It implements backend.Backend.
 func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var private bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		private, err = d.store.GetRepoIsPrivateByName(ctx, tx, name)
 		return err
@@ -906,12 +1173,10 @@ func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 }
 
 // IsHidden returns true if the repository is hidden.
-//
-// It implements backend.Backend.
 func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
 	var hidden bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		hidden, err = d.store.GetRepoIsHiddenByName(ctx, tx, name)
 		return err
@@ -923,12 +1188,10 @@ func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 }
 
 // ProjectName returns the project name of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
 	var pname string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		pname, err = d.store.GetRepoProjectNameByName(ctx, tx, name)
 		return err
@@ -940,8 +1203,6 @@ func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) 
 }
 
 // SetHidden sets the hidden flag of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetHidden(ctx context.Context, name string, hidden bool) error {
 	name = utils.SanitizeRepo(name)
 
@@ -995,6 +1256,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 			return wrapRepoError(err)
 		}
 	}
+
+	// The git config is written inside the transaction and is not restored
+	// if the transaction fails, so cancelling ctx, as a client disconnecting
+	// does, must not roll the flag back once the config is written.
+	ctx = context.WithoutCancel(ctx)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// Re-read both, so what is written is what was validated.
@@ -1090,7 +1356,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 		um, err := d.store.GetUserByID(ctx, d.db, m.UserID.Int64)
 		if err == nil {
 			owner = &user{user: um}
-		} else if !errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
+		} else if !errors.Is(err, db.ErrRecordNotFound) {
 			return err
 		}
 	}
@@ -1118,15 +1384,24 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 }
 
 // SetDescription sets the description of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetDescription(ctx context.Context, name string, desc string) error {
 	name = utils.SanitizeRepo(name)
 	desc = utils.Sanitize(desc)
 	rp := d.repoPath(name)
 
+	// The description file is written inside the transaction and is not
+	// restored if the transaction fails, so cancelling ctx, as a client
+	// disconnecting does, must not roll the row back once the file is written.
+	ctx = context.WithoutCancel(ctx)
+
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.store.GetRepoByName(ctx, tx, name); err != nil {
+			return err
+		}
+
+		// The row is written first and the file last, so a failure writing
+		// the file rolls the row back and the two stay in step.
+		if err := d.store.SetRepoDescriptionByName(ctx, tx, name, desc); err != nil {
 			return err
 		}
 
@@ -1136,17 +1411,20 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 			d.logger.Error("failed to write description", "repo", name, "err", err)
 			return errRepoUpdate
 		}
-
-		return d.store.SetRepoDescriptionByName(ctx, tx, name, desc)
+		return nil
 	}))
 }
 
 // SetPrivate sets the private flag of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
+
+	// git-daemon-export-ok is changed inside the transaction and is not
+	// restored if the transaction fails. Cancelling ctx, as a client
+	// disconnecting does, must not roll the flag back once the file is
+	// changed, so the change and its event run to the end once started.
+	ctx = context.WithoutCancel(ctx)
 
 	var changed bool
 	if err := wrapRepoError(
@@ -1156,6 +1434,12 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 				return err
 			}
 			changed = m.Private != private
+
+			// The flag is written first and the file last, so a failure
+			// writing the file rolls the flag back and the two stay in step.
+			if err := d.store.SetRepoIsPrivateByName(ctx, tx, name, private); err != nil {
+				return err
+			}
 
 			fp := filepath.Join(rp, "git-daemon-export-ok")
 			if !private {
@@ -1172,7 +1456,7 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 				}
 			}
 
-			return d.store.SetRepoIsPrivateByName(ctx, tx, name, private)
+			return nil
 		}),
 	); err != nil {
 		return err
@@ -1183,6 +1467,8 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 	}
 
 	// The change is committed, so an event problem is logged, not returned.
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	repo, err := d.Repository(ctx, name)
 	if err != nil {
 		d.logger.Error("visibility change committed but webhook event skipped", "repo", name, "err", err)
@@ -1200,8 +1486,6 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 }
 
 // SetProjectName sets the project name of a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) SetProjectName(ctx context.Context, repo string, name string) error {
 	repo = utils.SanitizeRepo(repo)
 	name = utils.Sanitize(name)
@@ -1223,11 +1507,50 @@ func (d *Backend) repoPath(name string) string {
 	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
 }
 
+// isOrphanRepoPath reports whether the directory of the repository named name,
+// which has no row, exists and is not the directory of any repository with a
+// row. A filesystem can lead the path of a different name to a repository's
+// directory: one that ignores case (macOS, Windows) or Unicode normalization
+// (APFS). Which names match depends on the filesystem, so every repository's
+// directory is compared, not only those of names that look alike.
+func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
+	fi, err := os.Lstat(d.repoPath(name))
+	if err != nil {
+		return false, nil //nolint:nilerr // no directory, nothing to remove
+	}
+	repos, err := d.store.GetAllRepos(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range repos {
+		rfi, err := os.Lstat(d.repoPath(r.Name))
+		if err == nil && os.SameFile(fi, rfi) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // repoPathExists reports whether anything occupies the repository's directory,
 // whether or not a database row points at it.
 func (d *Backend) repoPathExists(name string) bool {
 	_, err := os.Lstat(d.repoPath(name))
 	return err == nil
+}
+
+// repoRowExists reports whether the database holds a row for the
+// repository. It fails closed: an error other than not-found counts as a
+// row, so a lookup failure never makes a taken name look free.
+func (d *Backend) repoRowExists(ctx context.Context, name string) bool {
+	_, err := d.store.GetRepoByName(ctx, d.db, name)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return false
+	}
+	d.logger.Error("failed to look up repository row", "repo", name, "err", err)
+	return true
 }
 
 var _ proto.Repository = (*repo)(nil)
@@ -1248,7 +1571,6 @@ func (r *repo) ID() int64 {
 }
 
 // UserID returns the repository's owner's user ID.
-// If the repository is not owned by anyone, it returns 0.
 //
 // It implements proto.Repository.
 func (r *repo) UserID() int64 {
@@ -1260,35 +1582,35 @@ func (r *repo) UserID() int64 {
 
 // Description returns the repository's description.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Description() string {
 	return r.repo.Description
 }
 
 // IsMirror returns whether the repository is a mirror.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsMirror() bool {
 	return r.repo.Mirror
 }
 
 // IsPrivate returns whether the repository is private.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsPrivate() bool {
 	return r.repo.Private
 }
 
 // Name returns the repository's name.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Name() string {
 	return r.name
 }
 
 // Open opens the repository.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) Open() (*git.Repository, error) {
 	gr, err := git.Open(r.path)
 	if err != nil {
@@ -1314,14 +1636,14 @@ func openRepoError(logger *log.Logger, err error, path string) error {
 
 // ProjectName returns the repository's project name.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) ProjectName() string {
 	return r.repo.ProjectName
 }
 
 // IsHidden returns whether the repository is hidden.
 //
-// It implements backend.Repository.
+// It implements proto.Repository.
 func (r *repo) IsHidden() bool {
 	return r.repo.Hidden
 }

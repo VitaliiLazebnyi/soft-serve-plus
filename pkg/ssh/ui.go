@@ -1,13 +1,15 @@
 package ssh
 
 import (
+	"context"
 	"errors"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
@@ -44,6 +46,17 @@ type UI struct {
 	footer      *footer.Footer
 	showFooter  bool
 	error       error
+	// repoGen counts repository opens. Each open records the value it
+	// started with, and only the newest open is applied.
+	repoGen uint64
+}
+
+// repoOpenedMsg is the result of opening a repository the user picked (or the
+// initial repository). gen is the repoGen the open started with.
+type repoOpenedMsg struct {
+	gen  uint64
+	repo proto.Repository
+	err  error
 }
 
 // NewUI returns a new UI model.
@@ -93,9 +106,8 @@ func (ui *UI) ShortHelp() []key.Binding {
 		b = append(b, ui.pages[ui.activePage].ShortHelp()...)
 	}
 	if !ui.IsFiltering() {
-		b = append(b, ui.common.KeyMap.Quit)
+		b = append(b, ui.common.KeyMap.Quit, ui.common.KeyMap.Help)
 	}
-	b = append(b, ui.common.KeyMap.Help)
 	return b
 }
 
@@ -108,13 +120,12 @@ func (ui *UI) FullHelp() [][]key.Binding {
 	case readyState:
 		b = append(b, ui.pages[ui.activePage].FullHelp()...)
 	}
-	h := []key.Binding{
-		ui.common.KeyMap.Help,
-	}
 	if !ui.IsFiltering() {
-		h = append(h, ui.common.KeyMap.Quit)
+		b = append(b, []key.Binding{
+			ui.common.KeyMap.Help,
+			ui.common.KeyMap.Quit,
+		})
 	}
-	b = append(b, h)
 	return b
 }
 
@@ -148,7 +159,9 @@ func (ui *UI) Init() tea.Cmd {
 		ui.pages[repoPage].Init(),
 	)
 	if ui.initialRepo != "" {
-		cmds = append(cmds, ui.initialRepoCmd(ui.initialRepo))
+		// A deep link to a repository that is missing, or that the caller
+		// cannot read, shows the same error as picking one from the list.
+		cmds = append(cmds, ui.openRepoCmd(ui.initialRepo))
 	}
 	ui.state = readyState
 	ui.SetSize(ui.common.Width, ui.common.Height)
@@ -158,8 +171,8 @@ func (ui *UI) Init() tea.Cmd {
 // IsFiltering returns true if the selection page is filtering.
 func (ui *UI) IsFiltering() bool {
 	if ui.activePage == selectionPage {
-		if s, ok := ui.pages[selectionPage].(*selection.Selection); ok && s.FilterState() == list.Filtering {
-			return true
+		if s, ok := ui.pages[selectionPage].(interface{ IsFiltering() bool }); ok {
+			return s.IsFiltering()
 		}
 	}
 	return false
@@ -168,7 +181,25 @@ func (ui *UI) IsFiltering() bool {
 // Update implements tea.Model.
 func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	ui.common.Logger.Debugf("msg received: %T", msg)
+	if m, ok := msg.(repoOpenedMsg); ok {
+		// Only the newest open counts. An older one finished late, for
+		// example after the user picked another repository.
+		if m.gen != ui.repoGen {
+			return ui, nil
+		}
+		// The initial repository and a picked one report a failed open
+		// the same way.
+		if m.err != nil {
+			msg = common.ErrorMsg(m.err)
+		} else {
+			msg = repo.RepoMsg(m.repo)
+		}
+	}
 	cmds := make([]tea.Cmd, 0)
+	// While an error is shown the page underneath is hidden, so input
+	// belongs to the error alone: the key that dismisses it must not also
+	// act on the page.
+	forwardInput := ui.state != errorState
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		ui.SetSize(msg.Width, msg.Height)
@@ -184,16 +215,16 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, ui.common.KeyMap.Back) && ui.error != nil:
 			ui.error = nil
 			ui.state = readyState
-			// Always show the footer on error.
-			ui.showFooter = ui.footer.ShowAll()
-		case key.Matches(msg, ui.common.KeyMap.Help):
+			// Always show the footer on the selection page; on the repo page
+			// only when all help is shown.
+			ui.showFooter = ui.activePage == selectionPage || ui.footer.ShowAll()
+		case key.Matches(msg, ui.common.KeyMap.Help) && !ui.IsFiltering():
 			cmds = append(cmds, footer.ToggleFooterCmd)
-		case key.Matches(msg, ui.common.KeyMap.Quit):
-			if !ui.IsFiltering() {
-				// Stop bubblezone background workers.
-				ui.common.Zone.Close()
-				return ui, tea.Quit
-			}
+		case key.Matches(msg, ui.common.KeyMap.Quit) &&
+			(!ui.IsFiltering() || msg.String() == "ctrl+c"):
+			// While filtering, "q" is typed into the filter but ctrl+c
+			// still quits.
+			return ui, tea.Quit
 		case ui.activePage == repoPage &&
 			ui.pages[ui.activePage].(*repo.Repo).Path() == "" &&
 			key.Matches(msg, ui.common.KeyMap.Back):
@@ -205,7 +236,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Button {
 		case tea.MouseLeft:
 			switch {
-			case ui.common.Zone.Get("footer").InBounds(msg):
+			case ui.common.Zone.Get(ui.footer.ZoneID()).InBounds(msg):
 				cmds = append(cmds, footer.ToggleFooterCmd)
 			}
 		}
@@ -216,20 +247,35 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ui.showFooter = !ui.showFooter
 		}
 	case repo.RepoMsg:
-		ui.common.SetValue(common.RepoKey, msg)
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()
-		cmds = append(cmds, repo.UpdateRefCmd(msg))
+		// The repository page loads the ref to show itself.
 	case common.ErrorMsg:
+		if !common.IsUserError(msg) {
+			// The error screen shows a generic message for this error, which
+			// may carry git's output or paths on disk, so log it in full.
+			ui.common.Logger.Error("ui error", "err", msg)
+		}
 		ui.error = msg
 		ui.state = errorState
 		ui.showFooter = true
+	case selection.ReposMsg:
+		// The list loads in the background and may arrive after an
+		// initial repository opened, so it goes to the selection page
+		// whichever page is active.
+		if ui.activePage != selectionPage {
+			m, cmd := ui.pages[selectionPage].Update(msg)
+			ui.pages[selectionPage] = m.(common.Component)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case selection.Item:
 			if ui.activePage == selectionPage {
-				cmds = append(cmds, ui.setRepoCmd(msg.ID()))
+				cmds = append(cmds, ui.openRepoCmd(msg.ID()))
 			}
 		}
 	}
@@ -243,7 +289,9 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if ui.state != loadingState {
+	// A window size message has already been delivered to every page above.
+	_, resized := msg.(tea.WindowSizeMsg)
+	if !resized && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		m, cmd := ui.pages[ui.activePage].Update(msg)
 		ui.pages[ui.activePage] = m.(common.Component)
 		if cmd != nil {
@@ -268,7 +316,7 @@ func (ui *UI) View() tea.View {
 		view = "Loading..."
 	case errorState:
 		err := ui.common.Styles.ErrorTitle.Render("Bummer")
-		err += ui.common.Styles.ErrorBody.Render(ui.error.Error())
+		err += ui.common.Styles.ErrorBody.Render(common.ErrorMessage(ui.error))
 		view = ui.common.Styles.Error.
 			Width(ui.common.Width -
 				wm -
@@ -294,40 +342,41 @@ func (ui *UI) View() tea.View {
 	return v
 }
 
-func (ui *UI) openRepo(rn string) (proto.Repository, error) {
+// openRepoCmd starts opening repository rn. It must be called from Init or
+// Update: it takes the next repoGen and copies the context, backend and session
+// user there, so the command never reads the UI, whose context Update replaces
+// when a repository is shown.
+func (ui *UI) openRepoCmd(rn string) tea.Cmd {
+	ui.repoGen++
+	gen := ui.repoGen
+	ctx := ui.common.Context()
 	cfg := ui.common.Config()
+	be := ui.common.Backend()
+	user := proto.UserFromContext(ctx)
+	return func() tea.Msg {
+		r, err := openRepo(ctx, cfg, be, user, rn)
+		return repoOpenedMsg{gen: gen, repo: r, err: err}
+	}
+}
+
+// openRepo opens repository rn for user, the session user. An admin key on
+// ctx still opens every repository.
+func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, user proto.User, rn string) (proto.Repository, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil")
 	}
-
-	ctx := ui.common.Context()
-	be := ui.common.Backend()
+	if be == nil {
+		return nil, errors.New("backend is nil")
+	}
 
 	// A repository the caller cannot read is reported as missing, so a
-	// private repository and a missing one behave the same.
-	r, _ := be.ReadableByPublicKey(ctx, rn, ui.common.PublicKey())
+	// private repository and a missing one behave the same. The user is
+	// the one AuthenticationMiddleware put on the session context, so
+	// opening a repository does not look the key up again; an admin key
+	// on the context still gets admin access.
+	r, _ := be.ReadableForUser(ctx, rn, user)
 	if r == nil {
 		return nil, common.ErrMissingRepo
 	}
 	return r, nil
-}
-
-func (ui *UI) setRepoCmd(rn string) tea.Cmd {
-	return func() tea.Msg {
-		r, err := ui.openRepo(rn)
-		if err != nil {
-			return common.ErrorMsg(err)
-		}
-		return repo.RepoMsg(r)
-	}
-}
-
-func (ui *UI) initialRepoCmd(rn string) tea.Cmd {
-	return func() tea.Msg {
-		r, err := ui.openRepo(rn)
-		if err != nil {
-			return nil
-		}
-		return repo.RepoMsg(r)
-	}
 }

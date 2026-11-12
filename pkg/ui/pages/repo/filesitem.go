@@ -27,7 +27,7 @@ func (i FileItem) ID() string {
 
 // Title returns the title of the file item.
 func (i FileItem) Title() string {
-	return common.UnquoteFilename(i.entry.Name())
+	return common.DisplayFilename(i.entry.Name())
 }
 
 // Description returns the description of the file item.
@@ -42,27 +42,6 @@ func (i FileItem) Mode() fs.FileMode {
 
 // FilterValue implements list.Item.
 func (i FileItem) FilterValue() string { return i.Title() }
-
-// FileItems is a list of file items.
-type FileItems []FileItem
-
-// Len implements sort.Interface.
-func (cl FileItems) Len() int { return len(cl) }
-
-// Swap implements sort.Interface.
-func (cl FileItems) Swap(i, j int) { cl[i], cl[j] = cl[j], cl[i] }
-
-// Less implements sort.Interface.
-func (cl FileItems) Less(i, j int) bool {
-	if cl[i].entry.IsTree() && cl[j].entry.IsTree() {
-		return cl[i].Title() < cl[j].Title()
-	} else if cl[i].entry.IsTree() {
-		return true
-	} else if cl[j].entry.IsTree() {
-		return false
-	}
-	return cl[i].Title() < cl[j].Title()
-}
 
 // FileItemDelegate is the delegate for the file item list.
 type FileItemDelegate struct {
@@ -144,13 +123,10 @@ func (d FileItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 		s.Selector.GetWidth())
 	//nolint:errcheck
 	fmt.Fprint(w,
-		d.common.Zone.Mark(
-			i.ID(),
-			truncate.Render(fmt.Sprintf("%s%s%s",
-				modeStr,
-				size,
-				name,
-			)),
-		),
+		truncate.Render(fmt.Sprintf("%s%s%s",
+			modeStr,
+			size,
+			name,
+		)),
 	)
 }

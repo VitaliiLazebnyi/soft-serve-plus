@@ -20,6 +20,9 @@ type RepositoryStore interface {
 	GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error)
 	GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, error)
 	GetUserRepos(ctx context.Context, h db.Handler, userID int64) ([]models.Repo, error)
+	// CreateRepo creates a repository owned by userID, which must be an
+	// existing user; repositories created anonymously are owned by the
+	// default admin and marked with isAnonymous.
 	CreateRepo(ctx context.Context, h db.Handler, name string, userID int64, projectName string, description string, isPrivate bool, isHidden bool, isMirror bool, isAnonymous bool) error
 	// CountUserRepos counts the repositories userID created, leaving out
 	// those created anonymously that userID owns as the default admin.
@@ -28,8 +31,11 @@ type RepositoryStore interface {
 	CountAnonymousRepos(ctx context.Context, h db.Handler) (int64, error)
 	// LockUserRepos locks userID's row until the transaction ends, on
 	// Postgres, so that concurrent callers that insert a repository owned by
-	// userID and then count take turns. On SQLite callers take turns because
-	// the insert already holds the write lock, and it does nothing.
+	// userID and then count take turns. On SQLite it does nothing: a write
+	// transaction holds the database's write lock from BEGIN IMMEDIATE (see
+	// db.Open), or from its first write, so callers already take turns.
+	// Backend.RemoveOwnPublicKey takes it too, so that removals of a user's
+	// keys count the remaining keys in turn.
 	LockUserRepos(ctx context.Context, h db.Handler, userID int64) error
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error

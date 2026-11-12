@@ -77,6 +77,8 @@ func (*collabStore) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo s
 		INNER JOIN repos ON repos.id = collabs.repo_id
 		WHERE
 			repos.name = ?
+		ORDER BY
+			collabs.id
 	`)
 
 	err := tx.SelectContext(ctx, &m, query, repo)
@@ -97,9 +99,18 @@ func (*collabStore) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler,
 		INNER JOIN repos ON repos.id = collabs.repo_id
 		WHERE
 			repos.name = ?
+		ORDER BY
+			users.username
 	`)
 
 	err := tx.SelectContext(ctx, &m, query, repo)
+	return m, err
+}
+
+// ListCollabsByUserID implements store.CollaboratorStore.
+func (*collabStore) ListCollabsByUserID(ctx context.Context, tx db.Handler, userID int64) ([]models.Collab, error) {
+	var m []models.Collab
+	err := tx.SelectContext(ctx, &m, tx.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
 	return m, err
 }
 

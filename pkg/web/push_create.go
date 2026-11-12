@@ -33,7 +33,7 @@ var pushCreateTimeout = 10 * time.Minute
 // list once a request to it ends and it has a ref.
 //
 // The list is kept in memory, so a repository still on it when the server
-// stops is kept, empty, until someone deletes it. That errs on the side of
+// stops, or when close is called, is kept, empty, until someone deletes it. That errs on the side of
 // keeping: nothing on disk tells such a repository apart from one created
 // empty on purpose.
 type pushCreates struct {
@@ -42,6 +42,12 @@ type pushCreates struct {
 	// takes it.
 	mu    sync.Mutex
 	repos map[string]*pushCreate
+	// closed is set by close. No timer is started and no removal starts
+	// once it is set.
+	closed bool
+	// waiting, if set, is called when a request starts waiting for a
+	// removal. Tests use it to end the removal only once a request waits.
+	waiting func(name string)
 }
 
 // pushCreate is a repository created by an HTTP push that has no refs yet.
@@ -100,23 +106,30 @@ func (p *pushCreates) add(ctx context.Context, name string, repo proto.Repositor
 // removed under the request. It returns the request's context, carrying a
 // pushOutcome, and the function to call when the request ends, or ctx and
 // nil when name is not on the list.
-func (p *pushCreates) begin(ctx context.Context, name string) (context.Context, func()) {
+//
+// If the repository is being removed, begin waits for the removal to end
+// and returns waited true, with ctx and nil: the repository the caller
+// resolved before may be gone, so the caller must resolve it, and the
+// caller's access to it, again.
+func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context, done func(), waited bool) {
 	if p == nil {
-		return ctx, nil
+		return ctx, nil, false
 	}
 	p.mu.Lock()
 	pc, ok := p.repos[name]
 	if !ok {
 		p.mu.Unlock()
-		return ctx, nil
+		return ctx, nil, false
 	}
 	if pc.removing != nil {
-		// Wait for the removal to end; the request then finds the
-		// repository gone, or kept and off the list.
 		ch := pc.removing
+		waiting := p.waiting
 		p.mu.Unlock()
+		if waiting != nil {
+			waiting(name)
+		}
 		<-ch
-		return ctx, nil
+		return ctx, nil, true
 	}
 	pc.inflight++
 	pc.gen++
@@ -126,7 +139,7 @@ func (p *pushCreates) begin(ctx context.Context, name string) (context.Context, 
 	}
 	p.mu.Unlock()
 	o := &pushOutcome{}
-	return context.WithValue(ctx, pushOutcomeKey{}, o), func() { p.end(name, pc, o.failed) }
+	return context.WithValue(ctx, pushOutcomeKey{}, o), func() { p.end(name, pc, o.failed) }, false
 }
 
 // end is called when a request to a listed repository ends. Once no
@@ -159,6 +172,9 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 		delete(p.repos, name)
 		return
 	}
+	if p.closed {
+		return
+	}
 	pc.timer = time.AfterFunc(pushCreateTimeout, func() { p.remove(name, pc, gen) })
 }
 
@@ -167,7 +183,7 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 // request started since gen was taken.
 func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 	p.mu.Lock()
-	if p.repos[name] != pc || pc.gen != gen || pc.inflight > 0 || pc.removing != nil {
+	if p.closed || p.repos[name] != pc || pc.gen != gen || pc.inflight > 0 || pc.removing != nil {
 		p.mu.Unlock()
 		return
 	}
@@ -198,6 +214,38 @@ func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 	case removed:
 		logger.Info("removed repository created by a push that sent no refs", "repo", name)
 	}
+}
+
+// close stops the removal timers and keeps any removal from starting, so
+// none runs against a backend that is being closed. It then waits for the
+// removals already running to end, or for ctx to be done, and returns
+// ctx's error in that case.
+func (p *pushCreates) close(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	p.closed = true
+	var running []chan struct{}
+	for _, pc := range p.repos {
+		if pc.timer != nil {
+			pc.timer.Stop()
+			pc.timer = nil
+		}
+		if pc.removing != nil {
+			running = append(running, pc.removing)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, ch := range running {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // hasRefs reports whether the repository at dir has any ref. A repository

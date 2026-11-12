@@ -368,6 +368,18 @@ soft repo list
 ! soft repo delete gone
 stderr 'repository not found'
 
+# a private row whose directory is gone stays hidden from everyone else
+soft repo create hush -p -d 'confidential'
+rm $DATA_PATH/repos/hush.git
+soft repo list
+stdout 'hush'
+usoft repo list
+! stdout 'hush'
+! usoft repo create hush
+! usoft repo description hush
+! stdout 'confidential'
+soft repo delete hush
+
 # a reader who cannot write is still told so, since existence is no secret
 soft repo collab add secret user1 read-only
 usoft repo description secret
@@ -378,7 +390,6 @@ stderr 'unauthorized'
 ! usoft repo collab list secret
 stderr 'unauthorized'
 
-# stop the server; the last command must succeed so stderr is clean
-soft repo list
+# stop the server
 [windows] stopserver
 [windows] ! stderr .

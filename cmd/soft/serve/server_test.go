@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -110,7 +112,7 @@ func TestEnsureDefaultRepoDisabled(t *testing.T) {
 }
 
 // With admin-only creation on, the boot-time default repository is still
-// created: it is attributed to the database admin (user 1), who may create.
+// created: it is attributed to the lowest-ID admin, who may create.
 func TestEnsureDefaultRepoCreatesWhenAdminOnly(t *testing.T) {
 	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
@@ -124,18 +126,22 @@ func TestEnsureDefaultRepoCreatesWhenAdminOnly(t *testing.T) {
 	is.Equal(r.Name(), "gitops")
 }
 
-// The default repository is the server's own bootstrap, so admin-only
-// creation does not apply to it even when user 1 is no longer an admin.
-func TestEnsureDefaultRepoIgnoresAdminOnlyForDemotedOwner(t *testing.T) {
+// User 1 is not necessarily an admin (it can be demoted, and a database
+// imported from an older version keeps that version's user IDs), so the
+// default repository goes to the lowest-ID admin rather than to user 1, who
+// would otherwise get admin access to it as its owner.
+func TestEnsureDefaultRepoOwnedByAdminWhenUserOneDemoted(t *testing.T) {
 	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
-	owner, err := be.UserByID(ctx, 1)
+	user1, err := be.UserByID(ctx, 1)
 	is.NoErr(err)
-	// A second admin, so user 1 can be demoted.
-	_, err = be.CreateUser(ctx, "root2", proto.UserOptions{Admin: true})
+	// Two more admins, so user 1 can be demoted and the lowest ID wins.
+	admin, err := be.CreateUser(ctx, "root2", proto.UserOptions{Admin: true})
 	is.NoErr(err)
-	is.NoErr(be.SetAdmin(ctx, owner.Username(), false))
+	_, err = be.CreateUser(ctx, "root3", proto.UserOptions{Admin: true})
+	is.NoErr(err)
+	is.NoErr(be.SetAdmin(ctx, user1.Username(), false))
 
 	cfg.AdminOnlyCreate = true
 	cfg.DefaultRepo = "gitops"
@@ -143,7 +149,25 @@ func TestEnsureDefaultRepoIgnoresAdminOnlyForDemotedOwner(t *testing.T) {
 
 	r, err := be.Repository(ctx, "gitops")
 	is.NoErr(err)
-	is.Equal(r.UserID(), owner.ID())
+	is.Equal(r.UserID(), admin.ID())
+}
+
+// When user 1 has been deleted, the default repository is still created and
+// attributed to the remaining admin.
+func TestEnsureDefaultRepoCreatedWhenUserOneDeleted(t *testing.T) {
+	is := is.New(t)
+	ctx, cfg, be := setupTestBackend(t)
+
+	admin, err := be.CreateUser(ctx, "root2", proto.UserOptions{Admin: true})
+	is.NoErr(err)
+	is.NoErr(be.DeleteUser(ctx, "admin"))
+
+	cfg.DefaultRepo = "gitops"
+	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
+
+	r, err := be.Repository(ctx, "gitops")
+	is.NoErr(err)
+	is.Equal(r.UserID(), admin.ID())
 }
 
 func TestEnsureDefaultRepoCreatesWhenMissing(t *testing.T) {
@@ -219,8 +243,8 @@ func TestEnsureDefaultRepoOwnerLookupFailsSkipped(t *testing.T) {
 	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
-	// Delete the built-in admin account (ID 1) so UserByID cannot find it.
-	// ensureDefaultRepo must log and return, not panic.
+	// Delete the only admin account so there is no owner to attribute the
+	// repository to. ensureDefaultRepo must log and return, not panic.
 	is.NoErr(be.DeleteUser(ctx, "admin"))
 
 	cfg.DefaultRepo = "gitops"
@@ -441,6 +465,20 @@ func TestStartRejectsEmptyListenAddr(t *testing.T) {
 	requireBindable(t, sshAddr)
 }
 
+// With every server disabled, Start fails instead of returning nil at once,
+// which made "soft serve" exit successfully without serving anything.
+func TestStartFailsWithNoServerEnabled(t *testing.T) {
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	s.Config.SSH.Enabled = false
+	s.Config.Git.Enabled = false
+	s.Config.HTTP.Enabled = false
+	s.Config.Stats.Enabled = false
+	err := waitStart(t, startAsync(s), "with no server enabled")
+	if err == nil || !strings.Contains(err.Error(), "no server is enabled") {
+		t.Fatalf("Start returned %v, want a no server enabled error", err)
+	}
+}
+
 // A Shutdown that comes right after Start bound its listeners, while the
 // servers are only starting to serve on them, still stops them all within
 // its deadline. The SSH server used to wait for a listener it started serving
@@ -605,4 +643,68 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	requireServerClosed(t, "Git daemon", gitDaemon.Serve, daemon.ErrServerClosed)
+}
+
+// blockingJob is a cron job that runs blockingJobHook, when it is set, with
+// the context the server gives the job.
+type blockingJob struct{}
+
+var blockingJobHook atomic.Pointer[func(context.Context)]
+
+func (blockingJob) Spec(context.Context) string { return "@every 1s" }
+
+func (blockingJob) Func(ctx context.Context) func() {
+	return func() {
+		if h := blockingJobHook.Load(); h != nil {
+			(*h)(ctx)
+		}
+	}
+}
+
+// Shutdown cancels a running cron job, such as a mirror sync, and waits for
+// it to end, so it does not run on against the database the caller closes
+// next.
+func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
+	jobs.Register("test-blocking", blockingJob{})
+	started := make(chan struct{}, 1)
+	var finished atomic.Bool
+	hook := func(ctx context.Context) {
+		select {
+		case started <- struct{}{}:
+		default:
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+		}
+		// Still busy for a moment after the cancellation, as a job
+		// stopping its git processes is.
+		time.Sleep(200 * time.Millisecond)
+		finished.Store(true)
+	}
+	blockingJobHook.Store(&hook)
+	t.Cleanup(func() { blockingJobHook.Store(nil) })
+
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	errc := startAsync(s)
+	select {
+	case <-started:
+	case err := <-errc:
+		t.Fatalf("Start returned %v before the job ran", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cron job did not run")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx, ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if !finished.Load() {
+		t.Fatal("Shutdown returned while the cron job was still running")
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
 }

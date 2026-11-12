@@ -2,9 +2,13 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestWorkPool(t *testing.T) {
@@ -31,5 +35,90 @@ func TestWorkPool(t *testing.T) {
 		if wp.Status(id) {
 			t.Errorf("expected %s to be false", id)
 		}
+	}
+}
+
+// Run waits for the work already running when the pool's context is
+// cancelled, and starts no more.
+func TestWorkPoolRunWaitsAfterCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wp := NewWorkPool(ctx, 1)
+	var finished, ran atomic.Int32
+	for i := 0; i < 2; i++ {
+		wp.Add(strconv.Itoa(i), func() {
+			if ran.Add(1) > 1 {
+				return
+			}
+			cancel()
+			time.Sleep(200 * time.Millisecond)
+			finished.Add(1)
+		})
+	}
+	wp.Run()
+	if finished.Load() != 1 {
+		t.Fatal("Run returned before the running work ended")
+	}
+	if n := ran.Load(); n != 1 {
+		t.Fatalf("%d pieces of work ran, want 1", n)
+	}
+}
+
+// A pool can be run again: the second Run must not block on the workers the
+// first one waited for, and runs the work added since.
+func TestWorkPoolRunTwice(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var errs []string
+	wp := NewWorkPool(ctx, 2, WithWorkPoolLogger(func(format string, args ...interface{}) {
+		errs = append(errs, fmt.Sprintf(format, args...))
+	}))
+
+	var runs atomic.Int32
+	wp.Add("first", func() { runs.Add(1) })
+	wp.Run()
+
+	wp.Add("second", func() { runs.Add(1) })
+	wp.Run()
+
+	if n := runs.Load(); n != 2 {
+		t.Errorf("expected 2 runs, got %d", n)
+	}
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+	if wp.Status("second") {
+		t.Error("second job still queued")
+	}
+}
+
+// TestWorkPoolRecoversPanic checks that a panicking job is logged and
+// removed without killing the process or stopping the other jobs.
+func TestWorkPoolRecoversPanic(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	ran := false
+	wp := NewWorkPool(context.Background(), 1, WithWorkPoolLogger(func(format string, args ...interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}))
+	wp.Add("panics", func() { panic("boom") })
+	wp.Add("runs", func() {
+		mu.Lock()
+		defer mu.Unlock()
+		ran = true
+	})
+	wp.Run()
+
+	if !ran {
+		t.Error("expected the other job to run")
+	}
+	if wp.Status("panics") {
+		t.Error("expected the panicking job to be removed from the pool")
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "job panics panicked: boom") {
+		t.Errorf("expected the panic to be logged, got %q", logs)
 	}
 }

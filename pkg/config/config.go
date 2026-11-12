@@ -1,10 +1,16 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
+	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/crypto/ssh"
 )
@@ -65,6 +72,26 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
+	// HandshakeTimeout is the number of seconds a client has to finish the
+	// SSH handshake and authenticate, like OpenSSH's LoginGraceTime. Until
+	// then the connection holds a place under MaxConnections and
+	// MaxConnectionsPerIP, so this bounds how long an idle, unauthenticated
+	// client can keep one. Zero means no limit.
+	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
+
+	// MaxConnections is the maximum number of SSH connections open at once.
+	// Zero means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
+	// MaxConnectionsPerIP is the maximum number of SSH connections open at
+	// once from one client address (one IPv4 address, or one IPv6 /64).
+	// Zero means no limit.
+	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
+
+	// MaxSessions is the maximum number of sessions open at once on one SSH
+	// connection, like OpenSSH's MaxSessions. Zero means no limit.
+	MaxSessions int `env:"MAX_SESSIONS" yaml:"max_sessions"`
+
 	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
 	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
 	KexAlgorithms []string `env:"KEX_ALGORITHMS" yaml:"kex_algorithms"`
@@ -76,6 +103,11 @@ type SSHConfig struct {
 	// MACs lists the message authentication codes the SSH server offers, in
 	// order of preference. When empty, DefaultSSHMACs is used.
 	MACs []string `env:"MACS" yaml:"macs"`
+
+	// PublicKeyAuthAlgorithms lists the signature algorithms the SSH server
+	// accepts for client public key authentication. When empty,
+	// DefaultSSHPublicKeyAuthAlgorithms is used.
+	PublicKeyAuthAlgorithms []string `env:"PUBLIC_KEY_AUTH_ALGORITHMS" yaml:"public_key_auth_algorithms"`
 
 	// allowedHosts is ClientAllowedHosts parsed by Validate.
 	allowedHosts ssrf.AllowedHosts
@@ -104,7 +136,8 @@ type GitConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
-	// MaxConnections is the maximum number of concurrent connections.
+	// MaxConnections is the maximum number of concurrent connections. It must
+	// be at least 1 while the daemon is enabled.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
 }
 
@@ -134,6 +167,19 @@ type HTTPConfig struct {
 	// PublicURL is the public URL of the HTTP server.
 	PublicURL string `env:"PUBLIC_URL" yaml:"public_url"`
 
+	// MaxTimeout is the maximum number of seconds a git or LFS request can
+	// take. 0 means no limit.
+	MaxTimeout int `env:"MAX_TIMEOUT" yaml:"max_timeout"`
+
+	// IdleTimeout is the number of seconds a git or LFS request can go
+	// without reading from or writing to the client before it is closed.
+	// 0 means no limit.
+	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
+
+	// MaxConnections is the maximum number of git and LFS requests served at
+	// once. 0 means no limit.
+	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
 	// CORS is the cross-origin configuration for the HTTP server.
 	CORS CORSConfig `envPrefix:"CORS_" yaml:"cors"`
 }
@@ -153,7 +199,7 @@ type LogConfig struct {
 	// Valid values are "json", "logfmt", and "text".
 	Format string `env:"FORMAT" yaml:"format"`
 
-	// Time format for the log `ts` field.
+	// Time format for the log `time` field.
 	// Format must be described in Golang's time format.
 	TimeFormat string `env:"TIME_FORMAT" yaml:"time_format"`
 
@@ -200,7 +246,15 @@ type LFSConfig struct {
 
 // JobsConfig is the configuration for cron jobs.
 type JobsConfig struct {
+	// MirrorPull is the cron spec for syncing pull mirrors. An empty value
+	// in the config file disables mirror syncing. An empty environment
+	// variable leaves the config file's value in place.
 	MirrorPull string `env:"MIRROR_PULL" yaml:"mirror_pull"`
+
+	// LFSSweep is the schedule for removing temporary files that
+	// interrupted LFS uploads and mirror downloads left behind for more
+	// than a day.
+	LFSSweep string `env:"LFS_SWEEP" yaml:"lfs_sweep"`
 }
 
 // WebhookConfig is the configuration for repository webhooks.
@@ -294,9 +348,17 @@ type Config struct {
 	// push-to-create. Server admins (admin accounts or initial_admin_keys)
 	// are exempt. Repositories created without an account all count
 	// together as one user. A user at the limit is refused; the
-	// repositories they already have are kept. 0 (the default) means no
-	// limit.
+	// repositories they already have are kept. Imports still running count
+	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
+
+	// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
+	// "repo blob" command read into memory to display. Larger files are
+	// refused ("repo blob --raw" streams them instead), and a larger README
+	// is not shown. 0 means no limit. The TUI renders a file synchronously,
+	// so this limit is also what bounds the time and memory one file view
+	// takes.
+	MaxBlobSize int64 `env:"MAX_BLOB_SIZE" yaml:"max_blob_size"`
 
 	// DefaultPrivate makes repositories created without an explicit
 	// visibility private: push-to-create over SSH and HTTP, repo create and
@@ -323,6 +385,18 @@ type Config struct {
 	// per config source, and more than once for the environment.
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
+
+	// unknownKeys records the config file keys no setting is read from.
+	unknownKeys []UnknownKey
+}
+
+// UnknownKey is a key in the config file that no setting is read from,
+// such as a misspelt one. It is ignored.
+type UnknownKey struct {
+	// Key is the dotted path of the key, such as "ssh.listen_adr".
+	Key string
+	// Line is the line of the key in the config file.
+	Line int
 }
 
 // Environ returns the config as a list of environment variables.
@@ -334,7 +408,9 @@ func (c *Config) Environ() []string {
 		return envs
 	}
 
-	// TODO: do this dynamically
+	// TestEnvironRoundTrip checks that ParseEnv reads every field back, so
+	// a new field must be added here. Log.Path is left out on purpose: the
+	// server gives hooks their own log file.
 	envs = append(envs, []string{
 		fmt.Sprintf("SOFT_SERVE_CONFIG_LOCATION=%s", c.ConfigPath()),
 		fmt.Sprintf("SOFT_SERVE_DATA_PATH=%s", c.DataPath),
@@ -350,9 +426,14 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS=%d", c.SSH.MaxConnections),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=%d", c.SSH.MaxConnectionsPerIP),
+		fmt.Sprintf("SOFT_SERVE_SSH_MAX_SESSIONS=%d", c.SSH.MaxSessions),
 		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
+		fmt.Sprintf("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=%s", strings.Join(c.SSH.PublicKeyAuthAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_GIT_ENABLED=%t", c.Git.Enabled),
 		fmt.Sprintf("SOFT_SERVE_GIT_LISTEN_ADDR=%s", c.Git.ListenAddr),
 		fmt.Sprintf("SOFT_SERVE_GIT_PUBLIC_URL=%s", c.Git.PublicURL),
@@ -364,6 +445,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_KEY_PATH=%s", c.HTTP.TLSKeyPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_CERT_PATH=%s", c.HTTP.TLSCertPath),
 		fmt.Sprintf("SOFT_SERVE_HTTP_PUBLIC_URL=%s", c.HTTP.PublicURL),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_TIMEOUT=%d", c.HTTP.MaxTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_IDLE_TIMEOUT=%d", c.HTTP.IdleTimeout),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_CONNECTIONS=%d", c.HTTP.MaxConnections),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS=%s", strings.Join(c.HTTP.CORS.AllowedHeaders, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=%s", strings.Join(c.HTTP.CORS.AllowedOrigins, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS=%s", strings.Join(c.HTTP.CORS.AllowedMethods, ",")),
@@ -380,6 +464,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_LFS_ENABLED=%t", c.LFS.Enabled),
 		fmt.Sprintf("SOFT_SERVE_LFS_SSH_ENABLED=%t", c.LFS.SSHEnabled),
 		fmt.Sprintf("SOFT_SERVE_JOBS_MIRROR_PULL=%s", c.Jobs.MirrorPull),
+		fmt.Sprintf("SOFT_SERVE_JOBS_LFS_SWEEP=%s", c.Jobs.LFSSweep),
 		fmt.Sprintf("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS=%s", strings.Join(c.Webhook.AllowedHosts, ",")),
 	}...)
 
@@ -396,6 +481,7 @@ func (c *Config) Environ() []string {
 
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_ADMIN_ONLY_CREATE=%t", c.AdminOnlyCreate))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_REPOS_PER_USER=%d", c.MaxReposPerUser))
+	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_BLOB_SIZE=%d", c.MaxBlobSize))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_DEFAULT_PRIVATE=%t", c.DefaultPrivate))
 
 	return envs
@@ -417,17 +503,95 @@ func IsVerbose() bool {
 // parseFile parses the given file as a configuration file.
 // The file must be in YAML format.
 func parseFile(cfg *Config, path string) error {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	defer f.Close() //nolint: errcheck
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+	// An empty or comment-only file has no YAML document and decodes to
+	// io.EOF. Treat it like an empty document and keep the defaults.
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
+	// Unknown keys are reported, not rejected, so a config written for
+	// another version still loads.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	cfg.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
+
 	return cfg.Validate()
+}
+
+// findUnknownKeys returns the keys of the mappings in n that no field of t,
+// or of the structs nested in it, is decoded from. prefix is the dotted
+// path of n.
+func findUnknownKeys(n *yaml.Node, t reflect.Type, prefix string) []UnknownKey {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch n.Kind {
+	case yaml.DocumentNode:
+		var keys []UnknownKey
+		for _, c := range n.Content {
+			keys = append(keys, findUnknownKeys(c, t, prefix)...)
+		}
+		return keys
+	case yaml.AliasNode:
+		return findUnknownKeys(n.Alias, t, prefix)
+	case yaml.MappingNode:
+	default:
+		return nil
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	fields := make(map[string]reflect.Type, t.NumField())
+	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			name = strings.ToLower(f.Name)
+		}
+		fields[name] = f.Type
+	}
+
+	var keys []UnknownKey
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if k.Tag == "!!merge" {
+			// The keys of a "<<" merge belong to this mapping.
+			if v.Kind == yaml.SequenceNode {
+				for _, m := range v.Content {
+					keys = append(keys, findUnknownKeys(m, t, prefix)...)
+				}
+			} else {
+				keys = append(keys, findUnknownKeys(v, t, prefix)...)
+			}
+			continue
+		}
+		ft, ok := fields[k.Value]
+		if !ok {
+			keys = append(keys, UnknownKey{Key: prefix + k.Value, Line: k.Line})
+			continue
+		}
+		keys = append(keys, findUnknownKeys(v, ft, prefix+k.Value+".")...)
+	}
+	return keys
+}
+
+// UnknownKeys returns the keys of the parsed config file that no setting is
+// read from, in file order. They are ignored.
+func (c *Config) UnknownKeys() []UnknownKey {
+	return slices.Clone(c.unknownKeys)
 }
 
 // ParseFile parses the config from the default file path.
@@ -448,7 +612,10 @@ func parseEnv(cfg *Config) error {
 	}); err != nil {
 		return fmt.Errorf("parse environment variables: %w", err)
 	}
-	if _, ok := os.LookupEnv("SOFT_SERVE_INITIAL_ADMIN_KEYS"); ok {
+	// The env parser leaves the list alone when the variable is set but
+	// blank, as in the Docker image, so it then still holds the file's keys,
+	// whose quotes are not the environment's to strip.
+	if v := os.Getenv("SOFT_SERVE_INITIAL_ADMIN_KEYS"); v != "" {
 		cfg.InitialAdminKeys = trimOuterQuotes(cfg.InitialAdminKeys)
 	}
 
@@ -494,10 +661,16 @@ func (c *Config) Parse() error {
 
 // writeConfig writes the configuration to the given file.
 func writeConfig(cfg *Config, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+	// The config can hold secrets such as a database password, so only
+	// the server's user may read it.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(newConfigFile(cfg)), 0o644) //nolint: errcheck, gosec
+	content, err := newConfigFile(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // WriteConfig writes the configuration to the default file.
@@ -528,6 +701,31 @@ func (c *Config) ConfigPath() string { //nolint:revive
 	return filepath.Join(c.DataPath, "config.yaml")
 }
 
+// CheckConfigLocation returns an error when SOFT_SERVE_CONFIG_LOCATION names
+// a file that does not exist. Without this check the server would silently
+// start on the default config, and write it to the data directory, after a
+// typo in the variable or with a config file that is not mounted yet.
+// Naming the default location in the data directory is allowed, since the
+// server writes the default config there on its first start.
+func (c *Config) CheckConfigLocation() error {
+	path := os.Getenv("SOFT_SERVE_CONFIG_LOCATION")
+	if path == "" {
+		return nil
+	}
+	_, err := os.Stat(path)
+	if err == nil || samePath(path, filepath.Join(c.DataPath, "config.yaml")) {
+		return nil
+	}
+	return fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
+}
+
+// samePath reports whether a and b name the same path once made absolute.
+func samePath(a, b string) bool {
+	a, errA := filepath.Abs(a)
+	b, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && a == b
+}
+
 func exist(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -555,6 +753,10 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  0,
 			IdleTimeout:                 10 * 60, // 10 minutes
+			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
+			MaxConnections:              256,
+			MaxConnectionsPerIP:         32,
+			MaxSessions:                 10,
 		},
 		Git: GitConfig{
 			Enabled:        true,
@@ -565,13 +767,15 @@ func DefaultConfig() *Config {
 			MaxConnections: 32,
 		},
 		HTTP: HTTPConfig{
-			Enabled:    true,
-			ListenAddr: ":23232",
-			PublicURL:  "http://localhost:23232",
+			Enabled:        true,
+			ListenAddr:     ":23232",
+			PublicURL:      "http://localhost:23232",
+			MaxTimeout:     0,
+			IdleTimeout:    60,
+			MaxConnections: 64,
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "Accept-Language", "Content-Language", "Content-Type", "Origin", "X-Requested-With", "User-Agent", "Authorization", "Access-Control-Request-Method", "Access-Control-Allow-Origin"},
 				AllowedMethods: []string{"GET", "HEAD", "POST", "PUT", "OPTIONS"},
-				AllowedOrigins: []string{"http://localhost:23232"},
 			},
 		},
 		Stats: StatsConfig{
@@ -593,8 +797,21 @@ func DefaultConfig() *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 10m",
+			LFSSweep:   "@every 1h",
 		},
+		MaxBlobSize: DefaultMaxBlobSize,
 	}
+}
+
+// DefaultMaxBlobSize is the default MaxBlobSize: 1 MiB.
+const DefaultMaxBlobSize = 1 << 20
+
+// BlobSizeLimit returns MaxBlobSize, or DefaultMaxBlobSize for a nil config.
+func (c *Config) BlobSizeLimit() int64 {
+	if c == nil {
+		return DefaultMaxBlobSize
+	}
+	return c.MaxBlobSize
 }
 
 // Validate validates the configuration.
@@ -615,8 +832,40 @@ func (c *Config) Validate() error {
 		c.DataPath = dp
 	}
 
-	c.SSH.PublicURL = strings.TrimSuffix(c.SSH.PublicURL, "/")
-	c.HTTP.PublicURL = strings.TrimSuffix(c.HTTP.PublicURL, "/")
+	c.SSH.PublicURL = strings.TrimRight(c.SSH.PublicURL, "/")
+	c.Git.PublicURL = strings.TrimRight(c.Git.PublicURL, "/")
+	c.HTTP.PublicURL = strings.TrimRight(c.HTTP.PublicURL, "/")
+
+	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
+	// value without a scheme or a host would hand clients unusable links.
+	if c.HTTP.PublicURL != "" {
+		u, err := url.Parse(c.HTTP.PublicURL)
+		if err != nil {
+			return fmt.Errorf("http.public_url: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http.public_url: %q must be an http:// or https:// URL with a host", c.HTTP.PublicURL)
+		}
+	}
+
+	// Setting only one of the pair would silently serve plain HTTP.
+	if (c.HTTP.TLSKeyPath == "") != (c.HTTP.TLSCertPath == "") {
+		return fmt.Errorf("http.tls_key_path and http.tls_cert_path must be set together")
+	}
+
+	switch strings.ToLower(c.Log.Format) {
+	case "", "json", "logfmt", "text":
+	default:
+		return fmt.Errorf("log.format: %q is not one of %q, %q, %q", c.Log.Format, "json", "logfmt", "text")
+	}
+
+	// The scheduler uses the standard parser; a spec it rejects would leave
+	// mirrors never syncing behind a startup warning.
+	if c.Jobs.MirrorPull != "" {
+		if _, err := cron.ParseStandard(c.Jobs.MirrorPull); err != nil {
+			return fmt.Errorf("jobs.mirror_pull: %q: %w", c.Jobs.MirrorPull, err)
+		}
+	}
 
 	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {
 		c.SSH.KeyPath = filepath.Join(c.DataPath, c.SSH.KeyPath)
@@ -640,8 +889,43 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Git.Enabled && c.Git.MaxConnections < 1 {
+		return fmt.Errorf("git.max_connections: %d must be at least 1", c.Git.MaxConnections)
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.max_timeout", c.SSH.MaxTimeout},
+		{"ssh.idle_timeout", c.SSH.IdleTimeout},
+		{"git.max_timeout", c.Git.MaxTimeout},
+		{"git.idle_timeout", c.Git.IdleTimeout},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
+		}
+	}
+
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"http.max_timeout", c.HTTP.MaxTimeout},
+		{"http.idle_timeout", c.HTTP.IdleTimeout},
+		{"http.max_connections", c.HTTP.MaxConnections},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
+		}
+	}
+
 	if c.MaxReposPerUser < 0 {
 		return fmt.Errorf("max_repos_per_user: %d is negative; use 0 for no limit", c.MaxReposPerUser)
+	}
+
+	if c.MaxBlobSize < 0 {
+		return fmt.Errorf("max_blob_size: %d is negative; use 0 for no limit", c.MaxBlobSize)
 	}
 
 	switch c.SSH.ClientStrictHostKeyChecking {
@@ -667,6 +951,20 @@ func (c *Config) Validate() error {
 	}
 	c.SSH.allowedHosts = allowed
 
+	for _, v := range []struct {
+		name  string
+		value int
+	}{
+		{"ssh.handshake_timeout", c.SSH.HandshakeTimeout},
+		{"ssh.max_connections", c.SSH.MaxConnections},
+		{"ssh.max_connections_per_ip", c.SSH.MaxConnectionsPerIP},
+		{"ssh.max_sessions", c.SSH.MaxSessions},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
+		}
+	}
+
 	if err := c.SSH.validateAlgorithms(); err != nil {
 		return err
 	}
@@ -688,13 +986,17 @@ func (c *Config) Validate() error {
 		c.HTTP.TLSCertPath = filepath.Join(c.DataPath, c.HTTP.TLSCertPath)
 	}
 
-	if strings.HasPrefix(c.DB.Driver, "sqlite") && !filepath.IsAbs(c.DB.DataSource) {
-		c.DB.DataSource = filepath.Join(c.DataPath, c.DB.DataSource)
+	if strings.HasPrefix(c.DB.Driver, "sqlite") {
+		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
+	}
+
+	if c.Log.Path != "" && !filepath.IsAbs(c.Log.Path) {
+		c.Log.Path = filepath.Join(c.DataPath, c.Log.Path)
 	}
 
 	// Validate keys
 	pks := make([]string, 0)
-	keys := parseAuthKeys(c.InitialAdminKeys)
+	keys := parseAuthKeys(c.InitialAdminKeys, c.DataPath)
 	for _, key := range keys.pks {
 		ak := sshutils.MarshalAuthorizedKey(key)
 		pks = append(pks, ak)
@@ -704,11 +1006,25 @@ func (c *Config) Validate() error {
 
 	c.InitialAdminKeys = pks
 
-	if !slices.Contains(c.HTTP.CORS.AllowedOrigins, c.HTTP.PublicURL) {
-		c.HTTP.CORS.AllowedOrigins = append([]string{c.HTTP.PublicURL}, c.HTTP.CORS.AllowedOrigins...)
-	}
+	// The public URL is allowed by CORSAllowedOrigins, not added here, so an
+	// environment override of it does not leave the file's URL allowed too.
+	c.HTTP.CORS.AllowedOrigins = slices.DeleteFunc(slices.Clone(c.HTTP.CORS.AllowedOrigins), func(s string) bool {
+		return strings.TrimSpace(s) == ""
+	})
 
 	return nil
+}
+
+// CORSAllowedOrigins returns the origins allowed to make cross-origin
+// requests: the HTTP public URL, which is always allowed, followed by the
+// configured allowed origins. The list is empty when neither is set, which
+// means no origin is allowed, not every one.
+func (c *Config) CORSAllowedOrigins() []string {
+	origins := slices.Clone(c.HTTP.CORS.AllowedOrigins)
+	if c.HTTP.PublicURL != "" && !slices.Contains(origins, c.HTTP.PublicURL) {
+		origins = append([]string{c.HTTP.PublicURL}, origins...)
+	}
+	return origins
 }
 
 // authKeys is the result of parseAuthKeys.
@@ -725,8 +1041,10 @@ type authKeys struct {
 
 // parseAuthKeys parses authorized keys from either file paths or string
 // authorized_keys. Blank entries and entries starting with "#" are comments
-// and are skipped.
-func parseAuthKeys(aks []string) authKeys {
+// and are skipped. A relative key file path is read from dataPath, like the
+// other relative paths in the config; when no file of that name is there,
+// it is read from the working directory as before.
+func parseAuthKeys(aks []string, dataPath string) authKeys {
 	var r authKeys
 	exist := make(map[string]struct{}, 0)
 	r.pks = make([]ssh.PublicKey, 0)
@@ -735,7 +1053,7 @@ func parseAuthKeys(aks []string) authKeys {
 		if key == "" || strings.HasPrefix(key, "#") {
 			continue
 		}
-		if bts, err := os.ReadFile(key); err == nil {
+		if bts, err := readKeyFile(key, dataPath); err == nil {
 			// key is a file in authorized_keys format: one key per line.
 			var found bool
 			var bad []string
@@ -838,13 +1156,70 @@ func trimOuterQuotes(aks []string) []string {
 
 // looksLikePath reports whether an entry that is not a key names a file. An
 // authorized key always has a space between its type and its data, so an
-// entry with a space is a malformed key; an entry without one is a path if
-// it has a directory separator or a file extension.
+// entry with a space is a malformed key; an entry without one is taken for a
+// path, even one with no directory or extension such as "admin_key", so that
+// a key file that is missing keeps the keys it may stand for.
 func looksLikePath(s string) bool {
-	if strings.ContainsFunc(s, unicode.IsSpace) {
-		return false
+	return !strings.ContainsFunc(s, unicode.IsSpace)
+}
+
+// readKeyFile reads the admin key file named by path. A relative path is
+// looked up in dataPath first, then, if no such file exists there, in the
+// working directory, which is where earlier versions looked.
+func readKeyFile(path, dataPath string) ([]byte, error) {
+	if dataPath != "" && !filepath.IsAbs(path) {
+		bts, err := os.ReadFile(filepath.Join(dataPath, path))
+		if !errors.Is(err, fs.ErrNotExist) {
+			return bts, err
+		}
 	}
-	return strings.ContainsAny(s, `/\`) || filepath.Ext(s) != ""
+	return os.ReadFile(path)
+}
+
+// resolveSQLiteDataSource makes a relative SQLite database path in dsn
+// relative to dataPath. An in-memory database (":memory:", or a "file:" URI
+// naming ":memory:" or using mode=memory) is left alone, as is a "file:" URI
+// that already holds an absolute path or an authority ("file://..."). A
+// relative "file:" URI keeps its form and query, with the data path put in
+// front of its path.
+func resolveSQLiteDataSource(dataPath, dsn string) string {
+	name, query, hasQuery := strings.Cut(dsn, "?")
+	rest, isURI := strings.CutPrefix(name, "file:")
+	if !isURI {
+		if name == ":memory:" || filepath.IsAbs(dsn) {
+			return dsn
+		}
+		return filepath.Join(dataPath, dsn)
+	}
+
+	if rest == "" || rest == ":memory:" || strings.HasPrefix(rest, "/") || filepath.IsAbs(rest) {
+		return dsn
+	}
+	if hasQuery {
+		if q, err := url.ParseQuery(query); err == nil && q.Get("mode") == "memory" {
+			return dsn
+		}
+	}
+
+	// The data path goes into a URI, so escape the characters SQLite would
+	// read as the start of the query or fragment, or as an escape. The
+	// path from the URI is already in URI form and is kept as written.
+	base := (&url.URL{Path: filepath.ToSlash(dataPath)}).EscapedPath()
+	switch {
+	case strings.HasPrefix(base, "//"):
+		// A UNC path such as //server/share/data. As file://server/...
+		// SQLite would read "server" as the URI authority and refuse it, so
+		// keep the authority empty: file:////server/share/data.
+		base = "//" + base
+	case !strings.HasPrefix(base, "/"):
+		// A Windows path such as C:/data: SQLite wants file:///C:/data.
+		base = "///" + base
+	}
+	out := "file:" + strings.TrimSuffix(base, "/") + "/" + rest
+	if hasQuery {
+		out += "?" + query
+	}
+	return out
 }
 
 // addToSet adds items to set, creating it if needed.
@@ -863,7 +1238,7 @@ func addToSet(set map[string]struct{}, items []string) map[string]struct{} {
 
 // AdminKeys returns the server admin keys.
 func (c *Config) AdminKeys() []ssh.PublicKey {
-	return parseAuthKeys(c.InitialAdminKeys).pks
+	return parseAuthKeys(c.InitialAdminKeys, c.DataPath).pks
 }
 
 // UnreadableAdminKeyFiles returns, sorted and without duplicates, the
@@ -871,7 +1246,7 @@ func (c *Config) AdminKeys() []ssh.PublicKey {
 // holds no key, such as a secret that is not mounted yet. Such an entry may
 // stand for a key that is still wanted. Paths are not key material.
 func (c *Config) UnreadableAdminKeyFiles() []string {
-	set := addToSet(maps.Clone(c.unreadableAdminKeyFiles), parseAuthKeys(c.InitialAdminKeys).unreadable)
+	set := addToSet(maps.Clone(c.unreadableAdminKeyFiles), parseAuthKeys(c.InitialAdminKeys, c.DataPath).unreadable)
 	return slices.Sorted(maps.Keys(set))
 }
 
@@ -879,7 +1254,7 @@ func (c *Config) UnreadableAdminKeyFiles() []string {
 // ignored because they are neither a key nor a file path, such as a mistyped
 // key. The entries are not returned, as they may hold key material.
 func (c *Config) IgnoredAdminKeys() int {
-	return len(addToSet(maps.Clone(c.ignoredAdminKeys), parseAuthKeys(c.InitialAdminKeys).ignored))
+	return len(addToSet(maps.Clone(c.ignoredAdminKeys), parseAuthKeys(c.InitialAdminKeys, c.DataPath).ignored))
 }
 
 func init() {

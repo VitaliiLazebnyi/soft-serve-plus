@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/spf13/cobra"
 )
@@ -45,7 +46,9 @@ func tagListCommand() *cobra.Command {
 
 			tags, _ := r.Tags()
 			for _, t := range tags {
-				cmd.Println(t)
+				// A ref name cannot hold C0 controls, but it can hold
+				// C1 ones encoded as UTF-8.
+				cmd.Println(utils.Sanitize(t))
 			}
 
 			return nil
@@ -68,10 +71,14 @@ func tagDeleteCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if rr.IsMirror() {
+				return proto.ErrMirrorReadOnly
+			}
 
+			logger := log.FromContext(ctx)
 			r, err := rr.Open()
 			if err != nil {
-				log.Errorf("failed to open repo: %s", err)
+				logger.Error("failed to open repo", "err", err, "repo", rr.Name())
 				return err
 			}
 
@@ -86,26 +93,28 @@ func tagDeleteCommand() *cobra.Command {
 			}
 
 			if !exists {
-				log.Errorf("failed to get tag: tag %s does not exist", tag)
 				return git.ErrReferenceNotExist
 			}
 
 			tagCommit, err := r.TagCommit(tag)
 			if err != nil {
-				log.Errorf("failed to get tag commit: %s", err)
+				logger.Error("failed to get tag commit", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
 			if err := r.DeleteTag(tag); err != nil {
-				log.Errorf("failed to delete tag: %s", err)
+				logger.Error("failed to delete tag", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
 			// The tag is already deleted, so a failed event is logged rather
-			// than reported as a failed command.
+			// than reported as a failed command. The event is built
+			// and sent even if the session ends now.
+			ctx, cancel := backend.AfterChangeContext(ctx)
+			defer cancel()
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagCommit.ID.String(), git.ZeroID)
 			if err != nil {
-				log.Error("tag deleted but webhook event skipped", "err", err)
+				logger.Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil
 			}
 

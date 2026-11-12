@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -34,6 +37,10 @@ type lfsTransfer struct {
 	// authorizes only the operation, and the transfer processor accepts
 	// put-object and lock in either, so write commands check it here.
 	op string
+	// stdin bounds the bytes of each command the client sends. Upload
+	// tells it while it reads object data, which does not count. Nil in
+	// tests that call the backend directly.
+	stdin *lfsCommandLimitReader
 }
 
 var _ transfer.Backend = &lfsTransfer{}
@@ -52,9 +59,10 @@ var errInvalidOid = fmt.Errorf("%w: %w", transfer.ErrParseError, lfs.ErrInvalidO
 var errReadOnlySession = fmt.Errorf("%w: not allowed in a download session", transfer.ErrForbidden)
 
 // LFSTransfer is a Git LFS transfer service handler.
-// ctx is expected to have proto.User, *backend.Backend, *log.Logger,
-// *config.Config, *db.DB, and store.Store.
-// The first arg in cmd.Args should be the repo path.
+// ctx is expected to have proto.Repository, *log.Logger, *config.Config,
+// *db.DB and store.Store, and proto.User when the caller has an account.
+// The first arg in cmd.Args is the repo path; the repository itself is taken
+// from the context.
 // The second arg in cmd.Args should be the LFS operation (download or upload).
 func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	if len(cmd.Args) < 2 {
@@ -67,7 +75,8 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	logger := log.FromContext(ctx).WithPrefix("lfs-transfer")
-	handler := transfer.NewPktline(cmd.Stdin, cmd.Stdout, &lfsLogger{logger})
+	stdin := newLFSCommandLimitReader(cmd.Stdin, lfs.MaxBatchRequestSize)
+	handler := transfer.NewPktline(stdin, cmd.Stdout, &lfsLogger{logger})
 	repo := proto.RepositoryFromContext(ctx)
 	if repo == nil {
 		logger.Error("no repository in context")
@@ -75,16 +84,14 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	// Advertise capabilities.
-	for _, cap := range transfer.Capabilities {
-		if err := handler.WritePacketText(cap); err != nil {
-			logger.Errorf("error sending capability: %s: %v", cap, err)
-			return err
+	for _, capability := range transfer.Capabilities {
+		if err := handler.WritePacketText(capability); err != nil {
+			return lfsTransferError(ctx, fmt.Errorf("sending capability %s: %w", capability, err))
 		}
 	}
 
 	if err := handler.WriteFlush(); err != nil {
-		logger.Error("error sending flush", "err", err)
-		return err
+		return lfsTransferError(ctx, fmt.Errorf("sending flush: %w", err))
 	}
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
@@ -98,13 +105,107 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		storage: storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID)),
 		repo:    repo,
 		op:      op,
+		stdin:   stdin,
 	}, &lfsLogger{logger})
 
-	return processor.ProcessCommands(op)
+	err := processCommands(processor, handler, op)
+	if errors.Is(err, errLFSCommandTooLarge) {
+		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
+	}
+	return lfsTransferError(ctx, err)
+}
+
+// lfsTransferError returns err, a failure of an LFS transfer, marked as a
+// cancellation when it comes from the client going away mid-transfer, as a
+// git service run for a client that went away is. That is not a server
+// failure, and the caller logs it as such.
+func lfsTransferError(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, errLFSCommandTooLarge) {
+		return err
+	}
+	if ctx.Err() != nil || clientGone(err) {
+		return fmt.Errorf("%w: client went away: %w", context.Canceled, err)
+	}
+	return err
+}
+
+// processCommands runs the transfer processor's command loop.
+//
+// The processor reads the argument of a "version" command without checking
+// that one was sent (`len(msgs) > 0 && msgs[1]`), so a bare "version" panics
+// the loop. That happens right after the command packet is read, before the
+// processor writes anything or reads further, so the stream is still in step:
+// answer the way the guard means to (400 "unknown version") and carry on with
+// the next command. Any other panic is not ours to swallow.
+func processCommands(p *transfer.Processor, handler *transfer.Pktline, op string) error {
+	for {
+		resume, err := processCommandsOnce(p, handler, op)
+		if !resume {
+			return err
+		}
+	}
+}
+
+func processCommandsOnce(p *transfer.Processor, handler *transfer.Pktline, op string) (resume bool, err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if !isBareVersionPanic(r) {
+			panic(r)
+		}
+		if err = handler.SendError(transfer.StatusBadRequest, "unknown version"); err == nil {
+			resume = true
+		}
+	}()
+	return false, p.ProcessCommands(op)
+}
+
+// processCommandsFunc is the function whose own unguarded index panics on a
+// bare "version" command.
+const processCommandsFunc = "github.com/charmbracelet/git-lfs-transfer/transfer.(*Processor).ProcessCommands"
+
+// isBareVersionPanic reports whether r is the processor indexing past the
+// single field of a bare "version" command. It must be called from the
+// deferred function that recovered r, while the panicking frames are still on
+// the stack: the index error has to come from ProcessCommands itself, not
+// from a backend method it called.
+func isBareVersionPanic(r any) bool {
+	rerr, ok := r.(runtime.Error)
+	if !ok || !strings.Contains(rerr.Error(), "index out of range [1] with length 1") {
+		return false
+	}
+	pcs := make([]uintptr, 32)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+	// Skip this function and the deferred one, up to the runtime's panic
+	// frames; the first frame past those is where the panic was raised.
+	inRuntime := false
+	for {
+		frame, more := frames.Next()
+		switch {
+		case strings.HasPrefix(frame.Function, "runtime."):
+			inRuntime = true
+		case inRuntime:
+			return frame.Function == processCommandsFunc
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 // Batch implements transfer.Backend.
+//
+// Each object costs a storage stat and database lookups, so a batch holds at
+// most lfs.MaxBatchObjects objects, as over HTTP.
 func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.Args) ([]transfer.BatchItem, error) {
+	if len(pointers) > lfs.MaxBatchObjects {
+		t.logger.Warn("too many objects in batch request", "objects", len(pointers))
+		return nil, fmt.Errorf("%w: too many objects in batch request: %d, the maximum is %d",
+			transfer.ErrParseError, len(pointers), lfs.MaxBatchObjects)
+	}
+
 	for i := range pointers {
 		p := transfer.Pointer{Oid: pointers[i].Oid, Size: pointers[i].Size}
 		if !p.IsValid() {
@@ -115,18 +216,24 @@ func (t *lfsTransfer) Batch(_ string, pointers []transfer.BatchItem, _ transfer.
 	for i := range pointers {
 		obj, err := t.store.GetLFSObjectByOid(t.ctx, t.dbx, t.repo.ID(), pointers[i].Oid)
 		if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-			return pointers, db.WrapError(err)
-		}
-
-		pointers[i].Present, err = t.storage.Exists(path.Join("objects", pointers[i].RelativePath()))
-		if err != nil {
 			return pointers, err
 		}
 
-		if pointers[i].Present && obj.ID == 0 {
-			if err := t.store.CreateLFSObject(t.ctx, t.dbx, t.repo.ID(), pointers[i].Oid, pointers[i].Size); err != nil {
-				return pointers, store.RepoGoneError(t.ctx, t.store, t.dbx, t.repo.ID(), db.WrapError(err))
-			}
+		fi, err := t.storage.Stat(path.Join("objects", pointers[i].RelativePath()))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return pointers, err
+		}
+
+		// The client's size is checked, never recorded: a batch only reads.
+		// A file without a record (an upload that has not recorded it yet)
+		// counts at the size it has on disk when downloading. An upload
+		// session reports it missing, so the client sends it and the upload
+		// records it.
+		onDisk := err == nil && fi.Mode().IsRegular() && fi.Size() == pointers[i].Size
+		if obj.ID != 0 {
+			pointers[i].Present = onDisk && obj.Size == pointers[i].Size
+		} else {
+			pointers[i].Present = onDisk && t.op == lfs.OperationDownload
 		}
 	}
 
@@ -140,11 +247,7 @@ func (t *lfsTransfer) Download(oid string, _ transfer.Args) (io.ReadCloser, int6
 		return nil, 0, errInvalidOid
 	}
 
-	cfg := config.FromContext(t.ctx)
-	repoID := strconv.FormatInt(t.repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
-	pointer := transfer.Pointer{Oid: oid}
-	obj, err := strg.Open(path.Join("objects", pointer.RelativePath()))
+	obj, err := t.storage.Open(path.Join("objects", p.RelativePath()))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -159,8 +262,20 @@ func (t *lfsTransfer) Download(oid string, _ transfer.Args) (io.ReadCloser, int6
 func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Args) error {
 	p := transfer.Pointer{Oid: oid}
 	if !p.IsValid() {
+		// Consume the object data so the next command is read from the
+		// right place in the stream.
+		if r != nil {
+			_, _ = io.Copy(io.Discard, r)
+		}
 		return errInvalidOid
 	}
+
+	// From here on the object data is read, or drained, up to its flush,
+	// so its packets are not a command's arguments. Every return that
+	// leaves data unread happens before this point, and the processor
+	// then reads it as the next command, which does count.
+	t.stdin.streamData(true)
+	defer t.stdin.streamData(false)
 
 	if t.op == lfs.OperationDownload {
 		// Consume the object data so the next command is read from the
@@ -201,7 +316,7 @@ func (t *lfsTransfer) Upload(oid string, size int64, r io.Reader, _ transfer.Arg
 func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.Status, error) {
 	p := transfer.Pointer{Oid: oid}
 	if !p.IsValid() {
-		return transfer.NewStatus(transfer.StatusConflict, "invalid OID format"), nil
+		return transfer.NewStatus(transfer.StatusBadRequest, "invalid OID format"), nil
 	}
 
 	obj, err := t.store.GetLFSObjectByOid(t.ctx, t.dbx, t.repo.ID(), oid)
@@ -214,7 +329,7 @@ func (t *lfsTransfer) Verify(oid string, size int64, _ transfer.Args) (transfer.
 	}
 
 	if obj.Size != size {
-		t.logger.Errorf("size mismatch: %d != %d", obj.Size, size)
+		t.logger.Debugf("size mismatch: %d != %d", obj.Size, size)
 		return transfer.NewStatus(transfer.StatusConflict, "size mismatch"), nil
 	}
 
@@ -278,29 +393,44 @@ func (noUserLockBackend) Range(string, int, func(transfer.Lock) error) (string, 
 
 var errNoUserLocks = fmt.Errorf("%w: locks need a user account", transfer.ErrForbidden)
 
+// lockForceKey is the unlock argument that asks to remove another user's
+// lock, like force in the HTTP API's unlock request.
+const lockForceKey = "force"
+
+var (
+	errLockNotOwned        = fmt.Errorf("%w: lock belongs to another user", transfer.ErrForbidden)
+	errForceUnlockNotAdmin = fmt.Errorf("%w: admin access required for force unlock", transfer.ErrForbidden)
+)
+
 // Create implements transfer.LockBackend.
 func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, error) {
 	if l.op == lfs.OperationDownload {
 		return nil, errReadOnlySession
 	}
 
+	// Same rule as the HTTP locks API: a lock names one file in the working
+	// tree, so "a.bin", "./a.bin" and "dir/../a.bin" cannot hold three locks.
+	if err := lfs.ValidateLockPath(path); err != nil {
+		return nil, fmt.Errorf("%w: %w", transfer.ErrParseError, err)
+	}
+
 	var lock LFSLock
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		if err := l.store.CreateLFSLockForUser(l.ctx, tx, l.repo.ID(), l.user.ID(), path, refname); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		var err error
 		lock.lock, err = l.store.GetLFSLockForUserPath(l.ctx, tx, l.repo.ID(), l.user.ID(), path)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
-		// key too; that is not an existing lock.
+		// key; report it as gone.
 		if err := store.RepoGoneError(l.ctx, l.store, l.dbx, l.repo.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
 			return nil, err
 		}
@@ -318,22 +448,28 @@ func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, err
 }
 
 // FromID implements transfer.LockBackend.
+//
+// It finds the lock whoever owns it. Ownership is checked in Unlock, so
+// unlocking another user's lock is refused rather than reported missing.
+//
+// An ID that is not a number is refused with transfer.ErrParseError, which
+// the processor sends back to the client as a 400 status.
 func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 	var lock LFSLock
 	iid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: invalid lock id %q", transfer.ErrParseError, id)
 	}
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
-		lock.lock, err = l.store.GetLFSLockForUserByID(l.ctx, tx, l.repo.ID(), l.user.ID(), iid)
+		lock.lock, err = l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), iid)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, transfer.ErrNotFound
@@ -348,18 +484,21 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 }
 
 // FromPath implements transfer.LockBackend.
+//
+// Like FromID, it finds the lock whoever owns it: the processor uses it to
+// name the owner of a conflicting lock and to answer list-lock path=.
 func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 	var lock LFSLock
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
-		lock.lock, err = l.store.GetLFSLockForUserPath(l.ctx, tx, l.repo.ID(), l.user.ID(), path)
+		lock.lock, err = l.store.GetLFSLockForPath(l.ctx, tx, l.repo.ID(), path)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
-		lock.owner, err = l.store.GetUserByID(l.ctx, tx, lock.lock.UserID)
-		return db.WrapError(err)
+		lock.owner, err = l.lockOwner(tx, lock.lock.UserID)
+		return err
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, transfer.ErrNotFound
@@ -375,35 +514,36 @@ func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
 
 // Range implements transfer.LockBackend.
 //
-// The cursor is a page number handed out as next-cursor; empty means the
-// first page. Any other cursor is refused with transfer.ErrParseError, which
-// the processor sends back to the client as a 400 status.
+// The cursor is the ID of the last lock of the previous page, handed out as
+// next-cursor; empty means the first page. Any other cursor is refused with
+// transfer.ErrParseError, which the processor sends back to the client as a
+// 400 status.
 func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) error) (string, error) {
 	var nextCursor string
 	var locks []*LFSLock
 
-	page, err := lfs.ParseLocksCursor(cursor)
+	afterID, err := lfs.ParseLocksCursor(cursor)
 	if err != nil {
 		return "", fmt.Errorf("%w: invalid cursor %q", transfer.ErrParseError, cursor)
 	}
 	limit = lfs.ClampLocksLimit(limit)
 
-	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
-		l.logger.Debug("getting locks", "limit", limit, "page", page)
-		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), page, limit)
+	if err := l.dbx.ReadTransactionContext(l.ctx, func(tx *db.Tx) error {
+		l.logger.Debug("getting locks", "limit", limit, "after", afterID)
+		mlocks, err := l.store.GetLFSLocks(l.ctx, tx, l.repo.ID(), afterID, limit)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
-		nextCursor = lfs.NextLocksCursor(page, limit, len(mlocks))
+		nextCursor = lfs.NextLocksCursor(limit, mlocks)
 
-		users := make(map[int64]models.User, 0)
+		users := make(map[int64]lfsLockOwner, 0)
 		for _, mlock := range mlocks {
 			owner, ok := users[mlock.UserID]
 			if !ok {
-				owner, err = l.store.GetUserByID(l.ctx, tx, mlock.UserID)
+				owner, err = l.lockOwner(tx, mlock.UserID)
 				if err != nil {
-					return db.WrapError(err)
+					return err
 				}
 
 				users[mlock.UserID] = owner
@@ -437,14 +577,29 @@ func (l *lfsLockBackend) Unlock(lock transfer.Lock) error {
 		return err
 	}
 
+	// As over HTTP, force removes another user's lock and needs a server
+	// admin; without it, only the owner may unlock.
+	force, _ := strconv.ParseBool(l.args[lockForceKey])
+
 	err = l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
-		return db.WrapError(
-			l.store.DeleteLFSLockForUserByID(l.ctx, tx, l.repo.ID(), l.user.ID(), id),
-		)
+		mlock, err := l.store.GetLFSLockByID(l.ctx, tx, l.repo.ID(), id)
+		if err != nil {
+			return err
+		}
+		switch {
+		case force && !l.user.IsAdmin():
+			return errForceUnlockNotAdmin
+		case !force && mlock.UserID != l.user.ID():
+			return errLockNotOwned
+		}
+		return l.store.DeleteLFSLock(l.ctx, tx, l.repo.ID(), id)
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return transfer.ErrNotFound
+		}
+		if errors.Is(err, transfer.ErrForbidden) {
+			return err
 		}
 		l.logger.Error("error unlocking lock", "err", err)
 		return err
@@ -453,15 +608,37 @@ func (l *lfsLockBackend) Unlock(lock transfer.Lock) error {
 	return nil
 }
 
+// lockOwner returns the owner of a lock: only the user's ID and name, so
+// a lock never carries the rest of the user record, password hash included.
+func (l *lfsLockBackend) lockOwner(tx *db.Tx, id int64) (lfsLockOwner, error) {
+	user, err := l.store.GetUserByID(l.ctx, tx, id)
+	if err != nil {
+		return lfsLockOwner{}, err
+	}
+	return lfsLockOwner{ID: user.ID, Username: user.Username}, nil
+}
+
+// lfsLockOwner is the owner of an LFS lock.
+type lfsLockOwner struct {
+	ID       int64
+	Username string
+}
+
 // LFSLock is a Git LFS lock object.
 // It implements transfer.Lock.
 type LFSLock struct {
 	lock    models.LFSLock
-	owner   models.User
+	owner   lfsLockOwner
 	backend *lfsLockBackend
 }
 
 var _ transfer.Lock = (*LFSLock)(nil)
+
+// String implements fmt.Stringer, which is how the transfer library's debug
+// log prints a lock.
+func (l *LFSLock) String() string {
+	return fmt.Sprintf("id=%s path=%q ownername=%q", l.ID(), l.Path(), l.OwnerName())
+}
 
 // AsArguments implements transfer.Lock.
 func (l *LFSLock) AsArguments() []string {
@@ -485,7 +662,7 @@ func (l *LFSLock) AsLockSpec(ownerID bool) ([]string, error) {
 
 	if ownerID {
 		who := "theirs"
-		if l.lock.UserID == l.owner.ID {
+		if l.lock.UserID == l.backend.user.ID() {
 			who = "ours"
 		}
 

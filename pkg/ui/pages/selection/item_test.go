@@ -15,14 +15,21 @@ import (
 )
 
 type fakeRepo struct {
-	name    string
-	private bool
+	name        string
+	private     bool
+	projectName string
+	description string
 }
 
-func (r fakeRepo) ID() int64                      { return 1 }
-func (r fakeRepo) Name() string                   { return r.name }
-func (r fakeRepo) ProjectName() string            { return "" }
-func (r fakeRepo) Description() string            { return "a description" }
+func (r fakeRepo) ID() int64           { return 1 }
+func (r fakeRepo) Name() string        { return r.name }
+func (r fakeRepo) ProjectName() string { return r.projectName }
+func (r fakeRepo) Description() string {
+	if r.description == "" {
+		return "a description"
+	}
+	return r.description
+}
 func (r fakeRepo) IsPrivate() bool                { return r.private }
 func (r fakeRepo) IsMirror() bool                 { return false }
 func (r fakeRepo) IsHidden() bool                 { return false }
@@ -36,10 +43,7 @@ var _ proto.Repository = fakeRepo{}
 func renderItem(t *testing.T, repo proto.Repository, width int) string {
 	t.Helper()
 	c := common.NewCommon(context.Background(), width, 20)
-	item, err := NewItem(c, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	item := NewItem(c, repo)
 	pane := selectorPane
 	d := NewItemDelegate(&c, &pane)
 	m := list.New([]list.Item{item}, d, width, 20)
@@ -82,5 +86,66 @@ func TestItemVisibilityMarkerLongName(t *testing.T) {
 		if got, want := lipgloss.Width(long), lipgloss.Width(short); got != want {
 			t.Errorf("private=%v: long name renders %d wide, short name %d", private, got, want)
 		}
+	}
+}
+
+// Filtering matches the repository name as well as the project name.
+func TestItemFilterValue(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 20)
+	for _, tc := range []struct {
+		repo proto.Repository
+		want []string
+	}{
+		{fakeRepo{name: "repo"}, []string{"repo"}},
+		{fakeRepo{name: "repo", projectName: "Project"}, []string{"Project", "repo"}},
+	} {
+		got := NewItem(c, tc.repo).FilterValue()
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("FilterValue() = %q, lacks %q", got, w)
+			}
+		}
+	}
+}
+
+// A filter that matches the repository name highlights nothing: the name is
+// not shown, and the match must not spill onto the visibility marker.
+func TestItemFilterHighlightsTitleOnly(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 20)
+	item := NewItem(c, fakeRepo{name: "zzz", projectName: "Project"})
+	pane := selectorPane
+	d := NewItemDelegate(&c, &pane)
+	m := list.New([]list.Item{item}, d, 80, 20)
+	m.SetFilterText("zzz")
+	var buf bytes.Buffer
+	d.Render(&buf, m, 0, m.VisibleItems()[0])
+	// The match lies past the title, so the title and its marker are
+	// rendered in one piece, with nothing underlined.
+	if want := "Project " + common.VisibilityMarker(false); !strings.Contains(buf.String(), want) {
+		t.Errorf("item %q lacks an unbroken %q", buf.String(), want)
+	}
+}
+
+// A project name or description with line breaks still renders on one line
+// each, so the item keeps the height the list reserves for it.
+func TestItemMultiLineFields(t *testing.T) {
+	t.Parallel()
+	const width = 80
+	plain := renderItem(t, fakeRepo{name: "repo"}, width)
+	out := renderItem(t, fakeRepo{
+		name:        "repo",
+		projectName: "My\nProject",
+		description: "first line\r\nsecond\tline\n\nthird line\n",
+	}, width)
+	if got, want := lipgloss.Height(out), lipgloss.Height(plain); got != want {
+		t.Fatalf("item renders %d lines, want %d:\n%s", got, want, out)
+	}
+	if !strings.Contains(out, "My Project") {
+		t.Errorf("item %q lacks the joined project name", out)
+	}
+	if !strings.Contains(out, "first line second line third line") {
+		t.Errorf("item %q lacks the joined description", out)
 	}
 }

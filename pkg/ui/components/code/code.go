@@ -3,7 +3,6 @@ package code
 import (
 	"math"
 	"strings"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -27,8 +26,18 @@ type Code struct {
 	content       string
 	extension     string
 	renderContext gansi.RenderContext
-	renderMutex   sync.Mutex
 	styleConfig   gansi.StyleConfig
+	// renderedWidth is the width the content was last rendered at, and
+	// rendered tells whether it has been rendered at all.
+	renderedWidth int
+	rendered      bool
+	// resizes counts the window size messages the view has handled.
+	resizes int
+
+	// isMarkdown caches IsFileMarkdown for content and extension, which can
+	// mean running chroma's analysers over the whole content, while the
+	// content is rendered again on every resize. SetContent clears it.
+	isMarkdown *bool
 
 	SideNotePercent float64
 	TabWidth        int
@@ -65,7 +74,27 @@ func (r *Code) SetSize(width, height int) {
 func (r *Code) SetContent(c, ext string) tea.Cmd {
 	r.content = c
 	r.extension = ext
+	r.isMarkdown = nil
 	return r.Init()
+}
+
+// SetMarkdownContent is SetContent for callers that have already worked out
+// whether the content is markdown, so it is not worked out a second time.
+func (r *Code) SetMarkdownContent(c, ext string, isMarkdown bool) tea.Cmd {
+	r.content = c
+	r.extension = ext
+	r.isMarkdown = &isMarkdown
+	return r.Init()
+}
+
+// markdown reports whether the content is markdown, working it out only once
+// per SetContent.
+func (r *Code) markdown() bool {
+	if r.isMarkdown == nil {
+		md := common.IsFileMarkdown(r.content, r.extension)
+		r.isMarkdown = &md
+	}
+	return *r.isMarkdown
 }
 
 // SetSideNote sets the sidenote of the Code.
@@ -76,6 +105,7 @@ func (r *Code) SetSideNote(s string) tea.Cmd {
 
 // Init implements tea.Model.
 func (r *Code) Init() tea.Cmd {
+	r.rendered = false
 	// XXX: We probably won't need the GetHorizontalFrameSize margin
 	// subtraction if we get the new viewport soft wrapping to play nicely with
 	// Glamour. This also introduces a bug where when it soft wraps, the
@@ -92,7 +122,7 @@ func (r *Code) Init() tea.Cmd {
 	// 4-spaces.
 	content = strings.ReplaceAll(content, "\t", strings.Repeat(" ", r.TabWidth))
 
-	if r.UseGlamour && common.IsFileMarkdown(content, r.extension) {
+	if r.UseGlamour && r.markdown() {
 		md, err := r.glamourize(w, content)
 		if err != nil {
 			return common.ErrorCmd(err)
@@ -127,6 +157,8 @@ func (r *Code) Init() tea.Cmd {
 	content = lipgloss.NewStyle().Width(w).Render(content)
 
 	r.Viewport.Model.SetContent(content)
+	r.renderedWidth = r.common.Width
+	r.rendered = true
 
 	return nil
 }
@@ -136,8 +168,12 @@ func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg.(type) {
 	case tea.WindowSizeMsg:
-		// Recalculate content width and line wrap.
-		cmds = append(cmds, r.Init())
+		r.resizes++
+		// Recalculate content width and line wrap. A resize that keeps the
+		// width, such as a height-only change, needs no new render.
+		if !r.rendered || r.renderedWidth != r.common.Width {
+			cmds = append(cmds, r.Init())
+		}
 	}
 	v, cmd := r.Viewport.Update(msg)
 	r.Viewport = v.(*vp.Viewport)
@@ -147,17 +183,23 @@ func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	return r, tea.Batch(cmds...)
 }
 
-// View implements tea.View.
+// Resizes returns how many window size messages the view has handled. Tests
+// use it to check that a parent delivers each resize to the view only once.
+func (r *Code) Resizes() int {
+	return r.resizes
+}
+
+// View implements tea.Model.
 func (r *Code) View() string {
 	return r.Viewport.View()
 }
 
-// GotoTop moves the viewport to the top of the log.
+// GotoTop moves the viewport to the top of the content.
 func (r *Code) GotoTop() {
 	r.Viewport.GotoTop()
 }
 
-// GotoBottom moves the viewport to the bottom of the log.
+// GotoBottom moves the viewport to the bottom of the content.
 func (r *Code) GotoBottom() {
 	r.Viewport.GotoBottom()
 }
@@ -177,18 +219,7 @@ func (r *Code) ScrollPercent() float64 {
 	return r.Viewport.ScrollPercent()
 }
 
-// ScrollPosition returns the viewport's scroll position.
-func (r *Code) ScrollPosition() int {
-	scroll := r.ScrollPercent() * 100
-	if scroll < 0 || math.IsNaN(scroll) {
-		scroll = 0
-	}
-	return int(scroll)
-}
-
 func (r *Code) glamourize(w int, md string) (string, error) {
-	r.renderMutex.Lock()
-	defer r.renderMutex.Unlock()
 	if w > 120 {
 		w = 120
 	}

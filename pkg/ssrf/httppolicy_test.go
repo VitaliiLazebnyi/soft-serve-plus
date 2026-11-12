@@ -3,10 +3,13 @@ package ssrf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -21,6 +24,7 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		"169.254.10.0/24",
 		"fd00:ec2::254",
 		"0.0.0.0/0:7000",
+		"[fc00::/7]:7001",
 	)
 
 	tests := []struct {
@@ -33,6 +37,8 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		{"private address outside every entry", "anything.example", "443", "192.168.1.1", false},
 		{"IP entry with port, matching port", "127.0.0.1", "8080", "127.0.0.1", true},
 		{"IP entry with port, other port", "127.0.0.1", "8081", "127.0.0.1", false},
+		{"IP entry with port, matching port with leading zeros", "127.0.0.1", "08080", "127.0.0.1", true},
+		{"IP entry with port, non-numeric port", "127.0.0.1", "80x", "127.0.0.1", false},
 		{"hostname entry reaches loopback", "hooks.internal", "80", "127.0.0.1", true},
 		{"hostname entry reaches RFC1918 outside the CIDR entries", "hooks.internal", "443", "192.168.5.5", true},
 		{"hostname entry is case and dot insensitive", "Hooks.Internal.", "443", "192.168.5.5", true},
@@ -51,6 +57,13 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 		{"broad entry opens private networks", "x.example", "7000", "192.168.1.1", true},
 		{"broad entry does not open metadata", "x.example", "7000", "169.254.169.254", false},
 		{"broad entry does not open Alibaba metadata", "x.example", "7000", "100.100.100.200", false},
+		{"hostname entry never reaches EKS Pod Identity", "hooks.internal", "80", "fd00:ec2::23", false},
+		{"hostname entry never reaches GCE IPv6 metadata", "hooks.internal", "80", "fd20:ce::254", false},
+		{"hostname entry never reaches OCI IPv6 metadata", "hooks.internal", "80", "fd00:c1::a9fe:a9fe", false},
+		{"unique local entry does not open EKS Pod Identity", "x.example", "7001", "fd00:ec2::23", false},
+		{"unique local entry does not open GCE IPv6 metadata", "x.example", "7001", "fd20:ce::254", false},
+		{"unique local entry does not open OCI IPv6 metadata", "x.example", "7001", "fd00:c1::a9fe:a9fe", false},
+		{"unique local entry opens other unique local", "x.example", "7001", "fd00:c1::1", true},
 		{"IPv4-mapped IPv6 is checked as IPv4", "x.example", "80", "::ffff:10.0.0.1", true},
 		{"IPv4-mapped metadata stays blocked", "hooks.internal", "80", "::ffff:169.254.169.254", false},
 	}
@@ -65,7 +78,10 @@ func TestAllowedHostsPermitsHTTP(t *testing.T) {
 
 	// A hostname entry alone opens no metadata or link-local address.
 	hostOnly := mustAllowedHosts(t, "hooks.internal")
-	for _, ip := range []string{"169.254.169.254", "fd00:ec2::254", "100.100.100.200", "fe80::1", "64:ff9b::a9fe:a9fe"} {
+	for _, ip := range []string{
+		"169.254.169.254", "fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "fd00:c1::a9fe:a9fe",
+		"100.100.100.200", "fe80::1", "64:ff9b::a9fe:a9fe",
+	} {
 		if hostOnly.permitsHTTP("hooks.internal", "80", net.ParseIP(ip)) {
 			t.Errorf("hostname entry permits %s", ip)
 		}
@@ -112,6 +128,7 @@ func TestValidateURLAllowing(t *testing.T) {
 		"elsewhere.example": {"192.168.0.1"},
 	})
 	allowed := mustAllowedHosts(t, "hooks.internal", "rebind.internal", "mixed.internal", "172.16.0.0/12", "127.0.0.1", "localhost:8080")
+	port80 := mustAllowedHosts(t, "127.0.0.1:80", "hooks.internal:0443")
 
 	tests := []struct {
 		name    string
@@ -131,12 +148,17 @@ func TestValidateURLAllowing(t *testing.T) {
 		{"metadata literal is refused", allowed, "http://169.254.169.254/latest/meta-data/", ErrPrivateIP},
 		{"localhost name refused on unlisted port", allowed, "http://localhost:9090/hook", ErrPrivateIP},
 		{"localhost name allowed when listed", allowed, "http://localhost:8080/hook", nil},
+		{"localhost name allowed when listed, port with leading zero", allowed, "http://localhost:08080/hook", nil},
+		{"port with leading zero matches entry", port80, "http://127.0.0.1:080/hook", nil},
+		{"default port matches entry", port80, "http://127.0.0.1/hook", nil},
+		{"entry port with leading zero matches default https port", port80, "https://hooks.internal/hook", nil},
+		{"entry port does not open other ports", port80, "http://127.0.0.1:8080/hook", ErrPrivateIP},
 		{"scheme still checked", allowed, "ftp://127.0.0.1/hook", ErrInvalidScheme},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateURL(tt.url, tt.allowed, lookup)
+			err := validateURL(context.Background(), tt.url, tt.allowed, lookup)
 			if tt.wantErr == nil {
 				if err != nil {
 					t.Fatalf("validateURL(%q) = %v, want nil", tt.url, err)
@@ -249,5 +271,49 @@ func TestSecureClientAllowing(t *testing.T) {
 	// The default client is unaffected.
 	if _, err := get(NewSecureClient(), srv.URL+"/hook"); !errors.Is(err, ErrPrivateIP) {
 		t.Fatalf("NewSecureClient reached loopback: %v", err)
+	}
+}
+
+// TestNewSecureClientCapsResponseHeaders covers a receiver that answers with
+// more header bytes than MaxResponseHeaderBytes. The client gives up with an
+// error rather than reading net/http's default of up to 10 MiB, and a
+// response just under the cap still goes through.
+func TestNewSecureClientCapsResponseHeaders(t *testing.T) {
+	t.Parallel()
+	// Each header line is "X-Pad-NNNNN: <filler>\r\n".
+	filler := strings.Repeat("a", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		for i := range n {
+			w.Header().Set(fmt.Sprintf("X-Pad-%05d", i), filler)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	client := NewSecureClientAllowing(mustAllowedHosts(t, "127.0.0.0/8"))
+
+	get := func(n int) error {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("%s/?n=%d", srv.URL, n), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := client.Do(req)
+		if res != nil {
+			_ = res.Body.Close()
+		}
+		return err
+	}
+
+	// 50 headers are about 50 KiB, under the cap.
+	if err := get(50); err != nil {
+		t.Fatalf("GET with headers under the cap: %v", err)
+	}
+	// 100 headers are about 100 KiB, over the cap.
+	err := get(100)
+	if err == nil {
+		t.Fatal("GET with headers over the cap succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), "header") {
+		t.Fatalf("GET with headers over the cap: err = %v, want a header limit error", err)
 	}
 }

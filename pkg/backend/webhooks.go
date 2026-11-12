@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -22,11 +23,11 @@ import (
 )
 
 // CreateWebhook creates a webhook for a repository.
-func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
+	dbx := d.db
+	datastore := d.store
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, events); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
 	}
 	events = dedupeEvents(events)
@@ -34,19 +35,19 @@ func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 	err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		lastID, err := datastore.CreateWebhook(ctx, tx, repo.ID(), url, secret, int(contentType), active)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// The cap is checked after the insert, in the same transaction, which
-		// rolls the insert back if the repository is over it. Inserting first
-		// matters on SQLite: a transaction that reads before its first write
-		// cannot wait for another writer and fails with SQLITE_BUSY, while
-		// one that writes first waits (busy_timeout) and then holds the write
-		// lock through the count. On Postgres the count locks the repository
-		// first, so creates racing at the cap take turns.
+		// rolls the insert back if the repository is over it. On SQLite the
+		// transaction holds the write lock through the count: from BEGIN
+		// IMMEDIATE (see db.Open), or, when the data source asks for deferred
+		// transactions, from the insert, which is why it comes first. On
+		// Postgres the count locks the repository first, so creates racing
+		// at the cap take turns.
 		total, err := datastore.LockAndCountWebhooks(ctx, tx, repo.ID())
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		if total > webhook.MaxWebhooksPerRepo {
 			return webhook.ErrTooManyWebhooks
@@ -57,30 +58,30 @@ func (b *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 			evs[i] = int(e)
 		}
 		if err := datastore.CreateWebhookEvents(ctx, tx, lastID, evs); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
 	})
-	// A repository deleted meanwhile fails the insert on its foreign key,
-	// which would read as a duplicate; report it as gone.
+	// A repository deleted meanwhile fails the insert on its foreign key;
+	// report it as gone.
 	return store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err)
 }
 
 // Webhook returns a webhook for a repository.
-func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) (webhook.Hook, error) {
+	dbx := d.db
+	datastore := d.store
 
 	var wh webhook.Hook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		h, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 		events, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		wh = webhook.Hook{
@@ -94,20 +95,20 @@ func (b *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 
 		return nil
 	}); err != nil {
-		return webhook.Hook{}, db.WrapError(err)
+		return webhook.Hook{}, err
 	}
 
 	return wh, nil
 }
 
 // ListWebhooks lists webhooks for a repository.
-func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]webhook.Hook, error) {
+	dbx := d.db
+	datastore := d.store
 
 	var webhooks []models.Webhook
 	webhookEvents := map[int64][]models.WebhookEvent{}
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		webhooks, err = datastore.GetWebhooksByRepoID(ctx, tx, repo.ID())
 		if err != nil {
@@ -124,7 +125,7 @@ func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	hooks := make([]webhook.Hook, len(webhooks))
@@ -145,12 +146,12 @@ func (b *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 }
 
 // UpdateWebhook updates a webhook.
-func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
+	dbx := d.db
+	datastore := d.store
 
 	url = utils.Sanitize(url)
-	if err := validateWebhookInput(b.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
 		return err
 	}
 	updatedEvents = dedupeEvents(updatedEvents)
@@ -160,16 +161,16 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		// event rewrite below from touching another repository's webhook, and
 		// makes an unknown ID an error instead of a silent no-op.
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if err := datastore.UpdateWebhookByID(ctx, tx, repo.ID(), id, url, secret, int(contentType), active); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		currentEvents, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// Delete events that are no longer in the list.
@@ -187,8 +188,8 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 			}
 		}
 
-		if err := datastore.DeleteWebhookEventsByID(ctx, tx, toBeDeleted); err != nil {
-			return db.WrapError(err)
+		if err := datastore.DeleteWebhookEventsByID(ctx, tx, id, toBeDeleted); err != nil {
+			return err
 		}
 
 		// Prune events that are already in the list.
@@ -207,7 +208,7 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		}
 
 		if err := datastore.CreateWebhookEvents(ctx, tx, id, newEvents); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
@@ -215,16 +216,16 @@ func (b *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 }
 
 // DeleteWebhook deletes a webhook for a repository.
-func (b *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id int64) error {
+	dbx := d.db
+	datastore := d.store
 
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		_, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
-		return db.WrapError(b.deleteWebhookRows(ctx, tx, repo.ID(), id))
+		return d.deleteWebhookRows(ctx, tx, repo.ID(), id)
 	})
 }
 
@@ -261,32 +262,32 @@ func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID i
 //
 // The webhook is resolved scoped to the repository, so a caller authorized
 // only for repo A cannot read deliveries of a webhook owned by repo B.
-func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Repository, id int64) ([]webhook.Delivery, error) {
+	dbx := d.db
+	datastore := d.store
 
 	var deliveries []models.WebhookDelivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		var err error
 		deliveries, err = datastore.ListWebhookDeliveriesByWebhookID(ctx, tx, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	ds := make([]webhook.Delivery, len(deliveries))
-	for i, d := range deliveries {
+	for i, del := range deliveries {
 		ds[i] = webhook.Delivery{
-			WebhookDelivery: d,
-			Event:           webhook.Event(d.Event),
+			WebhookDelivery: del,
+			Event:           webhook.Event(del.Event),
 		}
 	}
 
@@ -299,23 +300,23 @@ func (b *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 // a webhook stops every request to its URL, including manual redeliveries, so
 // a receiver that was turned off is not sent to by mistake. Activate the
 // webhook first to redeliver.
-func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repository, id int64, delID uuid.UUID) error {
+	dbx := d.db
+	datastore := d.store
 
 	var delivery models.WebhookDelivery
 	var wh models.Webhook
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			b.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
-			return db.WrapError(err)
+			d.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
+			return err
 		}
 
 		delivery, err = datastore.GetWebhookDeliveryByID(ctx, tx, id, delID)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		// Checked after the lookup, so an unknown delivery is reported as
@@ -326,12 +327,12 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 
 		return nil
 	}); err != nil {
-		return db.WrapError(err)
+		return err
 	}
 
 	// Log identifiers only: the stored body, headers and signature carry repo,
 	// user and commit data, and must not end up in server logs.
-	b.logger.Info("redelivering webhook delivery", "delivery", delID, "webhook", id, "event", webhook.Event(delivery.Event), "repo", repo.Name())
+	d.logger.Info("redelivering webhook delivery", "delivery", delID, "webhook", id, "event", webhook.Event(delivery.Event), "repo", repo.Name())
 
 	// The stored body is in the content type the delivery was sent with, which
 	// may differ from the webhook's current one if it was changed since. Use
@@ -342,7 +343,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 	stored, found, err := storedContentType(delivery.RequestHeaders)
 	switch {
 	case err != nil:
-		b.logger.Warn("unrecognized content type in webhook delivery, using the webhook's", "delivery", delID, "webhook", id, "content_type", ct, "err", err)
+		d.logger.Warn("unrecognized content type in webhook delivery, using the webhook's", "delivery", delID, "webhook", id, "content_type", ct, "err", err)
 	case found:
 		ct = stored
 	}
@@ -354,7 +355,7 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		if err != nil {
 			// The parse error quotes part of the body, so it is returned to
 			// the caller but not logged.
-			b.logger.Error("error parsing webhook form body", "delivery", delID, "webhook", id)
+			d.logger.Error("error parsing webhook form body", "delivery", delID, "webhook", id)
 			return err
 		}
 		payload = vals
@@ -362,28 +363,61 @@ func (b *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(delivery.RequestBody), &raw); err != nil {
 			// As above: the error can quote part of the body.
-			b.logger.Error("error unmarshaling webhook payload", "delivery", delID, "webhook", id)
+			d.logger.Error("error unmarshaling webhook payload", "delivery", delID, "webhook", id)
 			return err
 		}
 		payload = raw
 	}
 
-	return webhook.SendWebhook(ctx, wh, webhook.Event(delivery.Event), payload)
+	// The redelivery keeps the GUID the receiver was first sent, so it can
+	// tell the event apart from a new one. A delivery recorded before GUIDs
+	// were kept across redeliveries may lack a usable header; its own id is
+	// the GUID it was sent with then.
+	guid := delivery.ID
+	if v, ok := storedHeader(delivery.RequestHeaders, webhook.HeaderDelivery); ok {
+		if parsed, err := uuid.Parse(v); err == nil {
+			guid = parsed
+		}
+	}
+
+	return webhook.RedeliverWebhook(d.webhookContext(ctx), wh, webhook.Event(delivery.Event), payload, guid)
+}
+
+// webhookContext returns ctx carrying the backend's own config, database and
+// store. The webhook package reads them from the context: the store and
+// database to record the delivery, and the config for webhook.allowed_hosts.
+// Without them a caller's bare context would panic while recording and
+// ignore the allowlist the webhook's URL was validated against.
+func (d *Backend) webhookContext(ctx context.Context) context.Context {
+	ctx = config.WithContext(ctx, d.cfg)
+	ctx = db.WithContext(ctx, d.db)
+	return store.WithContext(ctx, d.store)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
-// request headers, which hold one "Name: value" line per header. It reports
-// false when there is no Content-Type line.
+// request headers. It reports false when there is no Content-Type line.
 func storedContentType(headers string) (webhook.ContentType, bool, error) {
+	value, ok := storedHeader(headers, "Content-Type")
+	if !ok {
+		return 0, false, nil
+	}
+	ct, err := webhook.ParseContentType(value)
+	return ct, true, err
+}
+
+// storedHeader returns the first value of the header name from a delivery's
+// stored request headers, which hold one "Name: value" line per header. Names
+// are matched without regard to case. It reports false when there is no such
+// line.
+func storedHeader(headers, name string) (string, bool) {
 	for _, line := range strings.Split(headers, "\n") {
-		name, value, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Type") {
+		k, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), name) {
 			continue
 		}
-		ct, err := webhook.ParseContentType(strings.TrimSpace(value))
-		return ct, true, err
+		return strings.TrimSpace(value), true
 	}
-	return 0, false, nil
+	return "", false
 }
 
 // WebhookDelivery returns a webhook delivery for a webhook belonging to the
@@ -393,29 +427,29 @@ func storedContentType(headers string) (webhook.ContentType, bool, error) {
 // only for repo A cannot read a delivery of a webhook owned by repo B.
 // Deliveries expose the full request URL, headers, and body, so this scoping
 // is what keeps them from leaking across repositories.
-func (b *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, webhookID int64, id uuid.UUID) (webhook.Delivery, error) {
+	dbx := d.db
+	datastore := d.store
 
 	var delivery webhook.Delivery
-	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), webhookID); err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
-		d, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
+		del, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		delivery = webhook.Delivery{
-			WebhookDelivery: d,
-			Event:           webhook.Event(d.Event),
+			WebhookDelivery: del,
+			Event:           webhook.Event(del.Event),
 		}
 
 		return nil
 	}); err != nil {
-		return webhook.Delivery{}, db.WrapError(err)
+		return webhook.Delivery{}, err
 	}
 
 	return delivery, nil
@@ -432,10 +466,10 @@ func (d *Backend) webhookAllowedHosts() ssrf.AllowedHosts {
 
 // validateWebhookInput checks a webhook's URL, content type and events before
 // anything is stored. The URL may reach the private and internal
-// destinations allowed permits.
-func validateWebhookInput(allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
+// destinations allowed permits. The URL's hostname lookup ends with ctx.
+func validateWebhookInput(ctx context.Context, allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
 	// Validate webhook URL to prevent SSRF attacks.
-	if err := webhook.ValidateWebhookURLAllowing(url, allowed); err != nil {
+	if err := webhook.ValidateWebhookURLAllowing(ctx, url, allowed); err != nil {
 		return err //nolint:wrapcheck
 	}
 	if contentType.String() == "" {
@@ -471,6 +505,20 @@ func dedupeEvents(events []webhook.Event) []webhook.Event {
 // the wait early.
 const ShutdownDeliveryTimeout = time.Minute
 
+// afterChangeTimeout bounds the reads made after a change is committed to
+// build and send its webhook event.
+const afterChangeTimeout = 30 * time.Second
+
+// AfterChangeContext returns a context for the reads made after a change is
+// committed to build and send its webhook event. It keeps ctx's values but not
+// its cancellation, so a caller that goes away right after the commit, such as
+// an SSH client that disconnects, does not lose the event. The reads are
+// bounded by afterChangeTimeout instead. The caller must call the returned
+// cancel function.
+func AfterChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), afterChangeTimeout)
+}
+
 // SendEventAfterChange sends the webhook event for a change that is already
 // committed, the same way the backend's own changes do. See sendAfterChange.
 func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayload) {
@@ -479,9 +527,12 @@ func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayl
 
 // sendAfterChange sends the webhook event for a change that is already
 // committed. The subscribers are read now and the deliveries run in the
-// background, so the caller does not wait on receivers. The change has
+// background, so the caller does not wait on receivers. Neither is cut short
+// by the caller's context ending (see AfterChangeContext). The change has
 // happened, so a failure is logged rather than returned.
 func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) {
+	ctx, cancel := AfterChangeContext(ctx)
+	defer cancel()
 	hooks, err := webhook.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
@@ -499,10 +550,16 @@ func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) 
 // events queued plus running. A repository whose receivers are slow or never
 // answer, each send taking up to the per-hook timeout, then only delays and
 // drops its own events, and the others keep being sent.
+//
+// maxRepoRunningDeliveries is 1 so that one repository's events are sent one
+// at a time, in the order they were queued. A payload carries the state at
+// the time of its change, so a receiver handed two of them out of order, such
+// as making a repository private and then public again, would end in the
+// wrong state.
 const (
 	maxBackgroundDeliveries  = 32
 	maxQueuedDeliveries      = 1024
-	maxRepoRunningDeliveries = 4
+	maxRepoRunningDeliveries = 1
 	maxRepoDeliveries        = 64
 )
 
@@ -572,7 +629,8 @@ const (
 // repository, and no repository has more than maxRepoRunning deliveries
 // running or more than maxRepo queued plus running. Queued deliveries are
 // taken from the repositories in turn, so one repository's backlog does not
-// hold back the others'.
+// hold back the others'. One repository's deliveries start in the order they
+// were queued, so with maxRepoRunning at 1 they also finish in that order.
 //
 // It counts every delivery from enqueue until it has run, so shutdown can wait
 // for them. Once closed, it refuses new ones, so a request still running
@@ -611,9 +669,9 @@ func newDeliveryQueue(maxWorkers, maxPending int, logger *log.Logger) *deliveryQ
 	}
 }
 
-// enqueue starts job for repository repoID on a new goroutine if one is free
-// and the repository has not used up its share of them, or queues it. It never
-// blocks on a running job.
+// enqueue starts job for repository repoID on a new goroutine if one is free,
+// the repository has not used up its share of them and has nothing queued
+// ahead of job, or queues it. It never blocks on a running job.
 func (q *deliveryQueue) enqueue(repoID int64, job func()) enqueueResult {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -626,7 +684,7 @@ func (q *deliveryQueue) enqueue(repoID int64, job func()) enqueueResult {
 		return enqueueClosed
 	case r.running+len(r.queued) >= q.maxRepo:
 		return enqueueRepoFull
-	case q.workers < q.maxWorkers && r.running < q.maxRepoRunning:
+	case q.workers < q.maxWorkers && r.running < q.maxRepoRunning && len(r.queued) == 0:
 		q.workers++
 		r.running++
 		go q.work(repoID, job)

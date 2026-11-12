@@ -5,19 +5,34 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/pkg/git"
 )
 
-// connections is a synchronizes access to to a net.Conn pool.
+// connections is a net.Conn pool that is safe for concurrent use.
 type connections struct {
-	m  map[net.Conn]struct{}
-	mu sync.Mutex
+	m      map[net.Conn]struct{}
+	mu     sync.Mutex
+	closed bool // set by CloseAll; no connection is added after it
 }
 
-func (m *connections) Add(c net.Conn) {
+// Add adds c to the pool unless the pool already holds limit connections,
+// which returns git.ErrMaxConnections, or CloseAll has run, which returns
+// ErrServerClosed. Checking and adding under one lock keeps a burst of
+// connections from all passing the check before any of them is counted.
+func (m *connections) Add(c net.Conn, limit int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return ErrServerClosed
+	}
+	if len(m.m) >= limit {
+		return git.ErrMaxConnections
+	}
 	m.m[c] = struct{}{}
+	return nil
 }
 
 func (m *connections) Close(c net.Conn) error {
@@ -37,6 +52,7 @@ func (m *connections) Size() int {
 func (m *connections) CloseAll() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	var err error
 	for c := range m.m {
 		err = errors.Join(err, c.Close())
@@ -47,34 +63,54 @@ func (m *connections) CloseAll() error {
 }
 
 // serverConn is a wrapper around a net.Conn that closes the connection when
-// the one of the timeouts is reached.
+// one of its timeouts is reached.
 type serverConn struct {
 	net.Conn
 
-	initTimeout   time.Duration
+	// initDeadline, while set, bounds reading the request line as a whole,
+	// so a client trickling it in a byte at a time cannot keep pushing the
+	// idle deadline forward. It is set before the request is read and
+	// cleared once it has been, never while another goroutine uses the
+	// connection. Only reads honor it: a write, such as the error the
+	// daemon sends once this deadline has passed, still gets the idle and
+	// maximum deadlines, and Write never reads the field.
+	initDeadline  time.Time
 	idleTimeout   time.Duration
 	maxDeadline   time.Time
 	closeCanceler context.CancelFunc
+
+	// wrote records that some output reached the client.
+	wrote atomic.Bool
 }
 
 var _ net.Conn = (*serverConn)(nil)
 
 func (c *serverConn) Write(p []byte) (n int, err error) {
-	c.updateDeadline()
+	c.updateDeadline(false)
 	n, err = c.Conn.Write(p)
-	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
+	if n > 0 {
+		c.wrote.Store(true)
+	}
+	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
 	return
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
-	c.updateDeadline()
+	c.updateDeadline(true)
 	n, err = c.Conn.Read(b)
-	if _, isNetErr := err.(net.Error); isNetErr && c.closeCanceler != nil {
+	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
 	return
+}
+
+// Wrote reports whether any output was written to the client. Once it was,
+// an ERR packet can no longer be sent: the client would read it as part of
+// the stream, for example as a sideband packet of the pack.
+func (c *serverConn) Wrote() bool {
+	return c.wrote.Load()
 }
 
 func (c *serverConn) Close() (err error) {
@@ -85,21 +121,27 @@ func (c *serverConn) Close() (err error) {
 	return
 }
 
-func (c *serverConn) updateDeadline() {
-	switch {
-	case c.initTimeout > 0:
-		initTimeout := time.Now().Add(c.initTimeout)
-		c.initTimeout = 0
-		if initTimeout.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
-			c.Conn.SetDeadline(initTimeout) //nolint: errcheck
-			return
-		}
-	case c.idleTimeout > 0:
-		idleDeadline := time.Now().Add(c.idleTimeout)
-		if idleDeadline.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
-			c.Conn.SetDeadline(idleDeadline) //nolint: errcheck
-			return
+// updateDeadline sets the connection deadline to the earliest of the idle
+// deadline, the maximum deadline and, for a read before the request has been
+// read, the request deadline.
+func (c *serverConn) updateDeadline(read bool) {
+	deadline := c.maxDeadline
+	earlier := func(t time.Time) {
+		if deadline.IsZero() || t.Before(deadline) {
+			deadline = t
 		}
 	}
-	c.Conn.SetDeadline(c.maxDeadline) //nolint: errcheck
+	if read && !c.initDeadline.IsZero() {
+		earlier(c.initDeadline)
+	}
+	if c.idleTimeout > 0 {
+		earlier(time.Now().Add(c.idleTimeout))
+	}
+	c.Conn.SetDeadline(deadline) //nolint: errcheck
+}
+
+// isNetError reports whether err is, or wraps, a net.Error.
+func isNetError(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne)
 }

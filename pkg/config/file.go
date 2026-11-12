@@ -18,10 +18,11 @@ name: {{ q .Name }}
 log:
   # Log format to use. Valid values are "json", "logfmt", and "text".
   format: {{ q .Log.Format }}
-  # Time format for the log "timestamp" field.
+  # Time format for the log "time" field.
   # Should be described in Golang's time format.
   time_format: {{ q .Log.TimeFormat }}
-  # Path to the log file. Leave empty to write to stderr.
+  # Path to the log file. Leave empty to write to stderr. A relative path
+  # is relative to the data directory.
   #path: {{ q .Log.Path }}
 
 # The SSH server configuration.
@@ -46,9 +47,10 @@ ssh:
   # How the server's ssh client verifies host keys of ssh remotes it imports
   # or mirrors from, checked against <data_path>/ssh/known_hosts.
   # "accept-new" records a host key on first contact and refuses a changed
-  # one. "yes" refuses any host that is not already in known_hosts; use it
-  # with a pre-seeded known_hosts file. The client always runs with
-  # BatchMode=yes, so it fails fast instead of prompting for a passphrase.
+  # one (needs OpenSSH 7.6 or newer). "yes" refuses any host that is not
+  # already in known_hosts; use it with a pre-seeded known_hosts file. The
+  # client always runs with BatchMode=yes, so it fails fast instead of
+  # prompting for a passphrase.
   client_strict_host_key_checking: {{ q .SSH.ClientStrictHostKeyChecking }}
 
   # The ssh hosts that repositories may be imported from or mirrored. The
@@ -79,6 +81,26 @@ ssh:
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
   idle_timeout: {{ .SSH.IdleTimeout }}
+
+  # The number of seconds a client has to finish the SSH handshake and
+  # authenticate before the connection is closed, like OpenSSH's
+  # LoginGraceTime. A value of 0 means no limit.
+  handshake_timeout: {{ .SSH.HandshakeTimeout }}
+
+  # The maximum number of SSH connections open at once, in total and from
+  # one client address (one IPv4 address or one IPv6 /64). Connections over
+  # a limit are closed straight away. A connection holds its place from the
+  # moment it is accepted, so handshake_timeout bounds how long a client
+  # that never authenticates can keep one. A value of 0 means no limit.
+  # Many clients behind one NAT or CI egress address share the per-address
+  # limit; raise max_connections_per_ip, or set it to 0, for such setups.
+  max_connections: {{ .SSH.MaxConnections }}
+  max_connections_per_ip: {{ .SSH.MaxConnectionsPerIP }}
+
+  # The maximum number of sessions open at once on one SSH connection, like
+  # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
+  # value of 0 means no limit.
+  max_sessions: {{ .SSH.MaxSessions }}
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
@@ -121,6 +143,31 @@ ssh:
 {{- else }} []
 {{- end }}
 
+  # The signature algorithms the SSH server accepts for client public key
+  # authentication. When empty, the server accepts every algorithm
+  # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
+  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
+  # implement are rejected at startup. A list replaces the default, so to let
+  # an old client that only signs with ssh-rsa authenticate, copy the default
+  # list and append it. Builds with Go 1.27 or later also accept ssh-mldsa-44,
+  # ssh-mldsa-65 and ssh-mldsa-87 by default; add those too to keep them:
+  #   public_key_auth_algorithms:
+  #     - "ssh-ed25519"
+  #     - "sk-ssh-ed25519@openssh.com"
+  #     - "sk-ecdsa-sha2-nistp256@openssh.com"
+  #     - "ecdsa-sha2-nistp256"
+  #     - "ecdsa-sha2-nistp384"
+  #     - "ecdsa-sha2-nistp521"
+  #     - "rsa-sha2-256"
+  #     - "rsa-sha2-512"
+  #     - "ssh-rsa" # legacy, appended
+  public_key_auth_algorithms:
+{{- range .SSH.PublicKeyAuthAlgorithms }}
+    - {{ q . }}
+{{- else }} []
+{{- end }}
+
 # The Git daemon configuration.
 git:
   # Enable the Git daemon.
@@ -138,9 +185,14 @@ git:
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
+  # A value of 0 means no timeout.
+  # Independently of it, a client has 10 seconds to send its request.
+  # While a pack is prepared, keepalives are sent every idle_timeout/2
+  # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: {{ .Git.IdleTimeout }}
 
-  # The maximum number of concurrent connections.
+  # The maximum number of concurrent connections; at least 1. Connections
+  # beyond it are refused with "too many connections".
   max_connections: {{ .Git.MaxConnections }}
 
 # The HTTP server configuration.
@@ -154,7 +206,8 @@ http:
   # The path to the TLS private key.
   tls_key_path: {{ q .HTTP.TLSKeyPath }}
 
-  # The path to the TLS certificate.
+  # The path to the TLS certificate. Set both paths to serve HTTPS, or
+  # neither to serve plain HTTP.
   tls_cert_path: {{ q .HTTP.TLSCertPath }}
 
   # The public URL of the HTTP server.
@@ -162,38 +215,58 @@ http:
   # Make sure to use https:// if you are using TLS.
   public_url: {{ q .HTTP.PublicURL }}
 
+  # The maximum number of seconds a git or LFS request can take.
+  # A value of 0 means no timeout.
+  max_timeout: {{ .HTTP.MaxTimeout }}
+
+  # The number of seconds a git or LFS request can go without reading from
+  # or writing to the client before it is closed. Time the server spends
+  # working between reads and writes does not count.
+  # A value of 0 means no timeout.
+  idle_timeout: {{ .HTTP.IdleTimeout }}
+
+  # The maximum number of git and LFS requests served at once. Requests over
+  # the limit get 503 Service Unavailable.
+  # A value of 0 means no limit.
+  max_connections: {{ .HTTP.MaxConnections }}
+
   # The cross-origin request security options
   cors:
     # The allowed cross-origin headers
     allowed_headers:
-       - "Accept"
-       - "Accept-Language"
-       - "Content-Language"
-       - "Content-Type"
-       - "Origin"
-       - "X-Requested-With"
-       - "User-Agent"
-       - "Authorization"
-       - "Access-Control-Request-Method"
-       - "Access-Control-Allow-Origin"
-    # The allowed cross-origin URLs
+      - "Accept"
+      - "Accept-Language"
+      - "Content-Language"
+      - "Content-Type"
+      - "Origin"
+      - "X-Requested-With"
+      - "User-Agent"
+      - "Authorization"
+      - "Access-Control-Request-Method"
+      - "Access-Control-Allow-Origin"
+    # The allowed cross-origin URLs. The public URL is always allowed.
     allowed_origins:
-       - {{ q .HTTP.PublicURL }} # always allowed
-       # - "https://example.com"
+{{- range .HTTP.CORS.AllowedOrigins }}
+      - {{ q . }}
+{{- else }} []
+      # - "https://example.com"
+{{- end }}
     # The allowed cross-origin methods
     allowed_methods:
-       - "GET"
-       - "HEAD"
-       - "POST"
-       - "PUT"
-       - "OPTIONS"
+      - "GET"
+      - "HEAD"
+      - "POST"
+      - "PUT"
+      - "OPTIONS"
 
 # The stats server configuration.
 stats:
   # Enable the stats server.
   enabled: {{ .Stats.Enabled }}
 
-  # The address on which the stats server will listen.
+  # The address on which the stats server will listen. It serves Prometheus
+  # metrics at /metrics without authentication, and they name repositories,
+  # private ones included, so keep it off untrusted networks.
   listen_addr: {{ q .Stats.ListenAddr }}
 
 # The database configuration.
@@ -204,6 +277,9 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # Make sure foreign key support is enabled when using SQLite.
+  # A relative SQLite path, including the path in a relative "file:" URI, is
+  # relative to the data directory. ":memory:" and in-memory "file:" URIs
+  # are used as written.
   data_source: {{ q .DB.DataSource }}
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
@@ -221,12 +297,19 @@ db:
 lfs:
   # Enable Git LFS.
   enabled: {{ .LFS.Enabled }}
-  # Enable Git SSH transfer.
+  # Enable Git LFS over SSH (the git-lfs-transfer protocol).
   ssh_enabled: {{ .LFS.SSHEnabled }}
 
 # Cron job configuration
 jobs:
+  # How often pull mirrors sync: a standard five-field cron spec or a
+  # descriptor such as "@hourly" or "@every 10m". Set to "" to disable
+  # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
+  # it; it keeps this value.
   mirror_pull: {{ q .Jobs.MirrorPull }}
+  # Remove temporary files that interrupted LFS uploads and mirror
+  # downloads left behind for more than a day.
+  lfs_sweep: {{ q .Jobs.LFSSweep }}
 
 # Repository webhook configuration.
 webhook:
@@ -252,9 +335,24 @@ webhook:
     # - "127.0.0.1:8080"
 {{- end }}
 
-# Additional admin keys.
+# Additional admin keys. A listed key that no account holds is still a
+# server admin over SSH, git transport included, but it can't take LFS locks
+# or get an HTTP LFS token (git-lfs-authenticate): both need an account.
+# An entry may also be the path to a file in authorized_keys format; a
+# relative path is relative to the data directory.
 #initial_admin_keys:
-#  - "ssh-rsa AAAAB3NzaC1yc2..."
+#  - "ssh-ed25519 AAAAC3NzaC1lZDI1..."
+
+# Override the anon-access and allow-keyless settings (normally managed at
+# runtime with the "settings" command and stored in the database). While
+# set, these take precedence over the database on every read, not just on
+# first run. This is intended for scripted, non-production bootstrapping
+# (e.g. a throwaway server for local dev tooling), not for production use.
+# "admin-access" with allow_keyless: true gives anyone who can reach the
+# server full admin access. Valid anon_access values are "no-access",
+# "read-only", "read-write" and "admin-access".
+#anon_access: "read-only"
+#allow_keyless: true
 
 # Only server admins (admin accounts or initial_admin_keys) may create
 # repositories. Registered non-admins and anonymous users cannot create or
@@ -268,8 +366,17 @@ webhook:
 # Maximum number of repositories each user may create (repo create, repo
 # import and push-to-create). Server admins are exempt, and repositories
 # created without an account all count together as one user. A user at the
-# limit is refused; existing repositories are kept. 0 means no limit.
+# limit is refused; existing repositories are kept. Imports still running
+# count against the limit. 0 means no limit.
 #max_repos_per_user: 0
+
+# Largest file, in bytes, that the TUI and "repo blob" read into memory to
+# display. Larger files are refused ("repo blob --raw" streams them instead),
+# and a larger README is not shown. The TUI highlights and wraps a file
+# while handling input, so this limit is also what keeps one file view from
+# stalling a session: raising it, or 0 for no limit, makes large files slow
+# to open and costly in memory. Defaults to 1048576 (1 MiB).
+#max_blob_size: 1048576
 
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without
@@ -313,8 +420,12 @@ func yamlQuote(s string) string {
 	return b.String()
 }
 
-func newConfigFile(cfg *Config) string {
+// newConfigFile renders cfg as a config file. It fails rather than return
+// a file cut short where the template stopped.
+func newConfigFile(cfg *Config) (string, error) {
 	var b bytes.Buffer
-	configFileTmpl.Execute(&b, cfg) //nolint: errcheck
-	return b.String()
+	if err := configFileTmpl.Execute(&b, cfg); err != nil {
+		return "", fmt.Errorf("render config file: %w", err)
+	}
+	return b.String(), nil
 }

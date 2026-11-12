@@ -1,10 +1,10 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -15,14 +15,22 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
-// RefMsg is a message that contains a git.Reference.
-type RefMsg *git.Reference
+// RefMsg is a message that contains the git.Reference to show.
+type RefMsg struct {
+	Ref *git.Reference
+	gen uint64
+}
+
+func (m RefMsg) generation() uint64 { return m.gen }
 
 // RefItemsMsg is a message that contains a list of RefItem.
 type RefItemsMsg struct {
 	prefix string
 	items  []selector.IdentifiableItem
+	gen    uint64
 }
+
+func (m RefItemsMsg) generation() uint64 { return m.gen }
 
 // Refs is a component that displays a list of references.
 type Refs struct {
@@ -34,6 +42,11 @@ type Refs struct {
 	refPrefix string
 	spinner   spinner.Model
 	isLoading bool
+	gen       uint64
+	// loaded reports whether the references of repo were requested. They
+	// do not depend on the selected reference, so switching branches does
+	// not list them again.
+	loaded bool
 }
 
 // NewRefs creates a new Refs component.
@@ -43,17 +56,9 @@ func NewRefs(common common.Common, refPrefix string) *Refs {
 		refPrefix: refPrefix,
 		isLoading: true,
 	}
-	s := selector.New(common, []selector.IdentifiableItem{}, RefItemDelegate{&common})
-	s.SetShowFilter(false)
-	s.SetShowHelp(false)
-	s.SetShowPagination(false)
-	s.SetShowStatusBar(false)
-	s.SetShowTitle(false)
-	s.SetFilteringEnabled(false)
-	s.DisableQuitKeybindings()
+	s := selector.NewPane(common, RefItemDelegate{&common})
 	r.selector = s
-	sp := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	sp := common.NewSpinner()
 	r.spinner = sp
 	return r
 }
@@ -82,8 +87,7 @@ func (r *Refs) SetSize(width, height int) {
 
 // ShortHelp implements help.KeyMap.
 func (r *Refs) ShortHelp() []key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return []key.Binding{
 		r.common.KeyMap.SelectItem,
@@ -95,8 +99,7 @@ func (r *Refs) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (r *Refs) FullHelp() [][]key.Binding {
-	copyKey := r.common.KeyMap.Copy
-	copyKey.SetHelp("c", "copy ref")
+	copyKey := r.common.CopyKey("copy ref")
 	k := r.selector.KeyMap
 	return [][]key.Binding{
 		{r.common.KeyMap.SelectItem},
@@ -117,7 +120,7 @@ func (r *Refs) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Refs) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateItemsCmd)
+	return tea.Batch(r.spinner.Tick, r.updateItemsCmd())
 }
 
 // Update implements tea.Model.
@@ -127,9 +130,16 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.selector.Select(0)
 		r.repo = msg
+		r.loaded = false
 	case RefMsg:
-		r.ref = msg
-		cmds = append(cmds, r.Init())
+		r.ref = msg.Ref
+		r.gen = msg.gen
+		// A load still running carries the previous generation, so the
+		// repository page drops its result: start it again for this one.
+		if !r.loaded || r.isLoading {
+			r.loaded = true
+			cmds = append(cmds, r.Init())
+		}
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case RefItemsMsg:
@@ -150,17 +160,18 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		switch i := msg.IdentifiableItem.(type) {
 		case RefItem:
 			cmds = append(cmds,
-				switchRefCmd(i.Reference),
+				switchRefCmd(i.Reference, r.gen),
 				switchTabCmd(&Files{}),
 			)
 		}
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, r.common.KeyMap.SelectItem):
-			cmds = append(cmds, r.selector.SelectItemCmd)
+			cmds = append(cmds, r.selector.SelectItemCmd())
 		}
 	case EmptyRepoMsg:
 		r.ref = nil
+		r.gen = msg.gen
 		cmds = append(cmds, r.setItems([]selector.IdentifiableItem{}))
 	case spinner.TickMsg:
 		if r.isLoading && r.spinner.ID() == msg.ID {
@@ -209,106 +220,124 @@ func (r *Refs) StatusBarInfo() string {
 	return fmt.Sprintf("p. %d/%d", r.selector.Page()+1, totalPages)
 }
 
-func (r *Refs) updateItemsCmd() tea.Msg {
-	its := make(RefItems, 0)
-	rr, err := r.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-	refs, err := rr.References()
-	if err != nil {
-		r.common.Logger.Debugf("ui: error getting references: %v", err)
-		return common.ErrorMsg(err)
-	}
-	for _, ref := range refs {
-		if strings.HasPrefix(ref.Name().String(), r.refPrefix) {
-			refItem := RefItem{
-				Reference: ref,
-			}
-
-			if ref.IsTag() {
-				refItem.Tag, _ = rr.Tag(ref.Name().Short())
-				if refItem.Tag != nil {
-					refItem.Commit, _ = refItem.Tag.Commit()
-				}
-			} else {
-				refItem.Commit, _ = rr.CatFileCommit(ref.ID)
-			}
-			its = append(its, refItem)
+// updateItemsCmd returns a command that lists the refs of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (r *Refs) updateItemsCmd() tea.Cmd {
+	repo, prefix, logger, gen := r.repo, r.refPrefix, r.common.Logger, r.gen
+	ctx := r.common.Context()
+	return func() tea.Msg {
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
 		}
-	}
-	sort.Sort(its)
-	items := make([]selector.IdentifiableItem, len(its))
-	for i, it := range its {
-		items[i] = it
-	}
-	return RefItemsMsg{
-		items:  items,
-		prefix: r.refPrefix,
+		rr, err := openWithContext(ctx, repo)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		refs, err := rr.RefInfos(prefix)
+		if err != nil {
+			logger.Debugf("error getting references: %v", err)
+			return common.ErrorMsg(err)
+		}
+		its := make(RefItems, len(refs))
+		for i, ref := range refs {
+			its[i] = RefItem{ref}
+		}
+		sort.Stable(its)
+		items := make([]selector.IdentifiableItem, len(its))
+		for i, it := range its {
+			items[i] = it
+		}
+		return RefItemsMsg{
+			items:  items,
+			prefix: prefix,
+			gen:    gen,
+		}
 	}
 }
 
 func (r *Refs) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	prefix, gen := r.refPrefix, r.gen
 	return func() tea.Msg {
 		return RefItemsMsg{
 			items:  items,
-			prefix: r.refPrefix,
+			prefix: prefix,
+			gen:    gen,
 		}
 	}
 }
 
-func switchRefCmd(ref *git.Reference) tea.Cmd {
+func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		return RefMsg(ref)
+		return RefMsg{Ref: ref, gen: gen}
 	}
 }
 
-// UpdateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
-// fallback branch when HEAD names a branch that does not exist (see
-// defaultRef). It sends EmptyRepoMsg when the repository has no branches.
-func UpdateRefCmd(repo proto.Repository) tea.Cmd {
+// updateRefCmd sends a RefMsg with the reference to show first: HEAD, or a
+// fallback branch or tag when HEAD names a branch that does not exist (see
+// defaultRef). It sends EmptyRepoMsg when the repository has no branches or
+// tags. gen is the generation the repository page started for repo. Its git
+// commands stop when ctx is done.
+func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		r, err := repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		bs, _ := r.Branches()
-		if len(bs) == 0 {
-			return EmptyRepoMsg{}
+		refs, err := r.References()
+		if err != nil {
+			return common.ErrorMsg(err)
 		}
-		ref, err := defaultRef(r)
+		if len(refs) == 0 {
+			return EmptyRepoMsg{gen: gen}
+		}
+		ref, err := defaultRef(r, refs)
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
 		if ref == nil {
-			return EmptyRepoMsg{}
+			return EmptyRepoMsg{gen: gen}
 		}
-		return RefMsg(ref)
+		return RefMsg{Ref: ref, gen: gen}
 	}
 }
 
-// defaultRef returns the reference to show first: HEAD, or a branch when
-// HEAD names a branch that does not exist, such as in a mirror whose remote
-// renamed its default branch. It prefers "main" or "master", like
-// EnsureDefaultBranch does, and then the first branch. It returns nil when
-// there is no branch to show.
-func defaultRef(r *git.Repository) (*git.Reference, error) {
+// defaultRef returns the reference to show first: HEAD, the commit a
+// detached HEAD points at, or another ref from refs when HEAD names a branch
+// that does not exist, such as in a mirror whose remote renamed its default
+// branch or a repository that only has tags. It prefers "main" or "master",
+// like EnsureDefaultBranch does, then the first branch, and then the first
+// tag. It returns nil when there is no branch or tag to show.
+func defaultRef(r *git.Repository, refs []*git.Reference) (*git.Reference, error) {
 	ref, err := r.HEAD()
-	if !errors.Is(err, git.ErrReferenceNotExist) {
-		return ref, err
+	if err == nil {
+		return ref, nil
 	}
-	refs, _ := r.References()
-	var first *git.Reference
-	for _, ref := range refs {
-		if !ref.IsBranch() {
-			continue
-		}
-		if b := ref.Name().Short(); b == "main" || b == "master" {
+	if !errors.Is(err, git.ErrReferenceNotExist) {
+		// A detached HEAD is not a symbolic ref, so HEAD fails for it.
+		if ref, derr := r.DetachedHEAD(); derr == nil {
 			return ref, nil
 		}
-		if first == nil {
-			first = ref
+		return nil, err
+	}
+	var branch, tag *git.Reference
+	for _, ref := range refs {
+		switch {
+		case ref.IsBranch():
+			if b := ref.Name().Short(); b == "main" || b == "master" {
+				return ref, nil
+			}
+			if branch == nil {
+				branch = ref
+			}
+		case ref.IsTag():
+			if tag == nil {
+				tag = ref
+			}
 		}
 	}
-	return first, nil
+	if branch != nil {
+		return branch, nil
+	}
+	return tag, nil
 }

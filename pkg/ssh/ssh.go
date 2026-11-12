@@ -2,7 +2,9 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"strconv"
@@ -11,7 +13,6 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	bm "charm.land/wish/v2/bubbletea"
 	rm "charm.land/wish/v2/recover"
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -41,11 +42,10 @@ var (
 
 // SSHServer is a SSH server that implements the git protocol.
 type SSHServer struct { //nolint: revive
-	srv    *ssh.Server
-	cfg    *config.Config
-	be     *backend.Backend
-	ctx    context.Context
-	logger *log.Logger
+	srv *ssh.Server
+	be  *backend.Backend
+
+	limiter *connLimiter
 }
 
 // NewSSHServer returns a new SSHServer.
@@ -57,27 +57,26 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	be := backend.FromContext(ctx)
 
 	var err error
-	s := &SSHServer{
-		cfg:    cfg,
-		ctx:    ctx,
-		be:     be,
-		logger: logger,
-	}
+	s := &SSHServer{be: be}
 
 	mw := []wish.Middleware{
 		rm.MiddlewareWithLogger(
 			logger,
 			// BubbleTea middleware.
-			bm.MiddlewareWithProgramHandler(SessionHandler),
+			BubbleTeaMiddleware,
 			// CLI middleware.
 			CommandMiddleware,
 			// Logging middleware.
 			LoggingMiddleware,
 			// Authentication middleware.
-			// gossh.PublicKeyHandler doesn't guarantee that the public key
-			// is in fact the one used for authentication, so we need to
-			// check it again here.
+			// charm.land/ssh already gives the session the key that
+			// authenticated it. This checks it against the fingerprint
+			// PublicKeyHandler stored, as defense in depth, and sets the
+			// session's user.
 			AuthenticationMiddleware,
+			// Command length middleware.
+			// Refuses overlong exec commands before anything parses them.
+			CommandLengthMiddleware,
 			// Context middleware.
 			// This must come first to set up the context.
 			ContextMiddleware(cfg, dbx, datastore, be, logger),
@@ -112,22 +111,42 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 		s.srv.IdleTimeout = time.Duration(cfg.SSH.IdleTimeout) * time.Second
 	}
 
+	// Close connections that have not finished the handshake and
+	// authenticated in time. A connection holds its place under the
+	// connection limits from the moment it is accepted, so without this an
+	// unauthenticated client could hold places for the whole idle timeout,
+	// or for ever by sending a byte now and then.
+	if cfg.SSH.HandshakeTimeout > 0 {
+		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
+	}
+
+	// Limit the connections open at once, in total and per client address,
+	// and the session channels each connection may hold.
+	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
+	s.srv.ConnCallback = connCallback(s.limiter, logger)
+	s.srv.ChannelHandlers = map[string]ssh.ChannelHandler{
+		"session": limitSessions(ssh.DefaultSessionHandler, cfg.SSH.MaxSessions),
+	}
+
 	// Create client ssh key
-	if _, err := os.Stat(cfg.SSH.ClientKeyPath); err != nil && os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
 		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
 		if err != nil {
 			return nil, fmt.Errorf("client ssh key: %w", err)
 		}
+	} else if err != nil {
+		return nil, fmt.Errorf("client ssh key: %w", err)
 	}
 
 	return s, nil
 }
 
 // serverConfig returns the x/crypto server configuration for a new
-// connection. It restricts the key exchanges, ciphers and MACs offered to
-// those in the config, which default to the algorithms x/crypto considers
-// secure. Without them x/crypto falls back to its own defaults, which still
-// include SHA-1 key exchange and MACs. The SSH server adds the host keys
+// connection. It restricts the key exchanges, ciphers and MACs offered, and
+// the signature algorithms accepted for public key authentication, to those
+// in the config, which default to the algorithms x/crypto considers secure.
+// Without them x/crypto falls back to its own defaults, which still include
+// SHA-1 key exchange and MACs and accept ssh-rsa and ssh-dss signatures. The SSH server adds the host keys
 // and authentication callbacks on top of this.
 func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 	sc := &gossh.ServerConfig{
@@ -136,6 +155,7 @@ func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 			Ciphers:      cfg.SSH.SSHCiphers(),
 			MACs:         cfg.SSH.SSHMACs(),
 		},
+		PublicKeyAuthAlgorithms: cfg.SSH.SSHPublicKeyAuthAlgorithms(),
 	}
 	if config.IsDebug() {
 		sc.AuthLogCallback = func(conn gossh.ConnMetadata, method string, err error) {
@@ -165,7 +185,9 @@ func (s *SSHServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
-func initializePermissions(ctx ssh.Context) {
+// initializePermissions returns the context's permissions, creating them
+// and their extensions map when missing.
+func initializePermissions(ctx ssh.Context) *ssh.Permissions {
 	perms := ctx.Permissions()
 	if perms == nil || perms.Permissions == nil {
 		perms = &ssh.Permissions{Permissions: &gossh.Permissions{}}
@@ -173,20 +195,25 @@ func initializePermissions(ctx ssh.Context) {
 	if perms.Extensions == nil {
 		perms.Extensions = make(map[string]string)
 	}
+	return perms
 }
 
 // PublicKeyHandler handles public key authentication.
 func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed bool) {
+	defer func() {
+		publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
+	}()
+
 	if pk == nil {
 		return false
 	}
 
 	allowed = true
 
-	// XXX: store the first "approved" public-key fingerprint in the
-	// permissions block to use for authentication later.
-	initializePermissions(ctx)
-	perms := ctx.Permissions()
+	// Store the offered key's fingerprint in the permissions block for
+	// AuthenticationMiddleware to check. Each attempt overwrites it, so it
+	// ends up naming the key that authenticated.
+	perms := initializePermissions(ctx)
 
 	// Set the public key fingerprint to be used for authentication.
 	perms.Extensions["pubkey-fp"] = gossh.FingerprintSHA256(pk)
@@ -195,19 +222,16 @@ func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed
 	return
 }
 
-// KeyboardInteractiveHandler handles keyboard interactive authentication.
-// This is used after all public key authentication has failed.
+// KeyboardInteractiveHandler handles keyboard interactive authentication,
+// which lets a client in without a key when keyless access is allowed.
 func (s *SSHServer) KeyboardInteractiveHandler(ctx ssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
 	ac := s.be.AllowKeyless(ctx)
 	keyboardInteractiveCounter.WithLabelValues(strconv.FormatBool(ac)).Inc()
 
-	// If we're allowing keyless access, reset the public key fingerprint
-	initializePermissions(ctx)
-	perms := ctx.Permissions()
-
+	perms := initializePermissions(ctx)
 	if ac {
-		// XXX: reset the public-key fingerprint. This is used to validate the
-		// public key being used to authenticate.
+		// Clear the fingerprint a failed public key attempt may have left,
+		// since no key authenticated this session.
 		perms.Extensions["pubkey-fp"] = ""
 		ctx.SetValue(ssh.ContextKeyPermissions, perms)
 	}

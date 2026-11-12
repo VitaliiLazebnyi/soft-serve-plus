@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"charm.land/log/v2"
 )
 
 func generateTestCert(t *testing.T, certPath, keyPath, cn string) {
@@ -40,24 +38,18 @@ func generateTestCert(t *testing.T, certPath, keyPath, cn string) {
 		t.Fatal(err)
 	}
 
-	certFile, err := os.Create(certPath)
-	if err != nil {
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer certFile.Close()
 
-	pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
-
-	keyFile, err := os.Create(keyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer keyFile.Close()
-
-	pem.Encode(keyFile, &pem.Block{
+	keyPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 	})
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCertReloader(t *testing.T) {
@@ -68,9 +60,7 @@ func TestCertReloader(t *testing.T) {
 	// Initial cert
 	generateTestCert(t, certPath, keyPath, "cert-v1")
 
-	logger := log.New(os.Stderr)
-
-	certReloader, err := NewCertReloader(certPath, keyPath, logger)
+	certReloader, err := NewCertReloader(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("failed to create reloader: %v", err)
 	}
@@ -79,11 +69,8 @@ func TestCertReloader(t *testing.T) {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGHUP)
 		for range sigCh {
-			if err := certReloader.Reload(); err != nil {
-				logger.Error("failed to reload certificate", "err", err)
-			} else {
-				logger.Info("certificate reloaded successfully")
-			}
+			// The test checks below that the certificate changed.
+			_ = certReloader.Reload()
 		}
 	}()
 

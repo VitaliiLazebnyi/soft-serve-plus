@@ -35,7 +35,7 @@ func TestNewSecureClientBlocksPrivateIPs(t *testing.T) {
 
 			conn, err := transport.DialContext(ctx, "tcp", tt.addr)
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 
 			if tt.wantErr {
@@ -63,7 +63,7 @@ func TestNewSecureClientBlocksPrivateHostnames(t *testing.T) {
 	// net.LookupIP("localhost") -> 127.0.0.1 -> isPrivateOrInternal -> blocked.
 	conn, err := transport.DialContext(ctx, "tcp", "localhost:80")
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if !errors.Is(err, ErrPrivateIP) {
 		t.Errorf("expected ErrPrivateIP for hostname resolving to loopback, got: %v", err)
@@ -79,7 +79,7 @@ func TestNewSecureClientNilIPNotErrPrivateIP(t *testing.T) {
 
 	conn, err := transport.DialContext(ctx, "tcp", "not-an-ip:80")
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if err == nil {
 		t.Fatal("expected error for non-IP address, got none")
@@ -109,10 +109,27 @@ func TestNewSecureClientBlocksRedirects(t *testing.T) {
 		}
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("Expected redirect response (302), got %d", resp.StatusCode)
+	}
+}
+
+// Every secure client bounds the wait for response headers on its transport,
+// with or without an allowlist.
+func TestNewSecureClientBoundsResponseHeaders(t *testing.T) {
+	for name, c := range map[string]*http.Client{
+		"plain":    NewSecureClient(),
+		"allowing": NewSecureClientAllowing(mustAllowedHosts(t, "10.0.0.0/8")),
+	} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("%s: transport is %T, want *http.Transport", name, c.Transport)
+		}
+		if tr.ResponseHeaderTimeout != ResponseHeaderTimeout {
+			t.Errorf("%s: ResponseHeaderTimeout = %v, want %v", name, tr.ResponseHeaderTimeout, ResponseHeaderTimeout)
+		}
 	}
 }
 
@@ -165,6 +182,20 @@ func TestIsPrivateOrInternal(t *testing.T) {
 		{"2001:0000:4136:e378:8000:63bf:8001:5601", true}, // Teredo
 		{"::7f00:1", true},                                // IPv4-compatible -> 127.0.0.1
 		{"192.88.99.1", true},                             // 6to4 relay anycast
+		{"::ffff:0:7f00:1", true},                         // IPv4-translated -> 127.0.0.1
+		{"::ffff:0:a9fe:a9fe", true},                      // IPv4-translated -> 169.254.169.254
+		{"::ffff:0:808:808", true},                        // IPv4-translated -> 8.8.8.8, still blocked
+
+		// Other special-purpose IPv6 ranges no request should reach.
+		{"2001:2::1", true},     // benchmarking
+		{"2001:10::1", true},    // ORCHID
+		{"2001:2f::1", true},    // ORCHIDv2
+		{"3fff::1", true},       // documentation
+		{"3fff:fff::1", true},   // documentation, end of the range
+		{"5f00::1", true},       // SRv6 SIDs
+		{"2001:3::1", false},    // next to benchmarking, public
+		{"2001:30::1", false},   // past ORCHIDv2, public
+		{"3fff:1000::1", false}, // past the documentation range
 
 		// Public IPv6 must stay reachable: the transition prefixes are narrow
 		// and must not swallow ordinary global unicast.
@@ -261,7 +292,10 @@ func TestIsLocalhost(t *testing.T) {
 	}{
 		{"localhost", true},
 		{"LOCALHOST", true},
+		{"localhost.", true},
+		{"localhost.localdomain.", true},
 		{"test.localhost", true},
+		{"test.localhost.", true},
 		{"example.com", false},
 		{"localhost.com", false},
 	}
@@ -287,7 +321,7 @@ func TestValidateURLErrorsHideResolver(t *testing.T) {
 		lookups.Add(1)
 		return nil, &net.DNSError{Err: "no such host", Name: host, Server: "10.0.0.53:53", IsNotFound: true}
 	}
-	err := validateURL("https://does-not-exist.invalid/hook", nil, lookup)
+	err := validateURL(context.Background(), "https://does-not-exist.invalid/hook", nil, lookup)
 	if n := lookups.Load(); n != 1 {
 		t.Fatalf("fake resolver called %d times, want 1", n)
 	}
@@ -353,7 +387,7 @@ func TestValidateURLResolvesHostnames(t *testing.T) {
 			}
 			var lookups atomic.Int32
 			fake := fakeLookup(table)
-			err := validateURL("https://hooks.example/hook", nil, func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			err := validateURL(context.Background(), "https://hooks.example/hook", nil, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 				lookups.Add(1)
 				return fake(ctx, host)
 			})
@@ -370,5 +404,55 @@ func TestValidateURLResolvesHostnames(t *testing.T) {
 				t.Fatalf("validateURL() error = %q, want it to mention %q", err, tt.wantMsg)
 			}
 		})
+	}
+}
+
+// A cancelled context stops the hostname lookup: validation returns at once
+// with the context's error instead of waiting for the resolver, and does not
+// blame DNS.
+func TestValidateURLContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	lookup := func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() { done <- validateURL(ctx, "https://hooks.example/hook", nil, lookup) }()
+	<-started
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("validateURL() = %v, want context.Canceled", err)
+		}
+		if errors.Is(err, ErrInvalidURL) {
+			t.Fatalf("validateURL() = %v, should not report an invalid URL", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("validateURL did not return after its context was cancelled")
+	}
+}
+
+// ValidateURLContext and ValidateURLAllowingContext check a context that is
+// already done before resolving anything.
+func TestValidateURLContextAlreadyCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ValidateURLContext(ctx, "https://does-not-exist.invalid/"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateURLContext() = %v, want context.Canceled", err)
+	}
+	if err := ValidateURLAllowingContext(ctx, "https://does-not-exist.invalid/", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateURLAllowingContext() = %v, want context.Canceled", err)
+	}
+	// An IP literal needs no lookup, so it is still checked as before.
+	if err := ValidateURLContext(ctx, "https://93.184.216.34/"); err != nil {
+		t.Fatalf("ValidateURLContext(IP literal) = %v, want nil", err)
 	}
 }

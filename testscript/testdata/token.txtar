@@ -8,15 +8,15 @@ ensureserverrunning SSH_PORT
 # create user
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 
-# generate jwt token
+# create access tokens
 usoft token create 'test1'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 usoft token create --expires-in 1y 'test2'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 usoft token create --expires-in 1ns 'test3'
-stdout 'ss_.*'
+stdout '^ss_[0-9a-f]+$'
 stderr 'Access token created'
 
 # list tokens
@@ -24,13 +24,24 @@ usoft token list
 cp stdout tokens.txt
 grep '1.*test1.*-' tokens.txt
 grep '2.*test2.*1 year from now' tokens.txt
-grep '3.*est3.*expired' tokens.txt
+grep '3.*test3.*expired' tokens.txt
+
+# another user cannot delete the token, and gets the same answer as for an
+# unused ID
+! soft token delete 2
+stderr 'token not found'
+! soft token delete 99
+stderr 'token not found'
+usoft token list
+stdout 'test2'
 
 # delete token
 usoft token delete 1
 stderr 'Access token deleted'
 ! usoft token delete 1
 stderr 'token not found'
+! usoft token delete abc
+stderr 'invalid token ID'
 
 # stop the server
 [windows] stopserver

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -153,6 +154,130 @@ func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 	}
 }
 
+// setOutputIdleTimeout sets outputIdleTimeout to d for the test.
+func setOutputIdleTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := outputIdleTimeout
+	outputIdleTimeout = d
+	t.Cleanup(func() { outputIdleTimeout = prev })
+}
+
+// TestServiceBackgroundProcessHoldsOutputOpen covers a process started by
+// git, such as one a hook leaves running in the background, that keeps
+// git's output open after git exited normally. The handler must return
+// with git's output once that output stopped coming, instead of waiting for
+// the process.
+func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	setOutputIdleTimeout(t, 100*time.Millisecond)
+	levels := captureLog(t)
+
+	var stdout, stderr syncBuffer
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdout: &stdout,
+			Stderr: &stderr,
+			Dir:    t.TempDir(),
+			// Stand in for git: start a child that inherits stdout and
+			// stderr and outlives the shell, print its pid, and exit.
+			CmdFunc: func(c *exec.Cmd) {
+				c.Path = sh
+				c.Args = []string{"sh", "-c", "sleep 60 & echo $!; echo done >&2"}
+			},
+		})
+	}()
+
+	err = waitErr(t, errc)
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(stdout.Bytes())))
+	if perr == nil {
+		if p, err := os.FindProcess(pid); err == nil {
+			p.Kill() //nolint: errcheck
+		}
+	}
+	if err != nil {
+		t.Fatalf("expected the service to succeed, got %v", err)
+	}
+	if perr != nil {
+		t.Fatalf("expected the child pid on stdout, got %q", stdout.Bytes())
+	}
+	if got := string(stderr.Bytes()); got != "done\n" {
+		t.Fatalf("expected stderr %q, got %q", "done\n", got)
+	}
+	// The handler closing the pipes under the copies is expected, and must
+	// not be logged as an error.
+	for _, stream := range []string{"stdout", "stderr"} {
+		prefix := "gitServiceHandler: failed to copy " + stream + ": "
+		var found bool
+		for msg, level := range levels() {
+			if !strings.HasPrefix(msg, prefix) {
+				continue
+			}
+			found = true
+			if level != "debug" {
+				t.Errorf("%q logged at %q, want %q", msg, level, "debug")
+			}
+		}
+		if !found {
+			t.Errorf("expected the %s copy to be stopped and logged", stream)
+		}
+	}
+}
+
+// slowWriter is a client that takes delay for every write.
+type slowWriter struct {
+	delay time.Duration
+	n     atomic.Int64
+}
+
+func (w *slowWriter) Write(p []byte) (int, error) {
+	time.Sleep(w.delay)
+	w.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+// TestServiceSlowClientGetsAllOutput covers a client that reads git's
+// output slower than outputIdleTimeout per write: the handler must not
+// take it for a process holding the output open, and must copy all of the
+// output after git exited.
+func TestServiceSlowClientGetsAllOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	setOutputIdleTimeout(t, 20*time.Millisecond)
+
+	const size = 256 << 10
+	w := &slowWriter{delay: 50 * time.Millisecond}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- UploadPack(t.Context(), ServiceCommand{
+			Stdout: w,
+			Dir:    t.TempDir(),
+			CmdFunc: func(c *exec.Cmd) {
+				c.Path = sh
+				c.Args = []string{"sh", "-c", "head -c " + strconv.Itoa(size) + " /dev/zero"}
+			},
+		})
+	}()
+
+	if err := waitErr(t, errc); err != nil {
+		t.Fatalf("expected the service to succeed, got %v", err)
+	}
+	if got := w.n.Load(); got != size {
+		t.Fatalf("expected %d bytes of output, got %d", size, got)
+	}
+}
+
 // TestUploadPackFailsAfterCancel covers git failing on its own after the
 // context was cancelled but before it was killed: the real failure must be
 // reported, not the cancellation.
@@ -240,5 +365,67 @@ func TestStoppedByContext(t *testing.T) {
 	}
 	if !stoppedByContext(ctx, killed, false) {
 		t.Errorf("a process killed by a signal must report a cancellation: %v", killed)
+	}
+}
+
+// TestServiceErrorCarriesStderr checks a git failure reports why git failed,
+// from its stderr, whether or not the caller takes stderr too. It used to
+// report only the exit status unless the caller kept stderr itself.
+func TestServiceErrorCarriesStderr(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stderr *strings.Builder
+	}{
+		{"no caller stderr", nil},
+		{"caller stderr", &strings.Builder{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+			defer cancel()
+			scmd := ServiceCommand{
+				Stdout: io.Discard,
+				// An empty directory is not a repository.
+				Dir:  t.TempDir(),
+				Args: []string{"--stateless-rpc", "--advertise-refs"},
+			}
+			if tc.stderr != nil {
+				scmd.Stderr = tc.stderr
+			}
+			err := UploadPack(ctx, scmd)
+			if err == nil {
+				t.Fatal("upload-pack succeeded outside a repository")
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Errorf("error does not wrap the exit error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "fatal:") {
+				t.Errorf("error does not carry git's stderr: %v", err)
+			}
+			if tc.stderr != nil && !strings.Contains(tc.stderr.String(), "fatal:") {
+				t.Errorf("caller did not get git's stderr: %q", tc.stderr.String())
+			}
+		})
+	}
+}
+
+func TestTailBuffer(t *testing.T) {
+	t.Parallel()
+	b := &tailBuffer{max: 20}
+	if got := b.String(); got != "" {
+		t.Errorf("empty buffer = %q", got)
+	}
+	_, _ = fmt.Fprint(b, "\n  warning: one \n\n")
+	if got, want := b.String(), "warning: one"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+	n, err := fmt.Fprint(b, "fatal: two\nend\n")
+	if err != nil || n != 15 {
+		t.Errorf("Write = %d, %v; want 15, nil", n, err)
+	}
+	if got, want := b.String(), "...ne; fatal: two; end"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
 	}
 }

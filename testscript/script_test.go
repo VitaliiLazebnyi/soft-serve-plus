@@ -34,19 +34,34 @@ import (
 )
 
 var (
-	update  = flag.Bool("update", false, "update script files")
+	update = flag.Bool("update", false, "update script files")
+	// binPath is the soft binary under test; see buildSoft.
 	binPath string
 )
 
 // PrepareBuildCommand builds the soft binary under test. The webhooktest tag
-// lets the tests send webhooks to a local receiver; see newWebhookReceiver.
+// lets the tests send webhooks to a local receiver (see newWebhookReceiver)
+// and adds the HEAD /__stop endpoint that stopserver uses.
+// The binary is built with -cover only when its coverage is collected (see
+// coverDirSet): a -cover binary run without GOCOVERDIR warns on stderr, and
+// every server hook would print that warning to the pushing client.
 func PrepareBuildCommand(binPath string) *exec.Cmd {
-	_, disableRaceSet := os.LookupEnv("SOFT_SERVE_DISABLE_RACE_CHECKS")
-	if disableRaceSet {
-		// don't add the -race flag
-		return exec.Command("go", "build", "-tags", "webhooktest", "-cover", "-o", binPath, filepath.Join("..", "cmd", "soft")) //nolint:noctx
+	args := []string{"build", "-tags", "webhooktest"}
+	if _, disableRaceSet := os.LookupEnv("SOFT_SERVE_DISABLE_RACE_CHECKS"); !disableRaceSet {
+		args = append(args, "-race")
 	}
-	return exec.Command("go", "build", "-tags", "webhooktest", "-race", "-cover", "-o", binPath, filepath.Join("..", "cmd", "soft")) //nolint:noctx
+	if coverDirSet() {
+		args = append(args, "-cover")
+	}
+	args = append(args, "-o", binPath, filepath.Join("..", "cmd", "soft"))
+	return exec.Command("go", args...) //nolint:noctx
+}
+
+// coverDirSet reports whether the soft processes the scripts start have a
+// directory to write coverage counters to: GOCOVERDIR, which testscript passes
+// through, or SOFT_SERVE_TEST_COVDIR (see TestScript's Setup).
+func coverDirSet() bool {
+	return os.Getenv("GOCOVERDIR") != "" || os.Getenv("SOFT_SERVE_TEST_COVDIR") != ""
 }
 
 func TestMain(m *testing.M) {
@@ -56,31 +71,61 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	tmp, err := os.MkdirTemp("", "soft-serve*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temporary directory: %s", err)
-		os.Exit(1)
+	code := m.Run()
+	if binDir != "" {
+		_ = os.RemoveAll(binDir)
 	}
-	defer os.RemoveAll(tmp)
+	os.Exit(code)
+}
 
-	binPath = filepath.Join(tmp, "soft")
-	if runtime.GOOS == "windows" {
-		binPath += ".exe"
+var (
+	buildOnce sync.Once
+	buildErr  error
+	// binDir is the temporary directory that holds binPath, once built.
+	binDir string
+)
+
+// buildSoft builds the soft binary under test the first time it is called and
+// returns its path. Only TestScript runs the binary, so running just the unit
+// tests in this package (go test -run TestWaitExit, say) does not pay for a
+// -race build of the whole server.
+//
+// The build runs inside m.Run, so it counts toward the go test -timeout
+// deadline. A cold -race build plus the full TestScript run takes about a
+// minute locally; if CI runners get close to the deadline, raise -timeout
+// in the workflows instead of moving the build back into TestMain.
+func buildSoft(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		tmp, err := os.MkdirTemp("", "soft-serve*")
+		if err != nil {
+			buildErr = fmt.Errorf("failed to create temporary directory: %w", err)
+			return
+		}
+		binDir = tmp
+
+		path := filepath.Join(tmp, "soft")
+		if runtime.GOOS == "windows" {
+			path += ".exe"
+		}
+
+		// Build the soft binary; see PrepareBuildCommand.
+		cmd := PrepareBuildCommand(path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("failed to build soft-serve binary: %w\n%s", err, out)
+			return
+		}
+		binPath = path
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-
-	// Build the soft binary with -cover flag.
-	cmd := PrepareBuildCommand(binPath)
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build soft-serve binary: %s", err)
-		os.Exit(1)
-	}
-
-	// Run tests
-	os.Exit(m.Run())
+	return binPath
 }
 
 func TestScript(t *testing.T) {
 	flag.Parse()
+	bin := buildSoft(t)
 
 	mkkey := func(name string) (string, *keygen.SSHKeyPair) {
 		path := filepath.Join(t.TempDir(), name)
@@ -129,10 +174,10 @@ func TestScript(t *testing.T) {
 			"uui":                    cmdUI(user1.Signer()),
 		},
 		Setup: func(e *testscript.Env) error {
-			// Add binPath to PATH
-			e.Setenv("PATH", fmt.Sprintf("%s%c%s", filepath.Dir(binPath), os.PathListSeparator, e.Getenv("PATH")))
-			// The soft binary is built with -cover. When SOFT_SERVE_TEST_COVDIR
-			// is set, pass it to the server and hook processes as GOCOVERDIR so
+			// Put the soft binary under test first in PATH
+			e.Setenv("PATH", fmt.Sprintf("%s%c%s", filepath.Dir(bin), os.PathListSeparator, e.Getenv("PATH")))
+			// The soft binary is built with -cover when a coverage directory
+			// is set. When SOFT_SERVE_TEST_COVDIR is set, pass it to the server and hook processes as GOCOVERDIR so
 			// their counters are written there. A separate variable is used
 			// because `go test -cover` overrides GOCOVERDIR for the test process.
 			if dir := os.Getenv("SOFT_SERVE_TEST_COVDIR"); dir != "" {
@@ -216,8 +261,7 @@ func TestScript(t *testing.T) {
 			cfg.Stats.ListenAddr = statsListen
 			cfg.LFS.Enabled = true
 
-			// Parse os SOFT_SERVE environment variables
-			if err := cfg.ParseEnv(); err != nil {
+			if err := applyTestEnv(cfg); err != nil {
 				return err
 			}
 
@@ -233,7 +277,7 @@ func TestScript(t *testing.T) {
 				}
 			}
 
-			for _, env := range cfg.Environ() {
+			for _, env := range testEnviron(cfg) {
 				parts := strings.SplitN(env, "=", 2)
 				if len(parts) != 2 {
 					e.T().Fatal("invalid environment variable", env)
@@ -244,6 +288,54 @@ func TestScript(t *testing.T) {
 			return nil
 		},
 	})
+}
+
+// applyTestEnv takes the database driver from the environment, and the data
+// source too when the driver is postgres, so the scripts can run against
+// postgres, and validates cfg. setupPostgres then swaps the data source for
+// a disposable database. A sqlite data source is never taken from the
+// environment: an absolute one would be used as is, and the scripts would
+// change the users and repositories of whatever database it names, so
+// sqlite keeps the test's database under the data path.
+// Every other SOFT_SERVE_* variable of the developer's environment is
+// ignored: the data path, listen addresses and admin keys belong to the
+// test, and the scripts would otherwise create, change and delete users
+// and repositories wherever SOFT_SERVE_DATA_PATH points. testEnviron keeps
+// SOFT_SERVE_CONFIG_LOCATION out as well.
+func applyTestEnv(cfg *config.Config) error {
+	if v, ok := os.LookupEnv("SOFT_SERVE_DB_DRIVER"); ok {
+		cfg.DB.Driver = v
+	}
+	if cfg.DB.Driver == "postgres" {
+		if v, ok := os.LookupEnv("SOFT_SERVE_DB_DATA_SOURCE"); ok {
+			cfg.DB.DataSource = v
+		}
+	}
+	return cfg.Validate()
+}
+
+// testEnviron returns the environment the scripts run with: cfg.Environ,
+// with SOFT_SERVE_CONFIG_LOCATION pointing into the test's data path.
+// cfg.Environ takes the config location from the developer's
+// SOFT_SERVE_CONFIG_LOCATION when that file exists, and the `soft serve`
+// started by a script would then read the developer's config file, taking
+// anon access, keyless access, extra admin keys and every other setting
+// cfg.Environ does not export from it.
+func testEnviron(cfg *config.Config) []string {
+	const key = "SOFT_SERVE_CONFIG_LOCATION="
+	location := key + filepath.Join(cfg.DataPath, "config.yaml")
+	envs := cfg.Environ()
+	found := false
+	for i, env := range envs {
+		if strings.HasPrefix(env, key) {
+			envs[i] = location
+			found = true
+		}
+	}
+	if !found {
+		envs = append(envs, location)
+	}
+	return envs
 }
 
 func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
@@ -258,11 +350,11 @@ func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, ne
 			},
 		)
 		ts.Check(err)
-		defer cli.Close()
+		defer cli.Close() //nolint:errcheck
 
 		sess, err := cli.NewSession()
 		ts.Check(err)
-		defer sess.Close()
+		defer sess.Close() //nolint:errcheck
 
 		sess.Stdout = ts.Stdout()
 		sess.Stderr = ts.Stderr()
@@ -297,11 +389,11 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 		},
 	)
 	ts.Check(err)
-	defer cli.Close()
+	defer cli.Close() //nolint:errcheck
 
 	sess, err := cli.NewSession()
 	ts.Check(err)
-	defer sess.Close()
+	defer sess.Close() //nolint:errcheck
 
 	sess.Stdout = ts.Stdout()
 	sess.Stderr = ts.Stderr()
@@ -311,66 +403,147 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 
 func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
+		const usage = "usage: ui [-wait text] <quoted string input> [repository | command...]"
+		// -wait holds the input back until the screen shows text, for
+		// content the TUI loads in the background.
+		waitFor := ""
+		if len(args) > 0 && args[0] == "-wait" {
+			if len(args) < 2 {
+				ts.Fatalf(usage)
+			}
+			waitFor, args = args[1], args[2:]
+		}
 		if len(args) < 1 {
-			ts.Fatalf("usage: ui <quoted string input> [repository]")
+			ts.Fatalf(usage)
 			return
 		}
-
-		cli, err := ssh.Dial(
-			"tcp",
-			net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-			&ssh.ClientConfig{
-				User:            "git",
-				Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
-				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			},
-		)
-		check(ts, err, neg)
-		defer cli.Close()
-
-		sess, err := cli.NewSession()
-		check(ts, err, neg)
-		defer sess.Close()
-
-		// XXX: this is a hack to make the UI tests work
-		// cmp command always complains about an extra newline
-		// in the output
-		defer ts.Stdout().Write([]byte("\n"))
-
-		sess.Stdout = ts.Stdout()
-		sess.Stderr = ts.Stderr()
-
-		stdin, err := sess.StdinPipe()
-		check(ts, err, neg)
-
-		err = sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{})
-		check(ts, err, neg)
-		// An optional repository name opens the TUI on that repository.
-		initialRepo := ""
-		if len(args) > 1 {
-			initialRepo = args[1]
-		}
-		check(ts, sess.Start(initialRepo), neg)
-
 		in, err := strconv.Unquote(args[0])
-		check(ts, err, neg)
-		reader := strings.NewReader(in)
-		go func() {
-			defer stdin.Close()
-			for {
-				r, _, err := reader.ReadRune()
-				if err == io.EOF {
-					break
-				}
-				check(ts, err, neg)
-				_, _ = io.WriteString(stdin, string(r))
+		if err != nil {
+			ts.Fatalf("ui: input must be a quoted string: %v", err)
+		}
+		// An optional repository name opens the TUI on that repository;
+		// a command (more words, a flag, or a top-level command name that
+		// is no readable repository) runs with the pty instead.
+		check(ts, runUI(ts, key, in, strings.Join(args[1:], " "), waitFor), neg)
+	}
+}
 
-				// Wait for the UI to process the input
-				time.Sleep(100 * time.Millisecond)
+// uiWaitTimeout bounds how long "ui -wait" waits for its text.
+const uiWaitTimeout = time.Minute
+
+// outputWatcher records what the TUI writes and closes found once the output
+// contains text.
+type outputWatcher struct {
+	mu    sync.Mutex
+	text  []byte
+	buf   []byte
+	found chan struct{}
+	done  bool
+}
+
+func newOutputWatcher(text string) *outputWatcher {
+	return &outputWatcher{text: []byte(text), found: make(chan struct{})}
+}
+
+func (w *outputWatcher) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.done {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	if bytes.Contains(w.buf, w.text) {
+		w.done = true
+		w.buf = nil
+		close(w.found)
+	}
+	return len(p), nil
+}
+
+// runUI opens a session with a pty over SSH running command (empty for the
+// TUI), types in one rune at a time and waits for the session to end. With waitFor set, it starts typing only once the
+// output shows waitFor. Every failure is returned, so that "! ui" stops at
+// the first one instead of going on with what failed to open.
+func runUI(ts *testscript.TestScript, key ssh.Signer, in, command, waitFor string) error {
+	cli, err := ssh.Dial(
+		"tcp",
+		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
+		&ssh.ClientConfig{
+			User:            "git",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck
+
+	sess, err := cli.NewSession()
+	if err != nil {
+		return err
+	}
+	defer sess.Close() //nolint:errcheck
+
+	// XXX: this is a hack to make the UI tests work
+	// cmp command always complains about an extra newline
+	// in the output
+	defer ts.Stdout().Write([]byte("\n")) //nolint:errcheck
+
+	sess.Stdout = ts.Stdout()
+	sess.Stderr = ts.Stderr()
+	var watcher *outputWatcher
+	if waitFor != "" {
+		watcher = newOutputWatcher(waitFor)
+		sess.Stdout = io.MultiWriter(ts.Stdout(), watcher)
+	}
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{}); err != nil {
+		return err
+	}
+	if err := sess.Start(command); err != nil {
+		return err
+	}
+
+	waitErr := make(chan error, 1)
+	go func() {
+		defer stdin.Close() //nolint:errcheck
+		if watcher != nil {
+			select {
+			case <-watcher.found:
+				waitErr <- nil
+			case <-time.After(uiWaitTimeout):
+				// Type the input anyway, so that it can still quit the TUI.
+				waitErr <- fmt.Errorf("ui: %q did not appear within %v", waitFor, uiWaitTimeout)
 			}
-		}()
+		} else {
+			waitErr <- nil
+		}
+		for _, r := range in {
+			_, _ = io.WriteString(stdin, string(r))
 
-		check(ts, sess.Wait(), neg)
+			// Wait for the UI to process the input
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	if err := sess.Wait(); err != nil {
+		return err
+	}
+	select {
+	case err := <-waitErr:
+		return err
+	default:
+		// The session ended before the input started.
+		if watcher != nil {
+			return fmt.Errorf("ui: the session ended before %q appeared", waitFor)
+		}
+		return nil
 	}
 }
 
@@ -401,15 +574,20 @@ func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {
 const loopback = "127.0.0.1"
 
 // loopbackClient sends requests for "localhost" to loopback, for the same
-// reason the servers listen there.
-var loopbackClient = &http.Client{Transport: &http.Transport{
-	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
-			addr = net.JoinHostPort(loopback, port)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+// reason the servers listen there. A request that gets no answer fails the
+// script after a minute instead of hanging it until the test binary times
+// out.
+var loopbackClient = &http.Client{
+	Timeout: time.Minute,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
+				addr = net.JoinHostPort(loopback, port)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
 	},
-}}
+}
 
 var sshConfig = `
 Host *
@@ -466,8 +644,27 @@ func check(ts *testscript.TestScript, err error, neg bool) {
 	}
 }
 
+// cmdReadfile writes the content of a file to stdout. When an expected content
+// is given, it also checks that the file holds exactly that content (or, with
+// a "!" prefix, anything else).
 func cmdReadfile(ts *testscript.TestScript, neg bool, args []string) {
-	ts.Stdout().Write([]byte(ts.ReadFile(args[0])))
+	if len(args) < 1 || len(args) > 2 {
+		ts.Fatalf("usage: readfile path [content]")
+	}
+	got := ts.ReadFile(args[0])
+	_, _ = ts.Stdout().Write([]byte(got))
+	if len(args) == 1 {
+		if neg {
+			ts.Fatalf("unsupported: ! readfile without content")
+		}
+		return
+	}
+	if want := args[1]; (got == want) == neg {
+		if neg {
+			ts.Fatalf("%s: unexpected content %q", args[0], got)
+		}
+		ts.Fatalf("%s: got %q, want %q", args[0], got, want)
+	}
 }
 
 func cmdEnvfile(ts *testscript.TestScript, neg bool, args []string) {
@@ -555,7 +752,7 @@ func cmdWebhookReceived(ts *testscript.TestScript, neg bool, args []string) {
 	rcv.mu.Lock()
 	defer rcv.mu.Unlock()
 	for _, line := range rcv.received {
-		fmt.Fprintln(ts.Stdout(), line)
+		_, _ = fmt.Fprintln(ts.Stdout(), line)
 	}
 }
 
@@ -584,7 +781,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
 			}
 
 			for _, header := range headers {
@@ -603,7 +800,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			if verbose {
 				for key, values := range req.Header {
 					for _, value := range values {
-						fmt.Fprintf(cmd.ErrOrStderr(), "< %s: %s\n", key, value)
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s: %s\n", key, value)
 					}
 				}
 			}
@@ -614,15 +811,15 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				fmt.Fprintf(ts.Stderr(), "> %s\n", resp.Status)
+				_, _ = fmt.Fprintf(ts.Stderr(), "> %s\n", resp.Status)
 				for key, values := range resp.Header {
 					for _, value := range values {
-						fmt.Fprintf(cmd.ErrOrStderr(), "> %s: %s\n", key, value)
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "> %s: %s\n", key, value)
 					}
 				}
 			}
 
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck
 			buf, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
@@ -647,6 +844,9 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 }
 
 func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) {
+	if neg {
+		ts.Fatalf("unsupported: ! ensureserverrunning (use ensureservernotrunning)")
+	}
 	if len(args) < 1 {
 		ts.Fatalf("Must supply a TCP port of one of the services to connect to. " +
 			"These are set as env vars as they are randomized. " +
@@ -667,7 +867,7 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 		)
 		if err == nil {
 			ts.Logf("Server is running on port: %s", port)
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		if time.Now().After(deadline) {
@@ -678,6 +878,9 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 }
 
 func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []string) {
+	if neg {
+		ts.Fatalf("unsupported: ! ensureservernotrunning (use ensureserverrunning)")
+	}
 	if len(args) < 1 {
 		ts.Fatalf("Must supply a TCP port of one of the services to connect to. " +
 			"These are set as env vars as they are randomized. " +
@@ -687,16 +890,20 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 
 	port := ts.Getenv(args[0])
 
-	// verify that the server is not up
+	// verify that the server is not up. Only a refused connection says that
+	// nothing listens: a dial that times out on a loaded machine does not.
 	addr := net.JoinHostPort(loopback, port)
-	conn, _ := net.DialTimeout( //nolint:noctx
+	conn, err := net.DialTimeout( //nolint:noctx
 		"tcp",
 		addr,
-		time.Second,
+		5*time.Second,
 	)
-	if conn != nil {
+	if err == nil {
+		_ = conn.Close()
 		ts.Fatalf("server is running on port %s while it should not be running", port)
-		conn.Close()
+	}
+	if !connRefused(err) {
+		ts.Fatalf("cannot tell whether a server is running on port %s: %v", port, err)
 	}
 }
 
@@ -714,19 +921,23 @@ func cmdOccupyIPv6(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Logf("not occupying ::1: %v", err)
 		return
 	}
-	ts.Defer(func() { l.Close() })
+	ts.Defer(func() { _ = l.Close() })
 	go func() {
 		for {
 			conn, err := l.Accept()
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 }
 
 func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
+	// Start with empty stdout and stderr, so that a check that follows looks
+	// at this command's output rather than at the previous command's.
+	ts.Stdout()
+
 	// stop the server
 	publicURL := ts.Getenv("SOFT_SERVE_HTTP_PUBLIC_URL")
 	resp, err := loopbackClient.Head(fmt.Sprintf("%s/__stop", publicURL)) //nolint:noctx
@@ -734,7 +945,7 @@ func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
 	if err != nil {
 		return // only reached under "! stopserver", where failing is expected
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Wait for the server process to exit. A fixed sleep was not always long
 	// enough under load, and a server that is still shutting down when the
@@ -802,7 +1013,7 @@ func waitClosed(addr string, timeout time.Duration) error {
 	for {
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second) //nolint:noctx
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 		} else if connRefused(err) {
 			return nil
 		}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -20,29 +22,83 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 )
 
-// Limits on LFS JSON request bodies. A batch request costs a storage stat and
-// a database lookup per object, so the number of objects is capped. git-lfs
-// sends 100 objects per batch by default (lfs.transfer.batchSize); the batch
-// body limit leaves room for 1000 objects with long ref names. Verify and lock
-// requests carry a single object or path.
+// Limits on LFS JSON request bodies. The batch limits are shared with the
+// SSH transfer protocol. Verify and lock requests carry a single object or
+// path.
 const (
-	maxLfsBatchObjects  = 1000
-	maxLfsBatchBodySize = 1 << 20  // 1 MiB
+	maxLfsBatchObjects  = lfs.MaxBatchObjects
+	maxLfsBatchBodySize = lfs.MaxBatchRequestSize
 	maxLfsJSONBodySize  = 64 << 10 // 64 KiB
 )
 
+// lfsActionAuth is the Authorization header a batch response puts on its
+// actions, and how long it stays valid.
+type lfsActionAuth struct {
+	header    string
+	expiresIn *int64
+}
+
+// lfsActionAuthFor picks the credential to forward to the batch actions. Only
+// a bearer JWT is forwarded: it is short-lived, scoped to the repository, and
+// is how a client that authenticated with git-lfs-authenticate over SSH
+// reaches the object URLs. Its remaining lifetime goes into expires_in so the
+// client asks for a new batch before it runs out. A Basic password or an
+// access token is not echoed back in the response body; git-lfs sends the
+// credentials it used for the batch to the object URLs on the same server.
+// When the client reached the server under a different host than the one in
+// the HTTP public URL, git-lfs has to find credentials for the public-URL
+// host itself (for example from a credential helper, or by prompting).
+//
+// The token is verified again for repo, the repository of the batch request,
+// so a credential is only ever forwarded when it is a valid token for repo.
+func lfsActionAuthFor(r *http.Request, repo string, now time.Time) lfsActionAuth {
+	scheme, credential, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "bearer") || credential == "" {
+		return lfsActionAuth{}
+	}
+
+	claims, err := parseJWT(r.Context(), credential, []string{utils.SanitizeRepo(repo)})
+	if err != nil {
+		return lfsActionAuth{}
+	}
+	auth := lfsActionAuth{header: "Bearer " + credential}
+	if claims.ExpiresAt != nil {
+		left := int64(claims.ExpiresAt.Sub(now) / time.Second)
+		if left <= 0 {
+			return lfsActionAuth{}
+		}
+		auth.expiresIn = &left
+	}
+	return auth
+}
+
+// link returns an action for href with header, adding the forwarded
+// credential and its lifetime.
+func (a lfsActionAuth) link(href string, header map[string]string) *lfs.Link {
+	l := &lfs.Link{Href: href, Header: header}
+	if a.header != "" {
+		if l.Header == nil {
+			l.Header = map[string]string{}
+		}
+		l.Header["Authorization"] = a.header
+		l.ExpiresIn = a.expiresIn
+	}
+	return l
+}
+
 // lfsBodyTooLarge answers 413 when err comes from a body limited with
 // http.MaxBytesReader, and reports whether it did.
-func lfsBodyTooLarge(w http.ResponseWriter, logger *log.Logger, err error) bool {
+func lfsBodyTooLarge(w http.ResponseWriter, r *http.Request, logger *log.Logger, err error) bool {
 	var maxErr *http.MaxBytesError
 	if !errors.As(err, &maxErr) {
 		return false
 	}
 	logger.Warn("request body too large", "limit", maxErr.Limit)
-	renderJSON(w, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
+	renderJSON(w, r, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
 		Message: "request too large",
 	})
 	return true
@@ -56,9 +112,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithPrefix("http.lfs")
 
-	if !isLfs(r) {
-		logger.Errorf("invalid content type: %s", r.Header.Get("Content-Type"))
-		renderNotAcceptable(w)
+	if !lfsMediaTypes(w, r) {
 		return
 	}
 
@@ -66,11 +120,11 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint: errcheck
 	body := http.MaxBytesReader(w, r.Body, maxLfsBatchBodySize)
 	if err := json.NewDecoder(body).Decode(&batchRequest); err != nil {
-		if lfsBodyTooLarge(w, logger, err) {
+		if lfsBodyTooLarge(w, r, logger, err) {
 			return
 		}
-		logger.Errorf("error decoding json: %s", err)
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		logger.Info("error decoding json", "err", err)
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "validation error in request: " + err.Error(),
 		})
 		return
@@ -88,15 +142,24 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !isBasic {
-			renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 				Message: "unsupported transfer",
 			})
 			return
 		}
 	}
 
+	// Object IDs are SHA-256 hashes; the batch API answers 409 to any other
+	// hash algorithm.
+	if batchRequest.HashAlgo != "" && batchRequest.HashAlgo != lfs.HashAlgorithmSHA256 {
+		renderJSON(w, r, http.StatusConflict, lfs.ErrorResponse{
+			Message: "unsupported hash algorithm: " + batchRequest.HashAlgo,
+		})
+		return
+	}
+
 	if len(batchRequest.Objects) == 0 {
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "no objects found",
 		})
 		return
@@ -105,7 +168,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	// The batch API answers 413 when a request has too many objects.
 	if len(batchRequest.Objects) > maxLfsBatchObjects {
 		logger.Warn("too many objects in batch request", "objects", len(batchRequest.Objects))
-		renderJSON(w, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
 			Message: fmt.Sprintf("too many objects in batch request: %d, the maximum is %d", len(batchRequest.Objects), maxLfsBatchObjects),
 		})
 		return
@@ -130,6 +193,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 	batchResponse.Transfer = lfs.TransferBasic
 	batchResponse.HashAlgo = lfs.HashAlgorithmSHA256
 
+	actionAuth := lfsActionAuthFor(r, repo.Name(), time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
 	// XXX: We don't support objects TTL for now, probably implement that with
 	// S3 using object "expires_at" & "expires_in"
@@ -139,7 +203,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 			// Object IDs become storage paths, so validate before touching the
 			// filesystem.
 			if !o.IsValid() {
-				logger.Error("invalid object", "oid", o.Oid, "repo", name)
+				logger.Info("invalid object", "oid", o.Oid, "repo", name)
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
 					Error: &lfs.ObjectError{
@@ -150,24 +214,29 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			exist, err := strg.Exists(path.Join("objects", o.RelativePath()))
+			stat, err := strg.Stat(path.Join("objects", o.RelativePath()))
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				logger.Error("error getting object stat", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
 			}
+			exist := err == nil && stat.Mode().IsRegular()
 
 			obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), o.Oid)
 			if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
 				logger.Error("error getting object from database", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
 			}
 
+			// A download is read-only: the client's size is checked against
+			// the file and its record, never recorded. A file without a
+			// record (an upload that has not recorded it yet) is offered at
+			// the size it has on disk.
 			if !exist {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -176,7 +245,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "object not found",
 					},
 				})
-			} else if obj.Size != o.Size {
+			} else if stat.Size() != o.Size || (obj.ID != 0 && obj.Size != o.Size) {
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
 					Error: &lfs.ObjectError{
@@ -185,14 +254,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 					},
 				})
 			} else {
-				download := &lfs.Link{
-					Href: fmt.Sprintf("%s/%s", baseHref, o.Oid),
-				}
-				if auth := r.Header.Get("Authorization"); auth != "" {
-					download.Header = map[string]string{
-						"Authorization": auth,
-					}
-				}
+				download := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), nil)
 
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -200,17 +262,6 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						lfs.ActionDownload: download,
 					},
 				})
-
-				// If the object doesn't exist in the database, create it
-				if exist && obj.ID == 0 {
-					if err := datastore.CreateLFSObject(ctx, dbx, repo.ID(), o.Oid, o.Size); err != nil {
-						logger.Error("error creating object in datastore", "oid", o.Oid, "repo", name, "err", err)
-						renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
-							Message: "internal server error",
-						})
-						return
-					}
-				}
 			}
 		}
 	case lfs.OperationUpload:
@@ -231,24 +282,29 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 						Message: "invalid object",
 					},
 				})
+				continue
+			}
+
+			// The batch API omits actions for objects the server already
+			// has, so the client does not send them again.
+			// https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md#successful-responses
+			present, err := lfsObjectPresent(ctx, strg, dbx, datastore, repo.ID(), o)
+			if err != nil {
+				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
+				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+					Message: "internal server error",
+				})
+				return
+			}
+			if present {
+				objects = append(objects, &lfs.ObjectResponse{Pointer: o})
 			} else {
-				upload := &lfs.Link{
-					Href: fmt.Sprintf("%s/%s", baseHref, o.Oid),
-					Header: map[string]string{
-						// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
-						// This ensures that the client always uses the designated value for the header.
-						"Content-Type": "application/octet-stream",
-					},
-				}
-				verify := &lfs.Link{
-					Href: fmt.Sprintf("%s/verify", baseHref),
-				}
-				if auth := r.Header.Get("Authorization"); auth != "" {
-					upload.Header["Authorization"] = auth
-					verify.Header = map[string]string{
-						"Authorization": auth,
-					}
-				}
+				upload := actionAuth.link(fmt.Sprintf("%s/%s", baseHref, o.Oid), map[string]string{
+					// NOTE: git-lfs v2.5.0 sets the Content-Type based on the uploaded file.
+					// This ensures that the client always uses the designated value for the header.
+					"Content-Type": "application/octet-stream",
+				})
+				verify := actionAuth.link(fmt.Sprintf("%s/verify", baseHref), nil)
 
 				objects = append(objects, &lfs.ObjectResponse{
 					Pointer: o,
@@ -262,21 +318,47 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "unsupported operation",
 		})
 		return
 	}
 
 	batchResponse.Objects = objects
-	renderJSON(w, http.StatusOK, batchResponse)
+	renderJSON(w, r, http.StatusOK, batchResponse)
+}
+
+// lfsObjectPresent reports whether the repository already stores the object
+// with the given size: it has a database row of that size and its file is a
+// regular file of that size in storage. A missing, truncated or overgrown file
+// is not present, so the client sends it again and the upload handler restores
+// it. The content is not hashed here, to keep batch requests cheap.
+func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) (bool, error) {
+	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid)
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if obj.Size != p.Size {
+		return false, nil
+	}
+	stat, err := strg.Stat(path.Join("objects", p.RelativePath()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return stat.Mode().IsRegular() && stat.Size() == p.Size, nil
 }
 
 // serviceLfsBasic implements Git LFS basic transfer API
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md
 func serviceLfsBasic(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		serviceLfsBasicDownload(w, r)
 	case http.MethodPut:
 		serviceLfsBasicUpload(w, r)
@@ -294,46 +376,41 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	datastore := store.FromContext(ctx)
-	dbx := db.FromContext(ctx)
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 
-	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid)
-	if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-		logger.Error("error getting object from database", "oid", oid, "repo", repo.Name(), "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
+	// The object's database row may be missing (the batch API creates it
+	// lazily), so the stored file, not the row, is the source of truth for
+	// the size. http.ServeContent takes the length from the file and
+	// handles Range and HEAD requests, so interrupted downloads can resume.
 	pointer := lfs.Pointer{Oid: oid}
 	f, err := strg.Open(path.Join("objects", pointer.RelativePath()))
 	if err != nil {
-		logger.Error("error opening object", "oid", oid, "err", err)
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "object not found",
-		})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
-	defer f.Close() //nolint: errcheck
-	if _, err := io.Copy(w, f); err != nil {
-		logger.Error("error copying object to response", "oid", oid, "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		if errors.Is(err, fs.ErrNotExist) {
+			logger.Debug("object not found", "oid", oid, "repo", repo.Name())
+			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+				Message: "object not found",
+			})
+			return
+		}
+		logger.Error("error opening object", "oid", oid, "repo", repo.Name(), "err", err)
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
 	}
+	defer f.Close() //nolint: errcheck
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	// Objects are content addressed, so the oid is a strong validator.
+	w.Header().Set("ETag", `"`+oid+`"`)
+	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
 func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
-	if !isBinary(r) {
-		renderJSON(w, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
+	if !hasMediaType(r, "application/octet-stream") {
+		renderJSON(w, r, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
 			Message: "invalid content type",
 		})
 		return
@@ -364,15 +441,19 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint: errcheck
 
 	// NOTE: Git LFS client will retry uploading the same object if there was a
-	// partial error, so we need to skip existing objects.
-	if _, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
-		// Object exists, skip request
-		io.Copy(io.Discard, r.Body) //nolint: errcheck
-		renderStatus(http.StatusOK)(w, nil)
-		return
+	// partial error, so we need to skip existing objects. The object exists
+	// only if it is recorded and its file is in place: a recorded object
+	// whose file is gone or damaged is stored again, which restores it.
+	if obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid); err == nil {
+		if lfs.HasObject(strg, oid, obj.Size) {
+			// Object exists, skip request
+			io.Copy(io.Discard, r.Body) //nolint: errcheck
+			renderStatus(http.StatusOK)(w, nil)
+			return
+		}
 	} else if !errors.Is(err, db.ErrRecordNotFound) {
 		logger.Error("error getting object", "oid", oid, "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -383,8 +464,8 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 	// with a chunked body, and the object cannot be checked against it.
 	size := r.ContentLength
 	if size < 0 {
-		logger.Error("missing content length", "oid", oid)
-		renderJSON(w, http.StatusLengthRequired, lfs.ErrorResponse{
+		logger.Info("missing content length", "oid", oid)
+		renderJSON(w, r, http.StatusLengthRequired, lfs.ErrorResponse{
 			Message: "content length required",
 		})
 		return
@@ -393,20 +474,27 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 	err := lfs.StoreObject(ctx, strg, dbx, datastore, repo.ID(), oid, size, r.Body)
 	switch {
 	case errors.Is(err, lfs.ErrObjectSizeMismatch):
-		logger.Error("object size mismatch", "oid", oid, "err", err)
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		logger.Info("object size mismatch", "oid", oid, "err", err)
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "object size does not match content length",
 		})
 		return
 	case errors.Is(err, lfs.ErrObjectOidMismatch):
-		logger.Error("object hash mismatch", "oid", oid)
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		logger.Info("object hash mismatch", "oid", oid)
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "object content does not match oid",
+		})
+		return
+	case errors.Is(err, lfs.ErrObjectRead):
+		// The client aborted or truncated the upload.
+		logger.Info("error reading object", "oid", oid, "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
+			Message: "error reading object",
 		})
 		return
 	case err != nil:
 		logger.Error("error storing object", "oid", oid, "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -417,8 +505,7 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 
 // POST: /<repo>.git/info/lfs/objects/basic/verify
 func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
-	if !isLfs(r) {
-		renderNotAcceptable(w)
+	if !lfsMediaTypes(w, r) {
 		return
 	}
 
@@ -433,11 +520,11 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint: errcheck
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
 	if err := json.NewDecoder(body).Decode(&pointer); err != nil {
-		if lfsBodyTooLarge(w, logger, err) {
+		if lfsBodyTooLarge(w, r, logger, err) {
 			return
 		}
-		logger.Error("error decoding json", "err", err)
-		renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+		logger.Info("error decoding json", "err", err)
+		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request: " + err.Error(),
 		})
 		return
@@ -446,8 +533,8 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 	// Object IDs become storage paths, so validate before touching the
 	// filesystem.
 	if !pointer.IsValid() {
-		logger.Error("invalid object", "oid", pointer.Oid)
-		renderJSON(w, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		logger.Info("invalid object", "oid", pointer.Oid)
+		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "invalid object",
 		})
 		return
@@ -463,39 +550,46 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 		obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
-				logger.Error("object not found", "oid", pointer.Oid)
-				renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
+				logger.Info("object not found", "oid", pointer.Oid)
+				renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
 					Message: "object not found",
 				})
 				return
 			}
 			logger.Error("error getting object", "oid", pointer.Oid, "err", err)
-			renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
 		}
 
 		if obj.Size != pointer.Size {
-			renderJSON(w, http.StatusBadRequest, lfs.ErrorResponse{
+			renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
 				Message: "object size mismatch",
 			})
 			return
 		}
 
-		if stat.Size() == pointer.Size {
-			renderStatus(http.StatusOK)(w, nil)
+		if stat.Size() != pointer.Size {
+			// The recorded size matches but the stored file does not: the
+			// object on disk is truncated or corrupt and must not verify.
+			logger.Error("stored object size mismatch", "oid", pointer.Oid, "size", pointer.Size, "stored", stat.Size())
+			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+				Message: "object size mismatch",
+			})
 			return
 		}
+
+		renderStatus(http.StatusOK)(w, nil)
 	} else if errors.Is(err, fs.ErrNotExist) {
-		logger.Error("file not found", "oid", pointer.Oid)
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
+		logger.Info("object not found", "oid", pointer.Oid)
+		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
 			Message: "object not found",
 		})
 		return
 	} else {
 		logger.Error("error getting object", "oid", pointer.Oid, "err", err)
-		renderJSON(w, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -504,32 +598,40 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 
 // renderJSON renders a JSON response with the given status code and value. It
 // also sets the Content-Type header to the JSON LFS media type (application/vnd.git-lfs+json).
-func renderJSON(w http.ResponseWriter, statusCode int, v interface{}) {
-	hdrLfs(w)
+func renderJSON(w http.ResponseWriter, r *http.Request, statusCode int, v interface{}) {
+	w.Header().Set("Content-Type", lfs.MediaType)
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Error("error encoding json", "err", err)
+		// The client has most likely gone away.
+		log.FromContext(r.Context()).Debug("error encoding json", "err", err)
 	}
 }
 
-func renderNotAcceptable(w http.ResponseWriter) {
-	renderStatus(http.StatusNotAcceptable)(w, nil)
+// lfsAccepts answers 406 unless the client accepts the LFS media type, and
+// reports whether it does.
+func lfsAccepts(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.Header.Get("Accept"), lfs.MediaType) {
+		renderJSON(w, r, http.StatusNotAcceptable, lfs.ErrorResponse{
+			Message: "Not Acceptable: the Accept header must be " + lfs.MediaType,
+		})
+		return false
+	}
+	return true
 }
 
-func isLfs(r *http.Request) bool {
-	contentType := r.Header.Get("Content-Type")
-	accept := r.Header.Get("Accept")
-	return strings.HasPrefix(contentType, lfs.MediaType) && strings.HasPrefix(accept, lfs.MediaType)
-}
-
-func isBinary(r *http.Request) bool {
-	contentType := r.Header.Get("Content-Type")
-	return strings.HasPrefix(contentType, "application/octet-stream")
-}
-
-func hdrLfs(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", lfs.MediaType)
-	w.Header().Set("Accept", lfs.MediaType)
+// lfsMediaTypes answers 406 unless the client accepts the LFS media type,
+// and 415 unless it sends a body of that type, and reports whether both hold.
+func lfsMediaTypes(w http.ResponseWriter, r *http.Request) bool {
+	if !lfsAccepts(w, r) {
+		return false
+	}
+	if !hasMediaType(r, lfs.MediaType) {
+		renderJSON(w, r, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
+			Message: "Unsupported Media Type: the Content-Type header must be " + lfs.MediaType,
+		})
+		return false
+	}
+	return true
 }
 
 // lfsRepository returns the repository that withAccess stored in the request
@@ -538,7 +640,7 @@ func lfsRepository(w http.ResponseWriter, r *http.Request) (proto.Repository, bo
 	repo := proto.RepositoryFromContext(r.Context())
 	if repo == nil {
 		log.FromContext(r.Context()).Error("error getting repository from context")
-		renderJSON(w, http.StatusNotFound, lfs.ErrorResponse{
+		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
 			Message: "repository not found",
 		})
 		return nil, false

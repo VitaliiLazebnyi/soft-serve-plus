@@ -1,23 +1,22 @@
 package selection
 
 import (
-	"fmt"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
-	defaultNoContent = "No readme found.\n\nCreate a `.soft-serve` repository and add a `README.md` file to display readme."
+	defaultNoContent = "No readme found.\n\nAn admin can create a `.soft-serve` repository with a `README.md` file to show it here."
 )
 
 type pane int
@@ -26,6 +25,13 @@ const (
 	selectorPane pane = iota
 	readmePane
 	lastPane
+)
+
+// refreshKey reloads the repository list, so repositories created, removed
+// or shared since the page opened show up without reconnecting.
+var refreshKey = key.NewBinding(
+	key.WithKeys("r"),
+	key.WithHelp("r", "refresh"),
 )
 
 func (p pane) String() string {
@@ -116,14 +122,18 @@ func (s *Selection) ShortHelp() []key.Binding {
 		s.common.KeyMap.Section,
 	)
 	if s.activePane == selectorPane {
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		kb = append(kb,
 			s.common.KeyMap.Select,
 			k.Filter,
 			k.ClearFilter,
 			copyKey,
 		)
+		// While the filter is typed, r goes into the filter text, so the
+		// refresh key is only offered outside of filtering.
+		if !s.IsFiltering() {
+			kb = append(kb, refreshKey)
+		}
 	}
 	return kb
 }
@@ -151,13 +161,13 @@ func (s *Selection) FullHelp() [][]key.Binding {
 			k.Up,
 		})
 	case selectorPane:
-		copyKey := s.common.KeyMap.Copy
-		copyKey.SetHelp("c", "copy command")
+		copyKey := s.common.CopyKey("copy command")
 		k := s.selector.KeyMap
 		if !s.IsFiltering() {
 			b[0] = append(b[0],
 				s.common.KeyMap.Select,
 				copyKey,
+				refreshKey,
 			)
 		}
 		b = append(b, []key.Binding{
@@ -180,66 +190,108 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
+// setReadme shows the server README. It comes from the about
+// repository, and glamour passes escape sequences through to the terminal.
+func (s *Selection) setReadme(readme, path string) tea.Cmd {
+	return s.readme.SetContent(utils.Sanitize(readme), path)
+}
+
+// ReposMsg carries the repositories the selection page lists, loaded off
+// the UI goroutine by Init.
+type ReposMsg struct {
+	items      []selector.IdentifiableItem
+	readme     string
+	readmePath string
+	hasReadme  bool
+}
+
 // Init implements tea.Model.
 func (s *Selection) Init() tea.Cmd {
-	var readmeCmd tea.Cmd
-	cfg := s.common.Config()
-	if cfg == nil {
+	if s.common.Config() == nil {
 		return nil
 	}
+	return loadReposCmd(s.common)
+}
 
-	ctx := s.common.Context()
-	be := s.common.Backend()
-	pk := s.common.PublicKey()
+// loadReposCmd lists the repositories the caller may read, and the server
+// readme, without blocking the UI. bubbletea runs the command on its own
+// goroutine while Update keeps resizing the page, so it works on the copy
+// of common taken when Init returned and never reads the model.
+func loadReposCmd(c common.Common) tea.Cmd {
+	return func() tea.Msg {
+		return loadRepos(c)
+	}
+}
+
+func loadRepos(c common.Common) tea.Msg {
+	ctx := c.Context()
+	be := c.Backend()
+	pk := c.PublicKey()
 	if pk == nil && !be.AllowKeyless(ctx) {
 		return nil
 	}
 
-	repos, err := be.Repositories(ctx)
+	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
 	if err != nil {
-		return common.ErrorCmd(err)
+		return common.ErrorMsg(err)
 	}
-	sortedItems := make(Items, 0)
+	var msg ReposMsg
+	sortedItems := make(Items, 0, len(repos))
 	for _, r := range repos {
-		if r.Name() == ".soft-serve" {
-			readme, path, err := backend.Readme(r, nil)
+		// Every repository here is readable by the caller.
+		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
+			readme, path, err := backend.Readme(ctx, r, nil, c.Config().BlobSizeLimit())
 			if err != nil {
-				continue
+				c.Logger.Debugf("failed to read the about readme: %v", err)
+			} else {
+				// setReadme sanitises it when Update shows it.
+				msg.readme, msg.readmePath, msg.hasReadme = readme, path, true
 			}
-
-			readmeCmd = s.readme.SetContent(readme, path)
 		}
 
 		if r.IsHidden() {
 			continue
 		}
-		al := be.AccessLevelByPublicKey(ctx, r.Name(), pk)
-		if al >= access.ReadOnlyAccess {
-			item, err := NewItem(s.common, r)
-			if err != nil {
-				s.common.Logger.Debugf("ui: failed to create item for %s: %v", r.Name(), err)
-				continue
-			}
-			sortedItems = append(sortedItems, item)
+		sortedItems = append(sortedItems, NewItem(c, r))
+	}
+	sort.Stable(sortedItems)
+	msg.items = make([]selector.IdentifiableItem, len(sortedItems))
+	for i, it := range sortedItems {
+		msg.items[i] = it
+	}
+	return msg
+}
+
+// setItems replaces the listed repositories and keeps the highlighted one
+// highlighted when it is still listed, so a refresh does not move the cursor.
+func (s *Selection) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	var id string
+	if s.selector.FilterState() == list.Unfiltered {
+		if it := s.selector.SelectedItem(); it != nil {
+			id = it.ID()
 		}
 	}
-	sort.Sort(sortedItems)
-	items := make([]selector.IdentifiableItem, len(sortedItems))
-	for i, it := range sortedItems {
-		items[i] = it
+	cmd := s.selector.SetItems(items)
+	if id != "" {
+		for i, it := range items {
+			if it.ID() == id {
+				s.selector.Select(i)
+				break
+			}
+		}
 	}
-	return tea.Batch(
-		s.selector.Init(),
-		s.selector.SetItems(items),
-		readmeCmd,
-	)
+	return cmd
 }
 
 // Update implements tea.Model.
 func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// routed is set when the message has already been delivered to every
+	// pane, so that the active pane does not get it a second time.
+	routed := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		routed = true
 		r, cmd := s.readme.Update(msg)
 		s.readme = r.(*code.Code)
 		if cmd != nil {
@@ -256,6 +308,9 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, s.common.KeyMap.Back):
 				cmds = append(cmds, s.selector.Init())
+			case key.Matches(msg, refreshKey) && s.activePane == selectorPane &&
+				s.FilterState() != list.Filtering:
+				cmds = append(cmds, s.Init())
 			}
 		}
 		t, cmd := s.tabs.Update(msg)
@@ -265,6 +320,15 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
+	case ReposMsg:
+		cmds = append(cmds, s.setItems(msg.items), s.selector.Init())
+		if msg.hasReadme {
+			cmds = append(cmds, s.setReadme(msg.readme, msg.readmePath))
+		}
+		return s, tea.Batch(cmds...)
+	}
+	if routed {
+		return s, tea.Batch(cmds...)
 	}
 	switch s.activePane {
 	case readmePane:
@@ -296,7 +360,7 @@ func (s *Selection) View() string {
 	case readmePane:
 		rs := lipgloss.NewStyle().
 			Height(s.common.Height - hm)
-		status := fmt.Sprintf("☰ %.f%%", s.readme.ScrollPercent()*100)
+		status := common.ScrollPercent(s.readme.ScrollPosition())
 		readmeStatus := lipgloss.NewStyle().
 			Align(lipgloss.Right).
 			Width(s.common.Width - wm).

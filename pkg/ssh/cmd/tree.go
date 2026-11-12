@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -54,7 +56,7 @@ func treeCommand() *cobra.Command {
 			ents := git.Entries{}
 			if path != "" && path != "/" {
 				te, err := tree.TreeEntry(path)
-				if err == git.ErrRevisionNotExist {
+				if errors.Is(err, git.ErrRevisionNotExist) {
 					return proto.ErrFileNotFound
 				}
 				if err != nil {
@@ -65,7 +67,7 @@ func treeCommand() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					ents, err = tree.Entries()
+					ents, err = tree.EntriesWithSizes()
 					if err != nil {
 						return err
 					}
@@ -73,21 +75,18 @@ func treeCommand() *cobra.Command {
 					ents = append(ents, te)
 				}
 			} else {
-				ents, err = tree.Entries()
+				ents, err = tree.EntriesWithSizes()
 				if err != nil {
 					return err
 				}
 			}
 			ents.Sort()
 			for _, ent := range ents {
-				size := ent.Size()
-				ssize := ""
-				if size == 0 {
-					ssize = "-"
-				} else {
+				ssize := "-"
+				if size := ent.Size(); size != 0 {
 					ssize = humanize.Bytes(uint64(size)) //nolint:gosec
 				}
-				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.UnquoteFilename(ent.Name()))
+				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))
 			}
 			return nil
 		},

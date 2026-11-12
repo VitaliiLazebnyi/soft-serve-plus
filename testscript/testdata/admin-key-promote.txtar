@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # An operator lists an existing user's own key in initial_admin_keys. The
 # key is attached to a non-admin account, so SSH sessions with it are
 # refused with an error saying to run `user set-admin`, rather than
@@ -24,7 +21,7 @@ ugit -C mine add -A
 ugit -C mine commit -m 'first'
 ugit -C mine push origin HEAD
 usoft token create 'mine'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
@@ -69,4 +66,3 @@ stdout '.*git-upload-pack.*'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

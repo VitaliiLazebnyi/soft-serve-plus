@@ -108,6 +108,11 @@ func TestAllowedHostsMatch(t *testing.T) {
 		{"cidr with port mismatch", []string{"10.0.0.0/8:2222"}, "10.1.1.1", "", ErrSSHHostNotAllowed},
 		{"bracketed v6 cidr with port", []string{"[fd00::/8]:2222"}, "fd00::1", "2222", nil},
 		{"bracketed v6 cidr with port mismatch", []string{"[fd00::/8]:2222"}, "fd00::1", "22", ErrSSHHostNotAllowed},
+		// Ports compare as numbers, on either side.
+		{"entry port with leading zeros", []string{"gitlab.corp:02222"}, "gitlab.corp", "2222", nil},
+		{"remote port with leading zeros", []string{"gitlab.corp:2222"}, "gitlab.corp", "002222", nil},
+		{"remote port 022 is the default", []string{"gitlab.corp:22"}, "gitlab.corp", "022", nil},
+		{"non-numeric remote port", []string{"gitlab.corp:22"}, "gitlab.corp", "-oProxyCommand=x", ErrSSHHostNotAllowed},
 
 		{"empty allowlist", nil, "git.internal.example", "", ErrSSHHostNotAllowed},
 	}
@@ -134,10 +139,10 @@ func TestAllowedHostsMatchResolved(t *testing.T) {
 	}
 
 	// localhost resolves to loopback on every platform this runs on.
-	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").Match("localhost", ""); err != nil {
+	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").match(context.Background(), "localhost", "", nil); err != nil {
 		t.Errorf("localhost should resolve inside loopback: %v", err)
 	}
-	if err := mustAllowedHosts(t, "10.0.0.0/8").Match("localhost", ""); !errors.Is(err, ErrSSHHostNotAllowed) {
+	if err := mustAllowedHosts(t, "10.0.0.0/8").match(context.Background(), "localhost", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
 		t.Errorf("localhost resolved outside 10/8 but was allowed: %v", err)
 	}
 }
@@ -150,6 +155,9 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 		"not a host",
 		"host:notaport",
 		"host:70000",
+		"host:0",
+		"host:-22",
+		"host:+22",
 		":22",
 		"0177.0.0.1",
 		"-oProxyCommand=id",
@@ -198,6 +206,15 @@ func TestValidateGitRemotePolicy(t *testing.T) {
 		{"scp denied", "git@evil.example:x.git", listed, ErrSSHHostNotAllowed},
 		{"scp bracketed port right", "[git@gitlab.corp:2222]:x.git", listed, nil},
 		{"scp bracketed port wrong", "[git@gitlab.corp:22]:x.git", listed, ErrSSHHostNotAllowed},
+		{"scp bracketed port leading zeros", "[git@gitlab.corp:02222]:x.git", listed, nil},
+		{"ssh url port leading zeros", "ssh://git@gitlab.corp:02222/x.git", listed, nil},
+
+		// A port that is not a number is refused, whatever the policy.
+		{"scp bracketed option port, admin", "[git.example:-oProxyCommand=x]:repo", admin, ErrInvalidURL},
+		{"scp bracketed option port, listed", "[git@gitlab.corp:-oProxyCommand=x]:repo", listed, ErrInvalidURL},
+		{"scp bracketed port 0, admin", "[git@git.example:0]:repo", admin, ErrInvalidURL},
+		{"scp bracketed port out of range, admin", "[git@git.example:65536]:repo", admin, ErrInvalidURL},
+		{"ssh url port out of range, admin", "ssh://git@git.example:65536/x.git", admin, ErrInvalidURL},
 		{"scp cidr", "git@10.9.9.9:x.git", listed, nil},
 		{"scp ipv6 literal", "git@[fd00::1]:x.git", GitRemotePolicy{AllowedSSHHosts: mustAllowedHosts(t, "fd00::/8"), lookup: offline}, nil},
 
@@ -263,7 +280,7 @@ func TestLookupsAreBounded(t *testing.T) {
 		validate func(lookupFunc) error
 	}{
 		{"ValidateURL", func(l lookupFunc) error {
-			return validateURL("https://hooks.example/x", nil, l)
+			return validateURL(context.Background(), "https://hooks.example/x", nil, l)
 		}},
 		{"ValidateGitRemote https", func(l lookupFunc) error {
 			_, err := ValidateGitRemote("https://git.example/x.git", GitRemotePolicy{lookup: l})
@@ -349,7 +366,7 @@ func TestAllowedHostsMappedNetworks(t *testing.T) {
 	if got := all.String(); got != "0.0.0.0/0" {
 		t.Errorf("::ffff:0:0/96 parsed as %q, want 0.0.0.0/0", got)
 	}
-	if err := all.Match("203.0.113.9", ""); err != nil {
+	if err := all.match(context.Background(), "203.0.113.9", "", nil); err != nil {
 		t.Errorf("::ffff:0:0/96 does not match an IPv4 address: %v", err)
 	}
 
@@ -358,17 +375,17 @@ func TestAllowedHostsMappedNetworks(t *testing.T) {
 	if got := v6.String(); got != "::/0" {
 		t.Errorf("::/0 parsed as %q", got)
 	}
-	if err := v6.Match("fd00::1", ""); err != nil {
+	if err := v6.match(context.Background(), "fd00::1", "", nil); err != nil {
 		t.Errorf("::/0 does not match an IPv6 address: %v", err)
 	}
-	if err := v6.Match("10.1.2.3", ""); !errors.Is(err, ErrSSHHostNotAllowed) {
+	if err := v6.match(context.Background(), "10.1.2.3", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
 		t.Errorf("::/0 matched an IPv4 address: %v", err)
 	}
 }
 
 func TestAllowedHostsString(t *testing.T) {
 	t.Parallel()
-	a := mustAllowedHosts(t, "Git.Internal.Example.", "gitlab.corp:2222", "10.1.2.3/8", "::ffff:127.0.0.1", "[fd00::1]:22", "fd00::/8")
+	a := mustAllowedHosts(t, "Git.Internal.Example.", "gitlab.corp:02222", "10.1.2.3/8", "::ffff:127.0.0.1", "[fd00::1]:022", "fd00::/8")
 	want := "git.internal.example,gitlab.corp:2222,10.0.0.0/8,127.0.0.1,[fd00::1]:22,fd00::/8"
 	if got := a.String(); got != want {
 		t.Errorf("String() = %q, want %q", got, want)

@@ -1,6 +1,9 @@
 package selector
 
 import (
+	"fmt"
+	"io"
+	"strings"
 	"sync"
 
 	"charm.land/bubbles/v2/key"
@@ -13,6 +16,7 @@ import (
 type Selector struct {
 	*list.Model
 	common      common.Common
+	zonePrefix  string
 	active      int
 	filterState list.FilterState
 
@@ -35,6 +39,27 @@ type ItemDelegate interface {
 	list.ItemDelegate
 }
 
+// zoneDelegate marks each rendered item with a mouse zone ID that is unique
+// to its selector, so that item IDs (file names, repository names, …) cannot
+// collide with the zone IDs of other components.
+type zoneDelegate struct {
+	ItemDelegate
+	common common.Common
+	prefix string
+}
+
+// Render implements list.ItemDelegate.
+func (d zoneDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(IdentifiableItem)
+	if !ok {
+		d.ItemDelegate.Render(w, m, index, listItem)
+		return
+	}
+	var b strings.Builder
+	d.ItemDelegate.Render(&b, m, index, listItem)
+	fmt.Fprint(w, d.common.Zone.Mark(d.prefix+item.ID(), b.String())) //nolint:errcheck
+}
+
 // SelectMsg is a message that is sent when an item is selected.
 type SelectMsg struct{ IdentifiableItem }
 
@@ -47,11 +72,13 @@ func New(common common.Common, items []IdentifiableItem, delegate ItemDelegate) 
 	for i, item := range items {
 		itms[i] = item
 	}
-	l := list.New(itms, delegate, common.Width, common.Height)
+	prefix := common.Zone.NewPrefix()
+	l := list.New(itms, zoneDelegate{delegate, common, prefix}, common.Width, common.Height)
 	l.Styles.NoItems = common.Styles.NoContent
 	s := &Selector{
-		Model:  &l,
-		common: common,
+		Model:      &l,
+		common:     common,
+		zonePrefix: prefix,
 	}
 	s.SetSize(common.Width, common.Height)
 	return s
@@ -106,8 +133,8 @@ func (s *Selector) SelectedItem() IdentifiableItem {
 
 // Select selects the item at the given index.
 func (s *Selector) Select(index int) {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 	s.Model.Select(index)
 }
 
@@ -223,28 +250,35 @@ func (s *Selector) CursorDown() {
 
 // Init implements tea.Model.
 func (s *Selector) Init() tea.Cmd {
-	return s.activeCmd
+	return s.activeCmd()
 }
 
 // Update implements tea.Model.
 func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
+	// The select and filter commands are built after the list has handled
+	// msg, so they carry the items the list holds once Update returns.
+	var selectItem, activeFilter bool
 	switch msg := msg.(type) {
-	case tea.MouseClickMsg:
-		m := msg.Mouse()
-		switch m.Button {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
 		case tea.MouseWheelUp:
 			s.CursorUp()
 		case tea.MouseWheelDown:
 			s.CursorDown()
+		}
+	case tea.MouseClickMsg:
+		switch msg.Button {
 		case tea.MouseLeft:
+			// Index() and Select() count from the start of the filtered
+			// list, so look up the clicked item among the visible ones.
 			curIdx := s.Index()
-			for i, item := range s.Items() {
+			for i, item := range s.VisibleItems() {
 				item, _ := item.(IdentifiableItem)
 				// Check each item to see if it's in bounds.
-				if item != nil && s.common.Zone.Get(item.ID()).InBounds(msg) {
+				if item != nil && s.common.Zone.Get(s.zonePrefix+item.ID()).InBounds(msg) {
 					if i == curIdx {
-						cmds = append(cmds, s.SelectItemCmd)
+						selectItem = true
 					} else {
 						s.Select(i)
 					}
@@ -254,35 +288,35 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		filterState := s.FilterState()
-		switch {
-		case key.Matches(msg, s.common.KeyMap.Help):
-			if filterState == list.Filtering {
-				return s, tea.Batch(cmds...)
-			}
-		case key.Matches(msg, s.common.KeyMap.Select):
-			if filterState != list.Filtering {
-				cmds = append(cmds, s.SelectItemCmd)
-			}
+		// While filtering, keys such as "?" go to the filter input.
+		if key.Matches(msg, s.common.KeyMap.Select) && filterState != list.Filtering {
+			selectItem = true
 		}
 	case list.FilterMatchesMsg:
-		cmds = append(cmds, s.activeFilterCmd)
+		activeFilter = true
 	}
 	m, cmd := s.Model.Update(msg)
 	s.mtx.Lock()
 	s.Model = &m
 	s.mtx.Unlock()
+	if selectItem {
+		cmds = append(cmds, s.SelectItemCmd())
+	}
+	if activeFilter {
+		cmds = append(cmds, s.activeFilterCmd())
+	}
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	// Track filter state and update active item when filter state changes.
 	filterState := s.FilterState()
 	if s.filterState != filterState {
-		cmds = append(cmds, s.activeFilterCmd)
+		cmds = append(cmds, s.activeFilterCmd())
 	}
 	s.filterState = filterState
 	// Send ActiveMsg when index change.
 	if s.active != s.Index() {
-		cmds = append(cmds, s.activeCmd)
+		cmds = append(cmds, s.activeCmd())
 	}
 	s.active = s.Index()
 	return s, tea.Batch(cmds...)
@@ -293,17 +327,24 @@ func (s *Selector) View() string {
 	return s.Model.View()
 }
 
-// SelectItemCmd is a command that selects the currently active item.
-func (s *Selector) SelectItemCmd() tea.Msg {
-	return SelectMsg{s.SelectedItem()}
-}
-
-func (s *Selector) activeCmd() tea.Msg {
+// SelectItemCmd returns a command that selects the currently active item.
+// bubbletea runs commands in their own goroutines, so the item is read here,
+// in Update, and not from the command.
+func (s *Selector) SelectItemCmd() tea.Cmd {
 	item := s.SelectedItem()
-	return ActiveMsg{item}
+	return func() tea.Msg {
+		return SelectMsg{item}
+	}
 }
 
-func (s *Selector) activeFilterCmd() tea.Msg {
+func (s *Selector) activeCmd() tea.Cmd {
+	item := s.SelectedItem()
+	return func() tea.Msg {
+		return ActiveMsg{item}
+	}
+}
+
+func (s *Selector) activeFilterCmd() tea.Cmd {
 	// Here we use VisibleItems because when list.FilterMatchesMsg is sent,
 	// VisibleItems is the only way to get the list of filtered items. The list
 	// bubble should export something like list.FilterMatchesMsg.Items().
@@ -311,10 +352,28 @@ func (s *Selector) activeFilterCmd() tea.Msg {
 	if len(items) == 0 {
 		return nil
 	}
-	item := items[0]
-	i, ok := item.(IdentifiableItem)
+	i, ok := items[0].(IdentifiableItem)
 	if !ok {
 		return nil
 	}
-	return ActiveMsg{i}
+	return func() tea.Msg {
+		return ActiveMsg{i}
+	}
+}
+
+// NewPane returns a selector for a list inside a repository pane: no title,
+// filter, help, pagination or status bar of its own, filtering and the quit
+// keys disabled, and the shared page keys so every pane pages the same way.
+func NewPane(c common.Common, delegate ItemDelegate) *Selector {
+	s := New(c, []IdentifiableItem{}, delegate)
+	s.SetShowFilter(false)
+	s.SetShowHelp(false)
+	s.SetShowPagination(false)
+	s.SetShowStatusBar(false)
+	s.SetShowTitle(false)
+	s.SetFilteringEnabled(false)
+	s.DisableQuitKeybindings()
+	s.KeyMap.NextPage = c.KeyMap.NextPage
+	s.KeyMap.PrevPage = c.KeyMap.PrevPage
+	return s
 }

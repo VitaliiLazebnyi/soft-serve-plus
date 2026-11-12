@@ -14,9 +14,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 )
 
-// ErrNoBranches is returned when a repo has no branches.
-var ErrNoBranches = errors.New("no branches found")
-
 // WritePktline encodes and writes a pktline to the given writer.
 func WritePktline(w io.Writer, v ...interface{}) error {
 	msg := fmt.Sprintln(v...)
@@ -50,8 +47,10 @@ func EnsureWithin(reposDir string, repo string) error {
 		return ErrSystemMalfunction
 	}
 
-	// ensure the repo is within the repos directory
-	if !strings.HasPrefix(absRepo, absRepos) {
+	// ensure the repo is within the repos directory. A plain prefix check
+	// would let "/d/repos" accept a sibling such as "/d/repos2".
+	rel, err := filepath.Rel(absRepos, absRepo)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		log.Debugf("repo path is outside of repos directory: %s", absRepo)
 		return ErrInvalidRepo
 	}
@@ -60,22 +59,30 @@ func EnsureWithin(reposDir string, repo string) error {
 }
 
 // EnsureDefaultBranch ensures the repo has a default branch.
-// It will prefer choosing "main" or "master" if available.
+// It will prefer choosing "main" or "master" if available. A repo without
+// branches, such as one that was only pushed tags or had its last branch
+// deleted, is left as is: there is nothing to point HEAD at yet.
 func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 	r, err := git.Open(repoPath)
 	if err != nil {
 		return err
 	}
-	brs, err := r.Branches()
-	if len(brs) == 0 {
-		return ErrNoBranches
-	}
+	// Not r.Branches: git show-ref fails when nothing matches, which would
+	// make a real failure indistinguishable from having no branches.
+	out, err := gitm.NewCommandWithContext(ctx, "for-each-ref", "--format=%(refname)", git.RefsHeads).RunInDir(repoPath)
 	if err != nil {
 		return err
 	}
+	var brs []string
+	for _, ref := range strings.Fields(string(out)) {
+		brs = append(brs, strings.TrimPrefix(ref, git.RefsHeads))
+	}
+	if len(brs) == 0 {
+		return nil
+	}
 	// Rename the default branch to the first branch available
 	_, err = r.HEAD()
-	if err == git.ErrReferenceNotExist {
+	if errors.Is(err, git.ErrReferenceNotExist) {
 		branch := brs[0]
 		// Prefer "main" or "master" as the default branch
 		for _, b := range brs {
@@ -93,7 +100,7 @@ func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 			return err
 		}
 	}
-	if err != nil && err != git.ErrReferenceNotExist {
+	if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
 		return err
 	}
 	return nil

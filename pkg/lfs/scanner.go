@@ -59,8 +59,9 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 	// 3. Take the shas of the blobs and batch read them
 	go catFileBatch(ctx, shasToBatchReader, catFileBatchWriter, &wg, basePath, errChan)
 
-	// 2. From the provided objects restrict to blobs <=1k
-	go blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader, shasToBatchWriter, &wg)
+	// 2. From the provided objects restrict to blobs of at most
+	// blobSizeCutoff bytes
+	go smallBlobsFromCatFileBatchCheck(catFileCheckReader, shasToBatchWriter, &wg)
 
 	// 1. Run batch-check on all objects in the repository
 	revListReader, revListWriter := io.Pipe()
@@ -74,7 +75,7 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 	// cleanly, so report it rather than let it pass for a complete one.
 	// Don't block if a stage already reported an error.
 	if err := ctx.Err(); err != nil {
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 	}
 
 	close(pointerChan)
@@ -85,8 +86,14 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 // breaks the pipes around it, so the stages next to it may fail as well; the
 // first error is the one that counts and later ones are dropped rather than
 // block. Each stage reports before it closes its pipes with the error, so
-// the stage that failed first gets in ahead of the ones it broke.
-func sendScanError(errChan chan<- error, err error) {
+// the stage that failed first gets in ahead of the ones it broke. A stage
+// that fails once ctx is done failed because the scan was canceled, with an
+// error that doesn't say so (git's commands report a timeout when they are
+// killed), so ctx's error is reported instead.
+func sendScanError(ctx context.Context, errChan chan<- error, err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
 	select {
 	case errChan <- err:
 	default:
@@ -98,11 +105,12 @@ func createPointerResultsFromCatFileBatch(ctx context.Context, catFileBatchReade
 	defer catFileBatchReader.Close() //nolint: errcheck
 
 	bufferedReader := bufio.NewReader(catFileBatchReader)
-	buf := make([]byte, 1025)
+	// Room for the largest blob passed on, plus its trailing newline.
+	buf := make([]byte, blobSizeCutoff+1)
 
 	fail := func(err error) {
 		err = fmt.Errorf("reading git cat-file --batch output: %w", err)
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = catFileBatchReader.CloseWithError(err)
 	}
 
@@ -174,12 +182,14 @@ func catFileBatch(ctx context.Context, shasToBatchReader *io.PipeReader, catFile
 			Stderr: stderr,
 		}); err != nil {
 		err = fmt.Errorf("git cat-file --batch [%s]: %w - %s", basePath, err, stderr.String())
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = shasToBatchReader.CloseWithError(err)
 	}
 }
 
-func blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader *io.PipeReader, shasToBatchWriter *io.PipeWriter, wg *sync.WaitGroup) {
+// smallBlobsFromCatFileBatchCheck passes on the blobs of at most
+// blobSizeCutoff bytes, the only ones that can be LFS pointers.
+func smallBlobsFromCatFileBatchCheck(catFileCheckReader *io.PipeReader, shasToBatchWriter *io.PipeWriter, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer catFileCheckReader.Close() //nolint: errcheck
 	scanner := bufio.NewScanner(catFileCheckReader)
@@ -196,7 +206,7 @@ func blobsLessThan1024FromCatFileBatchCheck(catFileCheckReader *io.PipeReader, s
 			continue
 		}
 		size, _ := strconv.Atoi(fields[2])
-		if size > 1024 {
+		if size > blobSizeCutoff {
 			continue
 		}
 		toWrite := []byte(fields[0] + "\n")
@@ -225,7 +235,7 @@ func catFileBatchCheck(ctx context.Context, shasToCheckReader *io.PipeReader, ca
 			Stderr: stderr,
 		}); err != nil {
 		err = fmt.Errorf("git cat-file --batch-check [%s]: %w - %s", basePath, err, stderr.String())
-		sendScanError(errChan, err)
+		sendScanError(ctx, errChan, err)
 		_ = shasToCheckReader.CloseWithError(err)
 	}
 }
@@ -271,6 +281,6 @@ func revListObjects(ctx context.Context, revListWriter *io.PipeWriter, wg *sync.
 			Stdout: revListWriter,
 			Stderr: stderr,
 		}); err != nil {
-		sendScanError(errChan, fmt.Errorf("git rev-list [%s]: %w - %s", basePath, err, stderr.String()))
+		sendScanError(ctx, errChan, fmt.Errorf("git rev-list [%s]: %w - %s", basePath, err, stderr.String()))
 	}
 }

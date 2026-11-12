@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/statusbar"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type state int
@@ -26,12 +27,27 @@ const (
 )
 
 // EmptyRepoMsg is a message to indicate that the repository is empty.
-type EmptyRepoMsg struct{}
+type EmptyRepoMsg struct {
+	gen uint64
+}
+
+func (m EmptyRepoMsg) generation() uint64 { return m.gen }
+
+// genMsg is a message with something loaded for one repository and ref. Its
+// generation is the one the repository page was in when the load started.
+//
+// The repository page starts a new generation whenever it is given another
+// repository or ref, and drops a message from an older one: it was loaded
+// for a repository or ref the user has left since, and must not be shown in
+// place of the current one.
+type genMsg interface {
+	generation() uint64
+}
 
 // CopyURLMsg is a message to copy the URL of the current repository.
 type CopyURLMsg struct{}
 
-// RepoMsg is a message that contains a git.Repository.
+// RepoMsg is a message that contains a repository.
 type RepoMsg proto.Repository //nolint:revive
 
 // GoBackMsg is a message to go back to the previous view.
@@ -49,6 +65,7 @@ type SwitchTabMsg common.TabComponent
 // Repo is a view for a git repository.
 type Repo struct {
 	common       common.Common
+	zonePrefix   string
 	selectedRepo proto.Repository
 	activeTab    int
 	tabs         *tabs.Tabs
@@ -58,6 +75,11 @@ type Repo struct {
 	state        state
 	spinner      spinner.Model
 	panesReady   []bool
+	// gen is the generation of the repository and ref shown; see genMsg.
+	gen uint64
+	// noMenu is set when there is no repository menu to go back to, as in
+	// soft browse.
+	noMenu bool
 }
 
 // New returns a new Repo.
@@ -69,11 +91,10 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 	}
 	c.Logger = c.Logger.WithPrefix("ui.repo")
 	tb := tabs.New(c, ts)
-	// Make sure the order matches the order of tab constants above.
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(c.Styles.Spinner))
+	s := c.NewSpinner()
 	r := &Repo{
 		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
 		tabs:       tb,
 		statusbar:  sb,
 		panes:      comps,
@@ -82,6 +103,12 @@ func New(c common.Common, comps ...common.TabComponent) *Repo {
 		panesReady: make([]bool, len(comps)),
 	}
 	return r
+}
+
+// SetNoMenu tells the repository view that there is no repository menu to go
+// back to, so esc at the top of a tab does nothing.
+func (r *Repo) SetNoMenu(noMenu bool) {
+	r.noMenu = noMenu
 }
 
 func (r *Repo) getMargins() (int, int) {
@@ -104,6 +131,12 @@ func (r *Repo) SetSize(width, height int) {
 	}
 }
 
+// Repository returns the repository the page shows, or nil before one is
+// selected.
+func (r *Repo) Repository() proto.Repository {
+	return r.selectedRepo
+}
+
 // Path returns the current component path.
 func (r *Repo) Path() string {
 	return r.panes[r.activeTab].Path()
@@ -112,10 +145,17 @@ func (r *Repo) Path() string {
 func (r *Repo) commonHelp() []key.Binding {
 	b := make([]key.Binding, 0)
 	back := r.common.KeyMap.Back
-	back.SetHelp("esc", "back to menu")
+	switch {
+	case r.Path() != "":
+		// esc leaves the current sub-view; the pane says what it goes back to.
+		back.SetHelp("esc", "back")
+		b = append(b, back)
+	case !r.noMenu:
+		back.SetHelp("esc", "back to menu")
+		b = append(b, back)
+	}
 	tab := r.common.KeyMap.Section
 	tab.SetHelp("tab", "switch tab")
-	b = append(b, back)
 	b = append(b, tab)
 	return b
 }
@@ -135,7 +175,7 @@ func (r *Repo) FullHelp() [][]key.Binding {
 	return b
 }
 
-// Init implements tea.View.
+// Init implements tea.Model.
 func (r *Repo) Init() tea.Cmd {
 	r.state = loadingState
 	r.activeTab = 0
@@ -148,19 +188,45 @@ func (r *Repo) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+	if m, ok := msg.(genMsg); ok {
+		if m.generation() != r.gen {
+			return r, nil
+		}
+		// A new ref, or none, is shown: what was loaded for the previous
+		// one is out of date from here on. The panes tag their loads with
+		// the generation they get here.
+		switch m := msg.(type) {
+		case RefMsg:
+			r.gen++
+			m.gen = r.gen
+			msg = m
+		case EmptyRepoMsg:
+			r.gen++
+			m.gen = r.gen
+			msg = m
+		}
+	}
 	cmds := make([]tea.Cmd, 0)
+	// routed is set when the message has already been delivered to the panes
+	// it is meant for, so that the active pane does not get it a second time.
+	routed := false
 	switch msg := msg.(type) {
 	case RepoMsg:
 		// Set the state to loading when we get a new repository.
+		r.gen++
 		r.selectedRepo = msg
+		r.ref = nil
 		cmds = append(cmds,
 			r.Init(),
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
+			updateRefCmd(r.common.Context(), msg, r.gen),
 		)
+		routed = true
 	case RefMsg:
-		r.ref = msg
+		r.ref = msg.Ref
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 		r.state = readyState
 	case tabs.SelectTabMsg:
 		r.activeTab = int(msg)
@@ -178,9 +244,8 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if r.selectedRepo != nil {
-			urlID := fmt.Sprintf("%s-url", r.selectedRepo.Name())
 			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
-			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(urlID).InBounds(msg) {
+			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
 				cmds = append(cmds, copyCmd(cmd, "Command copied to clipboard"))
 			}
 		}
@@ -189,12 +254,12 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			switch msg.Button {
 			case tea.MouseLeft:
 				switch {
-				case r.common.Zone.Get("repo-help").InBounds(msg):
+				case r.common.Zone.Get(r.statusbar.HelpZoneID()).InBounds(msg):
 					cmds = append(cmds, footer.ToggleFooterCmd)
 				}
 			case tea.MouseRight:
 				switch {
-				case r.common.Zone.Get("repo-main").InBounds(msg):
+				case r.common.Zone.Get(r.zonePrefix + "main").InBounds(msg):
 					cmds = append(cmds, goBackCmd)
 				}
 			}
@@ -211,21 +276,29 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if cfg := r.common.Config(); cfg != nil {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
-		r.statusbar.SetStatus("", msg.Message, "", "")
+		r.statusbar.SetMessage(msg.Message)
 	case ReadmeMsg:
 		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
+		routed = true
 	case FileItemsMsg, FileContentMsg:
 		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
-	case LogItemsMsg, LogDiffMsg, LogCountMsg:
+		routed = true
+	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
 		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
+		routed = true
 	case RefItemsMsg:
 		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
+		routed = true
 	case StashListMsg, StashPatchMsg:
 		cmds = append(cmds, r.updateTabComponent(&Stash{}, msg))
+		routed = true
 	// We have two spinners, one is used to when loading the repository and the
 	// other is used when loading the log.
 	// Check if the spinner ID matches the spinner model.
 	case spinner.TickMsg:
+		// A tick belongs to exactly one spinner, so it never goes to the
+		// active pane unless that pane owns it.
+		routed = true
 		if r.state == loadingState && r.spinner.ID() == msg.ID {
 			s, cmd := r.spinner.Update(msg)
 			r.spinner = s
@@ -247,12 +320,20 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case EmptyRepoMsg:
 		r.ref = nil
 		r.state = readyState
 		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case common.ErrorMsg:
 		r.state = readyState
+		// The file listing loads on every ref change, usually while another
+		// tab is shown, so the Files pane must see its error to leave its
+		// loading view. The active pane gets the message below.
+		if r.panes[r.activeTab].TabName() != (&Files{}).TabName() {
+			cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		}
 	case SwitchTabMsg:
 		for i, c := range r.panes {
 			if c.TabName() == msg.TabName() {
@@ -261,11 +342,13 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		}
 	}
-	active := r.panes[r.activeTab]
-	m, cmd := active.Update(msg)
-	r.panes[r.activeTab] = m.(common.TabComponent)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	if !routed {
+		active := r.panes[r.activeTab]
+		m, cmd := active.Update(msg)
+		r.panes[r.activeTab] = m.(common.TabComponent)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Update the status bar on these events
@@ -307,7 +390,7 @@ func (r *Repo) View() string {
 		statusbar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
-		"repo-main",
+		r.zonePrefix+"main",
 		mainStyle.Render(main),
 	)
 	view := lipgloss.JoinVertical(lipgloss.Left,
@@ -324,13 +407,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.common.Width)
-	header := r.selectedRepo.ProjectName()
+	header := utils.Sanitize(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(r.selectedRepo.Description())
+	desc := strings.TrimSpace(utils.Sanitize(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -346,7 +429,7 @@ func (r *Repo) headerView() string {
 	}
 	url = common.TruncateString(url, r.common.Width-lipgloss.Width(header)-1)
 	url = r.common.Zone.Mark(
-		fmt.Sprintf("%s-url", r.selectedRepo.Name()),
+		r.zonePrefix+"url",
 		urlStyle.Render(url),
 	)
 

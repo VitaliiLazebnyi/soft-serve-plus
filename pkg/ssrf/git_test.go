@@ -101,6 +101,13 @@ func TestValidateGitRemote(t *testing.T) {
 		{"bare ssh unterminated bracket", "[host:22]path", 0, ErrInvalidURL},
 		{"bare ssh empty host", ":path", 0, ErrInvalidURL},
 		{"remote helper syntax", "host::path", 0, ErrUnsupportedRemoteScheme},
+		// git for Windows reads a drive prefix as a local path, not as the
+		// ssh host "C". Regression: these validated as ssh remotes, letting
+		// an import open a local repository on a Windows server.
+		{"drive path forward slash", "C:/Users/x/repo", 0, ErrUnsupportedRemoteScheme},
+		{"drive path backslash", `C:\Users\x\repo`, 0, ErrUnsupportedRemoteScheme},
+		{"drive relative path", "c:repo", 0, ErrUnsupportedRemoteScheme},
+		{"two-letter ssh host", "cc:repo", GitTransportSSH, nil},
 		// An ssh host must be a plain DNS name or IP literal, so that the
 		// name the policy matched is the name ssh connects to.
 		{"ssh url non-canonical ip", "ssh://git@0177.0.0.1/x.git", 0, ErrAmbiguousHost},
@@ -213,6 +220,82 @@ func TestGitEnvDisablesRedirects(t *testing.T) {
 				t.Errorf("GitEnv did not disable redirects: %v", env)
 			}
 		})
+	}
+}
+
+// TestGitEnvDisablesProxy checks the settings that keep git from handing the
+// connection to a proxy, which would resolve the hostname past the pin. See
+// TestGitEnvBypassesProxy for the same against a real git.
+func TestGitEnvDisablesProxy(t *testing.T) {
+	env := GitEnv()
+	if !hasGitConfig(env, "http.proxy", "") {
+		t.Errorf("GitEnv did not clear http.proxy: %v", env)
+	}
+	if !slices.Contains(env, "GIT_PROXY_COMMAND=") {
+		t.Errorf("GitEnv did not clear GIT_PROXY_COMMAND: %v", env)
+	}
+}
+
+// TestURLProxyOverride checks the key that clears a proxy set for the
+// remote's own URL: the full URL with the user name, never the password.
+func TestURLProxyOverride(t *testing.T) {
+	for _, tc := range []struct{ url, want string }{
+		{"https://example.com/org/x.git", "http.https://example.com/org/x.git.proxy"},
+		{"http://example.com:8080/x.git", "http.http://example.com:8080/x.git.proxy"},
+		{"https://alice@example.com/x.git", "http.https://alice@example.com/x.git.proxy"},
+		{"https://alice:secret@example.com/x.git", "http.https://alice@example.com/x.git.proxy"},
+	} {
+		u, err := url.Parse(tc.url)
+		if err != nil {
+			t.Fatalf("bad test url: %v", err)
+		}
+		got := urlProxyOverride(u)
+		if got.Key != tc.want || got.Value != "" {
+			t.Errorf("urlProxyOverride(%q) = %+v, want key %q with empty value", tc.url, got, tc.want)
+		}
+		if u.String() != tc.url {
+			t.Errorf("urlProxyOverride modified its URL: %q", u)
+		}
+	}
+}
+
+// TestGitEnvSetsLowSpeedLimit covers a remote that stops sending, or
+// trickles, after the transfer starts: without a low-speed limit libcurl
+// waits on it forever.
+func TestGitEnvSetsLowSpeedLimit(t *testing.T) {
+	for _, env := range [][]string{GitEnv(), GitEnv(ValidatedGitRemote{Transport: GitTransportHTTP})} {
+		if !hasGitConfig(env, "http.lowSpeedLimit", strconv.Itoa(GitLowSpeedLimit)) ||
+			!hasGitConfig(env, "http.lowSpeedTime", strconv.Itoa(GitLowSpeedTime)) {
+			t.Errorf("GitEnv set no low-speed limit: %v", env)
+		}
+	}
+}
+
+// TestValidatedRemoteProxyOverrides checks that an http remote clears a
+// proxy set for its URL, and Named and ForClone one set for its name.
+func TestValidatedRemoteProxyOverrides(t *testing.T) {
+	u, _ := url.Parse("https://example.com/x.git")
+	v := validatedHTTPRemote(u, netip.MustParseAddr("1.1.1.1"))
+	env := GitEnv(v)
+	if !hasGitConfig(env, "http.https://example.com/x.git.proxy", "") {
+		t.Errorf("http remote did not clear its URL's proxy: %v", env)
+	}
+
+	if env := GitEnv(v.Named("up")); !hasGitConfig(env, "remote.up.proxy", "") {
+		t.Errorf("Named did not clear remote.up.proxy: %v", env)
+	}
+	env = GitEnv(v.ForClone())
+	if !hasGitConfig(env, "remote.origin.proxy", "") || !hasGitConfig(env, "clone.defaultRemoteName", "origin") {
+		t.Errorf("ForClone did not fix the remote name and clear its proxy: %v", env)
+	}
+	if len(v.Config) != 2 {
+		t.Errorf("Named or ForClone modified the remote: %v", v.Config)
+	}
+
+	// Other transports never go through an http proxy.
+	ssh := ValidatedGitRemote{Transport: GitTransportSSH}
+	if c := ssh.Named("up").ForClone().Config; len(c) != 0 {
+		t.Errorf("ssh remote got proxy overrides: %v", c)
 	}
 }
 

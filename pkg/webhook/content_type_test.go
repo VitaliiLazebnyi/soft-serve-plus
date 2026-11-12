@@ -25,6 +25,34 @@ func TestParseContentType(t *testing.T) {
 			err:  ErrInvalidContentType,
 			want: -1,
 		},
+		{
+			name: "JSON with parameters",
+			s:    "application/json; charset=utf-8",
+			want: ContentTypeJSON,
+		},
+		{
+			name: "Form in upper case",
+			s:    "Application/X-WWW-Form-Urlencoded",
+			want: ContentTypeForm,
+		},
+		{
+			name: "JSON prefix of another type",
+			s:    "application/jsonx",
+			err:  ErrInvalidContentType,
+			want: -1,
+		},
+		{
+			name: "Form prefix of another type",
+			s:    "application/x-www-form-urlencoded-extra",
+			err:  ErrInvalidContentType,
+			want: -1,
+		},
+		{
+			name: "Empty",
+			s:    "",
+			err:  ErrInvalidContentType,
+			want: -1,
+		},
 	}
 
 	for _, tt := range tests {

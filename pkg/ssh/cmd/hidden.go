@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/spf13/cobra"
@@ -8,10 +11,10 @@ import (
 
 func hiddenCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "hidden REPOSITORY [TRUE|FALSE]",
+		Use:               "hidden REPOSITORY [true|false]",
 		Short:             "Hide or unhide a repository",
 		Aliases:           []string{"hide"},
-		Args:              cobra.MinimumNArgs(1),
+		Args:              cobra.RangeArgs(1, 2),
 		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -25,11 +28,19 @@ func hiddenCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsHidden())
 			case 2:
-				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
+				// Hiding a repository takes it out of every listing, a
+				// visibility setting like private, so only repository
+				// admins may change it.
+				if err := requireLevel(ctx, access.AdminAccess); err != nil {
 					return err
 				}
 
-				hidden := args[1] == "true"
+				// Read anything but a boolean as false would unhide the
+				// repository on a typo such as "True " or "yes".
+				hidden, err := strconv.ParseBool(args[1])
+				if err != nil {
+					return fmt.Errorf("invalid hidden value %q: want true or false", args[1])
+				}
 				if err := be.SetHidden(ctx, rr.Name(), hidden); err != nil {
 					return err
 				}

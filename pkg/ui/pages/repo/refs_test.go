@@ -1,12 +1,19 @@
 package repo
 
 import (
+	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
 // openRepo is a proto.Repository that only opens a repository on disk.
@@ -44,21 +51,21 @@ func TestDefaultRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref, err := defaultRef(r)
+	ref, err := defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "trunk" {
 		t.Fatalf("defaultRef with a valid HEAD = %v, %v; want trunk", ref, err)
 	}
 
 	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/gone")
-	switch msg := UpdateRefCmd(openRepo{path: dir})().(type) {
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
-		if ref := (*git.Reference)(msg); ref == nil || ref.Name().Short() != "dev" {
-			t.Fatalf("UpdateRefCmd with a dangling HEAD = %v; want dev", msg)
+		if ref := msg.Ref; ref == nil || ref.Name().Short() != "dev" {
+			t.Fatalf("updateRefCmd with a dangling HEAD = %v; want dev", msg)
 		}
 	default:
-		t.Fatalf("UpdateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
+		t.Fatalf("updateRefCmd with a dangling HEAD = %T %v; want a RefMsg", msg, msg)
 	}
-	ref, err = defaultRef(r)
+	ref, err = defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "dev" {
 		t.Fatalf("defaultRef with a dangling HEAD = %v, %v; want dev", ref, err)
 	}
@@ -67,8 +74,219 @@ func TestDefaultRef(t *testing.T) {
 	}
 
 	gitRun(t, dir, "branch", "main", "trunk")
-	ref, err = defaultRef(r)
+	ref, err = defaultRef(r, refs(t, r))
 	if err != nil || ref == nil || ref.Name().Short() != "main" {
 		t.Fatalf("defaultRef with a dangling HEAD and a main branch = %v, %v; want main", ref, err)
+	}
+}
+
+// The Tags pane lists tags with their commits and tag subjects, and does not
+// list them again when the user switches branches.
+func TestRefsLoadsOncePerRepo(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "-a", "-m", "release notes", "v1")
+	gitRun(t, dir, "tag", "v0")
+
+	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	repo := openRepo{path: dir}
+	r.Update(RepoMsg(repo))
+
+	ref, ok := updateRefCmd(t.Context(), repo, 0)().(RefMsg)
+	if !ok {
+		t.Fatal("updateRefCmd did not return a RefMsg")
+	}
+	r.Update(ref)
+	if !r.isLoading || !r.loaded {
+		t.Fatal("the first RefMsg did not load the tags")
+	}
+	msg, ok := r.updateItemsCmd()().(RefItemsMsg)
+	if !ok {
+		t.Fatal("updateItemsCmd did not return RefItemsMsg")
+	}
+	if len(msg.items) != 2 {
+		t.Fatalf("updateItemsCmd listed %d tags; want 2", len(msg.items))
+	}
+	for _, it := range msg.items {
+		item := it.(RefItem)
+		if item.CommitID != ref.Ref.ID {
+			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.Ref.ID)
+		}
+		if want := map[string]string{"v1": "release notes", "v0": ""}[item.Short()]; item.TagSubject != want {
+			t.Errorf("tag %s has subject %q; want %q", item.Short(), item.TagSubject, want)
+		}
+	}
+	r.SetSize(80, 10)
+	r.Update(msg)
+	if r.isLoading {
+		t.Fatal("the tags are still loading after RefItemsMsg")
+	}
+	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.Ref.ID[:7]) {
+		t.Errorf("the Tags pane %q lacks the tag subject or the commit", view)
+	}
+
+	// Switching branches leaves the listed tags alone.
+	r.Update(ref)
+	if r.isLoading {
+		t.Fatal("a branch switch listed the tags again")
+	}
+
+	// Opening the repository again lists them again.
+	r.Update(RepoMsg(repo))
+	r.Update(ref)
+	if !r.isLoading {
+		t.Fatal("reopening the repository did not list the tags again")
+	}
+}
+
+// A branch switch while the refs are still loading lists them again for the
+// new generation: the repository page drops the result of the running load,
+// which carries the previous one.
+func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "v1")
+
+	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	repo := openRepo{path: dir}
+	r.Update(RepoMsg(repo))
+	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
+	if !ok {
+		t.Fatal("updateRefCmd did not return a RefMsg")
+	}
+	r.Update(ref)
+	first := r.updateItemsCmd()().(RefItemsMsg)
+
+	// The user switches branches before the first load returns.
+	switched := RefMsg{Ref: ref.Ref, gen: 2}
+	_, cmd := r.Update(switched)
+	if cmd == nil || !r.isLoading {
+		t.Fatal("a branch switch during the load did not list the refs again")
+	}
+	second := r.updateItemsCmd()().(RefItemsMsg)
+	if first.gen != 1 || second.gen != 2 {
+		t.Fatalf("loads carry generations %d and %d; want 1 and 2", first.gen, second.gen)
+	}
+	r.Update(second)
+	if r.isLoading {
+		t.Fatal("the refs are still loading after the second RefItemsMsg")
+	}
+
+	// Once loaded, a branch switch leaves them alone.
+	if r.Update(RefMsg{Ref: ref.Ref, gen: 3}); r.isLoading {
+		t.Fatal("a branch switch after the load listed the refs again")
+	}
+}
+
+// A detached HEAD, as in a checkout during a rebase or bisect, shows the
+// commit it points at rather than an error.
+func TestDefaultRefDetachedHEAD(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "second")
+	gitRun(t, dir, "checkout", "-q", "--detach", "HEAD~1")
+
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := r.RevParse("HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
+	case RefMsg:
+		ref := msg.Ref
+		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
+			t.Fatalf("updateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
+		}
+		if _, err := r.TreePath(ref, ""); err != nil {
+			t.Fatalf("TreePath at a detached HEAD: %v", err)
+		}
+		if n, err := r.CountCommits(ref); err != nil || n != 1 {
+			t.Fatalf("CountCommits at a detached HEAD = %d, %v; want 1", n, err)
+		}
+	default:
+		t.Fatalf("updateRefCmd with a detached HEAD = %T %v; want a RefMsg", msg, msg)
+	}
+}
+
+// A repository that only has tags is not empty: it shows the first tag.
+func TestUpdateRefCmdTagsOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+
+	if msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)(); msg != (EmptyRepoMsg{}) {
+		t.Fatalf("updateRefCmd without refs = %T %v; want EmptyRepoMsg", msg, msg)
+	}
+
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	gitRun(t, dir, "tag", "-a", "-m", "v1", "v1")
+	gitRun(t, dir, "tag", "v2")
+	gitRun(t, dir, "update-ref", "-d", "refs/heads/main")
+
+	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
+	case RefMsg:
+		if ref := msg.Ref; ref == nil || !ref.IsTag() || ref.Name().Short() != "v1" {
+			t.Fatalf("updateRefCmd with only tags = %v; want tag v1", msg)
+		}
+	default:
+		t.Fatalf("updateRefCmd with only tags = %T %v; want a RefMsg", msg, msg)
+	}
+}
+
+// refs returns the references of r and fails the test on error.
+func refs(t *testing.T, r *git.Repository) []*git.Reference {
+	t.Helper()
+	refs, err := r.References()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refs
+}
+
+// `l` and `→` open the highlighted branch or tag; they must not also turn
+// the page, which would open an item on the next page instead.
+func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
+	for i := range 30 {
+		gitRun(t, dir, "branch", fmt.Sprintf("b%02d", i))
+	}
+
+	for _, k := range []tea.KeyPressMsg{
+		{Code: 'l', Text: "l"},
+		{Code: tea.KeyRight},
+	} {
+		t.Run(k.String(), func(t *testing.T) {
+			ctx := config.WithContext(context.Background(), config.DefaultConfig())
+			r := NewRefs(common.NewCommon(ctx, 80, 10), git.RefsHeads)
+			r.SetSize(80, 10)
+			r.Update(RepoMsg(openRepo{path: dir}))
+			r.Update(r.updateItemsCmd()())
+			if r.selector.TotalPages() < 2 {
+				t.Fatalf("want several pages, got %d", r.selector.TotalPages())
+			}
+			want := r.selector.SelectedItem().ID()
+
+			_, cmd := r.Update(k)
+			if p := r.selector.Page(); p != 0 {
+				t.Errorf("%s turned the page to %d", k, p)
+			}
+			var got string
+			for _, msg := range runCmd(cmd) {
+				if sel, ok := msg.(selector.SelectMsg); ok {
+					got = sel.ID()
+				}
+			}
+			if got != want {
+				t.Errorf("%s selected %q, want %q", k, got, want)
+			}
+		})
 	}
 }

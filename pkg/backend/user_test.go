@@ -72,6 +72,43 @@ func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 	is.Equal(be.AccessLevelForUser(ctx, "repo", nil), access.NoAccess)
 }
 
+// TestAccessLevelPublicRepoNonCollaborator verifies that the anonymous
+// level is a floor for a registered non-collaborator on a public repository,
+// as it is for collaborators: a registered user never gets less than an
+// anonymous caller. Registered users keep read-only when the anonymous level
+// is lower.
+func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
+	tests := []struct {
+		name string
+		anon access.AccessLevel
+		want access.AccessLevel
+	}{
+		{"anon no-access", access.NoAccess, access.ReadOnlyAccess},
+		{"anon read-only", access.ReadOnlyAccess, access.ReadOnlyAccess},
+		{"anon read-write", access.ReadWriteAccess, access.ReadWriteAccess},
+		{"anon admin-access", access.AdminAccess, access.AdminAccess},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := is.New(t)
+			be, _ := newTestBackend(t)
+			ctx := context.Background()
+
+			is.NoErr(be.SetAnonAccess(ctx, tt.anon))
+
+			_, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{})
+			is.NoErr(err)
+
+			user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
+			is.NoErr(err)
+
+			is.Equal(be.AccessLevelForUser(ctx, "repo", user), tt.want)
+			is.Equal(be.AccessLevelForUser(ctx, "repo", nil), tt.anon)
+		})
+	}
+}
+
 // TestDeleteUserWithRepositories verifies that a user who owns
 // repositories is not deleted until those repositories are gone, and that
 // their repositories are left untouched by the refusal.

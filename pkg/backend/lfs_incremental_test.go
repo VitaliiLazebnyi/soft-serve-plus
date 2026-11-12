@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,7 +65,7 @@ func recordLFSScans(t *testing.T) func() []lfsScan {
 // sync runs SyncRepoLFSObjects with the test's client.
 func (lt *lfsTest) sync() error {
 	lt.client.requested = nil
-	return SyncRepoLFSObjects(lt.ctx, lt.repo, lt.be.db, lt.be.store, lt.client)
+	return lt.be.SyncRepoLFSObjects(lt.ctx, lt.repo, lt.client)
 }
 
 // addObject commits a pointer to a new LFS object, which the client serves,
@@ -464,4 +465,19 @@ func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
 	is.Equal(lt.client.requested, oids(p))
 	_, err := os.Stat(lt.path(p))
 	is.NoErr(err)
+}
+
+// TestWriteScannedRefsDirMode verifies that the LFS root of a repository
+// that writeScannedRefs creates is 0700, like the object directories
+// pkg/storage creates under it.
+func TestWriteScannedRefsDirMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no unix permissions")
+	}
+	is := is.New(t)
+	dir := filepath.Join(t.TempDir(), "lfs", "1")
+	is.NoErr(writeScannedRefs(filepath.Join(dir, lfsScannedRefsFile), nil, time.Now()))
+	fi, err := os.Stat(dir)
+	is.NoErr(err)
+	is.Equal(fi.Mode().Perm(), os.FileMode(0o700))
 }

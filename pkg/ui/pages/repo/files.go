@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
@@ -9,12 +10,12 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type filesView int
@@ -26,9 +27,10 @@ const (
 )
 
 var (
-	errNoFileSelected = errors.New("no file selected")
-	errBinaryFile     = errors.New("binary file")
-	errInvalidFile    = errors.New("invalid file")
+	errNoFileSelected = common.NewUserError("no file selected")
+	errBinaryFile     = common.NewUserError("binary file")
+	errInvalidFile    = common.NewUserError("invalid file")
+	errFileTooLarge   = common.NewUserError("file too large")
 )
 
 var (
@@ -47,16 +49,40 @@ var (
 )
 
 // FileItemsMsg is a message that contains a list of files.
-type FileItemsMsg []selector.IdentifiableItem
+type FileItemsMsg struct {
+	items []selector.IdentifiableItem
+	gen   uint64
+}
+
+func (m FileItemsMsg) generation() uint64 { return m.gen }
 
 // FileContentMsg is a message that contains the content of a file.
 type FileContentMsg struct {
 	content string
 	ext     string
+	// path is the path of the file and index is the position of the file in
+	// its directory listing.
+	path  string
+	index int
+	// load is the Files load the content was requested in.
+	load int
+	// isMarkdown is worked out once, when the file is loaded, because chroma
+	// may have to analyse the whole content to tell.
+	isMarkdown bool
+	gen        uint64
 }
 
+func (m FileContentMsg) generation() uint64 { return m.gen }
+
 // FileBlameMsg is a message that contains the blame of a file.
-type FileBlameMsg *gitm.Blame
+type FileBlameMsg struct {
+	blame *git.Blame
+	// load is the Files load the blame was requested in.
+	load int
+	gen  uint64
+}
+
+func (m FileBlameMsg) generation() uint64 { return m.gen }
 
 // Files is the model for the files view.
 type Files struct {
@@ -69,12 +95,17 @@ type Files struct {
 	path           string
 	currentItem    *FileItem
 	currentContent FileContentMsg
-	currentBlame   FileBlameMsg
+	currentBlame   *git.Blame
 	lastSelected   []int
 	lineNumber     bool
 	spinner        spinner.Model
 	cursor         int
 	blameView      bool
+	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
+	// from an earlier load arrived after the user or a ref change moved on,
+	// and is dropped.
+	load int
+	gen  uint64
 }
 
 // NewFiles creates a new files model.
@@ -86,20 +117,20 @@ func NewFiles(common common.Common) *Files {
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.New(common, []selector.IdentifiableItem{}, FileItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	selector := selector.NewPane(common, FileItemDelegate{&common})
 	f.selector = selector
 	f.code.ShowLineNumber = f.lineNumber
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	// "b" toggles blame and "l" toggles line numbers in the content view, so
+	// they must not also page up or scroll right in the viewport.
+	f.code.KeyMap.PageUp = key.NewBinding(
+		key.WithKeys("pgup"),
+		key.WithHelp("pgup", "page up"),
+	)
+	f.code.KeyMap.Right = key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "move right"),
+	)
+	s := common.NewSpinner()
 	f.spinner = s
 	return f
 }
@@ -154,7 +185,7 @@ func (f *Files) FullHelp() [][]key.Binding {
 	actionKeys := []key.Binding{}
 	switch f.activeView {
 	case filesViewFiles:
-		copyKey.SetHelp("c", "copy name")
+		copyKey = f.common.CopyKey("copy name")
 		k := f.selector.KeyMap
 		b = append(b, [][]key.Binding{
 			{
@@ -177,11 +208,10 @@ func (f *Files) FullHelp() [][]key.Binding {
 			actionKeys = append(actionKeys, lineNo)
 		}
 		actionKeys = append(actionKeys, blameView)
-		if common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) &&
-			!f.blameView {
+		if f.currentContent.isMarkdown && !f.blameView {
 			actionKeys = append(actionKeys, preview)
 		}
-		copyKey.SetHelp("c", "copy content")
+		copyKey = f.common.CopyKey("copy content")
 		k := f.code.KeyMap
 		b = append(b, []key.Binding{
 			f.common.KeyMap.BackItem,
@@ -216,7 +246,8 @@ func (f *Files) Init() tea.Cmd {
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false
-	return tea.Batch(f.spinner.Tick, f.updateFilesCmd)
+	f.load++
+	return tea.Batch(f.spinner.Tick, f.updateFilesCmd())
 }
 
 // Update implements tea.Model.
@@ -226,12 +257,13 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		f.repo = msg
 	case RefMsg:
-		f.ref = msg
+		f.ref = msg.Ref
+		f.gen = msg.gen
 		f.selector.Select(0)
 		cmds = append(cmds, f.Init())
 	case FileItemsMsg:
 		cmds = append(cmds,
-			f.selector.SetItems(msg),
+			f.selector.SetItems(msg.items),
 		)
 		f.activeView = filesViewFiles
 		if f.cursor >= 0 {
@@ -239,25 +271,43 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			f.cursor = -1
 		}
 	case FileContentMsg:
+		if msg.load != f.load {
+			break
+		}
+		// Start a new load so that a repeated delivery of this message is
+		// dropped and the file's position is pushed only once.
+		f.load++
+		f.path = msg.path
+		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
 		f.currentContent = msg
-		f.code.UseGlamour = common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext)
-		cmds = append(cmds, f.code.SetContent(msg.content, msg.ext))
+		f.code.UseGlamour = msg.isMarkdown
+		// File contents come from the repository and must not reach the
+		// terminal as escape sequences; chroma and glamour pass them
+		// through. currentContent keeps the raw bytes for copying.
+		cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(msg.content), msg.ext, msg.isMarkdown))
 		f.code.GotoTop()
 	case FileBlameMsg:
-		f.currentBlame = msg
+		if msg.load != f.load || !f.blameView {
+			break
+		}
+		f.currentBlame = msg.blame
 		f.activeView = filesViewContent
 		f.code.UseGlamour = false
-		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg))
+		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg.blame))
 	case selector.SelectMsg:
 		switch sel := msg.IdentifiableItem.(type) {
 		case FileItem:
+			f.load++
 			f.currentItem = &sel
-			f.path = path.Join(f.path, sel.entry.Name())
+			p := path.Join(f.path, sel.entry.Name())
 			if sel.entry.IsTree() {
-				cmds = append(cmds, f.selectTreeCmd)
+				f.path = p
+				f.lastSelected = append(f.lastSelected, f.selector.Index())
+				f.cursor = 0
+				cmds = append(cmds, f.updateFilesCmd())
 			} else {
-				cmds = append(cmds, f.selectFileCmd)
+				cmds = append(cmds, f.selectFileCmd(sel, p, f.selector.Index()))
 			}
 		}
 	case GoBackMsg:
@@ -270,7 +320,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		case filesViewFiles:
 			switch {
 			case key.Matches(msg, f.common.KeyMap.SelectItem):
-				cmds = append(cmds, f.selector.SelectItemCmd)
+				cmds = append(cmds, f.selector.SelectItemCmd())
 			case key.Matches(msg, f.common.KeyMap.BackItem):
 				cmds = append(cmds, f.deselectItemCmd())
 			}
@@ -283,41 +333,49 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
+				f.load++
 				if f.blameView {
-					cmds = append(cmds, f.fetchBlame)
+					cmds = append(cmds, f.fetchBlameCmd())
 				} else {
 					f.activeView = filesViewContent
 					cmds = append(cmds, f.code.SetSideNote(""))
 				}
 				cmds = append(cmds, f.spinner.Tick)
 			case key.Matches(msg, preview) &&
-				common.IsFileMarkdown(f.currentContent.content, f.currentContent.ext) && !f.blameView:
+				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetContent(f.currentContent.content, f.currentContent.ext))
+				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
 			}
 		}
 	case tea.WindowSizeMsg:
 		f.SetSize(msg.Width, msg.Height)
-		switch f.activeView {
-		case filesViewFiles:
-			if f.repo != nil {
-				cmds = append(cmds, f.updateFilesCmd)
-			}
-		case filesViewContent:
-			if f.currentContent.content != "" {
-				m, cmd := f.code.Update(msg)
-				f.code = m.(*code.Code)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
+		// The content view re-renders through f.code.Update below.
+		if f.activeView == filesViewFiles && f.repo != nil {
+			cmds = append(cmds, f.updateFilesCmd())
+		}
+	case common.ErrorMsg:
+		// A listing or blame that failed to load never sends its result, so
+		// leave the loading view rather than spin until the next reload.
+		if f.activeView == filesViewLoading {
+			if f.blameView {
+				f.blameView = false
+				f.activeView = filesViewContent
+			} else {
+				// The selector still holds the previous listing, maybe of
+				// another ref or repository. Clear it now, not through a
+				// FileItemsMsg that could land after a later good listing.
+				f.activeView = filesViewFiles
+				cmds = append(cmds, f.selector.SetItems(nil))
 			}
 		}
 	case EmptyRepoMsg:
 		f.ref = nil
+		f.gen = msg.gen
+		f.load++
 		f.path = ""
 		f.currentItem = nil
 		f.activeView = filesViewFiles
@@ -375,14 +433,19 @@ func (f *Files) StatusBarValue() string {
 	if p == "." || p == "" {
 		return " "
 	}
-	return p
+	// File names may contain control characters; escape them for display.
+	return common.DisplayFilename(p)
 }
 
 // StatusBarInfo returns the status bar info.
 func (f *Files) StatusBarInfo() string {
 	switch f.activeView {
 	case filesViewFiles:
-		return fmt.Sprintf("# %d/%d", f.selector.Index()+1, len(f.selector.VisibleItems()))
+		total := len(f.selector.VisibleItems())
+		if total == 0 {
+			return "# 0/0"
+		}
+		return fmt.Sprintf("# %d/%d", f.selector.Index()+1, total)
 	case filesViewContent:
 		return common.ScrollPercent(f.code.ScrollPosition())
 	default:
@@ -390,60 +453,61 @@ func (f *Files) StatusBarInfo() string {
 	}
 }
 
-func (f *Files) updateFilesCmd() tea.Msg {
-	files := make([]selector.IdentifiableItem, 0)
-	dirs := make([]selector.IdentifiableItem, 0)
-	if f.ref == nil {
-		return nil
-	}
-	r, err := f.repo.Open()
-	if err != nil {
-		return common.ErrorCmd(err)
-	}
-	path := f.path
-	ref := f.ref
-	t, err := r.TreePath(ref, path)
-	if err != nil {
-		return common.ErrorCmd(err)
-	}
-	ents, err := t.Entries()
-	if err != nil {
-		return common.ErrorCmd(err)
-	}
-	ents.Sort()
-	for _, e := range ents {
-		if e.IsTree() {
-			dirs = append(dirs, FileItem{entry: e})
-		} else {
-			files = append(files, FileItem{entry: e})
+// updateFilesCmd returns a command that lists the files of the current
+// directory. Commands run in their own goroutines, so it captures the model
+// state it needs here instead of reading the model later.
+func (f *Files) updateFilesCmd() tea.Cmd {
+	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
+	ctx := f.common.Context()
+	return func() tea.Msg {
+		if repo == nil || ref == nil {
+			return nil
 		}
+		r, err := openWithContext(ctx, repo)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		t, err := r.TreePath(ref, path)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		ents, err := t.EntriesWithSizes()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+		ents.Sort()
+		files := make([]selector.IdentifiableItem, 0)
+		dirs := make([]selector.IdentifiableItem, 0)
+		for _, e := range ents {
+			if e.IsTree() {
+				dirs = append(dirs, FileItem{entry: e})
+			} else {
+				files = append(files, FileItem{entry: e})
+			}
+		}
+		return FileItemsMsg{items: append(dirs, files...), gen: gen}
 	}
-	return FileItemsMsg(append(dirs, files...))
 }
 
-func (f *Files) selectTreeCmd() tea.Msg {
-	if f.currentItem != nil && f.currentItem.entry.IsTree() {
-		f.lastSelected = append(f.lastSelected, f.selector.Index())
-		f.cursor = 0
-		return f.updateFilesCmd()
-	}
-	return common.ErrorMsg(errNoFileSelected)
-}
-
-func (f *Files) selectFileCmd() tea.Msg {
-	i := f.currentItem
-	if i != nil && !i.entry.IsTree() {
-		fi := i.entry.File()
-		if i.Mode().IsDir() || f == nil {
+// selectFileCmd returns a command that loads the content of item, which is at
+// filePath and at position index of its directory listing.
+func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
+	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
+	ctx := f.common.Context()
+	limit := f.common.Config().BlobSizeLimit()
+	return func() tea.Msg {
+		if item.entry.IsTree() || item.Mode().IsDir() {
 			return common.ErrorMsg(errInvalidFile)
 		}
+		if repo == nil || ref == nil {
+			return common.ErrorMsg(errNoFileSelected)
+		}
+		fi := item.entry.File()
 
-		var err error
 		var bin bool
-
-		r, err := f.repo.Open()
+		r, err := openWithContext(ctx, repo)
 		if err == nil {
-			attrs, err := r.CheckAttributes(f.ref, fi.Path())
+			attrs, err := r.CheckAttributes(ref, fi.Path())
 			if err == nil {
 				for _, attr := range attrs {
 					if (attr.Name == "binary" && attr.Value == "set") ||
@@ -455,47 +519,61 @@ func (f *Files) selectFileCmd() tea.Msg {
 			}
 		}
 
-		if !bin {
-			bin, err = fi.IsBinary()
-			if err != nil {
-				f.path = path.Dir(f.path)
-				return common.ErrorMsg(err)
-			}
-		}
-
 		if bin {
-			f.path = path.Dir(f.path)
 			return common.ErrorMsg(errBinaryFile)
 		}
 
-		c, err := fi.Bytes()
+		// Read the file once, capped by the size limit, and sniff the
+		// bytes in hand rather than piping the blob a second time.
+		c, err := fi.ContentsLimit(limit)
+		if errors.Is(err, git.ErrFileTooLarge) {
+			// Tell the user, and keep the size details for the log.
+			return common.ErrorMsg(fmt.Errorf("%w: %w", errFileTooLarge, err))
+		}
 		if err != nil {
-			f.path = path.Dir(f.path)
 			return common.ErrorMsg(err)
 		}
 
-		f.lastSelected = append(f.lastSelected, f.selector.Index())
-		return FileContentMsg{string(c), i.entry.Name()}
-	}
+		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
+			return common.ErrorMsg(errBinaryFile)
+		}
 
-	return common.ErrorMsg(errNoFileSelected)
+		content, name := string(c), item.entry.Name()
+		return FileContentMsg{
+			content:    content,
+			ext:        name,
+			path:       filePath,
+			index:      index,
+			load:       load,
+			isMarkdown: common.IsFileMarkdown(content, name),
+			gen:        gen,
+		}
+	}
 }
 
-func (f *Files) fetchBlame() tea.Msg {
-	r, err := f.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+// fetchBlameCmd returns a command that loads the blame of the current file.
+func (f *Files) fetchBlameCmd() tea.Cmd {
+	repo, ref, item, load, gen := f.repo, f.ref, f.currentItem, f.load, f.gen
+	ctx := f.common.Context()
+	return func() tea.Msg {
+		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
+			return common.ErrorMsg(errNoFileSelected)
+		}
+		r, err := openWithContext(ctx, repo)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	b, err := r.BlameFile(f.ref.ID, f.currentItem.entry.File().Path())
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		b, err := r.BlameFile(ref.ID, item.entry.File().Path())
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return FileBlameMsg(b)
+		return FileBlameMsg{blame: b, load: load, gen: gen}
+	}
 }
 
-func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
+func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
 	if f == nil || f.entry.IsTree() || b == nil {
 		return ""
 	}
@@ -508,10 +586,10 @@ func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
 		if commit == nil {
 			break
 		}
-		who := fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email)
+		who := utils.Sanitize(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
 		line := fmt.Sprintf("%s %s %s",
 			c.Styles.Tree.Blame.Hash.Render(commit.ID.String()[:7]),
-			c.Styles.Tree.Blame.Message.Render(commit.Summary()),
+			c.Styles.Tree.Blame.Message.Render(utils.Sanitize(commit.Summary())),
 			c.Styles.Tree.Blame.Who.Render(who),
 		)
 		if line != prev {
@@ -527,6 +605,7 @@ func renderBlame(c common.Common, f *FileItem, b *gitm.Blame) string {
 }
 
 func (f *Files) deselectItemCmd() tea.Cmd {
+	f.load++
 	f.path = path.Dir(f.path)
 	index := 0
 	if len(f.lastSelected) > 0 {
@@ -539,11 +618,12 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false
-	return f.updateFilesCmd
+	return f.updateFilesCmd()
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
+	gen := f.gen
 	return func() tea.Msg {
-		return FileItemsMsg(items)
+		return FileItemsMsg{items: items, gen: gen}
 	}
 }

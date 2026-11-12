@@ -93,7 +93,11 @@ func TestSendWebhookJSONDelivered(t *testing.T) {
 	is.Equal(rec.header.Get("Content-Type"), ContentTypeJSON.String())
 	is.Equal(rec.header.Get("X-SoftServe-Event"), EventBranchTagCreate.String())
 	is.True(strings.HasPrefix(rec.header.Get("User-Agent"), "SoftServe/"))
-	is.True(rec.header.Get("X-SoftServe-Delivery") != "")
+	// The delivery ID is a random (version 4) UUID: a version 1 UUID would
+	// embed the server's MAC address and clock in every request.
+	delID, err := uuid.Parse(rec.header.Get("X-SoftServe-Delivery"))
+	is.NoErr(err)
+	is.Equal(delID.Version(), uuid.Version(4))
 	is.True(rec.header.Get("X-SoftServe-Signature") == "")
 
 	var got BranchTagEvent
@@ -132,6 +136,63 @@ func TestSendWebhookFormDelivered(t *testing.T) {
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
 	is.Equal(ds[0].ResponseStatus, http.StatusNoContent)
+}
+
+// A form-encoded push event gives each commit field its own key, in the same
+// bracket notation as the other nested fields, rather than a Go struct dump.
+func TestSendWebhookFormPushCommits(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusNoContent, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventPush)
+
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	payload := PushEvent{
+		Ref:    "refs/heads/main",
+		Before: "0000000000000000000000000000000000000000",
+		After:  "2222222222222222222222222222222222222222",
+		Common: Common{
+			EventType:  EventPush,
+			Repository: Repository{ID: 1, Name: "repo"},
+			Sender:     User{ID: 1, Username: "alice"},
+		},
+		Commits: []Commit{
+			{
+				ID:        "1111111111111111111111111111111111111111",
+				Message:   "first&x=1\n",
+				Title:     "first&x=1",
+				Author:    Author{Name: "Alice", Email: "alice@example.com", Date: when},
+				Committer: Author{Name: "Bob", Email: "bob@example.com", Date: when},
+				Timestamp: when,
+			},
+			{
+				ID:        "2222222222222222222222222222222222222222",
+				Message:   "second",
+				Title:     "second",
+				Author:    Author{Name: "Carol", Email: "carol@example.com", Date: when},
+				Committer: Author{Name: "Carol", Email: "carol@example.com", Date: when},
+				Timestamp: when,
+			},
+		},
+	}
+	is.NoErr(SendWebhook(e.ctx, w, EventPush, payload))
+
+	form, err := url.ParseQuery(rec.body)
+	is.NoErr(err)
+	is.Equal(form["commits"], nil) // no struct dump under the bare key
+	is.Equal(form.Get("ref"), "refs/heads/main")
+	is.Equal(form.Get("sender[username]"), "alice")
+	is.Equal(form.Get("commits[0][id]"), "1111111111111111111111111111111111111111")
+	is.Equal(form.Get("commits[0][message]"), "first&x=1\n")
+	is.Equal(form.Get("commits[0][title]"), "first&x=1")
+	is.Equal(form.Get("commits[0][author][name]"), "Alice")
+	is.Equal(form.Get("commits[0][author][email]"), "alice@example.com")
+	is.Equal(form.Get("commits[0][author][date]"), "2026-01-02T03:04:05Z")
+	is.Equal(form.Get("commits[0][committer][name]"), "Bob")
+	is.Equal(form.Get("commits[0][timestamp]"), "2026-01-02T03:04:05Z")
+	is.Equal(form.Get("commits[1][id]"), "2222222222222222222222222222222222222222")
+	is.Equal(form.Get("commits[1][author][name]"), "Carol")
 }
 
 func TestSendWebhookInvalidContentTypeRejected(t *testing.T) {
@@ -189,6 +250,74 @@ func TestSendWebhookSignatureMatchesBody(t *testing.T) {
 	mac.Write([]byte(rec.body))
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	is.Equal(rec.header.Get("X-SoftServe-Signature"), want)
+}
+
+// The V2 signature covers the timestamp and delivery GUID as well as the
+// body, so a receiver can refuse a replayed request.
+func TestSendWebhookSignatureV2CoversTimestampAndDelivery(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	fixed := time.Unix(1731000000, 0)
+	now = func() time.Time { return fixed }
+	t.Cleanup(func() { now = time.Now })
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	ts := rec.header.Get(HeaderTimestamp)
+	is.Equal(ts, "1731000000")
+	guid := rec.header.Get(HeaderDelivery)
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write([]byte(ts + "." + guid + "." + rec.body))
+	is.Equal(rec.header.Get(HeaderSignatureV2), "sha256="+hex.EncodeToString(mac.Sum(nil)))
+
+	// The delivery GUID of a first delivery is the id of its record.
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ID.String(), guid)
+}
+
+// Without a secret there is nothing to sign, but the timestamp is still sent.
+func TestSendWebhookTimestampWithoutSecret(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	is.True(rec.header.Get(HeaderTimestamp) != "")
+	is.Equal(rec.header.Get(HeaderSignatureV2), "")
+}
+
+// A redelivery sends the GUID it is given, under a record of its own, and
+// signs it with a fresh timestamp.
+func TestRedeliverWebhookKeepsGUID(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
+	guid := uuid.New()
+	fixed := time.Unix(1731000500, 0)
+	now = func() time.Time { return fixed }
+	t.Cleanup(func() { now = time.Now })
+
+	is.NoErr(RedeliverWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), guid))
+
+	is.Equal(rec.header.Get(HeaderDelivery), guid.String())
+	is.Equal(rec.header.Get(HeaderTimestamp), "1731000500")
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write([]byte("1731000500." + guid.String() + "." + rec.body))
+	is.Equal(rec.header.Get(HeaderSignatureV2), "sha256="+hex.EncodeToString(mac.Sum(nil)))
+
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.True(ds[0].ID != guid)
+	is.True(strings.Contains(ds[0].RequestHeaders, "X-Softserve-Delivery: "+guid.String()))
 }
 
 func TestSendWebhookSignatureDependsOnSecret(t *testing.T) {
@@ -441,6 +570,29 @@ func TestSendWebhookRecordsEveryHeader(t *testing.T) {
 	is.Equal(ds[0].ResponseStatus, http.StatusAccepted)
 }
 
+// A stored header block is sorted by key, so the same headers are always
+// stored the same way, and keeps every value of a repeated header.
+func TestFormatHeadersKeepsEveryValue(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	h := http.Header{}
+	h.Add("X-B", "1")
+	h.Add("Set-Cookie", "a=1")
+	h.Add("Set-Cookie", "b=2")
+	h.Add("Content-Type", "text/plain")
+	h.Add("X-A", "0")
+
+	want := "Content-Type: text/plain\n" +
+		"Set-Cookie: a=1\n" +
+		"Set-Cookie: b=2\n" +
+		"X-A: 0\n" +
+		"X-B: 1\n"
+	for range 10 { // map order varies between runs
+		is.Equal(formatHeaders(h), want)
+	}
+	is.Equal(formatHeaders(nil), "")
+}
+
 // useSendTimeout shortens the per-webhook send timeout for the test. Like
 // useHTTPClient it swaps a package variable, so tests using it must not call
 // t.Parallel.
@@ -638,7 +790,7 @@ func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
 		uuid.MustParse("00000000-0000-1000-8000-000000000000"),
 	}
 	for _, id := range ids {
-		req, err := newRequest(w, EventPush, samplePayloadFor(e))
+		req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
 		is.NoErr(err)
 		req.id = id
 		is.NoErr(recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
@@ -667,7 +819,7 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
 	ctx := store.WithContext(e.ctx, failingPruneStore{e.ds})
 	ctx = log.WithContext(ctx, log.New(&logs))
 
-	req, err := newRequest(w, EventPush, samplePayloadFor(e))
+	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
 	is.NoErr(err)
 	is.NoErr(recordDelivery(ctx, w, EventPush, req, nil, 200, "", ""))
 
@@ -721,6 +873,43 @@ func TestDeliverSkipsRemovedOrUnsubscribedWebhook(t *testing.T) {
 	is.Equal(len(e.deliveries(t, unsubscribed.ID)), 0)
 }
 
+// countingLookupStore counts the subscriber lookups made through it.
+type countingLookupStore struct {
+	store.Store
+	listCalls, hookCalls *atomic.Int32
+}
+
+func (s countingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
+	s.listCalls.Add(1)
+	return s.Store.GetWebhooksByRepoIDWhereEvent(ctx, h, repoID, events)
+}
+
+func (s countingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID, id int64, event int) (models.Webhook, error) {
+	s.hookCalls.Add(1)
+	return s.Store.GetActiveWebhookByIDWhereEvent(ctx, h, repoID, id, event)
+}
+
+// Re-reading a webhook before its send reads only that webhook, not every
+// subscriber of the repository once per webhook.
+func TestDeliverRereadsEachWebhookAlone(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, rec := newReceiver(t, http.StatusOK, "")
+	var hooks []models.Webhook
+	for i := range 3 {
+		hooks = append(hooks, e.newWebhook(t, fmt.Sprintf("%s/?%d", srv.URL, i), "", ContentTypeJSON, EventPush))
+	}
+	cs := countingLookupStore{Store: e.ds, listCalls: new(atomic.Int32), hookCalls: new(atomic.Int32)}
+	ctx := store.WithContext(e.ctx, cs)
+
+	is.NoErr(Deliver(ctx, hooks, samplePayloadFor(e)))
+
+	is.Equal(rec.calls, 3)
+	is.Equal(cs.listCalls.Load(), int32(0))
+	is.Equal(cs.hookCalls.Load(), int32(3))
+}
+
 // useRereadTiming shortens the re-read timeout and retry delay for the test.
 // It swaps package variables, so tests using it must not call t.Parallel.
 func useRereadTiming(t *testing.T, timeout, delay time.Duration) {
@@ -739,12 +928,12 @@ type failingLookupStore struct {
 	calls    *atomic.Int32
 }
 
-func (s failingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
+func (s failingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID, id int64, event int) (models.Webhook, error) {
 	n := s.calls.Add(1)
 	if s.failures == 0 || n <= s.failures {
-		return nil, errors.New("lookup failed: dial tcp 10.0.0.5:5432")
+		return models.Webhook{}, errors.New("lookup failed: dial tcp 10.0.0.5:5432")
 	}
-	return s.Store.GetWebhooksByRepoIDWhereEvent(ctx, h, repoID, events)
+	return s.Store.GetActiveWebhookByIDWhereEvent(ctx, h, repoID, id, event)
 }
 
 // A webhook that cannot be re-read before its send, even after a retry, may
@@ -811,10 +1000,10 @@ type hangingLookupStore struct {
 	calls *atomic.Int32
 }
 
-func (s hangingLookupStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, _ db.Handler, _ int64, _ []int) ([]models.Webhook, error) {
+func (s hangingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, _ db.Handler, _, _ int64, _ int) (models.Webhook, error) {
 	s.calls.Add(1)
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return models.Webhook{}, ctx.Err()
 }
 
 // A background delivery runs with a context that is never cancelled, so the
@@ -911,4 +1100,66 @@ func TestReadResponseBodyKeepsPartialReadOnError(t *testing.T) {
 	got, err = readResponseBody(io.MultiReader(strings.NewReader(long), iotest.ErrReader(boom)))
 	is.NoErr(err)
 	is.Equal(got, long[:maxResponseBody]+truncatedMarker)
+}
+
+// formatHeaders lists headers sorted by key with every value, skips
+// keys without a value, and stops at maxStoredHeaders with a marker.
+func TestFormatHeaders(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+
+	is.Equal(formatHeaders(http.Header{
+		"X-B":     {"two", "three"},
+		"X-A":     {"one"},
+		"X-Empty": {},
+		"X-C":     {""},
+	}), "X-A: one\nX-B: two\nX-B: three\nX-C: \n")
+	is.Equal(formatHeaders(nil), "")
+
+	big := http.Header{}
+	value := strings.Repeat("v", 1000)
+	for i := range 200 {
+		big.Set(fmt.Sprintf("X-Pad-%03d", i), value)
+	}
+	got := formatHeaders(big)
+	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
+	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.True(strings.HasPrefix(got, "X-Pad-000: "+value+"\n"))
+
+	// Invalid bytes grow to U+FFFD (3 bytes) when made storable; the cap
+	// holds for the stored text, not the raw bytes.
+	invalid := http.Header{}
+	bad := strings.Repeat("\xffa", 500)
+	for i := range 200 {
+		invalid.Set(fmt.Sprintf("X-Bad-%03d", i), bad)
+	}
+	got = formatHeaders(invalid)
+	is.True(strings.HasSuffix(got, truncatedHeadersMarker))
+	is.True(len(got) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.Equal(storableText(got), got)
+}
+
+// A receiver that answers with a flood of headers must not get them all
+// stored: the stored response headers stay within maxStoredHeaders.
+func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	value := strings.Repeat("v", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for i := range 200 {
+			w.Header().Set(fmt.Sprintf("X-Pad-%03d", i), value)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ResponseStatus, http.StatusOK)
+	is.True(len(ds[0].ResponseHeaders) <= maxStoredHeaders+len(truncatedHeadersMarker))
+	is.True(strings.HasSuffix(ds[0].ResponseHeaders, truncatedHeadersMarker))
 }

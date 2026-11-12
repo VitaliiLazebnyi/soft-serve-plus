@@ -12,7 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/muesli/reflow/truncate"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // LogItem is a item in the log list that displays a git commit.
@@ -33,7 +33,7 @@ func (i LogItem) Hash() string {
 // Title returns the item title. Implements list.DefaultItem.
 func (i LogItem) Title() string {
 	if i.Commit != nil {
-		return strings.Split(i.Commit.Message, "\n")[0]
+		return utils.Sanitize(strings.Split(i.Commit.Message, "\n")[0])
 	}
 	return ""
 }
@@ -114,8 +114,8 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 				m.Width()-horizontalFrameSize),
 		)
 	}
-	author := i.Author.Name
-	committer := i.Committer.Name
+	author := utils.Sanitize(i.Author.Name)
+	committer := utils.Sanitize(i.Committer.Name)
 	who := ""
 	if author != "" && committer != "" {
 		who = styles.Keyword.Render(committer) + styles.Desc.Render(" committed")
@@ -131,16 +131,10 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 	who += styles.Desc.Render("on ") + styles.Keyword.Render(date)
 	who = common.TruncateString(who, m.Width()-horizontalFrameSize)
 	fmt.Fprint(w, //nolint:errcheck
-		d.common.Zone.Mark(
-			i.ID(),
-			styles.Base.Render(
-				lipgloss.JoinVertical(lipgloss.Left,
-					truncate.String(fmt.Sprintf("%s%s",
-						title,
-						hash,
-					), uint(m.Width()-horizontalFrameSize)), //nolint:gosec
-					who,
-				),
+		styles.Base.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				common.TruncateWidth(title+hash, m.Width()-horizontalFrameSize),
+				who,
 			),
 		),
 	)

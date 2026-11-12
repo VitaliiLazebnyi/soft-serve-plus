@@ -2,13 +2,18 @@ package web
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
 
@@ -69,6 +74,10 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 		// placeholder password; both lookups fail.
 		{"basic token with placeholder", basic(badToken, "x-oauth-basic"), false, "basic", []string{badToken}, nil},
 		{"basic jwt with placeholder", basic(badJWT, "x-oauth-basic"), false, "basic", []string{badJWT}, nil},
+		{"basic valid token with placeholder", basic(f.token, "x-oauth-basic"), true, "basic", []string{f.token}, nil},
+		{"basic token as password, empty username", basic("", f.token), true, "basic", []string{f.token}, nil},
+		// Another user's name with the token is refused and logged.
+		{"basic token of another user", basic("owner", f.token), false, "basic", []string{f.token}, []string{"username=owner"}},
 		// A malformed header whose first word is the credential.
 		{"malformed", badToken + " x", false, "other", []string{badToken}, nil},
 	} {
@@ -78,7 +87,7 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", tc.header)
 
-			user, err := parseAuthHdr(req, "secret")
+			user, _, err := parseAuthHdr(req, []string{"secret"})
 			is.Equal(err == nil && user != nil, tc.ok)
 
 			out := logs.String()
@@ -121,6 +130,10 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 	is.NoErr(err)
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
 	is.NoErr(err)
+	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
+	is.NoErr(err)
+	goneJWT := mintJWT(ctx, t, gone, "secret")
+	is.NoErr(f.be.DeleteUser(ctx, "gone"))
 
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
@@ -130,6 +143,7 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 
 	for name, header := range map[string]string{
 		"bad token":                   "token ss_bad-token",
+		"deleted user bearer":         "Bearer " + goneJWT,
 		"expired token":               "token " + expired,
 		"bad bearer":                  "Bearer ss_bad-token",
 		"basic bad password":          basic("stranger", "bad-password"),
@@ -143,7 +157,7 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", header)
 
-			user, err := parseAuthHdr(req, "secret")
+			user, _, err := parseAuthHdr(req, []string{"secret"})
 			is.True(err != nil || user == nil)
 
 			if out := logs.String(); strings.Contains(out, "ERRO") {
@@ -158,5 +172,41 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 				t.Errorf("failed login logged at error level by the router:\n%s", out)
 			}
 		})
+	}
+}
+
+// A host key that goes missing after startup leaves the server unable to
+// verify any token. A bearer request then fails as bad credentials, not as
+// an anonymous request, and the server logs the fault at error level.
+// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
+// and must not run in parallel.
+func TestBearerWithoutHostKey(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	logger.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	f := newOracleFixture(t)
+	ctx := log.WithContext(f.ctx, logger)
+	stranger, err := f.be.User(ctx, "stranger")
+	is.NoErr(err)
+	bearer := "Bearer " + mintJWT(ctx, t, stranger, "secret")
+
+	is.NoErr(os.Remove(config.FromContext(ctx).SSH.KeyPath))
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", bearer)
+	_, _, err = authenticate(req, "secret")
+	is.True(errors.Is(err, ErrInvalidToken))
+	is.True(errors.Is(err, fs.ErrNotExist))
+
+	logs.Reset()
+	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", bearer)
+	is.Equal(w.Code, http.StatusForbidden) // anonymous would get 401
+	if out := logs.String(); !strings.Contains(out, "ERRO") || !strings.Contains(out, "host key") {
+		t.Errorf("missing host key not logged at error level:\n%s", out)
 	}
 }

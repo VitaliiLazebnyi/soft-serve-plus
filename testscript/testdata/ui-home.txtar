@@ -15,7 +15,7 @@ grep 'No items' home.txt
 # test about tab
 ui '"\t    q"'
 cp stdout about.txt
-grep 'Create a `.soft-serve` repository and add a `README.md` file' about.txt
+grep 'An admin can create a `.soft-serve` repository' about.txt
 
 # add a new repo
 soft repo create .soft-serve -n 'Config' -d '"Test Soft Serve"'
@@ -33,8 +33,8 @@ git -C config add -A
 git -C config commit -m 'Initial commit'
 git -C config push origin HEAD
 
-# test repositories tab
-ui '"    q"'
+# test repositories tab, once the list has loaded in the background
+ui -wait Config '"    q"'
 cp stdout home2.txt
 grep 'Config 🌐' home2.txt
 grep 'Test Soft Serve' home2.txt
@@ -42,14 +42,14 @@ grep 'git clone ssh://localhost:.*/.soft-serve' home2.txt
 
 # a private repository is marked as such
 soft repo private .soft-serve true
-ui '"    q"'
+ui -wait Config '"    q"'
 cp stdout home3.txt
 grep 'Config 🔒' home3.txt
 ! grep '🌐' home3.txt
 soft repo private .soft-serve false
 
 # test about tab
-ui '"\t      q"'
+ui -wait Config '"\t      q"'
 cp stdout about2.txt
 grep '• About' about2.txt
 grep 'Hello World' about2.txt

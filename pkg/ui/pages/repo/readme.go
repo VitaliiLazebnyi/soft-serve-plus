@@ -6,27 +6,33 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // ReadmeMsg is a message sent when the readme is loaded.
 type ReadmeMsg struct {
 	Content string
 	Path    string
+	gen     uint64
 }
+
+func (m ReadmeMsg) generation() uint64 { return m.gen }
 
 // Readme is the readme component page.
 type Readme struct {
 	common     common.Common
 	code       *code.Code
-	ref        RefMsg
+	ref        *git.Reference
 	repo       proto.Repository
 	readmePath string
 	spinner    spinner.Model
 	isLoading  bool
+	gen        uint64
 }
 
 // NewReadme creates a new readme model.
@@ -34,8 +40,7 @@ func NewReadme(common common.Common) *Readme {
 	readme := code.New(common, "", "")
 	readme.NoContentStyle = readme.NoContentStyle.SetString("No readme found.")
 	readme.UseGlamour = true
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
+	s := common.NewSpinner()
 	return &Readme{
 		code:      readme,
 		common:    common,
@@ -91,7 +96,7 @@ func (r *Readme) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Readme) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd)
+	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd())
 }
 
 // Update implements tea.Model.
@@ -101,25 +106,29 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		r.repo = msg
 	case RefMsg:
-		r.ref = msg
+		r.ref = msg.Ref
+		r.gen = msg.gen
 		cmds = append(cmds, r.Init())
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.
+		r.gen = msg.gen
 		r.isLoading = false
 		r.readmePath = ""
 		r.code.GotoTop()
 		cmds = append(cmds,
-			r.code.SetContent(defaultEmptyRepoMsg(r.common.Config(),
+			r.code.SetContent(defaultEmptyRepoMsg(r.common,
 				r.repo.Name()), ".md"),
 		)
 	case ReadmeMsg:
 		r.isLoading = false
 		r.readmePath = msg.Path
 		r.code.GotoTop()
-		cmds = append(cmds, r.code.SetContent(msg.Content, msg.Path))
+		// The README comes from the repository; glamour passes escape
+		// sequences through to the terminal.
+		cmds = append(cmds, r.code.SetContent(utils.Sanitize(msg.Content), msg.Path))
 	case spinner.TickMsg:
 		if r.isLoading && r.spinner.ID() == msg.ID {
 			s, cmd := r.spinner.Update(msg)
@@ -164,13 +173,21 @@ func (r *Readme) StatusBarInfo() string {
 	return common.ScrollPercent(r.code.ScrollPosition())
 }
 
-func (r *Readme) updateReadmeCmd() tea.Msg {
-	m := ReadmeMsg{}
-	if r.repo == nil {
-		return common.ErrorMsg(common.ErrMissingRepo)
+// updateReadmeCmd returns a command that loads the readme of the current ref.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (r *Readme) updateReadmeCmd() tea.Cmd {
+	repo, ref, gen := r.repo, r.ref, r.gen
+	ctx := r.common.Context()
+	limit := r.common.Config().BlobSizeLimit()
+	return func() tea.Msg {
+		m := ReadmeMsg{gen: gen}
+		if repo == nil {
+			return common.ErrorMsg(common.ErrMissingRepo)
+		}
+		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
+		m.Content = rm
+		m.Path = rp
+		return m
 	}
-	rm, rp, _ := backend.Readme(r.repo, r.ref)
-	m.Content = rm
-	m.Path = rp
-	return m
 }

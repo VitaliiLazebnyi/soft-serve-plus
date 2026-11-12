@@ -1,10 +1,7 @@
 package lfs
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,55 +22,18 @@ func (a *BasicTransferAdapter) Name() string {
 
 // Download reads the download location and downloads the data
 func (a *BasicTransferAdapter) Download(ctx context.Context, _ Pointer, l *Link) (io.ReadCloser, error) {
-	resp, err := a.performRequest(ctx, "GET", l, nil, nil)
+	resp, err := a.performRequest(ctx, http.MethodGet, l)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Body, nil
 }
 
-// Upload sends the content to the LFS server
-func (a *BasicTransferAdapter) Upload(ctx context.Context, p Pointer, r io.Reader, l *Link) error {
-	res, err := a.performRequest(ctx, "PUT", l, r, func(req *http.Request) {
-		if len(req.Header.Get("Content-Type")) == 0 {
-			req.Header.Set("Content-Type", "application/octet-stream")
-		}
-
-		if req.Header.Get("Transfer-Encoding") == "chunked" {
-			req.TransferEncoding = []string{"chunked"}
-		}
-
-		req.ContentLength = p.Size
-	})
-	if err != nil {
-		return err
-	}
-	return res.Body.Close()
-}
-
-// Verify calls the verify handler on the LFS server
-func (a *BasicTransferAdapter) Verify(ctx context.Context, p Pointer, l *Link) error {
-	logger := log.FromContext(ctx).WithPrefix("lfs")
-	b, err := json.Marshal(p)
-	if err != nil {
-		logger.Errorf("Error encoding json: %v", err)
-		return err
-	}
-
-	res, err := a.performRequest(ctx, "POST", l, bytes.NewReader(b), func(req *http.Request) {
-		req.Header.Set("Content-Type", MediaType)
-	})
-	if err != nil {
-		return err
-	}
-	return res.Body.Close()
-}
-
-func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string, l *Link, body io.Reader, callback func(*http.Request)) (*http.Response, error) {
+func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string, l *Link) (*http.Response, error) {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	logger.Debugf("Calling: %s %s", method, utils.RedactURL(l.Href))
 
-	req, err := http.NewRequestWithContext(ctx, method, l.Href, body)
+	req, err := http.NewRequestWithContext(ctx, method, l.Href, nil)
 	if err != nil {
 		err = redactURLError(err)
 		logger.Errorf("Error creating request: %v", err)
@@ -83,10 +43,6 @@ func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string
 		req.Header.Set(key, value)
 	}
 	req.Header.Set("Accept", MediaType)
-
-	if callback != nil {
-		callback(req)
-	}
 
 	res, err := a.client.Do(req)
 	if err != nil {
@@ -101,27 +57,35 @@ func (a *BasicTransferAdapter) performRequest(ctx context.Context, method string
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return res, handleErrorResponse(res)
+		return res, &statusError{code: res.StatusCode, err: handleErrorResponse(logger, res)}
 	}
 
 	return res, nil
 }
 
-func handleErrorResponse(resp *http.Response) error {
-	defer resp.Body.Close() //nolint: errcheck
-
-	er, err := decodeResponseError(resp.Body)
-	if err != nil {
-		return fmt.Errorf("request failed with status %s", resp.Status)
-	}
-	return errors.New(er.Message)
+// statusError is the error of a transfer request the server answered with a
+// status other than 200 OK. It reads as err, the error handleErrorResponse
+// built from the response.
+type statusError struct {
+	code int
+	err  error
 }
 
-func decodeResponseError(r io.Reader) (ErrorResponse, error) {
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+// handleErrorResponse closes resp's body and returns an error carrying its
+// status and, when the body is an LFS error object with a message, that
+// message.
+func handleErrorResponse(logger *log.Logger, resp *http.Response) error {
+	defer resp.Body.Close() //nolint: errcheck
+
 	var er ErrorResponse
-	err := json.NewDecoder(r).Decode(&er)
-	if err != nil {
-		log.Error("Error decoding json: %v", err)
+	if err := decodeJSONLimit(resp.Body, maxErrorResponseSize, &er); err != nil {
+		logger.Debug("error decoding error response", "status", resp.Status, "err", err)
 	}
-	return er, err
+	if er.Message == "" {
+		return fmt.Errorf("request failed with status %s", resp.Status)
+	}
+	return fmt.Errorf("request failed with status %s: %s", resp.Status, er.Message)
 }

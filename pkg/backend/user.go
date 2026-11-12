@@ -17,14 +17,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// AccessLevel returns the access level of a user for a repository.
-//
-// It implements backend.Backend.
-func (d *Backend) AccessLevel(ctx context.Context, repo string, username string) access.AccessLevel {
-	user, _ := d.User(ctx, username)
-	return d.AccessLevelForUser(ctx, repo, user)
-}
-
 // adminKeyList returns the parsed initial_admin_keys. config.AdminKeys
 // parses every entry (trying each as a file first) on every call, and this
 // runs for every SSH session and access check, so the result is cached and
@@ -37,8 +29,45 @@ func (d *Backend) adminKeyList() []ssh.PublicKey {
 		d.adminKeysSrc = slices.Clone(d.cfg.InitialAdminKeys)
 		d.adminKeys = d.cfg.AdminKeys()
 		d.adminKeysOK = true
+		// The owned-admin-key warnings are about the previous list; a key
+		// still listed and still owned by a non-admin is logged again.
+		d.clearOwnedAdminKeyWarnings()
 	}
 	return d.adminKeys
+}
+
+// warnOwnedAdminKey records that the listed admin key ak is owned by the
+// non-admin account username and reports whether that has not been logged
+// yet for this key and owner.
+func (d *Backend) warnOwnedAdminKey(ak, username string) bool {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	if prev, ok := d.warnedOwnedAdminKeys[ak]; ok && prev == username {
+		return false
+	}
+	if d.warnedOwnedAdminKeys == nil {
+		d.warnedOwnedAdminKeys = make(map[string]string)
+	}
+	d.warnedOwnedAdminKeys[ak] = username
+	return true
+}
+
+// forgetOwnedAdminKey drops the owned-admin-key warning recorded for pk,
+// if any, once the key no longer resolves to a non-admin account.
+func (d *Backend) forgetOwnedAdminKey(pk ssh.PublicKey) {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	if len(d.warnedOwnedAdminKeys) == 0 {
+		return
+	}
+	delete(d.warnedOwnedAdminKeys, sshutils.MarshalAuthorizedKey(pk))
+}
+
+// clearOwnedAdminKeyWarnings drops every recorded owned-admin-key warning.
+func (d *Backend) clearOwnedAdminKeyWarnings() {
+	d.warnedOwnedAdminKeysMu.Lock()
+	defer d.warnedOwnedAdminKeysMu.Unlock()
+	clear(d.warnedOwnedAdminKeys)
 }
 
 // IsAdminKey reports whether pk is one of the configured admin keys
@@ -64,7 +93,8 @@ func (d *Backend) isAdminKey(pk ssh.PublicKey) bool {
 // admin flag, or the public key on ctx is one of the configured admin keys.
 // Admin keys are attached to an admin user on every start, but a key that a
 // non-admin account already owns stays on that account, and a key with no
-// unambiguous admin to go to is not attached, so the key is checked here too. It matches the SSH layer's isServerAdmin.
+// unambiguous admin to go to is not attached, so the key is checked here too.
+// It matches the SSH layer's isServerAdmin.
 func (d *Backend) isServerAdmin(ctx context.Context, user proto.User) bool {
 	if user != nil && user.IsAdmin() {
 		return true
@@ -73,8 +103,6 @@ func (d *Backend) isServerAdmin(ctx context.Context, user proto.User) bool {
 }
 
 // AccessLevelByPublicKey returns the access level of a user's public key for a repository.
-//
-// It implements backend.Backend.
 func (d *Backend) AccessLevelByPublicKey(ctx context.Context, repo string, pk ssh.PublicKey) access.AccessLevel {
 	if d.isAdminKey(pk) {
 		return access.AdminAccess
@@ -93,6 +121,14 @@ func (d *Backend) BaseAccessLevelByPublicKey(ctx context.Context, pk ssh.PublicK
 	}
 
 	user, _ := d.UserByPublicKey(ctx, pk)
+	return d.baseAccessLevel(ctx, user)
+}
+
+// BaseAccessLevelForUser is BaseAccessLevelByPublicKey for a caller whose
+// user is already resolved, such as the user an SSH session stored in its
+// context, so the key is not looked up again. An admin key on ctx still
+// gets admin access (see isServerAdmin).
+func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
 	return d.baseAccessLevel(ctx, user)
 }
 
@@ -133,6 +169,25 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 	return d.Readable(ctx, name, user)
 }
 
+// ReadableForUser is ReadableByPublicKey for a caller whose user is already
+// resolved, such as the user an SSH session stored in its context, so the
+// key is not looked up again. An admin key on ctx still sees every
+// repository with admin access, as in ReadableByPublicKey.
+//
+// The session user is the one resolved when the session authenticated, as
+// for the account commands and BaseAccessLevelForUser: a key removed from
+// that account mid-session keeps the session's user until it reconnects.
+// Collaborator rows, the repository's privacy and ownership are still read
+// fresh on every call.
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+	if d.isAdminKey(sshutils.PublicKeyFromContext(ctx)) {
+		r, _ := d.Repository(ctx, name)
+		return r, access.AdminAccess
+	}
+
+	return d.Readable(ctx, name, user)
+}
+
 // baseAccessLevel is the level user holds for a repository that does not
 // exist.
 //
@@ -147,7 +202,12 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 // Without it, this is upstream behaviour: registered users get read-write on
 // a missing name, and anonymous users get the anonymous level.
 func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.AccessLevel {
-	anon := d.AnonAccess(ctx)
+	return d.baseAccessLevelWithAnon(ctx, user, d.AnonAccess(ctx))
+}
+
+// baseAccessLevelWithAnon is baseAccessLevel with the anonymous level
+// already read, so a caller that has it does not read the setting again.
+func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, anon access.AccessLevel) access.AccessLevel {
 	adminOnly := d.cfg.AdminOnlyCreate
 	switch {
 	case d.isServerAdmin(ctx, user):
@@ -165,13 +225,8 @@ func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.A
 
 // accessLevel computes the access level of user for r, which is the
 // repository named name or nil when it does not exist.
-// TODO: user repository ownership
 func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User) access.AccessLevel {
-	var username string
 	anon := d.AnonAccess(ctx)
-	if user != nil {
-		username = user.Username()
-	}
 
 	// If the user is an admin, they have admin access.
 	if user != nil && user.IsAdmin() {
@@ -180,10 +235,35 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
-		if d.repoPathExists(name) {
+		// So is a row with no directory (removed by hand, a partial restore
+		// or an unmounted volume): its settings are unknown to the caller,
+		// so it must not fall back to the level for a free name, which would
+		// show a private repository in listings that walk the rows.
+		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
-		return d.baseAccessLevel(ctx, user)
+		return d.baseAccessLevelWithAnon(ctx, user, anon)
+	}
+
+	var username string
+	if user != nil {
+		username = user.Username()
+	}
+	collabAccess, isCollab, err := d.IsCollaborator(ctx, name, username)
+	if err != nil {
+		// Fall through to the non-collaborator rules, which deny access to
+		// a private repository, but leave a trace of the failed lookup.
+		d.logger.Error("error checking collaborator", "repo", name, "user", username, "err", err)
+	}
+	return repoAccessLevel(r, user, anon, collabAccess, isCollab)
+}
+
+// repoAccessLevel is accessLevel for an existing repository r once the
+// anonymous level and user's collaborator row for r, if any, are known.
+func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess access.AccessLevel, isCollab bool) access.AccessLevel {
+	// If the user is an admin, they have admin access.
+	if user != nil && user.IsAdmin() {
+		return access.AdminAccess
 	}
 
 	// If the user is the owner, they have admin access.
@@ -191,9 +271,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.AdminAccess
 	}
 
-	// If the user is a collaborator, they have return their access level.
-	// The anonymous floor only applies to public repositories.
-	collabAccess, isCollab, _ := d.IsCollaborator(ctx, name, username)
+	// On a public repository the anonymous level is a floor for everyone:
+	// a registered user, collaborator or not, never gets less than an
+	// anonymous caller could. On a private repository it does not apply.
+	//
+	// If the user is a collaborator, they have their access level.
 	if isCollab {
 		if !r.IsPrivate() && anon > collabAccess {
 			return anon
@@ -206,17 +288,73 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.NoAccess
 	}
 
-	// Otherwise, the user has read-only access.
-	if user == nil {
+	// Otherwise, anonymous users have the anonymous level, and registered
+	// users read-only or the anonymous level, whichever is higher.
+	if user == nil || anon > access.ReadOnlyAccess {
 		return anon
 	}
 
 	return access.ReadOnlyAccess
 }
 
+// ReadableRepositories returns every repository user may read. It gives
+// each the level Readable would, but loads the anonymous level and the
+// user's collaborations once for the whole list instead of once per
+// repository. Like Readable, it leaves out a row whose directory is gone
+// for everyone but admins, who are listed every row.
+func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]proto.Repository, error) {
+	repos, err := d.Repositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil && user.IsAdmin() {
+		return repos, nil
+	}
+
+	anon := d.AnonAccess(ctx)
+	var collabs map[int64]access.AccessLevel
+	if user != nil && user.ID() != 0 {
+		var ms []models.Collab
+		if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
+			var err error
+			ms, err = d.store.ListCollabsByUserID(ctx, tx, user.ID())
+			return err
+		}); err != nil {
+			return nil, err
+		}
+		collabs = make(map[int64]access.AccessLevel, len(ms))
+		for _, m := range ms {
+			collabs[m.RepoID] = m.AccessLevel
+		}
+	}
+
+	readable := make([]proto.Repository, 0, len(repos))
+	for _, r := range repos {
+		// A row with no directory is NoAccess for every non-admin, owner
+		// and collaborators included (see accessLevel).
+		if !d.repoPathExists(r.Name()) {
+			continue
+		}
+		collabAccess, isCollab := collabs[r.ID()]
+		if repoAccessLevel(r, user, anon, collabAccess, isCollab) >= access.ReadOnlyAccess {
+			readable = append(readable, r)
+		}
+	}
+	return readable, nil
+}
+
+// ReadableRepositoriesByPublicKey is ReadableRepositories for the holder of
+// a public key.
+func (d *Backend) ReadableRepositoriesByPublicKey(ctx context.Context, pk ssh.PublicKey) ([]proto.Repository, error) {
+	if d.isAdminKey(pk) {
+		return d.Repositories(ctx)
+	}
+
+	user, _ := d.UserByPublicKey(ctx, pk)
+	return d.ReadableRepositories(ctx, user)
+}
+
 // User finds a user by username.
-//
-// It implements backend.Backend.
 func (d *Backend) User(ctx context.Context, username string) (proto.User, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -225,7 +363,7 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.FindUserByUsername(ctx, tx, username)
 		if err != nil {
@@ -235,7 +373,6 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -253,7 +390,7 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 func (d *Backend) UserByID(ctx context.Context, id int64) (proto.User, error) {
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.GetUserByID(ctx, tx, id)
 		if err != nil {
@@ -263,7 +400,6 @@ func (d *Backend) UserByID(ctx context.Context, id int64) (proto.User, error) {
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -299,23 +435,24 @@ func (e *ErrAdminKeyNonAdminOwner) Error() string {
 func (e *ErrAdminKeyNonAdminOwner) Unwrap() error { return proto.ErrUserNotFound }
 
 // UserByPublicKey finds a user by public key.
-//
-// It implements backend.Backend.
 func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.User, error) {
 	var m models.User
 	var pks []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		m, err = d.store.FindUserByPublicKey(ctx, tx, pk)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
+			// The key left the account it was logged as owned by.
+			if d.isAdminKey(pk) {
+				d.forgetOwnedAdminKey(pk)
+			}
 			return nil, proto.ErrUserNotFound
 		}
 		d.logger.Error("error finding user", "pk", sshutils.MarshalAuthorizedKey(pk), "error", err)
@@ -330,13 +467,17 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	// would hand them what the key holder does. Acting as nobody instead
 	// strands a legitimate owner without their account, so the session is
 	// refused with an error saying how to fix it.
-	if !m.Admin && d.isAdminKey(pk) {
-		ak := sshutils.MarshalAuthorizedKey(pk)
-		if _, seen := d.warnedOwnedAdminKeys.LoadOrStore(ak, struct{}{}); !seen {
-			d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
-				"username", m.Username, "pk", ak)
+	if d.isAdminKey(pk) {
+		if !m.Admin {
+			ak := sshutils.MarshalAuthorizedKey(pk)
+			if d.warnOwnedAdminKey(ak, m.Username) {
+				d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
+					"username", m.Username, "pk", ak)
+			}
+			return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
 		}
-		return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
+		// The owner was promoted, or the key moved to an admin account.
+		d.forgetOwnedAdminKey(pk)
 	}
 
 	return &user{
@@ -352,25 +493,26 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 	var pks []ssh.PublicKey
 	token = HashToken(token)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		t, err := d.store.GetAccessTokenByToken(ctx, tx, token)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		if t.ExpiresAt.Valid && t.ExpiresAt.Time.Before(time.Now()) {
 			return proto.ErrTokenExpired
 		}
 
-		m, err = d.store.FindUserByAccessToken(ctx, tx, token)
+		// The token row names its user, so look the user up by ID instead
+		// of matching the token a second time.
+		m, err = d.store.GetUserByID(ctx, tx, t.UserID)
 		if err != nil {
-			return db.WrapError(err)
+			return err
 		}
 
 		pks, err = d.store.ListPublicKeysByUserID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
-		err = db.WrapError(err)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
@@ -389,11 +531,9 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 }
 
 // Users returns all users.
-//
-// It implements backend.Backend.
 func (d *Backend) Users(ctx context.Context) ([]string, error) {
 	var users []string
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		ms, err := d.store.GetAllUsers(ctx, tx)
 		if err != nil {
 			return err
@@ -405,15 +545,13 @@ func (d *Backend) Users(ctx context.Context) ([]string, error) {
 
 		return nil
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return users, nil
 }
 
 // AddPublicKey adds a public key to a user.
-//
-// It implements backend.Backend.
 func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -428,27 +566,23 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 }
 
 // CreateUser creates a new user.
-//
-// It implements backend.Backend.
 func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.UserOptions) (proto.User, error) {
 	username = utils.Sanitize(username)
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := utils.ValidateNewUsername(username); err != nil {
 		return nil, err
 	}
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.CreateUser(ctx, tx, username, opts.Admin, opts.PublicKeys)
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return d.User(ctx, username)
 }
 
 // DeleteUser deletes a user.
-//
-// It implements backend.Backend.
 func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -456,7 +590,13 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	}
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		// Lock the user's row before looking for their repositories: on
+		// Postgres a repository inserted meanwhile would otherwise be
+		// missed here and then removed by the cascade below, its
+		// directory left behind. The lock waits for such an insert to
+		// commit, so the query below sees it, and keeps new ones out
+		// until the user is gone.
+		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return err
 		}
@@ -481,30 +621,62 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrUserNotFound
 	}
-	return db.WrapError(err)
+	return err
 }
 
 // RemovePublicKey removes a public key from a user.
-//
-// It implements backend.Backend.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	return db.WrapError(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			if _, err := d.store.FindUserByUsername(ctx, tx, username); err != nil {
-				return userNotFound(err)
-			}
-			err := d.store.RemovePublicKeyByUsername(ctx, tx, username, pk)
-			if errors.Is(db.WrapError(err), db.ErrRecordNotFound) {
-				return proto.ErrPublicKeyNotFound
-			}
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		if _, err := d.store.FindUserByUsername(ctx, tx, username); err != nil {
+			return userNotFound(err)
+		}
+		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
+	})
+}
+
+// ErrLastPublicKey is returned by RemoveOwnPublicKey when the key is the
+// account's only public key.
+var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
+
+// RemoveOwnPublicKey is RemovePublicKey for a user removing a key from their
+// own account: it refuses, with ErrLastPublicKey, to remove the account's
+// only key, which would leave no way to sign in over SSH.
+//
+// The count and the removal happen in one transaction that holds the user's
+// row (LockUserRepos takes the row lock on Postgres; SQLite transactions
+// begin IMMEDIATE and take turns), so two sessions of one user that each
+// remove the other's key at once cannot both pass the check and leave the
+// account with no keys: the second sees one key left and is refused.
+func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		user, err := d.store.FindUserByUsername(ctx, tx, username)
+		if err != nil {
+			return userNotFound(err)
+		}
+		if err := d.store.LockUserRepos(ctx, tx, user.ID); err != nil {
 			return err
-		}),
-	)
+		}
+		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
+		if err != nil {
+			return err
+		}
+		if len(keys) <= 1 && slices.ContainsFunc(keys, func(k ssh.PublicKey) bool {
+			return sshutils.KeysEqual(k, pk)
+		}) {
+			return ErrLastPublicKey
+		}
+		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
+	})
 }
 
 // ListPublicKeys lists the public keys of a user.
@@ -515,20 +687,18 @@ func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.Pu
 	}
 
 	var keys []ssh.PublicKey
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		var err error
 		keys, err = d.store.ListPublicKeysByUsername(ctx, tx, username)
 		return err
 	}); err != nil {
-		return nil, db.WrapError(err)
+		return nil, err
 	}
 
 	return keys, nil
 }
 
 // SetUsername sets the username of a user.
-//
-// It implements backend.Backend.
 func (d *Backend) SetUsername(ctx context.Context, username string, newUsername string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -543,8 +713,6 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 }
 
 // SetAdmin sets the admin flag of a user.
-//
-// It implements backend.Backend.
 func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
@@ -613,13 +781,21 @@ func (u *user) Password() string {
 	return ""
 }
 
-// userNotFound wraps err, reporting a missing row as proto.ErrUserNotFound.
+// userNotFound reports a missing row as proto.ErrUserNotFound.
 // It is for changes made by username, where the user is the only row that
 // can be missing.
 func userNotFound(err error) error {
-	err = db.WrapError(err)
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return proto.ErrUserNotFound
+	}
+	return err
+}
+
+// publicKeyNotFound maps the error of removing a key the user does not have
+// to proto.ErrPublicKeyNotFound.
+func publicKeyNotFound(err error) error {
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrPublicKeyNotFound
 	}
 	return err
 }

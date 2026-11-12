@@ -9,7 +9,9 @@ import (
 // Endpoint is a Git LFS endpoint.
 type Endpoint = *url.URL
 
-// NewEndpoint returns a new Git LFS endpoint.
+// NewEndpoint returns a new Git LFS endpoint. rawurl is either a Git remote,
+// whose endpoint is derived from it, or an http(s) URL whose path already ends
+// in /info/lfs, which is used as is.
 func NewEndpoint(rawurl string) (Endpoint, error) {
 	u, err := url.Parse(rawurl)
 	if err != nil {
@@ -24,16 +26,20 @@ func NewEndpoint(rawurl string) (Endpoint, error) {
 
 	switch u.Scheme {
 	case "git":
-		// Use https for git:// URLs and strip the port if it exists.
+		// Use https for git:// URLs and strip the port if it exists,
+		// keeping the brackets around an IPv6 literal.
 		u.Scheme = "https"
-		if u.Port() != "" {
-			u.Host = u.Hostname()
+		if port := u.Port(); port != "" {
+			u.Host = strings.TrimSuffix(u.Host, ":"+port)
 		}
 		fallthrough
 	case "http", "https":
-		if strings.HasSuffix(u.Path, ".git") {
+		switch {
+		case strings.HasSuffix(u.Path, "/info/lfs"):
+			// Already an LFS endpoint (git-lfs's lfs.url), not a remote.
+		case strings.HasSuffix(u.Path, ".git"):
 			u.Path += "/info/lfs"
-		} else {
+		default:
 			u.Path += ".git/info/lfs"
 		}
 	case "ssh", "git+ssh", "ssh+git":

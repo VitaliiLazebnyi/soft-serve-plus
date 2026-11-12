@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -127,12 +128,7 @@ func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 
 // Download implements Client.
 func (c *httpClient) Download(ctx context.Context, objects []Pointer, callback DownloadCallback) error {
-	return c.performOperation(ctx, objects, callback, nil)
-}
-
-// Upload implements Client.
-func (c *httpClient) Upload(ctx context.Context, objects []Pointer, callback UploadCallback) error {
-	return c.performOperation(ctx, objects, nil, callback)
+	return c.performOperation(ctx, objects, callback)
 }
 
 func (c *httpClient) transferNames() []string {
@@ -148,10 +144,15 @@ func (c *httpClient) transferNames() []string {
 // batch performs a batch request to the LFS server.
 func (c *httpClient) batch(ctx context.Context, operation string, objects []Pointer) (*BatchResponse, error) {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
-	url := fmt.Sprintf("%s/objects/batch", c.endpoint.String())
+	url := c.endpoint.JoinPath("objects", "batch").String()
 
 	// TODO: support ref
-	request := &BatchRequest{operation, c.transferNames(), nil, objects, HashAlgorithmSHA256}
+	request := &BatchRequest{
+		Operation: operation,
+		Transfers: c.transferNames(),
+		Objects:   objects,
+		HashAlgo:  HashAlgorithmSHA256,
+	}
 
 	payload := new(bytes.Buffer)
 	err := json.NewEncoder(payload).Encode(request)
@@ -189,31 +190,59 @@ func (c *httpClient) batch(ctx context.Context, operation string, objects []Poin
 	}
 
 	var response BatchResponse
-	err = json.NewDecoder(res.Body).Decode(&response)
+	err = decodeJSONLimit(res.Body, maxBatchResponseSize, &response)
 	if err != nil {
 		logger.Errorf("Error decoding json: %v", err)
 		return nil, err
+	}
+
+	for _, object := range response.Objects {
+		if object == nil {
+			return nil, errors.New("invalid batch response: null object")
+		}
+	}
+
+	// A response may answer for fewer objects than were asked for, but
+	// never for more.
+	if len(response.Objects) > len(objects) {
+		return nil, fmt.Errorf("lfs: batch response has %d objects, %d were requested", len(response.Objects), len(objects))
 	}
 
 	if len(response.Transfer) == 0 {
 		response.Transfer = TransferBasic
 	}
 
+	// The oids were sent as SHA-256 hashes. A server that answers in another
+	// hash algorithm names different objects, whose content would never
+	// verify against the pointers. An empty hash_algo means sha256.
+	if response.HashAlgo != "" && response.HashAlgo != HashAlgorithmSHA256 {
+		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", response.HashAlgo, HashAlgorithmSHA256)
+	}
+
 	return &response, nil
 }
 
-func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback, uc UploadCallback) error {
+// actionLink returns the link of the named action of an object. ok is false
+// when the server left the action out; a link that is null or has no href is
+// an error, as there is nothing to transfer to or from.
+func actionLink(object *ObjectResponse, action string) (link *Link, ok bool, err error) {
+	link, ok = object.Actions[action]
+	if !ok {
+		return nil, false, nil
+	}
+	if link == nil || link.Href == "" {
+		return nil, false, fmt.Errorf("invalid action '%s': no href", action)
+	}
+	return link, true, nil
+}
+
+func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	if len(objects) == 0 {
 		return nil
 	}
 
-	operation := OperationDownload
-	if uc != nil {
-		operation = OperationUpload
-	}
-
-	result, err := c.batch(ctx, operation, objects)
+	result, err := c.batch(ctx, OperationDownload, objects)
 	if err != nil {
 		return err
 	}
@@ -223,70 +252,93 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		return fmt.Errorf("TransferAdapter not found: %s", result.Transfer)
 	}
 
+	// Only act on objects that were asked for, once each, so a response
+	// listing other objects or the same one twice transfers nothing more.
+	requested := make(map[string]bool, len(objects))
+	for _, p := range objects {
+		requested[p.Oid] = true
+	}
+
 	for _, object := range result.Objects {
+		if !requested[object.Oid] {
+			logger.Debugf("Ignoring %v, which was not requested or was already handled", object.Pointer)
+			continue
+		}
+		delete(requested, object.Oid)
+
 		if object.Error != nil {
 			objectError := errors.New(object.Error.Message)
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
-			if uc != nil {
-				if _, err := uc(object.Pointer, objectError); err != nil {
-					return err
-				}
-			} else {
-				if err := dc(object.Pointer, nil, objectError); err != nil {
-					return err
-				}
+			if err := dc(object.Pointer, nil, objectError); err != nil {
+				return err
 			}
 			continue
 		}
 
-		if uc != nil {
-			if len(object.Actions) == 0 {
-				logger.Debugf("%v already present on server", object.Pointer)
-				continue
-			}
-
-			link, ok := object.Actions[ActionUpload]
-			if !ok {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'upload'")
-			}
-
-			content, err := uc(object.Pointer, nil)
-			if err != nil {
-				return err
-			}
-
-			err = transferAdapter.Upload(ctx, object.Pointer, content, link)
-
-			content.Close() //nolint: errcheck
-
-			if err != nil {
-				return err
-			}
-
-			link, ok = object.Actions[ActionVerify]
-			if ok {
-				if err := transferAdapter.Verify(ctx, object.Pointer, link); err != nil {
-					return err
-				}
-			}
+		// A download that fails because of the object, not the
+		// connection or the server, only fails its own object, like an
+		// error the server reports for it in the batch response. A
+		// download link that is null or has no href is a malformed
+		// response and still fails the whole transfer.
+		link, ok, err := actionLink(object, ActionDownload)
+		if err != nil {
+			return err
+		}
+		var content io.ReadCloser
+		if ok {
+			content, err = transferAdapter.Download(ctx, object.Pointer, link)
 		} else {
-			link, ok := object.Actions[ActionDownload]
-			if !ok {
-				logger.Debugf("%v has no usable action", object.Pointer)
-				return errors.New("missing action 'download'")
+			logger.Debugf("%v has no usable action", object.Pointer)
+			err = errMissingDownload
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
-			content, err := transferAdapter.Download(ctx, object.Pointer, link)
-			if err != nil {
+			if !isObjectError(err) {
 				return err
 			}
-
-			if err := dc(object.Pointer, content, nil); err != nil {
+			logger.Debugf("Error on object %v: %v", object.Pointer, err)
+			if err := dc(object.Pointer, nil, err); err != nil {
 				return err
 			}
+			continue
+		}
+
+		if err := dc(object.Pointer, content, nil); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// errMissingDownload is the error of an object the batch response gives no
+// download action for.
+var errMissingDownload = errors.New("missing action 'download'")
+
+// isObjectError reports whether err, the error of downloading one object,
+// is about that object rather than the connection or the server: the object
+// has no download action or an href that doesn't parse, or its href answers
+// 404 Not Found, 410 Gone or a redirect, which is refused. Trying again
+// won't change the outcome of those, so they only fail their own object.
+// Any other error, such as a connection that fails or times out, a 5xx, or
+// a 401 or 403 from an expired href, may well pass on a later try, so it
+// stops the download: a plain import that is told an object is unavailable
+// never fetches it again.
+func isObjectError(err error) bool {
+	if errors.Is(err, errMissingDownload) || errors.Is(err, errInvalidURL) {
+		return true
+	}
+	var serr *statusError
+	if !errors.As(err, &serr) {
+		return false
+	}
+	switch {
+	case serr.code == http.StatusNotFound, serr.code == http.StatusGone:
+		return true
+	case serr.code >= 300 && serr.code < 400:
+		return true
+	}
+	return false
 }

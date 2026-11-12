@@ -234,7 +234,9 @@ func TestCreateWebhookCapsWebhooksPerRepo(t *testing.T) {
 // Concurrent creates on SQLite must not fail with "database is locked". A
 // transaction that reads before it writes cannot wait for another writer
 // (SQLite returns SQLITE_BUSY at once, without busy_timeout), so the cap is
-// checked after the insert.
+// checked after the insert. The creates together hold the write lock for
+// longer than busy_timeout on a slow disk (Windows), so they also rely on
+// the write transactions of one process taking turns (see db.transaction).
 func TestCreateWebhookConcurrentSQLite(t *testing.T) {
 	testConcurrentCreates(t, newWebhookEnv(t))
 }
@@ -893,4 +895,97 @@ func TestCreateWebhookOnDeletedRepository(t *testing.T) {
 
 	err := e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
 	is.True(errors.Is(err, proto.ErrRepoNotFound))
+}
+
+// redeliveredHeaders redelivers delID and returns the request headers of the
+// delivery the redelivery recorded.
+func (e whEnv) redeliveredHeaders(t *testing.T, id int64, delID uuid.UUID) string {
+	t.Helper()
+	is := is.New(t)
+	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+	}))
+	before, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	seen := map[uuid.UUID]bool{}
+	for _, d := range before {
+		seen[d.ID] = true
+	}
+
+	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID))
+
+	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	is.Equal(len(list), len(before)+1)
+	for _, d := range list {
+		if seen[d.ID] {
+			continue
+		}
+		rd, err := e.be.WebhookDelivery(e.ctx, e.repo, id, d.ID)
+		is.NoErr(err)
+		return rd.RequestHeaders
+	}
+	t.Fatal("no new delivery recorded")
+	return ""
+}
+
+// A redelivery sends the delivery GUID of the delivery it repeats, and a
+// redelivery of that redelivery keeps the same GUID.
+func TestRedeliverKeepsDeliveryGUID(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	id := e.createHook(t, whURL, webhook.EventPush)
+	guid := uuid.New()
+	delID := uuid.New()
+	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, delID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
+			nil, "Content-Type: application/json\nX-Softserve-Delivery: "+guid.String()+"\n", `{"ref":"main"}`, 200, "", "ok")
+	}))
+
+	headers := e.redeliveredHeaders(t, id, delID)
+	is.True(strings.Contains(headers, "X-Softserve-Delivery: "+guid.String()+"\n"))
+
+	// Redeliver the redelivery: still the first GUID.
+	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	var second uuid.UUID
+	for _, d := range list {
+		if d.ID != delID {
+			second = d.ID
+		}
+	}
+	headers = e.redeliveredHeaders(t, id, second)
+	is.True(strings.Contains(headers, "X-Softserve-Delivery: "+guid.String()+"\n"))
+}
+
+// A stored delivery without a usable GUID header is redelivered with its own
+// id, the GUID it was first sent with.
+func TestRedeliverWithoutStoredGUIDUsesDeliveryID(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	id := e.createHook(t, whURL, webhook.EventPush)
+
+	delID := e.seedDelivery(t, id, "http://127.0.0.1:1/", `{"ref":"main"}`)
+	headers := e.redeliveredHeaders(t, id, delID)
+	is.True(strings.Contains(headers, "X-Softserve-Delivery: "+delID.String()+"\n"))
+
+	badID := uuid.New()
+	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, badID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
+			nil, "X-Softserve-Delivery: not-a-uuid\n", `{"ref":"main"}`, 200, "", "ok")
+	}))
+	headers = e.redeliveredHeaders(t, id, badID)
+	is.True(strings.Contains(headers, "X-Softserve-Delivery: "+badID.String()+"\n"))
+}
+
+func TestStoredHeader(t *testing.T) {
+	is := is.New(t)
+	headers := "Content-Type: application/json\nx-softserve-delivery:  abc \nX-SoftServe-Delivery: second\n"
+
+	v, ok := storedHeader(headers, "X-SoftServe-Delivery")
+	is.True(ok)
+	is.Equal(v, "abc")
+
+	_, ok = storedHeader(headers, "X-Missing")
+	is.True(!ok)
 }

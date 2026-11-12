@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
@@ -59,14 +60,21 @@ func TestPktline(t *testing.T) {
 	}
 }
 
+// EnsureWithin takes a repository name relative to the repositories
+// directory, as the SSH server and the git daemon pass it.
 func TestEnsureWithinBad(t *testing.T) {
 	tmp := t.TempDir()
 	for _, f := range []string{
 		"..",
 		"../../../",
+		"../repo.git",
+		"foo/../../repo.git",
+		// A sibling whose name starts with the repos directory's name.
+		"../" + filepath.Base(tmp) + "2/x",
+		"../" + filepath.Base(tmp) + "x",
 	} {
-		if err := EnsureWithin(tmp, f); err == nil {
-			t.Errorf("EnsureWithin(%q, %q) => nil, want non-nil error", tmp, f)
+		if err := EnsureWithin(tmp, f); !errors.Is(err, ErrInvalidRepo) {
+			t.Errorf("EnsureWithin(%q, %q) => %v, want ErrInvalidRepo", tmp, f, err)
 		}
 	}
 }
@@ -74,9 +82,13 @@ func TestEnsureWithinBad(t *testing.T) {
 func TestEnsureWithinGood(t *testing.T) {
 	tmp := t.TempDir()
 	for _, f := range []string{
-		tmp,
-		tmp + "/foo",
-		tmp + "/foo/bar",
+		"",
+		".",
+		"repo.git",
+		"foo/repo.git",
+		"foo/../repo.git",
+		"..foo",
+		"foo/../bar",
 	} {
 		if err := EnsureWithin(tmp, f); err != nil {
 			t.Errorf("EnsureWithin(%q, %q) => %v, want nil error", tmp, f, err)
@@ -91,7 +103,7 @@ func TestEnsureDefaultBranchEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := EnsureDefaultBranch(context.TODO(), r.Path); !errors.Is(err, ErrNoBranches) {
-		t.Errorf("EnsureDefaultBranch(%q) => %v, want ErrNoBranches", tmp, err)
+	if err := EnsureDefaultBranch(context.TODO(), r.Path); err != nil {
+		t.Errorf("EnsureDefaultBranch(%q) => %v, want nil error", tmp, err)
 	}
 }

@@ -3,8 +3,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -50,7 +52,7 @@ func forgetSyncedAdminKey(ctx context.Context, tx db.Handler, ak string) error {
 // CreateUser implements store.UserStore.
 func (*userStore) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := utils.ValidateNewUsername(username); err != nil {
 		return err
 	}
 
@@ -120,26 +122,48 @@ func (*userStore) FindUserByUsername(ctx context.Context, tx db.Handler, usernam
 	return m, err
 }
 
-// FindUserByAccessToken implements store.UserStore.
-func (*userStore) FindUserByAccessToken(ctx context.Context, tx db.Handler, token string) (models.User, error) {
+// FindUserByUsernameForUpdate implements store.UserStore. See
+// GetRepoByNameForUpdate.
+func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return models.User{}, err
+	}
+
+	var query string
+	switch driver := h.DriverName(); driver {
+	case "postgres":
+		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
+	case "sqlite":
+		query = `SELECT * FROM users WHERE username = ?;`
+	default:
+		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
+	}
 	var m models.User
-	query := tx.Rebind(`SELECT users.*
-			FROM users
-			INNER JOIN access_tokens ON users.id = access_tokens.user_id
-			WHERE access_tokens.token = ?;`)
-	err := tx.GetContext(ctx, &m, query, token)
+	err := h.GetContext(ctx, &m, query, username)
 	return m, err
 }
 
 // GetAllUsers implements store.UserStore.
 func (*userStore) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
 	var ms []models.User
-	query := tx.Rebind(`SELECT * FROM users;`)
+	query := tx.Rebind(`SELECT * FROM users ORDER BY username;`)
 	err := tx.SelectContext(ctx, &ms, query)
 	return ms, err
 }
 
-// ListPublicKeysByUserID implements store.UserStore..
+// FindDefaultAdminUserID implements store.UserStore.
+//
+// It reads a single row instead of every user, so registering an anonymous
+// repository does not scan the users table inside its write transaction.
+func (*userStore) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
+	var id int64
+	query := tx.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
+	err := tx.GetContext(ctx, &id, query, true)
+	return id, err
+}
+
+// ListPublicKeysByUserID implements store.UserStore.
 func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
 	query := tx.Rebind(`SELECT public_key FROM public_keys
@@ -150,16 +174,7 @@ func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id 
 		return nil, err
 	}
 
-	pks := make([]ssh.PublicKey, len(aks))
-	for i, ak := range aks {
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
-		if err != nil {
-			return nil, err
-		}
-		pks[i] = pk
-	}
-
-	return pks, nil
+	return parseStoredKeys(ctx, aks, "user_id", id), nil
 }
 
 // ListPublicKeysByUsername implements store.UserStore.
@@ -179,16 +194,7 @@ func (*userStore) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, u
 		return nil, err
 	}
 
-	pks := make([]ssh.PublicKey, len(aks))
-	for i, ak := range aks {
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
-		if err != nil {
-			return nil, err
-		}
-		pks[i] = pk
-	}
-
-	return pks, nil
+	return parseStoredKeys(ctx, aks, "username", username), nil
 }
 
 // RemovePublicKeyByUsername implements store.UserStore.
@@ -217,7 +223,7 @@ func (*userStore) SetAdminByUsername(ctx context.Context, tx db.Handler, usernam
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET admin = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET admin = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	return affected(tx.ExecContext(ctx, query, isAdmin, username))
 }
 
@@ -229,18 +235,12 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 	}
 
 	newUsername = strings.ToLower(newUsername)
-	if err := utils.ValidateUsername(newUsername); err != nil {
+	if err := utils.ValidateNewUsername(newUsername); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET username = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	return affected(tx.ExecContext(ctx, query, newUsername, username))
-}
-
-// SetUserPassword implements store.UserStore.
-func (*userStore) SetUserPassword(ctx context.Context, tx db.Handler, userID int64, password string) error {
-	query := tx.Rebind(`UPDATE users SET password = ? WHERE id = ?;`)
-	return affected(tx.ExecContext(ctx, query, password, userID))
 }
 
 // SetUserPasswordByUsername implements store.UserStore.
@@ -250,7 +250,7 @@ func (*userStore) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, 
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET password = ? WHERE username = ?;`)
+	query := tx.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	return affected(tx.ExecContext(ctx, query, password, username))
 }
 
@@ -269,4 +269,22 @@ func affected(res sql.Result, err error) error {
 		return db.ErrRecordNotFound
 	}
 	return nil
+}
+
+// parseStoredKeys parses the stored authorized keys of one user. A key that
+// does not parse (stored by an older version, or edited in the database) is
+// skipped and logged, so it cannot fail every lookup of that user's keys and
+// lock them out with their other, valid keys. keyvals name the user in the
+// log entry.
+func parseStoredKeys(ctx context.Context, aks []string, keyvals ...any) []ssh.PublicKey {
+	pks := make([]ssh.PublicKey, 0, len(aks))
+	for _, ak := range aks {
+		pk, _, err := sshutils.ParseAuthorizedKey(ak)
+		if err != nil {
+			log.FromContext(ctx).WithPrefix("store").Warn("skipping unparsable stored public key", append(keyvals, "err", err)...)
+			continue
+		}
+		pks = append(pks, pk)
+	}
+	return pks
 }

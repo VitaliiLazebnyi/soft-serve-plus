@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"maps"
 	"sync"
 )
 
@@ -13,6 +14,7 @@ type Job struct {
 
 // Runner is a job runner.
 type Runner interface {
+	// Spec returns the job's cron spec. An empty spec disables the job.
 	Spec(context.Context) string
 	Func(context.Context) func()
 }
@@ -29,9 +31,11 @@ func Register(name string, runner Runner) {
 	jobs[name] = &Job{Runner: runner}
 }
 
-// List returns a map of registered jobs.
+// List returns the registered jobs, by name. The map is a copy, so ranging
+// over it is safe while jobs are registered; the jobs it points to are
+// shared.
 func List() map[string]*Job {
 	mtx.Lock()
 	defer mtx.Unlock()
-	return jobs
+	return maps.Clone(jobs)
 }

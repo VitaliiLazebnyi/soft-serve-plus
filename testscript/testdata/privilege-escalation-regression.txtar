@@ -18,14 +18,12 @@
 # 4. The account "victim" is now a global server administrator
 #
 # A related issue let a read-write collaborator grant admin-access to any
-# account, and remove collaborators ranked above themselves.
+# account, and remove or demote other collaborators.
 #
 # THIS TEST VERIFIES:
 # - A non-admin cannot reach `user` or `settings` commands by creating a
 #   repository named after the command argument
-# - A read-write collaborator cannot grant access above their own level
-# - A read-write collaborator cannot remove or demote a higher-ranked
-#   collaborator
+# - A read-write collaborator cannot add, remove or demote collaborators
 # - Webhook deliveries cannot be read across repositories
 
 # start soft serve
@@ -72,30 +70,38 @@ stdout 'Admin: false'
 soft settings anon-access
 stdout 'read-only.*'
 
-# Collaborator grants are bounded by the caller's own access level.
+# Managing collaborators needs admin access to the repository.
 soft repo create shared
 soft repo collab add shared user1 read-write
 soft repo collab add shared boss admin-access
+soft user create peer
 
-# user1 is read-write on "shared" and must not be able to grant admin-access.
+# user1 is read-write on "shared" and must not be able to grant admin-access...
 ! usoft repo collab add shared user1 admin-access
-# ...nor remove a collaborator ranked above them.
+stderr 'unauthorized'
+# ...nor remove a collaborator...
 ! usoft repo collab remove shared boss
-# ...nor demote one by overwriting the grant.
+stderr 'unauthorized'
+# ...nor demote one by re-adding them...
 ! usoft repo collab add shared boss read-only
+stderr 'unauthorized'
+# ...nor add anyone, even at a lower level.
+! usoft repo collab add shared peer read-only
+stderr 'unauthorized'
 
 # a placeholder to reset stderr
 soft help
 
-# boss is still an admin-access collaborator, and user1 did not escalate.
-soft repo collab list shared
-stdout 'boss'
-
-# Granting at or below the caller's own level still works.
-soft user create peer
-usoft repo collab add shared peer read-only
-soft repo collab list shared
-stdout 'peer'
+# boss is still an admin-access collaborator (webhook list needs admin
+# access), user1 did not escalate, and peer was not added. A read-write
+# collaborator can still list.
+usoft repo collab list shared
+stdout 'boss\tadmin-access'
+stdout 'user1\tread-write'
+! stdout 'peer'
+attacksoft repo webhook list shared
+! usoft repo webhook list shared
+stderr 'unauthorized'
 
 # Webhook deliveries must be scoped to the named repository. The attacker has
 # admin access to their own repo "user1", which must not expose the webhook
@@ -103,7 +109,7 @@ stdout 'peer'
 new-webhook WH_SHARED
 soft repo webhook create shared $WH_SHARED -e push
 soft repo webhook list shared
-stdout '1.*'
+stdout '│1 *│[^│]*/hooks/WH_SHARED│'
 ! usoft repo webhook deliveries list user1 1
 ! usoft repo webhook deliveries get user1 1 00000000-0000-0000-0000-000000000000
 

@@ -98,16 +98,32 @@ nfpms:
       - src: ./.nfpm/soft-serve.conf
         dst: /etc/soft-serve.conf
         type: config|noreplace
+        # systemd reads the environment file as root; it may hold secrets.
+        file_info:
+          mode: 0600
       - src: ./.nfpm/sysusers.conf
         dst: /usr/lib/sysusers.d/soft-serve.conf
       - src: ./.nfpm/tmpfiles.conf
         dst: /usr/lib/tmpfiles.d/soft-serve.conf
     scripts:
       postinstall: ./.nfpm/postinstall.sh
+      preremove: ./.nfpm/preremove.sh
       postremove: ./.nfpm/postremove.sh
+    apk:
+      scripts:
+        # apk runs postinstall only on first install; run it on upgrade too so
+        # the service is restarted with the new binary.
+        postupgrade: ./.nfpm/postinstall.sh
     dependencies:
       - git
       - bash
+    # git runs ssh to mirror repositories over ssh:// URLs.
+    recommends:
+      - openssh-client
+    overrides:
+      rpm:
+        recommends:
+          - openssh-clients
 
 checksum:
   name_template: "checksums.txt"

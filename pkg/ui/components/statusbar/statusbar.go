@@ -4,22 +4,28 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // Model is a status bar model.
 type Model struct {
-	common common.Common
-	key    string
-	value  string
-	info   string
-	extra  string
+	common     common.Common
+	zonePrefix string
+	key        string
+	value      string
+	info       string
+	extra      string
+	// msg is a transient message, such as a copy notice, shown in place of
+	// the value until the status is set again.
+	msg string
 }
 
 // New creates a new status bar component.
 func New(c common.Common) *Model {
 	s := &Model{
-		common: c,
+		common:     c,
+		zonePrefix: c.Zone.NewPrefix(),
 	}
 	return s
 }
@@ -30,20 +36,24 @@ func (s *Model) SetSize(width, height int) {
 	s.common.Height = height
 }
 
-// SetStatus sets the status bar status.
+// SetStatus sets the status bar status. Empty values clear the matching
+// part, and any transient message set with SetMessage is dropped.
+//
+// The values come from the repository (ref names, commit authors, paths), so
+// they are stripped of escape sequences and control characters here, whatever
+// pane they come from.
 func (s *Model) SetStatus(key, value, info, extra string) {
-	if key != "" {
-		s.key = key
-	}
-	if value != "" {
-		s.value = value
-	}
-	if info != "" {
-		s.info = info
-	}
-	if extra != "" {
-		s.extra = extra
-	}
+	s.key = utils.Sanitize(key)
+	s.value = utils.Sanitize(value)
+	s.info = utils.Sanitize(info)
+	s.extra = utils.Sanitize(extra)
+	s.msg = ""
+}
+
+// SetMessage shows a transient message in place of the status value until
+// the next SetStatus call. It is sanitised like the status values.
+func (s *Model) SetMessage(msg string) {
+	s.msg = utils.Sanitize(msg)
 }
 
 // Init implements tea.Model.
@@ -60,12 +70,17 @@ func (s *Model) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	return s, nil
 }
 
+// HelpZoneID returns the mouse zone ID of the status bar's help button.
+func (s *Model) HelpZoneID() string {
+	return s.zonePrefix + "help"
+}
+
 // View implements tea.Model.
 func (s *Model) View() string {
 	st := s.common.Styles
 	w := lipgloss.Width
 	help := s.common.Zone.Mark(
-		"repo-help",
+		s.HelpZoneID(),
 		st.StatusBarHelp.Render("? Help"),
 	)
 	key := st.StatusBarKey.Render(s.key)
@@ -75,7 +90,11 @@ func (s *Model) View() string {
 	}
 	branch := st.StatusBarBranch.Render(s.extra)
 	maxWidth := s.common.Width - w(key) - w(info) - w(branch) - w(help)
-	v := ansi.Truncate(s.value, maxWidth-st.StatusBarValue.GetHorizontalFrameSize(), "…")
+	v := s.value
+	if s.msg != "" {
+		v = s.msg
+	}
+	v = ansi.Truncate(v, maxWidth-st.StatusBarValue.GetHorizontalFrameSize(), "…")
 	value := st.StatusBarValue.
 		Width(maxWidth).
 		Render(v)

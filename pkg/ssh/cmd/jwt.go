@@ -15,20 +15,22 @@ import (
 // JWTCommand returns a command that generates a JSON Web Token.
 func JWTCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "jwt [repository1 repository2...]",
+		Use:   "jwt REPOSITORY...",
 		Short: "Generate a JSON Web Token",
-		Args:  cobra.MinimumNArgs(0),
+		// The HTTP server only accepts a token whose audience names the
+		// repository requested, so a token for no repository is useless.
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			user := proto.UserFromContext(ctx)
+			if user == nil {
+				return errUnknownKey(ctx)
+			}
+
 			cfg := config.FromContext(ctx)
 			kp, err := jwk.NewPair(cfg)
 			if err != nil {
 				return err
-			}
-
-			user := proto.UserFromContext(ctx)
-			if user == nil {
-				return errUnknownKey(ctx)
 			}
 
 			// Mint the spelling the HTTP router checks against.
@@ -48,7 +50,7 @@ func JWTCommand() *cobra.Command {
 				Audience:  audience,
 			}
 
-			token := jwt.NewWithClaims(jwk.SigningMethod, claims)
+			token := jwt.NewWithClaims(kp.SigningMethod(), claims)
 			token.Header["kid"] = kp.JWK().KeyID
 			j, err := token.SignedString(kp.PrivateKey())
 			if err != nil {

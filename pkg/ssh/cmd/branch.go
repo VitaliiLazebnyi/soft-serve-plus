@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +50,9 @@ func branchListCommand() *cobra.Command {
 
 			branches, _ := r.Branches()
 			for _, b := range branches {
-				cmd.Println(b)
+				// A ref name cannot hold C0 controls, but it can hold
+				// C1 ones encoded as UTF-8.
+				cmd.Println(utils.Sanitize(b))
 			}
 
 			return nil
@@ -84,7 +87,7 @@ func branchDefaultCommand() *cobra.Command {
 					return err
 				}
 
-				cmd.Println(head.Name().Short())
+				cmd.Println(utils.Sanitize(head.Name().Short()))
 			case 2:
 				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
 					return err
@@ -104,6 +107,12 @@ func branchDefaultCommand() *cobra.Command {
 					return git.ErrReferenceNotExist
 				}
 
+				// The default branch before the change, for the event. HEAD
+				// can name a branch that does not exist yet, so it is read
+				// as a symbolic ref rather than resolved.
+				oldHead, _ := r.SymbolicRef(git.HEAD, "")
+				oldBranch := git.ReferenceName(oldHead).Short()
+
 				if _, err := r.SymbolicRef(git.HEAD, gitm.RefsHeads+branch, gitm.SymbolicRefOptions{
 					CommandOptions: gitm.CommandOptions{
 						Context: ctx,
@@ -115,10 +124,13 @@ func branchDefaultCommand() *cobra.Command {
 				// TODO: move this to backend?
 				user := proto.UserFromContext(ctx)
 				// The default branch is already changed, so a failed event is
-				// logged rather than reported as a failed command.
-				wh, err := webhook.NewRepositoryEvent(ctx, user, rr, webhook.RepositoryEventActionDefaultBranchChange)
+				// logged rather than reported as a failed command. The event is built
+				// and sent even if the session ends now.
+				ctx, cancel := backend.AfterChangeContext(ctx)
+				defer cancel()
+				wh, err := webhook.NewDefaultBranchChangeEvent(ctx, user, rr, oldBranch)
 				if err != nil {
-					log.Error("default branch changed but webhook event skipped", "err", err)
+					log.FromContext(ctx).Error("default branch changed but webhook event skipped", "err", err, "repo", rr.Name())
 					return nil
 				}
 
@@ -147,6 +159,9 @@ func branchDeleteCommand() *cobra.Command {
 			rr, _, err := repoFromContext(ctx)
 			if err != nil {
 				return err
+			}
+			if rr.IsMirror() {
+				return proto.ErrMirrorReadOnly
 			}
 
 			r, err := rr.Open()
@@ -189,10 +204,13 @@ func branchDeleteCommand() *cobra.Command {
 			}
 
 			// The branch is already deleted, so a failed event is logged rather
-			// than reported as a failed command.
+			// than reported as a failed command. The event is built
+			// and sent even if the session ends now.
+			ctx, cancel := backend.AfterChangeContext(ctx)
+			defer cancel()
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsHeads+branch, branchCommit.ID.String(), git.ZeroID)
 			if err != nil {
-				log.Error("branch deleted but webhook event skipped", "err", err)
+				log.FromContext(ctx).Error("branch deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil
 			}
 

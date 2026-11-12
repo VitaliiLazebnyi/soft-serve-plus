@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // StashItem represents a stash item.
@@ -21,7 +22,7 @@ func (i StashItem) ID() string {
 
 // Title returns the title of the stash item.
 func (i StashItem) Title() string {
-	return i.Message
+	return utils.Sanitize(i.Message)
 }
 
 // Description returns the description of the stash item.
@@ -93,8 +94,7 @@ func (d StashItemDelegate) Render(w io.Writer, m list.Model, index int, listItem
 
 	selector = s.Selector.Render(selector)
 	title := st.Render(item.Title())
-	fmt.Fprint(w, d.common.Zone.Mark( //nolint:errcheck
-		item.ID(),
+	fmt.Fprint(w, //nolint:errcheck
 		common.TruncateString(fmt.Sprintf("%s%s",
 			selector,
 			title,
@@ -102,5 +102,5 @@ func (d StashItemDelegate) Render(w io.Writer, m list.Model, index int, listItem
 			s.Selector.GetWidth()-
 			st.GetHorizontalFrameSize(),
 		),
-	))
+	)
 }

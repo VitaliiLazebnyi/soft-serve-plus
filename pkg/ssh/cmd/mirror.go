@@ -24,11 +24,18 @@ func mirrorCommand() *cobra.Command {
 			case 1:
 				cmd.Println(rr.IsMirror())
 			case 2:
-				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
+				isMirror, err := parseBool(args[1])
+				if err != nil {
+					return err
+				}
+				// Mirroring points the repository at a remote that
+				// replaces its branches and tags on every sync, and
+				// turning it off lets pushes in again, so only
+				// repository admins may change it.
+				if err := requireLevel(ctx, access.AdminAccess); err != nil {
 					return err
 				}
 
-				isMirror := args[1] == "true"
 				if err := be.SetMirror(ctx, rr.Name(), isMirror); err != nil {
 					return err
 				}

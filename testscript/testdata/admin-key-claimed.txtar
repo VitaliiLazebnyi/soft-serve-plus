@@ -1,8 +1,5 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # A key in initial_admin_keys that is owned by a non-admin account is
 # refused for SSH sessions. `pubkey add` takes any public key without proof
 # of holding its private half, so user1 can claim admin2's public key before
@@ -20,7 +17,7 @@ ensureserverrunning SSH_PORT
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
 usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
 usoft token create 'read'
-stdout 'ss_*'
+stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
 envfile UTOKEN=utokenfile
 
@@ -48,7 +45,12 @@ soft repo list
 ! stdout 'secret'
 ! a2git clone ssh://localhost:$SSH_PORT/secret secret
 stderr 'attached to non-admin account "user1"'
-! a2git -C . push ssh://localhost:$SSH_PORT/secret HEAD
+a2git init pushsrc
+mkfile ./pushsrc/README.md '# secret'
+a2git -C pushsrc add -A
+a2git -C pushsrc commit -m 'first'
+! a2git -C pushsrc push ssh://localhost:$SSH_PORT/secret HEAD
+stderr 'attached to non-admin account "user1"'
 ! exists secret
 soft repo list
 ! stdout 'secret'
@@ -92,4 +94,3 @@ soft repo collab list secret
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .

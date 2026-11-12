@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 )
 
 type stashState int
@@ -24,40 +24,42 @@ const (
 )
 
 // StashListMsg is a message sent when the stash list is loaded.
-type StashListMsg []*gitm.Stash
+type StashListMsg struct {
+	stashes []*gitm.Stash
+	gen     uint64
+}
+
+func (m StashListMsg) generation() uint64 { return m.gen }
 
 // StashPatchMsg is a message sent when the stash patch is loaded.
-type StashPatchMsg struct{ *git.Diff }
+type StashPatchMsg struct {
+	*git.Diff
+	gen uint64
+}
+
+func (m StashPatchMsg) generation() uint64 { return m.gen }
 
 // Stash is the stash component page.
 type Stash struct {
 	common       common.Common
-	code         *code.Code
-	ref          RefMsg
+	vp           *viewport.Viewport
+	ref          *git.Reference
+	gen          uint64
 	repo         proto.Repository
 	spinner      spinner.Model
 	list         *selector.Selector
 	state        stashState
 	currentPatch StashPatchMsg
+	currentTitle string
 }
 
 // NewStash creates a new stash model.
 func NewStash(common common.Common) *Stash {
-	code := code.New(common, "", "")
-	s := spinner.New(spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(common.Styles.Spinner))
-	selector := selector.New(common, []selector.IdentifiableItem{}, StashItemDelegate{&common})
-	selector.SetShowFilter(false)
-	selector.SetShowHelp(false)
-	selector.SetShowPagination(false)
-	selector.SetShowStatusBar(false)
-	selector.SetShowTitle(false)
-	selector.SetFilteringEnabled(false)
-	selector.DisableQuitKeybindings()
-	selector.KeyMap.NextPage = common.KeyMap.NextPage
-	selector.KeyMap.PrevPage = common.KeyMap.PrevPage
+	vp := viewport.New(common)
+	s := common.NewSpinner()
+	selector := selector.NewPane(common, StashItemDelegate{&common})
 	return &Stash{
-		code:    code,
+		vp:      vp,
 		common:  common,
 		spinner: s,
 		list:    selector,
@@ -77,7 +79,7 @@ func (s *Stash) TabName() string {
 // SetSize implements common.Component.
 func (s *Stash) SetSize(width, height int) {
 	s.common.SetSize(width, height)
-	s.code.SetSize(width, height)
+	s.vp.SetSize(width, height)
 	s.list.SetSize(width, height)
 }
 
@@ -92,15 +94,19 @@ func (s *Stash) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (s *Stash) FullHelp() [][]key.Binding {
+	copyKey := s.common.CopyKey("copy message")
+	if s.state == stashStatePatch {
+		copyKey = s.common.CopyKey("copy patch")
+	}
 	b := [][]key.Binding{
 		{
 			s.common.KeyMap.Select,
 			s.common.KeyMap.Back,
-			s.common.KeyMap.Copy,
+			copyKey,
 		},
 		{
-			s.code.KeyMap.Down,
-			s.code.KeyMap.Up,
+			s.vp.KeyMap.Down,
+			s.vp.KeyMap.Up,
 			s.common.KeyMap.GotoTop,
 			s.common.KeyMap.GotoBottom,
 		},
@@ -128,7 +134,7 @@ func (s *Stash) StatusBarInfo() string {
 		}
 		return fmt.Sprintf("p. %d/%d", s.list.Page()+1, totalPages)
 	case stashStatePatch:
-		return common.ScrollPercent(s.code.ScrollPosition())
+		return common.ScrollPercent(s.vp.ScrollPosition())
 	default:
 		return ""
 	}
@@ -142,7 +148,7 @@ func (s *Stash) SpinnerID() int {
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
-	return tea.Batch(s.spinner.Tick, s.fetchStash)
+	return tea.Batch(s.spinner.Tick, s.fetchStashCmd())
 }
 
 // Update updates the model.
@@ -152,11 +158,15 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case RepoMsg:
 		s.repo = msg
 	case RefMsg:
-		s.ref = msg
+		s.ref = msg.Ref
+		s.gen = msg.gen
 		s.list.Select(0)
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
 		s.SetSize(msg.Width, msg.Height)
+		if s.currentPatch.Diff != nil {
+			s.renderPatch()
+		}
 	case spinner.TickMsg:
 		if s.state == stashStateLoading && s.spinner.ID() == msg.ID {
 			sp, cmd := s.spinner.Update(msg)
@@ -168,11 +178,11 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch s.state {
 		case stashStateList:
+			// Copying the selected stash message is handled by
+			// StashItemDelegate.
 			switch {
 			case key.Matches(msg, s.common.KeyMap.BackItem):
 				cmds = append(cmds, goBackCmd)
-			case key.Matches(msg, s.common.KeyMap.Copy):
-				cmds = append(cmds, copyCmd(s.list.SelectedItem().(StashItem).Title(), "Stash message copied to clipboard"))
 			}
 		case stashStatePatch:
 			switch {
@@ -187,8 +197,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		}
 	case StashListMsg:
 		s.state = stashStateList
-		items := make([]selector.IdentifiableItem, len(msg))
-		for i, stash := range msg {
+		items := make([]selector.IdentifiableItem, len(msg.stashes))
+		for i, stash := range msg.stashes {
 			items[i] = StashItem{stash}
 		}
 		cmds = append(cmds, s.list.SetItems(items))
@@ -196,20 +206,17 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		s.state = stashStatePatch
 		s.currentPatch = msg
 		if msg.Diff != nil {
-			title := s.common.Styles.Stash.Title.Render(s.list.SelectedItem().(StashItem).Title())
-			content := lipgloss.JoinVertical(lipgloss.Left,
-				title,
-				"",
-				renderSummary(msg.Diff, s.common.Styles, s.common.Width),
-				renderDiff(msg.Diff, s.common.Width),
-			)
-			cmds = append(cmds, s.code.SetContent(content, ".diff"))
-			s.code.GotoTop()
+			s.currentTitle = ""
+			if item, ok := s.list.SelectedItem().(StashItem); ok {
+				s.currentTitle = item.Title()
+			}
+			s.renderPatch()
+			s.vp.GotoTop()
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
 		case StashItem:
-			cmds = append(cmds, s.fetchStashPatch)
+			cmds = append(cmds, s.fetchStashPatchCmd())
 		}
 	case GoBackMsg:
 		if s.state == stashStateList {
@@ -225,8 +232,8 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case stashStatePatch:
-		c, cmd := s.code.Update(msg)
-		s.code = c.(*code.Code)
+		v, cmd := s.vp.Update(msg)
+		s.vp = v.(*viewport.Viewport)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -242,43 +249,68 @@ func (s *Stash) View() string {
 	case stashStateList:
 		return s.list.View()
 	case stashStatePatch:
-		return s.code.View()
+		return s.vp.View()
 	}
 	return ""
 }
 
-func (s *Stash) fetchStash() tea.Msg {
-	if s.repo == nil {
-		return StashListMsg(nil)
-	}
-
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-
-	stash, err := r.StashList()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
-
-	return StashListMsg(stash)
+// renderPatch shows the current stash patch. The patch is already
+// highlighted by renderDiff, so it goes straight into the viewport rather
+// than through the code component, which would highlight it again.
+func (s *Stash) renderPatch() {
+	s.vp.SetContent(lipgloss.JoinVertical(lipgloss.Left,
+		s.common.Styles.Stash.Title.Render(s.currentTitle),
+		"",
+		renderSummary(s.currentPatch.Diff, s.common.Styles, s.common.Width),
+		renderDiff(s.currentPatch.Diff, s.common.Width),
+	))
 }
 
-func (s *Stash) fetchStashPatch() tea.Msg {
-	if s.repo == nil {
-		return StashPatchMsg{nil}
-	}
+// fetchStashCmd returns a command that lists the stashes of the repository.
+// Commands run in their own goroutines, so it captures the model state it
+// needs here instead of reading the model later.
+func (s *Stash) fetchStashCmd() tea.Cmd {
+	repo, gen := s.repo, s.gen
+	ctx := s.common.Context()
+	return func() tea.Msg {
+		if repo == nil {
+			return StashListMsg{gen: gen}
+		}
 
-	r, err := s.repo.Open()
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		r, err := openWithContext(ctx, repo)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	diff, err := r.StashDiff(s.list.Index())
-	if err != nil {
-		return common.ErrorMsg(err)
-	}
+		stash, err := r.StashList()
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
 
-	return StashPatchMsg{diff}
+		return StashListMsg{stashes: stash, gen: gen}
+	}
+}
+
+// fetchStashPatchCmd returns a command that loads the patch of the selected
+// stash.
+func (s *Stash) fetchStashPatchCmd() tea.Cmd {
+	repo, index, gen := s.repo, s.list.Index(), s.gen
+	ctx := s.common.Context()
+	return func() tea.Msg {
+		if repo == nil {
+			return StashPatchMsg{gen: gen}
+		}
+
+		r, err := openWithContext(ctx, repo)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+
+		diff, err := r.StashDiff(index)
+		if err != nil {
+			return common.ErrorMsg(err)
+		}
+
+		return StashPatchMsg{Diff: diff, gen: gen}
+	}
 }

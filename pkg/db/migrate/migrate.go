@@ -29,65 +29,63 @@ type Migrations struct {
 	Version int64  `db:"version"`
 }
 
-func (Migrations) schema(driverName string) string {
+// schema returns the statement that creates the migrations table. Only the
+// drivers db.Open links in are supported.
+func (Migrations) schema(driverName string) (string, error) {
 	switch driverName {
-	case "sqlite3", "sqlite":
+	case "sqlite":
 		return `CREATE TABLE IF NOT EXISTS migrations (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				name TEXT NOT NULL,
 				version INTEGER NOT NULL UNIQUE
 			);
-		`
+		`, nil
 	case "postgres":
 		return `CREATE TABLE IF NOT EXISTS migrations (
 			id SERIAL PRIMARY KEY,
 			name TEXT NOT NULL,
 			version INTEGER NOT NULL UNIQUE
 		);
-	`
-	case "mysql":
-		return `CREATE TABLE IF NOT EXISTS migrations (
-			id INT NOT NULL AUTO_INCREMENT,
-			name TEXT NOT NULL,
-			version INT NOT NULL,
-			UNIQUE (version),
-			PRIMARY KEY (id)
-		);
-	`
+	`, nil
 	default:
-		panic("unknown driver")
+		return "", fmt.Errorf("migrate: unsupported database driver %q", driverName)
 	}
 }
 
-// Migrate runs the migrations.
+// errNoConfig is returned by migrations that need the server configuration
+// when ctx carries none.
+var errNoConfig = errors.New("migrate: no config in context")
+
+// Migrate runs the migrations. ctx must carry the server configuration
+// (config.WithContext).
 func Migrate(ctx context.Context, dbx *db.DB) error {
 	logger := log.FromContext(ctx).WithPrefix("migrate")
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		ok, err := tableExists(tx, "migrations")
+		if err := lockMigrations(ctx, tx); err != nil {
+			return err
+		}
+
+		ok, err := tableExists(ctx, tx, "migrations")
 		if err != nil {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
 		if !ok {
-			if _, err := tx.ExecContext(ctx, Migrations{}.schema(tx.DriverName())); err != nil {
+			schema, err := Migrations{}.schema(tx.DriverName())
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, schema); err != nil {
 				return err
 			}
 		}
 
-		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-		}
-
-		// Refuse to run against a database migrated by a newer binary: its
-		// schema may not match what this binary expects.
-		if n := len(migrations); n > 0 && migrs.Version > migrations[n-1].Version {
-			return fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", migrs.Version, migrations[n-1].Version)
+		current, err := checkApplied(ctx, tx)
+		if err != nil {
+			return err
 		}
 
 		for _, m := range migrations {
-			if m.Version <= migrs.Version {
+			if m.Version <= current {
 				continue
 			}
 
@@ -109,7 +107,11 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 func Rollback(ctx context.Context, dbx *db.DB) error {
 	logger := log.FromContext(ctx).WithPrefix("migrate")
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		ok, err := tableExists(tx, "migrations")
+		if err := lockMigrations(ctx, tx); err != nil {
+			return err
+		}
+
+		ok, err := tableExists(ctx, tx, "migrations")
 		if err != nil {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
@@ -117,31 +119,26 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 			return fmt.Errorf("there are no migrations to rollback")
 		}
 
-		var migrs Migrations
-		if err := tx.Get(&migrs, tx.Rebind("SELECT * FROM migrations ORDER BY version DESC LIMIT 1")); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("get latest migration: %w", err)
-			}
+		current, err := checkApplied(ctx, tx)
+		if err != nil {
+			return err
 		}
 
-		if migrs.Version == 0 {
+		if current == 0 {
 			return fmt.Errorf("there are no migrations to rollback")
 		}
 
-		// Look the migration up by version rather than by position, and
-		// refuse to roll back one this binary does not know.
+		// checkApplied has made sure this binary knows every applied
+		// migration, so the latest one is found.
 		var m *Migration
 		for i := range migrations {
-			if migrations[i].Version == migrs.Version {
+			if migrations[i].Version == current {
 				m = &migrations[i]
 				break
 			}
 		}
 		if m == nil {
-			if n := len(migrations); n > 0 && migrs.Version > migrations[n-1].Version {
-				return fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", migrs.Version, migrations[n-1].Version)
-			}
-			return fmt.Errorf("database is at migration version %d, which is unknown to this binary", migrs.Version)
+			return fmt.Errorf("database is at migration version %d, which is unknown to this binary", current)
 		}
 
 		logger.Infof("rolling back migration %d. %s", m.Version, m.Name)
@@ -149,7 +146,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, tx.Rebind("DELETE FROM migrations WHERE version = ?"), migrs.Version); err != nil {
+		if _, err := tx.ExecContext(ctx, tx.Rebind("DELETE FROM migrations WHERE version = ?"), current); err != nil {
 			return err
 		}
 
@@ -157,25 +154,116 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 	})
 }
 
+// checkApplied checks every migration recorded in the database against the
+// migrations this binary knows and returns the latest applied version, 0 when
+// none is. It refuses a database that:
+//
+//   - a newer binary migrated past the latest migration known here, since its
+//     schema may not match what this binary expects;
+//   - records a migration under a version this binary knows by another name,
+//     or one this binary does not know at all, such as a database migrated by
+//     a build whose migration numbers collide with this one's;
+//   - lacks a migration that is older than the latest applied one, which
+//     would otherwise never run.
+//
+// Comparing only the latest version would miss all but the first case.
+func checkApplied(ctx context.Context, tx *db.Tx) (int64, error) {
+	var applied []Migrations
+	if err := tx.SelectContext(ctx, &applied, tx.Rebind("SELECT * FROM migrations ORDER BY version ASC")); err != nil {
+		return 0, fmt.Errorf("list applied migrations: %w", err)
+	}
+	if len(applied) == 0 {
+		return 0, nil
+	}
+
+	current := applied[len(applied)-1].Version
+	if n := len(migrations); n == 0 || current > migrations[n-1].Version {
+		var latest int64
+		if n > 0 {
+			latest = migrations[n-1].Version
+		}
+		return 0, fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", current, latest)
+	}
+
+	known := make(map[int64]string, len(migrations))
+	for _, m := range migrations {
+		known[m.Version] = m.Name
+	}
+	done := make(map[int64]bool, len(applied))
+	for _, a := range applied {
+		name, ok := known[a.Version]
+		if !ok {
+			return 0, fmt.Errorf("database has migration %d %q, which is unknown to this binary; it was migrated by a different soft-serve build", a.Version, a.Name)
+		}
+		if a.Name != name {
+			return 0, fmt.Errorf("database has migration %d %q, but this binary's migration %d is %q; it was migrated by a different soft-serve build", a.Version, a.Name, a.Version, name)
+		}
+		done[a.Version] = true
+	}
+	for _, m := range migrations {
+		if m.Version > current {
+			break
+		}
+		if !done[m.Version] {
+			return 0, fmt.Errorf("database is missing migration %d %q although the later migration %d is applied; it was migrated by a different soft-serve build", m.Version, m.Name, current)
+		}
+	}
+
+	return current, nil
+}
+
+// migrationLockID is the Postgres advisory lock key that serialises Migrate
+// and Rollback. Advisory locks are scoped to the database, so servers sharing
+// a Postgres server but using different databases do not wait on each other.
+const migrationLockID int64 = 0x736f667473657276 // "softserv"
+
+// lockMigrations makes concurrent Migrate and Rollback calls on the same
+// database run one after another. Without it, servers starting at the same
+// time on a shared Postgres database each see the same schema version and run
+// the same migrations, and all but one fail on duplicate objects. The lock is
+// held until tx ends. It must be the first statement in tx.
+//
+// A run that waited must see what the previous holder committed. Under READ
+// COMMITTED each statement takes a new snapshot, so the statements after the
+// lock see it. Under REPEATABLE READ or SERIALIZABLE the snapshot is taken
+// when the lock statement starts, before it waits, so the run would read the
+// old schema version and apply every migration again. The server, database,
+// role or DSN can make either of those the default, so tx is set to READ
+// COMMITTED explicitly before taking the lock.
+//
+// SQLite write transactions are already serialised: they start with BEGIN
+// IMMEDIATE (see db.Open).
+func lockMigrations(ctx context.Context, tx *db.Tx) error {
+	if tx.DriverName() != "postgres" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
+		return fmt.Errorf("set migration isolation level: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLockID); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	return nil
+}
+
 // tableExists reports whether the table exists, returning any error from the
 // lookup other than the table not being found.
-func tableExists(tx *db.Tx, tableName string) (bool, error) {
+func tableExists(ctx context.Context, tx *db.Tx, tableName string) (bool, error) {
 	var query string
-	switch tx.DriverName() {
-	case "sqlite3", "sqlite":
+	switch driver := tx.DriverName(); driver {
+	case "sqlite":
 		query = "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
 	case "postgres":
 		// Look in the schema unqualified CREATE TABLE statements write to,
 		// which follows search_path and is not necessarily "public".
 		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?"
-	case "mysql":
-		// A MySQL schema is a database; look in the connection's current one.
-		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+	default:
+		return false, fmt.Errorf("migrate: unsupported database driver %q", driver)
 	}
 
 	query = tx.Rebind(query)
 	var name string
-	if err := tx.Get(&name, query, tableName); err != nil {
+	if err := tx.GetContext(ctx, &name, query, tableName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}

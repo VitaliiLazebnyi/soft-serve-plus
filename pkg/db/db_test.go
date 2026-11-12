@@ -2,10 +2,19 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"net"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestOpenUnknownDriver(t *testing.T) {
@@ -96,5 +105,394 @@ func TestSqliteReadThenWriteWaitsForWriter(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0] != 1 || rows[1] != 2 {
 		t.Errorf("rows = %v, want [1 2]", rows)
+	}
+}
+
+func TestPostgresConfigConnectTimeout(t *testing.T) {
+	t.Setenv("PGCONNECT_TIMEOUT", "")
+	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
+	for dsn, want := range map[string]time.Duration{
+		"postgres://user@localhost:5432/soft_serve?sslmode=disable":                    defaultPostgresConnectTimeout,
+		"postgres://user@localhost:5432/soft_serve?sslmode=disable&connect_timeout=3":  3 * time.Second,
+		"postgres://user@localhost:5432/soft_serve?connect_timeout=0":                  0,
+		"host=localhost port=5432 user=soft dbname=soft_serve sslmode=disable":         defaultPostgresConnectTimeout,
+		"host=localhost user=soft dbname=soft_serve connect_timeout=7 sslmode=disable": 7 * time.Second,
+	} {
+		cfg, err := postgresConfig(dsn)
+		if err != nil {
+			t.Fatalf("postgresConfig(%q): %v", dsn, err)
+		}
+		if cfg.ConnectTimeout != want {
+			t.Errorf("postgresConfig(%q).ConnectTimeout = %v, want %v", dsn, cfg.ConnectTimeout, want)
+		}
+		// The connect timeout must not drop the UTC session time zone.
+		if got := cfg.Runtime["timezone"]; got != "UTC" {
+			t.Errorf("postgresConfig(%q): timezone = %q, want UTC", dsn, got)
+		}
+	}
+
+	// PGCONNECT_TIMEOUT is honoured as lib/pq honours it.
+	t.Setenv("PGCONNECT_TIMEOUT", "4")
+	cfg, err := postgresConfig("postgres://user@localhost/soft_serve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnectTimeout != 4*time.Second {
+		t.Errorf("ConnectTimeout with PGCONNECT_TIMEOUT=4 = %v, want 4s", cfg.ConnectTimeout)
+	}
+}
+
+// Open gives up on a Postgres server that accepts the connection but never
+// answers, instead of hanging startup, when the data source sets no timeout.
+func TestOpenPostgresSilentServer(t *testing.T) {
+	t.Setenv("PGCONNECT_TIMEOUT", "")
+	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
+	old := defaultPostgresConnectTimeout
+	defaultPostgresConnectTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { defaultPostgresConnectTimeout = old })
+
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		ln.Close() //nolint:errcheck
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close() //nolint:errcheck
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Open() on a silent server => nil error, want an error")
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("Open() took %v, want about the connect timeout", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Open() on a silent server did not return")
+	}
+}
+
+// A panic in the transaction function rolls the transaction back, so its
+// connection and SQLite's write lock are released, and the panic goes on.
+func TestTransactionPanicRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Errorf("recovered %v, want boom", p)
+			}
+		}()
+		_ = d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			panic("boom")
+		})
+	}()
+
+	if n := d.Stats().InUse; n != 0 {
+		t.Errorf("connections in use after panic = %d, want 0", n)
+	}
+	// Another write transaction can take the write lock.
+	if err := d.TransactionContext(ctx, func(tx *Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (2)")
+		return err
+	}); err != nil {
+		t.Fatalf("write after panic: %v", err)
+	}
+	var rows []int
+	if err := d.SelectContext(ctx, &rows, "SELECT n FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0] != 2 {
+		t.Errorf("rows = %v, want [2]", rows)
+	}
+}
+
+// A transaction whose fn calls runtime.Goexit, as t.FailNow does, is rolled
+// back too: recover sees nothing in that case.
+func TestTransactionGoexitRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			runtime.Goexit()
+			return nil
+		})
+	}()
+	<-done
+
+	if n := d.Stats().InUse; n != 0 {
+		t.Errorf("connections in use after Goexit = %d, want 0", n)
+	}
+	var rows []int
+	if err := d.SelectContext(ctx, &rows, "SELECT n FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows = %v, want none", rows)
+	}
+}
+
+// When the rollback fails too, both the error from fn and the rollback error
+// stay reachable with errors.Is.
+func TestRollbackErrorKeepsOriginal(t *testing.T) {
+	d := &DB{DB: sqlx.NewDb(sql.OpenDB(failingRollbackConnector{}), "sqlite")}
+	defer d.Close() //nolint:errcheck
+
+	fnErr := errors.New("fn failed")
+	err := d.TransactionContext(context.Background(), func(*Tx) error { return fnErr })
+	if !errors.Is(err, fnErr) {
+		t.Errorf("err = %v, want it to wrap %v", err, fnErr)
+	}
+	if !errors.Is(err, errRollback) {
+		t.Errorf("err = %v, want it to wrap %v", err, errRollback)
+	}
+}
+
+var errRollback = errors.New("rollback failed")
+
+// failingRollbackConnector opens connections whose transactions fail to
+// roll back.
+type failingRollbackConnector struct{}
+
+func (failingRollbackConnector) Connect(context.Context) (driver.Conn, error) {
+	return failingRollbackConn{}, nil
+}
+func (failingRollbackConnector) Driver() driver.Driver { return nil }
+
+type failingRollbackConn struct{}
+
+func (failingRollbackConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("not supported")
+}
+func (failingRollbackConn) Close() error              { return nil }
+func (failingRollbackConn) Begin() (driver.Tx, error) { return failingRollbackTx{}, nil }
+
+type failingRollbackTx struct{}
+
+func (failingRollbackTx) Commit() error   { return nil }
+func (failingRollbackTx) Rollback() error { return errRollback }
+
+// TestSqliteReadTransactionDoesNotWaitForWriter checks that a read-only
+// transaction does not take the write lock: it reads while another
+// connection holds a write transaction open.
+func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+
+	written := make(chan struct{})
+	release := make(chan struct{})
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (2)"); err != nil {
+				return err
+			}
+			close(written)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-written:
+	case err := <-writerErr:
+		t.Fatalf("writer: %v", err)
+	}
+
+	// Well under busy_timeout, so a read that waits for the writer fails
+	// instead of slowing the test down.
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var n int
+	readErr := d.ReadTransactionContext(rctx, func(tx *Tx) error {
+		return tx.GetContext(rctx, &n, "SELECT COUNT(*) FROM t")
+	})
+	close(release)
+	if err := <-writerErr; err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read transaction: %v", readErr)
+	}
+	if n != 1 {
+		t.Errorf("read transaction saw %d rows, want 1", n)
+	}
+}
+
+// TestSqliteWritersTakeTurns checks that concurrent write transactions of
+// one process all succeed when between them they hold the write lock far
+// longer than busy_timeout, as a burst of writes does on a slow disk:
+// they wait for their turn instead of failing at BEGIN with "database is
+// locked".
+func TestSqliteWritersTakeTurns(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(50)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 16
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			<-start
+			errs <- d.TransactionContext(ctx, func(tx *Tx) error {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (?)", i); err != nil {
+					return err
+				}
+				// Hold the write lock as a slow commit would; all the
+				// writers together hold it for several busy_timeouts.
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			})
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("writer: %v", err)
+		}
+	}
+
+	var n int
+	if err := d.GetContext(ctx, &n, "SELECT COUNT(*) FROM t"); err != nil {
+		t.Fatal(err)
+	}
+	if n != writers {
+		t.Errorf("rows = %d, want %d", n, writers)
+	}
+}
+
+// TestSqliteWriterWaitEndsWithContext checks that a write transaction
+// waiting for its turn gives up when its context ends, and that reads do
+// not wait for the turn at all.
+func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
+	d, err := Open(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	written := make(chan struct{})
+	release := make(chan struct{})
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- d.TransactionContext(ctx, func(tx *Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)"); err != nil {
+				return err
+			}
+			close(written)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-written:
+	case err := <-writerErr:
+		t.Fatalf("writer: %v", err)
+	}
+
+	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	called := false
+	err = d.TransactionContext(wctx, func(*Tx) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiting writer = %v, want context.DeadlineExceeded", err)
+	}
+	if called {
+		t.Error("waiting writer ran fn without its turn")
+	}
+
+	rctx, rcancel := context.WithTimeout(ctx, 2*time.Second)
+	defer rcancel()
+	var n int
+	if err := d.ReadTransactionContext(rctx, func(tx *Tx) error {
+		return tx.GetContext(rctx, &n, "SELECT COUNT(*) FROM t")
+	}); err != nil {
+		t.Errorf("read transaction: %v", err)
+	}
+
+	close(release)
+	if err := <-writerErr; err != nil {
+		t.Fatalf("writer: %v", err)
 	}
 }

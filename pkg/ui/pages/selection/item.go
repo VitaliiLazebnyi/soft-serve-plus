@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -13,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/dustin/go-humanize"
 )
 
@@ -52,8 +54,8 @@ type Item struct {
 	cmd        string
 }
 
-// New creates a new Item.
-func NewItem(c common.Common, repo proto.Repository) (Item, error) {
+// NewItem creates a new Item.
+func NewItem(c common.Common, repo proto.Repository) Item {
 	var lastUpdate *time.Time
 	lu := repo.UpdatedAt()
 	if !lu.IsZero() {
@@ -67,7 +69,7 @@ func NewItem(c common.Common, repo proto.Repository) (Item, error) {
 		repo:       repo,
 		lastUpdate: lastUpdate,
 		cmd:        cmd,
-	}, nil
+	}
 }
 
 // ID implements selector.IdentifiableItem.
@@ -77,7 +79,7 @@ func (i Item) ID() string {
 
 // Title returns the item title. Implements list.DefaultItem.
 func (i Item) Title() string {
-	name := i.repo.ProjectName()
+	name := singleLine(utils.Sanitize(i.repo.ProjectName()))
 	if name == "" {
 		name = i.repo.Name()
 	}
@@ -86,10 +88,21 @@ func (i Item) Title() string {
 }
 
 // Description returns the item description. Implements list.DefaultItem.
-func (i Item) Description() string { return strings.TrimSpace(i.repo.Description()) }
+func (i Item) Description() string { return singleLine(utils.Sanitize(i.repo.Description())) }
 
-// FilterValue implements list.Item.
-func (i Item) FilterValue() string { return i.Title() }
+// singleLine collapses every run of whitespace, line breaks included, into a
+// single space so that a value fits on the one line the list gives it.
+func singleLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// FilterValue implements list.Item. It holds the project name followed by
+// the repository name, so filtering matches either.
+func (i Item) FilterValue() string {
+	title := i.Title()
+	if name := i.repo.Name(); name != title {
+		return title + " " + name
+	}
+	return title
+}
 
 // Command returns the item Command view.
 func (i Item) Command() string {
@@ -109,12 +122,6 @@ func NewItemDelegate(common *common.Common, activePane *pane) *ItemDelegate {
 		common:     common,
 		activePane: activePane,
 	}
-}
-
-// Width returns the item width.
-func (d ItemDelegate) Width() int {
-	width := d.common.Styles.MenuItem.GetHorizontalFrameSize() + d.common.Styles.MenuItem.GetWidth()
-	return width
 }
 
 // Height returns the item height. Implements list.ItemDelegate.
@@ -170,6 +177,7 @@ func (d *ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	}
 	title := i.Title()
 	title = common.TruncateString(title, m.Width()-styles.Base.GetHorizontalFrameSize()-lipgloss.Width(suffix))
+	titleRunes := utf8.RuneCountInString(title)
 	title += suffix
 	var updatedStr string
 	if i.lastUpdate != nil {
@@ -184,8 +192,14 @@ func (d *ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	updated := updatedStyle.Render(updatedStr)
 
 	if isFiltered && index < len(m.VisibleItems()) {
-		// Get indices of matched characters
-		matchedRunes = m.MatchesForItem(index)
+		// Get indices of matched characters. Only those in the title are
+		// highlighted: the rest match the repository name, which is not
+		// shown here.
+		for _, r := range m.MatchesForItem(index) {
+			if r < titleRunes {
+				matchedRunes = append(matchedRunes, r)
+			}
+		}
 	}
 
 	if isFiltered {
@@ -212,9 +226,5 @@ func (d *ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	}
 	cmd = common.TruncateString(cmd, m.Width()-styles.Base.GetHorizontalFrameSize())
 	s.WriteString(cmdStyler(cmd))
-	fmt.Fprint(w, //nolint:errcheck
-		d.common.Zone.Mark(i.ID(),
-			styles.Base.Render(s.String()),
-		),
-	)
+	fmt.Fprint(w, styles.Base.Render(s.String())) //nolint:errcheck
 }

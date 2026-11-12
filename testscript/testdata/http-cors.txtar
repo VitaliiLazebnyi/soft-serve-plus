@@ -1,55 +1,16 @@
 # vi: set ft=conf
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
-# git and git-lfs dial the remote and the LFS action URLs (built from the
-# public URL) themselves, so both name the address the server listens on
+# set the public URL, whose origin is always allowed
 env SOFT_SERVE_HTTP_PUBLIC_URL=http://127.0.0.1:$HTTP_PORT
 
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
 ensureserverrunning SSH_PORT
+ensureserverrunning HTTP_PORT
 # something else holds the HTTP port on ::1; clients must not depend on
 # which address "localhost" resolves to first
 occupyipv6 HTTP_PORT
-
-# create user
-soft user create user1 --key "$USER1_AUTHORIZED_KEY"
-
-# create access token
-soft token create --expires-in '1h' 'repo2'
-cp stdout tokenfile
-envfile TOKEN=tokenfile
-soft token create --expires-in '1ns' 'repo2'
-cp stdout etokenfile
-envfile ETOKEN=etokenfile
-usoft token create 'repo2'
-cp stdout utokenfile
-envfile UTOKEN=utokenfile
-
-# push & create repo with some files, commits, tags...
-mkdir ./repo2
-git -c init.defaultBranch=master -C repo2 init
-mkfile ./repo2/README.md '# Project\nfoo'
-mkfile ./repo2/foo.png 'foo'
-mkfile ./repo2/bar.png 'bar'
-# Pass the token through a credential helper, not the URL. Git on some
-# platforms (Homebrew git on macOS) thinks a URL with credentials was
-# redirected, drops them, and fails the push. Tests do not read system or
-# global git config, so the empty helper (which resets the helper list) is
-# only a guard that keeps the token from being stored outside the test.
-git -C repo2 remote add origin http://127.0.0.1:$HTTP_PORT/repo2
-git -C repo2 config credential.helper ''
-git -C repo2 config --add credential.helper '!f() { echo username=soft; echo password='$TOKEN'; }; f'
-git -C repo2 lfs install --local
-git -C repo2 lfs track '*.png'
-git -C repo2 add -A
-git -C repo2 commit -m 'first'
-git -C repo2 tag v0.1.0
-git -C repo2 push origin HEAD
-git -C repo2 push origin HEAD --tags
 
 # The CORS handler answers every preflight with 200 OK, allowed or not, so
 # the checks look at the Access-Control-Allow-Origin header.
@@ -106,4 +67,3 @@ stderr '> 403 Forbidden'
 
 # stop the server
 [windows] stopserver
-[windows] ! stderr .
