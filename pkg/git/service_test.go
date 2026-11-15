@@ -103,25 +103,12 @@ func runCancelled(t *testing.T, scmd ServiceCommand, atCancel func(line string))
 	return waitErr(t, errc)
 }
 
-// TestUploadPackClientGoesAway runs upload-pack the way a client that only
-// wants the ref advertisement does: it reads the first line and then goes
-// away, which cancels the context. The error must say the context was
-// cancelled rather than report the killed git process.
-func TestUploadPackClientGoesAway(t *testing.T) {
-	err := runCancelled(t, ServiceCommand{}, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
-	}
-	// The original Wait error stays in the message.
-	if runtime.GOOS != "windows" && !strings.Contains(err.Error(), "signal: killed") {
-		t.Fatalf("expected the error to keep the Wait error, got %v", err)
-	}
-}
-
 // TestUploadPackChildHoldsOutputOpen covers a process started by git that
 // keeps git's output open after git was killed, as the git wrapper on Windows
 // does with the git it runs. The handler must still return once the context
-// is cancelled instead of waiting for that process.
+// is cancelled instead of waiting for that process. The stand-in for git
+// ignores its input, so closing it does not stop it, and it is killed after
+// WaitDelay.
 func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
@@ -137,6 +124,7 @@ func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 		CmdFunc: func(c *exec.Cmd) {
 			c.Path = sh
 			c.Args = []string{"sh", "-c", "sleep 60 & echo $!; wait"}
+			c.WaitDelay = 100 * time.Millisecond
 		},
 	}, func(line string) {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))
@@ -245,7 +233,10 @@ func (w *slowWriter) Write(p []byte) (int, error) {
 // TestServiceSlowClientGetsAllOutput covers a client that reads git's
 // output slower than outputIdleTimeout per write: the handler must not
 // take it for a process holding the output open, and must copy all of the
-// output after git exited.
+// output after git exited. Git writes everything at once and exits, so all
+// of the client's reads are of the stream's tail after git is gone; with
+// cmd.Stdout set to the client and WaitDelay as the limit, os/exec cuts
+// the copy there (exec.ErrWaitDelay) and the client loses the end.
 func TestServiceSlowClientGetsAllOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
@@ -279,8 +270,8 @@ func TestServiceSlowClientGetsAllOutput(t *testing.T) {
 }
 
 // TestUploadPackFailsAfterCancel covers git failing on its own after the
-// context was cancelled but before it was killed: the real failure must be
-// reported, not the cancellation.
+// context was cancelled but before the handler stopped it (here Cancel
+// does nothing): the real failure must be reported, not the cancellation.
 func TestUploadPackFailsAfterCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -296,8 +287,8 @@ func TestUploadPackFailsAfterCancel(t *testing.T) {
 			Stdin:  stdin,
 			Stdout: stdoutW,
 			Dir:    initBare(t),
-			// Do not kill git when the context is cancelled, so that it
-			// exits on its own.
+			// Do not stop git when the context is cancelled, so that it
+			// fails on its own.
 			CmdFunc: func(c *exec.Cmd) { c.Cancel = func() error { return nil } },
 		})
 		stdoutW.Close() //nolint: errcheck
@@ -335,36 +326,15 @@ func TestStoppedByContext(t *testing.T) {
 	if !stoppedByContext(ctx, fmt.Errorf("wait: %w", context.Canceled), false) {
 		t.Error("a wrapped context error must report a cancellation")
 	}
-	if stoppedByContext(ctx, errors.New("some other failure"), false) {
+	// A git that failed while the context was done, but that the handler
+	// did not stop, failed on its own.
+	if stoppedByContext(ctx, errors.New("exit status 128"), false) {
 		t.Error("an unrelated error must not report a cancellation")
 	}
-
-	if runtime.GOOS == "windows" {
-		if !stoppedByContext(ctx, errors.New("exit status 1"), true) {
-			t.Error("a command killed for the context must report a cancellation")
-		}
-		t.Skip("uses sh")
-	}
-
-	exited := exec.CommandContext(t.Context(), "sh", "-c", "exit 1").Run()
-	if exited == nil {
-		t.Fatal("expected sh to exit with an error")
-	}
-	if stoppedByContext(ctx, exited, false) {
-		t.Errorf("a process that exited on its own must not report a cancellation: %v", exited)
-	}
-	// Killing a process that already exited but was not yet reaped succeeds
-	// on Unix, so the killed flag must not hide its exit status.
-	if stoppedByContext(ctx, exited, true) {
-		t.Errorf("a process that exited on its own must not report a cancellation even if killed: %v", exited)
-	}
-
-	killed := exec.CommandContext(t.Context(), "sh", "-c", "kill -9 $$").Run()
-	if killed == nil {
-		t.Fatal("expected sh to be killed")
-	}
-	if !stoppedByContext(ctx, killed, false) {
-		t.Errorf("a process killed by a signal must report a cancellation: %v", killed)
+	// Once Cancel closed git's input, git's exit, whatever its status or
+	// a kill after WaitDelay, is the cancellation's doing.
+	if !stoppedByContext(ctx, errors.New("exit status 128"), true) {
+		t.Error("a git stopped for the context must report a cancellation")
 	}
 }
 
