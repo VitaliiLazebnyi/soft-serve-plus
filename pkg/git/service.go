@@ -103,13 +103,8 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	cmd.Args = append(cmd.Args, ".")
 	cmd.Env = serviceEnv(os.Environ(), scmd.Env)
 
+	// stdin is git's input pipe, set below once the output pipes are.
 	var stdin io.WriteCloser
-	if scmd.Stdin != nil {
-		var err error
-		if stdin, err = cmd.StdinPipe(); err != nil {
-			return err
-		}
-	}
 	// cancelled records that the context stopped git, so that its exit,
 	// whatever its status, is reported as the cancellation.
 	var cancelled atomic.Bool
@@ -136,6 +131,15 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	outs, err := outputPipes(cmd, scmd.Stdout, stderr)
 	if err != nil {
 		return err
+	}
+	if scmd.Stdin != nil {
+		if stdin, err = cmd.StdinPipe(); err != nil {
+			for _, o := range outs {
+				o.r.Close() //nolint: errcheck
+				o.w.Close() //nolint: errcheck
+			}
+			return err
+		}
 	}
 
 	err = cmd.Start()
@@ -202,11 +206,15 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		// and git was stopped for it. Report the cancellation rather than
 		// how git ended so callers can tell it apart from a git failure.
 		return fmt.Errorf("%s: %w (%w)", svc, ctx.Err(), err)
-	case progress.clientGone.Load():
+	case progress.clientGone.Load() && brokenPipeExit(err):
 		// A write to the client failed because the client closed its end,
-		// and git, whose output then went nowhere, was stopped by SIGPIPE.
-		// The context need not end with the client (an SSH session's is
-		// its connection's), so report this as a cancellation as well.
+		// and git, whose output then went nowhere, died of the broken
+		// pipe. The context need not end with the client (an SSH session's
+		// is its connection's), so report this as a cancellation as well.
+		// A git that failed some other way after that is a failure, below.
+		if msg := errTail.String(); msg != "" {
+			return fmt.Errorf("%s: client went away: %w (%w): %s", svc, context.Canceled, err, msg)
+		}
 		return fmt.Errorf("%s: client went away: %w (%w)", svc, context.Canceled, err)
 	default:
 		if msg := errTail.String(); msg != "" {
@@ -543,6 +551,25 @@ var windowsClientGoneErrnos = []syscall.Errno{
 // waitDelay is how long after the context is done git may take to exit
 // once its input was closed, before it is killed.
 const waitDelay = 5 * time.Second
+
+// gitPipeExitCode is the status git exits with when a write fails with a
+// broken pipe and SIGPIPE did not end it (check_pipe: 128 + SIGPIPE), as on
+// Windows, which has no SIGPIPE.
+const gitPipeExitCode = 141
+
+// brokenPipeExit reports whether err, returned by Wait for git, means git
+// died of a broken pipe: killed by SIGPIPE on Unix, or exited with
+// gitPipeExitCode.
+func brokenPipeExit(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGPIPE {
+		return true
+	}
+	return exitErr.ExitCode() == gitPipeExitCode
+}
 
 // stoppedByContext reports whether err, returned by Wait for a command run
 // with ctx, comes from the command being stopped because ctx was done rather

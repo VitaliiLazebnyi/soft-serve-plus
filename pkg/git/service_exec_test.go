@@ -112,6 +112,62 @@ func TestServiceOutputCopyFailureStopsGit(t *testing.T) {
 	}
 }
 
+// A git that fails for its own reason after a write to the client failed
+// is a failure, reported with its stderr, not the client going away: only
+// a git that died of the broken pipe is.
+func TestServiceFailureAfterClientGone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	err = UploadPack(t.Context(), ServiceCommand{
+		Stdout: failingWriter{err: io.EOF},
+		Dir:    t.TempDir(),
+		// Stand in for git: write once (the client write fails), then fail
+		// on its own.
+		CmdFunc: func(c *exec.Cmd) {
+			c.Path = sh
+			c.Args = []string{"sh", "-c", "printf x; sleep 0.3; echo 'fatal: disk full' >&2; exit 3"}
+		},
+	})
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want a git failure, not a cancellation", err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Errorf("err = %v, want exit status 3", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "fatal: disk full") {
+		t.Errorf("err = %v, want git's stderr in it", err)
+	}
+}
+
+func TestBrokenPipeExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	for _, tc := range []struct {
+		script string
+		want   bool
+	}{
+		{"kill -PIPE $$", true},
+		{"exit 141", true},
+		{"exit 3", false},
+		{"kill -TERM $$", false},
+	} {
+		err := exec.CommandContext(t.Context(), "sh", "-c", tc.script).Run()
+		if got := brokenPipeExit(err); got != tc.want {
+			t.Errorf("%q: brokenPipeExit(%v) = %v, want %v", tc.script, err, got, tc.want)
+		}
+	}
+	if brokenPipeExit(errors.New("other")) {
+		t.Error("brokenPipeExit of a non-exit error = true")
+	}
+}
+
 // A CmdFunc that sets git's output is refused rather than silently
 // replaced: the handler owns git's output.
 func TestServiceCmdFuncOutputRefused(t *testing.T) {
