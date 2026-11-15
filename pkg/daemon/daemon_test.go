@@ -339,11 +339,11 @@ var refAdvertisement = regexp.MustCompile(`^[0-9a-f]{40} \S+\x00`)
 // and serves a public one.
 func TestInvalidRepo(t *testing.T) {
 	ctx := context.Background()
-	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create private repo: %v", err)
 	}
 
-	if _, err := testBackend.CreateRepository(ctx, "public", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, "public", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create public repo: %v", err)
 	}
 

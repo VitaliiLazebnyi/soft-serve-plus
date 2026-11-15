@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -125,7 +126,7 @@ func TestRequestContextDerivesFromServer(t *testing.T) {
 // The access checks run under accessTimeout: a database lookup that runs
 // out of time refuses the request instead of waiting on the database.
 func TestReadableAccessTimeout(t *testing.T) {
-	if _, err := testBackend.CreateRepository(context.Background(), "timeout-public", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := testBackend.CreateRepository(context.Background(), "timeout-public", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 	ctx := config.WithContext(context.Background(), testDaemon.cfg)
@@ -152,7 +153,7 @@ func TestReadableAccessTimeout(t *testing.T) {
 // An accepted request is logged at Info level and timed; a refused one is
 // neither.
 func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
-	if _, err := testBackend.CreateRepository(context.Background(), "accepted-public", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := testBackend.CreateRepository(context.Background(), "accepted-public", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 	d, logs := newRequestTestDaemon(t, context.Background())
