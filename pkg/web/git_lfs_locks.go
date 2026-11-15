@@ -16,7 +16,7 @@ import (
 )
 
 func (s *gitServer) serviceLfsLocks(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
-	// GitRoute has already refused any other method.
+	// gitRoute has already refused any other method.
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.serviceLfsLocksGet(w, r, gr)

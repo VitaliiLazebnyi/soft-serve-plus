@@ -19,14 +19,14 @@ import (
 // authenticate authenticates the user from the request. A bearer token must
 // name one of repos in its audience, and its audience is returned; it is nil
 // for other credentials, which are not scoped to repositories. The error is
-// ErrInvalidToken or ErrInvalidPassword for bad credentials, errAuthUnavailable
+// errInvalidToken or errInvalidPassword for bad credentials, errAuthUnavailable
 // when the credentials could not be checked, and proto.ErrUserNotFound
 // otherwise.
 func authenticate(r *http.Request, repos ...string) (proto.User, []string, error) {
 	// Prefer the Authorization header
 	user, audience, err := parseAuthHdr(r, repos)
 	if err != nil || user == nil {
-		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) || errors.Is(err, errAuthUnavailable) {
+		if errors.Is(err, errInvalidToken) || errors.Is(err, errInvalidPassword) || errors.Is(err, errAuthUnavailable) {
 			return nil, nil, err
 		}
 		return nil, nil, proto.ErrUserNotFound
@@ -59,10 +59,10 @@ func authUnavailable(ctx context.Context, logger *log.Logger, err error) error {
 	return fmt.Errorf("%w: %w", errAuthUnavailable, err)
 }
 
-// ErrInvalidPassword is returned for HTTP Basic credentials that hold no
+// errInvalidPassword is returned for HTTP Basic credentials that hold no
 // valid access token. There is no password login, so any other password is
 // refused without being checked against anything.
-var ErrInvalidPassword = errors.New("invalid password")
+var errInvalidPassword = errors.New("invalid password")
 
 // parseUsernamePassword authenticates HTTP Basic credentials. There is no
 // password login: a Basic login must carry an access token. It accepts:
@@ -117,22 +117,22 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 		}
 		if password == "" {
 			logger.Info("invalid access token", "err", err)
-			return nil, ErrInvalidToken
+			return nil, errInvalidToken
 		}
 	}
 
 	logger.Info("invalid password or token")
-	return nil, ErrInvalidPassword
+	return nil, errInvalidPassword
 }
 
-// ErrInvalidHeader is returned when the authorization header is invalid.
-var ErrInvalidHeader = errors.New("invalid authorization header")
+// errInvalidHeader is returned when the authorization header is invalid.
+var errInvalidHeader = errors.New("invalid authorization header")
 
 func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error) {
 	// Check for auth header
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		return nil, nil, ErrInvalidHeader
+		return nil, nil, errInvalidHeader
 	}
 
 	ctx := r.Context()
@@ -141,7 +141,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 {
-		return nil, nil, ErrInvalidHeader
+		return nil, nil, errInvalidHeader
 	}
 
 	// Log only a known scheme: the rest of the header is a credential, and
@@ -165,7 +165,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 			// anonymous request: answering it as anonymous would let it
 			// through wherever anonymous users may go.
 			logger.Info("invalid token", "err", err)
-			return nil, nil, ErrInvalidToken
+			return nil, nil, errInvalidToken
 		}
 
 		return user, nil, nil
@@ -184,7 +184,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 		parts := strings.SplitN(claims.Subject, "#", 2)
 		if len(parts) != 2 || utils.ValidateUsername(parts[0]) != nil {
 			logger.Info("invalid jwt subject", "subject", claims.Subject)
-			return nil, nil, ErrInvalidToken
+			return nil, nil, errInvalidToken
 		}
 
 		user, err := be.User(ctx, parts[0])
@@ -193,20 +193,20 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 				return nil, nil, authUnavailable(ctx, logger, err)
 			}
 			logger.Info("jwt user not found", "subject", claims.Subject)
-			return nil, nil, ErrInvalidToken
+			return nil, nil, errInvalidToken
 		}
 
 		expectedSubject := jwk.Subject(user)
 		if expectedSubject != claims.Subject {
 			logger.Info("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
-			return nil, nil, ErrInvalidToken
+			return nil, nil, errInvalidToken
 		}
 
 		return user, claims.Audience, nil
 	default:
 		username, password, ok := r.BasicAuth()
 		if !ok {
-			return nil, nil, ErrInvalidHeader
+			return nil, nil, errInvalidHeader
 		}
 
 		user, err := parseUsernamePassword(ctx, username, password)
@@ -214,8 +214,8 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 	}
 }
 
-// ErrInvalidToken is returned when a token is invalid.
-var ErrInvalidToken = errors.New("invalid token")
+// errInvalidToken is returned when a token is invalid.
+var errInvalidToken = errors.New("invalid token")
 
 // parseJWT validates a bearer token whose audience must name one of repos,
 // so the answer does not depend on whether they exist. The token must expire.
@@ -228,10 +228,10 @@ func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.Register
 			// is a server fault, so log it as one; the caller still sent a
 			// token, so answer as for a bad one rather than as anonymous.
 			logger.Error("cannot verify jwt", "err", err)
-			return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+			return nil, fmt.Errorf("%w: %w", errInvalidToken, err)
 		}
 		logger.Info("failed to parse jwt", "err", err)
-		return nil, ErrInvalidToken
+		return nil, errInvalidToken
 	}
 	return claims, nil
 }

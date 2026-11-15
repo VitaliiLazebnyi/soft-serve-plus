@@ -326,7 +326,7 @@ func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	for _, auth := range []string{"", "token " + token} {
 		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/public-repo.git/info/lfs/locks", nil)
 		req.Header.Set("Accept", lfs.MediaType)

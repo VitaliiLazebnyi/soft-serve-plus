@@ -50,7 +50,7 @@ func newOracleFixture(t *testing.T) *oracleFixture {
 	token, err := be.CreateAccessToken(ctx, stranger, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)
 
-	return &oracleFixture{ctx: ctx, owner: owner, be: be, handler: NewRouter(ctx), token: token}
+	return &oracleFixture{ctx: ctx, owner: owner, be: be, handler: testRouter(t, ctx), token: token}
 }
 
 // do performs a request and returns the recorded response. An empty auth

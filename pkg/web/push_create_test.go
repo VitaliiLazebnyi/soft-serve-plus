@@ -188,14 +188,14 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 	router := mux.NewRouter()
-	router.Handle("/{repo:.*}/info/refs", GitRoute{
+	router.Handle("/{repo:.*}/info/refs", gitRoute{
 		method:  []string{http.MethodGet},
 		handler: next,
 		path:    "/info/refs",
 		service: true,
 		server:  &gitServer{cfg: config.FromContext(f.ctx), be: f.be, pending: pending, limits: &requestLimits{}},
 	})
-	handler := NewContextHandler(f.ctx)(router)
+	handler := newContextHandler(f.ctx)(router)
 
 	// fetch sends the owner's ref advertisement request for name while a
 	// removal of name is running, and ends that removal with end once

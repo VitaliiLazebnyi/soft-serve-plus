@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -33,7 +34,7 @@ func serveRoute(h gitHandler, w http.ResponseWriter, r *http.Request) {
 }
 
 // gitRouteFor returns the git route with path.
-func gitRouteFor(t *testing.T, path string) GitRoute {
+func gitRouteFor(t *testing.T, path string) gitRoute {
 	t.Helper()
 	for _, rt := range gitRoutes {
 		if rt.path == path {
@@ -41,5 +42,14 @@ func gitRouteFor(t *testing.T, path string) GitRoute {
 		}
 	}
 	t.Fatalf("no git route %q", path)
-	return GitRoute{}
+	return gitRoute{}
+}
+
+// testRouter returns the HTTP router for ctx. The removals of repositories
+// its pushes create stop when the test ends.
+func testRouter(t *testing.T, ctx context.Context) http.Handler {
+	t.Helper()
+	pending := newPushCreates()
+	t.Cleanup(func() { _ = pending.close(context.Background()) })
+	return newRouter(ctx, pending)
 }

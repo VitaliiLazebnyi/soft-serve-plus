@@ -56,7 +56,7 @@ func newLFSUploadEnv(t *testing.T) *lfsUploadEnv {
 		datastore: datastore,
 		repo:      repo,
 		token:     token,
-		router:    lfsTestRouter(ctx),
+		router:    lfsTestRouter(t, ctx),
 		lfsDir:    filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10)),
 	}
 }

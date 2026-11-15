@@ -429,7 +429,7 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 		if lfs.HasObject(strg, oid, obj.Size) {
 			// Object exists, skip request
 			io.Copy(io.Discard, r.Body) //nolint: errcheck
-			renderStatus(http.StatusOK)(w, nil)
+			renderStatus(w, http.StatusOK)
 			return
 		}
 	} else if !errors.Is(err, db.ErrRecordNotFound) {
@@ -481,7 +481,7 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	renderStatus(http.StatusOK)(w, nil)
+	renderStatus(w, http.StatusOK)
 }
 
 // POST: /<repo>.git/info/lfs/objects/basic/verify
@@ -558,7 +558,7 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		renderStatus(http.StatusOK)(w, nil)
+		renderStatus(w, http.StatusOK)
 	} else if errors.Is(err, fs.ErrNotExist) {
 		logger.Info("object not found", "oid", pointer.Oid)
 		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{

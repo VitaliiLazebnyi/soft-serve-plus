@@ -27,7 +27,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // parts to temp files that were never removed.
 func TestInfoRefsDoesNotReadBody(t *testing.T) {
 	ctx, _, _ := newLFSTestContext(t)
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)

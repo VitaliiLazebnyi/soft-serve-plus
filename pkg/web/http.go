@@ -15,9 +15,6 @@ import (
 
 // HTTPServer is an http server.
 type HTTPServer struct {
-	ctx context.Context
-	cfg *config.Config
-
 	Server *http.Server
 
 	// pending tracks the repositories HTTP pushes created. It is closed
@@ -37,8 +34,6 @@ func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
 	logger := log.FromContext(ctx)
 	pending := newPushCreates()
 	s := &HTTPServer{
-		ctx:     ctx,
-		cfg:     cfg,
 		pending: pending,
 		Server: &http.Server{
 			Addr:              cfg.HTTP.ListenAddr,
@@ -82,14 +77,6 @@ func (s *HTTPServer) Close() error {
 	err := s.Server.Close()
 	_ = s.pending.close(context.Background())
 	return err
-}
-
-// ListenAndServe starts the HTTP server.
-func (s *HTTPServer) ListenAndServe() error {
-	if s.Server.TLSConfig != nil {
-		return s.Server.ListenAndServeTLS("", "")
-	}
-	return s.Server.ListenAndServe()
 }
 
 // Serve serves the HTTP server on l, with TLS when a TLS configuration is set.

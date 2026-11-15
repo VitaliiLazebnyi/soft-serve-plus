@@ -29,7 +29,7 @@ func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 		t.Fatal(err)
 	}
 	configure(&config.FromContext(ctx).HTTP)
-	srv := httptest.NewUnstartedServer(NewRouter(ctx))
+	srv := httptest.NewUnstartedServer(testRouter(t, ctx))
 	srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -624,7 +624,7 @@ func TestHTTPMaxConnectionsPerIP(t *testing.T) {
 	cfg.IdleTimeout = 0
 	cfg.MaxConnections = 8
 	cfg.MaxConnectionsPerIP = 2
-	h := NewRouter(ctx)
+	h := testRouter(t, ctx)
 
 	const a, b = "192.0.2.1:1000", "198.51.100.7:1000"
 	status := func(addr string) int {

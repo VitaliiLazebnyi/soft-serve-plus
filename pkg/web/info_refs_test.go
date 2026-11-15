@@ -37,7 +37,7 @@ func TestInfoRefsGitFailure(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/broken.git/info/refs?service=git-upload-pack", nil)
 	w := httptest.NewRecorder()
-	NewRouter(ctx).ServeHTTP(w, req)
+	testRouter(t, ctx).ServeHTTP(w, req)
 
 	is.Equal(w.Code, http.StatusInternalServerError)
 	out := logs.String()
@@ -60,7 +60,7 @@ func newInfoFixture(t *testing.T) *infoFixture {
 	_, err := be.CreateRepository(ctx, "pub", nil, proto.RepositoryOptions{})
 	is.NoErr(err)
 	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "pub.git")
-	return &infoFixture{handler: NewRouter(ctx), dir: dir}
+	return &infoFixture{handler: testRouter(t, ctx), dir: dir}
 }
 
 func (f *infoFixture) get(t *testing.T, path string, header ...string) *httptest.ResponseRecorder {

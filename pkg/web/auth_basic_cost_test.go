@@ -50,7 +50,9 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 // comparison. Each such login used to run a bcrypt against a dummy hash,
 // queued per client address and behind a global semaphore, while holding a
 // slot, so sixteen looping clients from one address kept all eight slots of
-// max_connections 8 and every anonymous fetch answered 503.
+// max_connections 8 and every anonymous fetch answered 503. Waits that only
+// happen under contention, such as a per-client queue or a semaphore around
+// cheap work, are deliberately not tested.
 //
 // The test does not race clients against the limit: how many slots looping
 // clients hold depends on how fast the machine serves them, not only on what a
@@ -66,11 +68,13 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	// A limit puts the slot channel in the request path, as in production;
+	// a slot a login leaked would make the ninth request answer 503.
 	config.FromContext(ctx).HTTP.MaxConnections = 8
-	router := NewRouter(ctx)
+	router := testRouter(t, ctx)
 
-	// The faster of two bcrypt comparisons, as a login used to run. The
-	// first also makes the dummy hash, so the second is the one that counts.
+	// One bcrypt comparison, as each login used to run. The first call also
+	// makes the dummy hash, so take the faster of two.
 	bcrypt := time.Duration(math.MaxInt64)
 	for range 2 {
 		start := time.Now()
