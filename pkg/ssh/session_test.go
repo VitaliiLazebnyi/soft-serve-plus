@@ -269,80 +269,103 @@ func heapAlloc() uint64 {
 	return m.HeapAlloc
 }
 
-// A TUI renders at most 500x200 cells, whatever pty size the client asks
-// for: Bubble Tea allocates its screen at the initial size without checking
-// it, about 250 bytes a cell, so a 5000x300 pty used to hold over 300 MiB,
-// and a 30000x30000 one would have exhausted memory. newSessionProgram
-// clamps the initial size, which this bounds; the clamp of later resizes is
-// checked directly in TestSessionFilter (Bubble Tea allocates its persistent
-// buffer only from the initial size, so a resize does not grow the heap the
-// same way).
+// A TUI renders at most 500x200 cells, whatever size the client asks for.
+// Bubble Tea allocates its screen at the size it is given, about 250 bytes a
+// cell: at the initial size, which it does not check, and again on every
+// resize it lets through (up to 4096 columns or rows and 1<<20 cells), as
+// the renderer resizes its screen and cell buffer on the next frame. So a
+// 5000x300 pty used to hold over 300 MiB, a 4000x250 window-change over
+// 200 MiB, and a 30000x30000 pty would have exhausted memory.
+// newSessionProgram clamps the initial size and sessionFilter the resizes.
 func TestTUIWindowSizeClamped(t *testing.T) {
-	// The clamped 500x200 costs about 25 MiB; 5000x300 unclamped, over 300.
+	// The clamped 500x200 costs about 25 MiB; the sizes below, unclamped,
+	// over 200 MiB.
 	const limit = 100 << 20
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	addr, _ := startTestServer(t, cfg)
-	before := heapAlloc()
-
-	c, err := dialClient(t, addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close() //nolint: errcheck
-	s, err := c.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RequestPty("xterm", 300, 5000, nil); err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := s.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Shell(); err != nil {
-		t.Fatal(err)
-	}
-	// Read the output in the background, so the TUI never blocks on it, and
-	// track when it last produced a frame. A render at the unclamped size
-	// would allocate the memory this test bounds.
-	var mu sync.Mutex
-	var total int
-	var lastRead time.Time
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, rerr := stdout.Read(buf)
-			if n > 0 {
-				mu.Lock()
-				total += n
-				lastRead = time.Now()
-				mu.Unlock()
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		resize        []byte
+	}{
+		{name: "pty-req", width: 5000, height: 300},
+		{name: "window-change", width: 80, height: 40, resize: windowPayload(4000, 250)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			addr, _ := startTestServer(t, cfg)
+			before := heapAlloc()
+			check := func() {
+				t.Helper()
+				grown := int64(heapAlloc()) - int64(before)
+				if grown > limit {
+					t.Fatalf("heap grew by %d MiB with the TUI open, want at most %d MiB", grown>>20, limit>>20)
+				}
 			}
-			if rerr != nil {
+
+			c, err := dialClient(t, addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close() //nolint: errcheck
+			s, err := c.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RequestPty("xterm", tc.height, tc.width, nil); err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := s.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Shell(); err != nil {
+				t.Fatal(err)
+			}
+			// Read the output in the background, so the TUI never blocks on
+			// it, and track when it last produced a frame.
+			var mu sync.Mutex
+			var total int
+			var lastRead time.Time
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					n, rerr := stdout.Read(buf)
+					if n > 0 {
+						mu.Lock()
+						total += n
+						lastRead = time.Now()
+						mu.Unlock()
+					}
+					if rerr != nil {
+						return
+					}
+				}
+			}()
+			// Wait for the first frame and for the output to go quiet,
+			// instead of a fixed wait.
+			waitFor(t, "the TUI to draw and settle", func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return total > 0 && time.Since(lastRead) > 300*time.Millisecond
+			})
+			check()
+			if tc.resize == nil {
 				return
 			}
-		}
-	}()
 
-	waitFor(t, "the TUI's first frame", func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return total > 0
-	})
-	// Measure once the TUI has drawn and its output has settled, instead of
-	// after a fixed wait.
-	waitFor(t, "the TUI to settle", func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return total > 0 && time.Since(lastRead) > 300*time.Millisecond
-	})
-
-	grown := int64(heapAlloc()) - int64(before)
-	t.Logf("heap grew by %d MiB", grown>>20)
-	if grown > limit {
-		t.Errorf("heap grew by %d MiB with the TUI open, want at most %d MiB", grown>>20, limit>>20)
+			if ok, err := s.SendRequest("window-change", true, tc.resize); err != nil || !ok {
+				t.Fatalf("window-change: %t, %v", ok, err)
+			}
+			// The reply comes from the request loop, before the TUI has
+			// handled the resize, so quiet output proves nothing here: watch
+			// the heap for a while and fail as soon as it is over the limit.
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				check()
+				time.Sleep(50 * time.Millisecond)
+			}
+			check()
+		})
 	}
 }
 
