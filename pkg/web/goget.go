@@ -131,7 +131,11 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		buf.WriteTo(w) //nolint: errcheck
 
-		goGetCounter.WithLabelValues(repo).Inc()
+		// Label with the repository's name, not the path walked to it:
+		// many spellings, such as "pub/.git/x", resolve to one
+		// repository, and each label value is a series kept until the
+		// server stops.
+		goGetCounter.WithLabelValues(name).Inc()
 		return
 	}
 

@@ -161,3 +161,45 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 	// Everything is up to date: git reads the advertisement and stops.
 	is.Equal(counted(push...), 1.0)
 }
+
+// The go get counter is labelled with the repository a request resolves to,
+// not with the path it walked: one readable repository, reached by any
+// number of spellings, makes one series. Each label value is a series kept
+// for the life of the process, so a label a client controls would let it
+// grow the metrics without bound. The fetch counter is held to the same
+// rule.
+func TestHTTPCountersLabelledByRepository(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	const name = "label-counted"
+	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	goGets := []string{
+		"/" + name + "/x",
+		"/" + name + "/x/y",
+		"/" + name + ".git/x",
+		"/" + name + "/.git/x",
+		"/" + name + "/.git/.git/x",
+		"/" + name + ".git.git/x",
+	}
+	series := testutil.CollectAndCount(goGetCounter)
+	count := testutil.ToFloat64(goGetCounter.WithLabelValues(name))
+	for _, p := range goGets {
+		w := f.do(http.MethodGet, p+"?go-get=1", "")
+		is.Equal(w.Code, http.StatusOK)
+		is.True(strings.Contains(w.Body.String(), "/"+name+" git ")) // resolves to the repository
+	}
+	is.Equal(testutil.CollectAndCount(goGetCounter)-series, 1)
+	is.Equal(testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)))
+
+	series = testutil.CollectAndCount(gitHttpUploadCounter)
+	fetches, _ := httpGitCounts(name)
+	refs := []string{"/" + name, "/" + name + ".git", "/" + name + ".git.git", "/" + name + "/.git"}
+	for _, p := range refs {
+		is.Equal(f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
+	}
+	is.Equal(testutil.CollectAndCount(gitHttpUploadCounter)-series, 1)
+	gotFetches, _ := httpGitCounts(name)
+	is.Equal(gotFetches-fetches, float64(len(refs)))
+}
