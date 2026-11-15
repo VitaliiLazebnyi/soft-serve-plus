@@ -34,9 +34,11 @@ const (
 	MaxHeight = 200
 )
 
-// ClampSize returns width and height limited to MaxWidth and MaxHeight.
+// ClampSize returns width and height limited to 0..MaxWidth and 0..MaxHeight.
+// A size from the client is a uint32, which is negative as an int on
+// 32-bit platforms when over MaxInt32.
 func ClampSize(width, height int) (int, int) {
-	return min(width, MaxWidth), min(height, MaxHeight)
+	return max(0, min(width, MaxWidth)), max(0, min(height, MaxHeight))
 }
 
 // NewCommon returns a new Common struct, with its size limited by

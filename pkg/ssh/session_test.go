@@ -376,6 +376,7 @@ func TestSessionFilter(t *testing.T) {
 		{tea.WindowSizeMsg{Width: 4000, Height: 250}, tea.WindowSizeMsg{Width: common.MaxWidth, Height: common.MaxHeight}},
 		{tea.WindowSizeMsg{Width: 120, Height: 250}, tea.WindowSizeMsg{Width: 120, Height: common.MaxHeight}},
 		{tea.WindowSizeMsg{Width: 80, Height: 24}, tea.WindowSizeMsg{Width: 80, Height: 24}},
+		{tea.WindowSizeMsg{Width: -1, Height: -1}, tea.WindowSizeMsg{Width: 0, Height: 0}},
 	} {
 		if got := sessionFilter(nil, tc.in); got != tc.want {
 			t.Errorf("sessionFilter(%+v) = %+v, want %+v", tc.in, got, tc.want)

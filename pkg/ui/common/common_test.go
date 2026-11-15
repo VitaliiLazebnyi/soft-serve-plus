@@ -44,6 +44,10 @@ func TestCommonSizeClamped(t *testing.T) {
 		{30000, 10, 500, 10},
 		{10, 30000, 10, 200},
 		{0, 0, 0, 0},
+		// A uint32 size over MaxInt32 is negative as an int on 32-bit
+		// platforms.
+		{-5, -7, 0, 0},
+		{-1 << 31, 80, 0, 80},
 	} {
 		c := common.NewCommon(context.Background(), tc.width, tc.height)
 		if c.Width != tc.wantWidth || c.Height != tc.wantHeight {
