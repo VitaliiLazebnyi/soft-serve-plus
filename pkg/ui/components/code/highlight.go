@@ -1,6 +1,8 @@
 package code
 
 import (
+	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -86,15 +88,18 @@ func stylePrimitive(p gansi.StylePrimitive) string {
 
 // highlight highlights content, the file at path, as a glamour code block
 // would, indented by the code block margin unless noMargin is set. It
-// reports false when highlighting would take more than HighlightBudget or
-// HighlightMaxTokens: the caller then shows the content as plain text.
+// reports false when the file is shown as plain text instead; see tokenise.
 func highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, bool, error) {
 	lexer := lexers.Match(path)
-	if path == "" {
+	if lexer == nil {
+		// A file without a known name, such as a script with a shebang.
 		lexer = lexers.Analyse(content)
 	}
 	if lexer == nil {
 		lexer = lexers.Fallback
+	}
+	if eager(lexer) && len(content) > EagerHighlightMax {
+		return "", false, nil
 	}
 	tokens, ok, err := tokenise(chroma.Coalesce(lexer), content)
 	if !ok || err != nil {
@@ -115,26 +120,69 @@ func highlight(st gansi.StyleConfig, path, content string, noMargin bool) (strin
 	return indentLines(out.String(), int(margin)), true, nil
 }
 
-// maxOverrun is the most tokenisations that may still run after their
-// HighlightBudget ran out; see tokenise. Past it, nothing is highlighted
-// with a lexer that tokenises up front until one of them ends.
-const maxOverrun = 2
+// EagerHighlightMax is the largest content, in bytes, highlighted with a
+// lexer that tokenises all of its input up front; see eager. A 256 KiB
+// Svelte file of braces took over three minutes of CPU; at 16 KiB such
+// files take from milliseconds to about 1.5 s.
+const EagerHighlightMax = 16 << 10
 
-// overrun counts the tokenisations still running after their budget ran
-// out.
-var overrun atomic.Int32
+// eagerLexers names the lexers that tokenise all of their input when they
+// are asked for an iterator, so that the budget cannot stop them.
+var eagerLexers = map[string]bool{
+	"ERB":              true,
+	"Go HTML Template": true,
+	"Go Text Template": true,
+	"PHP":              true,
+	"PHTML":            true,
+	"Svelte":           true,
+	"YAML+Jinja":       true,
+}
 
-// tokenise returns the tokens of content, or false when that takes more
-// than HighlightBudget or HighlightMaxTokens.
+// eager reports whether lexer tokenises all of its input up front: one of
+// eagerLexers, or any of chroma's delegating lexers.
+func eager(lexer chroma.Lexer) bool {
+	if cfg := lexer.Config(); cfg != nil && eagerLexers[cfg.Name] {
+		return true
+	}
+	return fmt.Sprintf("%T", lexer) == "*chroma.delegatingLexer"
+}
+
+// maxTokenising is the most tokenisations that run at once in the server.
+var maxTokenising = int32(max(2, runtime.GOMAXPROCS(0)/2))
+
+// tokenising counts the tokenisations running, including those that ran
+// past their budget and could not be stopped.
+var tokenising atomic.Int32
+
+// takeSlot takes one of the maxTokenising slots, or reports false when
+// none is free.
+func takeSlot() bool {
+	for {
+		n := tokenising.Load()
+		if n >= maxTokenising {
+			return false
+		}
+		if tokenising.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+// tokenise returns the tokens of content, or false when the content is to
+// be shown as plain text: when tokenising it would take more than
+// HighlightBudget or HighlightMaxTokens, or no tokenising slot is free.
 //
 // Most lexers tokenise as their iterator is read, embedded lexers and their
 // language lookups included, so the reads stop at the budget and so does
-// the work. A delegating lexer, such as Svelte's or PHP's, tokenises all of
-// its input when it is asked for the iterator, and cannot be stopped: it
-// runs on in its goroutine, and while maxOverrun such tokenisations run,
-// no other starts.
+// the work. A lexer that tokenises up front cannot be stopped: it runs on in
+// its goroutine, holding its slot, until it is done. The slots bound the
+// CPU this takes, but a user who opens such files can hold them all, and
+// files are then shown as plain text for everyone until one ends; highlight
+// limits these lexers to EagerHighlightMax to keep that short. A loaded
+// server, where the budget runs out sooner and slots stay taken longer,
+// shows more files as plain text.
 func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool, error) {
-	if overrun.Load() >= maxOverrun {
+	if !takeSlot() {
 		return nil, false, nil
 	}
 	type result struct {
@@ -145,6 +193,14 @@ func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool, error) 
 	var stop atomic.Bool
 	done := make(chan result, 1)
 	go func() {
+		defer tokenising.Add(-1)
+		defer func() {
+			// chroma panics on some errors; the render must fail, not
+			// the server.
+			if p := recover(); p != nil {
+				done <- result{err: fmt.Errorf("highlight: %v", p)}
+			}
+		}()
 		it, err := lexer.Tokenise(nil, content)
 		if err != nil {
 			done <- result{err: err}
@@ -166,18 +222,9 @@ func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool, error) 
 	case r := <-done:
 		return r.tokens, r.ok, r.err
 	case <-timer.C:
+		// A lexer read token by token stops at its next token; one that
+		// tokenised up front runs on, holding its slot.
 		stop.Store(true)
-		// A lexer read token by token stops at its next token.
-		select {
-		case <-done:
-			return nil, false, nil
-		case <-time.After(10 * time.Millisecond):
-		}
-		overrun.Add(1)
-		go func() {
-			<-done
-			overrun.Add(-1)
-		}()
 		return nil, false, nil
 	}
 }
