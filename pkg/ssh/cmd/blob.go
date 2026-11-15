@@ -52,6 +52,8 @@ func blobCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Stop git when the session goes away.
+			r = r.WithContext(ctx)
 
 			if ref == "" {
 				head, err := repoHead(r)

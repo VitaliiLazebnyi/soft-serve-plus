@@ -38,6 +38,8 @@ func treeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Stop git when the session goes away.
+			r = r.WithContext(ctx)
 
 			if ref == "" {
 				head, err := repoHead(r)
@@ -53,7 +55,6 @@ func treeCommand() *cobra.Command {
 				return err
 			}
 
-			ents := git.Entries{}
 			if path != "" && path != "/" {
 				te, err := tree.TreeEntry(path)
 				if errors.Is(err, git.ErrRevisionNotExist) {
@@ -62,34 +63,40 @@ func treeCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if te.Type() == "tree" {
-					tree, err = tree.SubTree(path)
-					if err != nil {
-						return err
-					}
-					ents, err = tree.EntriesWithSizes()
-					if err != nil {
-						return err
-					}
-				} else {
-					ents = append(ents, te)
+				if !te.IsTree() {
+					printEntries(cmd, git.Entries{te})
+					return nil
 				}
-			} else {
-				ents, err = tree.EntriesWithSizes()
+				tree, err = te.Tree()
 				if err != nil {
 					return err
 				}
 			}
-			ents.Sort()
-			for _, ent := range ents {
-				ssize := "-"
-				if size := ent.Size(); size != 0 {
-					ssize = humanize.Bytes(uint64(size)) //nolint:gosec
-				}
-				cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))
+			ents, err := tree.Entries()
+			// A directory with too many entries is listed in part, and
+			// says so after the listing.
+			truncated := errors.Is(err, git.ErrTreeTruncated)
+			if err != nil && !truncated {
+				return err
+			}
+			printEntries(cmd, ents)
+			if truncated {
+				cmd.PrintErrln(err)
 			}
 			return nil
 		},
 	}
 	return cmd
+}
+
+// printEntries prints ents sorted, one line each: mode, size and name.
+func printEntries(cmd *cobra.Command, ents git.Entries) {
+	ents.Sort()
+	for _, ent := range ents {
+		ssize := "-"
+		if size := ent.Size(); size != 0 {
+			ssize = humanize.Bytes(uint64(size)) //nolint:gosec
+		}
+		cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))
+	}
 }

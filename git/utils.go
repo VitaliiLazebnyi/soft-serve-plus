@@ -38,8 +38,9 @@ func LatestFile(repo *Repository, ref *Reference, pattern string, maxSize int64)
 	if err != nil {
 		return "", "", err
 	}
+	// In a directory too large to list, look among the entries listed.
 	ents, err := t.Entries()
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrTreeTruncated) {
 		return "", "", err
 	}
 	var root *Tree

@@ -210,21 +210,14 @@ func (r *Repository) treeID(ref string) (string, error) {
 	return id.String(), nil
 }
 
-// LsTree returns the tree for the given reference.
+// LsTree returns the root tree of the given reference. It only resolves
+// the reference; the tree is read when its entries are asked for.
 func (r *Repository) LsTree(ref string) (*Tree, error) {
 	id, err := r.treeID(ref)
 	if err != nil {
 		return nil, err
 	}
-	tree, err := r.Repository.LsTree(id, git.LsTreeOptions{CommandOptions: r.cmdOpts()})
-	if err != nil {
-		return nil, err
-	}
-	return &Tree{
-		Tree:       tree,
-		Path:       "",
-		Repository: r,
-	}, nil
+	return &Tree{id: id, Repository: r}, nil
 }
 
 // Tree returns the tree for the given reference.

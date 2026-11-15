@@ -13,9 +13,9 @@ import (
 )
 
 // pinQuotePath sets core.quotePath=true, git's default, for every git process
-// the test starts, including the ls-tree that git-module runs, so names are
-// C-quoted even on a machine whose config sets core.quotePath=false. It uses
-// t.Setenv, so the calling test must not be parallel.
+// the test starts, so any output that quotes names quotes them, even on a
+// machine whose config sets core.quotePath=false. It uses t.Setenv, so the
+// calling test must not be parallel.
 func pinQuotePath(t *testing.T) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_COUNT", "1")
@@ -177,22 +177,6 @@ func containsAttr(attrs []Attribute, want Attribute) bool {
 		}
 	}
 	return false
-}
-
-func TestUnquoteName(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"plain.txt":            "plain.txt",
-		`caf\303\251.txt`:      "café.txt",
-		`a\\b\"c\td.txt`:       "a\\b\"c\td.txt",
-		"café.txt":             "café.txt", // core.quotePath=false
-		`not\x-a-valid-escape`: `not\x-a-valid-escape`,
-	}
-	for in, want := range cases {
-		if got := unquoteName(in); got != want {
-			t.Errorf("unquoteName(%q) = %q, want %q", in, got, want)
-		}
-	}
 }
 
 // newFilesRepo creates a temp git repo with one commit holding files and
@@ -438,40 +422,35 @@ func TestContentsPreallocates(t *testing.T) {
 	}
 }
 
-func TestTreeEntriesWithSizes(t *testing.T) {
+// TestTreeEntriesSizes checks that a listing carries the sizes of its
+// entries, read with the listing.
+func TestTreeEntriesSizes(t *testing.T) {
 	repo, ref := setupTestRepo(t)
 
 	tree, err := repo.TreePath(ref, "")
 	if err != nil {
 		t.Fatalf("TreePath failed: %v", err)
 	}
-	ents, err := tree.EntriesWithSizes()
+	ents, err := tree.Entries()
 	if err != nil {
-		t.Fatalf("EntriesWithSizes failed: %v", err)
+		t.Fatalf("Entries failed: %v", err)
 	}
-	if len(ents) != 1 || !ents[0].IsTree() {
-		t.Fatalf("expected one tree entry, got %d", len(ents))
-	}
-	if !ents[0].sized || ents[0].Size() != 0 {
-		t.Fatalf("tree entry: sized=%v size=%d, want sized and 0", ents[0].sized, ents[0].Size())
+	if len(ents) != 1 || !ents[0].IsTree() || ents[0].Size() != 0 {
+		t.Fatalf("expected one tree entry of size 0, got %d entries", len(ents))
 	}
 
 	sub, err := repo.TreePath(ref, "dot_config")
 	if err != nil {
 		t.Fatalf("TreePath failed: %v", err)
 	}
-	ents, err = sub.EntriesWithSizes()
+	ents, err = sub.Entries()
 	if err != nil {
-		t.Fatalf("EntriesWithSizes failed: %v", err)
+		t.Fatalf("Entries failed: %v", err)
 	}
 	if len(ents) != 1 || ents[0].Name() != "bat" {
 		t.Fatalf("expected the bat entry, got %d entries", len(ents))
 	}
-	want := int64(len("test content"))
-	if !ents[0].sized {
-		t.Fatal("entry size was not loaded with the listing")
-	}
-	if got := ents[0].Size(); got != want {
+	if got, want := ents[0].Size(), int64(len("test content")); got != want {
 		t.Fatalf("size = %d, want %d", got, want)
 	}
 }

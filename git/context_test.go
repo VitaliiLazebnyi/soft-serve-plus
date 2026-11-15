@@ -87,6 +87,18 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 			_, err := e.Contents()
 			return err
 		},
+		"Entries": func(r *Repository) error {
+			tr := *tree
+			tr.Repository = r
+			_, err := tr.Entries()
+			return err
+		},
+		"TreeEntry": func(r *Repository) error {
+			tr := *tree
+			tr.Repository = r
+			_, err := tr.TreeEntry("bat")
+			return err
+		},
 		"IsBinary": func(r *Repository) error {
 			e := *entry
 			e.repo = entry.repo.WithContext(ctx)
