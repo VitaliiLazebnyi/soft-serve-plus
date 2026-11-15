@@ -297,16 +297,31 @@ func TestTUIWindowSizeClamped(t *testing.T) {
 			check := func() {
 				t.Helper()
 				grown := int64(heapAlloc()) - int64(before)
+				t.Logf("heap grew by %d MiB", grown>>20)
 				if grown > limit {
 					t.Fatalf("heap grew by %d MiB with the TUI open, want at most %d MiB", grown>>20, limit>>20)
 				}
 			}
 
+			loops := sessionLoops()
 			c, err := dialClient(t, addr)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer c.Close() //nolint: errcheck
+			// On the way out, close the connection and wait for the
+			// server's session to end and its memory to be released, so the
+			// next subtest, or the next run with -count, starts from a heap
+			// that no longer holds this TUI.
+			defer func() {
+				_ = c.Close()
+				if t.Failed() {
+					return
+				}
+				waitSessionLoops(t, loops)
+				waitFor(t, "the TUI's memory to be released", func() bool {
+					return int64(heapAlloc())-int64(before) < 16<<20
+				})
+			}()
 			s, err := c.NewSession()
 			if err != nil {
 				t.Fatal(err)
