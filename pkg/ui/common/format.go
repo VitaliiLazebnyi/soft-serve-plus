@@ -6,8 +6,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	gansi "charm.land/glamour/v2/ansi"
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 )
 
@@ -34,27 +32,15 @@ func FormatLineNumber(styles *styles.Styles, s string, color bool) (string, int)
 	return strings.Join(lines, "\n"), mll
 }
 
-// FormatHighlight adds syntax highlighting to a string.
+// FormatHighlight adds syntax highlighting to c, the file at p, without a
+// margin. Highlighting is bounded as Highlight bounds it; when it would take
+// too long, c is returned as is.
 func FormatHighlight(p, c string) (string, error) {
-	zero := uint(0)
-	lang := ""
-	lexer := lexers.Match(p)
-	if lexer != nil && lexer.Config() != nil {
-		lang = lexer.Config().Name
+	st := StyleConfig()
+	if out, ok := Highlight(st, p, c, true); ok {
+		return out, nil
 	}
-	formatter := &gansi.CodeBlockElement{
-		Code:     c,
-		Language: lang,
-	}
-	r := strings.Builder{}
-	styles := StyleConfig()
-	styles.CodeBlock.Margin = &zero
-	rctx := StyleRendererWithStyles(styles)
-	err := formatter.Render(&r, rctx)
-	if err != nil {
-		return "", err
-	}
-	return r.String(), nil
+	return c, nil
 }
 
 // DisplayFilename returns a file name that is safe to print in a terminal.

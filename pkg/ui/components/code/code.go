@@ -424,12 +424,7 @@ func (j renderJob) run() RenderedMsg {
 	}
 	highlighted := false
 	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
-		out, ok, err := highlight(j.styleConfig, j.extension, content, j.lineNumbers)
-		if err != nil {
-			msg.err = err
-			return msg
-		}
-		if ok {
+		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers); ok {
 			content, highlighted = out, true
 		}
 	}

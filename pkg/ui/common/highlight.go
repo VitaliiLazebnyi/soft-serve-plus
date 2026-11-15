@@ -1,13 +1,15 @@
-package code
+package common
 
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	gansi "charm.land/glamour/v2/ansi"
+	"charm.land/log/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -86,29 +88,33 @@ func stylePrimitive(p gansi.StylePrimitive) string {
 	return strings.Join(parts, " ")
 }
 
-// highlight highlights content, the file at path, as a glamour code block
-// would, indented by the code block margin unless noMargin is set. It
-// reports false when the file is shown as plain text instead; see tokenise.
-func highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, bool, error) {
+// Highlight highlights content, the file at path, as a glamour code block
+// styled by st would, indented by the code block's margin unless noMargin is
+// set. It reports false when the content is to be shown as plain text
+// instead; see tokenise. It must not be called before the program's init
+// functions have run, which wrap the eager lexers; see init.
+func Highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, bool) {
 	lexer := lexers.Match(path)
 	if lexer == nil {
 		// A file without a known name, such as a script with a shebang.
-		lexer = lexers.Analyse(content)
+		// Some analysers take time quadratic in their input, so only the
+		// start of the file is looked at.
+		lexer = lexers.Analyse(content[:min(len(content), analyseMax)])
 	}
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
 	if eager(lexer) && len(content) > EagerHighlightMax {
-		return "", false, nil
+		return "", false
 	}
-	tokens, ok, err := tokenise(chroma.Coalesce(lexer), content)
-	if !ok || err != nil {
-		return "", false, err
+	tokens, ok := tokenise(lexer, content)
+	if !ok {
+		return "", false
 	}
 
 	var out strings.Builder
 	if err := formatters.TTY256.Format(&out, newChromaStyle(st.CodeBlock.Chroma), chroma.Literator(tokens...)); err != nil {
-		return "", false, err
+		return "", false
 	}
 	var margin uint
 	if st.CodeBlock.Indent != nil {
@@ -117,34 +123,70 @@ func highlight(st gansi.StyleConfig, path, content string, noMargin bool) (strin
 	if st.CodeBlock.Margin != nil && !noMargin {
 		margin += *st.CodeBlock.Margin
 	}
-	return indentLines(out.String(), int(margin)), true, nil
+	return indentLines(out.String(), int(margin)), true
 }
+
+// analyseMax is how much of a file without a known name, in bytes, is
+// looked at to tell its language. The Templ analyser took 6 s over 10,000
+// short lines.
+const analyseMax = 4 << 10
 
 // EagerHighlightMax is the largest content, in bytes, highlighted with a
-// lexer that tokenises all of its input up front; see eager. A 256 KiB
-// Svelte file of braces took over three minutes of CPU; at 16 KiB such
-// files take from milliseconds to about 1.5 s.
-const EagerHighlightMax = 16 << 10
+// lexer that tokenises all of its input up front; see eager. Their time
+// grows faster than their input: a Svelte file of "{a}" took 1.1 s at
+// 8 KiB, 4.2 s at 16 KiB and over three minutes at 256 KiB; ERB's worst
+// input, "<%" repeated, took 0.6 s at 8 KiB and 2.4 s at 16 KiB.
+const EagerHighlightMax = 8 << 10
 
-// eagerLexers names the lexers that tokenise all of their input when they
-// are asked for an iterator, so that the budget cannot stop them.
-var eagerLexers = map[string]bool{
-	"ERB":              true,
-	"Go HTML Template": true,
-	"Go Text Template": true,
-	"PHP":              true,
-	"PHTML":            true,
-	"Svelte":           true,
-	"YAML+Jinja":       true,
+// cappedLexer is an eager lexer that does no work on more than
+// EagerHighlightMax bytes: it returns them as one token of plain text. It
+// takes the place of the eager lexer in chroma's registry, so that a code
+// block in markdown or reStructuredText, which looks its language up there,
+// is bounded too.
+type cappedLexer struct {
+	chroma.Lexer
 }
 
-// eager reports whether lexer tokenises all of its input up front: one of
-// eagerLexers, or any of chroma's delegating lexers.
-func eager(lexer chroma.Lexer) bool {
-	if cfg := lexer.Config(); cfg != nil && eagerLexers[cfg.Name] {
-		return true
+func (l cappedLexer) Tokenise(options *chroma.TokeniseOptions, text string) (chroma.Iterator, error) {
+	if len(text) > EagerHighlightMax {
+		return chroma.Literator(chroma.Token{Type: chroma.Text, Value: text}), nil
 	}
+	return l.Lexer.Tokenise(options, text)
+}
+
+func (l cappedLexer) SetRegistry(r *chroma.LexerRegistry) chroma.Lexer {
+	l.Lexer.SetRegistry(r)
+	return l
+}
+
+func (l cappedLexer) SetAnalyser(analyser func(text string) float32) chroma.Lexer {
+	l.Lexer.SetAnalyser(analyser)
+	return l
+}
+
+// delegating reports whether lexer is one of chroma's delegating lexers,
+// which tokenise all of their input when they are asked for an iterator:
+// the budget cannot stop them. TestEagerLexers fails if a chroma upgrade
+// renames the type.
+func delegating(lexer chroma.Lexer) bool {
 	return fmt.Sprintf("%T", lexer) == "*chroma.delegatingLexer"
+}
+
+// eager reports whether lexer tokenises all of its input up front.
+func eager(lexer chroma.Lexer) bool {
+	_, capped := lexer.(cappedLexer)
+	return capped || delegating(lexer)
+}
+
+// init puts a cappedLexer in place of each delegating lexer of chroma's
+// registry. Register replaces a lexer of the same name, in the list Match
+// and Analyse go through and in the name and alias maps Get uses.
+func init() {
+	for _, lexer := range slices.Clone(lexers.GlobalLexerRegistry.Lexers) {
+		if delegating(lexer) {
+			lexers.GlobalLexerRegistry.Register(cappedLexer{lexer})
+		}
+	}
 }
 
 // maxTokenising is the most tokenisations that run at once in the server.
@@ -168,64 +210,84 @@ func takeSlot() bool {
 	}
 }
 
-// tokenise returns the tokens of content, or false when the content is to
-// be shown as plain text: when tokenising it would take more than
-// HighlightBudget or HighlightMaxTokens, or no tokenising slot is free.
+// tokenise returns the tokens of content, with neighbours of the same type
+// merged, or false when the content is to be shown as plain text: when
+// tokenising it would take more than HighlightBudget or HighlightMaxTokens,
+// no tokenising slot is free, or the lexer fails or panics.
 //
 // Most lexers tokenise as their iterator is read, embedded lexers and their
 // language lookups included, so the reads stop at the budget and so does
-// the work. A lexer that tokenises up front cannot be stopped: it runs on in
-// its goroutine, holding its slot, until it is done. The slots bound the
-// CPU this takes, but a user who opens such files can hold them all, and
-// files are then shown as plain text for everyone until one ends; highlight
-// limits these lexers to EagerHighlightMax to keep that short. A loaded
-// server, where the budget runs out sooner and slots stay taken longer,
-// shows more files as plain text.
-func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool, error) {
+// the work. The tokens are read one by one, not through chroma.Coalesce,
+// which reads a whole run of tokens of one type before it returns one. A
+// lexer that tokenises up front cannot be stopped: it runs on in its
+// goroutine, holding its slot, until it is done. The slots bound the CPU
+// this takes, but a user who opens such files can hold them all, and files
+// are then shown as plain text for everyone until one ends; those lexers
+// are limited to EagerHighlightMax to keep that short. A loaded server,
+// where the budget runs out sooner and slots stay taken longer, shows more
+// files as plain text.
+func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool) {
 	if !takeSlot() {
-		return nil, false, nil
+		return nil, false
 	}
 	type result struct {
 		tokens []chroma.Token
 		ok     bool
-		err    error
 	}
 	var stop atomic.Bool
 	done := make(chan result, 1)
 	go func() {
 		defer tokenising.Add(-1)
 		defer func() {
-			// chroma panics on some errors; the render must fail, not
-			// the server.
+			// chroma panics on some input, the YANG lexer on lines of
+			// "/*" for one: show the file plain.
 			if p := recover(); p != nil {
-				done <- result{err: fmt.Errorf("highlight: %v", p)}
+				log.Debug("highlight: lexer panicked", "lexer", lexer.Config().Name, "panic", p)
+				done <- result{}
 			}
 		}()
 		it, err := lexer.Tokenise(nil, content)
 		if err != nil {
-			done <- result{err: err}
+			done <- result{}
 			return
 		}
-		var tokens []chroma.Token
+		var (
+			tokens []chroma.Token
+			run    strings.Builder
+			typ    chroma.TokenType
+			n      int
+		)
+		flush := func() {
+			if run.Len() > 0 {
+				tokens = append(tokens, chroma.Token{Type: typ, Value: run.String()})
+				run.Reset()
+			}
+		}
 		for t := it(); t != chroma.EOF; t = it() {
-			tokens = append(tokens, t)
-			if len(tokens) > HighlightMaxTokens || stop.Load() {
+			n++
+			if n > HighlightMaxTokens || stop.Load() {
 				done <- result{}
 				return
 			}
+			if t.Type != typ {
+				flush()
+				typ = t.Type
+			}
+			run.WriteString(t.Value)
 		}
+		flush()
 		done <- result{tokens: tokens, ok: true}
 	}()
 	timer := time.NewTimer(HighlightBudget)
 	defer timer.Stop()
 	select {
 	case r := <-done:
-		return r.tokens, r.ok, r.err
+		return r.tokens, r.ok
 	case <-timer.C:
 		// A lexer read token by token stops at its next token; one that
 		// tokenised up front runs on, holding its slot.
 		stop.Store(true)
-		return nil, false, nil
+		return nil, false
 	}
 }
 
