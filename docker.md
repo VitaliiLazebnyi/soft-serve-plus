@@ -123,6 +123,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/soft ./cmd/soft
 docker build --platform linux/amd64 -t soft-serve-plus:latest .
 ```
 
+The image does not ship bash; hooks run with BusyBox `sh`. Rewrite an admin
+hook that starts with `#!/bin/bash` for `sh`, or add bash in a derived image:
+
+```dockerfile
+FROM ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
+USER root
+RUN apk add --no-cache bash
+USER soft:soft
+```
+
 ## Reaping background git processes
 
 Git leaves orphaned processes behind: since git 2.47, one

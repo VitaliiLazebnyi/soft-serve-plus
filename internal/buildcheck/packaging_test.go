@@ -65,8 +65,9 @@ var (
 
 // TestImageInstallsOnlyWhatTheServerUses checks that the image installs git,
 // the OpenSSH client (for ssh:// mirrors) and tini, but not bash (the hooks
-// the server generates are #!/bin/sh) or the OpenSSH server, and that it does
-// not set CI, a workaround for a terminal library the binary no longer links.
+// the server generates are #!/bin/sh), the OpenSSH server or its SFTP server,
+// and that it does not set CI, a workaround for a terminal library the binary
+// no longer links.
 func TestImageInstallsOnlyWhatTheServerUses(t *testing.T) {
 	t.Parallel()
 	var pkgs []string
@@ -89,7 +90,7 @@ func TestImageInstallsOnlyWhatTheServerUses(t *testing.T) {
 			t.Errorf("Dockerfile does not install %s; installs %v", want, pkgs)
 		}
 	}
-	for _, unwanted := range []string{"bash", "openssh", "openssh-server"} {
+	for _, unwanted := range []string{"bash", "openssh", "openssh-server", "openssh-sftp-server"} {
 		if slices.Contains(pkgs, unwanted) {
 			t.Errorf("Dockerfile installs %s; installs %v", unwanted, pkgs)
 		}
