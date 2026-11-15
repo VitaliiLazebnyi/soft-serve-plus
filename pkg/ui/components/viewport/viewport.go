@@ -60,36 +60,6 @@ func (v *Viewport) View() string {
 	return v.Model.View()
 }
 
-// SetContent sets the viewport's content.
-func (v *Viewport) SetContent(content string) {
-	v.Model.SetContent(content)
-}
-
-// GotoTop moves the viewport to the top of the content.
-func (v *Viewport) GotoTop() {
-	v.Model.GotoTop()
-}
-
-// GotoBottom moves the viewport to the bottom of the content.
-func (v *Viewport) GotoBottom() {
-	v.Model.GotoBottom()
-}
-
-// HalfViewDown moves the viewport down by half the viewport height.
-func (v *Viewport) HalfViewDown() {
-	v.Model.HalfPageDown()
-}
-
-// HalfViewUp moves the viewport up by half the viewport height.
-func (v *Viewport) HalfViewUp() {
-	v.Model.HalfPageUp()
-}
-
-// ScrollPercent returns the viewport's scroll percentage.
-func (v *Viewport) ScrollPercent() float64 {
-	return v.Model.ScrollPercent()
-}
-
 // ScrollPosition returns the viewport's scroll percentage as a whole number
 // between 0 and 100.
 func (v *Viewport) ScrollPosition() int {

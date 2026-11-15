@@ -194,31 +194,6 @@ func (r *Code) View() string {
 	return r.Viewport.View()
 }
 
-// GotoTop moves the viewport to the top of the content.
-func (r *Code) GotoTop() {
-	r.Viewport.GotoTop()
-}
-
-// GotoBottom moves the viewport to the bottom of the content.
-func (r *Code) GotoBottom() {
-	r.Viewport.GotoBottom()
-}
-
-// HalfViewDown moves the viewport down by half the viewport height.
-func (r *Code) HalfViewDown() {
-	r.Viewport.HalfViewDown()
-}
-
-// HalfViewUp moves the viewport up by half the viewport height.
-func (r *Code) HalfViewUp() {
-	r.Viewport.HalfViewUp()
-}
-
-// ScrollPercent returns the viewport's scroll percentage.
-func (r *Code) ScrollPercent() float64 {
-	return r.Viewport.ScrollPercent()
-}
-
 func (r *Code) glamourize(w int, md string) (string, error) {
 	if w > 120 {
 		w = 120

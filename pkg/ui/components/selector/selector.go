@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -15,16 +14,9 @@ import (
 // Selector is a list of items that can be selected.
 type Selector struct {
 	*list.Model
-	common      common.Common
-	zonePrefix  string
-	active      int
-	filterState list.FilterState
-
-	// XXX: we use a mutex to support concurrent access to the model. This is
-	// needed to implement pagination for the Log component. list.Model does
-	// not support item pagination so we hack it ourselves on top of
-	// list.Model.
-	mtx sync.RWMutex
+	common     common.Common
+	zonePrefix string
+	active     int
 }
 
 // IdentifiableItem is an item that can be identified by a string. Implements
@@ -86,43 +78,31 @@ func New(common common.Common, items []IdentifiableItem, delegate ItemDelegate) 
 
 // PerPage returns the number of items per page.
 func (s *Selector) PerPage() int {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
 	return s.Model.Paginator.PerPage
 }
 
 // SetPage sets the current page.
 func (s *Selector) SetPage(page int) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	s.Model.Paginator.Page = page
 }
 
 // Page returns the current page.
 func (s *Selector) Page() int {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
 	return s.Model.Paginator.Page
 }
 
 // TotalPages returns the total number of pages.
 func (s *Selector) TotalPages() int {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
 	return s.Model.Paginator.TotalPages
 }
 
 // SetTotalPages sets the total number of pages given the number of items.
 func (s *Selector) SetTotalPages(items int) int {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	return s.Model.Paginator.SetTotalPages(items)
 }
 
 // SelectedItem returns the currently selected item.
 func (s *Selector) SelectedItem() IdentifiableItem {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
 	item := s.Model.SelectedItem()
 	i, ok := item.(IdentifiableItem)
 	if !ok {
@@ -131,66 +111,8 @@ func (s *Selector) SelectedItem() IdentifiableItem {
 	return i
 }
 
-// Select selects the item at the given index.
-func (s *Selector) Select(index int) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.Select(index)
-}
-
-// SetShowTitle sets the show title flag.
-func (s *Selector) SetShowTitle(show bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetShowTitle(show)
-}
-
-// SetShowHelp sets the show help flag.
-func (s *Selector) SetShowHelp(show bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetShowHelp(show)
-}
-
-// SetShowStatusBar sets the show status bar flag.
-func (s *Selector) SetShowStatusBar(show bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetShowStatusBar(show)
-}
-
-// DisableQuitKeybindings disables the quit keybindings.
-func (s *Selector) DisableQuitKeybindings() {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.DisableQuitKeybindings()
-}
-
-// SetShowFilter sets the show filter flag.
-func (s *Selector) SetShowFilter(show bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetShowFilter(show)
-}
-
-// SetShowPagination sets the show pagination flag.
-func (s *Selector) SetShowPagination(show bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetShowPagination(show)
-}
-
-// SetFilteringEnabled sets the filtering enabled flag.
-func (s *Selector) SetFilteringEnabled(enabled bool) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.SetFilteringEnabled(enabled)
-}
-
 // SetSize implements common.Component.
 func (s *Selector) SetSize(width, height int) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	s.common.SetSize(width, height)
 	s.Model.SetSize(width, height)
 }
@@ -201,51 +123,7 @@ func (s *Selector) SetItems(items []IdentifiableItem) tea.Cmd {
 	for i, item := range items {
 		its[i] = item
 	}
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	return s.Model.SetItems(its)
-}
-
-// Index returns the index of the selected item.
-func (s *Selector) Index() int {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.Model.Index()
-}
-
-// Items returns the items in the selector.
-func (s *Selector) Items() []list.Item {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.Model.Items()
-}
-
-// VisibleItems returns all the visible items in the selector.
-func (s *Selector) VisibleItems() []list.Item {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.Model.VisibleItems()
-}
-
-// FilterState returns the filter state.
-func (s *Selector) FilterState() list.FilterState {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.Model.FilterState()
-}
-
-// CursorUp moves the cursor up.
-func (s *Selector) CursorUp() {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.CursorUp()
-}
-
-// CursorDown moves the cursor down.
-func (s *Selector) CursorDown() {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.Model.CursorDown()
 }
 
 // Init implements tea.Model.
@@ -256,9 +134,9 @@ func (s *Selector) Init() tea.Cmd {
 // Update implements tea.Model.
 func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
-	// The select and filter commands are built after the list has handled
-	// msg, so they carry the items the list holds once Update returns.
-	var selectItem, activeFilter bool
+	// The select command is built after the list has handled msg, so it
+	// carries the item the list holds once Update returns.
+	var selectItem bool
 	switch msg := msg.(type) {
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -287,33 +165,19 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		}
 	case tea.KeyPressMsg:
-		filterState := s.FilterState()
 		// While filtering, keys such as "?" go to the filter input.
-		if key.Matches(msg, s.common.KeyMap.Select) && filterState != list.Filtering {
+		if key.Matches(msg, s.common.KeyMap.Select) && s.FilterState() != list.Filtering {
 			selectItem = true
 		}
-	case list.FilterMatchesMsg:
-		activeFilter = true
 	}
 	m, cmd := s.Model.Update(msg)
-	s.mtx.Lock()
 	s.Model = &m
-	s.mtx.Unlock()
 	if selectItem {
 		cmds = append(cmds, s.SelectItemCmd())
-	}
-	if activeFilter {
-		cmds = append(cmds, s.activeFilterCmd())
 	}
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	// Track filter state and update active item when filter state changes.
-	filterState := s.FilterState()
-	if s.filterState != filterState {
-		cmds = append(cmds, s.activeFilterCmd())
-	}
-	s.filterState = filterState
 	// Send ActiveMsg when index change.
 	if s.active != s.Index() {
 		cmds = append(cmds, s.activeCmd())
@@ -341,23 +205,6 @@ func (s *Selector) activeCmd() tea.Cmd {
 	item := s.SelectedItem()
 	return func() tea.Msg {
 		return ActiveMsg{item}
-	}
-}
-
-func (s *Selector) activeFilterCmd() tea.Cmd {
-	// Here we use VisibleItems because when list.FilterMatchesMsg is sent,
-	// VisibleItems is the only way to get the list of filtered items. The list
-	// bubble should export something like list.FilterMatchesMsg.Items().
-	items := s.VisibleItems()
-	if len(items) == 0 {
-		return nil
-	}
-	i, ok := items[0].(IdentifiableItem)
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		return ActiveMsg{i}
 	}
 }
 

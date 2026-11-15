@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -66,7 +65,7 @@ func newModel(ctx context.Context, r *git.Repository) *model {
 	rm.SetNoMenu(true)
 	m := &model{
 		model:  rm,
-		repo:   repository{r},
+		repo:   repository{r: r},
 		common: c,
 	}
 	m.footer = footer.New(c, m)
@@ -252,30 +251,17 @@ func (m *model) View() tea.View {
 	return v
 }
 
+// repository is the repository soft browse shows. The repository page only
+// calls the methods defined here; the rest of proto.Repository is left to
+// the nil embedded interface, which panics if called.
 type repository struct {
+	proto.Repository
 	r *git.Repository
 }
-
-var _ proto.Repository = repository{}
 
 // Description implements proto.Repository.
 func (r repository) Description() string {
 	return ""
-}
-
-// ID implements proto.Repository.
-func (r repository) ID() int64 {
-	return 0
-}
-
-// IsHidden implements proto.Repository.
-func (repository) IsHidden() bool {
-	return false
-}
-
-// IsMirror implements proto.Repository.
-func (repository) IsMirror() bool {
-	return false
 }
 
 // IsPrivate implements proto.Repository.
@@ -296,24 +282,4 @@ func (r repository) Open() (*git.Repository, error) {
 // ProjectName implements proto.Repository.
 func (r repository) ProjectName() string {
 	return r.Name()
-}
-
-// UpdatedAt implements proto.Repository.
-func (r repository) UpdatedAt() time.Time {
-	t, err := r.r.LatestCommitTime()
-	if err != nil {
-		return time.Time{}
-	}
-
-	return t
-}
-
-// UserID implements proto.Repository.
-func (r repository) UserID() int64 {
-	return 0
-}
-
-// CreatedAt implements proto.Repository.
-func (r repository) CreatedAt() time.Time {
-	return time.Time{}
 }
