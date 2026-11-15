@@ -57,7 +57,10 @@ while [ "$n" -le "$pushes" ]; do
 	echo "$n" >file
 	git add file
 	git commit -qm "commit $n"
-	git push -q origin main
+	if ! git push -q origin main; then
+		docker logs "$name" 2>&1 | tail -50
+		exit 1
+	fi
 	n=$((n + 1))
 done
 

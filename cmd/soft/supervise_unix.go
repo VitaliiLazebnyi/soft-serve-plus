@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/x/term"
 )
 
 // forwardedSignals are passed on from the supervising process to the server.
@@ -44,6 +46,9 @@ func superviseIfInit() {
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		sigs := make(chan os.Signal, 16)
 		signal.Notify(sigs, forwardedSignals...)
+		// The configuration is not read yet; match the server's default
+		// timestamp format at least.
+		log.SetTimeFormat(time.DateTime)
 		log.Info("soft is PID 1: running the server as a child process and reaping exited processes; " +
 			"an init such as tini (docker run --init, init: true in compose) uses less memory")
 		var code int
@@ -62,7 +67,18 @@ func superviseIfInit() {
 // every process that exits until child does. It returns child's exit code, or
 // 128 plus the signal number if a signal ended it. Callers must not wait for
 // processes themselves while it runs: it reaps any child of this process.
+//
+// The child runs in a process group of its own, so a signal sent to this
+// process's group (a terminal's ^C) reaches it once, through sigs, and not a
+// second time directly. When the child's stdin is a terminal, the child's
+// group becomes the terminal's foreground group: the terminal then signals
+// only the child, and the child may read from it.
 func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if f, ok := child.Stdin.(*os.File); ok && term.IsTerminal(f.Fd()) {
+		child.SysProcAttr.Foreground = true
+		child.SysProcAttr.Ctty = 0 // the child's stdin
+	}
 	if err := child.Start(); err != nil {
 		return 0, err
 	}

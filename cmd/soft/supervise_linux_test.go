@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // superviseHelperEnv names the scenario that TestSuperviseHelper runs. Each
@@ -50,7 +50,8 @@ func TestSuperviseHelper(t *testing.T) {
 		t.Fatalf("prctl(PR_SET_CHILD_SUBREAPER): %v", errno)
 	}
 	sigs := make(chan os.Signal, 1)
-	var script string
+	child := exec.CommandContext(t.Context(), "sh", "-c", "")
+	var script, extra string
 	switch scenario {
 	case "orphans":
 		// Each subshell starts a sleep and exits at once, so the sleep is
@@ -59,21 +60,45 @@ func TestSuperviseHelper(t *testing.T) {
 		// still runs.
 		script = `for i in 1 2 3; do (sleep 0.1 &); done; sleep 1; exit 3`
 	case "signal":
-		script = `trap 'exit 7' TERM; while :; do sleep 0.05; done`
+		// SIGTERM is sent once the trap is set, which the script reports.
+		script = `trap 'exit 7' TERM; echo ready; while :; do sleep 0.05; done`
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		child.Stdout = w
 		go func() {
-			time.Sleep(300 * time.Millisecond)
-			sigs <- syscall.SIGTERM
+			line, _ := bufio.NewReader(r).ReadString('\n')
+			if line == "ready\n" {
+				sigs <- syscall.SIGTERM
+			}
 		}()
 	case "killed":
 		script = `kill -KILL $$`
+	case "pgroup":
+		// Field 5 of /proc/PID/stat is the process group.
+		out := filepath.Join(t.TempDir(), "pgid")
+		script = `cut -d' ' -f5 /proc/$$/stat >` + out
+		defer func() {
+			b, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pgid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+			fmt.Printf("RESULT samegroup=%v\n", pgid == syscall.Getpgrp())
+		}()
 	default:
 		t.Fatalf("unknown scenario %q", scenario)
 	}
-	code, err := supervise(exec.CommandContext(t.Context(), "sh", "-c", script), sigs)
+	child.Args[2] = script
+	code, err := supervise(child, sigs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("RESULT code=%d zombies=%d\n", code, zombieChildren(t))
+	extra = fmt.Sprintf("code=%d zombies=%d", code, zombieChildren(t))
+	if scenario != "pgroup" {
+		fmt.Println("RESULT " + extra)
+	}
 }
 
 // zombieChildren counts the zombie processes whose parent is this process.
@@ -121,6 +146,16 @@ func TestSuperviseForwardsSignals(t *testing.T) {
 func TestSuperviseReportsDeathBySignal(t *testing.T) {
 	t.Parallel()
 	if got, want := runSuperviseScenario(t, "killed"), "code=137 zombies=0"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestSuperviseChildHasOwnGroup checks that the child gets a process group of
+// its own, so a terminal's ^C, sent to the supervisor's group, does not reach
+// the server a second time besides the forwarded copy.
+func TestSuperviseChildHasOwnGroup(t *testing.T) {
+	t.Parallel()
+	if got, want := runSuperviseScenario(t, "pgroup"), "samegroup=false"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
