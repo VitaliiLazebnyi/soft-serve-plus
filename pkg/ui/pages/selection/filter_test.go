@@ -2,14 +2,19 @@ package selection
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
+
+// cursorPkg is the package of the cursor blink messages.
+var cursorPkg = reflect.TypeOf(cursor.BlinkMsg{}).PkgPath()
 
 // filterDriver feeds keys to a selection page and the messages their
 // commands produce back to it, the way the bubbletea runtime does. It
@@ -20,9 +25,12 @@ type filterDriver struct {
 	selects []selector.SelectMsg
 }
 
-// run runs cmd and returns its messages. A command that has not returned
-// after a short while is a timer, such as the cursor blink, and is dropped.
+// run runs cmd to completion, however slow the machine, and returns its
+// messages. The filter input's cursor blinks for as long as it is focused,
+// so blink messages are dropped instead of delivered: delivering one would
+// schedule the next.
 func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
+	d.t.Helper()
 	if cmd == nil {
 		return nil
 	}
@@ -31,7 +39,10 @@ func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(time.Minute):
+		d.t.Fatal("command did not return")
+	}
+	if msg != nil && reflect.TypeOf(msg).PkgPath() == cursorPkg {
 		return nil
 	}
 	if batch, ok := msg.(tea.BatchMsg); ok {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -76,8 +77,13 @@ func newPinRepo(t *testing.T) diskRepo {
 
 func newPinPage(t *testing.T) *pinPage {
 	t.Helper()
+	// The Commits tab shows its spinner once a load is older than
+	// waitBeforeLoading, judged by the clock. A negative wait makes every
+	// load old enough on any clock: with a zero wait a load is not yet
+	// older than zero when the clock returns the same instant again, as
+	// Windows' does within its resolution.
 	old := waitBeforeLoading
-	waitBeforeLoading = 0
+	waitBeforeLoading = -time.Hour
 	t.Cleanup(func() { waitBeforeLoading = old })
 
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
