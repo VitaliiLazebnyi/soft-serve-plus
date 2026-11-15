@@ -184,13 +184,20 @@ func RedeliverWebhook(ctx context.Context, w models.Webhook, event Event, payloa
 // the SSRF-protected client. It is a variable so tests can shorten it.
 var sendTimeout = ssrf.ClientTimeout
 
-// recordTimeout bounds writing one delivery row.
-const recordTimeout = 5 * time.Second
+// recordTimeout bounds writing one delivery row. On SQLite it covers the wait
+// for this process's turn to write (see db.DB.TransactionContext) as well as
+// the write itself, so it must be well above the time one write takes: under
+// a burst of writes, or on a slow disk, a row that waited its turn and then
+// ran out of time would lose the delivery from the history, and with it the
+// chance to redeliver it. It stays short enough that a send to its client's
+// cap (ssrf.ClientTimeout) and its record fit in the shutdown wait
+// (backend.ShutdownDeliveryTimeout).
+const recordTimeout = 15 * time.Second
 
 // rereadTimeout bounds each try at re-reading a webhook before its send, so a
-// database that does not answer cannot hold a background sender. It is a
-// variable so tests can shorten it.
-var rereadTimeout = recordTimeout
+// database that does not answer cannot hold a background sender. A read does
+// not wait for a turn to write. It is a variable so tests can shorten it.
+var rereadTimeout = 5 * time.Second
 
 // rereadRetryDelay is the wait before the one retry of a failed re-read. It is
 // a variable so tests can shorten it.

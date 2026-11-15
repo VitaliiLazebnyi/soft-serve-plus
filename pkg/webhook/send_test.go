@@ -366,6 +366,34 @@ func TestSendWebhookNetworkErrorRecorded(t *testing.T) {
 	is.Equal(ds[0].ResponseBody, "")
 }
 
+// TestSendWebhookRecordWaitsForWriteTurn holds this process's SQLite write
+// turn while a delivery is recorded, for longer than the record used to
+// allow. The record waits for its turn, so the delivery is still in the
+// history. It used to give up after 5 seconds, which lost a delivery on a
+// loaded Windows runner.
+func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, _ := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	held := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- e.dbx.TransactionContext(context.Background(), func(*db.Tx) error {
+			close(held)
+			time.Sleep(6 * time.Second)
+			return nil
+		})
+	}()
+	<-held
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(<-done)
+	is.Equal(len(e.deliveries(t, w.ID)), 1)
+}
+
 func TestSendWebhookNonSuccessStatusRecorded(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
