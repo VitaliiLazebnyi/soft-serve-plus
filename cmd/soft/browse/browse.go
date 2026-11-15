@@ -52,7 +52,7 @@ var Command = &cobra.Command{
 func newModel(ctx context.Context, r *git.Repository) *model {
 	c := common.NewCommon(ctx, 0, 0)
 	c.HideCloneCmd = true
-	comps := []common.TabComponent{
+	comps := []repo.Pane{
 		repo.NewReadme(c),
 		repo.NewFiles(c),
 		repo.NewLog(c),

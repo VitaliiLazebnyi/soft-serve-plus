@@ -82,7 +82,6 @@ func TestLogDiffRenameQuotedName(t *testing.T) {
 
 				// The newest commit, the rename, is selected first.
 				l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
-				l.Update(l.selectCommitCmd(l.selectedCommit)())
 				msg := l.loadDiffCmd()()
 				if _, ok := msg.(LogDiffMsg); !ok {
 					t.Fatalf("loadDiffCmd() = %#v; want LogDiffMsg", msg)

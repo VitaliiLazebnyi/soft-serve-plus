@@ -205,7 +205,7 @@ func TestEveryPaneSanitisesRepositoryData(t *testing.T) {
 			t.Fatalf("%s: view is not clean", name)
 		}
 	}
-	tab := func(p common.TabComponent) {
+	tab := func(p Pane) {
 		t.Helper()
 		for i, q := range r.panes {
 			if q == p {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	gitm "github.com/aymanbagabas/git-module"
@@ -31,6 +30,8 @@ type StashListMsg struct {
 
 func (m StashListMsg) generation() uint64 { return m.gen }
 
+func (m StashListMsg) pane() paneID { return paneStash }
+
 // StashPatchMsg is a message sent when the stash patch is loaded.
 type StashPatchMsg struct {
 	*git.Diff
@@ -39,6 +40,8 @@ type StashPatchMsg struct {
 
 func (m StashPatchMsg) generation() uint64 { return m.gen }
 
+func (m StashPatchMsg) pane() paneID { return paneStash }
+
 // Stash is the stash component page.
 type Stash struct {
 	common       common.Common
@@ -46,7 +49,6 @@ type Stash struct {
 	ref          *git.Reference
 	gen          uint64
 	repo         proto.Repository
-	spinner      spinner.Model
 	list         *selector.Selector
 	state        stashState
 	currentPatch StashPatchMsg
@@ -56,17 +58,15 @@ type Stash struct {
 // NewStash creates a new stash model.
 func NewStash(common common.Common) *Stash {
 	vp := viewport.New(common)
-	s := common.NewSpinner()
 	selector := selector.NewPane(common, StashItemDelegate{&common})
 	return &Stash{
-		vp:      vp,
-		common:  common,
-		spinner: s,
-		list:    selector,
+		vp:     vp,
+		common: common,
+		list:   selector,
 	}
 }
 
-// Path implements common.TabComponent.
+// Path implements Pane.
 func (s *Stash) Path() string {
 	return ""
 }
@@ -140,15 +140,17 @@ func (s *Stash) StatusBarInfo() string {
 	}
 }
 
-// SpinnerID implements common.Component.
-func (s *Stash) SpinnerID() int {
-	return s.spinner.ID()
+// Loading implements Pane.
+func (s *Stash) Loading() (string, bool) {
+	return "loading…", s.state == stashStateLoading
 }
+
+func (s *Stash) id() paneID { return paneStash }
 
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
-	return tea.Batch(s.spinner.Tick, s.fetchStashCmd())
+	return s.fetchStashCmd()
 }
 
 // Update implements common.Model.
@@ -166,14 +168,6 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		s.SetSize(msg.Width, msg.Height)
 		if s.currentPatch.Diff != nil {
 			s.renderPatch()
-		}
-	case spinner.TickMsg:
-		if s.state == stashStateLoading && s.spinner.ID() == msg.ID {
-			sp, cmd := s.spinner.Update(msg)
-			s.spinner = sp
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
 		}
 	case tea.KeyPressMsg:
 		switch s.state {
@@ -236,8 +230,6 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 // View returns the view.
 func (s *Stash) View() string {
 	switch s.state {
-	case stashStateLoading:
-		return renderLoading(s.common, s.spinner)
 	case stashStateList:
 		return s.list.View()
 	case stashStatePatch:

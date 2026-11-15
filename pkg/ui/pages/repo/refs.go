@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -32,6 +31,8 @@ type RefItemsMsg struct {
 
 func (m RefItemsMsg) generation() uint64 { return m.gen }
 
+func (m RefItemsMsg) pane() paneID { return refsPane(m.prefix) }
+
 // Refs is a component that displays a list of references.
 type Refs struct {
 	common    common.Common
@@ -40,7 +41,6 @@ type Refs struct {
 	ref       *git.Reference
 	activeRef *git.Reference
 	refPrefix string
-	spinner   spinner.Model
 	isLoading bool
 	gen       uint64
 	// loaded reports whether the references of repo were requested. They
@@ -58,12 +58,10 @@ func NewRefs(common common.Common, refPrefix string) *Refs {
 	}
 	s := selector.NewPane(common, RefItemDelegate{&common})
 	r.selector = s
-	sp := common.NewSpinner()
-	r.spinner = sp
 	return r
 }
 
-// Path implements common.TabComponent.
+// Path implements Pane.
 func (r *Refs) Path() string {
 	return ""
 }
@@ -120,7 +118,7 @@ func (r *Refs) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Refs) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateItemsCmd())
+	return r.updateItemsCmd()
 }
 
 // Update implements common.Model.
@@ -161,7 +159,7 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 		case RefItem:
 			cmds = append(cmds,
 				switchRefCmd(i.Reference, r.gen),
-				switchTabCmd(&Files{}),
+				switchTabCmd(paneFiles),
 			)
 		}
 	case tea.KeyPressMsg:
@@ -173,14 +171,6 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 		r.ref = nil
 		r.gen = msg.gen
 		cmds = append(cmds, r.setItems([]selector.IdentifiableItem{}))
-	case spinner.TickMsg:
-		if r.isLoading && r.spinner.ID() == msg.ID {
-			s, cmd := r.spinner.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			r.spinner = s
-		}
 	}
 	cmds = append(cmds, r.selector.Update(msg))
 	return tea.Batch(cmds...)
@@ -188,16 +178,15 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 
 // View implements tea.Model.
 func (r *Refs) View() string {
-	if r.isLoading {
-		return renderLoading(r.common, r.spinner)
-	}
 	return r.selector.View()
 }
 
-// SpinnerID implements common.TabComponent.
-func (r *Refs) SpinnerID() int {
-	return r.spinner.ID()
+// Loading implements Pane.
+func (r *Refs) Loading() (string, bool) {
+	return "loading…", r.isLoading
 }
+
+func (r *Refs) id() paneID { return refsPane(r.refPrefix) }
 
 // StatusBarValue implements statusbar.StatusBar.
 func (r *Refs) StatusBarValue() string {

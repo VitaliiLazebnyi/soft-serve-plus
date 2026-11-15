@@ -159,7 +159,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	// Open a commit, then switch the ref before the diff command runs.
 	commit := commits.items[0].(LogItem).Commit
 	l.Update(RefMsg{Ref: ref})
-	cmd = l.Update(LogCommitMsg(commit))
+	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
 	l.Update(RefMsg{Ref: ref})
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
@@ -177,8 +177,8 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	if other == commit {
 		t.Fatal("reloading the commits returned the same commit")
 	}
-	cmd = l.Update(LogCommitMsg(commit))
-	otherCmd := l.Update(LogCommitMsg(other))
+	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
+	otherCmd := l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: other}})
 	l.Update(findMsg[LogDiffMsg](t, runCmd(cmd)))
 	if l.activeView == logViewDiff {
 		t.Fatal("the diff of a commit that is no longer selected was shown")

@@ -100,7 +100,6 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize while loading a diff, view = %v; want loading", l.activeView)
 	}
-	l.Update(l.selectCommitCmd(l.selectedCommit)())
 	l.Update(l.loadDiffCmd()())
 	if l.activeView != logViewDiff {
 		t.Fatalf("after loading the diff, view = %v; want diff", l.activeView)
@@ -143,7 +142,6 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 	l := newTestLog(t, dir)
 
 	l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
-	l.Update(l.selectCommitCmd(l.selectedCommit)())
 	// The repository can no longer be opened when the diff loads.
 	l.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
 	msg := l.loadDiffCmd()()
