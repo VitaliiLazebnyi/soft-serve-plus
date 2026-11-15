@@ -155,8 +155,9 @@ func TestNoAccountLifetime(t *testing.T) {
 	t.Run("unknown key running a command", func(t *testing.T) {
 		c := dialAuth(t, ls.addr, gossh.PublicKeys(newSigner(t)))
 		closed := watchClose(c)
-		// Spend most of the lifetime idle.
-		if closedWithin(c, closed, lifetime*8/10) {
+		// Spend half the lifetime idle, leaving a wide margin before the
+		// command starts.
+		if closedWithin(c, closed, lifetime/2) {
 			t.Fatal("connection closed before its lifetime")
 		}
 
@@ -191,10 +192,10 @@ func TestNoAccountLifetime(t *testing.T) {
 		if err := s.Wait(); err != nil {
 			t.Fatalf("git-upload-pack: %v", err)
 		}
-		// The clock goes on from where it stopped, with a fifth of the
+		// The clock goes on from where it stopped, with about half the
 		// lifetime left, rather than starting again.
 		ended := time.Now()
-		if !closedWithin(c, closed, lifetime*6/10) {
+		if !closedWithin(c, closed, lifetime*3/4) {
 			t.Fatalf("connection still open %v after its command ended, want the rest of its lifetime", time.Since(ended))
 		}
 	})

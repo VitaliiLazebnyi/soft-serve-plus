@@ -17,12 +17,16 @@ import (
 // could hold every place. The idle timeout does not help, since every
 // packet, a keepalive included, resets it.
 //
-// The clock stops while a command runs, so an anonymous clone, push or TUI
-// session is never cut short, and it carries on from where it stopped when
-// the command ends rather than starting again: a client cannot keep its
-// place by running a short command now and then. The trade-off is that a
-// client keeping a command running, for example by trickling a clone, keeps
-// its place for as long as it does; max_timeout bounds that.
+// The clock stops while a handler runs and carries on from where it stopped
+// when the handler ends, not from the start, so a client cannot keep its
+// place by running a short command now and then, and an anonymous clone or
+// push is never cut off mid-transfer. The trade-off is that a handler that
+// stays up holds the connection open for as long as it runs: an idle TUI
+// session, or a git command left waiting for the client's input, pauses the
+// clock indefinitely. Nothing here bounds that; only a non-zero max_timeout
+// would, and its default is 0 today (raising it is a later change). What
+// this does bound is the keepalive-only attack of SSH-9, where a connection
+// that runs no command holds its place for as long as it likes.
 const noAccountLifetime = 10 * time.Minute
 
 // connLifetimeKey is the connection context key of the connection's
