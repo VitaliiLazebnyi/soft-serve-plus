@@ -149,11 +149,11 @@ The image already handles this in two ways:
 The examples above still add `--init` (`init: true`). With this image it is a
 safeguard rather than a requirement, and it works with `read_only: true`,
 `cap_drop: [ALL]` and `no-new-privileges`. Without an init, when the entrypoint
-is overridden (for example `--entrypoint /usr/local/bin/soft`) or you run
-`soft serve` from your own image, `soft` is PID 1 and supervises itself, so
-the orphans are reaped anyway; the init saves the second `soft` process and
-also covers the case where the child cannot be started. It is required only
-with an older image that has neither tini nor this fallback.
+is overridden (for example `--entrypoint /usr/local/bin/soft` with `serve` as
+the command) or you run `soft serve` from your own image, `soft` is PID 1 and
+supervises itself, so the orphans are reaped anyway; the init saves the second
+`soft` process and also covers the case where the child cannot be started. It
+is required only with an older image that has neither tini nor this fallback.
 
 A PID limit such as `pids_limit: 128` can stay: with tini or `--init`, the
 container uses about 10 processes and the count stays stable.
@@ -183,6 +183,12 @@ git's `GIT_CONFIG_*` variables by adding these to the service's `environment:`
 GIT_CONFIG_COUNT: "1"
 GIT_CONFIG_KEY_0: gc.autoDetach
 GIT_CONFIG_VALUE_0: "false"
+```
+
+With `docker run`, pass the same variables:
+
+```sh
+-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=gc.autoDetach -e GIT_CONFIG_VALUE_0=false
 ```
 
 `maintenance.autoDetach` falls back to `gc.autoDetach` when it is not set, so
