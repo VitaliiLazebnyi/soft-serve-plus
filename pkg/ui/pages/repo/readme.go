@@ -108,8 +108,6 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 		r.ref = msg.Ref
 		r.gen = msg.gen
 		cmds = append(cmds, r.Init())
-	case tea.WindowSizeMsg:
-		r.SetSize(msg.Width, msg.Height)
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.

@@ -140,8 +140,6 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 			r.loaded = true
 			cmds = append(cmds, r.Init())
 		}
-	case tea.WindowSizeMsg:
-		r.SetSize(msg.Width, msg.Height)
 	case errorMsg:
 		// The list still holds the previous repository's references.
 		r.isLoading = false

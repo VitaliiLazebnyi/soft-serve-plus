@@ -57,7 +57,8 @@ type Stash struct {
 	// renders keeps one render in flight.
 	renders common.RenderGate
 	// winWidth is the window width of the last tea.WindowSizeMsg. The patch
-	// is rendered again only when it changes.
+	// is rendered again only when it changes: it changes with the pane's
+	// width, which the parent has set by then and which the render uses.
 	winWidth int
 	// listLoad and patchLoad are the loads in flight of each kind: a new
 	// one cancels the one before.
@@ -177,7 +178,6 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		s.list.Select(0)
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
-		s.SetSize(msg.Width, msg.Height)
 		// The patch is wrapped to the width, so only a width change needs
 		// it rendered again.
 		widthChanged := msg.Width != s.winWidth
