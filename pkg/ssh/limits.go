@@ -156,9 +156,9 @@ func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 	}
 }
 
-// errTooManySessions is the reason given for a session refused by
+// msgTooManySessions is the reason given for a session refused by
 // max_sessions.
-const errTooManySessions = "too many sessions on this connection"
+const msgTooManySessions = "too many sessions on this connection"
 
 // limitSessions wraps a session channel handler so that a connection holds at
 // most maxSessions session channels at once, as OpenSSH's MaxSessions does.
@@ -181,7 +181,7 @@ func limitSessions(next ssh.ChannelHandler, maxSessions int) ssh.ChannelHandler 
 		}
 		defer counts.channels.Add(-1)
 		if counts.channels.Add(1) > int64(maxSessions) {
-			_ = newChan.Reject(gossh.ResourceShortage, errTooManySessions)
+			_ = newChan.Reject(gossh.ResourceShortage, msgTooManySessions)
 			return
 		}
 		next(srv, conn, newChan, ctx)
@@ -206,7 +206,7 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 		}
 		defer counts.handlers.Add(-1)
 		if counts.handlers.Add(1) > int64(maxSessions) {
-			wish.Fatalln(s, errTooManySessions)
+			wish.Fatalln(s, msgTooManySessions)
 			return
 		}
 		next(s)

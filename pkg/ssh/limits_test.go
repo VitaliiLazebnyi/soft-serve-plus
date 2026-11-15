@@ -222,8 +222,14 @@ func TestSSHServerMaxSessions(t *testing.T) {
 }
 
 // A server built by NewSSHServer refuses a command while max_sessions
-// commands run, even when their channels are closed. A TUI keeps running
-// after the client closes its channel, until the connection ends.
+// commands run, even when their channels are closed.
+//
+// The place is held here by a TUI session whose channel the client then
+// closes. The TUI program is bound to the connection's context, not the
+// channel's (newSessionProgram passes tea.WithContext(s.Context())), so
+// closing the channel does not stop it: it keeps its handler slot until the
+// connection closes. That is the ControlMaster case limitHandlers exists
+// for, and what makes this a test of commands counted, not channels.
 func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
@@ -266,7 +272,7 @@ func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 		go func() { done <- s.Run("repo list") }()
 		select {
 		case err := <-done:
-			if err == nil || !strings.Contains(stderr.String(), errTooManySessions) {
+			if err == nil || !strings.Contains(stderr.String(), msgTooManySessions) {
 				t.Fatalf("command ran while the TUI runs: %v: %q", err, stderr.String())
 			}
 		case <-time.After(10 * time.Second):
@@ -483,8 +489,8 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 				}()
 				select {
 				case msg := <-refused:
-					if !strings.Contains(string(msg), errTooManySessions) {
-						t.Errorf("stderr = %q, want %q", msg, errTooManySessions)
+					if !strings.Contains(string(msg), msgTooManySessions) {
+						t.Errorf("stderr = %q, want %q", msg, msgTooManySessions)
 					}
 				case <-started:
 					t.Fatal("a second command started while a closed session's command still runs")
