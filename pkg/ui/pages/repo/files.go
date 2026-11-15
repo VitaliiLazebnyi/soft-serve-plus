@@ -317,7 +317,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.listing++
 		f.listLoad.Stop()
 		f.path = msg.path
-		f.lastSelected = append(f.lastSelected, msg.index)
+		f.pushSelected(path.Dir(msg.path), msg.index)
 		f.activeView = filesViewContent
 		f.currentContent = msg
 		f.code.UseGlamour = msg.isMarkdown
@@ -346,7 +346,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			p := path.Join(f.listed, sel.entry.Name())
 			if sel.entry.IsTree() {
 				f.path = p
-				f.lastSelected = append(f.lastSelected, f.selector.Index())
+				f.pushSelected(f.listed, f.selector.Index())
 				f.cursor = 0
 				cmds = append(cmds, f.updateFilesCmd())
 			} else {
@@ -658,6 +658,19 @@ func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// pushSelected records index as the position of the item opened in
+// directory dir. The back stack holds a position for every directory above
+// the item, so it is first cut to dir's depth: an item opened from the
+// listing on screen while another directory loaded comes from a directory
+// shallower than the one asked for.
+func (f *Files) pushSelected(dir string, index int) {
+	depth := 0
+	if dir != "" && dir != "." {
+		depth = strings.Count(dir, "/") + 1
+	}
+	f.lastSelected = append(f.lastSelected[:min(len(f.lastSelected), depth)], index)
 }
 
 func (f *Files) deselectItemCmd() tea.Cmd {

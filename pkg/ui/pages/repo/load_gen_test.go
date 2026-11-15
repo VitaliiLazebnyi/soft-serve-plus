@@ -147,6 +147,18 @@ func TestFilesFileFromPreviousListingNamedRight(t *testing.T) {
 	if got := p.files.Path(); got != "file.txt" {
 		t.Fatalf("the root file opened as %q; want file.txt", got)
 	}
+	// The back stack holds the file's position alone, so going back
+	// lists the top with the cursor on the file.
+	if got := p.files.lastSelected; len(got) != 1 {
+		t.Fatalf("back stack = %v; want the file's position alone", got)
+	}
+	p.settle(keyEsc)
+	if got := p.files.Path(); got != "" || len(p.files.lastSelected) != 0 {
+		t.Fatalf("after esc path = %q, back stack = %v; want the top and nothing", got, p.files.lastSelected)
+	}
+	if it, ok := p.files.selector.SelectedItem().(FileItem); !ok || it.ID() != "file.txt" {
+		t.Fatalf("after esc the cursor is on %v; want file.txt", p.files.selector.SelectedItem())
+	}
 }
 
 // Opening a file stops a listing still on its way, so that the listing
@@ -172,4 +184,24 @@ func TestFilesOpenedFileStopsListing(t *testing.T) {
 	}
 	p.deliver(blame...)
 	p.wantView("blame", "second-subject", "file-body-two")
+}
+
+// A load that fails in a tab that is not shown reaches that tab, which
+// leaves its loading view, rather than the tab that is shown.
+func TestErrorReachesItsPane(t *testing.T) {
+	p := newPinPage(t)
+	p.open()
+	p.tab(1)
+
+	// The repository goes away; a resize reloads the commit page, which
+	// fails while the Files tab is shown.
+	if err := os.Rename(p.repo.path, p.repo.path+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	if errs := p.deliver(tea.WindowSizeMsg{Width: 120, Height: 30}); errs == 0 {
+		t.Fatal("the failed page load reported no error")
+	}
+	if _, loading := p.log.Loading(); loading {
+		t.Fatal("the Commits tab is still loading after its load failed")
+	}
 }
