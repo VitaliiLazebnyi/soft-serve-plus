@@ -231,7 +231,8 @@ func (m *model) View() tea.View {
 		view = m.model.View()
 	case errorState:
 		err := m.common.Styles.ErrorTitle.Render("Bummer")
-		err += m.common.Styles.ErrorBody.Render(m.error.Error())
+		// A git error can carry bytes from the repository.
+		err += m.common.Styles.ErrorBody.Render(common.SanitizeText(m.error.Error()))
 		view = m.common.Styles.Error.
 			Width(m.common.Width -
 				wm -

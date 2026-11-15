@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -449,8 +448,8 @@ func (l *Log) StatusBarValue() string {
 	if c == nil {
 		return ""
 	}
-	who := utils.Sanitize(c.Author.Name)
-	if email := utils.Sanitize(c.Author.Email); email != "" {
+	who := common.SanitizeText(c.Author.Name)
+	if email := common.SanitizeText(c.Author.Email); email != "" {
 		who += " <" + email + ">"
 	}
 	value := c.ID.String()[:7]
@@ -699,10 +698,10 @@ func renderCommit(c *git.Commit, st *styles.Styles, width int) string {
 	s := strings.Builder{}
 	// Strip escape sequences and control characters, CR included since
 	// lipgloss prints empty lines when CRLF is used.
-	msg := utils.Sanitize(c.Message)
+	msg := common.SanitizeText(c.Message)
 	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 		st.Log.CommitHash.Render("commit "+c.ID.String()),
-		st.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
+		st.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", common.SanitizeText(c.Author.Name), common.SanitizeText(c.Author.Email))),
 		st.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		st.Log.CommitBody.Render(msg),
 	)

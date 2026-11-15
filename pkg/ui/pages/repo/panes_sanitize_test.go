@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // hostile holds the string sequences the bubbletea renderer passes through to
@@ -153,11 +154,6 @@ func (d *driver) send(msg tea.Msg) {
 	}
 }
 
-// cmdTimeout bounds how long run waits for one command. Every command the
-// panes return loads git data and finishes; a command still running after
-// this long is a hang, not a timer to skip.
-const cmdTimeout = 30 * time.Second
-
 // run runs cmd and returns its message, or nil if it has none. It waits for
 // the command however slow the runner is, so no message is lost; the only
 // timers the panes start are spinner ticks, which send drops by type.
@@ -171,8 +167,8 @@ func (d *driver) run(cmd tea.Cmd) tea.Msg {
 	select {
 	case msg := <-ch:
 		return msg
-	case <-time.After(cmdTimeout):
-		d.t.Fatalf("command did not finish within %v", cmdTimeout)
+	case <-time.After(uitest.HangGuard):
+		d.t.Fatalf("command did not finish within %v", uitest.HangGuard)
 		return nil
 	}
 }

@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"context"
+	"errors"
 	"path"
 
 	"charm.land/bubbles/v2/key"
@@ -16,7 +18,9 @@ import (
 type ReadmeMsg struct {
 	Content string
 	Path    string
-	gen     uint64
+	// tooLarge is set when the README is larger than the size limit.
+	tooLarge bool
+	gen      uint64
 }
 
 func (m ReadmeMsg) generation() uint64 { return m.gen }
@@ -121,11 +125,18 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 				r.repo.Name()), ".md"),
 		)
 	case errorMsg:
+		// The view still holds the README of the ref shown before.
 		r.isLoading = false
+		r.readmePath = ""
+		cmds = append(cmds, r.code.SetContent("", ""))
 	case ReadmeMsg:
 		r.isLoading = false
 		r.readmePath = msg.Path
 		r.code.GotoTop()
+		if msg.tooLarge {
+			cmds = append(cmds, r.code.SetContent(readmeTooLarge, ".md"))
+			break
+		}
 		// The code view sanitises the README, which comes from the
 		// repository, when it renders it.
 		cmds = append(cmds, r.code.SetContent(msg.Content, msg.Path))
@@ -176,14 +187,49 @@ func (r *Readme) updateReadmeCmd() tea.Cmd {
 		if repo == nil {
 			return errorMsg{err: common.ErrMissingRepo, to: paneReadme, gen: gen}
 		}
-		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
-		if ctx.Err() != nil {
+		rm, rp, err := findReadme(ctx, repo, ref, limit)
+		switch {
+		case ctx.Err() != nil:
 			// Cancelled while it ran: the readme may be missing because
 			// of it.
 			return nil
+		case errors.Is(err, git.ErrFileTooLarge):
+			m.tooLarge = true
+		case err != nil:
+			return loadError(ctx, paneReadme, gen, err)
 		}
 		m.Content = rm
 		m.Path = rp
 		return m
 	}
+}
+
+// readmeTooLarge is shown in place of a README larger than the size limit.
+const readmeTooLarge = "The README is larger than the size limit and is not shown."
+
+// findReadme returns the README of ref and its path, searched for in the
+// root, .github and docs, in that order, as backend.Readme does. It returns
+// "" and no error when there is none, and an error wrapping
+// git.ErrFileTooLarge when every README it found is larger than limit.
+// backend.Readme reports only the error of the last directory it looked in,
+// so it cannot tell a README too large to show from none.
+func findReadme(ctx context.Context, repo proto.Repository, ref *git.Reference, limit int64) (string, string, error) {
+	var tooLarge error
+	for _, dir := range []string{".", ".github", "docs"} {
+		// Tree paths always use forward slashes, whatever the OS.
+		rm, rp, err := backend.LatestFile(ctx, repo, ref, path.Join(dir, "[rR][eE][aA][dD][mM][eE]*"), limit)
+		switch {
+		case err == nil:
+			return rm, rp, nil
+		case errors.Is(err, git.ErrFileTooLarge):
+			if tooLarge == nil {
+				tooLarge = err
+			}
+		case errors.Is(err, git.ErrFileNotFound), errors.Is(err, git.ErrRevisionNotExist):
+			// No README here, or no such directory.
+		default:
+			return "", "", err
+		}
+	}
+	return "", "", tooLarge
 }
