@@ -858,6 +858,45 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
 	is.True(strings.Contains(logs.String(), "prune failed"))
 }
 
+// hangingPruneStore is a store whose prune waits until its context ends, and
+// which counts the delivery rows it is asked to create.
+type hangingPruneStore struct {
+	store.Store
+	creates *atomic.Int32
+}
+
+func (s hangingPruneStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error {
+	s.creates.Add(1)
+	return s.Store.CreateWebhookDelivery(ctx, h, id, webhookID, event, url, method, requestError, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody)
+}
+
+func (hangingPruneStore) PruneWebhookDeliveries(ctx context.Context, _ db.Handler, _ int64, _ int) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A prune that fails because recordTimeout ran out is not followed by a
+// second insert: it would fail at once on the same expired context.
+func TestRecordDeliveryDoesNotRetryAfterTimeout(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
+	orig := recordTimeout
+	recordTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { recordTimeout = orig })
+	var creates atomic.Int32
+	var logs bytes.Buffer
+	ctx := store.WithContext(e.ctx, hangingPruneStore{e.ds, &creates})
+	ctx = log.WithContext(ctx, log.New(&logs))
+
+	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
+	is.NoErr(err)
+	err = recordDelivery(ctx, w, EventPush, req, nil, 200, "", "")
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	is.Equal(creates.Load(), int32(1))
+	is.True(!strings.Contains(logs.String(), "pruning webhook deliveries"))
+}
+
 // Deliver re-reads each webhook before sending, so an event that waited while
 // the webhook was changed goes to its current URL, signed with its current
 // secret, and not to the old receiver.

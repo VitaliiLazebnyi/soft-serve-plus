@@ -186,13 +186,15 @@ var sendTimeout = ssrf.ClientTimeout
 
 // recordTimeout bounds writing one delivery row. On SQLite it covers the wait
 // for this process's turn to write (see db.DB.TransactionContext) as well as
-// the write itself, so it must be well above the time one write takes: under
-// a burst of writes, or on a slow disk, a row that waited its turn and then
-// ran out of time would lose the delivery from the history, and with it the
-// chance to redeliver it. It stays short enough that a send to its client's
-// cap (ssrf.ClientTimeout) and its record fit in the shutdown wait
-// (backend.ShutdownDeliveryTimeout).
-const recordTimeout = 15 * time.Second
+// the write itself, so it must be well above the time one write takes: a row
+// that runs out of time is lost from the delivery history, and with it the
+// chance to redeliver it. It was 5 seconds, and on a loaded Windows runner the
+// turn plus the write ran past that. It stays short enough that one webhook's
+// worst case, its re-read (rereadTimeout, rereadRetryDelay, rereadTimeout:
+// 10.2 seconds), a send to its client's cap (ssrf.ClientTimeout, 30 seconds)
+// and its record, fits in the shutdown wait (backend.ShutdownDeliveryTimeout,
+// a minute). It is a variable so tests can shorten it.
+var recordTimeout = 15 * time.Second
 
 // rereadTimeout bounds each try at re-reading a webhook before its send, so a
 // database that does not answer cannot hold a background sender. A read does
@@ -473,10 +475,13 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 		pruneErr = datastore.PruneWebhookDeliveries(rctx, tx, w.ID, maxDeliveries)
 		return pruneErr
 	})
-	if err != nil && pruneErr != nil {
+	if err != nil && pruneErr != nil && rctx.Err() == nil {
 		// A failed prune only leaves extra rows for the next delivery's
 		// prune, so it must not lose the delivery: the transaction was
 		// rolled back, and the delivery is recorded again without pruning.
+		// A prune that failed because recordTimeout ran out is not retried:
+		// the retry would fail at once on the same context, and a fresh one
+		// would take the record past its share of the shutdown wait.
 		log.FromContext(ctx).Warn("pruning webhook deliveries", "webhook", w.ID, "err", pruneErr)
 		err = create(dbx)
 	}

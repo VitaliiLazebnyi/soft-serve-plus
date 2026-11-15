@@ -35,6 +35,13 @@ func TestDeleteRefAtMalformedCommit(t *testing.T) {
 
 			is.NoErr(runRepo(t, ownerCtx, "branch", "delete", "hooks", "bad"))
 			is.True(!gitRefExists(t, bare, "refs/heads/bad"))
+			// The branch delete's delivery is recorded in the background.
+			// Let it finish first: on SQLite without WAL the tag delete's
+			// repository read waits out that commit, and one longer than
+			// busy_timeout reads as "repository not found".
+			// WaitForDeliveries would refuse the tag delete's delivery, so
+			// wait for the row instead.
+			whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 1)
 			is.NoErr(runRepo(t, ownerCtx, "tag", "delete", "hooks", "bad"))
 			is.True(!gitRefExists(t, bare, "refs/tags/bad"))
 

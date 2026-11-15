@@ -501,8 +501,10 @@ func dedupeEvents(events []webhook.Event) []webhook.Event {
 // deliveries. It is separate from the shorter HTTP and SSH drain, since a drain
 // that stops early abandons the deliveries. It covers a request that started
 // just before shutdown and runs to the client's cap (ssrf.ClientTimeout), with
-// time left to record it and to send a few queued ones. A second signal stops
-// the wait early.
+// time for the re-read of its webhook before it and its record after it (see
+// recordTimeout in the webhook package). Only a few seconds are left beyond
+// that, so queued deliveries are sent only if the running ones finish sooner.
+// A second signal stops the wait early.
 const ShutdownDeliveryTimeout = time.Minute
 
 // afterChangeTimeout bounds the reads made after a change is committed to
