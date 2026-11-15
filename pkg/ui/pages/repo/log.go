@@ -217,8 +217,8 @@ func (l *Log) Init() tea.Cmd {
 	)
 }
 
-// Update implements tea.Model.
-func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
@@ -267,11 +267,9 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			// XXX: This is a hack for loading commits on demand based on
 			// list.Pagination.
 			curPage := l.selector.Page()
-			s, cmd := l.selector.Update(msg)
-			m := s.(*selector.Selector)
-			l.selector = m
-			if m.Page() != curPage {
-				l.nextPage = m.Page()
+			cmd := l.selector.Update(msg)
+			if l.selector.Page() != curPage {
+				l.nextPage = l.selector.Page()
 				l.selector.SetPage(curPage)
 				cmds = append(cmds,
 					l.updateCommitsCmd(),
@@ -383,13 +381,9 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	}
 	switch l.activeView {
 	case logViewDiff:
-		vp, cmd := l.vp.Update(msg)
-		l.vp = vp.(*viewport.Viewport)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, l.vp.Update(msg))
 	}
-	return l, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

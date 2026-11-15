@@ -183,11 +183,11 @@ func (r *Repo) Init() tea.Cmd {
 	)
 }
 
-// Update implements tea.Model.
-func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	if m, ok := msg.(genMsg); ok {
 		if m.generation() != r.gen {
-			return r, nil
+			return nil
 		}
 		// A new ref, or none, is shown: what was loaded for the previous
 		// one is out of date from here on. The panes tag their loads with
@@ -227,19 +227,11 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.state = readyState
 	case tabs.SelectTabMsg:
 		r.activeTab = int(msg)
-		t, cmd := r.tabs.Update(msg)
-		r.tabs = t.(*tabs.Tabs)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, r.tabs.Update(msg))
 	case tabs.ActiveTabMsg:
 		r.activeTab = int(msg)
 	case tea.KeyPressMsg, tea.MouseClickMsg:
-		t, cmd := r.tabs.Update(msg)
-		r.tabs = t.(*tabs.Tabs)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, r.tabs.Update(msg))
 		if r.selectedRepo != nil {
 			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
 			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
@@ -303,13 +295,9 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		} else {
-			for i, c := range r.panes {
+			for _, c := range r.panes {
 				if c.SpinnerID() == msg.ID {
-					m, cmd := c.Update(msg)
-					r.panes[i] = m.(common.TabComponent)
-					if cmd != nil {
-						cmds = append(cmds, cmd)
-					}
+					cmds = append(cmds, c.Update(msg))
 					break
 				}
 			}
@@ -341,11 +329,7 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	}
 	if !routed {
 		active := r.panes[r.activeTab]
-		m, cmd := active.Update(msg)
-		r.panes[r.activeTab] = m.(common.TabComponent)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, active.Update(msg))
 	}
 
 	// Update the status bar on these events
@@ -358,13 +342,9 @@ func (r *Repo) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		r.setStatusBarInfo()
 	}
 
-	s, cmd := r.statusbar.Update(msg)
-	r.statusbar = s.(*statusbar.Model)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	cmds = append(cmds, r.statusbar.Update(msg))
 
-	return r, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.
@@ -457,13 +437,9 @@ func (r *Repo) setStatusBarInfo() {
 
 func (r *Repo) updateTabComponent(c common.TabComponent, msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
-	for i, b := range r.panes {
+	for _, b := range r.panes {
 		if b.TabName() == c.TabName() {
-			m, cmd := b.Update(msg)
-			r.panes[i] = m.(common.TabComponent)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			cmds = append(cmds, b.Update(msg))
 			break
 		}
 	}
@@ -472,12 +448,8 @@ func (r *Repo) updateTabComponent(c common.TabComponent, msg tea.Msg) tea.Cmd {
 
 func (r *Repo) updateModels(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
-	for i, b := range r.panes {
-		m, cmd := b.Update(msg)
-		r.panes[i] = m.(common.TabComponent)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+	for _, b := range r.panes {
+		cmds = append(cmds, b.Update(msg))
 	}
 	return tea.Batch(cmds...)
 }

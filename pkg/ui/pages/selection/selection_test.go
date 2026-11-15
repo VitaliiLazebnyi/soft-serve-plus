@@ -138,7 +138,7 @@ func runLoad(t *testing.T, s *Selection, cmd tea.Cmd) bool {
 }
 
 func press(s *Selection, k rune) tea.Cmd {
-	_, cmd := s.Update(tea.KeyPressMsg{Code: k, Text: string(k)})
+	cmd := s.Update(tea.KeyPressMsg{Code: k, Text: string(k)})
 	return cmd
 }
 

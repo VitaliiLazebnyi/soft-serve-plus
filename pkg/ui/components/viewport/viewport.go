@@ -39,8 +39,8 @@ func (v *Viewport) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model.
-func (v *Viewport) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (v *Viewport) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
@@ -52,7 +52,7 @@ func (v *Viewport) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	}
 	vp, cmd := v.Model.Update(msg)
 	v.Model = &vp
-	return v, cmd
+	return cmd
 }
 
 // View implements tea.Model.

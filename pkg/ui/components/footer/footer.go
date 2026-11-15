@@ -48,9 +48,9 @@ func (f *Footer) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model.
-func (f *Footer) Update(_ tea.Msg) (common.Model, tea.Cmd) {
-	return f, nil
+// Update implements common.Model.
+func (f *Footer) Update(_ tea.Msg) tea.Cmd {
+	return nil
 }
 
 // View implements tea.Model.

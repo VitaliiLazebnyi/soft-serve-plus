@@ -99,8 +99,8 @@ func (r *Readme) Init() tea.Cmd {
 	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd())
 }
 
-// Update implements tea.Model.
-func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
@@ -138,12 +138,8 @@ func (r *Readme) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			}
 		}
 	}
-	c, cmd := r.code.Update(msg)
-	r.code = c.(*code.Code)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	return r, tea.Batch(cmds...)
+	cmds = append(cmds, r.code.Update(msg))
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

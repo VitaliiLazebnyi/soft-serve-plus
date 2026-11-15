@@ -53,7 +53,7 @@ func TestStashCopy(t *testing.T) {
 			s.Init()
 			s.Update(tc.stashes)
 
-			_, cmd := s.Update(copyKey)
+			cmd := s.Update(copyKey)
 			msgs := copyMsgs(cmd)
 			if len(msgs) != tc.want {
 				t.Fatalf("copy produced %d CopyMsgs, want %d: %v", len(msgs), tc.want, msgs)

@@ -107,7 +107,7 @@ func newPinPage(t *testing.T) *pinPage {
 // produces, without delivering them.
 func (p *pinPage) update(msg tea.Msg) []tea.Msg {
 	p.t.Helper()
-	_, cmd := p.r.Update(msg)
+	cmd := p.r.Update(msg)
 	return runCmd(cmd)
 }
 

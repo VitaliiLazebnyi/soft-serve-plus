@@ -20,7 +20,7 @@ func TestTabsUseSectionKeys(t *testing.T) {
 	tb := New(c, []string{"a", "b", "c"})
 
 	press := func(k tea.KeyPressMsg) int {
-		_, cmd := tb.Update(k)
+		cmd := tb.Update(k)
 		if cmd == nil {
 			return -1
 		}

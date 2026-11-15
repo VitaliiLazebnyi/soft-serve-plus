@@ -256,8 +256,8 @@ func (f *Files) Init() tea.Cmd {
 	return tea.Batch(f.spinner.Tick, f.updateFilesCmd())
 }
 
-// Update implements tea.Model.
-func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
@@ -400,19 +400,11 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	}
 	switch f.activeView {
 	case filesViewFiles:
-		m, cmd := f.selector.Update(msg)
-		f.selector = m.(*selector.Selector)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, f.selector.Update(msg))
 	case filesViewContent:
-		m, cmd := f.code.Update(msg)
-		f.code = m.(*code.Code)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, f.code.Update(msg))
 	}
-	return f, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

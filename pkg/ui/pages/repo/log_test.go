@@ -47,7 +47,7 @@ func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
 	if after >= before {
 		t.Fatalf("per page %d after shrinking, %d before; want fewer", after, before)
 	}
-	_, cmd := l.Update(load())
+	cmd := l.Update(load())
 	l.Update(findMsg[LogItemsMsg](t, runCmd(cmd)))
 
 	items := l.selector.Items()
@@ -150,7 +150,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 	if _, ok := msg.(LogDiffErrorMsg); !ok {
 		t.Fatalf("loadDiffCmd() = %T; want LogDiffErrorMsg", msg)
 	}
-	_, cmd := l.Update(msg)
+	cmd := l.Update(msg)
 	if l.activeView != logViewCommits || l.selectedCommit != nil {
 		t.Fatalf("after a diff error, view = %v, selected = %v; want commits, none", l.activeView, l.selectedCommit)
 	}
@@ -161,7 +161,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 		t.Fatal("after a diff error, command does not report a common.ErrorMsg")
 	}
 	// Repo can deliver the message again; that must not report it twice.
-	if _, cmd := l.Update(msg); cmd != nil {
+	if cmd := l.Update(msg); cmd != nil {
 		if _, ok := cmd().(common.ErrorMsg); ok {
 			t.Fatal("a repeated diff error reported the error again")
 		}
@@ -185,8 +185,7 @@ func TestLogMouseWheel(t *testing.T) {
 		LogItem{&git.Commit{Message: "two"}},
 	})
 
-	m, _ := l.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
-	l = m.(*Log)
+	l.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	if got := l.selector.Index(); got != 1 {
 		t.Fatalf("index after wheel down = %d; want 1", got)
 	}

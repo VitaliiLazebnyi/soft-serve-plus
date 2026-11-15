@@ -161,7 +161,7 @@ func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
 
 	// The user switches branches before the first load returns.
 	switched := RefMsg{Ref: ref.Ref, gen: 2}
-	_, cmd := r.Update(switched)
+	cmd := r.Update(switched)
 	if cmd == nil || !r.isLoading {
 		t.Fatal("a branch switch during the load did not list the refs again")
 	}
@@ -274,7 +274,7 @@ func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
 			}
 			want := r.selector.SelectedItem().ID()
 
-			_, cmd := r.Update(k)
+			cmd := r.Update(k)
 			if p := r.selector.Page(); p != 0 {
 				t.Errorf("%s turned the page to %d", k, p)
 			}

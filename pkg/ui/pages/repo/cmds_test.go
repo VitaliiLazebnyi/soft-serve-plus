@@ -83,7 +83,7 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	repo, ref := cmdTestRepo(t)
 	f := NewFiles(cmdTestCommon())
 	f.Update(RepoMsg(repo))
-	_, cmd := f.Update(RefMsg{Ref: ref})
+	cmd := f.Update(RefMsg{Ref: ref})
 	items := findMsg[FileItemsMsg](t, runCmd(cmd))
 	f.Update(items)
 	if len(items.items) != 1 {
@@ -91,7 +91,7 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	}
 
 	// Select the file, then clear the model before its command runs.
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
 	f.Update(EmptyRepoMsg{})
 	content := findMsg[FileContentMsg](t, runCmd(cmd))
 	if content.content != "hello\n" {
@@ -106,7 +106,7 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 
 	// Content requested before a ref change is dropped too.
 	f.Update(RefMsg{Ref: ref})
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
 	f.Update(RefMsg{Ref: ref})
 	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
 	if f.activeView == filesViewContent || f.Path() != "" {
@@ -115,12 +115,12 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 
 	// Open the file and toggle the blame view, then clear the model before
 	// the blame command runs.
-	_, cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
 	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
 	if got := f.Path(); got != "file.txt" {
 		t.Fatalf("path = %q, want file.txt", got)
 	}
-	_, cmd = f.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	cmd = f.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
 	f.Update(EmptyRepoMsg{})
 	blame := findMsg[FileBlameMsg](t, runCmd(cmd))
 	if blame.blame == nil {
@@ -141,7 +141,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	l.Update(RepoMsg(repo))
 
 	// A new ref, then an empty repository, before the count command runs.
-	_, cmd := l.Update(RefMsg{Ref: ref})
+	cmd := l.Update(RefMsg{Ref: ref})
 	l.Update(EmptyRepoMsg{})
 	count := findMsg[LogCountMsg](t, runCmd(cmd))
 	if count.count != 1 {
@@ -149,7 +149,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	}
 
 	l.Update(RefMsg{Ref: ref})
-	_, cmd = l.Update(count)
+	cmd = l.Update(count)
 	l.Update(EmptyRepoMsg{})
 	commits := findMsg[LogItemsMsg](t, runCmd(cmd))
 	if len(commits.items) != 1 || commits.items[0] == nil {
@@ -159,7 +159,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	// Open a commit, then switch the ref before the diff command runs.
 	commit := commits.items[0].(LogItem).Commit
 	l.Update(RefMsg{Ref: ref})
-	_, cmd = l.Update(LogCommitMsg(commit))
+	cmd = l.Update(LogCommitMsg(commit))
 	l.Update(RefMsg{Ref: ref})
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
@@ -172,13 +172,13 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	// Open another commit before the diff of the first one arrives: only the
 	// diff of the selected commit is shown.
 	// Loading the commits again gives another *git.Commit.
-	_, cmd = l.Update(count)
+	cmd = l.Update(count)
 	other := findMsg[LogItemsMsg](t, runCmd(cmd)).items[0].(LogItem).Commit
 	if other == commit {
 		t.Fatal("reloading the commits returned the same commit")
 	}
-	_, cmd = l.Update(LogCommitMsg(commit))
-	_, otherCmd := l.Update(LogCommitMsg(other))
+	cmd = l.Update(LogCommitMsg(commit))
+	otherCmd := l.Update(LogCommitMsg(other))
 	l.Update(findMsg[LogDiffMsg](t, runCmd(cmd)))
 	if l.activeView == logViewDiff {
 		t.Fatal("the diff of a commit that is no longer selected was shown")
@@ -221,13 +221,13 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 	r := New(cmdTestCommon(), f)
 	update := func(msg tea.Msg) tea.Cmd {
 		t.Helper()
-		_, cmd := r.Update(msg)
+		cmd := r.Update(msg)
 		return cmd
 	}
 	// Give the pane its repository and ref directly: Repo itself only needs
 	// them for the status bar.
 	f.Update(RepoMsg(openRepo{path: dir}))
-	_, cmd := f.Update(RefMsg{Ref: ref})
+	cmd := f.Update(RefMsg{Ref: ref})
 	update(findMsg[FileItemsMsg](t, runCmd(cmd)))
 
 	// Open "sub", the third directory of the root.

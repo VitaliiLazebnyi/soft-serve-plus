@@ -163,8 +163,8 @@ func (r *Code) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model.
-func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (r *Code) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg.(type) {
 	case tea.WindowSizeMsg:
@@ -175,12 +175,8 @@ func (r *Code) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			cmds = append(cmds, r.Init())
 		}
 	}
-	v, cmd := r.Viewport.Update(msg)
-	r.Viewport = v.(*vp.Viewport)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	return r, tea.Batch(cmds...)
+	cmds = append(cmds, r.Viewport.Update(msg))
+	return tea.Batch(cmds...)
 }
 
 // Resizes returns how many window size messages the view has handled. Tests

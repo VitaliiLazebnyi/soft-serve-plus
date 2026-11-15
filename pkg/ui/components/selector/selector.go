@@ -131,8 +131,8 @@ func (s *Selector) Init() tea.Cmd {
 	return s.activeCmd()
 }
 
-// Update implements tea.Model.
-func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (s *Selector) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	// The select command is built after the list has handled msg, so it
 	// carries the item the list holds once Update returns.
@@ -175,15 +175,13 @@ func (s *Selector) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	if selectItem {
 		cmds = append(cmds, s.SelectItemCmd())
 	}
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	cmds = append(cmds, cmd)
 	// Send ActiveMsg when index change.
 	if s.active != s.Index() {
 		cmds = append(cmds, s.activeCmd())
 	}
 	s.active = s.Index()
-	return s, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

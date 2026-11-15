@@ -283,8 +283,8 @@ func (s *Selection) setItems(items []selector.IdentifiableItem) tea.Cmd {
 	return cmd
 }
 
-// Update implements tea.Model.
-func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (s *Selection) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	// routed is set when the message has already been delivered to every
 	// pane, so that the active pane does not get it a second time.
@@ -292,16 +292,8 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		routed = true
-		r, cmd := s.readme.Update(msg)
-		s.readme = r.(*code.Code)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		m, cmd := s.selector.Update(msg)
-		s.selector = m.(*selector.Selector)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.readme.Update(msg))
+		cmds = append(cmds, s.selector.Update(msg))
 	case tea.KeyPressMsg, tea.MouseMsg:
 		switch msg := msg.(type) {
 		case tea.KeyPressMsg:
@@ -313,11 +305,7 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 				cmds = append(cmds, s.Init())
 			}
 		}
-		t, cmd := s.tabs.Update(msg)
-		s.tabs = t.(*tabs.Tabs)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.tabs.Update(msg))
 	case tabs.ActiveTabMsg:
 		s.activePane = pane(msg)
 	case ReposMsg:
@@ -325,26 +313,18 @@ func (s *Selection) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		if msg.hasReadme {
 			cmds = append(cmds, s.setReadme(msg.readme, msg.readmePath))
 		}
-		return s, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 	}
 	if routed {
-		return s, tea.Batch(cmds...)
+		return tea.Batch(cmds...)
 	}
 	switch s.activePane {
 	case readmePane:
-		r, cmd := s.readme.Update(msg)
-		s.readme = r.(*code.Code)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.readme.Update(msg))
 	case selectorPane:
-		m, cmd := s.selector.Update(msg)
-		s.selector = m.(*selector.Selector)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.selector.Update(msg))
 	}
-	return s, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

@@ -69,8 +69,7 @@ func (d *filterDriver) send(msg tea.Msg) {
 		if sel, ok := msg.(selector.SelectMsg); ok {
 			d.selects = append(d.selects, sel)
 		}
-		_, cmd := d.s.Update(msg)
-		queue = append(queue, d.run(cmd)...)
+		queue = append(queue, d.run(d.s.Update(msg))...)
 	}
 }
 

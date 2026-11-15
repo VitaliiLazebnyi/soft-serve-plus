@@ -198,12 +198,8 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		ui.SetSize(msg.Width, msg.Height)
-		for i, p := range ui.pages {
-			m, cmd := p.Update(msg)
-			ui.pages[i] = m.(common.Component)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+		for _, p := range ui.pages {
+			cmds = append(cmds, p.Update(msg))
 		}
 	case tea.KeyPressMsg:
 		switch {
@@ -260,11 +256,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// initial repository opened, so it goes to the selection page
 		// whichever page is active.
 		if ui.activePage != selectionPage {
-			m, cmd := ui.pages[selectionPage].Update(msg)
-			ui.pages[selectionPage] = m.(common.Component)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			cmds = append(cmds, ui.pages[selectionPage].Update(msg))
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
@@ -274,19 +266,11 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	f, cmd := ui.footer.Update(msg)
-	ui.footer = f.(*footer.Footer)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	cmds = append(cmds, ui.footer.Update(msg))
 	// A window size message has already been delivered to every page above.
 	_, resized := msg.(tea.WindowSizeMsg)
 	if !resized && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
-		m, cmd := ui.pages[ui.activePage].Update(msg)
-		ui.pages[ui.activePage] = m.(common.Component)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, ui.pages[ui.activePage].Update(msg))
 	}
 	// This fixes determining the height margin of the footer.
 	ui.SetSize(ui.common.Width, ui.common.Height)
