@@ -122,6 +122,26 @@ func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
 	}
 }
 
+// git's stat for a binary file ("Bin 2 -> 3 bytes") has no +/- graph; the
+// summary must not colour the "-" of its "->" as a deletion. A text file's
+// graph still is coloured.
+func TestRenderSummaryBinaryStat(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 120, 40)
+	del := c.Styles.Log.CommitStatsDel.Render("-")
+	if del == "-" {
+		t.Skip("the renderer adds no styling")
+	}
+	out := renderSummary(&git.Diff{Stat: " b.bin | Bin 2 -> 3 bytes\n t.txt | 2 +-\n"}, c.Styles, 120)
+	lines := strings.Split(out, "\n")
+	if strings.Contains(lines[0], del) || !strings.Contains(lines[0], "Bin 2 -> 3 bytes") {
+		t.Errorf("binary stat line = %q, want it unstyled", lines[0])
+	}
+	if !strings.Contains(lines[1], del) {
+		t.Errorf("text stat line = %q, want its - styled", lines[1])
+	}
+}
+
 // The stash patch view is built from pieces the TUI has already styled
 // (and sanitised at their source); the code view must keep those styles.
 func TestStashPatchKeepsStyling(t *testing.T) {

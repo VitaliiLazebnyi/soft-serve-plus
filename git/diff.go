@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aymanbagabas/git-module"
 )
@@ -17,8 +18,9 @@ var (
 	DiffMaxFiles = 1000
 	// DiffMaxFileLines is the most lines of one file's patch a diff shows.
 	DiffMaxFileLines = 1000
-	// DiffMaxLineChars is the most bytes of one line a diff shows.
-	DiffMaxLineChars = 1000
+	// DiffMaxLineBytes is the most bytes of one line a diff shows. A line
+	// is cut at the start of the last whole UTF-8 character that fits.
+	DiffMaxLineBytes = 1000
 	// DiffMaxBytes is the most bytes a diff holds in all, stat and patch
 	// together.
 	DiffMaxBytes = 4 << 20
@@ -35,7 +37,8 @@ type DiffLimits struct {
 	// diffFileTruncated put in its place.
 	FileLines int
 	// LineBytes is the most bytes of one line shown; the rest of the line
-	// is left out.
+	// is left out. The cut backs off to the start of a UTF-8 character it
+	// would split.
 	LineBytes int
 	// Bytes is the most bytes of output, stat and patch together. The diff
 	// ends at the last whole line that fits.
@@ -43,12 +46,12 @@ type DiffLimits struct {
 }
 
 // DefaultDiffLimits returns the limits for a diff shown to a reader:
-// DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars and DiffMaxBytes.
+// DiffMaxFiles, DiffMaxFileLines, DiffMaxLineBytes and DiffMaxBytes.
 func DefaultDiffLimits() DiffLimits {
 	return DiffLimits{
 		Files:     DiffMaxFiles,
 		FileLines: DiffMaxFileLines,
-		LineBytes: DiffMaxLineChars,
+		LineBytes: DiffMaxLineBytes,
 		Bytes:     DiffMaxBytes,
 	}
 }
@@ -155,12 +158,96 @@ func (r *Repository) DiffLimited(commit *Commit, limits DiffLimits) (*Diff, erro
 // commit against nothing, for git apply: binary changes included, no stat,
 // and cut only by PatchLimits. A caller must not hand on a patch with
 // Truncated set, as git apply would apply the files before the cut.
+//
+// A changed blob over the size cap would be cut anyway, and with --binary
+// git spends seconds and gigabytes encoding a large one first, so the sizes
+// of the changed blobs are checked before: a patch with one over the cap
+// comes back empty and Truncated without running the patch at all.
 func (r *Repository) Patch(commit *Commit) (*Diff, error) {
 	args, err := commitDiffArgs(commit)
 	if err != nil {
 		return nil, err
 	}
-	return r.runDiff(r.diffCommand(patchArgs, args...), PatchLimits())
+	limits := PatchLimits()
+	if limits.Bytes > 0 {
+		fits, err := r.changedBlobsFit(args, int64(limits.Bytes))
+		if err != nil {
+			return nil, err
+		}
+		if !fits {
+			return &Diff{Truncated: true}, nil
+		}
+	}
+	return r.runDiff(r.diffCommand(patchArgs, args...), limits)
+}
+
+// changedBlobsFit reports whether every blob the diff named by args changes,
+// before and after, is at most limit bytes. A raw listing over limit bytes
+// means a patch over it too, so that does not fit either.
+func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
+	raw := &cappedBuffer{max: int(limit)}
+	var stderr bytes.Buffer
+	err := git.NewCommand("diff-tree").
+		AddOptions(git.CommandOptions{
+			Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+			Context: r.Context(),
+		}).
+		AddArgs("-r", "-M", "--raw", "-z", "--full-index").
+		AddArgs(args...).
+		RunInDirPipeline(raw, &stderr, r.Path)
+	if raw.over {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("diff-tree: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	// -z gives ":<mode> <mode> <id> <id> <status>" and then the path or
+	// paths, each ended by a NUL.
+	var ids bytes.Buffer
+	for _, rec := range strings.Split(raw.buf.String(), "\x00") {
+		f := strings.Fields(strings.TrimPrefix(rec, ":"))
+		if !strings.HasPrefix(rec, ":") || len(f) < 4 {
+			continue
+		}
+		for i, id := range f[2:4] {
+			// A submodule's commit is not in this repository.
+			if f[i] == "160000" || strings.Trim(id, "0") == "" {
+				continue
+			}
+			ids.WriteString(id + "\n")
+		}
+	}
+	if ids.Len() == 0 {
+		return true, nil
+	}
+	var out bytes.Buffer
+	stderr.Reset()
+	if err := git.NewCommandWithContext(r.Context(), "cat-file", "--batch-check=%(objectsize)").
+		RunInDirWithOptions(r.Path, git.RunInDirOptions{Stdin: &ids, Stdout: &out, Stderr: &stderr}); err != nil {
+		return false, fmt.Errorf("cat-file: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	for line := range strings.Lines(out.String()) {
+		if n, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64); err == nil && n > limit {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// cappedBuffer keeps up to max bytes and fails the write that would go over.
+type cappedBuffer struct {
+	buf  bytes.Buffer
+	max  int
+	over bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		b.over = true
+		return 0, errDiffFull
+	}
+	return b.buf.Write(p)
 }
 
 // StashDiff returns the diff of the stash at index, its work tree against
@@ -240,12 +327,17 @@ func (w *diffWriter) addToLine(b []byte) {
 	if nl {
 		b = b[:len(b)-1]
 	}
-	if lim := w.limits.LineBytes; lim > 0 {
+	cut := false
+	if w.lineCut {
+		// The rest of a line already cut is dropped.
+		b = nil
+	} else if lim := w.limits.LineBytes; lim > 0 {
 		// Keep enough to recognise a file header however small the cap.
 		lim = max(lim, len(diffHeader))
 		if room := lim - len(w.line); len(b) > room {
 			b = b[:max(room, 0)]
 			w.lineCut = true
+			cut = true
 		}
 	}
 	// A line that cannot fit in the total is not kept at all, so a huge
@@ -255,9 +347,28 @@ func (w *diffWriter) addToLine(b []byte) {
 		return
 	}
 	w.line = append(w.line, b...)
+	if cut {
+		// Do not end the line inside a UTF-8 character.
+		w.line = w.line[:len(w.line)-partialRuneLen(w.line)]
+	}
 	if nl {
 		w.line = append(w.line, '\n')
 	}
+}
+
+// partialRuneLen returns how many bytes at the end of b are the start of a
+// UTF-8 character that is not complete there: 0 when b ends on a whole
+// character, or on bytes that are not UTF-8, which are kept as they are.
+func partialRuneLen(b []byte) int {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return len(b) - i
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 // flushLine takes a last line git ended without a newline.

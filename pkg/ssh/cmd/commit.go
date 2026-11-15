@@ -54,7 +54,7 @@ func commitCommand() *cobra.Command {
 					return err
 				}
 				if p.Truncated {
-					return fmt.Errorf("patch truncated at %d bytes; not printed, as a cut patch could be applied in part", git.PatchLimits().Bytes)
+					return fmt.Errorf("patch truncated at %d bytes; not printed, as a cut patch could be applied in part: clone the repository and use git format-patch or git diff instead", git.PatchLimits().Bytes)
 				}
 				cmd.Print(p.Patch)
 				return nil

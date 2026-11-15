@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // diffPatch and diffStat return the two texts callers take from a Diff.
@@ -295,9 +296,9 @@ func TestDiffTotalCap(t *testing.T) {
 func setDiffLimits(t *testing.T, l DiffLimits) {
 	t.Helper()
 	prev := DefaultDiffLimits()
-	DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, DiffMaxBytes = l.Files, l.FileLines, l.LineBytes, l.Bytes
+	DiffMaxFiles, DiffMaxFileLines, DiffMaxLineBytes, DiffMaxBytes = l.Files, l.FileLines, l.LineBytes, l.Bytes
 	t.Cleanup(func() {
-		DiffMaxFiles, DiffMaxFileLines, DiffMaxLineChars, DiffMaxBytes = prev.Files, prev.FileLines, prev.LineBytes, prev.Bytes
+		DiffMaxFiles, DiffMaxFileLines, DiffMaxLineBytes, DiffMaxBytes = prev.Files, prev.FileLines, prev.LineBytes, prev.Bytes
 	})
 }
 
@@ -399,6 +400,71 @@ func TestDiffDefaultAndPatchLimits(t *testing.T) {
 	// A patch has no stat to use up its size cap.
 	if d.Stat != "" || !strings.HasPrefix(d.Patch, "diff --git ") {
 		t.Errorf("Patch has a stat: %q", d.Stat)
+	}
+}
+
+// Patch refuses, without running the patch, a commit that changes a blob
+// over the size cap, before or after: --binary would spend seconds and
+// gigabytes encoding it only for the result to be cut.
+func TestPatchRefusesLargeBlob(t *testing.T) {
+	prev := DiffMaxBytes
+	DiffMaxBytes = 2000
+	t.Cleanup(func() { DiffMaxBytes = prev })
+
+	big := strings.Repeat("\x00binary\x01", 1000) // 8000 bytes
+	r := newDiffRepo(t)
+	r.put("small.txt", "small\n")
+	r.commit("root")
+	r.put("big.bin", big)
+	added := r.commit("add big")
+	r.put("small.txt", "small\nchanged\n")
+	small := r.commit("change small")
+	r.rm("big.bin")
+	removed := r.commit("remove big")
+
+	repo := r.open()
+	for name, c := range map[string]*Commit{"added": added, "removed": removed} {
+		d, err := repo.Patch(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !d.Truncated || d.Patch != "" {
+			t.Errorf("%s: Truncated = %v, patch %d bytes; want refused before running", name, d.Truncated, len(d.Patch))
+		}
+	}
+	d, err := repo.Patch(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Truncated || !strings.Contains(d.Patch, "+changed\n") {
+		t.Errorf("a small change was refused: %+v", d)
+	}
+}
+
+// A line cut by LineBytes never ends inside a UTF-8 character, however the
+// output is split into writes.
+func TestDiffWriterCutsWholeRunes(t *testing.T) {
+	in := "diff --git a/x b/x\n+" + strings.Repeat("é", 20) + "\n+" + strings.Repeat("日", 20) + "\n+ok\n"
+	for lim := 11; lim <= 16; lim++ {
+		for chunk := 1; chunk <= 7; chunk++ {
+			w := &diffWriter{limits: DiffLimits{LineBytes: lim}, statEnd: -1}
+			for s := in; len(s) > 0; {
+				n := min(chunk, len(s))
+				if _, err := w.Write([]byte(s[:n])); err != nil {
+					t.Fatal(err)
+				}
+				s = s[n:]
+			}
+			d := w.diff()
+			for _, l := range strings.Split(strings.TrimSuffix(d.Patch, DiffTruncated), "\n") {
+				if !utf8.ValidString(l) || len(l) > max(lim, len(diffHeader)) {
+					t.Fatalf("lim %d chunk %d: line %q is cut inside a character or too long", lim, chunk, l)
+				}
+			}
+			if !strings.Contains(d.Patch, "\n+ok\n") || !d.Truncated {
+				t.Fatalf("lim %d chunk %d: patch = %q", lim, chunk, d.Patch)
+			}
+		}
 	}
 }
 
