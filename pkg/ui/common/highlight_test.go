@@ -87,6 +87,21 @@ func TestHighlightByContent(t *testing.T) {
 	}
 }
 
+// A file without a known name is told quickly, from its start, when the
+// file view works out whether it is markdown.
+func TestIsFileMarkdownBounded(t *testing.T) {
+	start := time.Now()
+	if IsFileMarkdown(strings.Repeat("package a\n", 10000), "noext") {
+		t.Fatal("Go source taken for markdown")
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("IsFileMarkdown took %v over 10,000 lines", took)
+	}
+	if !IsFileMarkdown("# T\n\ntext\n", "README.md") {
+		t.Fatal("README.md not taken for markdown")
+	}
+}
+
 // Every delegating lexer, which tokenises all of its input up front, is
 // replaced by a cappedLexer in the registry, for lookups by file name, by
 // name and by alias. If chroma renames its delegating type, nothing is
@@ -170,21 +185,55 @@ func TestBudgetStopsLongRuns(t *testing.T) {
 	}
 }
 
-// Merging neighbours of one type leaves the output as chroma.Coalesce did.
+// Merging neighbours of one type leaves the tokens as chroma.Coalesce gave
+// them, and so the output: empty tokens are dropped, and a run of one type
+// is cut at coalesceMax bytes.
 func TestTokensMerged(t *testing.T) {
+	cases := map[string]struct{ lexer, content string }{
+		"go":   {"go", strings.Repeat("package main\n\nfunc main() { println(\"a\") }\n", 50)},
+		"html": {"html", "<!doctype html>\n<html><head><style>p { color: red }</style></head>\n<body><p class=\"a\">hi</p><script>let a = 1</script></body></html>\n"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			waitSlots(t)
+			got, ok := tokenise(lexers.Get(tc.lexer), tc.content)
+			if !ok {
+				t.Fatal("tokenise failed")
+			}
+			it, err := chroma.Coalesce(lexers.Get(tc.lexer)).Tokenise(nil, tc.content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := it.Tokens()
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("tokens differ from chroma.Coalesce:\n%q\n%q", got, want)
+			}
+		})
+	}
+
+	// A run of 4,000 words, with empty tokens of another type between
+	// them, from a lexer that costs nothing, so that the budget plays no
+	// part.
+	var words []chroma.Token
+	for range 4000 {
+		words = append(words, chroma.Token{Type: chroma.Text, Value: "word "}, chroma.Token{Type: chroma.Punctuation})
+	}
+	run := fakeLexer{tokenise: func() (chroma.Iterator, error) { return chroma.Literator(words...), nil }}
 	waitSlots(t)
-	content := strings.Repeat("package main\n\nfunc main() { println(\"a\") }\n", 50)
-	got, ok := tokenise(lexers.Get("go"), content)
+	got, ok := tokenise(run, "")
 	if !ok {
 		t.Fatal("tokenise failed")
 	}
-	it, err := chroma.Coalesce(lexers.Get("go")).Tokenise(nil, content)
+	it, err := chroma.Coalesce(run).Tokenise(nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := it.Tokens()
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("tokens differ from chroma.Coalesce:\n%v\n%v", got, want)
+		t.Fatalf("tokens of a long run differ from chroma.Coalesce:\n%q\n%q", got, want)
+	}
+	if len(want) < 3 {
+		t.Fatalf("the run was cut into %d tokens; want it cut at coalesceMax", len(want))
 	}
 }
 

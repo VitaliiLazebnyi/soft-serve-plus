@@ -99,7 +99,7 @@ func Highlight(st gansi.StyleConfig, path, content string, noMargin bool) (strin
 		// A file without a known name, such as a script with a shebang.
 		// Some analysers take time quadratic in their input, so only the
 		// start of the file is looked at.
-		lexer = lexers.Analyse(content[:min(len(content), analyseMax)])
+		lexer = analyse(content)
 	}
 	if lexer == nil {
 		lexer = lexers.Fallback
@@ -189,6 +189,16 @@ func init() {
 	}
 }
 
+// coalesceMax is the length at which chroma.Coalesce stops adding tokens to
+// a run of one type.
+const coalesceMax = 8192
+
+// analyse returns the lexer chroma thinks fits content best, from its first
+// analyseMax bytes: some analysers take time quadratic in their input.
+func analyse(content string) chroma.Lexer {
+	return lexers.Analyse(content[:min(len(content), analyseMax)])
+}
+
 // maxTokenising is the most tokenisations that run at once in the server.
 var maxTokenising = int32(max(2, runtime.GOMAXPROCS(0)/2))
 
@@ -264,12 +274,20 @@ func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool) {
 			}
 		}
 		for t := it(); t != chroma.EOF; t = it() {
+			// Merge as chroma.Coalesce does, for the same output: empty
+			// tokens are dropped, and a run of one type is cut once it
+			// reaches coalesceMax bytes. Empty tokens are dropped before
+			// they are counted, so the cap counts the tokens it counted
+			// when chroma.Coalesce ran first.
+			if t.Value == "" {
+				continue
+			}
 			n++
 			if n > HighlightMaxTokens || stop.Load() {
 				done <- result{}
 				return
 			}
-			if t.Type != typ {
+			if t.Type != typ || run.Len() >= coalesceMax {
 				flush()
 				typ = t.Type
 			}
