@@ -243,7 +243,11 @@ func TestDiffPatchAppliesNoNewline(t *testing.T) {
 	r.put("a.txt", "one\nTWO")
 	r.put("b.txt", "keep\nno newline")
 	head := r.commit("change")
-	patch := diffPatch(r.diff(head))
+	d, err := r.open().Patch(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := d.Patch
 	if got := strings.Count(patch, "\\ No newline at end of file\n"); got != 3 {
 		t.Errorf("patch has %d no-newline markers, want 3:\n%s", got, patch)
 	}
@@ -385,12 +389,36 @@ func TestDiffDefaultAndPatchLimits(t *testing.T) {
 	if d := r.diff(c); !d.Truncated || strings.Contains(d.Patch, "+line 49\n") {
 		t.Errorf("Diff ignores DiffMaxFileLines:\n%s", d.Patch)
 	}
-	d, err := r.open().DiffLimited(c, PatchLimits())
+	d, err := r.open().Patch(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Truncated || !strings.Contains(d.Patch, "+line 49\n") {
-		t.Errorf("PatchLimits cut the diff by lines:\n%s", d.Patch)
+		t.Errorf("Patch cut the diff by lines:\n%s", d.Patch)
+	}
+	// A patch has no stat to use up its size cap.
+	if d.Stat != "" || !strings.HasPrefix(d.Patch, "diff --git ") {
+		t.Errorf("Patch has a stat: %q", d.Stat)
+	}
+}
+
+// Patch carries binary changes, so they apply too.
+func TestPatchAppliesBinary(t *testing.T) {
+	r := newDiffRepo(t)
+	r.put("data.bin", "bin\x00ary\x01")
+	root := r.commit("one")
+	r.put("data.bin", "bin\x00ary\x02 changed")
+	r.put("new.bin", "\x00\x01\x02")
+	head := r.commit("two")
+	d, err := r.open().Patch(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContains(t, "patch", d.Patch, "GIT binary patch")
+	r.git("", "read-tree", root.ID.String())
+	r.git(d.Patch, "apply", "--cached", "-")
+	if diff := r.git("", "diff", "--cached", head.ID.String()); diff != "" {
+		t.Errorf("applied patch differs from the commit:\n%s", diff)
 	}
 }
 
@@ -441,9 +469,12 @@ func TestDiffHugeMemory(t *testing.T) {
 	const size = 32 << 20
 	for _, tc := range []struct {
 		name, content string
+		patch         bool // Repository.Patch: no line caps, only the total
 	}{
-		{"one line", strings.Repeat("x", size)},
-		{"many lines", strings.Repeat("x\n", size/2)},
+		{"one line", strings.Repeat("x", size), false},
+		{"many lines", strings.Repeat("x\n", size/2), false},
+		{"one line patch", strings.Repeat("x", size), true},
+		{"many lines patch", strings.Repeat("x\n", size/2), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDiffRepo(t)
@@ -454,12 +485,30 @@ func TestDiffHugeMemory(t *testing.T) {
 			repo := r.open()
 			var d *Diff
 			var err error
-			n := allocated(func() { d, err = repo.Diff(c) })
+			if tc.patch {
+				// Under the total cap the big file alone is over it.
+				prev := DiffMaxBytes
+				DiffMaxBytes = 1 << 20
+				t.Cleanup(func() { DiffMaxBytes = prev })
+			}
+			n := allocated(func() {
+				if tc.patch {
+					d, err = repo.Patch(c)
+				} else {
+					d, err = repo.Diff(c)
+				}
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if n > size/4 {
-				t.Errorf("Diff allocated %d bytes for a %d byte file", n, size)
+				t.Errorf("allocated %d bytes for a %d byte file", n, size)
+			}
+			if tc.patch {
+				if !d.Truncated || len(d.Patch) > DiffMaxBytes+len(DiffTruncated) {
+					t.Errorf("Truncated = %v, %d bytes", d.Truncated, len(d.Patch))
+				}
+				return
 			}
 			if !d.Truncated || !strings.Contains(d.Patch, "+after\n") {
 				t.Errorf("Truncated = %v, the file after the big one shown = %v", d.Truncated, strings.Contains(d.Patch, "+after\n"))

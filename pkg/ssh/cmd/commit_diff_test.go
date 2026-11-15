@@ -13,6 +13,7 @@ import (
 	sgit "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/matryer/is"
 )
 
@@ -124,9 +125,9 @@ func TestRepoCommitPatchApplies(t *testing.T) {
 	}
 }
 
-// A plain --patch over the size cap is cut, says so, and fails, so a
-// pipeline into git apply does not take it for the whole patch. The view
-// for reading is cut the same way but does not fail.
+// A plain --patch over the size cap prints nothing and fails: in a pipeline
+// into git apply, a cut patch would apply the files before the cut and
+// succeed. The view for reading is cut and says so, and does not fail.
 func TestRepoCommitPatchTruncated(t *testing.T) {
 	prev := sgit.DiffMaxBytes
 	sgit.DiffMaxBytes = 300
@@ -142,11 +143,29 @@ func TestRepoCommitPatchTruncated(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "truncated") {
 		t.Errorf("commit --patch over the cap: err = %v, want a truncation error", err)
 	}
-	if !strings.HasSuffix(stdout, sgit.DiffTruncated) {
-		t.Errorf("cut patch does not end with the marker: %q", stdout)
+	if stdout != "" {
+		t.Errorf("commit --patch over the cap printed %q, want nothing", stdout)
 	}
 	stdout, _, err = runRepoOutput(t, ctx, "commit", "diffs", "main")
 	if err != nil || !strings.Contains(stdout, sgit.DiffTruncated) {
 		t.Errorf("commit over the cap: err = %v, marker shown = %v", err, strings.Contains(stdout, sgit.DiffTruncated))
+	}
+}
+
+// git's stat for a binary file ("Bin 2 -> 3 bytes") has no +/- graph; its
+// "->" must not be coloured as a deletion. A text file's graph still is.
+func TestRenderStatsBinary(t *testing.T) {
+	st := styles.DefaultStyles()
+	del := st.Log.CommitStatsDel.Render("-")
+	if del == "-" {
+		t.Skip("the renderer adds no styling")
+	}
+	out := renderStats(&sgit.Diff{Stat: " b.bin | Bin 2 -> 3 bytes\n t.txt | 2 +-\n"}, st, true)
+	lines := strings.Split(out, "\n")
+	if strings.Contains(lines[0], del) || !strings.Contains(lines[0], "Bin 2 -> 3 bytes") {
+		t.Errorf("binary stat line = %q, want it unstyled", lines[0])
+	}
+	if !strings.Contains(lines[1], del) {
+		t.Errorf("text stat line = %q, want its - styled", lines[1])
 	}
 }

@@ -43,14 +43,24 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 
-			// A plain --patch is meant for git apply, so it is cut only by
-			// its total size; anything for reading is cut by file and by
-			// line as well.
-			limits := git.DefaultDiffLimits()
+			// A plain --patch is meant for git apply and is printed byte
+			// for byte, as git prints it, binary changes included. It is
+			// cut only by its total size, and a cut one is not printed at
+			// all: git apply would apply the files before the cut and
+			// succeed.
 			if patchOnly && !color {
-				limits = git.PatchLimits()
+				p, err := r.Patch(commit)
+				if err != nil {
+					return err
+				}
+				if p.Truncated {
+					return fmt.Errorf("patch truncated at %d bytes; not printed, as a cut patch could be applied in part", git.PatchLimits().Bytes)
+				}
+				cmd.Print(p.Patch)
+				return nil
 			}
-			diff, err := r.DiffLimited(commit, limits)
+
+			diff, err := r.Diff(commit)
 			if err != nil {
 				return err
 			}
@@ -64,26 +74,13 @@ func commitCommand() *cobra.Command {
 			authorLine := "Author: " + utils.Sanitize(commit.Author.Name)
 			dateLine := "Date:   " + commit.Committer.When.UTC().Format(time.UnixDate)
 			msgLine := strings.ReplaceAll(utils.Sanitize(commit.Message), "\r\n", "\n")
-			// A plain --patch is meant for git apply and is printed byte
-			// for byte, as git prints it. Anything formatted for reading
-			// in a terminal is stripped of the escape sequences and
-			// control characters a commit can carry.
-			if !patchOnly || color {
-				patch = utils.Sanitize(patch)
-			}
+			// Anything formatted for reading in a terminal is stripped of
+			// the escape sequences and control characters a commit can
+			// carry.
+			patch = utils.Sanitize(patch)
 			statsLine := renderStats(diff, commonStyle, color)
 			diffLine := renderDiff(patch, color)
 
-			if patchOnly && !color {
-				// Byte for byte, without a line added at the end.
-				cmd.Print(patch)
-				if diff.Truncated {
-					// A pipeline into git apply must not take the cut
-					// patch for the whole.
-					return fmt.Errorf("patch truncated at %d bytes; it does not apply", limits.Bytes)
-				}
-				return nil
-			}
 			if patchOnly {
 				cmd.Println(
 					diffLine,
@@ -162,7 +159,7 @@ func renderStats(diff *git.Diff, commonStyle *styles.Styles, color bool) string 
 
 		for i, line := range s {
 			ch := strings.Split(line, "|")
-			if len(ch) > 1 {
+			if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
 				adddel := ch[len(ch)-1]
 				adddel = strings.ReplaceAll(adddel, "+", style.CommitStatsAdd.Render("+"))
 				adddel = strings.ReplaceAll(adddel, "-", style.CommitStatsDel.Render("-"))

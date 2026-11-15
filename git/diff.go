@@ -28,8 +28,10 @@ var (
 type DiffLimits struct {
 	// Files is the most files shown. The diff ends before the next one.
 	Files int
-	// FileLines is the most lines of one file's patch shown, its header
-	// lines included. The rest of that file is left out and the line
+	// FileLines is the most lines of one file's patch shown. The count
+	// includes the file's header lines (diff --git, index, ---, +++ and
+	// the like), not only its hunks, so a file gets a few lines fewer of
+	// content than the cap. The rest of that file is left out and the line
 	// diffFileTruncated put in its place.
 	FileLines int
 	// LineBytes is the most bytes of one line shown; the rest of the line
@@ -51,9 +53,9 @@ func DefaultDiffLimits() DiffLimits {
 	}
 }
 
-// PatchLimits returns the limits for a patch meant to be applied: only the
-// total size is capped, as cutting a file or a line would make the patch
-// useless to git apply.
+// PatchLimits returns the limits of Repository.Patch, a patch meant to be
+// applied: only the total size is capped, as cutting a file or a line would
+// make the patch useless to git apply.
 func PatchLimits() DiffLimits {
 	return DiffLimits{Bytes: DiffMaxBytes}
 }
@@ -68,6 +70,13 @@ type Diff struct {
 	Patch string
 	// Truncated reports that the diff was cut to its limits.
 	Truncated bool
+}
+
+// IsBinaryStat reports whether graph, the part of a --stat line after its
+// last "|", is git's summary of a binary file ("Bin 2 -> 3 bytes") rather
+// than a +/- graph, so its "->" is not coloured as a deletion.
+func IsBinaryStat(graph string) bool {
+	return strings.HasPrefix(strings.TrimSpace(graph), "Bin ")
 }
 
 // DiffTruncated ends a diff that was cut to its limits.
@@ -86,21 +95,44 @@ var diffHeader = []byte("diff --git ")
 // would C-quote only for being non-ASCII are left as they are, so names read
 // as they are; git still quotes control characters, quotes and backslashes.
 var diffArgs = []string{
-	"-r", "--stat=80", "-p", "-M", "--full-index",
+	"-r", "-p", "-M", "--full-index",
 	"--no-ext-diff", "--no-textconv", "--no-color",
 }
 
-// diffCommand returns a diff-tree command with diffArgs and then args. It is
-// plumbing, so porcelain settings such as diff.noprefix do not change it;
-// user and system config are left out too, as before.
-func (r *Repository) diffCommand(args ...string) *git.Command {
+// diffViewArgs add the stat to a diff for reading.
+var diffViewArgs = []string{"--stat=80"}
+
+// patchArgs make a patch to apply carry binary changes, which git apply
+// needs to apply them, and no stat, which would only use up its size cap.
+var patchArgs = []string{"--binary"}
+
+// diffCommand returns a diff-tree command with diffArgs, mode (diffViewArgs
+// or patchArgs) and then args. It is plumbing, so porcelain settings such
+// as diff.noprefix do not change it; user and system config are left out
+// too, as before.
+func (r *Repository) diffCommand(mode []string, args ...string) *git.Command {
 	return git.NewCommand("-c", "core.quotePath=false", "diff-tree").
 		AddOptions(git.CommandOptions{
 			Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
 			Context: r.Context(),
 		}).
 		AddArgs(diffArgs...).
+		AddArgs(mode...).
 		AddArgs(args...)
+}
+
+// commitDiffArgs are the arguments that name what commit's diff compares:
+// its first parent and itself, or for a root commit itself alone.
+func commitDiffArgs(commit *Commit) ([]string, error) {
+	rev := commit.ID.String()
+	if commit.ParentsCount() == 0 {
+		return []string{"--root", "--no-commit-id", "--end-of-options", rev}, nil
+	}
+	parent, err := commit.ParentID(0)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"--end-of-options", parent.String(), rev}, nil
 }
 
 // Diff returns the diff of commit against its first parent, or for a root
@@ -110,20 +142,25 @@ func (r *Repository) Diff(commit *Commit) (*Diff, error) {
 }
 
 // DiffLimited returns the diff of commit against its first parent, or for a
-// root commit against nothing, cut to limits.
+// root commit against nothing, cut to limits, for reading: with its stat.
 func (r *Repository) DiffLimited(commit *Commit, limits DiffLimits) (*Diff, error) {
-	rev := commit.ID.String()
-	var cmd *git.Command
-	if commit.ParentsCount() == 0 {
-		cmd = r.diffCommand("--root", "--no-commit-id", "--end-of-options", rev)
-	} else {
-		parent, err := commit.ParentID(0)
-		if err != nil {
-			return nil, err
-		}
-		cmd = r.diffCommand("--end-of-options", parent.String(), rev)
+	args, err := commitDiffArgs(commit)
+	if err != nil {
+		return nil, err
 	}
-	return r.runDiff(cmd, limits)
+	return r.runDiff(r.diffCommand(diffViewArgs, args...), limits)
+}
+
+// Patch returns the patch of commit against its first parent, or for a root
+// commit against nothing, for git apply: binary changes included, no stat,
+// and cut only by PatchLimits. A caller must not hand on a patch with
+// Truncated set, as git apply would apply the files before the cut.
+func (r *Repository) Patch(commit *Commit) (*Diff, error) {
+	args, err := commitDiffArgs(commit)
+	if err != nil {
+		return nil, err
+	}
+	return r.runDiff(r.diffCommand(patchArgs, args...), PatchLimits())
 }
 
 // StashDiff returns the diff of the stash at index, its work tree against
@@ -131,7 +168,7 @@ func (r *Repository) DiffLimited(commit *Commit, limits DiffLimits) (*Diff, erro
 // DefaultDiffLimits.
 func (r *Repository) StashDiff(index int) (*Diff, error) {
 	stash := "stash@{" + strconv.Itoa(index) + "}"
-	return r.runDiff(r.diffCommand("--end-of-options", stash+"^1", stash), DefaultDiffLimits())
+	return r.runDiff(r.diffCommand(diffViewArgs, "--end-of-options", stash+"^1", stash), DefaultDiffLimits())
 }
 
 // runDiff runs cmd and returns its output cut to limits. Once the output is
@@ -183,6 +220,9 @@ func (w *diffWriter) Write(p []byte) (int, error) {
 		}
 		p = p[len(seg):]
 		w.addToLine(seg)
+		if w.full {
+			return n - len(p), errDiffFull
+		}
 		if i >= 0 {
 			w.endLine()
 			if w.full {
@@ -207,6 +247,12 @@ func (w *diffWriter) addToLine(b []byte) {
 			b = b[:max(room, 0)]
 			w.lineCut = true
 		}
+	}
+	// A line that cannot fit in the total is not kept at all, so a huge
+	// line under no line cap costs no more memory than the total cap.
+	if lim := w.limits.Bytes; lim > 0 && w.out.Len()+len(w.line)+len(b) > lim {
+		w.stop()
+		return
 	}
 	w.line = append(w.line, b...)
 	if nl {

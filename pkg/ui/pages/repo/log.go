@@ -581,7 +581,7 @@ func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
 	stats := strings.Split(utils.Sanitize(diff.Stat), "\n")
 	for i, line := range stats {
 		ch := strings.Split(line, "|")
-		if len(ch) > 1 {
+		if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
 			adddel := ch[len(ch)-1]
 			adddel = strings.ReplaceAll(adddel, "+", styles.Log.CommitStatsAdd.Render("+"))
 			adddel = strings.ReplaceAll(adddel, "-", styles.Log.CommitStatsDel.Render("-"))
