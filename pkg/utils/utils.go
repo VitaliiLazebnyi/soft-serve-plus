@@ -225,10 +225,12 @@ func ValidateRepo(repo string) error {
 }
 
 // MaxRepoSegments is the most path segments a new repository name may have,
-// as in "a/b/c" (three). The HTTP server looks a go get import path up only
-// in its first MaxRepoSegments segments, so the work of one request stays
-// bounded however deep the package path is; a deeper repository could not
-// serve its packages to go get.
+// as in "a/b/c" (three). The HTTP server resolves a go get path only within
+// its first MaxRepoSegments segments, so the work of one request stays
+// bounded however deep the package path is. A repository nested deeper,
+// created before this limit, is found only when the import path names the
+// repository itself, and a bearer token for it gets 403 on the go get paths
+// of its subpackages.
 const MaxRepoSegments = 32
 
 // ValidateRepoSegments rejects repo path segments that start with a hyphen,
