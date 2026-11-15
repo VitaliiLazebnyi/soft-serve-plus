@@ -77,6 +77,11 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			}
 		}
 		ctx.SetValue(proto.ContextKeyUser, user)
+		// A connection with neither an account nor an admin key is
+		// closed after noAccountLifetime.
+		if user != nil || be.IsAdminKey(pk) {
+			hasAccount(ctx)
+		}
 
 		sh(s)
 	}
