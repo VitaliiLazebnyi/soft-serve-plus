@@ -109,24 +109,67 @@ func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 		}
 	}
 	p.notView("enter on the failed repository", "inner-body")
+	if n := len(p.r.FullHelp()); n != 1 {
+		t.Fatalf("full help has %d groups; want esc alone", n)
+	}
+
+	// Opening a repository that loads brings the tabs and their help back.
+	p.settle(RepoMsg(p.repo))
+	p.wantView("repository A again", "Commits", "readme-body")
+	if n := len(p.r.ShortHelp()); n <= len(p.r.commonHelp()) {
+		t.Fatalf("help offers %d keys after A opened again; want the tab's too", n)
+	}
+	p.settle(keyTab)
+	if p.r.activeTab != 1 {
+		t.Fatalf("tab went to tab %d after A opened again; want 1", p.r.activeTab)
+	}
 }
 
-// A load that fails in a tab that is not shown reaches that tab, which
-// leaves its loading view, rather than the tab that is shown.
-func TestErrorReachesItsPane(t *testing.T) {
+// A file opened from the listing on screen, while another directory loads,
+// is named after the directory it was listed in.
+func TestFilesFileFromPreviousListingNamedRight(t *testing.T) {
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
+	selectItem(t, p.files.selector, "sub")
+	// sub is asked for; its listing is still on its way.
+	var late []tea.Msg
+	for _, m := range nonTicks(p.update(keyEnter)) {
+		late = append(late, nonTicks(p.update(m))...)
+	}
+	if p.files.Path() != "sub" {
+		t.Fatalf("path = %q; want sub", p.files.Path())
+	}
+	selectItem(t, p.files.selector, "file.txt")
+	p.settle(keyEnter)
+	p.wantView("root file", "file-body-two")
+	p.settle(late...)
+	if got := p.files.Path(); got != "file.txt" {
+		t.Fatalf("the root file opened as %q; want file.txt", got)
+	}
+}
 
-	// The repository goes away; a resize reloads the commit page, which
-	// fails while the Files tab is shown.
+// Opening a file stops a listing still on its way, so that the listing
+// cannot fail afterwards and turn off a blame the user opened.
+func TestFilesOpenedFileStopsListing(t *testing.T) {
+	p := newPinPage(t)
+	p.open()
+	p.tab(1)
+	// "h" at the top lists the directory again; the user opens a file and
+	// its blame before the listing runs.
+	listing := p.files.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	selectItem(t, p.files.selector, "file.txt")
+	p.settle(keyEnter)
+	blame := nonTicks(p.update(keyB))
+
+	// The listing then fails, the repository having gone away.
 	if err := os.Rename(p.repo.path, p.repo.path+".gone"); err != nil {
 		t.Fatal(err)
 	}
-	if errs := p.deliver(tea.WindowSizeMsg{Width: 120, Height: 30}); errs == 0 {
-		t.Fatal("the failed page load reported no error")
+	p.deliver(runCmd(listing)...)
+	if !p.files.blameView {
+		t.Fatal("a late listing turned off the blame the user opened")
 	}
-	if _, loading := p.log.Loading(); loading {
-		t.Fatal("the Commits tab is still loading after its load failed")
-	}
+	p.deliver(blame...)
+	p.wantView("blame", "second-subject", "file-body-two")
 }

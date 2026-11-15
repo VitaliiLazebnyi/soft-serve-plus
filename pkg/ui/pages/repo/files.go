@@ -52,7 +52,9 @@ type FileItemsMsg struct {
 	items []selector.IdentifiableItem
 	// listing is the Files listing count when the listing was requested.
 	listing int
-	gen     uint64
+	// dir is the directory listed.
+	dir string
+	gen uint64
 	// truncated is set when the directory is too large to list in full
 	// and items holds only the first entries that fit.
 	truncated bool
@@ -118,6 +120,10 @@ type Files struct {
 	// opening a file that then fails to load must not drop the listing of
 	// the directory the pane is in.
 	listing int
+	// listed is the directory the listing on screen shows. It is not
+	// path, which names the directory being listed, or the file opened,
+	// as soon as the user asks for it.
+	listed string
 	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
 	// from an earlier load arrived after the user or a ref change moved on,
 	// and is dropped.
@@ -292,6 +298,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			f.selector.SetItems(msg.items),
 		)
 		f.truncated = msg.truncated
+		f.listed = msg.dir
 		f.activeView = filesViewFiles
 		if f.cursor >= 0 {
 			f.selector.Select(f.cursor)
@@ -305,8 +312,10 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		// dropped and the file's position is pushed only once.
 		f.load++
 		// A listing still on its way would put the list back while the
-		// path names the file.
+		// path names the file: drop it, and stop it, so that it cannot
+		// fail and turn off a blame the user opens next either.
 		f.listing++
+		f.listLoad.Stop()
 		f.path = msg.path
 		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
@@ -332,7 +341,9 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		case FileItem:
 			f.load++
 			f.currentItem = &sel
-			p := path.Join(f.path, sel.entry.Name())
+			// The item comes from the listing on screen, which may not be
+			// of the directory the user has since asked for.
+			p := path.Join(f.listed, sel.entry.Name())
 			if sel.entry.IsTree() {
 				f.path = p
 				f.lastSelected = append(f.lastSelected, f.selector.Index())
@@ -520,7 +531,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), listing: listing, gen: gen, truncated: truncated}
+		return FileItemsMsg{items: append(dirs, files...), listing: listing, dir: path, gen: gen, truncated: truncated}
 	}
 }
 
@@ -541,8 +552,8 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		if repo == nil || ref == nil {
 			return loadError(ctx, paneFiles, gen, errNoFileSelected)
 		}
-		// The entry was listed under the listing's context, which this
-		// load cancelled when it started.
+		// The entry was listed under the listing's context, which a later
+		// listing cancels; read the file under this load's.
 		fi := item.entry.WithContext(ctx).File()
 
 		var bin bool
@@ -669,7 +680,6 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
-	f.listing++
 	listing, gen := f.listing, f.gen
 	return func() tea.Msg {
 		return FileItemsMsg{items: items, listing: listing, gen: gen}
