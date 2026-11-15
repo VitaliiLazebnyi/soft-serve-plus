@@ -227,6 +227,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case RepoMsg:
 		l.repo = msg
+		l.clearDiff()
 	case RefMsg:
 		l.ref = msg.Ref
 		l.gen = msg.gen
@@ -317,7 +318,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		l.currentDiff = msg.diff
 		cmds = append(cmds, l.renderDiffCmd())
 	case diffRenderedMsg:
-		again := l.renders.Done()
+		again := l.renders.Done(msg.epoch)
 		if msg.render == l.render && l.selectedCommit != nil && l.currentDiff != nil {
 			l.vp.SetContent(msg.content)
 			if l.activeView == logViewLoading {
@@ -329,8 +330,8 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		}
 		// Otherwise the diff or the width changed while it was rendered:
 		// render what is shown now, once for every change meanwhile.
-		if again && l.selectedCommit != nil && l.currentDiff != nil && l.renders.Start() {
-			cmds = append(cmds, l.startRender())
+		if again && l.selectedCommit != nil && l.currentDiff != nil {
+			cmds = append(cmds, l.renderDiffCmd())
 		}
 	case LogDiffErrorMsg:
 		// Leave the loading view for the commit list, so the spinner does not
@@ -463,10 +464,13 @@ func (l *Log) goBack() {
 	}
 }
 
-// clearDiff forgets the diff shown, and drops a render of it in flight.
+// clearDiff forgets the diff shown, and drops a render of it in flight. It
+// also forgets that render, whose result may never come back, for example
+// when the page was left while it ran.
 func (l *Log) clearDiff() {
 	l.currentDiff = nil
 	l.render++
+	l.renders.Reset()
 	l.vp.SetContent("")
 }
 
@@ -475,16 +479,12 @@ func (l *Log) clearDiff() {
 // starts when it returns.
 func (l *Log) renderDiffCmd() tea.Cmd {
 	l.render++
-	if !l.renders.Start() {
+	epoch, ok := l.renders.Start()
+	if !ok {
 		return nil
 	}
-	return l.startRender()
-}
-
-// startRender returns the command of a render RenderGate let start.
-func (l *Log) startRender() tea.Cmd {
 	commit, st, width := l.selectedCommit, l.common.Styles, l.common.Width
-	return renderDiffCmd(paneLog, l.render, st, width, l.currentDiff, func() string {
+	return renderDiffCmd(paneLog, l.render, epoch, st, width, l.currentDiff, func() string {
 		return renderCommit(commit, st, width)
 	})
 }

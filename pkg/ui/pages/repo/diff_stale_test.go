@@ -130,6 +130,32 @@ func TestDiffRenderDropsStaleResults(t *testing.T) {
 	}
 }
 
+// A render whose result never comes back, because the user left the page
+// while it ran, does not keep the next diff from rendering once the pane
+// is reset.
+func TestDiffRenderLostResult(t *testing.T) {
+	for name, p := range newDiffPanes(t) {
+		t.Run(name, func(t *testing.T) {
+			updateRendered(p.m, findMsg[diffRenderedMsg](t, runCmd(p.open(&git.Diff{Patch: "+one\n"}))))
+			// A width change starts a render; its result is lost.
+			if n := len(renders(p.m.Update(tea.WindowSizeMsg{Width: 90, Height: 40}))); n != 1 {
+				t.Fatalf("a width change started %d renders; want 1", n)
+			}
+			p.m.Update(GoBackMsg{})
+			// The repository is opened again, and a diff with it.
+			p.m.Update(RepoMsg(fakeRepo{}))
+			r := renders(p.open(&git.Diff{Patch: "+two\n"}))
+			if len(r) != 1 {
+				t.Fatalf("opening a diff after a lost render started %d renders; want 1", len(r))
+			}
+			p.m.Update(r[0])
+			if !p.shown() || !strings.Contains(p.vp.GetContent(), "two") {
+				t.Fatal("the diff is not shown")
+			}
+		})
+	}
+}
+
 // Width changes while a render is in flight start no render of their own:
 // a client that resizes over and over costs at most two renders, the one in
 // flight and one for the width it ends at.

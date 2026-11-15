@@ -166,6 +166,7 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case RepoMsg:
 		s.repo = msg
+		s.clearPatch()
 	case RefMsg:
 		s.ref = msg.Ref
 		s.gen = msg.gen
@@ -222,7 +223,7 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		s.state = stashStateLoading
 		cmds = append(cmds, s.renderPatchCmd())
 	case diffRenderedMsg:
-		again := s.renders.Done()
+		again := s.renders.Done(msg.epoch)
 		if msg.render == s.render && s.currentPatch.Diff != nil {
 			s.vp.SetContent(msg.content)
 			if s.state == stashStateLoading {
@@ -234,8 +235,8 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		}
 		// Otherwise the patch or the width changed while it was rendered:
 		// render what is shown now, once for every change meanwhile.
-		if again && s.currentPatch.Diff != nil && s.renders.Start() {
-			cmds = append(cmds, s.startRender())
+		if again && s.currentPatch.Diff != nil {
+			cmds = append(cmds, s.renderPatchCmd())
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
@@ -278,24 +279,23 @@ func (s *Stash) View() string {
 // returns.
 func (s *Stash) renderPatchCmd() tea.Cmd {
 	s.render++
-	if !s.renders.Start() {
+	epoch, ok := s.renders.Start()
+	if !ok {
 		return nil
 	}
-	return s.startRender()
-}
-
-// startRender returns the command of a render RenderGate let start.
-func (s *Stash) startRender() tea.Cmd {
 	title := s.common.Styles.Stash.Title.Render(s.currentTitle) + "\n"
-	return renderDiffCmd(paneStash, s.render, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
+	return renderDiffCmd(paneStash, s.render, epoch, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
 		return title
 	})
 }
 
-// clearPatch forgets the patch shown, and drops a render of it in flight.
+// clearPatch forgets the patch shown, and drops a render of it in flight. It
+// also forgets that render, whose result may never come back, for example
+// when the page was left while it ran.
 func (s *Stash) clearPatch() {
 	s.currentPatch = StashPatchMsg{}
 	s.render++
+	s.renders.Reset()
 	s.vp.SetContent("")
 }
 

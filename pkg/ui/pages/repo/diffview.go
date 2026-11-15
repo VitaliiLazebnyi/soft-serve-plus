@@ -24,6 +24,14 @@ const diffHighlightMaxLines = 10000
 // diffTruncatedNote tops a diff that was cut to its limits.
 const diffTruncatedNote = "This diff is too large to show in full; the rest is left out."
 
+// RenderedMsg is the result of a render a tab of the repository page
+// started. The program must hand it to the repository page even while
+// another page is shown: the tab starts its next render only once the
+// running one has returned.
+type RenderedMsg interface {
+	repoRendered()
+}
+
 // diffRenderedMsg is a diff rendered for a pane's viewport by
 // renderDiffCmd.
 type diffRenderedMsg struct {
@@ -35,20 +43,25 @@ type diffRenderedMsg struct {
 	// repository page never drops it: the pane must see every render it
 	// started return, to start the next one (see common.RenderGate).
 	render int
+	// epoch is the common.RenderGate epoch the render started in.
+	epoch int
 }
 
 func (m diffRenderedMsg) pane() paneID { return m.to }
+
+func (diffRenderedMsg) repoRendered() {}
 
 // renderDiffCmd returns a command that renders diff under header for a
 // viewport width columns wide. Sanitising, highlighting and wrapping a diff
 // of a few MiB takes seconds, so it runs in a command and not in Update,
 // which would block the session meanwhile. header runs in the command too.
-func renderDiffCmd(to paneID, render int, st *styles.Styles, width int, diff *git.Diff, header func() string) tea.Cmd {
+func renderDiffCmd(to paneID, render, epoch int, st *styles.Styles, width int, diff *git.Diff, header func() string) tea.Cmd {
 	return func() tea.Msg {
 		return diffRenderedMsg{
 			content: renderDiffView(header(), diff, st, width),
 			to:      to,
 			render:  render,
+			epoch:   epoch,
 		}
 	}
 }

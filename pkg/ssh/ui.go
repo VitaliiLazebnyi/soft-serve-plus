@@ -237,6 +237,10 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ui.error == nil && ui.activePage == repoPage {
 			ui.showFooter = !ui.showFooter
 		}
+	case repo.RenderedMsg:
+		// A render a tab started, which it waits for to start its next
+		// one, even after the user left the repository page.
+		cmds = append(cmds, ui.pages[repoPage].Update(msg))
 	case repo.RepoMsg:
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
@@ -267,9 +271,11 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	cmds = append(cmds, ui.footer.Update(msg))
-	// A window size message has already been delivered to every page above.
+	// A window size message has already been delivered to every page above,
+	// and a render to the repository page.
 	_, resized := msg.(tea.WindowSizeMsg)
-	if !resized && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
+	_, rendered := msg.(repo.RenderedMsg)
+	if !resized && !rendered && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		cmds = append(cmds, ui.pages[ui.activePage].Update(msg))
 	}
 	// This fixes determining the height margin of the footer.
