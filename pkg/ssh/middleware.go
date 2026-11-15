@@ -22,7 +22,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/spf13/cobra"
-	gossh "golang.org/x/crypto/ssh"
 )
 
 // ErrPermissionDenied is returned when a user is not allowed connect.
@@ -36,33 +35,13 @@ var ErrUserLookupFailed = errors.New("could not look up your account, try again 
 // AuthenticationMiddleware handles authentication.
 func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		// charm.land/ssh gives the session the key that authenticated it.
-		// As defense in depth, check it against the fingerprint
-		// PublicKeyHandler stored for the last key it approved.
-
+		// charm.land/ssh gives the session the key that signed, parsed
+		// from the permissions x/crypto returned for that key, not the
+		// last key the client offered. TestAuthenticationAfterOfferedKey
+		// guards that.
 		ctx := s.Context()
 		be := backend.FromContext(ctx)
-
-		var pkFp string
-		perms := s.Permissions().Permissions
 		pk := s.PublicKey()
-		if pk != nil {
-			// A session with a key but no permissions block did not go
-			// through PublicKeyHandler: refuse it.
-			if perms == nil {
-				wish.Fatalln(s, ErrPermissionDenied)
-				return
-			}
-
-			pkFp = gossh.FingerprintSHA256(pk)
-		}
-
-		// Check if the key is the same as the one we have in context
-		fp := perms.Extensions["pubkey-fp"]
-		if fp != "" && fp != pkFp {
-			wish.Fatalln(s, ErrPermissionDenied)
-			return
-		}
 
 		// The keyless setting only matters without a key, so a keyed
 		// session does not look it up.

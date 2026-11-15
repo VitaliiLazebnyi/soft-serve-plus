@@ -69,10 +69,8 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 			// Logging middleware.
 			LoggingMiddleware,
 			// Authentication middleware.
-			// charm.land/ssh already gives the session the key that
-			// authenticated it. This checks it against the fingerprint
-			// PublicKeyHandler stored, as defense in depth, and sets the
-			// session's user.
+			// Sets the session's user from the key that authenticated
+			// it, and refuses keyless sessions when keyless access is off.
 			AuthenticationMiddleware,
 			// Command length middleware.
 			// Refuses overlong exec commands before anything parses them.
@@ -121,12 +119,11 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	}
 
 	// Limit the connections open at once, in total and per client address,
-	// and the session channels each connection may hold.
+	// and the session channels and running commands each connection may
+	// hold.
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
 	s.srv.ConnCallback = connCallback(s.limiter, logger)
-	s.srv.ChannelHandlers = map[string]ssh.ChannelHandler{
-		"session": limitSessions(ssh.DefaultSessionHandler, cfg.SSH.MaxSessions),
-	}
+	setSessionHandlers(s.srv, cfg.SSH.MaxSessions)
 
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
@@ -185,41 +182,14 @@ func (s *SSHServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
-// initializePermissions returns the context's permissions, creating them
-// and their extensions map when missing.
-func initializePermissions(ctx ssh.Context) *ssh.Permissions {
-	perms := ctx.Permissions()
-	if perms == nil || perms.Permissions == nil {
-		perms = &ssh.Permissions{Permissions: &gossh.Permissions{}}
-	}
-	if perms.Extensions == nil {
-		perms.Extensions = make(map[string]string)
-	}
-	return perms
-}
-
-// PublicKeyHandler handles public key authentication.
-func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed bool) {
-	defer func() {
-		publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
-	}()
-
-	if pk == nil {
-		return false
-	}
-
-	allowed = true
-
-	// Store the offered key's fingerprint in the permissions block for
-	// AuthenticationMiddleware to check. Each attempt overwrites it, so it
-	// ends up naming the key that authenticated.
-	perms := initializePermissions(ctx)
-
-	// Set the public key fingerprint to be used for authentication.
-	perms.Extensions["pubkey-fp"] = gossh.FingerprintSHA256(pk)
-	ctx.SetValue(ssh.ContextKeyPermissions, perms)
-
-	return
+// PublicKeyHandler handles public key authentication. It approves every key:
+// what a key may do is decided per session, from the account that owns it.
+// charm.land/ssh gives each session the key that signed, which is how
+// AuthenticationMiddleware finds the session's user.
+func (s *SSHServer) PublicKeyHandler(_ ssh.Context, pk ssh.PublicKey) (allowed bool) {
+	allowed = pk != nil
+	publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
+	return allowed
 }
 
 // KeyboardInteractiveHandler handles keyboard interactive authentication,
@@ -227,13 +197,5 @@ func (s *SSHServer) PublicKeyHandler(ctx ssh.Context, pk ssh.PublicKey) (allowed
 func (s *SSHServer) KeyboardInteractiveHandler(ctx ssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
 	ac := s.be.AllowKeyless(ctx)
 	keyboardInteractiveCounter.WithLabelValues(strconv.FormatBool(ac)).Inc()
-
-	perms := initializePermissions(ctx)
-	if ac {
-		// Clear the fingerprint a failed public key attempt may have left,
-		// since no key authenticated this session.
-		perms.Extensions["pubkey-fp"] = ""
-		ctx.SetValue(ssh.ContextKeyPermissions, perms)
-	}
 	return ac
 }

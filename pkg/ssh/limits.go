@@ -8,6 +8,7 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
+	"charm.land/wish/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	gossh "golang.org/x/crypto/ssh"
@@ -126,12 +127,19 @@ func (c *limitedConn) Close() error {
 	return err
 }
 
-// sessionCounterKey is the connection context key of the number of open
-// session channels on that connection.
+// sessionCounterKey is the connection context key of the connection's
+// sessionCounts.
 type sessionCounterKey struct{}
 
+// sessionCounts holds the number of session channels open on one connection
+// and the number of session handlers running on it.
+type sessionCounts struct {
+	channels atomic.Int64
+	handlers atomic.Int64
+}
+
 // connCallback returns the ssh.ConnCallback that enforces the connection
-// limits and sets up the per-connection session counter.
+// limits and sets up the per-connection session counts.
 func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 	return func(ctx ssh.Context, conn net.Conn) net.Conn {
 		release, limit := l.acquire(conn.RemoteAddr())
@@ -143,95 +151,75 @@ func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 			logger.Debug("refusing connection: too many connections", "limit", limit, "remote-addr", conn.RemoteAddr())
 			return nil
 		}
-		ctx.SetValue(sessionCounterKey{}, new(atomic.Int64))
+		ctx.SetValue(sessionCounterKey{}, new(sessionCounts))
 		return &limitedConn{Conn: conn, release: release}
 	}
 }
 
+// msgTooManySessions is the reason given for a session refused by
+// max_sessions.
+const msgTooManySessions = "too many sessions on this connection"
+
 // limitSessions wraps a session channel handler so that a connection holds at
-// most maxSessions sessions at once, as OpenSSH's MaxSessions does. Further
-// channels are rejected until one ends. A zero limit returns next unchanged.
+// most maxSessions session channels at once, as OpenSSH's MaxSessions does.
+// Further channels are rejected until one ends. A zero limit returns next
+// unchanged.
 //
-// A session holds its place until both its channel's request loop and the
-// handler it started, if any, have returned. ssh.DefaultSessionHandler runs
-// the shell, exec or subsystem handler in a goroutine of its own and returns
-// as soon as the client closes the channel, so freeing the place then would
-// let a client start a command, close the channel at once and repeat,
-// keeping any number of commands running on one connection.
+// A channel's place is freed when its request loop returns. That can be
+// before the command it started has finished: ssh.DefaultSessionHandler runs
+// the command in a goroutine of its own and returns as soon as the client
+// closes the channel. limitHandlers bounds the running commands.
 func limitSessions(next ssh.ChannelHandler, maxSessions int) ssh.ChannelHandler {
 	if maxSessions <= 0 {
 		return next
 	}
 	return func(srv *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
-		n, _ := ctx.Value(sessionCounterKey{}).(*atomic.Int64)
-		if n == nil {
+		counts, _ := ctx.Value(sessionCounterKey{}).(*sessionCounts)
+		if counts == nil {
 			next(srv, conn, newChan, ctx)
 			return
 		}
-		if n.Add(1) > int64(maxSessions) {
-			n.Add(-1)
-			_ = newChan.Reject(gossh.ResourceShortage, "too many sessions on this connection")
+		defer counts.channels.Add(-1)
+		if counts.channels.Add(1) > int64(maxSessions) {
+			_ = newChan.Reject(gossh.ResourceShortage, msgTooManySessions)
 			return
 		}
-		defer n.Add(-1)
-		var running sync.WaitGroup
-		next(trackHandlers(srv, &running), conn, newChan, ctx)
-		running.Wait()
+		next(srv, conn, newChan, ctx)
 	}
 }
 
-// trackHandlers returns a server for a single session channel that hands that
-// channel's handlers to ssh.DefaultSessionHandler as srv does, but counts the
-// one it starts in running until it returns.
-//
-// The handler starts in a goroutine that may not have run by the time the
-// request loop returns, so the count goes up in the session request callback,
-// which the request loop calls before it starts a handler; the request loop
-// accepts at most one shell, exec or subsystem request per session. The
-// returned server only carries the fields ssh.DefaultSessionHandler reads:
-// copying the whole of srv would copy its locks.
-func trackHandlers(srv *ssh.Server, running *sync.WaitGroup) *ssh.Server {
-	t := &ssh.Server{
-		PtyCallback: srv.PtyCallback,
-		PtyHandler:  srv.PtyHandler,
+// limitHandlers wraps a session handler so that at most maxSessions of them
+// run at once on one connection. Without it a client could start a command,
+// close its channel at once, which frees the channel's place under
+// limitSessions, and repeat, keeping any number of commands running on one
+// connection. A session over the limit ends with an error. A zero limit
+// returns next unchanged.
+func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
+	if maxSessions <= 0 {
+		return next
 	}
-	if srv.Handler != nil {
-		h := srv.Handler
-		t.Handler = func(s ssh.Session) {
-			defer running.Done()
-			h(s)
+	return func(s ssh.Session) {
+		counts, _ := s.Context().Value(sessionCounterKey{}).(*sessionCounts)
+		if counts == nil {
+			next(s)
+			return
 		}
+		defer counts.handlers.Add(-1)
+		if counts.handlers.Add(1) > int64(maxSessions) {
+			wish.Fatalln(s, msgTooManySessions)
+			return
+		}
+		next(s)
 	}
-	if srv.SubsystemHandlers != nil {
-		t.SubsystemHandlers = make(map[string]ssh.SubsystemHandler, len(srv.SubsystemHandlers))
-		for name, h := range srv.SubsystemHandlers {
-			if h == nil {
-				continue
-			}
-			t.SubsystemHandlers[name] = func(s ssh.Session) {
-				defer running.Done()
-				h(s)
-			}
-		}
+}
+
+// setSessionHandlers sets up how srv handles session channels, the only
+// channels it accepts: ssh.DefaultSessionHandler limited by limitSessions,
+// running srv.Handler, which must already be set, limited by limitHandlers,
+// both to maxSessions.
+func setSessionHandlers(srv *ssh.Server, maxSessions int) {
+	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
+		"session": limitSessions(ssh.DefaultSessionHandler, maxSessions),
 	}
-	cb := srv.SessionRequestCallback
-	t.SessionRequestCallback = func(s ssh.Session, requestType string) bool {
-		if cb != nil && !cb(s, requestType) {
-			return false
-		}
-		// Count the handler only when the request loop is about to start
-		// one, mirroring its own checks after this callback.
-		switch requestType {
-		case "shell", "exec":
-			if t.Handler != nil {
-				running.Add(1)
-			}
-		case "subsystem":
-			if t.SubsystemHandlers[s.Subsystem()] != nil || t.SubsystemHandlers["default"] != nil {
-				running.Add(1)
-			}
-		}
-		return true
-	}
-	return t
+	srv.Handler = limitHandlers(srv.Handler, maxSessions)
 }
