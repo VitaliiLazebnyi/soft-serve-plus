@@ -45,8 +45,8 @@ services:
     restart: unless-stopped
 ```
 
-`--init` and `init: true` are a safeguard rather than a requirement with this
-image; see [Reaping background git processes](#reaping-background-git-processes).
+For why the examples use `--init` and `init: true`, see
+[Reaping background git processes](#reaping-background-git-processes).
 
 The container runs Soft Serve Plus as the unprivileged `soft` user (UID and GID
 `1000`), so the data directory must be writable by that user. A new named volume
@@ -147,11 +147,17 @@ The image already handles this in two ways:
   `soft is PID 1 and cannot supervise itself ...` and the server runs without
   anything reaping its orphans.
 
-The examples above still add `--init` (`init: true`). With this image it is
-belt-and-braces, and it works with `read_only: true`, `cap_drop: [ALL]` and
-`no-new-privileges`. It is what protects you when the entrypoint is
-overridden (for example `--entrypoint /usr/local/bin/soft`), or when you run
-`soft serve` from your own image or an older image without tini.
+The examples above still add `--init` (`init: true`). With this image it is a
+safeguard rather than a requirement, and it works with `read_only: true`,
+`cap_drop: [ALL]` and `no-new-privileges`. When the entrypoint is overridden
+(for example `--entrypoint /usr/local/bin/soft`) or you run `soft serve` from
+your own image, `soft` is PID 1 and supervises itself, so the orphans are
+reaped anyway; the init saves the second `soft` process and also covers the
+case where the child cannot be started. It is required only with an older
+image that has neither tini nor this fallback.
+
+A PID limit such as `pids_limit: 128` can stay: with an init, the container
+uses about 10 processes and the count stays stable.
 
 ### Kubernetes
 
@@ -176,13 +182,13 @@ and raise `GIT_CONFIG_COUNT`):
 
 ```yaml
     environment:
-      GIT_CONFIG_COUNT: "2"
-      GIT_CONFIG_KEY_0: maintenance.autoDetach
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: gc.autoDetach
       GIT_CONFIG_VALUE_0: "false"
-      # git older than 2.47 runs "git gc --auto" instead, which reads this key:
-      GIT_CONFIG_KEY_1: gc.autoDetach
-      GIT_CONFIG_VALUE_1: "false"
 ```
+
+`maintenance.autoDetach` falls back to `gc.autoDetach` when it is not set, so
+this one key covers git 2.47 and later as well as older versions.
 
 The trade-off is that a push then waits for maintenance to finish whenever it
 has real work to do. The setting reaches the git processes that serve pushes;
