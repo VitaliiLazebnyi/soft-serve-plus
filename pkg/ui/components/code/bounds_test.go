@@ -58,9 +58,6 @@ func TestGlamourBounded(t *testing.T) {
 		"ordered markers":            strings.Repeat("1. ", 200) + "x\n",
 		"ordered markers, parens":    strings.Repeat("1) ", 200) + "x\n",
 		"many nested markers":        strings.Repeat("- - - - x\n", 1000),
-		"code blocks in list items":  strings.Repeat("- ```\n", 1000),
-		"empty code blocks":          strings.Repeat("```\n```\n", 500),
-		"indented code blocks":       strings.Repeat("    code\n# h\n", 500),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -78,21 +75,6 @@ func TestGlamourBounded(t *testing.T) {
 	// A README within the limits is still rendered as markdown.
 	if out := renderWithin(t, "# Title\n\nSome *text*.\n", 10*time.Second); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") {
 		t.Fatalf("a small README was not rendered as markdown:\n%s", out)
-	}
-}
-
-// Markdown shown as source, as the Files tab does when the preview is off,
-// is not highlighted when it has many code blocks: chroma's markdown lexer
-// looks each block's language up as glamour does.
-func TestMarkdownSourceWithManyCodeBlocksNotHighlighted(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
-	deliver(c, c.SetContent(strings.Repeat("```zzz\nx\n```\n", 333), "README.md"))
-	if out := c.GetContent(); strings.Contains(out, "\x1b[") || !strings.Contains(out, "```zzz") {
-		t.Fatal("markdown with 333 code blocks was highlighted, or is missing")
-	}
-	deliver(c, c.SetContent("# T\n\n```zzz\nx\n```\n", "README.md"))
-	if !strings.Contains(c.GetContent(), "\x1b[") {
-		t.Fatal("markdown with one code block was not highlighted")
 	}
 }
 

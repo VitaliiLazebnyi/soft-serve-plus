@@ -11,7 +11,6 @@ import (
 	"charm.land/glamour/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	vp "github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
@@ -33,7 +32,7 @@ const HighlightMax = 256 << 10
 // HighlightLineMax is the longest line, in bytes, of content that is
 // highlighted or rendered as markdown. chroma's time grows much faster than
 // the length of a token: one identifier of 64 KiB takes seconds, one of
-// 1 MiB minutes, and glamour highlights code blocks with chroma.
+// 1 MiB minutes.
 const HighlightLineMax = 4 << 10
 
 // HighlightMaxLines is the most lines content may have to be highlighted.
@@ -60,12 +59,6 @@ const GlamourMaxDepth = 8
 // container costs glamour far more than its text: 1,000 lines of ten
 // nested list markers took 7.6 s and 2.9 GiB.
 const GlamourMaxMarkers = 750
-
-// GlamourMaxCodeBlocks is the most code blocks content may have to be
-// rendered as markdown. glamour highlights each with chroma, which looks a
-// block without a known language up by matching every lexer's file name
-// patterns: about 2.4 ms a block, whatever its size.
-const GlamourMaxCodeBlocks = 200
 
 // lastID numbers the Code views, so a RenderedMsg finds its view.
 var lastID atomic.Int64
@@ -429,15 +422,18 @@ func (j renderJob) run() RenderedMsg {
 	if !j.lineNumbers && j.styleConfig.CodeBlock.Margin != nil {
 		margin = int(*j.styleConfig.CodeBlock.Margin)
 	}
-	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines &&
-		!manyMarkdownCodeBlocks(j.extension, content) {
-		out, err := highlight(j.styleConfig, j.extension, content, j.lineNumbers)
+	highlighted := false
+	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
+		out, ok, err := highlight(j.styleConfig, j.extension, content, j.lineNumbers)
 		if err != nil {
 			msg.err = err
 			return msg
 		}
-		content = out
-	} else if margin > 0 {
+		if ok {
+			content, highlighted = out, true
+		}
+	}
+	if !highlighted && margin > 0 {
 		// Indent as the highlighted code block would be.
 		pad := strings.Repeat(" ", margin)
 		content = pad + strings.ReplaceAll(content, "\n", "\n"+pad)
@@ -476,92 +472,45 @@ func wrapLine(s string, width int) []string {
 }
 
 // markdownNestingOK reports whether s nests block quotes and lists little
-// enough for glamour, and has few enough code blocks: no line deeper than
-// GlamourMaxDepth, no more than GlamourMaxMarkers markers and
-// GlamourMaxCodeBlocks code blocks in all.
+// enough for glamour: no line deeper than GlamourMaxDepth, and no more than
+// GlamourMaxMarkers markers in all.
 func markdownNestingOK(s string) bool {
-	deepest, markers, blocks := markdownNesting(s)
-	return deepest <= GlamourMaxDepth && markers <= GlamourMaxMarkers &&
-		blocks <= GlamourMaxCodeBlocks
+	deepest, markers := markdownNesting(s)
+	return deepest <= GlamourMaxDepth && markers <= GlamourMaxMarkers
 }
 
 // markdownNesting returns the deepest nesting at the start of a line of s,
-// the number of block quote and list markers at the start of all its lines,
-// and the number of code blocks it opens.
-//
-// A marker is ">", "-", "*", "+", or up to nine digits followed by "." or
-// ")" and then a space or the end of the line; the nesting of a line is its
-// markers plus one for every two columns of indentation. A code block opens
-// on a line that, after its markers and spaces, starts a ``` or ~~~ fence
-// outside a fence, or on a line with text after four or more spaces
-// following its last marker or the start of the line, unless it continues
-// an indented block on the line before. It may count more blocks than
-// CommonMark finds, which only means plain text sooner.
-func markdownNesting(s string) (deepest, markers, blocks int) {
-	inFence, prevIndented := false, false
+// and the number of block quote and list markers at the start of all its
+// lines. A marker is ">", "-", "*", "+", or up to nine digits followed by
+// "." or ")" and then a space or the end of the line; the nesting of a line
+// is its markers plus one for every two columns of indentation.
+func markdownNesting(s string) (deepest, markers int) {
 	for line := range strings.SplitSeq(s, "\n") {
-		depth, spaces, run := 0, 0, 0
-		i := 0
-	scan:
-		for i < len(line) {
+		depth, spaces := 0, 0
+		for i := 0; i < len(line); {
 			c := line[i]
 			switch {
 			case c == ' ':
 				spaces++
-				run++
 				i++
+				continue
 			case c == '>' || c == '-' || c == '*' || c == '+':
 				depth++
-				run = 0
 				i++
+				continue
 			case c >= '0' && c <= '9':
-				n := orderedMarker(line[i:])
-				if n == 0 {
-					break scan
+				if n := orderedMarker(line[i:]); n > 0 {
+					depth++
+					i += n
+					continue
 				}
-				depth++
-				run = 0
-				i += n
-			default:
-				break scan
 			}
+			break
 		}
 		markers += depth
 		deepest = max(deepest, depth+spaces/2)
-
-		rest := line[i:]
-		switch {
-		case strings.HasPrefix(rest, "```") || strings.HasPrefix(rest, "~~~"):
-			if !inFence {
-				blocks++
-			}
-			inFence = !inFence
-			prevIndented = false
-		case inFence || rest == "":
-			// Inside a fence, or a blank line, which an indented block
-			// runs through.
-		case run >= 4:
-			if depth > 0 || !prevIndented {
-				blocks++
-			}
-			prevIndented = true
-		default:
-			prevIndented = false
-		}
 	}
-	return deepest, markers, blocks
-}
-
-// manyMarkdownCodeBlocks reports whether content, named name, is markdown
-// with more than GlamourMaxCodeBlocks code blocks. chroma's markdown lexer
-// highlights each code block as glamour does, at the same cost.
-func manyMarkdownCodeBlocks(name, content string) bool {
-	lexer := lexers.Match(name)
-	if lexer == nil || lexer.Config() == nil || lexer.Config().Name != "markdown" {
-		return false
-	}
-	_, _, blocks := markdownNesting(content)
-	return blocks > GlamourMaxCodeBlocks
+	return deepest, markers
 }
 
 // orderedMarker returns the length of the ordered list marker s starts
@@ -593,6 +542,11 @@ func glamourize(st gansi.StyleConfig, w int, md string) (string, error) {
 	if w > 120 {
 		w = 120
 	}
+	// Code blocks are shown as plain styled text. Highlighting them is
+	// chroma's work, which costs about 2.4 ms a block for a block in a
+	// language chroma does not know, whatever its size.
+	st.CodeBlock.Chroma = nil
+	st.CodeBlock.Theme = ""
 	tr, err := glamour.NewTermRenderer(
 		glamour.WithStyles(st),
 		glamour.WithWordWrap(w),
@@ -605,29 +559,4 @@ func glamourize(st gansi.StyleConfig, w int, md string) (string, error) {
 		return "", err
 	}
 	return mdt, nil
-}
-
-func highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, error) {
-	lexer := lexers.Match(path)
-	if path == "" {
-		lexer = lexers.Analyse(content)
-	}
-	lang := ""
-	if lexer != nil && lexer.Config() != nil {
-		lang = lexer.Config().Name
-	}
-
-	formatter := &gansi.CodeBlockElement{
-		Code:     content,
-		Language: lang,
-	}
-	if noMargin {
-		var m uint
-		st.CodeBlock.Margin = &m
-	}
-	s := strings.Builder{}
-	if err := formatter.Render(&s, common.StyleRendererWithStyles(st)); err != nil {
-		return "", err
-	}
-	return s.String(), nil
 }
