@@ -33,7 +33,7 @@ const maxGitProtocolLength = 256
 // window-change until a shell or exec request has started the session's
 // handler (the server has no subsystems), and accepts one short GIT_PROTOCOL
 // and no other env request, as OpenSSH does without AcceptEnv. Once the
-// handler runs, discardWindowChanges keeps the loop from blocking. Refused
+// handler runs, discard keeps the loop from blocking. Refused
 // requests get a false reply when the client wants one; clients carry on
 // without them.
 func filterSessionRequests(next ssh.ChannelHandler) ssh.ChannelHandler {
@@ -93,18 +93,10 @@ func isGitProtocolEnv(payload []byte) bool {
 	return kv.Key == gitProtocolEnv && len(kv.Value) <= maxGitProtocolLength
 }
 
-// discardWindowChanges reads and drops the session's window changes, if it
-// has a pty, until its request loop ends, so the loop never blocks on a
-// window change nobody reads (see filterSessionRequests). Call it for a
-// command run with a pty, which has no TUI to read them.
-func discardWindowChanges(s ssh.Session) {
-	_, winch, _ := s.Pty()
-	discard(winch)
-}
-
 // discardWindowChangesAfter wraps a session handler so that the session's
 // window changes are discarded once the handler returns. The TUI reads them
-// while it runs, and nothing does after it exits.
+// while it runs, and nothing does after it exits. It must wrap every
+// middleware that may end a session, including the session limit.
 func discardWindowChangesAfter(next ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		// Take the channel now, as the other middleware read the pty when
@@ -118,7 +110,9 @@ func discardWindowChangesAfter(next ssh.Handler) ssh.Handler {
 }
 
 // discard reads and drops the window changes on winch, if any, until the
-// request loop closes it.
+// request loop closes it, so the loop never blocks on a window change nobody
+// reads (see filterSessionRequests). CommandMiddleware calls it for a
+// command run with a pty, which has no TUI to read them.
 func discard(winch <-chan ssh.Window) {
 	if winch == nil {
 		return

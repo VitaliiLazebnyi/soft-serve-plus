@@ -30,7 +30,7 @@ func sessionLoops() int {
 		}
 		buf = make([]byte, 2*len(buf))
 	}
-	return strings.Count(string(buf), "charm.land/ssh.(*session).handleRequests")
+	return strings.Count(string(buf), "charm.land/ssh.(*session).handleRequests(")
 }
 
 // waitSessionLoops waits until no more than want session request loops run.
@@ -243,6 +243,108 @@ func TestWindowChangeDuringTUI(t *testing.T) {
 	waitSessionLoops(t, before)
 }
 
+// execPayload is the payload of an exec request for command.
+func execPayload(command string) []byte {
+	return gossh.Marshal(struct{ Value string }{command})
+}
+
+// skipUnderRace skips a test that sends window changes while the session's
+// handler starts. charm.land/ssh writes the window size without a lock and
+// Session.Pty copies it, so the race detector reports the library's race,
+// which these tests cannot avoid: they need the window changes to arrive
+// before the handler returns.
+func skipUnderRace(t *testing.T) {
+	t.Helper()
+	if raceEnabled {
+		t.Skip("charm.land/ssh races on the window size of a resize sent while the handler starts")
+	}
+}
+
+// ptyExecThenResize requests a pty on s, then sends an exec request for
+// command and three window changes without waiting for any reply, as a
+// client that means harm would.
+func ptyExecThenResize(t *testing.T, s *gossh.Session, command string) {
+	t.Helper()
+	if err := s.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SendRequest("exec", false, execPayload(command)); err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < 3; i++ {
+		// The server may have closed the channel already.
+		_, _ = s.SendRequest("window-change", false, windowPayload(100+i, 50))
+	}
+}
+
+// A session that a middleware ends before any command runs, here for an
+// overlong command, has no reader of its window changes: they are dropped
+// once its handler has returned, instead of blocking the request loop for
+// ever.
+func TestWindowChangeAfterRefusedCommandLeavesNothing(t *testing.T) {
+	skipUnderRace(t)
+	addr, _ := startTestServer(t, noAccessConfig(t))
+	before := sessionLoops()
+	long := strings.Repeat("x", 64<<10)
+	for i := 0; i < 3; i++ {
+		c, err := dialClient(t, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ptyExecThenResize(t, s, long)
+		_ = c.Close()
+	}
+	waitSessionLoops(t, before)
+}
+
+// A pty command refused by max_sessions also drops its window changes.
+func TestWindowChangeAfterSessionLimitLeavesNothing(t *testing.T) {
+	skipUnderRace(t)
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.MaxSessions = 1
+	addr, _ := startTestServer(t, cfg)
+	before := sessionLoops()
+	for i := 0; i < 3; i++ {
+		c, err := dialClient(t, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A TUI keeps its place under max_sessions after its channel
+		// closes, until the connection ends.
+		tui, err := c.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tui.RequestPty("xterm", 40, 80, nil); err != nil {
+			t.Fatal(err)
+		}
+		stdout, err := tui.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tui.Shell(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stdout.Read(make([]byte, 1)); err != nil {
+			t.Fatal(err)
+		}
+		_ = tui.Close()
+		var s *gossh.Session
+		waitFor(t, "the closed channel's place", func() bool {
+			s, err = c.NewSession()
+			return err == nil
+		})
+		ptyExecThenResize(t, s, "repo list")
+		_ = c.Close()
+	}
+	waitSessionLoops(t, before)
+}
+
 // env requests used to be stored, each up to 256 KiB, until the connection
 // closed. Only one short GIT_PROTOCOL is accepted now, and the rest is
 // refused and not kept.
@@ -421,12 +523,13 @@ func TestFilterWindowChanges(t *testing.T) {
 	}
 }
 
-// discardWindowChanges keeps a session's request loop answering window
-// changes nobody reads.
+// discard keeps a session's request loop answering window changes nobody
+// reads.
 func TestDiscardWindowChanges(t *testing.T) {
 	release := make(chan struct{})
 	addr := startFilterServer(t, func(s ssh.Session) {
-		discardWindowChanges(s)
+		_, winch, _ := s.Pty()
+		discard(winch)
 		_, _ = fmt.Fprintln(s, "ready")
 		<-release
 		_ = s.Exit(0)
