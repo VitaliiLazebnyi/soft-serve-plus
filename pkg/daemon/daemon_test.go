@@ -183,6 +183,58 @@ func TestBadRequests(t *testing.T) {
 	}
 }
 
+// TestRefusalSurvivesLateInput verifies a client that sends more after its
+// request line, as git archive sends its arguments, still reads the refusal
+// when that input arrives after the daemon has answered. The daemon used to
+// close the connection at once, so the late input drew a reset: the client's
+// next write failed, or its read lost the ERR packet to the reset.
+func TestRefusalSurvivesLateInput(t *testing.T) {
+	c := dialDaemon(t)
+	if _, err := io.WriteString(c, pkt("git-upload-archive /missing\x00host=127.0.0.1\x00")); err != nil {
+		t.Fatalf("failed to write request: %v", err)
+	}
+	// Let the daemon answer before the rest of the request goes out.
+	time.Sleep(200 * time.Millisecond)
+	for _, p := range []string{pkt("argument --format=tar\n"), pkt("argument HEAD\n"), "0000"} {
+		if _, err := io.WriteString(c, p); err != nil {
+			t.Fatalf("write after the refusal failed: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	line, err := readPktline(c)
+	if err == nil {
+		t.Fatalf("expected ERR %q, got line %q", git.ErrNotAuthed, line)
+	}
+	wantErrLine(t, "late input", err, git.ErrNotAuthed)
+}
+
+// TestRefusalReleasesConnection verifies a refused client that neither sends
+// nor hangs up does not keep its connection past the refusal's linger.
+func TestRefusalReleasesConnection(t *testing.T) {
+	d, addr := startLimitedDaemon(t, 1)
+	var dialer net.Dialer
+	c, err := dialer.DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if _, err := io.WriteString(c, pkt("git-receive-pack /repo.git\x00host=localhost\x00")); err != nil {
+		t.Fatalf("failed to write request: %v", err)
+	}
+	_, err = readPktline(c)
+	wantErrLine(t, "push", err, ErrPushNotSupported)
+	// The connection stays open on this side; the daemon must still let
+	// it go once the linger is over.
+	deadline := time.Now().Add(refuseLinger + 5*time.Second)
+	for d.conns.Size() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("refused connection still open after %v", refuseLinger+5*time.Second)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestProtocolVersion(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

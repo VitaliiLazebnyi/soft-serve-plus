@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -199,11 +200,75 @@ func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *ser
 	return c
 }
 
+// fatal sends err to the client and closes the connection at once. It is
+// for the accept loop and for shutdown, which must not wait on a client; the
+// answer to a client's request goes through refuse.
 func (d *GitDaemon) fatal(c net.Conn, err error) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	if err := c.Close(); err != nil {
 		d.logger.Debugf("git: error closing connection: %v", err)
 	}
+}
+
+// refuseLinger bounds how long refuse waits for a refused client to hang
+// up, and refuseDrain how much of what it sends refuse reads meanwhile.
+const (
+	refuseLinger = time.Second
+	refuseDrain  = 64 << 10
+)
+
+// refuse sends err to the client of a request and closes the connection
+// without losing the error.
+//
+// A client may send more than the request line before it reads the answer:
+// git archive sends its arguments straight after the request. Closing a
+// socket that still receives input makes the kernel answer with a reset, and
+// a client that gets the reset before it has read the error loses the error
+// with it: a write fails, or the read reports a reset connection. So refuse
+// shuts the write side first, which delivers the error followed by
+// end-of-file, then reads and drops what the client still sends until it
+// hangs up, and only then closes.
+//
+// The wait lasts at most refuseLinger and budget, ends at the connection's
+// maximum deadline, and reads at most refuseDrain bytes. The connection
+// stays counted against max_connections meanwhile, as it is still open. A
+// refusal of the request passes what was left of the request timeout when
+// the request line arrived, so a client holds its connection unanswered no
+// longer than it could already by sending the request line late.
+func (d *GitDaemon) refuse(c *serverConn, err error, budget time.Duration) {
+	git.WritePktlineErr(c, err) //nolint: errcheck
+	if linger := min(refuseLinger, budget); linger > 0 {
+		if cw := closeWriter(c.Conn); cw != nil && cw.CloseWrite() == nil {
+			deadline := time.Now().Add(linger)
+			if !c.maxDeadline.IsZero() && c.maxDeadline.Before(deadline) {
+				deadline = c.maxDeadline
+			}
+			// Read the wrapped connection: serverConn.Read would move
+			// the deadline.
+			_ = c.Conn.SetReadDeadline(deadline)
+			_, _ = io.CopyN(io.Discard, c.Conn, refuseDrain)
+		}
+	}
+	if err := c.Close(); err != nil {
+		d.logger.Debugf("git: error closing connection: %v", err)
+	}
+}
+
+// closeWriter returns the connection under c that can shut its write side
+// alone, such as a *net.TCPConn, looking through wrappers that expose the
+// connection they wrap with NetConn. It returns nil if there is none.
+func closeWriter(c net.Conn) interface{ CloseWrite() error } {
+	for c != nil {
+		if cw, ok := c.(interface{ CloseWrite() error }); ok {
+			return cw
+		}
+		w, ok := c.(interface{ NetConn() net.Conn })
+		if !ok {
+			return nil
+		}
+		c = w.NetConn()
+	}
+	return nil
 }
 
 // requestContext returns the context a request is served with. It derives
@@ -249,7 +314,9 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		return
 	}
 	// The read is over: from here on reads and writes only have to keep
-	// the connection from going idle.
+	// the connection from going idle. A refusal of the request may still
+	// wait on the client for what was left of the request timeout.
+	left := time.Until(c.initDeadline)
 	c.initDeadline = time.Time{}
 	if !scanned {
 		err := s.Err()
@@ -258,10 +325,10 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		case err == nil:
 			// The client hung up without sending a request.
 		case errors.As(err, &nerr) && nerr.Timeout():
-			d.fatal(c, git.ErrTimeout)
+			d.refuse(c, git.ErrTimeout, left)
 		case errors.Is(err, pktline.ErrInvalidPktLen), isErrorLine(err):
 			d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
-			d.fatal(c, git.ErrInvalidRequest)
+			d.refuse(c, git.ErrInvalidRequest, left)
 		default:
 			// The connection was reset, cut short, or closed by the server:
 			// there is no one to answer.
@@ -273,7 +340,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	line := s.Bytes()
 	split := bytes.SplitN(line, []byte{' '}, 2)
 	if len(split) != 2 {
-		d.fatal(c, git.ErrInvalidRequest)
+		d.refuse(c, git.ErrInvalidRequest, left)
 		return
 	}
 
@@ -285,16 +352,16 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	case git.UploadArchiveService:
 		counter = uploadArchiveGitCounter
 	case git.ReceivePackService:
-		d.fatal(c, ErrPushNotSupported)
+		d.refuse(c, ErrPushNotSupported, left)
 		return
 	default:
-		d.fatal(c, git.ErrInvalidRequest)
+		d.refuse(c, git.ErrInvalidRequest, left)
 		return
 	}
 
 	opts := bytes.SplitN(split[1], []byte{0}, 3)
 	if len(opts) < 2 {
-		d.fatal(c, git.ErrInvalidRequest)
+		d.refuse(c, git.ErrInvalidRequest, left)
 		return
 	}
 
@@ -315,7 +382,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	reposDir := filepath.Join(d.cfg.DataPath, "repos")
 	if err := git.EnsureWithin(reposDir, repo); err != nil {
 		d.logger.Debugf("git: error ensuring repo path: %v", err)
-		d.fatal(c, git.ErrNotAuthed)
+		d.refuse(c, git.ErrNotAuthed, left)
 		return
 	}
 
@@ -323,7 +390,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	// gets the anonymous answer whether it is private or missing, and
 	// so does every repository when keyless access is off.
 	if !d.readable(ctx, name) {
-		d.fatal(c, git.ErrNotAuthed)
+		d.refuse(c, git.ErrNotAuthed, left)
 		return
 	}
 
@@ -384,9 +451,9 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		// Before that, the client gets a fixed message rather than
 		// the error itself.
 		if errors.Is(err, git.ErrInvalidRepo) {
-			d.fatal(c, git.ErrInvalidRepo)
+			d.refuse(c, git.ErrInvalidRepo, refuseLinger)
 		} else {
-			d.fatal(c, git.ErrSystemMalfunction)
+			d.refuse(c, git.ErrSystemMalfunction, refuseLinger)
 		}
 		return
 	}
