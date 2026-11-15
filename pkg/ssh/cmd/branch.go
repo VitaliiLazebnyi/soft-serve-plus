@@ -197,7 +197,7 @@ func branchDeleteCommand() *cobra.Command {
 			// The event needs only the ID. Reading the commit would
 			// fail for one git cannot parse, and such a branch must
 			// still be deletable.
-			branchID, err := r.BranchCommitID(branch)
+			branchID, err := r.ShowRefVerify(git.RefsHeads+branch, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
 				return err
 			}

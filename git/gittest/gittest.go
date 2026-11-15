@@ -15,8 +15,8 @@ import (
 type Kind string
 
 // The kinds of commit object Commit writes. Every kind but Valid makes
-// git-module's parser panic or leave the author unset; git itself lists
-// them all.
+// git-module's parser panic, fail on the date, or leave a signature unset;
+// git itself lists them all.
 const (
 	// Valid is a well-formed commit.
 	Valid Kind = "valid"
@@ -28,10 +28,22 @@ const (
 	AuthorNoDate Kind = "author-no-date"
 	// NoAuthor has no author line.
 	NoAuthor Kind = "no-author"
+	// AuthorBadDate has an author date that is not a date ("notadate").
+	AuthorBadDate Kind = "author-bad-date"
+	// CommitterBadDate has a committer timestamp that is not a number
+	// ("17000x").
+	CommitterBadDate Kind = "committer-bad-date"
+	// NoCommitter has no committer line.
+	NoCommitter Kind = "no-committer"
+	// CommitterNoEmail has a committer without "<email>".
+	CommitterNoEmail Kind = "committer-no-email"
 )
 
 // Malformed lists every kind except Valid.
-var Malformed = []Kind{HeaderNoSpace, AuthorNoEmail, AuthorNoDate, NoAuthor}
+var Malformed = []Kind{
+	HeaderNoSpace, AuthorNoEmail, AuthorNoDate, NoAuthor,
+	AuthorBadDate, CommitterBadDate, NoCommitter, CommitterNoEmail,
+}
 
 // Git runs git with args in dir, with no system or global configuration,
 // and returns its trimmed output. stdin may be nil.
@@ -89,6 +101,14 @@ func Commit(t testing.TB, dir string, kind Kind, tree, message string, parents .
 		b.WriteString("author A U Thor <author@example.com>\n" + committer)
 	case NoAuthor:
 		b.WriteString(committer)
+	case AuthorBadDate:
+		b.WriteString("author A U Thor <author@example.com> notadate\n" + committer)
+	case CommitterBadDate:
+		b.WriteString(author + "committer C O Mitter <committer@example.com> 17000x +0000\n")
+	case NoCommitter:
+		b.WriteString(author)
+	case CommitterNoEmail:
+		b.WriteString(author + "committer C O Mitter 1700000000 +0000\n")
 	default:
 		t.Fatalf("unknown commit kind %q", kind)
 	}

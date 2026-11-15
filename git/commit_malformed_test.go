@@ -2,7 +2,9 @@ package git
 
 import (
 	"errors"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gitm "github.com/aymanbagabas/git-module"
@@ -158,5 +160,46 @@ func TestCommitByRevisionMissing(t *testing.T) {
 	c, err := r.CommitByRevision("main")
 	if err != nil || c.Author == nil || c.Author.Email != "author@example.com" {
 		t.Fatalf("CommitByRevision(main) = %+v, %v", c, err)
+	}
+}
+
+// TestCommitByRevisionUnreadable checks that git log failing with exit
+// status 128 on a revision that does resolve, here because the commit's
+// parent is missing from the repository, is reported as git's error and
+// not as a missing revision.
+func TestCommitByRevisionUnreadable(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "r.git")
+	gittest.Git(t, "", nil, "init", "-q", "--bare", dir)
+	missing := strings.Repeat("1", 40)
+	id := gittest.Commit(t, dir, gittest.Valid, gittest.Tree(t, dir, "f", "x\n"), "orphan", missing)
+	gittest.Git(t, dir, nil, "update-ref", RefsHeads+"main", id)
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = r.CommitByRevision("main")
+	if err == nil || errors.Is(err, ErrRevisionNotExist) {
+		t.Fatalf("CommitByRevision on a commit with a missing parent = %v; want git's error", err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 128 {
+		t.Fatalf("CommitByRevision error = %v; want git log's exit status 128", err)
+	}
+}
+
+// TestMalformedCommitErrorHidesParser checks that the error, which reaches
+// SSH users, names the revision and not the parser's panic.
+func TestMalformedCommitErrorHidesParser(t *testing.T) {
+	t.Parallel()
+	r, _, _ := malformedRepo(t)
+
+	for _, kind := range gittest.Malformed {
+		rev := RefsHeads + string(kind)
+		_, err := r.CatFileCommit(rev)
+		if want := ErrMalformedCommit.Error() + ": " + rev; err == nil || err.Error() != want {
+			t.Errorf("CatFileCommit(%s) error = %v; want %q", rev, err, want)
+		}
 	}
 }

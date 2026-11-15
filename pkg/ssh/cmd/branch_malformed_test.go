@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -43,9 +44,20 @@ func TestDeleteRefAtMalformedCommit(t *testing.T) {
 			ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
 			is.NoErr(err)
 			is.Equal(len(ds), 2)
+			refs := map[string]bool{}
 			for _, d := range ds {
 				is.Equal(d.Event.String(), "branch_tag_delete")
+				full, err := be.WebhookDelivery(ownerCtx, r, id, d.ID)
+				is.NoErr(err)
+				var payload struct {
+					Ref    string `json:"ref"`
+					Before string `json:"before"`
+				}
+				is.NoErr(json.Unmarshal([]byte(full.RequestBody), &payload))
+				is.Equal(payload.Before, bad) // the deleted ref's ID
+				refs[payload.Ref] = true
 			}
+			is.Equal(refs, map[string]bool{"refs/heads/bad": true, "refs/tags/bad": true})
 		})
 	}
 }

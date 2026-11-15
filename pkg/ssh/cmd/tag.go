@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"charm.land/log/v2"
+	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -99,7 +100,7 @@ func tagDeleteCommand() *cobra.Command {
 			// The event needs only the ID. Reading the commit would
 			// fail for one git cannot parse, and such a tag must still
 			// be deletable.
-			tagID, err := r.TagCommitID(tag)
+			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
 				logger.Error("failed to get tag commit", "err", err, "repo", rr.Name(), "tag", tag)
 				return err

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/aymanbagabas/git-module"
 )
 
@@ -31,36 +32,48 @@ type Commits []*Commit
 
 // git-module's commit parser (parseCommit, parseSignature) indexes the
 // commit object without checking its shape: a header line without a space,
-// an author or committer without "<email>" or without a date all panic.
-// git accepts such commits in a push (the server does not fsck), and old
+// an author or committer without "<email>" or without a date all panic, and
+// a date it cannot read is a *time.ParseError or *strconv.NumError. git
+// accepts such commits in a push (the server does not fsck), and old
 // imported histories hold some. Every read of a commit therefore goes
-// through CatFileCommit below, which turns the panic into
+// through CatFileCommit below, which turns all of these into
 // ErrMalformedCommit, and the git-module methods that read commits with its
 // own CatFileCommit (Log, CommitByRevision, BranchCommit, TagCommit) are
 // replaced by methods that use this one.
 
 // CatFileCommit returns the commit for the given revision. A commit
 // git-module cannot parse, or one without an author or committer, is an
-// ErrMalformedCommit.
+// ErrMalformedCommit. Its message names only the revision, since it reaches
+// SSH users; what the parser reported is logged.
 func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions) (c *Commit, err error) {
 	var opt git.CatFileCommitOptions
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
 	opt.CommandOptions = r.withCtx(opt.CommandOptions)
+	malformed := func(reason any) error {
+		log.FromContext(r.Context()).Warn("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
+		return fmt.Errorf("%w: %s", ErrMalformedCommit, rev)
+	}
 	defer func() {
 		if p := recover(); p != nil {
-			c, err = nil, fmt.Errorf("%w: %s: %v", ErrMalformedCommit, rev, p)
+			c, err = nil, malformed(p)
 		}
 	}()
 	c, err = r.Repository.CatFileCommit(rev, opt)
 	if err != nil {
+		// parseSignature's errors for a date it cannot read.
+		var timeErr *time.ParseError
+		var numErr *strconv.NumError
+		if errors.As(err, &timeErr) || errors.As(err, &numErr) {
+			return nil, malformed(err)
+		}
 		return nil, err
 	}
 	// parseCommit leaves a signature nil when its line is missing, and
 	// callers read c.Author.Name without checking.
 	if c.Author == nil || c.Committer == nil {
-		return nil, fmt.Errorf("%w: %s: no author or committer", ErrMalformedCommit, rev)
+		return nil, malformed("no author or committer")
 	}
 	return c, nil
 }
@@ -123,9 +136,11 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 		CommandOptions: opt.CommandOptions,
 	})
 	if err != nil {
-		// git log exits with 128 for a revision it cannot resolve.
+		// git log exits with 128 for a revision it cannot resolve, but
+		// also for a repository it cannot read. Only a revision that does
+		// not resolve to a commit either is a missing revision.
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 {
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && !r.resolvesToCommit(rev) {
 			return nil, ErrRevisionNotExist
 		}
 		return nil, err
@@ -134,6 +149,14 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 		return nil, ErrRevisionNotExist
 	}
 	return r.CatFileCommit(ids[0], git.CatFileCommitOptions{Timeout: opt.Timeout}) //nolint:staticcheck
+}
+
+// resolvesToCommit reports whether rev names a commit.
+func (r *Repository) resolvesToCommit(rev string) bool {
+	_, err := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}").
+		AddOptions(r.cmdOpts()).
+		RunInDir(r.Path)
+	return err == nil
 }
 
 // logIDs runs git log for rev with opt, as git-module's Log does, and
