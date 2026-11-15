@@ -10,7 +10,8 @@ metadata:
 
 before:
   hooks:
-    - go mod tidy
+    # Fail on an untidy go.mod or go.sum instead of changing them mid-release.
+    - go mod tidy -diff
     - rm -rf completions
     - mkdir completions
     - rm -rf manpages
@@ -25,6 +26,11 @@ builds:
     main: "./cmd/soft"
     env:
       - CGO_ENABLED=0
+    # Reproducible: no checkout or module-cache paths in the binary, and the
+    # file dated by the commit rather than by the build.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags: -s -w -X main.Version=v{{ .Version }} -X main.CommitSHA={{ .Commit }} -X main.CommitDate={{ .CommitDate }}
     goos:
       - linux

@@ -12,6 +12,15 @@ import (
 )
 
 type goreleaserConfig struct {
+	Before struct {
+		// A hook is a command string or a mapping with a cmd key.
+		Hooks []any `yaml:"hooks"`
+	} `yaml:"before"`
+	Builds []struct {
+		Binary       string   `yaml:"binary"`
+		Flags        []string `yaml:"flags"`
+		ModTimestamp string   `yaml:"mod_timestamp"`
+	} `yaml:"builds"`
 	NFPMs []struct {
 		Dependencies []string `yaml:"dependencies"`
 	} `yaml:"nfpms"`
@@ -111,6 +120,50 @@ func TestPackagesDoNotDependOnBash(t *testing.T) {
 		}
 		if slices.Contains(n.Dependencies, "bash") {
 			t.Errorf("nfpms[%d]: bash is a dependency: %v", i, n.Dependencies)
+		}
+	}
+}
+
+// TestReleaseBinariesAreReproducible checks that every release build strips
+// local paths (-trimpath) and dates the binary by the commit, so a rebuild of
+// a tag elsewhere gives the same bytes.
+func TestReleaseBinariesAreReproducible(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	if len(c.Builds) == 0 {
+		t.Fatal("no builds in .goreleaser.yml; update this test")
+	}
+	for i, b := range c.Builds {
+		if !slices.Contains(b.Flags, "-trimpath") {
+			t.Errorf("builds[%d] (%s): flags %v lack -trimpath", i, b.Binary, b.Flags)
+		}
+		if b.ModTimestamp != "{{ .CommitTimestamp }}" {
+			t.Errorf("builds[%d] (%s): mod_timestamp is %q, want {{ .CommitTimestamp }}", i, b.Binary, b.ModTimestamp)
+		}
+	}
+}
+
+// TestReleaseHooksDoNotRewriteModules checks that the release does not run a
+// plain `go mod tidy`, which could change go.mod or go.sum during the build
+// and so release code that differs from the tagged commit. `go mod tidy -diff`
+// only reports.
+func TestReleaseHooksDoNotRewriteModules(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	for i, h := range c.Before.Hooks {
+		var cmd string
+		switch h := h.(type) {
+		case string:
+			cmd = h
+		case map[string]any:
+			cmd, _ = h["cmd"].(string)
+		}
+		f := strings.Fields(cmd)
+		if len(f) < 3 || f[0] != "go" || f[1] != "mod" || f[2] != "tidy" {
+			continue
+		}
+		if !slices.Contains(f[3:], "-diff") {
+			t.Errorf("before.hooks[%d]: %q rewrites go.mod and go.sum; use `go mod tidy -diff`", i, cmd)
 		}
 	}
 }
