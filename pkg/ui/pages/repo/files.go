@@ -291,11 +291,13 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.activeView = filesViewContent
 		f.currentContent = msg
 		f.code.UseGlamour = msg.isMarkdown
-		// File contents come from the repository and must not reach the
-		// terminal as escape sequences; chroma and glamour pass them
-		// through. currentContent keeps the raw bytes for copying.
-		cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(msg.content), msg.ext, msg.isMarkdown))
-		f.code.GotoTop()
+		// The code view sanitises the content, highlights and wraps it in
+		// a command; until it is done the tab shows the spinner.
+		// currentContent keeps the raw bytes for copying.
+		cmds = append(cmds, f.code.SetMarkdownContent(msg.content, msg.ext, msg.isMarkdown))
+	case code.RenderedMsg:
+		// The code view's render, whichever view is shown now.
+		cmds = append(cmds, f.code.Update(msg))
 	case FileBlameMsg:
 		if msg.load != f.load || !f.blameView {
 			break
@@ -303,7 +305,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.currentBlame = msg.blame
 		f.activeView = filesViewContent
 		f.code.UseGlamour = false
-		f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg.blame))
+		cmds = append(cmds, f.code.SetSideNote(renderBlame(f.common, f.currentItem, msg.blame)))
 	case selector.SelectMsg:
 		switch sel := msg.IdentifiableItem.(type) {
 		case FileItem:
@@ -342,7 +344,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, lineNo) && !f.code.UseGlamour:
 				f.lineNumber = !f.lineNumber
 				f.code.ShowLineNumber = f.lineNumber
-				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
+				cmds = append(cmds, f.code.Init())
 			case key.Matches(msg, blameView):
 				f.activeView = filesViewLoading
 				f.blameView = !f.blameView
@@ -356,7 +358,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			case key.Matches(msg, preview) &&
 				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
-				cmds = append(cmds, f.code.SetMarkdownContent(utils.Sanitize(f.currentContent.content), f.currentContent.ext, f.currentContent.isMarkdown))
+				cmds = append(cmds, f.code.Init())
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -395,7 +397,9 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	case filesViewFiles:
 		cmds = append(cmds, f.selector.Update(msg))
 	case filesViewContent:
-		cmds = append(cmds, f.code.Update(msg))
+		if _, ok := msg.(code.RenderedMsg); !ok {
+			cmds = append(cmds, f.code.Update(msg))
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -412,9 +416,11 @@ func (f *Files) View() string {
 	}
 }
 
-// Loading implements Pane.
+// Loading implements Pane. An opened file loads until its first render is
+// done.
 func (f *Files) Loading() (string, bool) {
-	return "loading…", f.activeView == filesViewLoading
+	return "loading…", f.activeView == filesViewLoading ||
+		(f.activeView == filesViewContent && f.code.Rendering())
 }
 
 func (f *Files) id() paneID { return paneFiles }

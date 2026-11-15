@@ -116,6 +116,14 @@ func (p *pinPage) update(msg tea.Msg) []tea.Msg {
 // something loads.
 func (p *pinPage) settle(msgs ...tea.Msg) {
 	p.t.Helper()
+	// The last tick dropped is delivered once everything else is, as the
+	// runtime would, so that the spinner sees nothing loads any more.
+	var tick tea.Msg
+	defer func() {
+		if tick != nil {
+			p.r.Update(tick)
+		}
+	}()
 	for steps := 0; len(msgs) > 0; steps++ {
 		if steps > 10000 {
 			p.t.Fatal("page never settles")
@@ -124,6 +132,7 @@ func (p *pinPage) settle(msgs ...tea.Msg) {
 		msg, msgs = msgs[0], msgs[1:]
 		switch msg := msg.(type) {
 		case spinner.TickMsg:
+			tick = msg
 			continue
 		case common.ErrorMsg:
 			p.t.Fatalf("page reported an error: %v", msg)

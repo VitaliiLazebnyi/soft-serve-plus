@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/statusbar"
@@ -305,6 +306,10 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		}
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
+		cmds = append(cmds, r.updateModels(msg))
+		routed = true
+	case code.RenderedMsg:
+		// A code view's render: the tab whose view it is takes it.
 		cmds = append(cmds, r.updateModels(msg))
 		routed = true
 	case EmptyRepoMsg:

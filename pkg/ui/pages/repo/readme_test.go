@@ -26,7 +26,7 @@ func TestReadmeEmptyRepoStopsLoading(t *testing.T) {
 	r.Update(RepoMsg(readmeTestRepo{}))
 	r.Update(ReadmeMsg{Content: "# Old", Path: "docs/README.md"})
 	r.Init()
-	r.Update(EmptyRepoMsg{})
+	updateRendered(r, EmptyRepoMsg{})
 
 	view := ansi.Strip(r.View())
 	if strings.Contains(view, "loading") {
@@ -51,7 +51,7 @@ func TestReadmeEmptyRepoHidesCloneCmd(t *testing.T) {
 
 	r.Update(RepoMsg(readmeTestRepo{}))
 	r.Init()
-	r.Update(EmptyRepoMsg{})
+	updateRendered(r, EmptyRepoMsg{})
 
 	view := ansi.Strip(r.View())
 	if strings.Contains(view, "git clone") || strings.Contains(view, cfg.SSH.PublicURL) {
