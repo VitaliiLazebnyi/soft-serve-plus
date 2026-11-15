@@ -72,7 +72,9 @@ func TestAuthDatabaseErrorIsUnavailable(t *testing.T) {
 				if h := w.Header().Get("WWW-Authenticate"); h != "" {
 					t.Errorf("%s: credentials challenge %q", path, h)
 				}
-				if !strings.Contains(logs.String(), "ERRO") {
+				// The backend logs its own error too, so look for the
+				// web's line at error level.
+				if !hasLogLine(logs.String(), "ERRO", "failed to look up credentials") {
 					t.Errorf("%s: database error not logged as an error:\n%s", path, logs.String())
 				}
 			}
@@ -129,5 +131,55 @@ func TestAuthUnavailableCanceled(t *testing.T) {
 	logs.Reset()
 	err = authUnavailable(context.Background(), logger, errors.New("sql: database is closed"))
 	is.True(errors.Is(err, errAuthUnavailable))
-	is.True(strings.Contains(logs.String(), "ERRO"))
+	is.True(hasLogLine(logs.String(), "ERRO", "failed to look up credentials"))
+}
+
+// hasLogLine reports whether out has a line that holds level and msg.
+func hasLogLine(out, level, msg string) bool {
+	for line := range strings.Lines(out) {
+		if strings.Contains(line, level) && strings.Contains(line, msg) {
+			return true
+		}
+	}
+	return false
+}
+
+// A bearer token whose subject names no valid username is a failed login,
+// as for a user who does not exist, not an anonymous request: the user
+// lookup refuses such a name with an error that is not
+// proto.ErrUserNotFound, and that is not a server fault either.
+// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
+// and must not run in parallel.
+func TestBearerInvalidSubjectUsername(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	logger.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	f := newOracleFixture(t)
+	for _, subject := range []string{"not_a_user#1", "1user#1", "#1"} {
+		claims := jwtTestClaims(f.ctx, "secret")
+		claims.Subject = subject
+		bearer := "Bearer " + signJWT(f.ctx, t, claims)
+
+		req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", bearer)
+		user, _, err := authenticate(req, "secret")
+		is.True(user == nil)
+		if !errors.Is(err, ErrInvalidToken) {
+			t.Errorf("subject %q: err = %v, want %v", subject, err, ErrInvalidToken)
+		}
+
+		logs.Reset()
+		w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", bearer)
+		if w.Code != http.StatusForbidden { // anonymous would get 401
+			t.Errorf("subject %q: got %d, want 403", subject, w.Code)
+		}
+		if out := logs.String(); strings.Contains(out, "ERRO") {
+			t.Errorf("subject %q: logged at error level:\n%s", subject, out)
+		}
+	}
 }
