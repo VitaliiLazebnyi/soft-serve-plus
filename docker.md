@@ -216,8 +216,3 @@ With an init, the number of processes in the container
 pushes the server handles.
 
 [ghcr]: https://github.com/VitaliiLazebnyi/soft-serve-plus/pkgs/container/soft-serve-plus
-
-> **Warning**
->
-> Make sure to run the image without a TTY, i.e.: do not use the `--tty`/`-t`
-> flags.

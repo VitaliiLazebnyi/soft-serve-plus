@@ -116,7 +116,6 @@ nfpms:
         postupgrade: ./.nfpm/postinstall.sh
     dependencies:
       - git
-      - bash
     # git runs ssh to mirror repositories over ssh:// URLs.
     recommends:
       - openssh-client
