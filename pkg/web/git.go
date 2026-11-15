@@ -119,14 +119,21 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
 	limits := newRequestLimits(config.FromContext(ctx).HTTP)
 
+	goGet := withParams(withCaller(http.HandlerFunc(GoGetHandler)))
+
 	// The dumb protocol is not served. Its requests get a fixed answer that
 	// does not depend on the repository, so they are refused before anything
-	// is looked up or authorized.
-	r.Handle(basePrefix+"/info/refs", http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
-		return !isSmartService(getServiceType(r))
+	// is looked up or authorized. A go get request for a repository or
+	// package whose path ends in one of these names, such as "group/HEAD"
+	// or "repo/info/refs", is a go get request. The ref advertisement route
+	// would take a go get request for info/refs, so it is sent to the go get
+	// handler here.
+	r.Handle(basePrefix+"/info/refs", goGet).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return !isSmartService(getServiceType(r)) && isGoGet(r)
 	})
-	// A go get request for a repository or package whose path ends in one
-	// of these names, such as "group/HEAD", goes on to the go get route.
+	r.Handle(basePrefix+"/info/refs", http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return !isSmartService(getServiceType(r)) && !isGoGet(r)
+	})
 	r.Handle(basePrefix+dumbPaths, http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
 		return !isGoGet(r)
 	})
@@ -140,7 +147,7 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	}
 
 	// Handle go-get
-	r.Handle(basePrefix, withParams(withCaller(http.HandlerFunc(GoGetHandler)))).Methods(http.MethodGet, http.MethodHead)
+	r.Handle(basePrefix, goGet).Methods(http.MethodGet, http.MethodHead)
 }
 
 // dumbPaths matches the repository files only the dumb HTTP protocol fetches:
