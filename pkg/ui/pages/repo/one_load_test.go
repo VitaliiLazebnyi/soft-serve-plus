@@ -190,8 +190,8 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 // one before, whose command then sends nothing.
 func TestLogPageLoadSupersedes(t *testing.T) {
 	l := newTestLog(t, filepath.Join(t.TempDir(), "repo"))
-	first := l.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-	second := l.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	first := resizeLog(l, 80, 30)
+	second := resizeLog(l, 80, 20)
 	for _, m := range runCmd(first) {
 		if _, ok := m.(LogItemsMsg); ok {
 			t.Fatal("a superseded page load ran to completion")

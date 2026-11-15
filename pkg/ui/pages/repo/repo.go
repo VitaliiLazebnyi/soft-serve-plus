@@ -347,6 +347,11 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		// neither the page nor its tabs take.
 		cmds = append(cmds, r.updateModels(msg))
 		routed = true
+	case footer.ToggleFooterMsg:
+		// The footer changes the height of every tab, the hidden ones
+		// too: the Commits tab loads its page again by its new size.
+		cmds = append(cmds, r.updateModels(msg))
+		routed = true
 	case code.RenderedMsg:
 		// A code view's render: the tab whose view it is takes it.
 		cmds = append(cmds, r.updateModels(msg))

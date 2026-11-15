@@ -198,6 +198,7 @@ func TestErrorReachesItsPane(t *testing.T) {
 	if err := os.Rename(p.repo.path, p.repo.path+".gone"); err != nil {
 		t.Fatal(err)
 	}
+	p.r.SetSize(120, 30)
 	if errs := p.deliver(tea.WindowSizeMsg{Width: 120, Height: 30}); errs == 0 {
 		t.Fatal("the failed page load reported no error")
 	}

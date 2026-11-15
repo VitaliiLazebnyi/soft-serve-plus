@@ -81,11 +81,6 @@ func (s *Selector) PerPage() int {
 	return s.Model.Paginator.PerPage
 }
 
-// SetPage sets the current page.
-func (s *Selector) SetPage(page int) {
-	s.Model.Paginator.Page = page
-}
-
 // Page returns the current page.
 func (s *Selector) Page() int {
 	return s.Model.Paginator.Page
@@ -94,11 +89,6 @@ func (s *Selector) Page() int {
 // TotalPages returns the total number of pages.
 func (s *Selector) TotalPages() int {
 	return s.Model.Paginator.TotalPages
-}
-
-// SetTotalPages sets the total number of pages given the number of items.
-func (s *Selector) SetTotalPages(items int) int {
-	return s.Model.Paginator.SetTotalPages(items)
 }
 
 // SelectedItem returns the currently selected item.
