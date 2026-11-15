@@ -120,7 +120,8 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 
 	// Limit the connections open at once, in total and per client address,
 	// and the session channels and running commands each connection may
-	// hold.
+	// hold. Session channels pass only the requests the server can afford
+	// (see filterSessionRequests).
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
 	s.srv.ConnCallback = connCallback(s.limiter, logger)
 	setSessionHandlers(s.srv, cfg.SSH.MaxSessions)
