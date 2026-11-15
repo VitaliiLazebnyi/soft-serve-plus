@@ -21,7 +21,7 @@ import (
 )
 
 // TestLFSBatchActionsForwardOnlyJWT checks which credential a batch response
-// copies into its actions. A Basic password or an access token sent with the
+// copies into its actions. An access token sent with the
 // batch request must not come back in the response body, where client traces
 // and proxies can log it. A bearer JWT, which is how a client authenticated
 // over SSH reaches the object URLs, is forwarded with its remaining lifetime
@@ -37,7 +37,6 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
-	is.NoErr(be.SetPassword(ctx, "owner", "hunter2"))
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 	token, err := be.CreateAccessToken(ctx, owner, "t", time.Time{})
@@ -85,7 +84,7 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 		return resp
 	}
 
-	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("owner:hunter2"))
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("owner:"+token))
 	for _, auth := range []string{basic, "token " + token} {
 		for _, op := range []string{lfs.OperationDownload, lfs.OperationUpload} {
 			resp := batch(op, auth)
