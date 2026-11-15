@@ -58,6 +58,7 @@ func TestSuperviseHelper(t *testing.T) {
 	child := exec.CommandContext(t.Context(), "sh", "-c", "")
 	var script, extra string
 	var terminal chan string // the "terminal" scenario's findings
+	var terminalOut *os.File // and the write end of the child's stdout
 	switch scenario {
 	case "orphans":
 		// Each subshell starts a sleep and exits at once, so the sleep is
@@ -103,7 +104,7 @@ func TestSuperviseHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		child.Stdout = w
+		child.Stdout, terminalOut = w, w
 		terminal = make(chan string, 1)
 		go func() {
 			line, _ := bufio.NewReader(r).ReadString('\n')
@@ -127,6 +128,9 @@ func TestSuperviseHelper(t *testing.T) {
 	}
 	extra = fmt.Sprintf("code=%d zombies=%d", code, zombieChildren(t))
 	if terminal != nil {
+		// Should the child have exited without printing its group,
+		// closing the last write end ends the reader's wait with EOF.
+		_ = terminalOut.Close()
 		extra += " " + <-terminal
 	}
 	if scenario != "pgroup" {

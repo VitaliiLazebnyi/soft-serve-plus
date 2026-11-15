@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -79,7 +80,9 @@ func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var withoutTerminal *exec.Cmd
 	if f, ok := child.Stdin.(*os.File); ok && term.IsTerminal(f.Fd()) {
-		// A Cmd cannot be started twice, so the retry needs a copy.
+		// A Cmd cannot be started twice, so the retry needs a copy. It
+		// copies only the fields superviseIfInit sets; keep it in step
+		// if that ever sets another.
 		withoutTerminal = &exec.Cmd{
 			Path: child.Path, Args: child.Args, Env: child.Env, Dir: child.Dir,
 			Stdin: child.Stdin, Stdout: child.Stdout, Stderr: child.Stderr,
@@ -91,8 +94,15 @@ func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
 	}
 	err := child.Start()
 	if err != nil && withoutTerminal != nil {
+		// Retry after any error, not only ENOTTY: a child in a group
+		// of its own beats an unsupervised server, and if the cause
+		// was something else, the retry fails too.
 		child = withoutTerminal
-		err = child.Start()
+		if retryErr := child.Start(); retryErr != nil {
+			err = fmt.Errorf("%w; without the terminal: %w", err, retryErr)
+		} else {
+			err = nil
+		}
 	}
 	if err != nil {
 		return 0, err
