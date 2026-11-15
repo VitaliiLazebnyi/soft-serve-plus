@@ -35,6 +35,9 @@ func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 	git("add", "-A")
 	git("commit", "-q", "-m", "files")
 	git("push", "-q", bare, "main")
+	// The bare repository's HEAD names the host's init.defaultBranch,
+	// which may not be main.
+	git("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
 }
 
 // blob --color highlights within the same bounds as the TUI: a file whose
