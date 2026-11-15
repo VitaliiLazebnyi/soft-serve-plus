@@ -183,23 +183,25 @@ func TestHTTPCountersLabelledByRepository(t *testing.T) {
 		"/" + name + "/.git/.git/x",
 		"/" + name + ".git.git/x",
 	}
-	series := testutil.CollectAndCount(goGetCounter)
+	// The counters are global, so count the series once the one for name
+	// exists: a run before this one (-count=2) may have made it already.
 	count := testutil.ToFloat64(goGetCounter.WithLabelValues(name))
+	series := testutil.CollectAndCount(goGetCounter)
 	for _, p := range goGets {
 		w := f.do(http.MethodGet, p+"?go-get=1", "")
 		is.Equal(w.Code, http.StatusOK)
 		is.True(strings.Contains(w.Body.String(), "/"+name+" git ")) // resolves to the repository
 	}
-	is.Equal(testutil.CollectAndCount(goGetCounter)-series, 1)
+	is.Equal(testutil.CollectAndCount(goGetCounter)-series, 0)
 	is.Equal(testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)))
 
-	series = testutil.CollectAndCount(gitHttpUploadCounter)
 	fetches, _ := httpGitCounts(name)
+	series = testutil.CollectAndCount(gitHttpUploadCounter)
 	refs := []string{"/" + name, "/" + name + ".git", "/" + name + ".git.git", "/" + name + "/.git"}
 	for _, p := range refs {
 		is.Equal(f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
 	}
-	is.Equal(testutil.CollectAndCount(gitHttpUploadCounter)-series, 1)
+	is.Equal(testutil.CollectAndCount(gitHttpUploadCounter)-series, 0)
 	gotFetches, _ := httpGitCounts(name)
 	is.Equal(gotFetches-fetches, float64(len(refs)))
 }
