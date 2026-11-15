@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"runtime"
@@ -82,7 +84,9 @@ func allocated(f func()) uint64 {
 // The list of a path's parent directories, which a bearer token may name,
 // used to be built for every request, one copy of the path per segment: a
 // 32 KB path cost seconds and gigabytes. It is now built only for a bearer
-// token, and only for the parents nearest the root.
+// token, and only for the parents nearest the root. The go get walk tries
+// only those parents too: it used to look up every parent, which at the
+// length cap cost hundreds of megabytes per request.
 func TestGoGetPathWorkIsBounded(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
@@ -92,7 +96,8 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 
 	// Under the cap: a package path of about 2,000 segments in the
 	// repository the token names.
-	atCap := "/secret/" + strings.Repeat("a/", (maxGoGetPathLen-8)/2)
+	pkgAtCap := strings.Repeat("a/", (maxGoGetPathLen-8)/2)
+	atCap := "/secret/" + pkgAtCap
 	// Over the cap, as a client may send it.
 	long := "/" + strings.Repeat("a/", 16<<10)
 
@@ -105,6 +110,9 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 		{"anonymous long go get", long + "?go-get=1", "", http.StatusNotFound},
 		{"bearer long path", long, bearer, http.StatusNotFound},
 		{"bearer path at cap", atCap, bearer, http.StatusNotFound},
+		{"anonymous go get at cap", atCap + "?go-get=1", "", http.StatusNotFound},
+		{"anonymous go get at cap found", "/pub/" + pkgAtCap + "?go-get=1", "", http.StatusOK},
+		{"bearer go get at cap", atCap + "?go-get=1", bearer, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var code int
@@ -137,16 +145,27 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 	go func() { _ = s.Serve(l) }()
 	t.Cleanup(func() { _ = s.Close() })
 
+	// get sends the request over a raw connection and reads the status
+	// line as soon as it arrives. The server closes the connection with
+	// what it did not read of an over-long request still unread, which
+	// some systems (Windows) answer with a reset that can discard the
+	// reply; a request only a little over the limit leaves little unread.
 	get := func(path string) int {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+l.Addr().String()+path, nil)
+		conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", l.Addr().String())
 		is.NoErr(err)
-		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		defer conn.Close() //nolint:errcheck
+		is.NoErr(conn.SetDeadline(time.Now().Add(30 * time.Second)))
+		go func() {
+			_, _ = io.WriteString(conn, "GET "+path+" HTTP/1.1\r\nHost: localhost\r\n\r\n")
+		}()
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 		is.NoErr(err)
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
 	is.Equal(get("/"+strings.Repeat("a", 32<<10)), http.StatusNotFound)
-	is.Equal(get("/"+strings.Repeat("a", 128<<10)), http.StatusRequestHeaderFieldsTooLarge)
+	// net/http allows 4 KiB over MaxHeaderBytes.
+	is.Equal(get("/"+strings.Repeat("a", maxHeaderBytes+8<<10)), http.StatusRequestHeaderFieldsTooLarge)
 }
 
 // pathAncestors lists the parents nearest the root, and no more than

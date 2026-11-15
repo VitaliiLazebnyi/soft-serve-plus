@@ -5,7 +5,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 
 	"charm.land/log/v2"
@@ -67,7 +66,8 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 	// https://golang.org/cmd/go/#hdr-Remote_import_paths
 	// https://go.dev/ref/mod#vcs-branch
 	if r.URL.Query().Get("go-get") == "1" {
-		repo := repo
+		// The router refuses a longer path before it gets here; this
+		// guards callers of GoGetHandler that do not go through it.
 		if len(repo) > maxGoGetPathLen {
 			renderNotFound(w, r)
 			return
@@ -82,28 +82,33 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 		// Find the closest repository the caller can read; skip the rest. A
 		// bearer token only stands for the caller on the repositories it
 		// names, so a token for "repo" does not reveal "repo/sub".
-		for {
+		//
+		// Only the path itself and the parents pathAncestors lists are
+		// tried, nearest the path first. Each try is a lookup that costs a
+		// few copies of the name, so trying every parent of a deep package
+		// path would make the work quadratic in its length; no new
+		// repository is named deeper than those parents (see
+		// utils.MaxRepoSegments).
+		name := ""
+		for _, candidate := range pathAncestors(repo) {
 			if ctx.Err() != nil {
 				return
 			}
 
 			// Readable loads the repository once and returns nil when it
 			// is missing or the caller may not read it.
-			if found, _ := be.Readable(ctx, repo, callerFor(ctx, repo)); found != nil {
+			if found, _ := be.Readable(ctx, candidate, callerFor(ctx, candidate)); found != nil {
+				name = utils.SanitizeRepo(candidate)
 				break
 			}
-
-			if repo == "" || repo == "." || repo == "/" {
-				renderNotFound(w, r)
-				return
-			}
-
-			repo = path.Dir(repo)
+		}
+		if name == "" {
+			renderNotFound(w, r)
+			return
 		}
 
 		// Render into a buffer so a failure can still answer with a 500.
 		var buf bytes.Buffer
-		name := utils.SanitizeRepo(repo)
 		root := goImportRoot(importRoot)
 		// html/template refuses a URL it cannot vet inside the refresh
 		// content attribute, so hand it one built and escaped here.

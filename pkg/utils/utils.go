@@ -224,11 +224,23 @@ func ValidateRepo(repo string) error {
 	return ValidateRepoSegments(repo)
 }
 
+// MaxRepoSegments is the most path segments a new repository name may have,
+// as in "a/b/c" (three). The HTTP server looks a go get import path up only
+// in its first MaxRepoSegments segments, so the work of one request stays
+// bounded however deep the package path is; a deeper repository could not
+// serve its packages to go get.
+const MaxRepoSegments = 32
+
 // ValidateRepoSegments rejects repo path segments that start with a hyphen,
 // which a git command would read as an option, or consist only of periods,
-// such as "...", which Windows does not keep as a directory name.
+// such as "...", which Windows does not keep as a directory name. It also
+// rejects names of more than MaxRepoSegments segments.
 func ValidateRepoSegments(repo string) error {
-	for _, segment := range strings.Split(repo, "/") {
+	segments := strings.Split(repo, "/")
+	if len(segments) > MaxRepoSegments {
+		return fmt.Errorf("repo name cannot have more than %d path segments", MaxRepoSegments)
+	}
+	for _, segment := range segments {
 		if strings.HasPrefix(segment, "-") {
 			return fmt.Errorf("repo path segments cannot start with a hyphen")
 		}

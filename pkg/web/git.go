@@ -551,8 +551,9 @@ func isBearer(hdr string) bool {
 // Each costs a copy of the path, so listing every one would make the work of
 // a request quadratic in its path length. The parents kept are the ones
 // nearest the root, where repositories are: a go get path is a repository
-// followed by a package path, which may be deep.
-const maxPathAncestors = 32
+// followed by a package path, which may be deep. A new repository name has
+// at most this many segments, so it is always among them.
+const maxPathAncestors = utils.MaxRepoSegments
 
 // pathAncestors returns p followed by its parent directories, each spelled
 // as a sanitized repository name, which is what `soft jwt` mints. Only the

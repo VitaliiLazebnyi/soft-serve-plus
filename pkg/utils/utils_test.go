@@ -262,3 +262,19 @@ func TestSanitize(t *testing.T) {
 		})
 	}
 }
+
+// A new repository name has at most MaxRepoSegments segments; an existing
+// one may have more.
+func TestValidateRepoSegmentCount(t *testing.T) {
+	deepest := strings.TrimSuffix(strings.Repeat("a/", MaxRepoSegments), "/")
+	if err := ValidateRepo(deepest); err != nil {
+		t.Fatalf("ValidateRepo(%d segments) = %v, want nil", MaxRepoSegments, err)
+	}
+	tooDeep := deepest + "/a"
+	if err := ValidateRepo(tooDeep); err == nil {
+		t.Fatalf("ValidateRepo(%d segments) = nil, want an error", MaxRepoSegments+1)
+	}
+	if err := ValidateExistingRepo(tooDeep); err != nil {
+		t.Fatalf("ValidateExistingRepo(%d segments) = %v, want nil", MaxRepoSegments+1, err)
+	}
+}
