@@ -70,6 +70,7 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 	if password != "" {
 		// Access token as the password. The token's owner is the user,
 		// whatever the username, which is not looked up.
+		// When both fields are valid tokens of different users, the password's wins.
 		owner, err := be.UserByAccessToken(ctx, password)
 		if err == nil {
 			return owner, nil
