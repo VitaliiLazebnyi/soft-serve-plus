@@ -59,7 +59,7 @@ func TestReadmePaneSanitisesReadme(t *testing.T) {
 	c := common.NewCommon(ctx, 120, 40)
 	s := New(c)
 	s.SetSize(120, 40)
-	s.setReadme("# Welcome"+escapes+"\n\nreadme-text"+escapes+"\n", "README.md")
+	s.Update(s.setReadme("# Welcome"+escapes+"\n\nreadme-text"+escapes+"\n", "README.md")())
 	s.activePane = readmePane
 	assertClean(t, s.View(), "Welcome", "readme-text")
 }

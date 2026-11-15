@@ -73,7 +73,7 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	if r.ref != nil {
 		t.Fatalf("late ref of A shown in B: %v", r.ref.Name())
 	}
-	r.Update(lateReadmeA())
+	updateRendered(r, lateReadmeA())
 	if strings.Contains(readmeView(), "Readme of A") {
 		t.Fatalf("late readme of A shown in B:\n%s", readmeView())
 	}
@@ -85,7 +85,7 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	if files.ref == nil || files.ref.Name().Short() != "trunk" {
 		t.Fatalf("files ref of B = %v; want trunk", files.ref)
 	}
-	r.Update(lateReadmeA())
+	updateRendered(r, lateReadmeA())
 	r.Update(lateFilesA())
 	if strings.Contains(readmeView(), "Readme of A") {
 		t.Fatalf("late readme of A shown in B:\n%s", readmeView())
@@ -94,7 +94,7 @@ func TestRepoDropsLateMessages(t *testing.T) {
 		t.Fatalf("late files of A shown in B: view %v", files.activeView)
 	}
 
-	r.Update(readme.updateReadmeCmd()())
+	updateRendered(r, readme.updateReadmeCmd()())
 	if v := readmeView(); !strings.Contains(v, "Readme of B") {
 		t.Fatalf("readme of B not shown:\n%s", v)
 	}
@@ -120,11 +120,11 @@ func TestRepoDropsLateMessages(t *testing.T) {
 		t.Fatal("no dev branch")
 	}
 	r.Update(switchRefCmd(dev, r.gen)())
-	r.Update(lateReadmeTrunk())
+	updateRendered(r, lateReadmeTrunk())
 	if v := readmeView(); strings.Contains(v, "Readme of B") {
 		t.Fatalf("late readme of trunk shown for dev:\n%s", v)
 	}
-	r.Update(readme.updateReadmeCmd()())
+	updateRendered(r, readme.updateReadmeCmd()())
 	if v := readmeView(); !strings.Contains(v, "Readme of B dev") {
 		t.Fatalf("readme of dev not shown:\n%s", v)
 	}

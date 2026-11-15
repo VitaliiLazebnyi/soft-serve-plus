@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 	"github.com/charmbracelet/x/ansi"
@@ -112,5 +113,19 @@ func TestUIDiffRenderAfterLeavingRepository(t *testing.T) {
 	v := ansi.Strip(ui.View().Content)
 	if strings.Contains(v, "loading commit") || !strings.Contains(v, "diff-body") {
 		t.Fatalf("the diff opened after leaving the page is not shown:\n%s", v)
+	}
+}
+
+// A code view renders in a command, and its result goes to every page: the
+// server README on the selection page renders while the repository page is
+// shown.
+func TestUIDeliversRendersToEveryPage(t *testing.T) {
+	t.Parallel()
+	ui, active := newTestUI(t, repoPage)
+	inactive := ui.pages[selectionPage].(*recordingPage)
+	ui.Update(code.RenderedMsg{})
+	if len(inactive.msgs) != 1 || len(active.msgs) != 1 {
+		t.Fatalf("render delivered %d times to the selection page and %d times to the repository page; want once each",
+			len(inactive.msgs), len(active.msgs))
 	}
 }

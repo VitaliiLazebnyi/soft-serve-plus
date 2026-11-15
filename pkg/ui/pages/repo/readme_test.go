@@ -24,9 +24,9 @@ func TestReadmeEmptyRepoStopsLoading(t *testing.T) {
 	// A readme shown before, for example before the repository was emptied,
 	// must not leave its path behind.
 	r.Update(RepoMsg(readmeTestRepo{}))
-	r.Update(ReadmeMsg{Content: "# Old", Path: "docs/README.md"})
+	updateRendered(r, ReadmeMsg{Content: "# Old", Path: "docs/README.md"})
 	r.Init()
-	r.Update(EmptyRepoMsg{})
+	updateRendered(r, EmptyRepoMsg{})
 
 	view := ansi.Strip(r.View())
 	if strings.Contains(view, "loading") {
@@ -51,7 +51,7 @@ func TestReadmeEmptyRepoHidesCloneCmd(t *testing.T) {
 
 	r.Update(RepoMsg(readmeTestRepo{}))
 	r.Init()
-	r.Update(EmptyRepoMsg{})
+	updateRendered(r, EmptyRepoMsg{})
 
 	view := ansi.Strip(r.View())
 	if strings.Contains(view, "git clone") || strings.Contains(view, cfg.SSH.PublicURL) {

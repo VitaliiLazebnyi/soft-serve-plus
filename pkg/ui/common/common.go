@@ -107,7 +107,9 @@ func IsFileMarkdown(content, ext string) bool {
 	var lang string
 	lexer := lexers.Match(ext)
 	if lexer == nil {
-		lexer = lexers.Analyse(content)
+		// Only the start of the file: some analysers take time quadratic
+		// in their input.
+		lexer = analyse(content)
 	}
 	if lexer != nil && lexer.Config() != nil {
 		lang = lexer.Config().Name

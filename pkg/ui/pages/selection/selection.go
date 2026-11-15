@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 const (
@@ -190,10 +189,10 @@ func (s *Selection) FullHelp() [][]key.Binding {
 	return b
 }
 
-// setReadme shows the server README. It comes from the about
-// repository, and glamour passes escape sequences through to the terminal.
+// setReadme shows the server README. It comes from the about repository;
+// the code view sanitises it when it renders it.
 func (s *Selection) setReadme(readme, path string) tea.Cmd {
-	return s.readme.SetContent(utils.Sanitize(readme), path)
+	return s.readme.SetContent(readme, path)
 }
 
 // ReposMsg carries the repositories the selection page lists, loaded off
@@ -294,6 +293,9 @@ func (s *Selection) Update(msg tea.Msg) tea.Cmd {
 		routed = true
 		cmds = append(cmds, s.readme.Update(msg))
 		cmds = append(cmds, s.selector.Update(msg))
+	case code.RenderedMsg:
+		// The readme's render, whichever pane is active.
+		return s.readme.Update(msg)
 	case tea.KeyPressMsg, tea.MouseMsg:
 		switch msg := msg.(type) {
 		case tea.KeyPressMsg:

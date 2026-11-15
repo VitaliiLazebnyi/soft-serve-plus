@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
@@ -196,8 +197,12 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// act on the page.
 	forwardInput := ui.state != errorState
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		ui.SetSize(msg.Width, msg.Height)
+	case tea.WindowSizeMsg, code.RenderedMsg:
+		if msg, ok := msg.(tea.WindowSizeMsg); ok {
+			ui.SetSize(msg.Width, msg.Height)
+		}
+		// A render goes to the page whose code view started it, which may
+		// not be the active one.
 		for _, p := range ui.pages {
 			cmds = append(cmds, p.Update(msg))
 		}
@@ -271,10 +276,13 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	cmds = append(cmds, ui.footer.Update(msg))
-	// A window size message has already been delivered to every page above,
-	// and a render to the repository page.
+	// A window size message or a code view render has already been
+	// delivered to every page above, and a repository render to the
+	// repository page.
 	_, resized := msg.(tea.WindowSizeMsg)
-	_, rendered := msg.(repo.RenderedMsg)
+	_, codeRendered := msg.(code.RenderedMsg)
+	_, repoRendered := msg.(repo.RenderedMsg)
+	rendered := codeRendered || repoRendered
 	if !resized && !rendered && ui.state != loadingState && (forwardInput || !common.IsInputMsg(msg)) {
 		cmds = append(cmds, ui.pages[ui.activePage].Update(msg))
 	}

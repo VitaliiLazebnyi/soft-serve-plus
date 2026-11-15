@@ -14,18 +14,18 @@ func TestMarkdownCachedPerContent(t *testing.T) {
 	r := New(c, "", "")
 	r.UseGlamour = true
 
-	r.SetContent("# Title\n\nbody\n", "README.md")
+	deliver(r, r.SetContent("# Title\n\nbody\n", "README.md"))
 	if r.isMarkdown == nil || !*r.isMarkdown {
 		t.Fatalf("README.md not cached as markdown")
 	}
 	cached := r.isMarkdown
 	r.SetSize(60, 20)
-	r.Init()
+	deliver(r, r.Init())
 	if r.isMarkdown != cached {
 		t.Error("markdown detection ran again on a re-render")
 	}
 
-	r.SetContent("package main\n", "main.go")
+	deliver(r, r.SetContent("package main\n", "main.go"))
 	if r.isMarkdown == nil || *r.isMarkdown {
 		t.Error("main.go still treated as markdown after SetContent")
 	}
