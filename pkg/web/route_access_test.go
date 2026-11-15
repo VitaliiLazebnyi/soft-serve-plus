@@ -3,11 +3,13 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -22,10 +24,13 @@ const (
 	needRead
 	// needWrite: a caller who may only read is refused.
 	needWrite
+	// preflight: answered by the CORS middleware before any route, the
+	// same for every caller.
+	preflight
 )
 
 func (n routeNeed) String() string {
-	return [...]string{"405", "read", "write"}[n]
+	return [...]string{"405", "read", "write", "cors"}[n]
 }
 
 // routeWant is the classification of one route and method.
@@ -71,7 +76,7 @@ func TestRouteAccessTable(t *testing.T) {
 	no := routeWant{need: notAllowed}
 	noLFS := routeWant{need: notAllowed, lfs: true}
 
-	methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+	methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
 	routes := []struct {
 		path string // under /<repo>.git
 		want map[string]routeWant
@@ -107,12 +112,22 @@ func TestRouteAccessTable(t *testing.T) {
 					want = noLFS
 				}
 			}
+			if method == http.MethodOptions {
+				want = routeWant{need: preflight, lfs: want.lfs}
+			}
 			name := method + " " + rt.path
 			at := func(repo string) string { return "/" + repo + ".git" + rt.path }
 
 			var got routeWant
 			got.lfs = want.lfs // checked below where a refusal has a body
 			switch w := f.do(method, at("pub"), writer); {
+			case method == http.MethodOptions && w.Code == http.StatusOK && w.Body.Len() == 0:
+				got.need = preflight
+				for _, auth := range []string{"", reader} {
+					if a := f.do(method, at("secret"), auth); a.Code != http.StatusOK || a.Body.Len() != 0 {
+						t.Errorf("%s: 200 for the owner, %d %q for another caller", name, a.Code, a.Body)
+					}
+				}
 			case w.Code == http.StatusMethodNotAllowed:
 				got.need = notAllowed
 				// Every caller gets the same 405.
@@ -160,6 +175,69 @@ func TestRouteAccessTable(t *testing.T) {
 				t.Errorf("%s: got {%v lfs=%v creates=%v}, want {%v lfs=%v creates=%v}",
 					name, got.need, got.lfs, got.creates, want.need, want.lfs, want.creates)
 			}
+		}
+	}
+}
+
+// TestRouteAccessAnonymousWriter pins what an anonymous caller gets on the
+// write routes of a public repository when anonymous users may write
+// (anon-access read-write): authorization lets every request through, so
+// the answer is the handler's. Under anon-access read-only the same
+// requests are refused by authorization with 401. Creating or deleting a
+// lock then asks for credentials in the handler, since a lock needs an
+// owner.
+func TestRouteAccessAnonymousWriter(t *testing.T) {
+	f := newOracleFixture(t)
+	is := is.New(t)
+	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	oid := sha256Hex("x")
+	lfsJSON := map[string]string{"Accept": lfs.MediaType, "Content-Type": lfs.MediaType}
+	octets := map[string]string{"Content-Type": "application/octet-stream"}
+	rpc := map[string]string{"Content-Type": "application/x-git-receive-pack-request"}
+	rows := []struct {
+		method, path string
+		hdr          map[string]string
+		body         string
+		// want is the status with anon-access read-write.
+		want int
+		// challenge is whether that answer asks for credentials.
+		challenge bool
+	}{
+		{http.MethodGet, "/info/refs?service=git-receive-pack", nil, "", http.StatusOK, false},
+		{http.MethodHead, "/info/refs?service=git-receive-pack", nil, "", http.StatusOK, false},
+		{http.MethodPost, "/git-receive-pack", nil, "", http.StatusUnsupportedMediaType, false},
+		{http.MethodPost, "/git-receive-pack", rpc, "0000", http.StatusOK, false},
+		{http.MethodPut, "/info/lfs/objects/basic/" + oid, nil, "x", http.StatusUnsupportedMediaType, false},
+		{http.MethodPut, "/info/lfs/objects/basic/" + oid, octets, "x", http.StatusOK, false},
+		{http.MethodPost, "/info/lfs/locks", lfsJSON, "{", http.StatusBadRequest, false},
+		{http.MethodPost, "/info/lfs/locks", lfsJSON, `{"path":"a.bin"}`, http.StatusUnauthorized, true},
+		// Verify lists no locks as the anonymous caller's own.
+		{http.MethodPost, "/info/lfs/locks/verify", lfsJSON, `{}`, http.StatusOK, false},
+		{http.MethodPost, "/info/lfs/locks/1/unlock", lfsJSON, `{}`, http.StatusUnauthorized, true},
+	}
+
+	do := func(method, path string, hdr map[string]string, body string) *httptest.ResponseRecorder {
+		return f.send(method, "/pub.git"+path, hdr, body)
+	}
+
+	// anon-access read-only: authorization refuses each, asking for
+	// credentials.
+	is.NoErr(f.be.SetAnonAccess(f.ctx, access.ReadOnlyAccess))
+	for _, row := range rows {
+		w := do(row.method, row.path, row.hdr, row.body)
+		if w.Code != http.StatusUnauthorized || w.Header().Get("WWW-Authenticate") == "" {
+			t.Errorf("read-only: %s %s: got %d, want 401 with a challenge", row.method, row.path, w.Code)
+		}
+	}
+
+	is.NoErr(f.be.SetAnonAccess(f.ctx, access.ReadWriteAccess))
+	for _, row := range rows {
+		w := do(row.method, row.path, row.hdr, row.body)
+		if w.Code != row.want || (w.Header().Get("WWW-Authenticate") != "") != row.challenge {
+			t.Errorf("read-write: %s %s %q: got %d (challenge %q), want %d (challenge %v): %s",
+				row.method, row.path, row.body, w.Code, w.Header().Get("WWW-Authenticate"), row.want, row.challenge, w.Body)
 		}
 	}
 }

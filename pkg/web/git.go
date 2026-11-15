@@ -52,7 +52,7 @@ type GitRoute struct {
 var _ http.Handler = GitRoute{}
 
 // gitHandler serves a request of a git route once withAccess has let it
-// through. req is never nil, and gr.repo is the repository the caller may
+// through. gr is never nil, and gr.repo is the repository the caller may
 // read.
 type gitHandler func(s *gitServer, w http.ResponseWriter, r *http.Request, gr *gitRequest)
 
@@ -73,17 +73,13 @@ type gitServer struct {
 // backend, database and store in ctx.
 func newGitServer(ctx context.Context, pending *pushCreates) *gitServer {
 	cfg := config.FromContext(ctx)
-	limits := &requestLimits{}
-	if cfg != nil {
-		limits = newRequestLimits(cfg.HTTP)
-	}
 	return &gitServer{
 		cfg:       cfg,
 		be:        backend.FromContext(ctx),
 		dbx:       db.FromContext(ctx),
 		datastore: store.FromContext(ctx),
 		pending:   pending,
-		limits:    limits,
+		limits:    newRequestLimits(cfg.HTTP),
 	}
 }
 
