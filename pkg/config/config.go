@@ -182,9 +182,10 @@ type HTTPConfig struct {
 	// MaxConnectionsPerIP is the maximum number of git and LFS requests
 	// served at once from one client address (one IPv4 address, or one IPv6
 	// /64). 0 means no limit. Loopback clients are not limited by it, so a
-	// reverse proxy on the same host is not; behind a proxy on another host
-	// every client has the proxy's address, so set it to 0 there and limit
-	// clients at the proxy.
+	// reverse proxy on the same host is not; behind a reverse proxy that
+	// connects from a non-loopback address, such as another host or another
+	// container, every client has the proxy's address, so set it to 0 there
+	// and limit clients at the proxy.
 	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
 
 	// CORS is the cross-origin configuration for the HTTP server.

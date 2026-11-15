@@ -8,8 +8,8 @@ import "net/netip"
 // for IPv4 (and IPv4-mapped IPv6), and its /64 for IPv6, since one client
 // usually holds a whole /64. ok is false when ip is not valid.
 //
-// The zone of an IPv6 address is dropped, so every link-local peer
-// (fe80::/10) falls into the one bucket fe80::/64, whatever its interface.
+// The zone of an IPv6 address is dropped, so every peer in fe80::/64 shares
+// one bucket, whatever its interface.
 func Prefix(ip netip.Addr) (p netip.Prefix, ok bool) {
 	if !ip.IsValid() {
 		return netip.Prefix{}, false

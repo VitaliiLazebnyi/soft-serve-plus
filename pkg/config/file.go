@@ -240,7 +240,8 @@ http:
   # over a limit get 503 Service Unavailable. A value of 0 means no limit.
   # Loopback clients (127.0.0.0/8, ::1) have no per-address limit, so a
   # reverse proxy on the same host is bound only by max_connections. Behind
-  # a reverse proxy on another host every client has the proxy's address
+  # a reverse proxy that connects from a non-loopback address, such as
+  # another host or another container, every client has the proxy's address
   # and shares one address's limit: set max_connections_per_ip to 0 there
   # and limit clients at the proxy. Raise it when many clients share one
   # NAT or CI egress address. The per-address limit keeps one address from
