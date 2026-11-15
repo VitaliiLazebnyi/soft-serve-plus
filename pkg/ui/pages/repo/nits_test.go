@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -126,6 +128,64 @@ func TestReadmeTooLarge(t *testing.T) {
 	p = newReadmePage(t, none, 64)
 	p.open()
 	p.wantView("none", "No readme found.")
+
+	// A root README too large to show gives way to a small one in .github.
+	github := newDiskRepo(t, "github", "main", "# big\n\n"+strings.Repeat("text ", 100)+"\n")
+	if err := os.MkdirAll(filepath.Join(github.path, ".github"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(github.path, ".github", "README.md"), "small-readme\n")
+	gitRun(t, github.path, "add", "-A")
+	gitRun(t, github.path, "commit", "-q", "-m", "small readme")
+	p = newReadmePage(t, github, 64)
+	p.open()
+	p.wantView(".github", "small-readme")
+	p.notView(".github", "larger than the size limit")
+
+	// With no README in the root, one too large in docs is reported.
+	docs := newDiskRepo(t, "docs", "main", "# docs\n")
+	gitRun(t, docs.path, "rm", "-q", "README.md")
+	if err := os.MkdirAll(filepath.Join(docs.path, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(docs.path, "docs", "README.md"), strings.Repeat("text ", 100)+"\n")
+	gitRun(t, docs.path, "add", "-A")
+	gitRun(t, docs.path, "commit", "-q", "-m", "big readme in docs")
+	p = newReadmePage(t, docs, 64)
+	p.open()
+	p.wantView("docs", "larger than the size limit")
+	p.notView("docs", "No readme found.")
+}
+
+// The file names in a diff's summary lose their bidirectional controls, as
+// file names do everywhere else.
+func TestDiffSummaryBidiControlsRemoved(t *testing.T) {
+	t.Parallel()
+	c := common.NewCommon(context.Background(), 80, 24)
+	out := renderSummary(&git.Diff{Stat: " na" + bidi + "me.txt | 1 +\n 1 file changed, 1 insertion(+)\n"}, c.Styles, 80)
+	if strings.ContainsAny(out, bidi) {
+		t.Fatalf("the diff summary keeps bidirectional controls: %q", out)
+	}
+	if !strings.Contains(ansi.Strip(out), "name.txt") {
+		t.Fatalf("the diff summary lacks the file name: %q", ansi.Strip(out))
+	}
+}
+
+// A result for a hidden tab leaves the status bar alone, so a copy notice
+// stays until something on the tab shown changes.
+func TestStatusBarKeepsNoticeOnHiddenTabResult(t *testing.T) {
+	p := newPinPage(t)
+	p.open()
+	p.tab(2)
+	p.update(CopyMsg{Text: "x", Message: "Commit hash copied"})
+	p.update(StashListMsg{gen: p.r.gen})
+	if v := ansi.Strip(p.r.statusbar.View()); !strings.Contains(v, "Commit hash copied") {
+		t.Fatalf("a hidden tab's result cleared the copy notice: %q", v)
+	}
+	p.update(LogCountMsg{count: 2, gen: p.r.gen})
+	if v := ansi.Strip(p.r.statusbar.View()); strings.Contains(v, "Commit hash copied") {
+		t.Fatalf("a result for the tab shown kept the copy notice: %q", v)
+	}
 }
 
 // A README that fails to load for another reason reports the error, and

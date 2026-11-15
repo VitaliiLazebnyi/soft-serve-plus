@@ -375,11 +375,17 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 
 	// Refresh the status bar on anything that can change what the tabs
 	// show: input, a tab or ref change, and every result of a tab's load
-	// or render. It must come after the tabs have handled the message.
-	switch msg.(type) {
+	// or render. It must come after the tabs have handled the message. A
+	// result for a hidden tab changes nothing the status bar shows, and a
+	// refresh would clear a copy notice early.
+	switch msg := msg.(type) {
+	case paneMsg:
+		if r.state == failedState || msg.pane() == paneRepo || msg.pane() == r.panes[r.activeTab].id() {
+			r.setStatusBarInfo()
+		}
 	case RepoMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
 		selector.ActiveMsg, tea.KeyPressMsg, tea.MouseClickMsg,
-		tea.MouseWheelMsg, paneMsg, code.RenderedMsg:
+		tea.MouseWheelMsg, code.RenderedMsg:
 		r.setStatusBarInfo()
 	}
 
