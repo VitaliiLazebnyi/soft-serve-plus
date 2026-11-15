@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
@@ -139,8 +140,10 @@ type sessionCounts struct {
 }
 
 // connCallback returns the ssh.ConnCallback that enforces the connection
-// limits and sets up the per-connection session counts.
-func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
+// limits and sets up the per-connection session counts. A connection that
+// spends lifetime with no command running, without hasAccount having been
+// called for it, is closed (see connLifetime); zero turns that off.
+func connCallback(l *connLimiter, logger *log.Logger, lifetime time.Duration) ssh.ConnCallback {
 	return func(ctx ssh.Context, conn net.Conn) net.Conn {
 		release, limit := l.acquire(conn.RemoteAddr())
 		if release == nil {
@@ -152,7 +155,22 @@ func connCallback(l *connLimiter, logger *log.Logger) ssh.ConnCallback {
 			return nil
 		}
 		ctx.SetValue(sessionCounterKey{}, new(sessionCounts))
-		return &limitedConn{Conn: conn, release: release}
+		lc := &limitedConn{Conn: conn, release: release}
+		if lifetime > 0 {
+			lt := &connLifetime{}
+			// Stop the clock when the connection closes first, so its
+			// timer does not keep the connection in memory until it fires.
+			lc.release = func() {
+				lt.stop()
+				release()
+			}
+			lt.start(lifetime, func() {
+				logger.Debug("closing connection without an account: lifetime over", "remote-addr", conn.RemoteAddr())
+				_ = lc.Close()
+			})
+			ctx.SetValue(connLifetimeKey{}, lt)
+		}
+		return lc
 	}
 }
 
@@ -218,10 +236,12 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 // filterSessionRequests, limited by limitSessions, running srv.Handler,
 // which must already be set, limited by limitHandlers, both to maxSessions.
 // forwardWindowChanges wraps the limit too, so a session it refuses still
-// has its window changes forwarded.
+// has its window changes forwarded. Inside the limit, pauseLifetime stops
+// the lifetime clock of a connection without an account while the handler
+// runs.
 func setSessionHandlers(srv *ssh.Server, maxSessions int) {
 	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
 		"session": limitSessions(filterSessionRequests(ssh.DefaultSessionHandler), maxSessions),
 	}
-	srv.Handler = forwardWindowChanges(limitHandlers(srv.Handler, maxSessions))
+	srv.Handler = forwardWindowChanges(limitHandlers(pauseLifetime(srv.Handler), maxSessions))
 }
