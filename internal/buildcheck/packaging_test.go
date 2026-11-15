@@ -27,6 +27,9 @@ type goreleaserConfig struct {
 		// A file is a glob string or a mapping with src and info.
 		Files []any `yaml:"files"`
 	} `yaml:"archives"`
+	DockersV2 []struct {
+		Labels map[string]string `yaml:"labels"`
+	} `yaml:"dockers_v2"`
 	NFPMs []struct {
 		Dependencies []string `yaml:"dependencies"`
 		MTime        string   `yaml:"mtime"`
@@ -220,6 +223,29 @@ func TestReleaseHooksDoNotRewriteModules(t *testing.T) {
 // commitDate is the template that dates a file by the commit. GoReleaser
 // parses these mtime fields as RFC 3339, which CommitTimestamp is not.
 const commitDate = "{{ .CommitDate }}"
+
+// buildTime matches the templates that give the time of the build.
+var buildTime = regexp.MustCompile(`{{[^}]*\.(Date|Now|Timestamp)\b`)
+
+// TestImageLabelsAreReproducible checks that the image labels carry the commit
+// date rather than the build time, so a rebuilt image has the same config.
+func TestImageLabelsAreReproducible(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	if len(c.DockersV2) == 0 {
+		t.Fatal("no dockers_v2 in .goreleaser.yml; update this test")
+	}
+	for i, d := range c.DockersV2 {
+		if got := d.Labels["org.opencontainers.image.created"]; got != commitDate {
+			t.Errorf("dockers_v2[%d]: org.opencontainers.image.created is %q, want %s", i, got, commitDate)
+		}
+		for k, v := range d.Labels {
+			if buildTime.MatchString(v) {
+				t.Errorf("dockers_v2[%d]: label %s is %q, the build time", i, k, v)
+			}
+		}
+	}
+}
 
 // TestReleaseArtifactsAreReproducible checks that the archives and packages,
 // which checksums.txt lists and the provenance attests, do not depend on when,

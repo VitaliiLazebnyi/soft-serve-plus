@@ -200,7 +200,8 @@ dockers_v2:
       org.opencontainers.image.description: "A tasty, self-hostable Git server for the command line (maintained fork of Soft Serve)"
       org.opencontainers.image.source: "https://github.com/VitaliiLazebnyi/soft-serve-plus"
       org.opencontainers.image.version: "v{{ .Version }}"
-      org.opencontainers.image.created: "{{ .Date }}"
+      # The commit date, not the build time, so a rebuilt image has the same labels.
+      org.opencontainers.image.created: "{{ .CommitDate }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.licenses: MIT
 
