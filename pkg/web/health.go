@@ -9,14 +9,14 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// HealthController registers the health check routes for the web server.
-func HealthController(_ context.Context, r *mux.Router) {
+// healthController registers the health check routes for the web server.
+func healthController(_ context.Context, r *mux.Router) {
 	r.HandleFunc("/livez", getLiveness)
 	r.HandleFunc("/readyz", getReadiness)
 }
 
 func getLiveness(w http.ResponseWriter, _ *http.Request) {
-	renderStatus(http.StatusOK)(w, nil)
+	renderStatus(w, http.StatusOK)
 }
 
 func getReadiness(w http.ResponseWriter, r *http.Request) {
@@ -26,9 +26,9 @@ func getReadiness(w http.ResponseWriter, r *http.Request) {
 
 	if err := db.PingContext(ctx); err != nil {
 		logger.Error("error getting db readiness", "err", err)
-		renderStatus(http.StatusServiceUnavailable)(w, nil)
+		renderStatus(w, http.StatusServiceUnavailable)
 		return
 	}
 
-	renderStatus(http.StatusOK)(w, nil)
+	renderStatus(w, http.StatusOK)
 }

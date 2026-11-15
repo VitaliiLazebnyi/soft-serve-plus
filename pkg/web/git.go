@@ -28,9 +28,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// GitRoute is a route for git services. It holds the access its requests
+// gitRoute is a route for git services. It holds the access its requests
 // need, so the rule sits next to the route: see access.
-type GitRoute struct {
+type gitRoute struct {
 	method  []string
 	handler gitHandler
 	path    string
@@ -48,7 +48,7 @@ type GitRoute struct {
 	server *gitServer
 }
 
-var _ http.Handler = GitRoute{}
+var _ http.Handler = gitRoute{}
 
 // gitHandler serves a request of a git route once withAccess has let it
 // through. gr is never nil, and gr.repo is the repository the caller may
@@ -104,7 +104,7 @@ type gitRequest struct {
 }
 
 // newRequest returns what the route knows about r.
-func (g GitRoute) newRequest(r *http.Request) *gitRequest {
+func (g gitRoute) newRequest(r *http.Request) *gitRequest {
 	vars := mux.Vars(r)
 	repo := vars["repo"]
 	gr := &gitRequest{
@@ -133,7 +133,7 @@ type routeAccess struct {
 }
 
 // access returns the access a request with method and service needs.
-func (g GitRoute) access(method string, service git.Service) routeAccess {
+func (g gitRoute) access(method string, service git.Service) routeAccess {
 	a := routeAccess{lfs: g.lfs, write: slices.Contains(g.write, method)}
 	if g.service && service == git.ReceivePackService {
 		a.write = true
@@ -147,7 +147,7 @@ func (g GitRoute) access(method string, service git.Service) routeAccess {
 // ServeHTTP implements http.Handler. The method is checked before
 // authorization so a mismatched method can neither probe nor create a
 // repository.
-func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (g gitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	allowed := g.allowed()
 	if !slices.Contains(allowed, r.Method) {
 		renderMethodNotAllowed(w, r, allowed)
@@ -161,7 +161,7 @@ func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // allowed returns the methods the route answers: a route that answers GET
 // answers HEAD too, as git http-backend does.
-func (g GitRoute) allowed() []string {
+func (g gitRoute) allowed() []string {
 	allowed := g.method
 	if slices.Contains(allowed, http.MethodGet) {
 		allowed = append(slices.Clip(allowed), http.MethodHead)
@@ -203,18 +203,13 @@ func withParams(next http.Handler) http.Handler {
 	})
 }
 
-// GitController is a router for git services.
-func GitController(ctx context.Context, r *mux.Router) {
-	gitController(ctx, r, newPushCreates())
-}
-
 // gitController routes git services, tracking the repositories HTTP pushes
 // create in pending.
 func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
 	server := newGitServer(ctx, pending)
 
-	goGet := withParams(withCaller(http.HandlerFunc(GoGetHandler)))
+	goGet := withParams(withCaller(http.HandlerFunc(goGetHandler)))
 
 	// The dumb protocol is not served. Its requests get a fixed answer that
 	// does not depend on the repository, so they are refused before anything
@@ -278,9 +273,9 @@ func isSmartService(service git.Service) bool {
 	return service == git.UploadPackService || service == git.ReceivePackService
 }
 
-var gitRoutes = []GitRoute{
+var gitRoutes = []gitRoute{
 	// Git services
-	// These handlers don't authenticate or authorize the caller: GitRoute
+	// These handlers don't authenticate or authorize the caller: gitRoute
 	// wraps each of them in withAccess.
 	{
 		method:  []string{http.MethodPost},
@@ -392,7 +387,7 @@ func callerFor(ctx context.Context, repo string) proto.User {
 
 // badCredentials reports whether the caller sent credentials that failed.
 func badCredentials(err error) bool {
-	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword)
+	return errors.Is(err, errInvalidToken) || errors.Is(err, errInvalidPassword)
 }
 
 // authRetryAfter is the Retry-After, in seconds, of the answer to a request
@@ -411,7 +406,7 @@ func refuseUnchecked(w http.ResponseWriter, r *http.Request, err error, lfsJSON 
 	if lfsJSON {
 		renderJSON(w, r, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
 	} else {
-		renderStatus(http.StatusServiceUnavailable)(w, r)
+		renderStatus(w, http.StatusServiceUnavailable)
 	}
 	return true
 }
@@ -602,7 +597,7 @@ func pathAncestors(p string) []string {
 // repository as route needs, and serves the route's handler. A repository
 // created by push-to-create is recorded in pending, which removes it if the
 // push fails, or never arrives, without any ref.
-func (s *gitServer) withAccess(route GitRoute, w http.ResponseWriter, orig *http.Request) {
+func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http.Request) {
 	gr := route.newRequest(orig)
 	r, err := identify(orig, gr.name)
 	need := route.access(r.Method, gr.service)
@@ -753,7 +748,7 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 
 	// git http-backend answers 415 to any other content type.
 	if !hasMediaType(r, fmt.Sprintf("application/x-%s-request", service)) {
-		renderStatus(http.StatusUnsupportedMediaType)(w, r)
+		renderStatus(w, http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -771,7 +766,7 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 			if service == git.ReceivePackService {
 				markPushFailed(ctx)
 			}
-			renderStatus(http.StatusBadRequest)(w, r)
+			renderStatus(w, http.StatusBadRequest)
 			return
 		}
 		defer gz.Close() //nolint: errcheck
@@ -790,8 +785,6 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 
 	hdrNocache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
-	w.Header().Set("Connection", "Keep-Alive")
-	w.Header().Set("Transfer-Encoding", "chunked")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 
@@ -996,23 +989,23 @@ func hasMediaType(r *http.Request, want string) bool {
 // renderMethodNotAllowed answers 405 and lists the allowed methods.
 func renderMethodNotAllowed(w http.ResponseWriter, r *http.Request, allowed []string) {
 	w.Header().Set("Allow", strings.Join(allowed, ", "))
-	renderStatus(http.StatusMethodNotAllowed)(w, r)
+	renderStatus(w, http.StatusMethodNotAllowed)
 }
 
 func renderNotFound(w http.ResponseWriter, r *http.Request) {
-	renderStatus(http.StatusNotFound)(w, r)
+	renderStatus(w, http.StatusNotFound)
 }
 
 func renderUnauthorized(w http.ResponseWriter, r *http.Request) {
-	renderStatus(http.StatusUnauthorized)(w, r)
+	renderStatus(w, http.StatusUnauthorized)
 }
 
 func renderForbidden(w http.ResponseWriter, r *http.Request) {
-	renderStatus(http.StatusForbidden)(w, r)
+	renderStatus(w, http.StatusForbidden)
 }
 
 func renderInternalServerError(w http.ResponseWriter, r *http.Request) {
-	renderStatus(http.StatusInternalServerError)(w, r)
+	renderStatus(w, http.StatusInternalServerError)
 }
 
 // Header writing functions

@@ -1,10 +1,7 @@
 package web
 
 import (
-	"bufio"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"time"
 
@@ -23,8 +20,6 @@ type logWriter struct {
 var (
 	_ http.ResponseWriter = (*logWriter)(nil)
 	_ http.Flusher        = (*logWriter)(nil)
-	_ http.Hijacker       = (*logWriter)(nil)
-	_ io.ReaderFrom       = (*logWriter)(nil)
 )
 
 // Write implements http.ResponseWriter.
@@ -32,22 +27,6 @@ func (r *logWriter) Write(p []byte) (int, error) {
 	written, err := r.ResponseWriter.Write(p)
 	r.bytes += int64(written)
 	return written, err
-}
-
-// ReadFrom implements io.ReaderFrom. io.Copy and http.ServeContent use it,
-// so forwarding to the underlying writer's ReadFrom lets net/http send a
-// file with sendfile(2) instead of copying it through user space.
-func (r *logWriter) ReadFrom(src io.Reader) (int64, error) {
-	var n int64
-	var err error
-	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
-		n, err = rf.ReadFrom(src)
-	} else {
-		// Hide our own ReadFrom from io.Copy so it does not recurse.
-		n, err = io.Copy(struct{ io.Writer }{r.ResponseWriter}, src)
-	}
-	r.bytes += n
-	return n, err
 }
 
 // Note this is generally only called when sending an HTTP error, so it's
@@ -69,16 +48,8 @@ func (r *logWriter) Flush() {
 	}
 }
 
-// Hijack implements http.Hijacker.
-func (r *logWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
-		return h.Hijack()
-	}
-	return nil, nil, fmt.Errorf("http.Hijacker not implemented")
-}
-
-// NewLoggingMiddleware returns a new logging middleware.
-func NewLoggingMiddleware(next http.Handler, logger *log.Logger) http.Handler {
+// newLoggingMiddleware returns a new logging middleware.
+func newLoggingMiddleware(next http.Handler, logger *log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		writer := &logWriter{code: http.StatusOK, ResponseWriter: w}

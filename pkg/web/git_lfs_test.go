@@ -216,7 +216,7 @@ var forgeableServices = []string{"git-upload-pack", "git-receive-pack", "git-upl
 // see a bypass.
 func lfsTestRouter(ctx context.Context) *mux.Router {
 	router := mux.NewRouter()
-	GitController(ctx, router)
+	gitController(ctx, router, newPushCreates())
 	return router
 }
 

@@ -169,8 +169,8 @@ func TestBearerInvalidSubjectUsername(t *testing.T) {
 		req.Header.Set("Authorization", bearer)
 		user, _, err := authenticate(req, "secret")
 		is.True(user == nil)
-		if !errors.Is(err, ErrInvalidToken) {
-			t.Errorf("subject %q: err = %v, want %v", subject, err, ErrInvalidToken)
+		if !errors.Is(err, errInvalidToken) {
+			t.Errorf("subject %q: err = %v, want %v", subject, err, errInvalidToken)
 		}
 
 		logs.Reset()

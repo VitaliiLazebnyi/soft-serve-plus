@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// Serve speaks TLS on the given listener when a TLS configuration is set, as
-// ListenAndServe does, and plain HTTP otherwise.
+// Serve speaks TLS on the given listener when a TLS configuration is set,
+// and plain HTTP otherwise.
 func TestHTTPServerServe(t *testing.T) {
 	cert := selfSignedCert(t)
 	for _, useTLS := range []bool{false, true} {

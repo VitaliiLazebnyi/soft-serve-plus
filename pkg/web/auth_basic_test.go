@@ -33,10 +33,10 @@ func TestBasicAuthTokenForms(t *testing.T) {
 		want    string // the username logged in as, or "" for a refusal
 		wantErr error
 	}{
-		{"stored password", "stranger", "stranger-password", "", ErrInvalidPassword},
-		{"stored password, other case", "Stranger", "stranger-password", "", ErrInvalidPassword},
-		{"wrong password", "stranger", "owner-password", "", ErrInvalidPassword},
-		{"missing user", "nobody", "some-password", "", ErrInvalidPassword},
+		{"stored password", "stranger", "stranger-password", "", errInvalidPassword},
+		{"stored password, other case", "Stranger", "stranger-password", "", errInvalidPassword},
+		{"wrong password", "stranger", "owner-password", "", errInvalidPassword},
+		{"missing user", "nobody", "some-password", "", errInvalidPassword},
 		{"token as password, empty username", "", f.token, "stranger", nil},
 		{"token as password, owner's username", "stranger", f.token, "stranger", nil},
 		{"token as password, owner's username in other case", "STRANGER", f.token, "stranger", nil},
@@ -47,11 +47,11 @@ func TestBasicAuthTokenForms(t *testing.T) {
 		{"token as username, no password", f.token, "", "stranger", nil},
 		{"token as username, placeholder password", f.token, "x-oauth-basic", "stranger", nil},
 		{"token as username, token as password", f.token, f.token, "stranger", nil},
-		{"bad token, empty username", "", "ss_bad-token", "", ErrInvalidPassword},
-		{"bad token as username", "ss_bad-token", "", "", ErrInvalidToken},
-		{"bad token as username, placeholder password", "ss_bad-token", "x-oauth-basic", "", ErrInvalidPassword},
-		{"expired token, empty username", "", expired, "", ErrInvalidPassword},
-		{"expired token as username", expired, "x-oauth-basic", "", ErrInvalidPassword},
+		{"bad token, empty username", "", "ss_bad-token", "", errInvalidPassword},
+		{"bad token as username", "ss_bad-token", "", "", errInvalidToken},
+		{"bad token as username, placeholder password", "ss_bad-token", "x-oauth-basic", "", errInvalidPassword},
+		{"expired token, empty username", "", expired, "", errInvalidPassword},
+		{"expired token as username", expired, "x-oauth-basic", "", errInvalidPassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			is := is.New(t)

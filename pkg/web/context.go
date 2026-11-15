@@ -11,9 +11,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
-// NewContextHandler returns a new context middleware.
+// newContextHandler returns a new context middleware.
 // This middleware adds the config, backend, and logger to the request context.
-func NewContextHandler(ctx context.Context) func(http.Handler) http.Handler {
+func newContextHandler(ctx context.Context) func(http.Handler) http.Handler {
 	cfg := config.FromContext(ctx)
 	be := backend.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("http")

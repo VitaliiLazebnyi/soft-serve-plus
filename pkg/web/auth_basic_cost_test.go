@@ -67,7 +67,7 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.FromContext(ctx).HTTP.MaxConnections = 8
-	router := NewRouter(ctx)
+	router := testRouter(t, ctx)
 
 	// The faster of two bcrypt comparisons, as a login used to run. The
 	// first also makes the dummy hash, so the second is the one that counts.

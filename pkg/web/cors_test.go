@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-// An empty public URL with no allowed origins allows no origin. gorilla's
-// CORS handler would allow every origin for an empty list.
+// An empty public URL with no allowed origins allows no origin, not every
+// one.
 func TestCORSHandlerOrigins(t *testing.T) {
 	t.Parallel()
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

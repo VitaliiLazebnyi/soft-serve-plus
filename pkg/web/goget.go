@@ -50,8 +50,8 @@ func goImportRoot(u *url.URL) string {
 // longer import path never resolves to one.
 const maxGoGetPathLen = 4096
 
-// GoGetHandler handles go get requests.
-func GoGetHandler(w http.ResponseWriter, r *http.Request) {
+// goGetHandler handles go get requests.
+func goGetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cfg := config.FromContext(ctx)
 	be := backend.FromContext(ctx)
@@ -67,7 +67,7 @@ func GoGetHandler(w http.ResponseWriter, r *http.Request) {
 	// https://go.dev/ref/mod#vcs-branch
 	if r.URL.Query().Get("go-get") == "1" {
 		// The router refuses a longer path before it gets here; this
-		// guards callers of GoGetHandler that do not go through it.
+		// guards callers of goGetHandler that do not go through it.
 		if len(repo) > maxGoGetPathLen {
 			renderNotFound(w, r)
 			return

@@ -135,7 +135,7 @@ func TestCORSBehaviour(t *testing.T) {
 			if group.methods != nil {
 				cfg.HTTP.CORS.AllowedMethods = group.methods
 			}
-			h := NewRouter(ctx)
+			h := testRouter(t, ctx)
 
 			for _, tc := range group.cases {
 				t.Run(tc.name, func(t *testing.T) {

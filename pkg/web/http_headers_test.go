@@ -37,7 +37,7 @@ func TestCORSVaryOrigin(t *testing.T) {
 	f := newOracleFixture(t)
 	cfg := config.FromContext(f.ctx)
 	cfg.HTTP.CORS.AllowedOrigins = []string{"https://git.example.com"}
-	h := NewRouter(f.ctx)
+	h := testRouter(t, f.ctx)
 
 	for _, origin := range []string{"", "https://git.example.com", "https://evil.example.com"} {
 		for _, method := range []string{http.MethodGet, http.MethodOptions} {
@@ -63,7 +63,7 @@ func TestCORSPublicURLWithPath(t *testing.T) {
 	cfg := config.FromContext(f.ctx)
 	cfg.HTTP.PublicURL = "https://Git.Example.com:443/soft/"
 	cfg.HTTP.CORS.AllowedOrigins = []string{cfg.HTTP.PublicURL}
-	h := NewRouter(f.ctx)
+	h := testRouter(t, f.ctx)
 
 	for origin, want := range map[string]string{
 		"https://git.example.com":  "https://git.example.com",
