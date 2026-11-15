@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
 )
 
 // deliver hands msgs to the page and then every message their commands
@@ -69,25 +70,45 @@ func TestFilesLateListingAfterFileOpened(t *testing.T) {
 func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 	p := newPinPage(t)
 	p.open()
+	// A's Files tab is in a directory.
 	p.tab(1)
-	p.wantView("repository A", "file.txt")
+	selectItem(t, p.files.selector, "sub")
+	p.settle(keyEnter)
+	if got := p.files.Path(); got != "sub" {
+		t.Fatalf("files path = %q; want sub", got)
+	}
 
 	b := diskRepo{name: "broken-b", path: filepath.Join(t.TempDir(), "missing")}
 	if errs := p.deliver(RepoMsg(b)); errs == 0 {
 		t.Fatal("the failed open reported no error")
 	}
 	p.wantView("failed repository", "broken-b")
-	p.notView("failed repository", "readme-body", "file.txt", "README.md", "loading")
+	p.notView("failed repository", "readme-body", "inner.txt", "README.md", "loading", "Commits")
+
+	// The tab key switches no tab, and help offers no tab's keys.
+	p.deliver(keyTab)
+	if p.r.activeTab != 0 {
+		t.Fatalf("tab switched to tab %d on the failed repository", p.r.activeTab)
+	}
+	if n := len(p.r.ShortHelp()); n != len(p.r.commonHelp()) || n > 1 {
+		t.Fatalf("help offers %d keys; want esc alone", n)
+	}
+
+	// A tab switch already on its way lands on A's Files tab, in sub.
+	// The page still has no path, so esc leaves it, and enter does not
+	// reach the tab.
+	p.deliver(tabs.ActiveTabMsg(1))
 	if got := p.r.Path(); got != "" {
 		t.Fatalf("path = %q; want none, so esc leaves the page", got)
 	}
-
-	// Input does not reach A's panes: enter opens nothing.
-	p.deliver(keyEnter)
-	p.notView("enter on the failed repository", "file-body-two")
-	if got := p.files.Path(); got != "" {
-		t.Fatalf("enter opened %q from the previous repository", got)
+	selectItem(t, p.files.selector, "inner.txt")
+	for _, k := range []tea.KeyPressMsg{keyEnter, {Code: 'h', Text: "h"}} {
+		p.deliver(k)
+		if got := p.files.Path(); got != "sub" {
+			t.Fatalf("%s changed A's Files tab to %q", k, got)
+		}
 	}
+	p.notView("enter on the failed repository", "inner-body")
 }
 
 // A load that fails in a tab that is not shown reaches that tab, which

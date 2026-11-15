@@ -206,7 +206,12 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case errorMsg:
-		// The list or a patch failed to load: leave the loading view.
+		// The list or a patch failed to load: leave the loading view. A
+		// list that failed leaves the previous ref's stashes behind:
+		// clear them.
+		if s.state == stashStateLoading && s.currentPatch.Diff == nil {
+			cmds = append(cmds, s.list.SetItems(nil))
+		}
 		if s.state == stashStateLoading {
 			s.state = stashStateList
 		}

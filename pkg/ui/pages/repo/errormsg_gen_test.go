@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
@@ -29,5 +30,37 @@ func TestRepoDropsStaleError(t *testing.T) {
 	}
 	if !reported {
 		t.Fatal("a current error did not reach the error screen")
+	}
+}
+
+// A list that fails to load is not left showing what was loaded before,
+// perhaps for another ref or repository.
+func TestListErrorClearsPreviousItems(t *testing.T) {
+	p := newPinPage(t)
+	p.open()
+	fail := func(to paneID) {
+		t.Helper()
+		p.update(errorMsg{err: errors.New("listing failed"), to: to, gen: p.r.gen})
+	}
+
+	// Log: a page reload fails.
+	p.log.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	fail(paneLog)
+	if n := len(p.log.selector.VisibleItems()); n != 0 || p.log.activeView != logViewCommits {
+		t.Errorf("Commits tab shows %d commits in view %v after its load failed; want none", n, p.log.activeView)
+	}
+
+	// Stash: the list reloads and fails.
+	p.stash.Init()
+	fail(paneStash)
+	if n := len(p.stash.list.Items()); n != 0 || p.stash.state != stashStateList {
+		t.Errorf("Stash tab shows %d stashes in state %v after its load failed; want none", n, p.stash.state)
+	}
+
+	// Branches: the listing fails.
+	p.branches.Init()
+	fail(paneBranches)
+	if n := len(p.branches.selector.Items()); n != 0 || p.branches.StatusBarValue() != "" {
+		t.Errorf("Branches tab shows %d branches after its load failed; want none", n)
 	}
 }

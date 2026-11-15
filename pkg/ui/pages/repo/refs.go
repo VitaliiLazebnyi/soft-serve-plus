@@ -143,7 +143,10 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
 	case errorMsg:
+		// The list still holds the previous repository's references.
 		r.isLoading = false
+		r.activeRef = nil
+		cmds = append(cmds, r.selector.SetItems(nil))
 	case RefItemsMsg:
 		if r.refPrefix == msg.prefix {
 			cmds = append(cmds, r.selector.SetItems(msg.items))

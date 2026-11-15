@@ -165,6 +165,10 @@ func (r *Repo) commonHelp() []key.Binding {
 		back.SetHelp("esc", "back to menu")
 		b = append(b, back)
 	}
+	if r.state == failedState {
+		// No tab is shown, so there is none to switch to.
+		return b
+	}
 	tab := r.common.KeyMap.Section
 	tab.SetHelp("tab", "switch tab")
 	b = append(b, tab)
@@ -174,6 +178,9 @@ func (r *Repo) commonHelp() []key.Binding {
 // ShortHelp implements help.KeyMap.
 func (r *Repo) ShortHelp() []key.Binding {
 	b := r.commonHelp()
+	if r.state == failedState {
+		return b
+	}
 	b = append(b, r.panes[r.activeTab].(help.KeyMap).ShortHelp()...)
 	return b
 }
@@ -182,6 +189,9 @@ func (r *Repo) ShortHelp() []key.Binding {
 func (r *Repo) FullHelp() [][]key.Binding {
 	b := make([][]key.Binding, 0)
 	b = append(b, r.commonHelp())
+	if r.state == failedState {
+		return b
+	}
 	b = append(b, r.panes[r.activeTab].(help.KeyMap).FullHelp()...)
 	return b
 }
@@ -265,7 +275,9 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	case tabs.ActiveTabMsg:
 		r.activeTab = int(msg)
 	case tea.KeyPressMsg, tea.MouseClickMsg:
-		cmds = append(cmds, r.tabs.Update(msg))
+		if r.state != failedState {
+			cmds = append(cmds, r.tabs.Update(msg))
+		}
 		if r.selectedRepo != nil {
 			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
 			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
@@ -410,9 +422,13 @@ func (r *Repo) View() string {
 		r.zonePrefix+"main",
 		mainStyle.Render(main),
 	)
+	var tabsView string
+	if r.state != failedState {
+		tabsView = r.tabs.View()
+	}
 	view := lipgloss.JoinVertical(lipgloss.Left,
 		r.headerView(),
-		r.tabs.View(),
+		tabsView,
 		main,
 		statusbar,
 	)

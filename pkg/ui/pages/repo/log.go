@@ -343,8 +343,11 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	case errorMsg:
 		// The count or a page failed to load: leave the loading view for
 		// the commit list, unless a commit is opening.
+		// The list still holds the previous ref's commits: clear it.
 		if l.activeView == logViewLoading && l.selectedCommit == nil {
 			l.activeView = logViewCommits
+			l.count = 0
+			cmds = append(cmds, l.selector.SetItems(nil))
 		}
 	case LogDiffErrorMsg:
 		// Leave the loading view for the commit list, so the spinner does not

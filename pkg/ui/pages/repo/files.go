@@ -50,9 +50,9 @@ var (
 // FileItemsMsg is a message that contains a list of files.
 type FileItemsMsg struct {
 	items []selector.IdentifiableItem
-	// load is the Files load the listing was requested in.
-	load int
-	gen  uint64
+	// listing is the Files listing count when the listing was requested.
+	listing int
+	gen     uint64
 	// truncated is set when the directory is too large to list in full
 	// and items holds only the first entries that fit.
 	truncated bool
@@ -113,6 +113,11 @@ type Files struct {
 	// truncated is set while the listing shows only the first entries
 	// of the directory that fit.
 	truncated bool
+	// listing counts the listings requested, and the files opened: a
+	// FileItemsMsg of an earlier listing is dropped. It is not load, as
+	// opening a file that then fails to load must not drop the listing of
+	// the directory the pane is in.
+	listing int
 	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
 	// from an earlier load arrived after the user or a ref change moved on,
 	// and is dropped.
@@ -278,7 +283,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.selector.Select(0)
 		cmds = append(cmds, f.Init())
 	case FileItemsMsg:
-		if msg.load != f.load {
+		if msg.listing != f.listing {
 			// The user opened a file or another directory since; the
 			// listing would replace it while the path names it.
 			break
@@ -299,6 +304,9 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		// Start a new load so that a repeated delivery of this message is
 		// dropped and the file's position is pushed only once.
 		f.load++
+		// A listing still on its way would put the list back while the
+		// path names the file.
+		f.listing++
 		f.path = msg.path
 		f.lastSelected = append(f.lastSelected, msg.index)
 		f.activeView = filesViewContent
@@ -473,7 +481,8 @@ func (f *Files) StatusBarInfo() string {
 // directory. Commands run in their own goroutines, so it captures the model
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
-	repo, ref, path, load, gen := f.repo, f.ref, f.path, f.load, f.gen
+	f.listing++
+	repo, ref, path, listing, gen := f.repo, f.ref, f.path, f.listing, f.gen
 	// The pane is about to list a directory: a file it was opening is no
 	// longer wanted.
 	f.fileLoad.Stop()
@@ -511,7 +520,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), load: load, gen: gen, truncated: truncated}
+		return FileItemsMsg{items: append(dirs, files...), listing: listing, gen: gen, truncated: truncated}
 	}
 }
 
@@ -660,8 +669,9 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
-	load, gen := f.load, f.gen
+	f.listing++
+	listing, gen := f.listing, f.gen
 	return func() tea.Msg {
-		return FileItemsMsg{items: items, load: load, gen: gen}
+		return FileItemsMsg{items: items, listing: listing, gen: gen}
 	}
 }
