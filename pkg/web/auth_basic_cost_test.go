@@ -1,17 +1,15 @@
 package web
 
 import (
-	"context"
-	"io"
-	"math/rand/v2"
+	"math"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
 // A Basic login whose password is not an access token is refused without a
@@ -48,101 +46,55 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 	}
 }
 
-// Failed Basic logins do not hold request slots: with max_connections 8,
-// sixteen clients looping on "alice:guess" from one address do not make
-// anonymous fetches answer 503. Each such login used to run a bcrypt, one at
-// a time per address and behind a global semaphore, while holding a slot.
-func TestBasicNonTokenLoginsDoNotStarveFetches(t *testing.T) {
-	addr := newLimitsServer(t, func(c *config.HTTPConfig) {
-		c.MaxConnections = 8
-	})
-	url := "http://" + addr + "/repo.git/info/refs?service=git-upload-pack"
-	// Keep connections alive, so the loop measures request slots and not
-	// the loopback listen queue.
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{MaxIdleConnsPerHost: 32},
+// A failed Basic login holds its request slot for a small part of one bcrypt
+// comparison. Each such login used to run a bcrypt against a dummy hash,
+// queued per client address and behind a global semaphore, while holding a
+// slot, so sixteen looping clients from one address kept all eight slots of
+// max_connections 8 and every anonymous fetch answered 503.
+//
+// The test does not race clients against the limit: how many slots looping
+// clients hold depends on how fast the machine serves them, not only on what a
+// login costs. It measures the cost itself. Requests are served one at a time
+// through the production router, so none waits for a slot, and the time each
+// spends in the router bounds the time it holds its slot. Every such login
+// takes the same path, so the fastest of them is what the path costs; noise
+// (a GC pause, a busy runner) only makes samples slower, and the fastest is
+// compared with the fastest bcrypt measured on the same machine. A login that
+// runs a bcrypt can never be faster than one.
+func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
+	ctx, be, _ := newLFSTestContext(t)
+	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(client.CloseIdleConnections)
+	config.FromContext(ctx).HTTP.MaxConnections = 8
+	router := NewRouter(ctx)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	codes := map[int]int{}
-	for range 16 {
-		wg.Go(func() {
-			for ctx.Err() == nil {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-				if err != nil {
-					return
-				}
-				req.SetBasicAuth("alice", "guess")
-				resp, err := client.Do(req)
-				if err != nil {
-					continue
-				}
-				_, _ = io.Copy(io.Discard, resp.Body)
-				_ = resp.Body.Close()
-				mu.Lock()
-				codes[resp.StatusCode]++
-				mu.Unlock()
-				// A refusal that costs nothing leaves its slot at once.
-				// The pause keeps the clients from holding all eight
-				// slots by request rate alone, which any request could.
-				// It is random, so the clients do not move in step.
-				time.Sleep(time.Duration(10+rand.IntN(50)) * time.Millisecond)
-			}
-		})
+	// The faster of two bcrypt comparisons, as a login used to run. The
+	// first also makes the dummy hash, so the second is the one that counts.
+	bcrypt := time.Duration(math.MaxInt64)
+	for range 2 {
+		start := time.Now()
+		backend.VerifyPassword("guess", "")
+		bcrypt = min(bcrypt, time.Since(start))
 	}
-	t.Cleanup(func() {
-		cancel()
-		wg.Wait()
-	})
 
-	// Let the attackers fill whatever they can hold.
-	time.Sleep(200 * time.Millisecond)
-	// fetch sends an anonymous fetch and returns its status. A 503 is
-	// retried a few times after a short pause, as Retry-After asks: a
-	// stall of the server (a GC pause, or SQLite) can leave all sixteen
-	// clients in flight at once for a moment, though each costs nothing.
-	// Logins that hold their slots keep them for the whole retry window.
-	fetch := func() int {
-		for try := 0; ; try++ {
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" || try == 3 {
-				return resp.StatusCode
-			}
-			time.Sleep(50 * time.Millisecond)
+	login := time.Duration(math.MaxInt64)
+	for range 32 {
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/refs?service=git-upload-pack", nil)
+		req.SetBasicAuth("alice", "guess")
+		rec := httptest.NewRecorder()
+		start := time.Now()
+		router.ServeHTTP(rec, req)
+		login = min(login, time.Since(start))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("Basic login with a non-token password answered %d, want %d", rec.Code, http.StatusForbidden)
 		}
 	}
-	const probes = 9
-	ok := 0
-	for range probes {
-		if code := fetch(); code == http.StatusOK {
-			ok++
-		} else {
-			t.Logf("anonymous fetch answered %d", code)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	cancel()
-	wg.Wait()
 
-	if ok != probes {
-		t.Errorf("%d of %d anonymous fetches succeeded", ok, probes)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if codes[http.StatusForbidden] == 0 {
-		t.Errorf("failed logins got %v, want 403 for bad credentials", codes)
+	// An order of magnitude, so a slow machine cannot close the gap: the
+	// login path costs a few database lookups and no bcrypt.
+	t.Logf("fastest failed login %s, fastest bcrypt %s", login, bcrypt)
+	if login*10 > bcrypt {
+		t.Errorf("a failed Basic login held its request slot for %s, more than a tenth of a bcrypt comparison (%s)", login, bcrypt)
 	}
 }
