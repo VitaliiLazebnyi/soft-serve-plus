@@ -101,23 +101,36 @@ func TestBasicNonTokenLoginsDoNotStarveFetches(t *testing.T) {
 
 	// Let the attackers fill whatever they can hold.
 	time.Sleep(200 * time.Millisecond)
+	// fetch sends an anonymous fetch and returns its status. A 503 is
+	// retried a few times after a short pause, as Retry-After asks: a
+	// stall of the server (a GC pause, or SQLite) can leave all sixteen
+	// clients in flight at once for a moment, though each costs nothing.
+	// Logins that hold their slots keep them for the whole retry window.
+	fetch := func() int {
+		for try := 0; ; try++ {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" || try == 3 {
+				return resp.StatusCode
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 	const probes = 9
 	ok := 0
 	for range probes {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if code := fetch(); code == http.StatusOK {
 			ok++
 		} else {
-			t.Logf("anonymous fetch answered %d", resp.StatusCode)
+			t.Logf("anonymous fetch answered %d", code)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

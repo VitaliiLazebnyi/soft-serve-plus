@@ -875,11 +875,13 @@ dumb protocol is not served: its requests (`info/refs` without a smart
 `GIT_SMART_HTTP=0`, are refused: GET and HEAD requests are answered `403`
 with no caching.
 
-You can generate user access tokens through the SSH command line interface. Access tokens can have an optional expiration date. Use your access token as the basic auth user to access your Soft Serve Plus repos through HTTP.
+You can generate user access tokens through the SSH command line interface. Access tokens can have an optional expiration date. Use your access token as the HTTP Basic username or password to access your Soft Serve Plus repos through HTTP.
 
 There is no password login over HTTP: HTTP Basic credentials must carry an
-access token, as the username or as the password. Any other password is
-refused at once, without being checked.
+access token, as the username or as the password. With the token as the
+password, the username must be your username, or any name that is not
+another user's. Any other password is refused at once, without being
+checked.
 
 ```sh
 # Create a user token
@@ -892,12 +894,13 @@ ss_98fghi1234abc56789012345678901234de246d7
 ```
 
 Now you can access repos that require `read-write` access. Give git the token
-as the password (any username works) through a credential helper, so it is
-not stored in the remote URL:
+as the password (with your username, or any name that is not another user's)
+through a credential helper, so it is not stored in the remote URL:
 
 ```sh
 git clone http://localhost:23232/my-private-repo.git my-private-repo
-# When prompted, enter any username and the token as the password.
+# When prompted, enter your username (or any name that is not another
+# user's) and the token as the password.
 # Your credential helper (e.g. osxkeychain, manager, libsecret) remembers it.
 # Make changes and push
 ```
