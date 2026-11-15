@@ -368,32 +368,52 @@ func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		calls := map[string]int{}
-		guarded := map[string]bool{}
-		for _, cmd := range shellCommands(string(b)) {
-			for _, tool := range []string{"systemd-sysusers", "systemd-tmpfiles"} {
-				pos := slices.Index(cmd, tool)
-				if pos < 0 {
-					continue
-				}
-				// `command -v TOOL` checks for the tool; it does not run it.
-				if pos == 2 && cmd[0] == "command" && (cmd[1] == "-v" || cmd[1] == "-V") {
-					guarded[tool] = true
-					continue
-				}
-				calls[tool]++
-				line := strings.Join(cmd, " ")
-				// With set -e, a systemd host without the tool would fail
-				// the install.
-				if !guarded[tool] {
-					t.Errorf("nfpms[%d]: %s runs %q without first checking `command -v %s`", i, n.Scripts.PostInstall, line, tool)
-				}
-				conf, ok := installed[tool]
-				if !ok {
-					t.Errorf("nfpms[%d]: %s runs %s, but the package installs no rule file for it", i, n.Scripts.PostInstall, tool)
-					continue
-				}
-				if !slices.Contains(cmd[pos+1:], conf) {
-					t.Errorf("nfpms[%d]: %s runs %q, which applies every package's rules; name %s", i, n.Scripts.PostInstall, line, conf)
+		// guards has one entry per enclosing if block: the tool its
+		// condition checks with `command -v`, or "" for any other condition
+		// and for an else branch.
+		var guards []string
+		for _, line := range scriptLines(string(b)) {
+			f := strings.Fields(strings.ReplaceAll(line, ";", " ; "))
+			for j, w := range f {
+				switch w {
+				case "if", "elif":
+					g := ""
+					if j+3 < len(f) && f[j+1] == "command" && (f[j+2] == "-v" || f[j+2] == "-V") {
+						g = f[j+3]
+					}
+					if w == "if" {
+						guards = append(guards, g)
+					} else if len(guards) > 0 {
+						guards[len(guards)-1] = g
+					}
+				case "else":
+					if len(guards) > 0 {
+						guards[len(guards)-1] = ""
+					}
+				case "fi":
+					if len(guards) > 0 {
+						guards = guards[:len(guards)-1]
+					}
+				case "systemd-sysusers", "systemd-tmpfiles":
+					// `command -v TOOL` checks for the tool; it does not
+					// run it.
+					if j > 0 && (f[j-1] == "-v" || f[j-1] == "-V") {
+						continue
+					}
+					calls[w]++
+					// With set -e, a systemd host without the tool would
+					// fail the install.
+					if !slices.Contains(guards, w) {
+						t.Errorf("nfpms[%d]: %s runs %q outside an `if command -v %s` block", i, n.Scripts.PostInstall, line, w)
+					}
+					conf, ok := installed[w]
+					if !ok {
+						t.Errorf("nfpms[%d]: %s runs %s, but the package installs no rule file for it", i, n.Scripts.PostInstall, w)
+						continue
+					}
+					if !slices.Contains(f[j+1:], conf) {
+						t.Errorf("nfpms[%d]: %s runs %q, which applies every package's rules; name %s", i, n.Scripts.PostInstall, line, conf)
+					}
 				}
 			}
 		}
@@ -405,53 +425,18 @@ func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
 	}
 }
 
-var (
-	// shellOperator separates simple commands on a line.
-	shellOperator = regexp.MustCompile(`&&|\|\||[;&|()]`)
-	// shellKeywords are words that can precede a command.
-	shellKeywords = []string{"if", "then", "elif", "else", "while", "until", "do", "!", "exec", "{"}
-)
-
-// shellCommands splits a shell script into its simple commands, each as its
-// words: comments are dropped, backslash continuations joined, lines split at
-// ;, &&, ||, |, & and parentheses, and keywords such as if and then removed
-// from the front. It is meant for the package scripts, not for any script:
-// it does not understand quoting.
-func shellCommands(script string) [][]string {
-	script = strings.ReplaceAll(script, "\\\n", " ")
-	var out [][]string
-	for line := range strings.SplitSeq(script, "\n") {
+// scriptLines returns the lines of a shell script with backslash
+// continuations joined and comments dropped. It does not understand quoting,
+// which the package scripts do not need.
+func scriptLines(script string) []string {
+	var out []string
+	for line := range strings.SplitSeq(strings.ReplaceAll(script, "\\\n", " "), "\n") {
 		if i := strings.Index(line, "#"); i >= 0 && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
 			line = line[:i]
 		}
-		for _, part := range shellOperator.Split(line, -1) {
-			f := strings.Fields(part)
-			for len(f) > 0 && slices.Contains(shellKeywords, f[0]) {
-				f = f[1:]
-			}
-			if len(f) > 0 {
-				out = append(out, f)
-			}
+		if strings.TrimSpace(line) != "" {
+			out = append(out, strings.TrimSpace(line))
 		}
 	}
 	return out
-}
-
-func TestShellCommands(t *testing.T) {
-	t.Parallel()
-	got := shellCommands("a b # c\n" +
-		"if command -v x >/dev/null; then x --create \\\n  y.conf; fi\n" +
-		"[ -d /run ] && x z || true\n")
-	want := [][]string{
-		{"a", "b"},
-		{"command", "-v", "x", ">/dev/null"},
-		{"x", "--create", "y.conf"},
-		{"fi"},
-		{"[", "-d", "/run", "]"},
-		{"x", "z"},
-		{"true"},
-	}
-	if !slices.EqualFunc(got, want, slices.Equal) {
-		t.Errorf("shellCommands = %q, want %q", got, want)
-	}
 }
