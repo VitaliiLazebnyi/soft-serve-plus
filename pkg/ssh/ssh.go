@@ -123,7 +123,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	// hold. Session channels pass only the requests the server can afford
 	// (see filterSessionRequests).
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
-	s.srv.ConnCallback = connCallback(s.limiter, logger)
+	s.srv.ConnCallback = connCallback(s.limiter, logger, noAccountLifetime)
 	setSessionHandlers(s.srv, cfg.SSH.MaxSessions)
 
 	// Create client ssh key

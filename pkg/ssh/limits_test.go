@@ -410,7 +410,7 @@ func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler,
 			"test": ssh.SubsystemHandler(limitHandlers(ssh.Handler(sub), maxSessions)),
 		},
 		PublicKeyHandler: func(ssh.Context, ssh.PublicKey) bool { return true },
-		ConnCallback:     connCallback(newConnLimiter(0, 0), log.Default()),
+		ConnCallback:     connCallback(newConnLimiter(0, 0), log.Default(), 0),
 	}
 	setSessionHandlers(srv, maxSessions)
 	srv.AddHostKey(signer)
