@@ -571,8 +571,9 @@ func TestUploadPackCounted(t *testing.T) {
 }
 
 // startLimitedDaemon serves a daemon allowing limit connections that never
-// time out, and returns it with its address.
-func startLimitedDaemon(t *testing.T, limit int) (*GitDaemon, string) {
+// time out, and returns it with its address. opts change the daemon before
+// it serves.
+func startLimitedDaemon(t *testing.T, limit int, opts ...func(*GitDaemon)) (*GitDaemon, string) {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = testDaemon.cfg.DataPath
@@ -590,6 +591,9 @@ func startLimitedDaemon(t *testing.T, limit int) (*GitDaemon, string) {
 	}
 	// Kept connections send no request line; do not drop them for that.
 	d.requestTimeout = time.Hour
+	for _, opt := range opts {
+		opt(d)
+	}
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

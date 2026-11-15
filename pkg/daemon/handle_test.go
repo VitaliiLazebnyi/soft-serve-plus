@@ -83,16 +83,16 @@ func TestHangUpWithoutRequest(t *testing.T) {
 	if len(out) != 0 {
 		t.Errorf("answer to a client that sent nothing: %q", out)
 	}
-	waitConns(t, d, 0)
+	waitConns(t, d, 0, 30*time.Second)
 }
 
-// waitConns waits until d holds n connections.
-func waitConns(t *testing.T, d *GitDaemon, n int) {
+// waitConns waits up to within until d holds n connections.
+func waitConns(t *testing.T, d *GitDaemon, n int, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(within)
 	for d.conns.Size() != n {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d connections open, want %d", d.conns.Size(), n)
+			t.Fatalf("%d connections open after %v, want %d", d.conns.Size(), within, n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

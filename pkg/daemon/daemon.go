@@ -87,6 +87,15 @@ type GitDaemon struct {
 	// refuseLinger bounds how long a refusal waits for the client to hang
 	// up; see refuse.
 	refuseLinger time.Duration
+
+	testHooks testHooks
+}
+
+// testHooks are called by the daemon while it serves, for tests to inject
+// delays and faults. They are nil outside tests.
+type testHooks struct {
+	// beforeAuthorize runs before the access checks of a request.
+	beforeAuthorize func()
 }
 
 // NewGitDaemon returns a new Git daemon.
@@ -233,20 +242,18 @@ const (
 // end-of-file, then reads and drops what the client still sends until it
 // hangs up, and only then closes.
 //
-// The wait lasts at most refuseLinger and budget, ends at the connection's
-// maximum deadline, and reads at most refuseDrain bytes. The connection
-// stays counted against max_connections meanwhile, as it is still open. A
-// refusal of the request passes what was left of the request timeout when
-// the request line arrived, so a client holds its connection unanswered no
-// longer than it could already by sending the request line late.
-func (d *GitDaemon) refuse(c *serverConn, err error, budget time.Duration) {
+// The wait ends refuseLinger after the answer, at until unless it is zero,
+// and at the connection's maximum deadline, whichever comes first, and reads
+// at most refuseDrain bytes. The connection stays counted against
+// max_connections meanwhile, as it is still open. A refusal of the request
+// passes the request deadline as until, so a client holds its connection
+// unanswered no longer than it could already by sending the request line
+// late, however long the access checks took.
+func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
-	if linger := min(d.refuseLinger, budget); linger > 0 {
+	deadline := earliest(time.Now().Add(d.refuseLinger), until, c.maxDeadline)
+	if time.Until(deadline) > 0 {
 		if cw := closeWriter(c.Conn); cw != nil && cw.CloseWrite() == nil {
-			deadline := time.Now().Add(linger)
-			if !c.maxDeadline.IsZero() && c.maxDeadline.Before(deadline) {
-				deadline = c.maxDeadline
-			}
 			// Read the wrapped connection: serverConn.Read would move
 			// the deadline.
 			_ = c.Conn.SetReadDeadline(deadline)
@@ -256,6 +263,16 @@ func (d *GitDaemon) refuse(c *serverConn, err error, budget time.Duration) {
 	if err := c.Close(); err != nil {
 		d.logger.Debugf("git: error closing connection: %v", err)
 	}
+}
+
+// earliest returns the earliest of t and the non-zero times in ts.
+func earliest(t time.Time, ts ...time.Time) time.Time {
+	for _, u := range ts {
+		if !u.IsZero() && u.Before(t) {
+			t = u
+		}
+	}
+	return t
 }
 
 // closeWriter returns the connection under c that can shut its write side
@@ -302,20 +319,23 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.conns.Close(c) //nolint: errcheck
 	}()
 
-	line, left, ok := d.readRequest(c)
+	line, until, ok := d.readRequest(c)
 	if !ok {
 		return
 	}
 	req, err := parseRequest(line)
 	if err != nil {
-		d.refuse(c, err, left)
+		d.refuse(c, err, until)
 		return
 	}
 	if req.version != "" {
 		d.logger.Debugf("git: protocol version %s", req.version)
 	}
+	if d.testHooks.beforeAuthorize != nil {
+		d.testHooks.beforeAuthorize()
+	}
 	if err := d.authorize(ctx, req); err != nil {
-		d.refuse(c, err, left)
+		d.refuse(c, err, until)
 		return
 	}
 	d.serve(ctx, c, req)
@@ -323,9 +343,9 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 
 // readRequest reads the request line from c. It answers the client itself
 // when the read fails, and then reports !ok. Otherwise it returns the line
-// and what was left of the request timeout when it arrived, which bounds how
-// long a refusal of the request may wait on the client.
-func (d *GitDaemon) readRequest(c *serverConn) (line []byte, left time.Duration, ok bool) {
+// and the request deadline, which bounds how long a refusal of the request
+// may wait on the client.
+func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok bool) {
 	// Read the request line on this goroutine. The connection's deadlines
 	// bound the read, and closing the connection on shutdown unblocks it, so
 	// there is nothing to wait on beside it. If the server's context ends
@@ -338,31 +358,31 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, left time.Duration,
 	line, err := git.ReadPkt(c)
 	if !stopRead() {
 		// The server's context ended and the client has been answered.
-		return nil, 0, false
+		return nil, time.Time{}, false
 	}
 	// The read is over: from here on reads and writes only have to keep
 	// the connection from going idle. A refusal of the request may still
-	// wait on the client for what was left of the request timeout.
-	left = time.Until(c.initDeadline)
+	// wait on the client until the request deadline.
+	until = c.initDeadline
 	c.initDeadline = time.Time{}
 	if err == nil {
-		return line, left, true
+		return line, until, true
 	}
 	var nerr net.Error
 	switch {
 	case errors.Is(err, io.EOF):
 		// The client hung up without sending a request.
 	case errors.As(err, &nerr) && nerr.Timeout():
-		d.refuse(c, git.ErrTimeout, left)
+		d.refuse(c, git.ErrTimeout, until)
 	case errors.Is(err, git.ErrInvalidPktLen), isErrorLine(err):
 		d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
-		d.refuse(c, git.ErrInvalidRequest, left)
+		d.refuse(c, git.ErrInvalidRequest, until)
 	default:
 		// The connection was reset, cut short, or closed by the server:
 		// there is no one to answer.
 		d.logger.Debugf("git: error reading request from %s: %v", c.RemoteAddr(), err)
 	}
-	return nil, 0, false
+	return nil, time.Time{}, false
 }
 
 // gitRequest is a parsed git:// request line.
@@ -493,9 +513,9 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 		// Before that, the client gets a fixed message rather than
 		// the error itself.
 		if errors.Is(err, git.ErrInvalidRepo) {
-			d.refuse(c, git.ErrInvalidRepo, d.refuseLinger)
+			d.refuse(c, git.ErrInvalidRepo, time.Time{})
 		} else {
-			d.refuse(c, git.ErrSystemMalfunction, d.refuseLinger)
+			d.refuse(c, git.ErrSystemMalfunction, time.Time{})
 		}
 	}
 }
