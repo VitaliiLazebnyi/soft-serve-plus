@@ -164,7 +164,9 @@ func TestServiceClientGoneExit128(t *testing.T) {
 		{"fatal: fwrite error: Invalid argument", true},
 		{"fatal: write error: Broken pipe", true},
 		{"fatal: write failure on 'standard output': Invalid argument", true},
+		{"fatal: fflush error: Invalid argument", true},
 		{"fatal: disk full", false},
+		{"fatal: sha1 file 'objects/pack/tmp_pack_x' write error. Out of diskspace", false},
 	} {
 		err := UploadPack(t.Context(), ServiceCommand{
 			Stdout: failingWriter{err: io.EOF},
@@ -197,8 +199,17 @@ func TestOutputClosedExit(t *testing.T) {
 	}{
 		{exit("141"), "", true},
 		{exit("128"), "fatal: fwrite error: Invalid argument", true},
-		{exit("128"), "fatal: packet write failed", true},
+		{exit("128"), "fatal: fflush error: Invalid argument", true},
+		{exit("128"), "fatal: write error: Invalid argument", true},
+		{exit("128"), "fatal: write failure on 'standard output': Invalid argument", true},
+		{exit("128"), "fatal: packet write failed: Invalid argument", true},
+		{exit("128"), "fatal: packet write with format failed", true},
+		{exit("128"), "erreur fatale : write error: Broken pipe", true},
+		{exit("128"), "fatal: the remote end hung up: Broken pipe", true},
 		{exit("128"), "fatal: not a git repository", false},
+		{exit("128"), "fatal: sha1 file 'objects/pack/tmp_pack_x' write error. Out of diskspace", false},
+		{exit("128"), "fatal: packet write failed - data exceeds max packet size", false},
+		{exit("128"), "fatal: unable to write new index file", false},
 		{exit("3"), "fatal: fwrite error: Invalid argument", false},
 		{errors.New("other"), "fatal: write error", false},
 	} {

@@ -587,12 +587,24 @@ func brokenPipeExit(err error) bool {
 //
 // The second case is Windows: git for Windows writes most output through
 // stdio, where a write to a closed pipe fails with EINVAL rather than EPIPE,
-// so maybe_flush_or_die reports "fwrite error: Invalid argument" (or
-// write_or_die "write error") and exits 128 instead of 141. die() exits 128
-// for every failure, so only the message tells them apart, and only the
-// messages of a failed write to git's own output count. The trade-off:
-// a death the client caused with another message (a failed packet_flush,
-// or EOF on a read) is still logged as a failure.
+// so maybe_flush_or_die and fflush_or_die report "fwrite error: Invalid
+// argument" or "fflush error: Invalid argument" (or write_or_die "write
+// error") and exit 128 instead of 141. die() exits 128 for every failure,
+// so only the message tells them apart, and only the messages of a failed
+// write to git's own output count: the message, after its "fatal: "
+// prefix, must start with one of outputWriteFailures, or end with
+// strerror's "Broken pipe". A failed write elsewhere, such as csum-file's
+// "sha1 file '...' write error. Out of diskspace" or pkt-line's "packet
+// write failed - data exceeds max packet size", stays a failure.
+//
+// The trade-offs: a death the client caused with another message (a failed
+// packet_flush, or EOF on a read) is still logged as a failure. And git
+// translates "packet write failed" and its siblings, and strerror's text
+// follows the locale too (LANG and LC_* reach git through serviceEnv, and
+// are not overridden, as hooks inherit them); on a localized server those
+// deaths are logged as failures again. Only the write_or_die and
+// maybe_flush_or_die messages ("fwrite error", "fflush error", "write
+// error", "write failure on") are not translated.
 func outputClosedExit(err error, lastStderr string) bool {
 	if brokenPipeExit(err) {
 		return true
@@ -601,25 +613,36 @@ func outputClosedExit(err error, lastStderr string) bool {
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 128 {
 		return false
 	}
-	msg := strings.ToLower(lastStderr)
+	msg := strings.TrimSpace(lastStderr)
+	// Drop die()'s "fatal: ", whose text is translated, at the first ": ".
+	if _, rest, ok := strings.Cut(msg, ": "); ok {
+		msg = rest
+	}
+	msg = strings.ToLower(msg)
+	if strings.HasSuffix(msg, "broken pipe") {
+		return true
+	}
 	for _, m := range outputWriteFailures {
-		if strings.Contains(msg, m) {
+		if strings.HasPrefix(msg, m) {
 			return true
 		}
 	}
 	return false
 }
 
-// outputWriteFailures are the messages, lowercased, git dies with when a
-// write to its stdout or stderr fails: maybe_flush_or_die's "fwrite error"
-// and "write failure on 'standard output'", write_or_die's "write error",
-// pkt-line's "packet write failed", and strerror's "broken pipe".
+// outputWriteFailures start the messages, lowercased and without die()'s
+// prefix, git dies with when a write to its stdout or stderr fails:
+// maybe_flush_or_die's "fwrite error" and "write failure on 'standard
+// output'", fflush_or_die's "fflush error" (after the ref advertisement,
+// and in protocol v2 ls-refs), write_or_die's "write error", and pkt-line's
+// "packet write failed: ..." and "packet write with format failed".
 var outputWriteFailures = []string{
 	"fwrite error",
+	"fflush error",
 	"write error",
-	"write failure",
-	"packet write",
-	"broken pipe",
+	"write failure on",
+	"packet write failed:",
+	"packet write with format failed",
 }
 
 // stoppedByContext reports whether err, returned by Wait for a command run
