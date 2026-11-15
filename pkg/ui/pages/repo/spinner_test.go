@@ -82,7 +82,8 @@ func TestLogLoadingWaitsBeforeShowingSpinner(t *testing.T) {
 	p.wantView("commits before the wait", "second-subject")
 	p.notView("commits before the wait", "loading")
 
-	waitBeforeLoading = 0
+	// Negative, not zero: see newPinPage.
+	waitBeforeLoading = -time.Hour
 	if text, ok := p.log.Loading(); text != "loading commits…" || !ok {
 		t.Fatalf("Loading() after the wait = (%q, %v); want (\"loading commits…\", true)", text, ok)
 	}
