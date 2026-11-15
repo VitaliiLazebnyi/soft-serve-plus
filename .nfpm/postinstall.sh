@@ -43,9 +43,14 @@ esac
 # Apply only this package's rules (/usr/lib/sysusers.d/soft-serve.conf and
 # /usr/lib/tmpfiles.d/soft-serve.conf, or an admin's copy in /etc). Without a
 # file name these apply every package's rules, and with set -e a failing rule
-# of another package would fail this install.
-systemd-sysusers soft-serve.conf
-systemd-tmpfiles --create soft-serve.conf
+# of another package would fail this install. A systemd host can lack either
+# tool (e.g. a minimal image), so check for each first.
+if command -v systemd-sysusers >/dev/null; then
+	systemd-sysusers soft-serve.conf
+fi
+if command -v systemd-tmpfiles >/dev/null; then
+	systemd-tmpfiles --create soft-serve.conf
+fi
 
 # Skip talking to the service manager in a chroot or container build.
 if [ -d /run/systemd/system ]; then

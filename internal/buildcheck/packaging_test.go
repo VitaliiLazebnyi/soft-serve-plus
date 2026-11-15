@@ -368,23 +368,33 @@ func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		calls := map[string]int{}
-		for line := range strings.SplitSeq(string(b), "\n") {
-			f := strings.Fields(line)
-			if len(f) == 0 || strings.HasPrefix(f[0], "#") {
-				continue
-			}
-			tool := f[0]
-			if tool != "systemd-sysusers" && tool != "systemd-tmpfiles" {
-				continue
-			}
-			calls[tool]++
-			conf, ok := installed[tool]
-			if !ok {
-				t.Errorf("nfpms[%d]: %s runs %s, but the package installs no rule file for it", i, n.Scripts.PostInstall, tool)
-				continue
-			}
-			if !slices.Contains(f[1:], conf) {
-				t.Errorf("nfpms[%d]: %s runs %q, which applies every package's rules; name %s", i, n.Scripts.PostInstall, strings.TrimSpace(line), conf)
+		guarded := map[string]bool{}
+		for _, cmd := range shellCommands(string(b)) {
+			for _, tool := range []string{"systemd-sysusers", "systemd-tmpfiles"} {
+				pos := slices.Index(cmd, tool)
+				if pos < 0 {
+					continue
+				}
+				// `command -v TOOL` checks for the tool; it does not run it.
+				if pos == 2 && cmd[0] == "command" && (cmd[1] == "-v" || cmd[1] == "-V") {
+					guarded[tool] = true
+					continue
+				}
+				calls[tool]++
+				line := strings.Join(cmd, " ")
+				// With set -e, a systemd host without the tool would fail
+				// the install.
+				if !guarded[tool] {
+					t.Errorf("nfpms[%d]: %s runs %q without first checking `command -v %s`", i, n.Scripts.PostInstall, line, tool)
+				}
+				conf, ok := installed[tool]
+				if !ok {
+					t.Errorf("nfpms[%d]: %s runs %s, but the package installs no rule file for it", i, n.Scripts.PostInstall, tool)
+					continue
+				}
+				if !slices.Contains(cmd[pos+1:], conf) {
+					t.Errorf("nfpms[%d]: %s runs %q, which applies every package's rules; name %s", i, n.Scripts.PostInstall, line, conf)
+				}
 			}
 		}
 		for tool := range installed {
@@ -392,5 +402,56 @@ func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
 				t.Errorf("nfpms[%d]: the package installs a %s rule, but %s does not run %s", i, tool, n.Scripts.PostInstall, tool)
 			}
 		}
+	}
+}
+
+var (
+	// shellOperator separates simple commands on a line.
+	shellOperator = regexp.MustCompile(`&&|\|\||[;&|()]`)
+	// shellKeywords are words that can precede a command.
+	shellKeywords = []string{"if", "then", "elif", "else", "while", "until", "do", "!", "exec", "{"}
+)
+
+// shellCommands splits a shell script into its simple commands, each as its
+// words: comments are dropped, backslash continuations joined, lines split at
+// ;, &&, ||, |, & and parentheses, and keywords such as if and then removed
+// from the front. It is meant for the package scripts, not for any script:
+// it does not understand quoting.
+func shellCommands(script string) [][]string {
+	script = strings.ReplaceAll(script, "\\\n", " ")
+	var out [][]string
+	for line := range strings.SplitSeq(script, "\n") {
+		if i := strings.Index(line, "#"); i >= 0 && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			line = line[:i]
+		}
+		for _, part := range shellOperator.Split(line, -1) {
+			f := strings.Fields(part)
+			for len(f) > 0 && slices.Contains(shellKeywords, f[0]) {
+				f = f[1:]
+			}
+			if len(f) > 0 {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+func TestShellCommands(t *testing.T) {
+	t.Parallel()
+	got := shellCommands("a b # c\n" +
+		"if command -v x >/dev/null; then x --create \\\n  y.conf; fi\n" +
+		"[ -d /run ] && x z || true\n")
+	want := [][]string{
+		{"a", "b"},
+		{"command", "-v", "x", ">/dev/null"},
+		{"x", "--create", "y.conf"},
+		{"fi"},
+		{"[", "-d", "/run", "]"},
+		{"x", "z"},
+		{"true"},
+	}
+	if !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("shellCommands = %q, want %q", got, want)
 	}
 }
