@@ -18,15 +18,17 @@ import (
 // MaxTreeEntries is the most entries a directory listing returns; see
 // Tree.Entries. A listing is for a person to read, in the TUI or from `repo
 // tree`, and ten thousand lines are already more than anyone scrolls.
-// Together with maxTreeNameBytes it bounds the memory of one listing to a few
-// MiB (an entry costs about two hundred bytes plus two copies of its name),
+// Together with maxTreeTextBytes it bounds the memory of one listing to a few
+// MiB (an entry costs about two hundred bytes plus its name and its path),
 // where a tree with half a million entries used to cost hundreds of MiB.
 const MaxTreeEntries = 10_000
 
-// maxTreeNameBytes is the most bytes of names a directory listing keeps. A
-// listing stops at whichever of it and MaxTreeEntries comes first, so long
-// names cannot multiply the cost of the entries kept.
-const maxTreeNameBytes = 2 << 20
+// maxTreeTextBytes is the most bytes of names and paths a directory listing
+// keeps: each entry stores its name and its full path, which deep in a tree
+// of long directory names is long even for a short name. A listing stops at
+// whichever of it and MaxTreeEntries comes first, so long names or paths
+// cannot multiply the cost of the entries kept.
+const maxTreeTextBytes = 2 << 20
 
 // maxTreeRecord is the longest `ls-tree -l -z` record, in bytes, a listing
 // accepts: the mode, type, ID and size, and a name or path as long as the
@@ -189,7 +191,8 @@ func (e *TreeEntry) Tree() (*Tree, error) {
 
 // Entries returns the entries of the tree, in git's order, read by one git
 // process that also reports their sizes. A tree with more than
-// MaxTreeEntries entries, or with more than maxTreeNameBytes of names, gives
+// MaxTreeEntries entries, or with more than maxTreeTextBytes of names and
+// paths, gives
 // the first entries that fit along with an error wrapping ErrTreeTruncated;
 // git is stopped there, so a huge tree costs no more than that.
 func (t *Tree) Entries() (Entries, error) {
@@ -291,7 +294,7 @@ type lsTreeParser struct {
 	dir       string
 	limit     int
 	ents      Entries
-	nameBytes int
+	textBytes int
 	pending   []byte
 	truncated bool
 	err       error
@@ -334,12 +337,12 @@ func (p *lsTreeParser) Write(b []byte) (int, error) {
 			p.err = err
 			return 0, err
 		}
-		if p.nameBytes += len(e.name); p.nameBytes > maxTreeNameBytes {
+		e.path = gopath.Join(p.dir, e.name)
+		if p.textBytes += len(e.name) + len(e.path); p.textBytes > maxTreeTextBytes {
 			p.truncated = true
 			return 0, errListingFull
 		}
 		e.repo = p.repo
-		e.path = gopath.Join(p.dir, e.name)
 		p.ents = append(p.ents, e)
 	}
 	return n, nil

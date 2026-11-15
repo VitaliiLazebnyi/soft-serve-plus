@@ -52,8 +52,8 @@ var (
 type FileItemsMsg struct {
 	items []selector.IdentifiableItem
 	gen   uint64
-	// truncated is set when the directory has more than
-	// git.MaxTreeEntries entries and items holds only the first ones.
+	// truncated is set when the directory is too large to list in full
+	// and items holds only the first entries that fit.
 	truncated bool
 }
 
@@ -104,8 +104,8 @@ type Files struct {
 	spinner        spinner.Model
 	cursor         int
 	blameView      bool
-	// truncated is set while the listing shows only the first
-	// git.MaxTreeEntries entries of the directory.
+	// truncated is set while the listing shows only the first entries
+	// of the directory that fit.
 	truncated bool
 	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
 	// from an earlier load arrived after the user or a ref change moved on,

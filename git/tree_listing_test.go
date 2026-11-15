@@ -237,7 +237,7 @@ func TestTreeEntriesAtCap(t *testing.T) {
 }
 
 // Long names cannot multiply the cost of a listing: it stops once the names
-// kept pass maxTreeNameBytes, well before MaxTreeEntries.
+// and paths kept pass maxTreeTextBytes, well before MaxTreeEntries.
 func TestTreeEntriesNameBudget(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, "", "", "init", "-q", "--bare", dir)
@@ -261,13 +261,58 @@ func TestTreeEntriesNameBudget(t *testing.T) {
 	if !errors.Is(err, ErrTreeTruncated) {
 		t.Fatalf("Entries error = %v, want ErrTreeTruncated", err)
 	}
-	if want := maxTreeNameBytes / nameLen; len(ents) != want {
+	// Each entry counts its name and its path, the same here at the root.
+	if want := maxTreeTextBytes / (2 * nameLen); len(ents) != want {
 		t.Errorf("Entries kept %d entries, want %d", len(ents), want)
 	}
 	if !strings.Contains(err.Error(), fmt.Sprint(len(ents))) {
 		t.Errorf("error %q does not give the number of entries shown", err)
 	}
 	t.Logf("listing of %d long names allocated %d KiB", len(ents), alloc>>10)
+	if alloc > 12<<20 {
+		t.Errorf("listing allocated %d MiB, want under 12 MiB", alloc>>20)
+	}
+}
+
+// The text budget counts each entry's path, not only its name: deep in a
+// tree of long directory names, short names still cost a long path each.
+func TestTreeEntriesPathBudget(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, "", "", "init", "-q", "--bare", dir)
+	blob := gitRun(t, dir, "x", "hash-object", "-w", "--stdin")
+	var in strings.Builder
+	for i := range MaxTreeEntries {
+		fmt.Fprintf(&in, "100644 blob %s\tf%04d\n", blob, i)
+	}
+	id := gitRun(t, dir, in.String(), "mktree")
+	// 15 nested directories of 250-byte names: a path of about 3.8 KiB.
+	const depth, dirLen = 15, 250
+	var parts []string
+	for i := range depth {
+		name := fmt.Sprintf("%02d%s", i, strings.Repeat("d", dirLen-2))
+		parts = append(parts, name)
+	}
+	for i := depth - 1; i >= 0; i-- {
+		id = gitRun(t, dir, "040000 tree "+id+"\t"+parts[i]+"\n", "mktree")
+	}
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	root, err := repo.LsTree(id)
+	if err != nil {
+		t.Fatalf("LsTree: %v", err)
+	}
+	tree, err := root.SubTree(strings.Join(parts, "/"))
+	if err != nil {
+		t.Fatalf("SubTree: %v", err)
+	}
+	var ents Entries
+	alloc := allocated(func() { ents, err = tree.Entries() })
+	t.Logf("listing of %d entries under a %d-byte path allocated %d KiB", len(ents), len(tree.Path), alloc>>10)
+	if !errors.Is(err, ErrTreeTruncated) {
+		t.Errorf("Entries error = %v, want ErrTreeTruncated", err)
+	}
 	if alloc > 12<<20 {
 		t.Errorf("listing allocated %d MiB, want under 12 MiB", alloc>>20)
 	}
