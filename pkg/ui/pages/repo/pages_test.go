@@ -90,7 +90,7 @@ func TestStashPatchHighlightedOnce(t *testing.T) {
 	if !ok || msg.Diff == nil {
 		t.Fatalf("fetchStashPatchCmd()() = %v, want a patch", msg)
 	}
-	s.Update(msg)
+	updateRendered(s, msg)
 
 	// Highlighting the patch again would wrap each line in another code
 	// block, with its own margin and color, so it no longer starts as

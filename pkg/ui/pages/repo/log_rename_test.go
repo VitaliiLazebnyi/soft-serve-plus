@@ -86,7 +86,7 @@ func TestLogDiffRenameQuotedName(t *testing.T) {
 				if _, ok := msg.(LogDiffMsg); !ok {
 					t.Fatalf("loadDiffCmd() = %#v; want LogDiffMsg", msg)
 				}
-				l.Update(msg)
+				updateRendered(l, msg)
 				if l.activeView != logViewDiff {
 					t.Fatalf("view = %v; want the diff", l.activeView)
 				}

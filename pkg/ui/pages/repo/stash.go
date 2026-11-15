@@ -5,7 +5,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -53,6 +52,11 @@ type Stash struct {
 	state        stashState
 	currentPatch StashPatchMsg
 	currentTitle string
+	// render counts the renders of currentPatch; see diffRenderedMsg.
+	render int
+	// winWidth is the window width of the last tea.WindowSizeMsg. The patch
+	// is rendered again only when it changes.
+	winWidth int
 }
 
 // NewStash creates a new stash model.
@@ -150,6 +154,7 @@ func (s *Stash) id() paneID { return paneStash }
 // Init initializes the model.
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
+	s.clearPatch()
 	return s.fetchStashCmd()
 }
 
@@ -166,8 +171,12 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, s.Init())
 	case tea.WindowSizeMsg:
 		s.SetSize(msg.Width, msg.Height)
-		if s.currentPatch.Diff != nil {
-			s.renderPatch()
+		// The patch is wrapped to the width, so only a width change needs
+		// it rendered again.
+		widthChanged := msg.Width != s.winWidth
+		s.winWidth = msg.Width
+		if widthChanged && s.currentPatch.Diff != nil {
+			cmds = append(cmds, s.renderPatchCmd())
 		}
 	case tea.KeyPressMsg:
 		switch s.state {
@@ -197,15 +206,29 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		}
 		cmds = append(cmds, s.list.SetItems(items))
 	case StashPatchMsg:
-		s.state = stashStatePatch
 		s.currentPatch = msg
-		if msg.Diff != nil {
-			s.currentTitle = ""
-			if item, ok := s.list.SelectedItem().(StashItem); ok {
-				s.currentTitle = item.Title()
-			}
-			s.renderPatch()
+		if msg.Diff == nil {
+			s.state = stashStatePatch
+			break
+		}
+		s.currentTitle = ""
+		if item, ok := s.list.SelectedItem().(StashItem); ok {
+			s.currentTitle = item.Title()
+		}
+		// The pane shows the spinner until the patch is rendered.
+		s.state = stashStateLoading
+		cmds = append(cmds, s.renderPatchCmd())
+	case diffRenderedMsg:
+		if msg.render != s.render || s.currentPatch.Diff == nil {
+			// The patch or the width changed while it was rendered.
+			break
+		}
+		s.vp.SetContent(msg.content)
+		if s.state == stashStateLoading {
+			// The first render of this patch; a later one follows a
+			// resize and keeps the scroll position.
 			s.vp.GotoTop()
+			s.state = stashStatePatch
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
@@ -217,6 +240,7 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 			s.list.Select(0)
 		}
 		s.state = stashStateList
+		s.clearPatch()
 	}
 	switch s.state {
 	case stashStateList:
@@ -238,16 +262,22 @@ func (s *Stash) View() string {
 	return ""
 }
 
-// renderPatch shows the current stash patch. The patch is already
-// highlighted by renderDiff, so it goes straight into the viewport rather
-// than through the code component, which would highlight it again.
-func (s *Stash) renderPatch() {
-	s.vp.SetContent(lipgloss.JoinVertical(lipgloss.Left,
-		s.common.Styles.Stash.Title.Render(s.currentTitle),
-		"",
-		renderSummary(s.currentPatch.Diff, s.common.Styles, s.common.Width),
-		renderDiff(s.currentPatch.Diff, s.common.Width),
-	))
+// renderPatchCmd returns a command that renders the current stash patch.
+// The patch is highlighted by renderDiff, so it goes straight into the
+// viewport rather than through the code component, which would highlight it
+// again.
+func (s *Stash) renderPatchCmd() tea.Cmd {
+	s.render++
+	title := s.common.Styles.Stash.Title.Render(s.currentTitle) + "\n"
+	return renderDiffCmd(paneStash, s.render, s.gen, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
+		return title
+	})
+}
+
+// clearPatch forgets the patch shown, and drops a render of it in flight.
+func (s *Stash) clearPatch() {
+	s.currentPatch = StashPatchMsg{}
+	s.render++
 }
 
 // fetchStashCmd returns a command that lists the stashes of the repository.

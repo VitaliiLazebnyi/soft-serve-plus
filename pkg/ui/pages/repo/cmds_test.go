@@ -164,7 +164,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
 	// The diff of a commit that is no longer selected is dropped.
-	l.Update(diff)
+	updateRendered(l, diff)
 	if l.activeView == logViewDiff {
 		t.Fatal("a stale diff opened the diff view")
 	}
@@ -179,11 +179,11 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	}
 	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
 	otherCmd := l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: other}})
-	l.Update(findMsg[LogDiffMsg](t, runCmd(cmd)))
+	updateRendered(l, findMsg[LogDiffMsg](t, runCmd(cmd)))
 	if l.activeView == logViewDiff {
 		t.Fatal("the diff of a commit that is no longer selected was shown")
 	}
-	l.Update(findMsg[LogDiffMsg](t, runCmd(otherCmd)))
+	updateRendered(l, findMsg[LogDiffMsg](t, runCmd(otherCmd)))
 	if l.activeView != logViewDiff || l.currentDiff == nil {
 		t.Fatal("the diff of the selected commit was not shown")
 	}
