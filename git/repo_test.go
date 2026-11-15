@@ -131,6 +131,23 @@ func TestReferencesEmpty(t *testing.T) {
 	}
 }
 
+// runGit runs git in dir with a fixed identity and no line ending conversion.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	args = append([]string{
+		"-c", "user.email=test@example.com",
+		"-c", "user.name=Test",
+		"-c", "core.autocrlf=false",
+	}, args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
 func evalPath(t *testing.T, path string) string {
 	t.Helper()
 	p, err := filepath.EvalSymlinks(path)

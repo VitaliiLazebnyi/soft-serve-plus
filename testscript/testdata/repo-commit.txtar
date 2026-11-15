@@ -43,8 +43,8 @@ Date:   Tue Mar 31 11:44:52 UTC 2015
 Creating changelog
 
 
-CHANGELOG | 1 +
-1 file changed, 1 insertion(+)
+ CHANGELOG | 1 +
+ 1 file changed, 1 insertion(+)
 
 diff --git a/CHANGELOG b/CHANGELOG
 new file mode 100644

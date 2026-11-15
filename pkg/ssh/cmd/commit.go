@@ -43,11 +43,28 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 
+			// A plain --patch is meant for git apply and is printed byte
+			// for byte, as git prints it, binary changes included. It is
+			// cut only by its total size, and a cut one is not printed at
+			// all: git apply would apply the files before the cut and
+			// succeed.
+			if patchOnly && !color {
+				p, err := r.Patch(commit)
+				if err != nil {
+					return err
+				}
+				if p.Truncated {
+					return fmt.Errorf("patch truncated at %d bytes; not printed, as a cut patch could be applied in part: clone the repository and use git format-patch or git diff instead", git.PatchLimits().Bytes)
+				}
+				cmd.Print(p.Patch)
+				return nil
+			}
+
 			diff, err := r.Diff(commit)
 			if err != nil {
 				return err
 			}
-			patch := diff.Patch()
+			patch := diff.Patch
 
 			commonStyle := styles.DefaultStyles()
 			style := commonStyle.Log
@@ -57,13 +74,10 @@ func commitCommand() *cobra.Command {
 			authorLine := "Author: " + utils.Sanitize(commit.Author.Name)
 			dateLine := "Date:   " + commit.Committer.When.UTC().Format(time.UnixDate)
 			msgLine := strings.ReplaceAll(utils.Sanitize(commit.Message), "\r\n", "\n")
-			// A plain --patch is meant for git apply and is printed byte
-			// for byte, as git prints it. Anything formatted for reading
-			// in a terminal is stripped of the escape sequences and
-			// control characters a commit can carry.
-			if !patchOnly || color {
-				patch = utils.Sanitize(patch)
-			}
+			// Anything formatted for reading in a terminal is stripped of
+			// the escape sequences and control characters a commit can
+			// carry.
+			patch = utils.Sanitize(patch)
 			statsLine := renderStats(diff, commonStyle, color)
 			diffLine := renderDiff(patch, color)
 
@@ -138,14 +152,14 @@ func renderDiff(patch string, color bool) string {
 func renderStats(diff *git.Diff, commonStyle *styles.Styles, color bool) string {
 	style := commonStyle.Log
 	// The stats name the changed files, which may hold control characters.
-	c := utils.Sanitize(diff.Stats().String())
+	c := utils.Sanitize(diff.Stat)
 
 	if color {
 		s := strings.Split(c, "\n")
 
 		for i, line := range s {
 			ch := strings.Split(line, "|")
-			if len(ch) > 1 {
+			if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
 				adddel := ch[len(ch)-1]
 				adddel = strings.ReplaceAll(adddel, "+", style.CommitStatsAdd.Render("+"))
 				adddel = strings.ReplaceAll(adddel, "-", style.CommitStatsDel.Render("-"))

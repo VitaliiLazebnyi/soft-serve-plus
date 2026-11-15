@@ -122,32 +122,41 @@ func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
 	}
 }
 
+// git's stat for a binary file ("Bin 2 -> 3 bytes") has no +/- graph; the
+// summary must not colour the "-" of its "->" as a deletion. A text file's
+// graph still is coloured.
+func TestRenderSummaryBinaryStat(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	c := common.NewCommon(ctx, 120, 40)
+	del := c.Styles.Log.CommitStatsDel.Render("-")
+	if del == "-" {
+		t.Skip("the renderer adds no styling")
+	}
+	out := renderSummary(&git.Diff{Stat: " b.bin | Bin 2 -> 3 bytes\n t.txt | 2 +-\n"}, c.Styles, 120)
+	lines := strings.Split(out, "\n")
+	if strings.Contains(lines[0], del) || !strings.Contains(lines[0], "Bin 2 -> 3 bytes") {
+		t.Errorf("binary stat line = %q, want it unstyled", lines[0])
+	}
+	if !strings.Contains(lines[1], del) {
+		t.Errorf("text stat line = %q, want its - styled", lines[1])
+	}
+}
+
 // The stash patch view is built from pieces the TUI has already styled
 // (and sanitised at their source); the code view must keep those styles.
 func TestStashPatchKeepsStyling(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
 	c := common.NewCommon(ctx, 120, 40)
 
-	const raw = "diff --git a/a.txt b/a.txt\n" +
-		"index 0123456..789abcd 100644\n" +
-		"--- a/a.txt\n" +
-		"+++ b/a.txt\n" +
-		"@@ -1 +1 @@\n" +
-		"-old\n" +
-		"+new\n"
-	done := make(chan gitm.SteamParseDiffResult, 1)
-	gitm.StreamParseDiff(strings.NewReader(raw), done, 10, 100, 1000)
-	res := <-done
-	if res.Err != nil {
-		t.Fatal(res.Err)
-	}
-	diff := &git.Diff{Diff: res.Diff}
-	for _, df := range res.Diff.Files {
-		sections := make([]*git.DiffSection, 0, len(df.Sections))
-		for _, ds := range df.Sections {
-			sections = append(sections, &git.DiffSection{DiffSection: ds})
-		}
-		diff.Files = append(diff.Files, &git.DiffFile{DiffFile: df, Sections: sections})
+	diff := &git.Diff{
+		Stat: " a.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+		Patch: "diff --git a/a.txt b/a.txt\n" +
+			"index 0123456..789abcd 100644\n" +
+			"--- a/a.txt\n" +
+			"+++ b/a.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n",
 	}
 
 	s := NewStash(c)

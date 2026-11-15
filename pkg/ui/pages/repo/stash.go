@@ -191,7 +191,7 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			case key.Matches(msg, s.common.KeyMap.Copy):
 				if s.currentPatch.Diff != nil {
 					patch := s.currentPatch.Diff
-					cmds = append(cmds, copyCmd(patch.Patch(), "Stash patch copied to clipboard"))
+					cmds = append(cmds, copyCmd(patch.Patch, "Stash patch copied to clipboard"))
 				}
 			}
 		}

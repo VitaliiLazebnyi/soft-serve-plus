@@ -16,15 +16,6 @@ import (
 	"github.com/aymanbagabas/git-module"
 )
 
-var (
-	// DiffMaxFile is the maximum number of files to show in a diff.
-	DiffMaxFiles = 1000
-	// DiffMaxFileLines is the maximum number of lines to show in a file diff.
-	DiffMaxFileLines = 1000
-	// DiffMaxLineChars is the maximum number of characters to show in a line diff.
-	DiffMaxLineChars = 1000
-)
-
 // Repository is a wrapper around git.Repository with helper methods.
 type Repository struct {
 	*git.Repository
@@ -261,33 +252,6 @@ func (r *Repository) TreePath(ref *Reference, path string) (*Tree, error) {
 		return nil, err
 	}
 	return t.SubTree(path)
-}
-
-// Patch returns the patch for the given commit against its first parent, or
-// against the empty tree for a root commit.
-//
-// Unlike [Diff.Patch], which rebuilds a patch from a parsed and size-limited
-// [Diff], this returns git's own output unchanged, so nothing is truncated and
-// markers such as "\ No newline at end of file" are kept. The result can be
-// fed to "git apply".
-func (r *Repository) Patch(commit *Commit) (string, error) {
-	args := []string{"diff-tree", "-r", "-p", "--full-index", "-M", "--no-commit-id"}
-	if commit.ParentsCount() == 0 {
-		args = append(args, "--root", commit.ID.String())
-	} else {
-		parent, err := commit.ParentID(0)
-		if err != nil {
-			return "", err
-		}
-		args = append(args, parent.String(), commit.ID.String())
-	}
-	out, err := NewCommand(args...).
-		AddEnvs("GIT_CONFIG_GLOBAL=/dev/null").
-		RunInDir(r.Path)
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }
 
 // CountCommits returns the number of commits in the repository.

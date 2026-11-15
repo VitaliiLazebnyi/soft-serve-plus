@@ -287,7 +287,7 @@ func (l *Log) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 					l.goBack()
 				case key.Matches(kmsg, l.common.KeyMap.Copy):
 					if l.currentDiff != nil {
-						cmds = append(cmds, copyCmd(l.currentDiff.Patch(), "Commit diff copied to clipboard"))
+						cmds = append(cmds, copyCmd(l.currentDiff.Patch, "Commit diff copied to clipboard"))
 					}
 				}
 			}
@@ -578,10 +578,10 @@ func wrapText(s string, width int) string {
 }
 
 func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
-	stats := strings.Split(utils.Sanitize(diff.Stats().String()), "\n")
+	stats := strings.Split(utils.Sanitize(diff.Stat), "\n")
 	for i, line := range stats {
 		ch := strings.Split(line, "|")
-		if len(ch) > 1 {
+		if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
 			adddel := ch[len(ch)-1]
 			adddel = strings.ReplaceAll(adddel, "+", styles.Log.CommitStatsAdd.Render("+"))
 			adddel = strings.ReplaceAll(adddel, "-", styles.Log.CommitStatsDel.Render("-"))
@@ -595,7 +595,7 @@ func renderDiff(diff *git.Diff, width int) string {
 	var s strings.Builder
 	var pr strings.Builder
 	diffChroma := &gansi.CodeBlockElement{
-		Code:     utils.Sanitize(diff.Patch()),
+		Code:     utils.Sanitize(diff.Patch),
 		Language: "diff",
 	}
 	err := diffChroma.Render(&pr, common.StyleRenderer())
