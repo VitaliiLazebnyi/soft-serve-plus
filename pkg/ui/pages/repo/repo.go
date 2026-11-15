@@ -278,9 +278,10 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		if r.state != failedState {
 			cmds = append(cmds, r.tabs.Update(msg))
 		}
-		if r.selectedRepo != nil {
-			cmd := r.common.CloneCmd(r.common.Config().SSH.PublicURL, r.selectedRepo.Name())
-			if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
+		if msg, ok := msg.(tea.MouseMsg); ok && r.common.Zone.Get(r.zonePrefix+"url").InBounds(msg) {
+			// The zone is marked only while there is a command to copy;
+			// copying an empty one would clear the clipboard.
+			if cmd := r.cloneCmd(); cmd != "" {
 				cmds = append(cmds, copyCmd(cmd, "Command copied to clipboard"))
 			}
 		}
@@ -341,7 +342,9 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case tea.WindowSizeMsg:
-		r.SetSize(msg.Width, msg.Height)
+		// The parent has sized the page, less its own margins, before it
+		// passes the message on: msg holds the window's size, which
+		// neither the page nor its tabs take.
 		cmds = append(cmds, r.updateModels(msg))
 		routed = true
 	case code.RenderedMsg:
@@ -456,15 +459,13 @@ func (r *Repo) headerView() string {
 	urlStyle := r.common.Styles.URLStyle.
 		Width(r.common.Width - lipgloss.Width(header) - 1).
 		Align(lipgloss.Right)
-	var url string
-	if cfg := r.common.Config(); cfg != nil {
-		url = r.common.CloneCmd(cfg.SSH.PublicURL, r.selectedRepo.Name())
+	cmd := r.cloneCmd()
+	url := urlStyle.Render(common.TruncateString(cmd, r.common.Width-lipgloss.Width(header)-1))
+	if cmd != "" {
+		// A click copies the command. Without one, as in soft browse,
+		// the header's right half is blank and a click copies nothing.
+		url = r.common.Zone.Mark(r.zonePrefix+"url", url)
 	}
-	url = common.TruncateString(url, r.common.Width-lipgloss.Width(header)-1)
-	url = r.common.Zone.Mark(
-		r.zonePrefix+"url",
-		urlStyle.Render(url),
-	)
 
 	header = lipgloss.JoinHorizontal(lipgloss.Top, header, url)
 
@@ -472,6 +473,17 @@ func (r *Repo) headerView() string {
 	return style.Render(
 		truncate.Render(header),
 	)
+}
+
+// cloneCmd returns the command that clones the repository shown, or "" when
+// there is none: no repository, no server configuration, or the command is
+// hidden.
+func (r *Repo) cloneCmd() string {
+	cfg := r.common.Config()
+	if r.selectedRepo == nil || cfg == nil {
+		return ""
+	}
+	return r.common.CloneCmd(cfg.SSH.PublicURL, r.selectedRepo.Name())
 }
 
 func (r *Repo) setStatusBarInfo() {

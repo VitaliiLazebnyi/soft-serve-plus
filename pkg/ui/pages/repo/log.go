@@ -93,7 +93,10 @@ type Log struct {
 	// renders keeps one render in flight.
 	renders common.RenderGate
 	// winWidth is the window width of the last tea.WindowSizeMsg. The diff
-	// is rendered again only when it changes.
+	// is rendered again only when it changes. The window is wider than the
+	// pane by the parent's margins, which do not change, so its width
+	// changes with the pane's, which the parent has set by the time the
+	// message comes and which the render uses.
 	winWidth int
 	// countLoad, pageLoad and diffLoad are the loads in flight of each
 	// kind: a new one cancels the one before.
@@ -363,7 +366,6 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	case footer.ToggleFooterMsg:
 		cmds = append(cmds, l.updateCommitsCmd())
 	case tea.WindowSizeMsg:
-		l.SetSize(msg.Width, msg.Height)
 		// The diff is wrapped to the width, so only a width change needs
 		// it rendered again.
 		widthChanged := msg.Width != l.winWidth

@@ -18,12 +18,22 @@ import (
 
 // diffPane is a Log or a Stash pane showing a diff, for the render tests.
 type diffPane struct {
-	m  interface{ Update(tea.Msg) tea.Cmd }
+	m interface {
+		Update(tea.Msg) tea.Cmd
+		SetSize(width, height int)
+	}
 	vp *viewport.Viewport
 	// shown reports whether the pane shows the diff.
 	shown func() bool
 	// open shows a diff and returns the command of its first render.
 	open func(*git.Diff) tea.Cmd
+}
+
+// resize resizes the pane the way the repository page does: it sets the
+// size, then passes the window size on.
+func (p diffPane) resize(width, height int) tea.Cmd {
+	p.m.SetSize(width, height)
+	return p.m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 }
 
 func newDiffPanes(t *testing.T) map[string]diffPane {
@@ -95,11 +105,11 @@ func TestDiffRenderDropsStaleResults(t *testing.T) {
 
 			// A render for 100 columns is in flight when the window
 			// narrows to 60: it is dropped, and 60 is rendered.
-			wide := renders(p.m.Update(tea.WindowSizeMsg{Width: 100, Height: 40}))
+			wide := renders(p.resize(100, 40))
 			if len(wide) != 1 {
 				t.Fatalf("a width change started %d renders; want 1", len(wide))
 			}
-			if n := len(renders(p.m.Update(tea.WindowSizeMsg{Width: 60, Height: 40}))); n != 0 {
+			if n := len(renders(p.resize(60, 40))); n != 0 {
 				t.Fatalf("a width change started %d renders while one was in flight; want 0", n)
 			}
 			narrow := renders(p.m.Update(wide[0]))
@@ -115,7 +125,7 @@ func TestDiffRenderDropsStaleResults(t *testing.T) {
 			}
 
 			// Leaving the diff drops a render in flight and starts none.
-			late := renders(p.m.Update(tea.WindowSizeMsg{Width: 80, Height: 40}))
+			late := renders(p.resize(80, 40))
 			if len(late) != 1 {
 				t.Fatalf("a width change started %d renders; want 1", len(late))
 			}
@@ -138,7 +148,7 @@ func TestDiffRenderLostResult(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			updateRendered(p.m, findMsg[diffRenderedMsg](t, runCmd(p.open(&git.Diff{Patch: "+one\n"}))))
 			// A width change starts a render; its result is lost.
-			if n := len(renders(p.m.Update(tea.WindowSizeMsg{Width: 90, Height: 40}))); n != 1 {
+			if n := len(renders(p.resize(90, 40))); n != 1 {
 				t.Fatalf("a width change started %d renders; want 1", n)
 			}
 			p.m.Update(GoBackMsg{})
@@ -165,7 +175,7 @@ func TestDiffRenderOneInFlight(t *testing.T) {
 			first := p.open(&git.Diff{Patch: "+line\n"})
 			total := 0
 			for i := range 64 {
-				total += len(renders(p.m.Update(tea.WindowSizeMsg{Width: 80 + i%2, Height: 40})))
+				total += len(renders(p.resize(80+i%2, 40)))
 			}
 			if total != 0 {
 				t.Fatalf("64 width changes during a render started %d renders; want 0", total)

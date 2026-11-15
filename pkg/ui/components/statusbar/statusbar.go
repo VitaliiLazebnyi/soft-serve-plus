@@ -61,12 +61,9 @@ func (s *Model) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements common.Model.
-func (s *Model) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		s.SetSize(msg.Width, msg.Height)
-	}
+// Update implements common.Model. The status bar handles no message: the
+// repository page sizes it, without its margins, before a resize reaches it.
+func (s *Model) Update(tea.Msg) tea.Cmd {
 	return nil
 }
 

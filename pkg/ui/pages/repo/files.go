@@ -397,8 +397,8 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		// A listing does not depend on the size, so a resize loads
 		// nothing. The content view re-renders through f.code.Update
-		// below.
-		f.SetSize(msg.Width, msg.Height)
+		// below. The parent has sized the pane before passing the
+		// message on.
 	case errorMsg:
 		// A listing or blame that failed to load never sends its result, so
 		// leave the loading view rather than spin until the next reload.

@@ -245,6 +245,9 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ui.error == nil && ui.activePage == repoPage {
 			ui.showFooter = !ui.showFooter
 		}
+		// Size the pages for the footer now, before they get the message:
+		// the Commits tab loads its page by the size it has then.
+		ui.SetSize(ui.common.Width, ui.common.Height)
 	case repo.RenderedMsg:
 		// A render a tab started, which it waits for to start its next
 		// one, even after the user left the repository page.
