@@ -139,33 +139,10 @@ type sessionCounts struct {
 	handlers atomic.Int64
 }
 
-// noAccountLifetime is how long an SSH connection may stay open, from the
-// moment it is accepted, unless a session on it runs as an account or with
-// an admin key. Connections with a key no account owns, or with no key, are
-// closed then.
-//
-// The server accepts every key, so without this a connection that can do no
-// more than an anonymous clone keeps its place under max_connections and
-// max_connections_per_ip for as long as it sends keepalives: eight addresses
-// could hold every place. Ten minutes, the default idle timeout, leaves room
-// for an anonymous clone of a large repository.
-const noAccountLifetime = 10 * time.Minute
-
-// lifetimeTimerKey is the connection context key of the timer that closes
-// the connection once its lifetime without an account has passed.
-type lifetimeTimerKey struct{}
-
-// hasAccount keeps the connection of ctx open past noAccountLifetime.
-func hasAccount(ctx ssh.Context) {
-	if t, _ := ctx.Value(lifetimeTimerKey{}).(*time.Timer); t != nil {
-		t.Stop()
-	}
-}
-
 // connCallback returns the ssh.ConnCallback that enforces the connection
 // limits and sets up the per-connection session counts. A connection that
-// hasAccount has not been called for when lifetime has passed is closed;
-// zero turns that off.
+// spends lifetime with no command running, without hasAccount having been
+// called for it, is closed (see connLifetime); zero turns that off.
 func connCallback(l *connLimiter, logger *log.Logger, lifetime time.Duration) ssh.ConnCallback {
 	return func(ctx ssh.Context, conn net.Conn) net.Conn {
 		release, limit := l.acquire(conn.RemoteAddr())
@@ -180,18 +157,18 @@ func connCallback(l *connLimiter, logger *log.Logger, lifetime time.Duration) ss
 		ctx.SetValue(sessionCounterKey{}, new(sessionCounts))
 		lc := &limitedConn{Conn: conn, release: release}
 		if lifetime > 0 {
-			timer := time.AfterFunc(lifetime, func() {
-				logger.Debug("closing connection without an account: lifetime over", "remote-addr", conn.RemoteAddr())
-				_ = conn.Close()
-				release()
-			})
-			ctx.SetValue(lifetimeTimerKey{}, timer)
-			// Stop the timer when the connection closes first, so it
-			// does not keep the connection in memory until it fires.
+			lt := &connLifetime{}
+			// Stop the clock when the connection closes first, so its
+			// timer does not keep the connection in memory until it fires.
 			lc.release = func() {
-				timer.Stop()
+				lt.stop()
 				release()
 			}
+			lt.start(lifetime, func() {
+				logger.Debug("closing connection without an account: lifetime over", "remote-addr", conn.RemoteAddr())
+				_ = lc.Close()
+			})
+			ctx.SetValue(connLifetimeKey{}, lt)
 		}
 		return lc
 	}
@@ -259,10 +236,12 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 // filterSessionRequests, limited by limitSessions, running srv.Handler,
 // which must already be set, limited by limitHandlers, both to maxSessions.
 // forwardWindowChanges wraps the limit too, so a session it refuses still
-// has its window changes forwarded.
+// has its window changes forwarded. Inside the limit, pauseLifetime stops
+// the lifetime clock of a connection without an account while the handler
+// runs.
 func setSessionHandlers(srv *ssh.Server, maxSessions int) {
 	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
 		"session": limitSessions(filterSessionRequests(ssh.DefaultSessionHandler), maxSessions),
 	}
-	srv.Handler = forwardWindowChanges(limitHandlers(srv.Handler, maxSessions))
+	srv.Handler = forwardWindowChanges(limitHandlers(pauseLifetime(srv.Handler), maxSessions))
 }
