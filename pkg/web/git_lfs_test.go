@@ -213,10 +213,14 @@ var forgeableServices = []string{"git-upload-pack", "git-receive-pack", "git-upl
 // lfsTestRouter builds the real git router so requests pass through withParams
 // and withAccess rather than reaching a handler directly. The middleware is
 // where LFS authorization lives, so a test that calls the handler itself cannot
-// see a bypass.
-func lfsTestRouter(ctx context.Context) *mux.Router {
+// see a bypass. The removals of repositories its pushes create stop when the
+// test ends.
+func lfsTestRouter(t *testing.T, ctx context.Context) *mux.Router {
+	t.Helper()
+	pending := newPushCreates()
+	t.Cleanup(func() { _ = pending.close(context.Background()) })
 	router := mux.NewRouter()
-	gitController(ctx, router, newPushCreates())
+	gitController(ctx, router, pending)
 	return router
 }
 
@@ -238,7 +242,7 @@ func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
 	repo, err := be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	oid := strings.Repeat("a", 64)
 	path := "/victim-repo.git/info/lfs/objects/basic/" + oid
 
@@ -291,7 +295,7 @@ func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, attacker, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 
 	lock := func(url string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, url,
@@ -334,7 +338,7 @@ func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 	_, err = be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	url := "/victim-repo.git/info/lfs/objects/basic/" + strings.Repeat("a", 64)
 
 	for _, service := range forgeableServices {
@@ -364,7 +368,7 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	body := "payload"
 	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(body)
 
@@ -421,7 +425,7 @@ func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	oid := strings.Repeat("b", 64)
 	requests := []struct {
 		name, method, path, body string
@@ -479,7 +483,7 @@ func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	batch := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost,
 			"/repo.git/info/lfs/objects/batch", strings.NewReader(body))
@@ -527,7 +531,7 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	padding := strings.Repeat("a", maxLfsJSONBodySize)
 	for _, tc := range []struct {
 		name, path, body string
@@ -578,7 +582,7 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 		strconv.FormatInt(repo.ID(), 10), "objects", filepath.FromSlash(pointer.RelativePath()))
 	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	verify := func() *httptest.ResponseRecorder {
 		body := fmt.Sprintf(`{"oid":%q,"size":%d}`, pointer.Oid, pointer.Size)
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/basic/verify", strings.NewReader(body))
@@ -622,7 +626,7 @@ func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
 	objPath := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10), "objects", oid[0:2], oid[2:4], oid)
 	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	batch := func() lfs.ObjectResponse {
 		t.Helper()
 		body := fmt.Sprintf(`{"operation":"download","objects":[{"oid":%q,"size":%d}]}`, oid, len(content))

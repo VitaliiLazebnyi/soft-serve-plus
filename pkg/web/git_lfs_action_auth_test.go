@@ -58,7 +58,7 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	// actions: objects already stored get none.
 	missingOid := sha256Hex("missing")
 
-	router := lfsTestRouter(ctx)
+	router := lfsTestRouter(t, ctx)
 	batch := func(op, auth string) lfs.BatchResponse {
 		t.Helper()
 		reqOid := oid
