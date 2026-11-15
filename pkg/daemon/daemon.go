@@ -244,11 +244,13 @@ const (
 //
 // The wait ends refuseLinger after the answer, at until unless it is zero,
 // and at the connection's maximum deadline, whichever comes first, and reads
-// at most refuseDrain bytes. The connection stays counted against
-// max_connections meanwhile, as it is still open. A refusal of the request
-// passes the request deadline as until, so a client holds its connection
-// unanswered no longer than it could already by sending the request line
-// late, however long the access checks took.
+// at most refuseDrain bytes. It also ends when the server's context does or
+// the daemon shuts down, so a graceful Shutdown does not wait on refused
+// clients. The connection stays counted against max_connections meanwhile,
+// as it is still open. A refusal of the request passes the request deadline
+// as until, so a client holds its connection unanswered no longer than it
+// could already by sending the request line late, however long the access
+// checks took.
 func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	deadline := earliest(time.Now().Add(d.refuseLinger), until, c.maxDeadline)
@@ -257,11 +259,38 @@ func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 			// Read the wrapped connection: serverConn.Read would move
 			// the deadline.
 			_ = c.Conn.SetReadDeadline(deadline)
+			stop := d.onClosing(func() { _ = c.Conn.SetReadDeadline(aLongTimeAgo) })
 			_, _ = io.CopyN(io.Discard, c.Conn, refuseDrain)
+			stop()
 		}
 	}
 	if err := c.Close(); err != nil {
 		d.logger.Debugf("git: error closing connection: %v", err)
+	}
+}
+
+// aLongTimeAgo is a deadline that has passed, which ends a blocked read.
+var aLongTimeAgo = time.Unix(1, 0)
+
+// onClosing calls f once, on another goroutine, when the server's context
+// ends or the daemon shuts down or closes, unless stop is called first. stop
+// returns once f will not be called or has returned.
+func (d *GitDaemon) onClosing(f func()) (stop func()) {
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-d.ctx.Done():
+		case <-d.finished:
+		case <-quit:
+			return
+		}
+		f()
+	}()
+	return func() {
+		close(quit)
+		<-done
 	}
 }
 
