@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
 )
 
@@ -189,8 +192,10 @@ func TestRouteAccessTable(t *testing.T) {
 func TestRouteAccessAnonymousWriter(t *testing.T) {
 	f := newOracleFixture(t)
 	is := is.New(t)
-	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
+	pub, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
+	// A lock of the owner's, which verify lists for others as theirs.
+	is.NoErr(store.FromContext(f.ctx).CreateLFSLockForUser(f.ctx, db.FromContext(f.ctx), pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main"))
 
 	oid := sha256Hex("x")
 	lfsJSON := map[string]string{"Accept": lfs.MediaType, "Content-Type": lfs.MediaType}
@@ -213,7 +218,7 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 		{http.MethodPut, "/info/lfs/objects/basic/" + oid, octets, "x", http.StatusOK, false},
 		{http.MethodPost, "/info/lfs/locks", lfsJSON, "{", http.StatusBadRequest, false},
 		{http.MethodPost, "/info/lfs/locks", lfsJSON, `{"path":"a.bin"}`, http.StatusUnauthorized, true},
-		// Verify lists no locks as the anonymous caller's own.
+		// Verify answers; see the body check below.
 		{http.MethodPost, "/info/lfs/locks/verify", lfsJSON, `{}`, http.StatusOK, false},
 		{http.MethodPost, "/info/lfs/locks/1/unlock", lfsJSON, `{}`, http.StatusUnauthorized, true},
 	}
@@ -240,4 +245,14 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 				row.method, row.path, row.body, w.Code, w.Header().Get("WWW-Authenticate"), row.want, row.challenge, w.Body)
 		}
 	}
+
+	// The anonymous writer owns no lock: the owner's comes back as theirs.
+	w := do(http.MethodPost, "/info/lfs/locks/verify", lfsJSON, `{}`)
+	is.Equal(w.Code, http.StatusOK)
+	var verify lfs.LockVerifyResponse
+	is.NoErr(json.Unmarshal(w.Body.Bytes(), &verify))
+	is.Equal(len(verify.Ours), 0)
+	is.Equal(len(verify.Theirs), 1)
+	is.Equal(verify.Theirs[0].Path, "owned.bin")
+	is.Equal(verify.Theirs[0].Owner.Name, f.owner.Username())
 }
