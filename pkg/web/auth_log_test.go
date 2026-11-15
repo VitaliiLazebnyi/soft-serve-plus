@@ -64,7 +64,8 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 		{"bad token", "token " + badToken, false, "token", []string{badToken}, nil},
 		{"bearer", "Bearer " + jwt, true, "bearer", []string{jwt}, nil},
 		{"bad bearer", "Bearer " + badToken, false, "bearer", []string{badToken}, nil},
-		{"basic password", basic("stranger", "hunter2-password"), true, "basic", []string{"hunter2-password"}, nil},
+		// There is no password login, so a stored password is refused.
+		{"basic password", basic("stranger", "hunter2-password"), false, "basic", []string{"hunter2-password"}, []string{"username=stranger"}},
 		// A valid username is logged on failure, for per-account monitoring.
 		{"basic bad password", basic("stranger", badPass), false, "basic", []string{badPass}, []string{"username=stranger"}},
 		{"basic token as password", basic("stranger", f.token), true, "basic", []string{f.token}, nil},

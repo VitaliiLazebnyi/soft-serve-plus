@@ -46,8 +46,8 @@ type lfsActionAuth struct {
 // a bearer JWT is forwarded: it is short-lived, scoped to the repository, and
 // is how a client that authenticated with git-lfs-authenticate over SSH
 // reaches the object URLs. Its remaining lifetime goes into expires_in so the
-// client asks for a new batch before it runs out. A Basic password or an
-// access token is not echoed back in the response body; git-lfs sends the
+// client asks for a new batch before it runs out. An access token, in
+// HTTP Basic or not, is not echoed back in the response body; git-lfs sends the
 // credentials it used for the batch to the object URLs on the same server.
 // When the client reached the server under a different host than the one in
 // the HTTP public URL, git-lfs has to find credentials for the public-URL

@@ -12,7 +12,8 @@ import (
 
 // HTTP Basic accepts an access token the ways GitHub clients send one, but a
 // token sent as the password with another registered user's name does not
-// log in as the token's owner.
+// log in as the token's owner. There is no password login: a password hash
+// written into the database by hand does not let its user in.
 func TestBasicAuthTokenForms(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
@@ -31,9 +32,10 @@ func TestBasicAuthTokenForms(t *testing.T) {
 		want    string // the username logged in as, or "" for a refusal
 		wantErr error
 	}{
-		{"password", "stranger", "stranger-password", "stranger", nil},
-		{"password, other case", "Stranger", "stranger-password", "stranger", nil},
+		{"stored password", "stranger", "stranger-password", "", ErrInvalidPassword},
+		{"stored password, other case", "Stranger", "stranger-password", "", ErrInvalidPassword},
 		{"wrong password", "stranger", "owner-password", "", ErrInvalidPassword},
+		{"missing user", "nobody", "some-password", "", ErrInvalidPassword},
 		{"token as password, empty username", "", f.token, "stranger", nil},
 		{"token as password, owner's username", "stranger", f.token, "stranger", nil},
 		{"token as password, owner's username in other case", "STRANGER", f.token, "stranger", nil},

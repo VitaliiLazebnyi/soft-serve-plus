@@ -877,6 +877,10 @@ with no caching.
 
 You can generate user access tokens through the SSH command line interface. Access tokens can have an optional expiration date. Use your access token as the basic auth user to access your Soft Serve Plus repos through HTTP.
 
+There is no password login over HTTP: HTTP Basic credentials must carry an
+access token, as the username or as the password. Any other password is
+refused at once, without being checked.
+
 ```sh
 # Create a user token
 ssh -p 23231 localhost token create 'my new token'
