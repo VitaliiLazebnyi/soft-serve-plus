@@ -140,17 +140,19 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	l := NewLog(cmdTestCommon())
 	l.Update(RepoMsg(repo))
 
-	// A new ref, then an empty repository, before the count command runs.
+	// A new ref, then the model changes before the count command runs. An
+	// empty repository would cancel the load, so clear the model by hand.
 	cmd := l.Update(RefMsg{Ref: ref})
-	l.Update(EmptyRepoMsg{})
+	l.repo, l.ref = nil, nil
 	count := findMsg[LogCountMsg](t, runCmd(cmd))
 	if count.count != 1 {
 		t.Fatalf("count = %d, want 1", count.count)
 	}
 
+	l.Update(RepoMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(count)
-	l.Update(EmptyRepoMsg{})
+	l.repo, l.ref = nil, nil
 	commits := findMsg[LogItemsMsg](t, runCmd(cmd))
 	if len(commits.items) != 1 || commits.items[0] == nil {
 		t.Fatalf("commits = %#v, want one commit", commits)
@@ -158,9 +160,10 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 
 	// Open a commit, then switch the ref before the diff command runs.
 	commit := commits.items[0].(LogItem).Commit
+	l.Update(RepoMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
-	l.Update(RefMsg{Ref: ref})
+	l.selectedCommit = nil
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
 	// The diff of a commit that is no longer selected is dropped.

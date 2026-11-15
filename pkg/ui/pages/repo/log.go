@@ -219,6 +219,10 @@ func (l *Log) Init() tea.Cmd {
 	l.activeCommit = nil
 	l.selectedCommit = nil
 	l.clearDiff()
+	// A page or a diff of the previous ref is no longer wanted; the count
+	// starts again below.
+	l.pageLoad.Stop()
+	l.diffLoad.Stop()
 	// start loading on init
 	l.startLoading()
 	return l.countCommitsCmd()
@@ -368,6 +372,9 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case EmptyRepoMsg:
+		l.countLoad.Stop()
+		l.pageLoad.Stop()
+		l.diffLoad.Stop()
 		l.ref = nil
 		l.gen = msg.gen
 		l.activeView = logViewCommits

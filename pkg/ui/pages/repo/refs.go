@@ -170,6 +170,7 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, r.selector.SelectItemCmd())
 		}
 	case EmptyRepoMsg:
+		r.load.Stop()
 		r.ref = nil
 		r.gen = msg.gen
 		cmds = append(cmds, r.setItems([]selector.IdentifiableItem{}))

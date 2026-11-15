@@ -116,9 +116,12 @@ type Files struct {
 	// and is dropped.
 	load int
 	gen  uint64
-	// nav is the listing, file or blame load in flight. The pane shows one
-	// of them, so a new one cancels the one before.
-	nav common.Loader
+	// listLoad is the listing in flight, and fileLoad the file or blame
+	// load: a new one of each cancels the one before. Listing a directory
+	// also cancels a file load, but opening a file does not cancel the
+	// listing: the user may open a file from the previous listing, and
+	// when it fails to open the pane still needs the listing.
+	listLoad, fileLoad common.Loader
 }
 
 // NewFiles creates a new files model.
@@ -355,7 +358,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 				if f.blameView {
 					cmds = append(cmds, f.fetchBlameCmd())
 				} else {
-					f.nav.Stop()
+					f.fileLoad.Stop()
 					f.activeView = filesViewContent
 					cmds = append(cmds, f.code.SetSideNote(""))
 				}
@@ -386,7 +389,8 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case EmptyRepoMsg:
-		f.nav.Stop()
+		f.listLoad.Stop()
+		f.fileLoad.Stop()
 		f.ref = nil
 		f.gen = msg.gen
 		f.load++
@@ -463,7 +467,10 @@ func (f *Files) StatusBarInfo() string {
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
 	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
-	ctx := f.nav.Start(f.common.Context())
+	// The pane is about to list a directory: a file it was opening is no
+	// longer wanted.
+	f.fileLoad.Stop()
+	ctx := f.listLoad.Start(f.common.Context())
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.
@@ -505,7 +512,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
-	ctx := f.nav.Start(f.common.Context())
+	ctx := f.fileLoad.Start(f.common.Context())
 	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
 		if ctx.Err() != nil {
@@ -572,7 +579,7 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 // fetchBlameCmd returns a command that loads the blame of the current file.
 func (f *Files) fetchBlameCmd() tea.Cmd {
 	repo, ref, item, load, gen := f.repo, f.ref, f.currentItem, f.load, f.gen
-	ctx := f.nav.Start(f.common.Context())
+	ctx := f.fileLoad.Start(f.common.Context())
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.

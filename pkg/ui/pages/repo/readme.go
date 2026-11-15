@@ -113,6 +113,7 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.
+		r.load.Stop()
 		r.gen = msg.gen
 		r.isLoading = false
 		r.readmePath = ""

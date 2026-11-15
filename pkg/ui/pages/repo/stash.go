@@ -160,6 +160,7 @@ func (s *Stash) id() paneID { return paneStash }
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
 	s.clearPatch()
+	s.patchLoad.Stop()
 	return s.fetchStashCmd()
 }
 
@@ -252,6 +253,9 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		}
 		s.state = stashStateList
 		s.clearPatch()
+		// A patch still loading would open the patch view when it
+		// arrives.
+		s.patchLoad.Stop()
 	}
 	switch s.state {
 	case stashStateList:
