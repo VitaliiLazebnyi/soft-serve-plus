@@ -1,8 +1,10 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
@@ -20,6 +23,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/matryer/is"
 	dto "github.com/prometheus/client_model/go"
 	gossh "golang.org/x/crypto/ssh"
@@ -254,4 +258,133 @@ func tuiSeconds(t *testing.T) float64 {
 		t.Fatal(err)
 	}
 	return m.GetCounter().GetValue()
+}
+
+// heapAlloc returns the live heap after a garbage collection.
+func heapAlloc() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// A TUI renders at most 500x200 cells, whatever size the client asks for:
+// Bubble Tea allocates its screen at the size it is given, about 250 bytes
+// a cell, so a 5000x300 pty used to hold over 300 MiB, and a 30000x30000 one
+// would have exhausted memory.
+func TestTUIWindowSizeClamped(t *testing.T) {
+	// The clamped size costs about 25 MiB; the sizes below, unclamped, over
+	// 250 MiB.
+	const limit = 100 << 20
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		resize        []byte
+	}{
+		{name: "pty-req", width: 5000, height: 300},
+		// Bubble Tea itself drops resizes over 4096 columns or rows, or
+		// 1<<20 cells, but not this one.
+		{name: "window-change", width: 80, height: 40, resize: windowPayload(4000, 250)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			addr, _ := startTestServer(t, cfg)
+			before := heapAlloc()
+
+			c, err := dialClient(t, addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close() //nolint: errcheck
+			s, err := c.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RequestPty("xterm", tc.height, tc.width, nil); err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := s.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Shell(); err != nil {
+				t.Fatal(err)
+			}
+			// Wait for the TUI to draw, then keep reading so it never
+			// blocks on output.
+			if _, err := stdout.Read(make([]byte, 1)); err != nil {
+				t.Fatal(err)
+			}
+			go io.Copy(io.Discard, stdout) //nolint: errcheck
+			if tc.resize != nil {
+				if ok, err := s.SendRequest("window-change", true, tc.resize); err != nil || !ok {
+					t.Fatalf("window-change: %t, %v", ok, err)
+				}
+			}
+			time.Sleep(time.Second)
+
+			grown := int64(heapAlloc()) - int64(before)
+			t.Logf("heap grew by %d MiB", grown>>20)
+			if grown > limit {
+				t.Errorf("heap grew by %d MiB with the TUI open, want at most %d MiB", grown>>20, limit>>20)
+			}
+		})
+	}
+}
+
+// newSessionProgram gives the UI the clamped size.
+func TestNewSessionProgramClampsSize(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	ctx := serverContext(t, cfg, log.Default())
+	srv := &ssh.Server{
+		Handler: ContextMiddleware(cfg, db.FromContext(ctx), store.FromContext(ctx), backend.FromContext(ctx), log.Default())(func(s ssh.Session) {
+			p, c := newSessionProgram(s)
+			if p == nil {
+				_ = s.Exit(1)
+				return
+			}
+			c.Zone.Close()
+			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", c.Width, c.Height)
+			_ = s.Exit(0)
+		}),
+	}
+	if err := ssh.EmulatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
+	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	if err := sess.RequestPty("xterm", 30000, 30000, nil); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	sess.Stderr = &stderr
+	if err := sess.Run(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := stderr.String(); got != "500x200" {
+		t.Errorf("UI size %s, want 500x200", got)
+	}
+}
+
+// TestSessionFilter checks the TUI's message filter: resizes are clamped,
+// and a suspend resumes, as with the filter of bm.MakeOptions it replaces.
+func TestSessionFilter(t *testing.T) {
+	for _, tc := range []struct {
+		in, want tea.WindowSizeMsg
+	}{
+		{tea.WindowSizeMsg{Width: 4000, Height: 250}, tea.WindowSizeMsg{Width: common.MaxWidth, Height: common.MaxHeight}},
+		{tea.WindowSizeMsg{Width: 120, Height: 250}, tea.WindowSizeMsg{Width: 120, Height: common.MaxHeight}},
+		{tea.WindowSizeMsg{Width: 80, Height: 24}, tea.WindowSizeMsg{Width: 80, Height: 24}},
+	} {
+		if got := sessionFilter(nil, tc.in); got != tc.want {
+			t.Errorf("sessionFilter(%+v) = %+v, want %+v", tc.in, got, tc.want)
+		}
+	}
+	if got := sessionFilter(nil, tea.SuspendMsg{}); got != (tea.ResumeMsg{}) {
+		t.Errorf("sessionFilter(SuspendMsg) = %#v, want ResumeMsg", got)
+	}
+	if got := sessionFilter(nil, tea.QuitMsg{}); got != (tea.QuitMsg{}) {
+		t.Errorf("sessionFilter(QuitMsg) = %#v, want it unchanged", got)
+	}
 }
