@@ -15,6 +15,7 @@ import (
 	"time"
 
 	sgit "github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
@@ -80,11 +81,23 @@ func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
 	}
 }
 
+// diffRepoOnMain is diffRepo with the server repository's HEAD pointed at
+// main, the branch the work tree pushes. The server creates the repository
+// with git's init.defaultBranch, which depends on the host's git config, so
+// tests that read HEAD must not rely on it.
+func diffRepoOnMain(t *testing.T) (context.Context, func(stdin string, args ...string) string) {
+	t.Helper()
+	ctx, git := diffRepo(t)
+	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "diffs.git")
+	git("", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return ctx, git
+}
+
 // R10: `repo tree` on a directory with more than git.MaxTreeEntries entries
 // lists the first ones and says on stderr that the listing is cut. Paths
 // past the cap can still be read.
 func TestRepoTreeTruncated(t *testing.T) {
-	ctx, git := diffRepo(t)
+	ctx, git := diffRepoOnMain(t)
 	blob := git("x", "hash-object", "-w", "--stdin")
 	var in strings.Builder
 	for i := range sgit.MaxTreeEntries + 1 {
@@ -122,7 +135,7 @@ func TestRepoTreeTruncated(t *testing.T) {
 // with the given arguments.
 func treeRepo(t *testing.T) func(args ...string) (string, string, error) {
 	t.Helper()
-	ctx, git := diffRepo(t)
+	ctx, git := diffRepoOnMain(t)
 	add := func(mode, content, path string) {
 		sha := content
 		if mode != "160000" {
