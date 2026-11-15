@@ -194,7 +194,10 @@ func branchDeleteCommand() *cobra.Command {
 				return fmt.Errorf("cannot delete the default branch")
 			}
 
-			branchCommit, err := r.BranchCommit(branch)
+			// The event needs only the ID. Reading the commit would
+			// fail for one git cannot parse, and such a branch must
+			// still be deletable.
+			branchID, err := r.BranchCommitID(branch)
 			if err != nil {
 				return err
 			}
@@ -208,7 +211,7 @@ func branchDeleteCommand() *cobra.Command {
 			// and sent even if the session ends now.
 			ctx, cancel := backend.AfterChangeContext(ctx)
 			defer cancel()
-			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsHeads+branch, branchCommit.ID.String(), git.ZeroID)
+			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsHeads+branch, branchID, git.ZeroID)
 			if err != nil {
 				log.FromContext(ctx).Error("branch deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil

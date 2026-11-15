@@ -55,16 +55,6 @@ func (r *Repository) Branches() ([]string, error) {
 	return branches, nil
 }
 
-// CatFileCommit returns the commit for the given revision.
-func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions) (*git.Commit, error) {
-	var opt git.CatFileCommitOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	opt.CommandOptions = r.withCtx(opt.CommandOptions)
-	return r.Repository.CatFileCommit(rev, opt)
-}
-
 // StashList returns the repository's stashes. It must run in a work tree.
 func (r *Repository) StashList(opts ...git.StashListOptions) ([]*git.Stash, error) {
 	var opt git.StashListOptions
