@@ -1,3 +1,6 @@
+// Package jwk signs and verifies the JSON Web Tokens the server issues: the
+// ones `soft jwt` prints and git-lfs-authenticate hands out, which the HTTP
+// server accepts as bearer tokens. They are signed with the SSH host key.
 package jwk
 
 import (
@@ -5,19 +8,28 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
-	"encoding/base64"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/go-jose/go-jose/v4"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// SigningMethodFor returns the JSON Web Token signing method for a public
+// ErrHostKey wraps the error of a token that could not be signed or verified
+// because the host key could not be loaded or used. That is a server fault,
+// not a bad token.
+var ErrHostKey = errors.New("no usable host key")
+
+// errInvalid is wrapped by the error of a token that does not verify.
+var errInvalid = errors.New("invalid token")
+
+// signingMethodFor returns the JSON Web Token signing method for a public
 // key: EdDSA for Ed25519, RS256 for RSA and ES256, ES384 or ES512 for ECDSA
 // on P-256, P-384 or P-521. Tokens are signed with the server's SSH host key,
 // whose type follows the key at ssh.key_path.
-func SigningMethodFor(pub crypto.PublicKey) (jwt.SigningMethod, error) {
+func signingMethodFor(pub crypto.PublicKey) (jwt.SigningMethod, error) {
 	switch k := pub.(type) {
 	case ed25519.PublicKey:
 		return jwt.SigningMethodEdDSA, nil
@@ -38,52 +50,88 @@ func SigningMethodFor(pub crypto.PublicKey) (jwt.SigningMethod, error) {
 	}
 }
 
-// Pair is a JSON Web Key pair.
-type Pair struct {
-	privateKey crypto.PrivateKey
-	jwk        jose.JSONWebKey
-	method     jwt.SigningMethod
-}
-
-// PrivateKey returns the private key.
-func (p Pair) PrivateKey() crypto.PrivateKey {
-	return p.privateKey
-}
-
-// JWK returns the JSON Web Key.
-func (p Pair) JWK() jose.JSONWebKey {
-	return p.jwk
-}
-
-// SigningMethod returns the signing method that matches the key type.
-func (p Pair) SigningMethod() jwt.SigningMethod {
-	return p.method
-}
-
-// NewPair creates a new JSON Web Key pair.
-func NewPair(cfg *config.Config) (Pair, error) {
+// hostKey returns the host key and the signing method for its type.
+func hostKey(cfg *config.Config) (*config.HostKey, jwt.SigningMethod, error) {
 	kp, err := config.KeyPair(cfg)
 	if err != nil {
-		return Pair{}, err
+		return nil, nil, fmt.Errorf("%w: %w", ErrHostKey, err)
 	}
-
-	method, err := SigningMethodFor(kp.CryptoPublicKey())
+	method, err := signingMethodFor(kp.CryptoPublicKey())
 	if err != nil {
-		return Pair{}, err
+		return nil, nil, fmt.Errorf("%w: %w", ErrHostKey, err)
 	}
+	return kp, method, nil
+}
 
-	jwk := jose.JSONWebKey{
-		Key:       kp.CryptoPublicKey(),
-		Algorithm: method.Alg(),
+// Subject returns the subject of a token for user: the username and the
+// user ID, so a token does not carry over to a new account of the same name.
+func Subject(user proto.User) string {
+	return fmt.Sprintf("%s#%d", user.Username(), user.ID())
+}
+
+// Sign returns a token for user that is valid from now until expiresAt, for
+// the repositories in audience, issued by the server at cfg.HTTP.PublicURL.
+func Sign(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("%w: %w", ErrHostKey, config.ErrNilConfig)
 	}
+	now := time.Now()
+	return SignClaims(cfg, jwt.RegisteredClaims{
+		Subject:   Subject(user),
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
+		NotBefore: jwt.NewNumericDate(now),
+		IssuedAt:  jwt.NewNumericDate(now),
+		Issuer:    cfg.HTTP.PublicURL,
+		Audience:  audience,
+	})
+}
 
-	// The key ID is the RFC 7638 thumbprint of the public key, so it is
-	// stable for a given host key and reveals nothing about the private key.
-	thumb, err := jwk.Thumbprint(crypto.SHA256)
+// SignClaims signs claims with the host key, using the algorithm of its key
+// type. Sign is the way to issue a token; this is for callers, such as
+// tests, that need other claims.
+func SignClaims(cfg *config.Config, claims jwt.RegisteredClaims) (string, error) {
+	kp, method, err := hostKey(cfg)
 	if err != nil {
-		return Pair{}, fmt.Errorf("jwk thumbprint: %w", err)
+		return "", err
 	}
-	jwk.KeyID = base64.RawURLEncoding.EncodeToString(thumb)
+	return jwt.NewWithClaims(method, claims).SignedString(kp.PrivateKey())
+}
 
-	return Pair{privateKey: kp.PrivateKey(), jwk: jwk, method: method}, nil
+// Verify checks a token signed with the host key, in the algorithm of its
+// key type, issued by the server at cfg.HTTP.PublicURL, with an expiry, and
+// with an audience that names one of audience. It returns the token's
+// claims. The error wraps ErrHostKey when the host key cannot be used;
+// otherwise the token does not verify.
+//
+// Any "kid" header is ignored: tokens issued before it was dropped carry
+// one, and there is only one key to verify with.
+func Verify(cfg *config.Config, token string, audience []string) (*jwt.RegisteredClaims, error) {
+	if len(audience) == 0 {
+		// jwt.WithAudience checks nothing without an audience.
+		return nil, errInvalid
+	}
+	kp, method, err := hostKey(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	pub := kp.CryptoPublicKey()
+	parsed, err := jwt.ParseWithClaims(token, &jwt.RegisteredClaims{}, func(*jwt.Token) (any, error) {
+		return pub, nil
+	},
+		jwt.WithValidMethods([]string{method.Alg()}),
+		jwt.WithIssuer(cfg.HTTP.PublicURL),
+		jwt.WithIssuedAt(),
+		jwt.WithExpirationRequired(),
+		jwt.WithAudience(audience...),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errInvalid, err)
+	}
+
+	claims, ok := parsed.Claims.(*jwt.RegisteredClaims)
+	if !parsed.Valid || !ok {
+		return nil, errInvalid
+	}
+	return claims, nil
 }

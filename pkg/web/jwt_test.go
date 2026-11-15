@@ -3,13 +3,14 @@ package web
 import (
 	"context"
 	"crypto/elliptic"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -70,9 +71,9 @@ func TestParseJWTRejectsOtherAlgorithms(t *testing.T) {
 	}
 
 	// An RSA-PSS token from the same RSA key is not the expected RS256.
-	kp, err := jwk.NewPair(config.FromContext(rsaCtx))
+	kp, err := config.KeyPair(config.FromContext(rsaCtx))
 	if err != nil {
-		t.Fatalf("NewPair: %v", err)
+		t.Fatalf("KeyPair: %v", err)
 	}
 	pss, err := jwt.NewWithClaims(jwt.SigningMethodPS256, jwtTestClaims(rsaCtx, "repo")).SignedString(kp.PrivateKey())
 	if err != nil {
@@ -103,5 +104,33 @@ func jwtTestClaims(ctx context.Context, audience ...string) jwt.RegisteredClaims
 		IssuedAt:  jwt.NewNumericDate(now),
 		Issuer:    config.FromContext(ctx).HTTP.PublicURL,
 		Audience:  audience,
+	}
+}
+
+// TestBearerTokenWithKeyID checks a token minted before the "kid" header was
+// dropped, which carries one, still authenticates its user until it expires.
+func TestBearerTokenWithKeyID(t *testing.T) {
+	f := newOracleFixture(t)
+	kp, err := config.KeyPair(config.FromContext(f.ctx))
+	if err != nil {
+		t.Fatalf("KeyPair: %v", err)
+	}
+	claims := jwtTestClaims(f.ctx, "secret")
+	claims.Subject = fmt.Sprintf("%s#%d", f.owner.Username(), f.owner.ID())
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	// An RFC 7638 thumbprint, as the old code put there.
+	token.Header["kid"] = "pXIvChkPX0Nik0T-8ADSGgxzCbqOXKyjqTUu4M4TYy0"
+	signed, err := token.SignedString(kp.PrivateKey())
+	if err != nil {
+		t.Fatalf("SignedString: %v", err)
+	}
+
+	const path = "/secret.git/info/refs?service=git-upload-pack"
+	if got := f.do(http.MethodGet, path, "Bearer "+signed).Code; got != http.StatusOK {
+		t.Errorf("status = %d, want %d", got, http.StatusOK)
+	}
+	// Without the token the private repository is not readable.
+	if got := f.do(http.MethodGet, path, "").Code; got != http.StatusUnauthorized {
+		t.Errorf("anonymous status = %d, want %d", got, http.StatusUnauthorized)
 	}
 }

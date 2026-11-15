@@ -8,13 +8,11 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -120,6 +118,28 @@ func GitController(ctx context.Context, r *mux.Router) {
 func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
 	limits := newRequestLimits(config.FromContext(ctx).HTTP)
+
+	goGet := withParams(withCaller(http.HandlerFunc(GoGetHandler)))
+
+	// The dumb protocol is not served. Its requests get a fixed answer that
+	// does not depend on the repository, so they are refused before anything
+	// is looked up or authorized. A go get request for a repository or
+	// package whose path ends in one of these names, such as "group/HEAD"
+	// or "repo/info/refs", is a go get request. The ref advertisement route
+	// would take a go get request for info/refs, so it is sent to the go get
+	// handler here. The route matches the whole path, so the handler gets
+	// the full path as the repository and walks up from it, as it does for
+	// "group/HEAD".
+	r.Handle(basePrefix, goGet).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return strings.HasSuffix(r.URL.Path, "/info/refs") && !isSmartService(getServiceType(r)) && isGoGet(r)
+	})
+	r.Handle(basePrefix+"/info/refs", http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return !isSmartService(getServiceType(r)) && !isGoGet(r)
+	})
+	r.Handle(basePrefix+dumbPaths, http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return !isGoGet(r)
+	})
+
 	for _, route := range gitRoutes {
 		route.pending = pending
 		route.limits = limits
@@ -129,7 +149,41 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	}
 
 	// Handle go-get
-	r.Handle(basePrefix, withParams(withCaller(http.HandlerFunc(GoGetHandler)))).Methods(http.MethodGet, http.MethodHead)
+	r.Handle(basePrefix, goGet).Methods(http.MethodGet, http.MethodHead)
+}
+
+// dumbPaths matches the repository files only the dumb HTTP protocol fetches:
+// HEAD, the alternates and pack lists, loose objects, packs and their indexes.
+const dumbPaths = "/{_:(?:HEAD|objects/info/(?:alternates|http-alternates|packs)" +
+	"|objects/[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62})" +
+	"|objects/pack/pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.(?:pack|idx))$}"
+
+// errDumbHTTP is the answer to a dumb HTTP request.
+var errDumbHTTP = errors.New("dumb HTTP is not supported; use smart HTTP (git 1.6.6 or later, without GIT_SMART_HTTP=0)")
+
+// refuseDumbHTTP answers a request of the dumb HTTP protocol with 403, as git
+// http-backend does when it is configured not to serve dumb clients. The
+// answer is marked uncacheable, so no cache keeps it for a repository file.
+func refuseDumbHTTP(w http.ResponseWriter, r *http.Request) {
+	allowed := []string{http.MethodGet, http.MethodHead}
+	if !slices.Contains(allowed, r.Method) {
+		renderMethodNotAllowed(w, r, allowed)
+		return
+	}
+	hdrNocache(w)
+	// git shows a text/plain error body to the user.
+	http.Error(w, errDumbHTTP.Error(), http.StatusForbidden)
+}
+
+// isGoGet reports whether r is a request the go get route answers.
+func isGoGet(r *http.Request) bool {
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Query().Get("go-get") == "1"
+}
+
+// isSmartService reports whether service is one a smart HTTP ref
+// advertisement is served for.
+func isSmartService(service git.Service) bool {
+	return service == git.UploadPackService || service == git.ReceivePackService
 }
 
 var gitRoutes = []GitRoute{
@@ -145,31 +199,6 @@ var gitRoutes = []GitRoute{
 		method:  []string{http.MethodGet},
 		handler: getInfoRefs,
 		path:    "/info/refs",
-	},
-	{
-		method:  []string{http.MethodGet},
-		handler: getTextFile,
-		path:    "/{_:(?:HEAD|objects/info/alternates|objects/info/http-alternates)$}",
-	},
-	{
-		method:  []string{http.MethodGet},
-		handler: getInfoPacks,
-		path:    "/objects/info/packs",
-	},
-	{
-		method:  []string{http.MethodGet},
-		handler: getLooseObject,
-		path:    "/objects/{_:[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62})$}",
-	},
-	{
-		method:  []string{http.MethodGet},
-		handler: getPackFile,
-		path:    "/objects/pack/{_:pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.pack$}",
-	},
-	{
-		method:  []string{http.MethodGet},
-		handler: getIdxFile,
-		path:    "/objects/pack/{_:pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.idx$}",
 	},
 	// Git LFS
 	{
@@ -721,90 +750,91 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 	service := git.Service(mux.Vars(r)["service"])
 	protocol := r.Header.Get("Git-Protocol")
 
-	if service != "" && (service == git.UploadPackService || service == git.ReceivePackService) {
-		// Smart HTTP
-		var version int
-		for _, p := range strings.Split(protocol, ":") {
-			if strings.HasPrefix(p, "version=") {
-				if v, _ := strconv.Atoi(p[8:]); v > version {
-					version = v
-				}
+	if !isSmartService(service) {
+		// The router refuses these before authorization; this only keeps a
+		// routing mistake from running git with no service.
+		refuseDumbHTTP(w, r)
+		return
+	}
+
+	var version int
+	for _, p := range strings.Split(protocol, ":") {
+		if strings.HasPrefix(p, "version=") {
+			if v, _ := strconv.Atoi(p[8:]); v > version {
+				version = v
 			}
 		}
+	}
 
-		// The advertisement is streamed to the client as git writes it,
-		// rather than held in memory: a repository with many refs has a large
-		// one. The header goes out with git's first output, so a git that
-		// fails before writing anything still gets an error status.
-		refs := &advertisement{w: w, start: func() {
-			hdrNocache(w)
-			w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
-			w.WriteHeader(http.StatusOK)
-			if version < 2 {
-				git.WritePktline(w, "# service="+service.String()) //nolint: errcheck
-			}
-		}}
-		cmd := git.ServiceCommand{
-			Stdout: refs,
-			Dir:    dir,
-			Args:   []string{"--stateless-rpc", "--advertise-refs"},
+	// The advertisement is streamed to the client as git writes it,
+	// rather than held in memory: a repository with many refs has a large
+	// one. The header goes out with git's first output, so a git that
+	// fails before writing anything still gets an error status.
+	refs := &advertisement{w: w, start: func() {
+		hdrNocache(w)
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
+		w.WriteHeader(http.StatusOK)
+		if version < 2 {
+			git.WritePktline(w, "# service="+service.String()) //nolint: errcheck
 		}
+	}}
+	cmd := git.ServiceCommand{
+		Stdout: refs,
+		Dir:    dir,
+		Args:   []string{"--stateless-rpc", "--advertise-refs"},
+	}
 
-		user := proto.UserFromContext(ctx)
-		cmd.Env = cfg.Environ()
+	user := proto.UserFromContext(ctx)
+	cmd.Env = cfg.Environ()
+	cmd.Env = append(cmd.Env, []string{
+		"SOFT_SERVE_REPO_NAME=" + repoName,
+		"SOFT_SERVE_REPO_PATH=" + dir,
+		"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
+	}...)
+	if user != nil {
 		cmd.Env = append(cmd.Env, []string{
-			"SOFT_SERVE_REPO_NAME=" + repoName,
-			"SOFT_SERVE_REPO_PATH=" + dir,
-			"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
+			"SOFT_SERVE_USERNAME=" + user.Username(),
 		}...)
-		if user != nil {
-			cmd.Env = append(cmd.Env, []string{
-				"SOFT_SERVE_USERNAME=" + user.Username(),
-			}...)
-		}
-		if len(protocol) != 0 {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_PROTOCOL=%s", protocol))
-		}
+	}
+	if len(protocol) != 0 {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_PROTOCOL=%s", protocol))
+	}
 
-		if err := service.Handler(ctx, cmd); err != nil {
-			if refs.started {
-				// The status is already sent; the client sees the
-				// advertisement cut short.
-				logger.Debugf("ref advertisement cut short: %v", err)
-				return
-			}
-			switch {
-			case errors.Is(err, context.Canceled):
-				// The client went away before git was done.
-				logger.Debugf("service cancelled: %v", err)
-			case errors.Is(err, git.ErrInvalidRepo):
-				renderNotFound(w, r)
-			default:
-				logger.Errorf("failed to advertise refs: %v", err)
-				renderInternalServerError(w, r)
-			}
+	if err := service.Handler(ctx, cmd); err != nil {
+		if refs.started {
+			// The status is already sent; the client sees the
+			// advertisement cut short.
+			logger.Debugf("ref advertisement cut short: %v", err)
 			return
 		}
-
-		// A fetch or push asks for its advertisement once, so count it here
-		// rather than per RPC. A fetch may send several upload-pack RPCs
-		// (ls-refs and fetch in protocol v2, one per negotiation round). A
-		// push whose pack is larger than http.postBuffer first sends a probe
-		// receive-pack RPC holding only a flush packet, then the real one.
-		// A push with nothing to send sends no RPC, and is still counted,
-		// as over SSH.
-		switch service {
-		case git.UploadPackService:
-			gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
-		case git.ReceivePackService:
-			gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
+		switch {
+		case errors.Is(err, context.Canceled):
+			// The client went away before git was done.
+			logger.Debugf("service cancelled: %v", err)
+		case errors.Is(err, git.ErrInvalidRepo):
+			renderNotFound(w, r)
+		default:
+			logger.Errorf("failed to advertise refs: %v", err)
+			renderInternalServerError(w, r)
 		}
-
-		refs.begin()
-	} else {
-		// Dumb HTTP
-		getDumbInfoRefs(w, r)
+		return
 	}
+
+	// A fetch or push asks for its advertisement once, so count it here
+	// rather than per RPC. A fetch may send several upload-pack RPCs
+	// (ls-refs and fetch in protocol v2, one per negotiation round). A
+	// push whose pack is larger than http.postBuffer first sends a probe
+	// receive-pack RPC holding only a flush packet, then the real one.
+	// A push with nothing to send sends no RPC, and is still counted,
+	// as over SSH.
+	switch service {
+	case git.UploadPackService:
+		gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
+	case git.ReceivePackService:
+		gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
+	}
+
+	refs.begin()
 }
 
 // advertisement passes git's ref advertisement through to the response,
@@ -830,49 +860,6 @@ func (a *advertisement) Write(p []byte) (int, error) {
 	}
 	a.begin()
 	return a.w.Write(p)
-}
-
-func getLooseObject(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w, r)
-	sendFile("application/x-git-loose-object", w, r)
-}
-
-func getPackFile(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w, r)
-	sendFile("application/x-git-packed-objects", w, r)
-}
-
-func getIdxFile(w http.ResponseWriter, r *http.Request) {
-	hdrCacheForever(w, r)
-	sendFile("application/x-git-packed-objects-toc", w, r)
-}
-
-func getTextFile(w http.ResponseWriter, r *http.Request) {
-	hdrNocache(w)
-	sendFile("text/plain", w, r)
-}
-
-// sendFile serves the requested repository file. Anything that is not a
-// readable regular file, whatever the reason, is not found.
-func sendFile(contentType string, w http.ResponseWriter, r *http.Request) {
-	dir, file := mux.Vars(r)["dir"], mux.Vars(r)["file"]
-	reqFile := filepath.Join(dir, file)
-
-	f, err := os.Open(reqFile)
-	if err != nil {
-		renderNotFound(w, r)
-		return
-	}
-	defer f.Close() //nolint: errcheck
-
-	fi, err := f.Stat()
-	if err != nil || !fi.Mode().IsRegular() {
-		renderNotFound(w, r)
-		return
-	}
-
-	w.Header().Set("Content-Type", contentType)
-	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
 
 // getServiceType returns the service named by the ?service= query parameter.
@@ -925,19 +912,4 @@ func hdrNocache(w http.ResponseWriter) {
 	w.Header().Set("Expires", "Fri, 01 Jan 1980 00:00:00 GMT")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Cache-Control", "no-cache, max-age=0, must-revalidate")
-}
-
-// hdrCacheForever marks an immutable object as cacheable for a year. Shared
-// caches may only store it when the repository is public and the request
-// carries no credentials; otherwise it is private to the caller.
-func hdrCacheForever(w http.ResponseWriter, r *http.Request) {
-	const maxAge = 365 * 24 * time.Hour
-	scope := "public"
-	ctx := r.Context()
-	if repo := proto.RepositoryFromContext(ctx); repo == nil || repo.IsPrivate() ||
-		proto.UserFromContext(ctx) != nil || r.Header.Get("Authorization") != "" {
-		scope = "private"
-	}
-	w.Header().Set("Expires", time.Now().Add(maxAge).UTC().Format(http.TimeFormat))
-	w.Header().Set("Cache-Control", fmt.Sprintf("%s, max-age=%d", scope, int(maxAge.Seconds())))
 }

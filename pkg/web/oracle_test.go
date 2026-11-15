@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/matryer/is"
 )
 
@@ -101,14 +100,14 @@ func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 
-	// Routes that carry ?service=git-receive-pack but never create a
-	// repository must answer the same for private and missing.
+	// Former dumb HTTP routes that carry ?service=git-receive-pack never
+	// create a repository, and answer the same for private and missing.
 	for _, path := range []string{
 		"/%s.git/HEAD?service=git-receive-pack",
 		"/%s.git/objects/info/packs?service=git-receive-pack",
 	} {
-		f.assertSameAnswer(t, http.MethodGet, path, auth, http.StatusNotFound)
-		f.assertSameAnswer(t, http.MethodGet, path, "", http.StatusUnauthorized)
+		f.assertSameAnswer(t, http.MethodGet, path, auth, http.StatusForbidden)
+		f.assertSameAnswer(t, http.MethodGet, path, "", http.StatusForbidden)
 	}
 
 	// The push advertisement and RPC answer the same for an anonymous
@@ -152,7 +151,7 @@ func TestReceivePackReaderIsForbidden(t *testing.T) {
 
 	// The service parameter does not turn a read into a push off the
 	// advertisement.
-	is.Equal(f.do(http.MethodGet, "/secret.git/HEAD?service=git-receive-pack", auth).Code, http.StatusOK)
+	is.Equal(f.do(http.MethodGet, "/secret.git/HEAD?service=git-receive-pack", auth).Code, http.StatusForbidden)
 	want := answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever", auth))
 	is.Equal(want.code, http.StatusNotFound)
 	is.Equal(answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever?service=git-receive-pack", auth)), want)
@@ -176,24 +175,8 @@ func TestReceivePackReaderIsForbidden(t *testing.T) {
 // mintJWT signs a token for user the way `soft jwt` does.
 func mintJWT(ctx context.Context, t *testing.T, user proto.User, audience ...string) string {
 	t.Helper()
-	is := is.New(t)
-	cfg := config.FromContext(ctx)
-	kp, err := jwk.NewPair(cfg)
-	is.NoErr(err)
-
-	now := time.Now()
-	claims := jwt.RegisteredClaims{
-		Subject:   fmt.Sprintf("%s#%d", user.Username(), user.ID()),
-		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
-		NotBefore: jwt.NewNumericDate(now),
-		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    cfg.HTTP.PublicURL,
-		Audience:  audience,
-	}
-	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
-	token.Header["kid"] = kp.JWK().KeyID
-	signed, err := token.SignedString(kp.PrivateKey())
-	is.NoErr(err)
+	signed, err := jwk.Sign(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
+	is.New(t).NoErr(err)
 	return signed
 }
 
