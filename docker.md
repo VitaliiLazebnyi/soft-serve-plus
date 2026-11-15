@@ -142,22 +142,21 @@ The image already handles this in two ways:
 - When `soft` itself runs as PID 1, it starts the server again as a child,
   forwards signals to it and reaps every process that exits. It logs
   `soft is PID 1: running the server as a child process ...` when it does
-  this. This costs a second `soft` process, so an init is still preferred. If
-  it cannot start the child, it logs the warning
-  `soft is PID 1 and cannot supervise itself ...` and the server runs without
-  anything reaping its orphans.
+  this. This costs a second `soft` process. If it cannot start the child, it
+  logs the warning `soft is PID 1 and cannot supervise itself ...` and the
+  server runs without anything reaping its orphans.
 
 The examples above still add `--init` (`init: true`). With this image it is a
 safeguard rather than a requirement, and it works with `read_only: true`,
-`cap_drop: [ALL]` and `no-new-privileges`. When the entrypoint is overridden
-(for example `--entrypoint /usr/local/bin/soft`) or you run `soft serve` from
-your own image, `soft` is PID 1 and supervises itself, so the orphans are
-reaped anyway; the init saves the second `soft` process and also covers the
-case where the child cannot be started. It is required only with an older
-image that has neither tini nor this fallback.
+`cap_drop: [ALL]` and `no-new-privileges`. Without an init, when the entrypoint
+is overridden (for example `--entrypoint /usr/local/bin/soft`) or you run
+`soft serve` from your own image, `soft` is PID 1 and supervises itself, so
+the orphans are reaped anyway; the init saves the second `soft` process and
+also covers the case where the child cannot be started. It is required only
+with an older image that has neither tini nor this fallback.
 
-A PID limit such as `pids_limit: 128` can stay: with an init, the container
-uses about 10 processes and the count stays stable.
+A PID limit such as `pids_limit: 128` can stay: with tini or `--init`, the
+container uses about 10 processes and the count stays stable.
 
 ### Kubernetes
 
@@ -173,18 +172,17 @@ or set `shareProcessNamespace: true` on the pod, which makes the pod's pause
 container PID 1 and the reaper. Otherwise `soft` falls back to supervising
 itself as described above.
 
-### Not starting background maintenance
+### Running automatic maintenance in the foreground
 
 Optionally, tell git to run automatic maintenance in the foreground instead of
-detaching it, which removes the orphan each push leaves behind. Add the setting
-through git's `GIT_CONFIG_*` variables (if you already set some, append to them
-and raise `GIT_CONFIG_COUNT`):
+detaching it, which removes the orphan each push leaves behind. Set it through
+git's `GIT_CONFIG_*` variables by adding these to the service's `environment:`
+(if you already set some, append to them and raise `GIT_CONFIG_COUNT`):
 
 ```yaml
-    environment:
-      GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: gc.autoDetach
-      GIT_CONFIG_VALUE_0: "false"
+GIT_CONFIG_COUNT: "1"
+GIT_CONFIG_KEY_0: gc.autoDetach
+GIT_CONFIG_VALUE_0: "false"
 ```
 
 `maintenance.autoDetach` falls back to `gc.autoDetach` when it is not set, so
@@ -193,8 +191,10 @@ this one key covers git 2.47 and later as well as older versions.
 The trade-off is that a push then waits for maintenance to finish whenever it
 has real work to do. The setting reaches the git processes that serve pushes;
 mirror syncs and imports set their own `GIT_CONFIG_*` variables and do not pick
-it up. It does not cover interrupted transfers either, so it does not
-replace an init. The server does not set these keys itself.
+it up, so each mirror sync, whose fetch also triggers automatic maintenance,
+still leaves one detached maintenance process behind. It does not cover
+interrupted transfers either, so it does not replace an init. The server does
+not set these keys itself.
 
 ### Checking for zombies
 
