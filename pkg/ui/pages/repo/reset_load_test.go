@@ -91,6 +91,21 @@ func TestPaneResetCancelsLoads(t *testing.T) {
 			p.log.Update(RefMsg{Ref: p.r.ref, gen: p.r.gen})
 			return cmd
 		},
+		"log page, new ref": func(p *pinPage) tea.Cmd {
+			cmd := p.log.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+			p.log.Update(RefMsg{Ref: p.r.ref, gen: p.r.gen})
+			return cmd
+		},
+		"log count, empty": func(p *pinPage) tea.Cmd {
+			cmd := p.log.Update(RefMsg{Ref: p.r.ref, gen: p.r.gen})
+			p.log.Update(EmptyRepoMsg{gen: p.r.gen})
+			return cmd
+		},
+		"log diff, empty": func(p *pinPage) tea.Cmd {
+			cmd := p.log.Update(selector.SelectMsg{IdentifiableItem: p.log.selector.SelectedItem()})
+			p.log.Update(EmptyRepoMsg{gen: p.r.gen})
+			return cmd
+		},
 		"log page, empty": func(p *pinPage) tea.Cmd {
 			cmd := p.log.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 			p.log.Update(EmptyRepoMsg{gen: p.r.gen})
