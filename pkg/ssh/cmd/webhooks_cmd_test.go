@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -114,6 +115,29 @@ func whPointAtLoopback(t *testing.T, ctx context.Context, repo string, hookID in
 	is.NoErr(err)
 	is.NoErr(store.FromContext(ctx).UpdateWebhookByID(ctx, db.FromContext(ctx), r.ID(), hookID,
 		"http://127.0.0.1:1/", h.Secret, int(h.ContentType), h.Active))
+}
+
+// whAwaitDeliveries waits until the webhook has at least n recorded
+// deliveries. Unlike Backend.WaitForDeliveries it leaves the delivery queue
+// open, so a test can wait for one change's delivery before making the next.
+// A read that fails while a record commits is retried.
+func whAwaitDeliveries(t *testing.T, ctx context.Context, be *backend.Backend, repo string, hookID int64, n int) {
+	t.Helper()
+	r, err := be.Repository(ctx, repo)
+	if err != nil {
+		t.Fatalf("repository %s: %v", repo, err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		ds, err := be.ListWebhookDeliveries(ctx, r, hookID)
+		if err == nil && len(ds) >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("webhook %d: want %d deliveries, have %d (last error: %v)", hookID, n, len(ds), err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.UUID, status int) {
@@ -827,8 +851,13 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 		is.NoErr(runRepo(t, sess, args...))
 		cancel()
 	}
+	// Each change waits for the one before it to be recorded: on SQLite
+	// without WAL a command's repository read waits out a record's commit,
+	// and one longer than busy_timeout reads as "repository not found".
 	run("branch", "delete", "hooks", "feature")
+	whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 1)
 	run("tag", "delete", "hooks", "v1")
+	whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 2)
 	run("branch", "default", "hooks", "other")
 
 	be.WaitForDeliveries(context.Background())

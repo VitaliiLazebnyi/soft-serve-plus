@@ -73,9 +73,11 @@ func (e whEnv) deliveredEvents(t *testing.T, hookID int64) []webhook.Event {
 
 // waitFor polls cond until it holds. Changes made through the backend send
 // their events in the background, so tests wait for those sends to finish.
+// The bound is well above the time one delivery may take to be recorded
+// (the webhook package's recordTimeout), so a loaded machine does not fail it.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
@@ -84,11 +86,23 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// awaitDeliveries waits until the webhook has recorded exactly want.
+// awaitDeliveries waits until the webhook has recorded exactly want. A test
+// that makes a second change after one that records a delivery in the
+// background waits here first: on SQLite without WAL the second change's
+// reads wait out the record's commit, and one longer than busy_timeout fails
+// them. A read that fails while a record commits is retried.
 func (e whEnv) awaitDeliveries(t *testing.T, hookID int64, want ...webhook.Event) {
 	t.Helper()
 	waitFor(t, "deliveries", func() bool {
-		return slices.Equal(e.deliveredEvents(t, hookID), want)
+		list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, hookID)
+		if err != nil {
+			return false
+		}
+		got := make([]webhook.Event, 0, len(list))
+		for _, d := range list {
+			got = append(got, d.Event)
+		}
+		return slices.Equal(got, want)
 	})
 }
 
@@ -317,6 +331,7 @@ func TestCollaboratorEventsAddAndRemove(t *testing.T) {
 	id := e.seedHook(t, webhook.EventCollaborator)
 
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
 
 	e.awaitDeliveries(t, id, webhook.EventCollaborator, webhook.EventCollaborator)
@@ -333,6 +348,9 @@ func TestCollaboratorChangesKeepWhenEventFails(t *testing.T) {
 	is.NoErr(err)
 
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	// Its event fails to be recorded; wait for that to finish before the
+	// next change, which would otherwise read while the record writes.
+	e.awaitLog(t, "webhook event not delivered")
 	is.Equal(e.be.AccessLevelForUser(e.ctx, "repo", bob), access.ReadWriteAccess)
 
 	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
@@ -578,6 +596,7 @@ func TestAddCollaboratorTwice(t *testing.T) {
 	is.NoErr(err)
 	id := e.seedHook(t, webhook.EventCollaborator)
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 
 	is.True(errors.Is(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess), proto.ErrCollaboratorExist))
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
@@ -1051,10 +1070,10 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 	ctx := proto.WithUserContext(e.ctx, nil)
 
 	is.NoErr(e.be.SetPrivate(ctx, "repo", true))
+	e.awaitDeliveries(t, id, webhook.EventRepositoryVisibilityChange)
 	is.NoErr(e.be.RenameRepository(ctx, "repo", "renamed"))
 	e.be.WaitForDeliveries(e.ctx)
 
-	// The two events may be sent by different senders, so in either order.
 	is.Equal(sortedEvents(e.deliveredEvents(t, id)), sortedEvents([]webhook.Event{webhook.EventRepositoryVisibilityChange, webhook.EventRepository}))
 	var bodies []string
 	is.NoErr(e.be.db.SelectContext(e.ctx, &bodies, "SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?", id))

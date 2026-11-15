@@ -366,6 +366,34 @@ func TestSendWebhookNetworkErrorRecorded(t *testing.T) {
 	is.Equal(ds[0].ResponseBody, "")
 }
 
+// TestSendWebhookRecordWaitsForWriteTurn holds this process's SQLite write
+// turn while a delivery is recorded, for longer than the record used to
+// allow. The record waits for its turn, so the delivery is still in the
+// history. It used to give up after 5 seconds, which lost a delivery on a
+// loaded Windows runner.
+func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
+	is := is.New(t)
+	useHTTPClient(t)
+	e := newTestEnv(t)
+	srv, _ := newReceiver(t, http.StatusOK, "")
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
+
+	held := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- e.dbx.TransactionContext(context.Background(), func(*db.Tx) error {
+			close(held)
+			time.Sleep(6 * time.Second)
+			return nil
+		})
+	}()
+	<-held
+
+	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(<-done)
+	is.Equal(len(e.deliveries(t, w.ID)), 1)
+}
+
 func TestSendWebhookNonSuccessStatusRecorded(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
@@ -828,6 +856,45 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
 	is.Equal(ds[0].ID, req.id)
 	is.True(strings.Contains(logs.String(), "pruning webhook deliveries"))
 	is.True(strings.Contains(logs.String(), "prune failed"))
+}
+
+// hangingPruneStore is a store whose prune waits until its context ends, and
+// which counts the delivery rows it is asked to create.
+type hangingPruneStore struct {
+	store.Store
+	creates *atomic.Int32
+}
+
+func (s hangingPruneStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error {
+	s.creates.Add(1)
+	return s.Store.CreateWebhookDelivery(ctx, h, id, webhookID, event, url, method, requestError, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody)
+}
+
+func (hangingPruneStore) PruneWebhookDeliveries(ctx context.Context, _ db.Handler, _ int64, _ int) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A prune that fails because recordTimeout ran out is not followed by a
+// second insert: it would fail at once on the same expired context.
+func TestRecordDeliveryDoesNotRetryAfterTimeout(t *testing.T) {
+	is := is.New(t)
+	e := newTestEnv(t)
+	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
+	orig := recordTimeout
+	recordTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { recordTimeout = orig })
+	var creates atomic.Int32
+	var logs bytes.Buffer
+	ctx := store.WithContext(e.ctx, hangingPruneStore{e.ds, &creates})
+	ctx = log.WithContext(ctx, log.New(&logs))
+
+	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
+	is.NoErr(err)
+	err = recordDelivery(ctx, w, EventPush, req, nil, 200, "", "")
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	is.Equal(creates.Load(), int32(1))
+	is.True(!strings.Contains(logs.String(), "pruning webhook deliveries"))
 }
 
 // Deliver re-reads each webhook before sending, so an event that waited while
