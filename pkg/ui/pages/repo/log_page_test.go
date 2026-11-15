@@ -219,6 +219,27 @@ func TestLogEndThenResize(t *testing.T) {
 	wantPage(t, l, "end, then a resize", 14, 14, 40)
 }
 
+// Next page keeps the row, which can be past the last commit of a short last
+// page. A resize before that page arrives puts the cursor on the last commit,
+// not on a page past the end.
+func TestLogNextPageThenResize(t *testing.T) {
+	l := newPagedLog(t)
+	for range 7 {
+		deliverAll(l, l.Update(keyNextPage))
+	}
+	for range 4 {
+		deliverAll(l, l.Update(keyDown))
+	}
+	wantPage(t, l, "row 4 of page 8", 8, 9, 39)
+	next := l.Update(keyNextPage)
+	deliverAll(l, resizeLog(l, 80, 9))
+	deliverAll(l, next)
+	if per := l.selector.PerPage(); per != 3 {
+		t.Fatalf("%d commits a page after the resize; want 3", per)
+	}
+	wantPage(t, l, "next, then a resize", 14, 14, 40)
+}
+
 // At the edges of a short history the status bar numbers the one or two
 // pages right, and the keys that would leave them do nothing.
 func TestLogPageEdges(t *testing.T) {
