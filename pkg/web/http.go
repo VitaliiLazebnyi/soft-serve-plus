@@ -25,6 +25,12 @@ type HTTPServer struct {
 	pending *pushCreates
 }
 
+// maxHeaderBytes bounds the request line and headers the server reads. git,
+// git-lfs and go send short ones: a path, a few headers and at most a token.
+// The net/http default of 1 MB would let an anonymous request hand every
+// handler a path of nearly that length.
+const maxHeaderBytes = 64 << 10
+
 // NewHTTPServer creates a new HTTP server.
 func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
 	cfg := config.FromContext(ctx)
@@ -39,7 +45,7 @@ func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
 			Handler:           newRouter(ctx, pending),
 			ReadHeaderTimeout: time.Second * 10,
 			IdleTimeout:       time.Second * 10,
-			MaxHeaderBytes:    http.DefaultMaxHeaderBytes,
+			MaxHeaderBytes:    maxHeaderBytes,
 			ErrorLog:          stdlog.New(serverErrorLog{logger.WithPrefix("http")}, "", 0),
 		},
 	}
