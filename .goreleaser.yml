@@ -10,7 +10,8 @@ metadata:
 
 before:
   hooks:
-    - go mod tidy
+    # Fail on an untidy go.mod or go.sum instead of changing them mid-release.
+    - go mod tidy -diff
     - rm -rf completions
     - mkdir completions
     - rm -rf manpages
@@ -18,13 +19,21 @@ before:
     - sh -c 'go run ./cmd/soft completion "bash" >./completions/soft.bash'
     - sh -c 'go run ./cmd/soft completion "zsh" >./completions/soft.zsh'
     - sh -c 'go run ./cmd/soft completion "fish" >./completions/soft.fish'
-    - sh -c 'go run ./cmd/soft man | gzip -c >./manpages/soft.1.gz'
+    # Dated by the commit, and gzip -n leaves the build time out of the header.
+    - sh -c 'SOURCE_DATE_EPOCH={{ .CommitTimestamp }} go run ./cmd/soft man | gzip -cn >./manpages/soft.1.gz'
+    # nfpm dates the apk's scripts by their files, not by mtime below.
+    - touch -d "{{ .CommitDate }}" .nfpm/postinstall.sh .nfpm/preremove.sh .nfpm/postremove.sh
 
 builds:
   - binary: "soft"
     main: "./cmd/soft"
     env:
       - CGO_ENABLED=0
+    # Reproducible: no checkout or module-cache paths in the binary, and the
+    # file dated by the commit rather than by the build.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags: -s -w -X main.Version=v{{ .Version }} -X main.CommitSHA={{ .Commit }} -X main.CommitDate={{ .CommitDate }}
     goos:
       - linux
@@ -50,8 +59,15 @@ builds:
       - goos: freebsd
         goarch: arm
 
+# The archives and packages are what checksums.txt lists and the provenance
+# attests, so they are reproducible too: every entry is dated by the commit and
+# has a fixed owner and mode, whatever the checkout's times, umask and user.
 archives:
-  - format_overrides:
+  - builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    format_overrides:
       - goos: windows
         formats: zip
     name_template: >-
@@ -63,10 +79,18 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     wrap_in_directory: true
     files:
-      - README*
-      - LICENSE*
-      - manpages/*
-      - completions/*
+      - src: README*
+        info: &archive_file
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: LICENSE*
+        info: *archive_file
+      - src: manpages/*
+        info: *archive_file
+      - src: completions/*
+        info: *archive_file
 
 nfpms:
   - vendor: "Soft Serve Plus"
@@ -75,6 +99,9 @@ nfpms:
     description: "A tasty, self-hostable Git server for the command line🍦 (maintained fork of Soft Serve)"
     license: MIT
     file_name_template: "{{ .ConventionalFileName }}"
+    # Dates the binary and the package metadata; each entry in contents
+    # carries its own mtime.
+    mtime: "{{ .CommitDate }}"
     formats:
       - apk
       - deb
@@ -87,24 +114,34 @@ nfpms:
     contents:
       - src: ./completions/soft.bash
         dst: /etc/bash_completion.d/soft
+        file_info: &package_file
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
       - src: ./completions/soft.fish
         dst: /usr/share/fish/vendor_completions.d/soft.fish
+        file_info: *package_file
       - src: ./completions/soft.zsh
         dst: /usr/share/zsh/site-functions/_soft
+        file_info: *package_file
       - src: ./manpages/soft.1.gz
         dst: /usr/share/man/man1/soft.1.gz
+        file_info: *package_file
       - src: ./.nfpm/soft-serve.service
         dst: /usr/lib/systemd/system/soft-serve.service
+        file_info: *package_file
       - src: ./.nfpm/soft-serve.conf
         dst: /etc/soft-serve.conf
         type: config|noreplace
         # systemd reads the environment file as root; it may hold secrets.
         file_info:
           mode: 0600
+          mtime: "{{ .CommitDate }}"
       - src: ./.nfpm/sysusers.conf
         dst: /usr/lib/sysusers.d/soft-serve.conf
+        file_info: *package_file
       - src: ./.nfpm/tmpfiles.conf
         dst: /usr/lib/tmpfiles.d/soft-serve.conf
+        file_info: *package_file
     scripts:
       postinstall: ./.nfpm/postinstall.sh
       preremove: ./.nfpm/preremove.sh
@@ -163,7 +200,8 @@ dockers_v2:
       org.opencontainers.image.description: "A tasty, self-hostable Git server for the command line (maintained fork of Soft Serve)"
       org.opencontainers.image.source: "https://github.com/VitaliiLazebnyi/soft-serve-plus"
       org.opencontainers.image.version: "v{{ .Version }}"
-      org.opencontainers.image.created: "{{ .Date }}"
+      # The commit date, not the build time, so a rebuilt image has the same labels.
+      org.opencontainers.image.created: "{{ .CommitDate }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.licenses: MIT
 
