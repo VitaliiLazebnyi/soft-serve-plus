@@ -378,10 +378,12 @@ func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
 	_ = s.Close()
 }
 
-// waitFor polls cond until it holds, failing the test after ten seconds.
+// waitFor polls cond until it holds, failing the test after
+// sessionLoopsWait: the conditions waited for mostly need the server to read
+// a close from the client, which can stall as long on a loaded machine.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(sessionLoopsWait)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
