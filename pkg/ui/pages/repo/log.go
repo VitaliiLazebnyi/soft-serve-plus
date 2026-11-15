@@ -184,19 +184,12 @@ func (l *Log) FullHelp() [][]key.Binding {
 		b = append(b, []key.Binding{
 			l.common.KeyMap.SelectItem,
 		})
-		b = append(b, [][]key.Binding{
-			{
-				copyKey,
-				k.CursorUp,
-				k.CursorDown,
-			},
-			{
-				l.common.KeyMap.NextPage,
-				l.common.KeyMap.PrevPage,
-				k.GoToStart,
-				k.GoToEnd,
-			},
-		}...)
+		move := []key.Binding{k.GoToStart, k.GoToEnd}
+		if l.lastPage() > 0 {
+			// The page keys do something only with more than one page.
+			move = append([]key.Binding{l.common.KeyMap.NextPage, l.common.KeyMap.PrevPage}, move...)
+		}
+		b = append(b, []key.Binding{copyKey, k.CursorUp, k.CursorDown}, move)
 	case logViewDiff:
 		copyKey := l.common.CopyKey("copy diff")
 		k := l.vp.KeyMap
@@ -577,8 +570,7 @@ func (l *Log) pageMove(msg tea.Msg) (page, row int, ok bool) {
 		case key.Matches(msg, k.GoToStart):
 			return 0, 0, l.page > 0
 		case key.Matches(msg, k.GoToEnd):
-			// The row is cut to the last commit when the page arrives.
-			return last, l.perPage - 1, l.page < last
+			return last, l.lastRow(), l.page < last
 		}
 	}
 	switch {
@@ -588,6 +580,14 @@ func (l *Log) pageMove(msg tea.Msg) (page, row int, ok bool) {
 		return l.page + 1, 0, true
 	}
 	return 0, 0, false
+}
+
+// lastRow returns the row of the last commit on the last page.
+func (l *Log) lastRow() int {
+	if l.count <= 0 || l.perPage <= 0 {
+		return 0
+	}
+	return int((l.count - 1) % int64(l.perPage))
 }
 
 // resized returns a command that loads the page again when the list holds
@@ -609,6 +609,11 @@ func (l *Log) reloadPage() tea.Cmd {
 	if per := l.selector.PerPage(); per != l.perPage {
 		if l.perPage > 0 {
 			i := l.page*l.perPage + l.row
+			if l.count > 0 {
+				// A row past the last commit, which a page that has
+				// not arrived yet may hold, is on the last commit.
+				i = min(i, int(l.count)-1)
+			}
 			l.page, l.row = i/per, i%per
 		}
 		l.perPage = per

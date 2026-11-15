@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -35,8 +36,16 @@ var pagedSubjects = func() []string {
 // showing the first page of a repository of 41 commits.
 func newPagedLog(t *testing.T) *Log {
 	t.Helper()
+	return newLogOf(t, 41)
+}
+
+// newLogOf returns a Log, 15 rows high so that it lists 5 commits a page,
+// showing the first page of a repository of n commits, n at least 1: "first"
+// and then c00, c01 and so on.
+func newLogOf(t *testing.T, n int) *Log {
+	t.Helper()
 	repo := newDiskRepo(t, "r", "main", "# r\n")
-	for i := range 40 {
+	for i := range n - 1 {
 		gitRun(t, repo.path, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("c%02d", i))
 	}
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
@@ -194,5 +203,97 @@ func TestLogResizeKeepingPageSizeLoadsNothing(t *testing.T) {
 	wantPage(t, l, "after the resize", 2, 9, 5)
 	if l.activeView != logViewCommits {
 		t.Fatalf("after the resize, view = %v; want the commits", l.activeView)
+	}
+}
+
+// End, then a resize before the last page arrives, shows the last page by the
+// new size with the cursor on the last commit, not a page past the end.
+func TestLogEndThenResize(t *testing.T) {
+	l := newPagedLog(t)
+	end := l.Update(keyEnd)
+	deliverAll(l, resizeLog(l, 80, 9))
+	deliverAll(l, end)
+	if per := l.selector.PerPage(); per != 3 {
+		t.Fatalf("%d commits a page after the resize; want 3", per)
+	}
+	wantPage(t, l, "end, then a resize", 14, 14, 40)
+}
+
+// At the edges of a short history the status bar numbers the one or two
+// pages right, and the keys that would leave them do nothing.
+func TestLogPageEdges(t *testing.T) {
+	for _, tc := range []struct {
+		commits, rows   int
+		first, lastPage string
+	}{
+		{0, 0, "p. 1/1", "p. 1/1"},
+		{1, 1, "p. 1/1", "p. 1/1"},
+		{5, 5, "p. 1/1", "p. 1/1"},
+		{6, 5, "p. 1/2", "p. 2/2"},
+	} {
+		t.Run(fmt.Sprint(tc.commits), func(t *testing.T) {
+			l := newLogOf(t, max(tc.commits, 1))
+			if tc.commits == 0 {
+				deliverAll(l, l.Update(LogCountMsg{count: 0, gen: l.gen}))
+			}
+			if got := l.StatusBarInfo(); got != tc.first {
+				t.Fatalf("status %q; want %q", got, tc.first)
+			}
+			if n := len(l.selector.Items()); n != tc.rows {
+				t.Fatalf("%d rows; want %d", n, tc.rows)
+			}
+			pages := tc.commits > l.selector.PerPage()
+			if got := helpHasDesc(l.FullHelp(), "next page"); got != pages {
+				t.Fatalf("help lists the page keys: %v; want %v", got, pages)
+			}
+			deliverAll(l, l.Update(keyEnd))
+			want := l.selector.SelectedItem()
+			for _, k := range []tea.Msg{keyNextPage, keyDown, keyEnd, tea.MouseWheelMsg{Button: tea.MouseWheelDown}} {
+				for _, msg := range runCmd(l.Update(k)) {
+					if _, ok := msg.(LogItemsMsg); ok {
+						t.Fatalf("%v on the last page loaded a page", k)
+					}
+				}
+				if got := l.StatusBarInfo(); got != tc.lastPage {
+					t.Fatalf("after %v on the last page, status %q; want %q", k, got, tc.lastPage)
+				}
+				if got := l.selector.SelectedItem(); got != want {
+					t.Fatalf("after %v on the last page, the cursor moved", k)
+				}
+			}
+			if tc.commits > 0 {
+				if got := strings.TrimSpace(want.(LogItem).Commit.Message); got != "first" {
+					t.Fatalf("the cursor is on %q at the end; want the oldest commit", got)
+				}
+			}
+		})
+	}
+}
+
+// Toggling the footer while another tab is shown still loads the Commits
+// tab's page again by its new size, so the tab does not show a page of the
+// wrong length when it is shown next.
+func TestRepoFooterToggleReachesHiddenCommitsTab(t *testing.T) {
+	p := newPinPage(t)
+	for i := range 20 {
+		gitRun(t, p.repo.path, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("c%02d", i))
+	}
+	p.open()
+	p.tab(1)
+	before := p.log.selector.PerPage()
+	if n := len(p.log.selector.Items()); n != before {
+		t.Fatalf("%d commits listed; want a full page of %d", n, before)
+	}
+
+	// The footer takes rows from the page, which its parent resizes before
+	// it passes the toggle on.
+	p.r.SetSize(120, 30)
+	p.settle(footer.ToggleFooterMsg{})
+	after := p.log.selector.PerPage()
+	if after >= before {
+		t.Fatalf("%d commits a page after the footer shows, %d before; want fewer", after, before)
+	}
+	if n := len(p.log.selector.Items()); n != after {
+		t.Fatalf("the hidden Commits tab lists %d commits after the footer toggle; want the %d a page holds", n, after)
 	}
 }
