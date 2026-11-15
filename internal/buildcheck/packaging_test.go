@@ -370,10 +370,10 @@ func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
 	}
 }
 
-// TestPostinstallCheckIsPortable checks the helpers above on input whose form
-// depends on the OS the test runs on: package paths, which are slash paths on
-// every OS, and a script checked out with CRLF line endings, as Git does on
-// Windows with core.autocrlf.
+// TestPostinstallCheckIsPortable checks ruleFiles and postinstallProblems on
+// input whose form depends on the OS the test runs on: package paths, which
+// are slash paths on every OS, and a script checked out with CRLF line
+// endings, as Git does on Windows with core.autocrlf.
 func TestPostinstallCheckIsPortable(t *testing.T) {
 	t.Parallel()
 	installed := ruleFiles([]string{
@@ -479,8 +479,8 @@ func postinstallProblems(script string, installed map[string]string) []string {
 	return problems
 }
 
-// scriptLines returns the lines of a shell script with CRLF line endings
-// (a Windows checkout) read as LF, backslash continuations joined and
+// scriptLines returns the lines of a shell script, with CRLF line endings (as
+// in a Windows checkout) treated as LF, backslash continuations joined and
 // comments dropped. It does not understand quoting, which the package scripts
 // do not need.
 func scriptLines(script string) []string {
