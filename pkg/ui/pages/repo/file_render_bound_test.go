@@ -19,6 +19,16 @@ func codeRenders(cmd tea.Cmd) []tea.Msg {
 	return out
 }
 
+// A file of many short lines is not highlighted, however small: chroma's
+// cost grows with its tokens.
+func TestFileOfManyLinesNotHighlighted(t *testing.T) {
+	f := newRenderFiles(120)
+	deliverAll(f, openFile(t, f, strings.Repeat("x := 1\n", 20000), "many.go"))
+	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "x := 1") {
+		t.Fatal("a Go file of 20,000 lines was highlighted, or is missing")
+	}
+}
+
 // Pressing "l" over and over on a large file renders it once at a time:
 // presses while a render runs start none, and one render follows it.
 func TestFileLineNumberTogglesRenderOneAtATime(t *testing.T) {

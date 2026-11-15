@@ -53,7 +53,13 @@ const GlamourMaxLines = 1000
 // GlamourMaxDepth is the deepest nesting of block quotes, lists and
 // indentation at the start of a line that is rendered as markdown. glamour's
 // time grows exponentially with it.
-const GlamourMaxDepth = 16
+const GlamourMaxDepth = 8
+
+// GlamourMaxMarkers is the most block quote and list markers, over all
+// lines, that content may have to be rendered as markdown. Each nested
+// container costs glamour far more than its text: 1,000 lines of ten
+// nested list markers took 7.6 s and 2.9 GiB.
+const GlamourMaxMarkers = 1000
 
 // lastID numbers the Code views, so a RenderedMsg finds its view.
 var lastID atomic.Int64
@@ -65,7 +71,7 @@ type RenderedMsg struct {
 	render int
 	// epoch is the common.RenderGate epoch the render started in.
 	epoch int
-	lines  []string
+	lines []string
 	// numbers holds, for each line, the number of the line of content it
 	// starts, or 0 for a line that continues a wrapped one.
 	numbers []int
@@ -378,7 +384,7 @@ func (j renderJob) run() RenderedMsg {
 	width := j.width - msg.sideWidth
 
 	if j.glamour && len(content) <= GlamourMax && longest <= HighlightLineMax &&
-		strings.Count(content, "\n") <= GlamourMaxLines && markdownDepth(content) <= GlamourMaxDepth {
+		strings.Count(content, "\n") <= GlamourMaxLines && markdownNestingOK(content) {
 		md := j.isMarkdown
 		if md == nil {
 			v := common.IsFileMarkdown(content, j.extension)
@@ -462,27 +468,62 @@ func wrapLine(s string, width int) []string {
 	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
 }
 
-// markdownDepth returns the deepest nesting at the start of a line of s:
-// block quote and list markers, plus one for every two columns of
-// indentation.
-func markdownDepth(s string) int {
-	deepest := 0
+// markdownNestingOK reports whether s nests block quotes and lists little
+// enough for glamour: no line deeper than GlamourMaxDepth, and no more than
+// GlamourMaxMarkers markers in all.
+func markdownNestingOK(s string) bool {
+	deepest, markers := markdownNesting(s)
+	return deepest <= GlamourMaxDepth && markers <= GlamourMaxMarkers
+}
+
+// markdownNesting returns the deepest nesting at the start of a line of s,
+// and the number of block quote and list markers at the start of all its
+// lines. A marker is ">", "-", "*", "+", or up to nine digits followed by
+// "." or ")" and then a space or the end of the line; the nesting of a line
+// is its markers plus one for every two columns of indentation.
+func markdownNesting(s string) (deepest, markers int) {
 	for line := range strings.SplitSeq(s, "\n") {
 		depth, spaces := 0, 0
-	scan:
-		for _, c := range line {
-			switch c {
-			case '>', '-', '*', '+':
-				depth++
-			case ' ':
+		for i := 0; i < len(line); {
+			c := line[i]
+			switch {
+			case c == ' ':
 				spaces++
-			default:
-				break scan
+				i++
+				continue
+			case c == '>' || c == '-' || c == '*' || c == '+':
+				depth++
+				i++
+				continue
+			case c >= '0' && c <= '9':
+				if n := orderedMarker(line[i:]); n > 0 {
+					depth++
+					i += n
+					continue
+				}
 			}
+			break
 		}
+		markers += depth
 		deepest = max(deepest, depth+spaces/2)
 	}
-	return deepest
+	return deepest, markers
+}
+
+// orderedMarker returns the length of the ordered list marker s starts
+// with, such as "12." or "3)", or 0 when it starts with none.
+func orderedMarker(s string) int {
+	n := 0
+	for n < len(s) && n < 10 && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	if n == 0 || n > 9 || n == len(s) || (s[n] != '.' && s[n] != ')') {
+		return 0
+	}
+	if n+1 < len(s) && s[n+1] != ' ' {
+		return 0
+	}
+	return n + 1
 }
 
 // longestLine returns the length in bytes of the longest line of s.

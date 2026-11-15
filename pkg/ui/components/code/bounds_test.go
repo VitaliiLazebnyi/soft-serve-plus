@@ -55,10 +55,13 @@ func TestGlamourBounded(t *testing.T) {
 		"deep block quote":           strings.Repeat(">", 128) + " x\n",
 		"deep lists":                 nested.String(),
 		"many lines":                 strings.Repeat("- item\n", 5000),
+		"ordered markers":            strings.Repeat("1. ", 200) + "x\n",
+		"ordered markers, parens":    strings.Repeat("1) ", 200) + "x\n",
+		"many nested markers":        strings.Repeat("- - - - x\n", 1000),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			out := renderWithin(t, content, 10*time.Second)
+			out := renderWithin(t, content, 3*time.Second)
 			first := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
 			if len(first) > 60 {
 				first = first[:60]
@@ -72,6 +75,29 @@ func TestGlamourBounded(t *testing.T) {
 	// A README within the limits is still rendered as markdown.
 	if out := renderWithin(t, "# Title\n\nSome *text*.\n", 10*time.Second); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") {
 		t.Fatalf("a small README was not rendered as markdown:\n%s", out)
+	}
+}
+
+// glamour's output is wrapped line by line: wrapping it whole runs every
+// byte of it through the style-keeping wrap writer, which allocates once a
+// byte. The render of this README makes about 1.8 million allocations
+// wrapped per line and 3 million wrapped whole.
+func TestGlamourOutputWrappedPerLine(t *testing.T) {
+	md := true
+	j := renderJob{
+		content:     strings.Repeat("Some words in a paragraph that goes on for a while.\n\n", 450),
+		extension:   "README.md",
+		isMarkdown:  &md,
+		glamour:     true,
+		width:       116,
+		tabWidth:    defaultTabWidth,
+		styleConfig: common.StyleConfig(),
+	}
+	if msg := j.run(); len(msg.lines) < 900 || msg.lineNumbers {
+		t.Fatalf("the README was not rendered as markdown: %d lines", len(msg.lines))
+	}
+	if n := testing.AllocsPerRun(2, func() { j.run() }); n > 2_400_000 {
+		t.Fatalf("rendering the README made %.0f allocations; want at most 2.4 million", n)
 	}
 }
 
