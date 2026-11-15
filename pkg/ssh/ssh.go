@@ -123,10 +123,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	// hold.
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
 	s.srv.ConnCallback = connCallback(s.limiter, logger)
-	s.srv.ChannelHandlers = map[string]ssh.ChannelHandler{
-		"session": limitSessions(ssh.DefaultSessionHandler, cfg.SSH.MaxSessions),
-	}
-	s.srv.Handler = limitHandlers(s.srv.Handler, cfg.SSH.MaxSessions)
+	setSessionHandlers(s.srv, cfg.SSH.MaxSessions)
 
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {

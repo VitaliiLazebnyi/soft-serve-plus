@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -220,6 +221,61 @@ func TestSSHServerMaxSessions(t *testing.T) {
 	_ = s2.Close()
 }
 
+// A server built by NewSSHServer refuses a command while max_sessions
+// commands run, even when their channels are closed. A TUI keeps running
+// after the client closes its channel, until the connection ends.
+func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.MaxSessions = 1
+	addr, _ := startTestServer(t, cfg)
+
+	c, err := dialClient(t, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+	tui, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tui.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := tui.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tui.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdout.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	_ = tui.Close()
+
+	for i := 0; i < 3; i++ {
+		var s *gossh.Session
+		waitFor(t, "the closed channel's place", func() bool {
+			s, err = c.NewSession()
+			return err == nil
+		})
+		done := make(chan error, 1)
+		var stderr bytes.Buffer
+		s.Stderr = &stderr
+		go func() { done <- s.Run("repo list") }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(stderr.String(), errTooManySessions) {
+				t.Fatalf("command ran while the TUI runs: %v: %q", err, stderr.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("command neither refused nor finished")
+		}
+		_ = s.Close()
+	}
+}
+
 // TestSSHServerHandshakeTimeoutFreesPlace checks that a client which opens a
 // TCP connection and never finishes the handshake loses its place under the
 // connection limits once handshake_timeout passes, so it cannot lock others
@@ -328,10 +384,10 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// startSessionLimitServer starts a bare SSH server whose session channels are
-// limited by limitSessions to maxSessions, running handler for each shell or
-// exec request and sub for the "test" subsystem, both limited by
-// limitHandlers to maxSessions running at once.
+// startSessionLimitServer starts a bare SSH server whose session handling is
+// set up by setSessionHandlers with maxSessions, running handler for each
+// shell or exec request, and sub for the "test" subsystem, also limited by
+// limitHandlers (the server itself has no subsystems).
 func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler, sub ssh.SubsystemHandler) string {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -343,16 +399,14 @@ func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler,
 		t.Fatal(err)
 	}
 	srv := &ssh.Server{
-		Handler: limitHandlers(handler, maxSessions),
+		Handler: handler,
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"test": ssh.SubsystemHandler(limitHandlers(ssh.Handler(sub), maxSessions)),
 		},
 		PublicKeyHandler: func(ssh.Context, ssh.PublicKey) bool { return true },
 		ConnCallback:     connCallback(newConnLimiter(0, 0), log.Default()),
-		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"session": limitSessions(ssh.DefaultSessionHandler, maxSessions),
-		},
 	}
+	setSessionHandlers(srv, maxSessions)
 	srv.AddHostKey(signer)
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -422,16 +476,22 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 					t.Fatal(err)
 				}
 				// The server ends the session, which ends stderr.
-				msg, _ := io.ReadAll(stderr)
-				if !strings.Contains(string(msg), errTooManySessions) {
-					t.Errorf("stderr = %q, want %q", msg, errTooManySessions)
-				}
-				_ = s2.Close()
+				refused := make(chan []byte, 1)
+				go func() {
+					msg, _ := io.ReadAll(stderr)
+					refused <- msg
+				}()
 				select {
+				case msg := <-refused:
+					if !strings.Contains(string(msg), errTooManySessions) {
+						t.Errorf("stderr = %q, want %q", msg, errTooManySessions)
+					}
 				case <-started:
 					t.Fatal("a second command started while a closed session's command still runs")
-				default:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the second session was neither refused nor started")
 				}
+				_ = s2.Close()
 				time.Sleep(20 * time.Millisecond)
 			}
 

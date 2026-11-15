@@ -212,3 +212,14 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 		next(s)
 	}
 }
+
+// setSessionHandlers sets up how srv handles session channels, the only
+// channels it accepts: ssh.DefaultSessionHandler limited by limitSessions,
+// running srv.Handler, which must already be set, limited by limitHandlers,
+// both to maxSessions.
+func setSessionHandlers(srv *ssh.Server, maxSessions int) {
+	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
+		"session": limitSessions(ssh.DefaultSessionHandler, maxSessions),
+	}
+	srv.Handler = limitHandlers(srv.Handler, maxSessions)
+}
