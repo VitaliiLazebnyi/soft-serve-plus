@@ -99,12 +99,29 @@ func TestServiceOutputCopyFailureStopsGit(t *testing.T) {
 
 	select {
 	case err := <-errc:
-		t.Logf("handler returned: %v", err)
+		// The client going away is not a git failure: callers log
+		// context.Canceled at Debug and report nothing to the client.
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want it to wrap context.Canceled", err)
+		}
 	case <-time.After(waitDelay + 5*time.Second):
 		t.Fatal("handler still waiting for git after the copy of its output failed")
 	}
 	if cmd.ProcessState == nil {
 		t.Fatal("handler returned before git exited")
+	}
+}
+
+// A CmdFunc that sets git's output is refused rather than silently
+// replaced: the handler owns git's output.
+func TestServiceCmdFuncOutputRefused(t *testing.T) {
+	err := UploadPack(t.Context(), ServiceCommand{
+		Stdout:  io.Discard,
+		Dir:     initBare(t),
+		CmdFunc: func(c *exec.Cmd) { c.Stdout = io.Discard },
+	})
+	if err == nil || !strings.Contains(err.Error(), "stdout already set") {
+		t.Fatalf("err = %v, want stdout already set", err)
 	}
 }
 

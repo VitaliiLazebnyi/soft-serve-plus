@@ -202,6 +202,12 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		// and git was stopped for it. Report the cancellation rather than
 		// how git ended so callers can tell it apart from a git failure.
 		return fmt.Errorf("%s: %w (%w)", svc, ctx.Err(), err)
+	case progress.clientGone.Load():
+		// A write to the client failed because the client closed its end,
+		// and git, whose output then went nowhere, was stopped by SIGPIPE.
+		// The context need not end with the client (an SSH session's is
+		// its connection's), so report this as a cancellation as well.
+		return fmt.Errorf("%s: client went away: %w (%w)", svc, context.Canceled, err)
 	default:
 		if msg := errTail.String(); msg != "" {
 			return fmt.Errorf("%s: %w: %s", svc, err, msg)
@@ -341,6 +347,14 @@ func outputPipes(cmd *exec.Cmd, stdout, stderr io.Writer) (outputs, error) {
 		if o.dst == nil {
 			continue
 		}
+		if *o.set != nil {
+			// A CmdFunc set it; the handler owns git's output.
+			for _, o := range outs {
+				o.r.Close() //nolint: errcheck
+				o.w.Close() //nolint: errcheck
+			}
+			return nil, fmt.Errorf("exec: %s already set", o.name)
+		}
 		r, w, err := os.Pipe()
 		if err != nil {
 			for _, o := range outs {
@@ -374,6 +388,9 @@ type outputProgress struct {
 	// closes the pipes under them. Their reads then fail, which is
 	// expected.
 	stopped atomic.Bool
+	// clientGone is set when a write to the client failed because the
+	// client closed its end (see clientGone).
+	clientGone atomic.Bool
 }
 
 // writer returns w, recording the writes to it in p.
@@ -394,7 +411,11 @@ func (w progressWriter) Write(b []byte) (int, error) {
 		w.p.writes.Add(1)
 		w.p.writing.Add(-1)
 	}()
-	return w.w.Write(b)
+	n, err := w.w.Write(b)
+	if err != nil && clientGone(err) && !w.p.stopped.Load() {
+		w.p.clientGone.Store(true)
+	}
+	return n, err
 }
 
 // outputIdleTimeout is how long, after git exited, the copies of its output
@@ -416,6 +437,12 @@ var outputIdleTimeout = waitDelay
 // once, so a client that keeps receiving gets all of git's output however
 // slow it is. This is the difference from os/exec's own copy, which
 // WaitDelay cuts at a fixed time after git exits.
+//
+// outputIdleTimeout (5 s) is the handler's own bound on a copy that makes
+// no progress after git exited; it is separate from the transports' idle
+// timeouts, which govern the connection itself. While a write to the
+// client is in progress the wait is bounded only by the context (and so by
+// those transport timeouts), as it already was while git ran.
 func waitOutput(ctx context.Context, copied <-chan struct{}, p *outputProgress, closeOutput func()) {
 	timer := time.NewTimer(outputIdleTimeout)
 	defer timer.Stop()

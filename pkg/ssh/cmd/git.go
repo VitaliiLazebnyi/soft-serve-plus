@@ -195,8 +195,11 @@ func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLe
 
 // gitServiceError logs a failed git service and returns the error for the
 // client. A client that goes away early, such as one that only reads the ref
-// advertisement, cancels the session context and git is killed for it. That
-// is not a server failure, so it is logged at Debug and not reported as one.
+// advertisement, cancels the session context, or closes its channel so the
+// write of git's output fails. git then gets the end of its input (and
+// SIGPIPE on its output) and exits; it is killed only if it has not exited
+// WaitDelay later. The service reports that as context.Canceled. It is not a
+// server failure, so it is logged at Debug and not reported as one.
 func gitServiceError(logger *log.Logger, service git.Service, repo string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		logger.Debug("git service cancelled", "service", service, "err", err, "repo", repo)

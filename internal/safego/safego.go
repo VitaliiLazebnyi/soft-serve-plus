@@ -36,6 +36,11 @@ func (e *PanicError) Unwrap() error {
 // logger (the default logger if nil) at Error, and returns it as a
 // *PanicError; otherwise it returns nil. Deferred calls in fn have run by
 // then, as for any panic.
+//
+// Run is for goroutines a handler starts, not for an HTTP handler's own
+// goroutine: there it would also swallow http.ErrAbortHandler, the panic
+// net/http uses to abort a response, and net/http recovers handler panics
+// itself.
 func Run(logger *log.Logger, fn func()) (err error) {
 	defer func() {
 		v := recover()
