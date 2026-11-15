@@ -21,4 +21,10 @@ var (
 	// ErrFileTooLarge is returned when a file is larger than the size limit
 	// it is read with.
 	ErrFileTooLarge = errors.New("file too large")
+	// ErrTreeTruncated is returned along with the first MaxTreeEntries
+	// entries of a directory that has more.
+	ErrTreeTruncated = errors.New("tree listing truncated")
+	// ErrMalformedTree is returned for a tree listing that cannot be
+	// parsed.
+	ErrMalformedTree = errors.New("malformed tree")
 )

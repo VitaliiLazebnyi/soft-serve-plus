@@ -15,60 +15,77 @@ import (
 	"github.com/aymanbagabas/git-module"
 )
 
-// Tree is a wrapper around git.Tree with helper methods.
+// MaxTreeEntries is the most entries a directory listing returns; see
+// Tree.Entries. A listing is for a person to read, in the TUI or from `repo
+// tree`, and ten thousand lines are already more than anyone scrolls. It
+// bounds the memory of one listing to a few MiB (an entry costs a few hundred
+// bytes, and a name is at most maxTreeRecord bytes), where a tree with half a
+// million entries used to cost hundreds of MiB.
+const MaxTreeEntries = 10_000
+
+// maxTreeRecord is the longest `ls-tree -l -z` record, in bytes, a listing
+// accepts: the mode, type, ID and size, and a name or path as long as the
+// usual PATH_MAX. A longer one fails the listing, so a hostile tree cannot
+// make a single name cost unbounded memory.
+const maxTreeRecord = 4096 + 128
+
+// Tree is a tree object of a repository: a directory at a revision.
 type Tree struct {
-	*git.Tree
+	// id is the tree object's full hex ID.
+	id string
+	// Path is the tree's path from the root tree, "" for the root.
 	Path       string
 	Repository *Repository
 }
 
-// TreeEntry is a wrapper around git.TreeEntry with helper methods.
+// TreeEntry is an entry of a tree: a file, a directory, a symlink or a
+// submodule.
 type TreeEntry struct {
-	*git.TreeEntry
-	// name is the file name, unquoted
+	mode git.EntryMode
+	typ  git.ObjectType
+	// id is the object's full hex ID.
+	id string
+	// name is the file name, as stored in the tree.
 	name string
-	// path is the full path of the file
+	// path is the full path of the file.
 	path string
+	// size is the object's size from the listing, 0 for a tree or a
+	// submodule.
+	size int64
 	// repo is the repository the entry was read from. Its context bounds
-	// reading the entry's contents. It is nil for entries built elsewhere.
+	// reading the entry's contents.
 	repo *Repository
-	// size is the object size, valid when sized is set. See
-	// Tree.EntriesWithSizes.
-	size  int64
-	sized bool
 }
 
-func newTreeEntry(repo *Repository, dir string, e *git.TreeEntry) *TreeEntry {
-	name := unquoteName(e.Name())
-	return &TreeEntry{
-		TreeEntry: e,
-		name:      name,
-		path:      gopath.Join(dir, name),
-		repo:      repo,
-	}
-}
+// Name returns the name of the entry.
+func (e *TreeEntry) Name() string { return e.name }
 
-// unquoteName returns the real name of a tree entry. git ls-tree C-quotes
-// names that contain special characters (and, with core.quotePath, non-ASCII
-// bytes), e.g. "caf\303\251.txt", and git-module strips the surrounding
-// double quotes but keeps the escapes. A name git did not quote never
-// contains a backslash, so only names with one need unquoting.
-func unquoteName(name string) string {
-	if !strings.Contains(name, `\`) {
-		return name
-	}
-	if n, err := strconv.Unquote(`"` + name + `"`); err == nil {
-		return n
-	}
-	return name
-}
+// ID returns the ID of the entry's object.
+func (e *TreeEntry) ID() *git.SHA1 { return git.MustIDFromString(e.id) }
 
-// Name returns the name of the entry, unquoted.
-func (e *TreeEntry) Name() string {
-	return e.name
-}
+// Type returns the type of the entry's object: blob, tree or commit.
+func (e *TreeEntry) Type() git.ObjectType { return e.typ }
 
-// Entries is a wrapper around git.Entries.
+// IsTree reports whether the entry is a directory.
+func (e *TreeEntry) IsTree() bool { return e.mode == git.EntryTree }
+
+// IsBlob reports whether the entry is a regular, non-executable file.
+func (e *TreeEntry) IsBlob() bool { return e.mode == git.EntryBlob }
+
+// IsExec reports whether the entry is an executable file.
+func (e *TreeEntry) IsExec() bool { return e.mode == git.EntryExec }
+
+// IsSymlink reports whether the entry is a symbolic link.
+func (e *TreeEntry) IsSymlink() bool { return e.mode == git.EntrySymlink }
+
+// IsCommit reports whether the entry is a submodule.
+func (e *TreeEntry) IsCommit() bool { return e.mode == git.EntryCommit }
+
+// Size returns the size of the entry's object, or zero for a tree or a
+// submodule. It comes from the listing the entry was read from.
+func (e *TreeEntry) Size() int64 { return e.size }
+
+// Entries is a list of tree entries.
 type Entries []*TreeEntry
 
 var sorters = []func(t1, t2 *TreeEntry) bool{
@@ -107,9 +124,8 @@ func (es Entries) Sort() {
 	sort.Sort(es)
 }
 
-// File is a wrapper around git.Blob with helper methods.
+// File is a file of a tree, read through its entry.
 type File struct {
-	*git.Blob
 	Entry *TreeEntry
 }
 
@@ -123,148 +139,251 @@ func (f *File) Path() string {
 	return f.Entry.path
 }
 
-// SubTree returns the sub-tree at the given path, relative to t. The path
-// uses real (unquoted) names.
-func (t *Tree) SubTree(path string) (*Tree, error) {
-	path = gopath.Clean(path)
-	if path == "." || path == "/" {
-		return t, nil
-	}
-	cur := t
-	for _, name := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		e, err := cur.entry(name)
-		if err != nil {
-			return nil, err
-		}
-		if !e.IsTree() {
-			return nil, ErrRevisionNotExist
-		}
-		tree, err := t.Repository.Repository.LsTree(e.ID().String(), t.lsTreeOpts())
-		if err != nil {
-			return nil, err
-		}
-		cur = &Tree{
-			Tree:       tree,
-			Path:       e.path,
-			Repository: t.Repository,
-		}
-	}
-	return cur, nil
+// ID returns the ID of the file's blob.
+func (f *File) ID() *git.SHA1 {
+	return f.Entry.ID()
 }
 
-// entry returns the direct child of t with the given name.
-func (t *Tree) entry(name string) (*TreeEntry, error) {
-	entries, err := t.Entries()
+// Size returns the size of the file's blob.
+func (f *File) Size() int64 {
+	return f.Entry.Size()
+}
+
+// cleanTreePath cleans a path relative to a tree. It returns "" for the
+// tree itself and false for a path that leaves the tree.
+func cleanTreePath(path string) (string, bool) {
+	path = strings.TrimPrefix(gopath.Clean(path), "/")
+	if path == "." {
+		path = ""
+	}
+	if path == ".." || strings.HasPrefix(path, "../") {
+		return "", false
+	}
+	return path, true
+}
+
+// SubTree returns the sub-tree at the given path, relative to t.
+func (t *Tree) SubTree(path string) (*Tree, error) {
+	e, err := t.TreeEntry(path)
 	if err != nil {
 		return nil, err
 	}
-	for _, e := range entries {
-		if e.Name() == name {
+	if !e.IsTree() {
+		return nil, ErrRevisionNotExist
+	}
+	return &Tree{id: e.id, Path: e.path, Repository: t.Repository}, nil
+}
+
+// Entries returns the entries of the tree, in git's order, read by one git
+// process that also reports their sizes. A tree with more than
+// MaxTreeEntries entries gives the first MaxTreeEntries along with an error
+// wrapping ErrTreeTruncated; git is stopped there, so a huge tree costs no
+// more than that.
+func (t *Tree) Entries() (Entries, error) {
+	ents, truncated, err := t.lsTree("", MaxTreeEntries)
+	if err != nil {
+		return nil, err
+	}
+	if truncated {
+		return ents, fmt.Errorf("%w: showing the first %d entries", ErrTreeTruncated, MaxTreeEntries)
+	}
+	return ents, nil
+}
+
+// TreeEntry returns the TreeEntry for the file path, relative to t. It asks
+// git for that one path, so a lookup does not list the directories on the
+// way.
+func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
+	path, ok := cleanTreePath(path)
+	if !ok {
+		return nil, ErrRevisionNotExist
+	}
+	if path == "" {
+		return &TreeEntry{
+			mode: git.EntryTree,
+			typ:  git.ObjectTree,
+			id:   t.id,
+			path: t.Path,
+			repo: t.Repository,
+		}, nil
+	}
+	// Without -t, git prints the entry at the path alone, not the trees on
+	// the way to it; a malformed tree can hold duplicates of it.
+	ents, _, err := t.lsTree(path, 4)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range ents {
+		if e.name == path {
+			e.name = gopath.Base(path)
 			return e, nil
 		}
 	}
 	return nil, ErrRevisionNotExist
 }
 
-// Entries returns the entries in the tree.
-func (t *Tree) Entries() (Entries, error) {
-	entries, err := t.Tree.Entries(t.lsTreeOpts())
-	if err != nil {
-		return nil, err
+// lsTree streams `git ls-tree -l -z` for t, or for the one path in t when
+// path is not empty, and keeps at most limit entries. It reports whether
+// git had more; git is stopped as soon as it does.
+func (t *Tree) lsTree(path string, limit int) (Entries, bool, error) {
+	args := []string{"ls-tree", "-l", "-z", "--full-tree", "--end-of-options", t.id}
+	if path != "" {
+		args = append(args, "--", path)
 	}
-	ret := make(Entries, len(entries))
-	for i, e := range entries {
-		ret[i] = newTreeEntry(t.Repository, t.Path, e)
+	// Literal pathspecs: a name such as ":(glob)x" or "*" is a name.
+	cmd := NewCommandWithContext(t.Repository.Context(), args...).AddEnvs(
+		"GIT_LITERAL_PATHSPECS=1",
+		"GIT_GLOB_PATHSPECS=0",
+		"GIT_NOGLOB_PATHSPECS=0",
+		"GIT_ICASE_PATHSPECS=0",
+	)
+	p := &lsTreeParser{repo: t.Repository, dir: t.Path, limit: limit}
+	var stderr bytes.Buffer
+	err := cmd.RunInDirPipeline(p, &stderr, t.Repository.Path)
+	switch {
+	case p.err != nil:
+		return nil, false, p.err
+	case p.truncated:
+		// git is stopped by the failed write, so err does not matter.
+		return p.ents, true, nil
+	case err != nil:
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, false, fmt.Errorf("ls-tree: %w - %s", err, msg)
+		}
+		return nil, false, fmt.Errorf("ls-tree: %w", err)
+	case len(p.pending) > 0:
+		return nil, false, fmt.Errorf("%w: ls-tree output ends mid-entry", ErrMalformedTree)
 	}
-	return ret, nil
+	return p.ents, false, nil
 }
 
-// EntriesWithSizes returns the entries in the tree with their sizes loaded
-// by one git process for the whole tree. Calling Size on an entry from
-// Entries runs a git process for that entry alone, which adds up when a
-// listing shows the size of every entry.
-func (t *Tree) EntriesWithSizes() (Entries, error) {
-	ents, err := t.Entries()
-	if err != nil {
-		return nil, err
-	}
+// errListingFull stops git once a listing has all the entries it keeps.
+var errListingFull = errors.New("listing full")
 
-	var in bytes.Buffer
-	for _, e := range ents {
-		if e.IsBlob() || e.IsExec() || e.IsSymlink() {
-			in.WriteString(e.ID().String())
-			in.WriteByte('\n')
-		}
-	}
+// lsTreeParser parses `git ls-tree -l -z` output as git writes it, one
+// NUL-terminated record at a time:
+//
+//	<mode> SP <type> SP <id> SP+ <size> TAB <name> NUL
+//
+// where the size is right-aligned and "-" for a tree or a submodule. The
+// name is raw: -z turns off quoting, so it can hold any byte but NUL.
+type lsTreeParser struct {
+	repo      *Repository
+	dir       string
+	limit     int
+	ents      Entries
+	pending   []byte
+	truncated bool
+	err       error
+}
 
-	sizes := make(map[string]int64)
-	if in.Len() > 0 {
-		var out, stderr bytes.Buffer
-		if err := git.NewCommandWithContext(t.Repository.Context(), "cat-file", "--batch-check=%(objectname) %(objectsize)").
-			RunInDirWithOptions(t.Repository.Path, git.RunInDirOptions{
-				Stdin:  &in,
-				Stdout: &out,
-				Stderr: &stderr,
-			}); err != nil {
-			return nil, fmt.Errorf("cat-file: %w: %s", err, strings.TrimSpace(stderr.String()))
-		}
-		// A missing object is reported as "<id> missing"; it is left
-		// out so its size reads as zero, which is what Size gives it.
-		for line := range strings.Lines(out.String()) {
-			id, size, ok := strings.Cut(strings.TrimSpace(line), " ")
-			if !ok {
-				continue
+func (p *lsTreeParser) Write(b []byte) (int, error) {
+	if p.err != nil || p.truncated {
+		return 0, errListingFull
+	}
+	n := len(b)
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, 0)
+		if i < 0 {
+			if len(p.pending)+len(b) > maxTreeRecord {
+				p.err = fmt.Errorf("%w: entry longer than %d bytes", ErrMalformedTree, maxTreeRecord)
+				return 0, p.err
 			}
-			if n, err := strconv.ParseInt(size, 10, 64); err == nil {
-				sizes[id] = n
+			p.pending = append(p.pending, b...)
+			break
+		}
+		rec := b[:i]
+		if len(p.pending) > 0 {
+			if len(p.pending)+i > maxTreeRecord {
+				p.err = fmt.Errorf("%w: entry longer than %d bytes", ErrMalformedTree, maxTreeRecord)
+				return 0, p.err
 			}
+			rec = append(p.pending, rec...)
+			p.pending = p.pending[:0]
+		} else if i > maxTreeRecord {
+			p.err = fmt.Errorf("%w: entry longer than %d bytes", ErrMalformedTree, maxTreeRecord)
+			return 0, p.err
 		}
-	}
-
-	for _, e := range ents {
-		e.size = sizes[e.ID().String()]
-		e.sized = true
-	}
-	return ents, nil
-}
-
-// Size returns the size of the entry's object, or zero for a tree or a
-// submodule. Entries from EntriesWithSizes already hold it; any other entry
-// asks git.
-func (e *TreeEntry) Size() int64 {
-	if e.sized {
-		return e.size
-	}
-	return e.TreeEntry.Size()
-}
-
-// TreeEntry returns the TreeEntry for the file path, relative to t. The path
-// uses real (unquoted) names.
-func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
-	path = gopath.Clean(path)
-	if path == "." || path == "/" {
-		entry, err := t.Tree.TreeEntry("", t.lsTreeOpts())
+		b = b[i+1:]
+		if len(p.ents) == p.limit {
+			p.truncated = true
+			return 0, errListingFull
+		}
+		e, err := parseLsTreeRecord(rec)
 		if err != nil {
-			return nil, err
+			p.err = err
+			return 0, err
 		}
-		return &TreeEntry{TreeEntry: entry, path: t.Path, repo: t.Repository}, nil
+		e.repo = p.repo
+		e.path = gopath.Join(p.dir, e.name)
+		p.ents = append(p.ents, e)
 	}
-	dir, name := gopath.Split(path)
-	tree := t
-	if dir != "" {
-		var err error
-		tree, err = t.SubTree(dir)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return tree.entry(name)
+	return n, nil
 }
 
-// lsTreeOpts returns options that run ls-tree under the context of the
-// tree's repository.
-func (t *Tree) lsTreeOpts() git.LsTreeOptions {
-	return git.LsTreeOptions{CommandOptions: t.Repository.cmdOpts()}
+// lsTreeModes maps the modes ls-tree prints to an entry mode and the object
+// type that goes with it. 100664 is a blob mode old versions of git wrote.
+var lsTreeModes = map[string]struct {
+	mode git.EntryMode
+	typ  git.ObjectType
+}{
+	"100644": {git.EntryBlob, git.ObjectBlob},
+	"100664": {git.EntryBlob, git.ObjectBlob},
+	"100755": {git.EntryExec, git.ObjectBlob},
+	"120000": {git.EntrySymlink, git.ObjectBlob},
+	"160000": {git.EntryCommit, git.ObjectCommit},
+	"040000": {git.EntryTree, git.ObjectTree},
+}
+
+// parseLsTreeRecord parses one `ls-tree -l -z` record, without its NUL.
+func parseLsTreeRecord(rec []byte) (*TreeEntry, error) {
+	bad := func(what string) (*TreeEntry, error) {
+		return nil, fmt.Errorf("%w: ls-tree entry with %s", ErrMalformedTree, what)
+	}
+	meta, name, ok := bytes.Cut(rec, []byte{'\t'})
+	if !ok || len(name) == 0 {
+		return bad("no name")
+	}
+	mode, meta, _ := bytes.Cut(meta, []byte{' '})
+	typ, meta, _ := bytes.Cut(meta, []byte{' '})
+	id, size, _ := bytes.Cut(meta, []byte{' '})
+	size = bytes.TrimLeft(size, " ")
+
+	m, ok := lsTreeModes[string(mode)]
+	if !ok {
+		return bad(fmt.Sprintf("unknown mode %q", mode))
+	}
+	if string(typ) != string(m.typ) {
+		return bad(fmt.Sprintf("type %q for mode %s", typ, mode))
+	}
+	if !isFullHexID(id) {
+		return bad("a malformed object ID")
+	}
+	e := &TreeEntry{mode: m.mode, typ: m.typ, id: string(id), name: string(name)}
+	if m.typ == git.ObjectBlob {
+		n, err := strconv.ParseInt(string(size), 10, 64)
+		if err != nil || n < 0 {
+			return bad(fmt.Sprintf("size %q", size))
+		}
+		e.size = n
+	} else if string(size) != "-" {
+		return bad(fmt.Sprintf("size %q for a %s", size, typ))
+	}
+	return e, nil
+}
+
+// isFullHexID reports whether id is a full-length SHA-1 object ID in
+// lower-case hex, as git prints it.
+func isFullHexID(id []byte) bool {
+	if len(id) != 40 {
+		return false
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 const sniffLen = 8000
@@ -294,14 +413,11 @@ func IsBinary(r io.Reader) (bool, error) {
 }
 
 // Pipeline writes the contents of the file to stdout and git's errors to
-// stderr. Unlike git-module's Blob.Pipeline it runs under the context of the
-// repository the file was read from.
+// stderr. It runs under the context of the repository the file was read
+// from.
 func (f *File) Pipeline(stdout, stderr io.Writer) error {
-	if f.Entry == nil || f.Entry.repo == nil {
-		return f.Blob.Pipeline(stdout, stderr)
-	}
 	r := f.Entry.repo
-	return git.NewCommandWithContext(r.Context(), "show", f.ID().String()).
+	return git.NewCommandWithContext(r.Context(), "show", f.Entry.id).
 		RunInDirPipeline(stdout, stderr, r.Path)
 }
 
@@ -343,7 +459,7 @@ func (w *sniffWriter) Write(p []byte) (int, error) {
 // symlink is fs.ModeSymlink, and a submodule, which has no equivalent, is
 // fs.ModeIrregular.
 func (e *TreeEntry) Mode() fs.FileMode {
-	switch e.TreeEntry.Mode() {
+	switch e.mode {
 	case git.EntryTree:
 		return fs.ModeDir | fs.ModePerm
 	case git.EntryBlob:
@@ -359,11 +475,7 @@ func (e *TreeEntry) Mode() fs.FileMode {
 
 // File returns the file for the TreeEntry.
 func (e *TreeEntry) File() *File {
-	b := e.Blob()
-	return &File{
-		Blob:  b,
-		Entry: e,
-	}
+	return &File{Entry: e}
 }
 
 // Contents returns the contents of the file.
@@ -373,20 +485,11 @@ func (e *TreeEntry) Contents() ([]byte, error) {
 
 // Contents returns the contents of the file.
 func (f *File) Contents() ([]byte, error) {
-	if f.Entry == nil || f.Entry.repo == nil {
-		return f.Blob.Bytes()
-	}
-	if err := f.Entry.repo.Context().Err(); err != nil {
-		return nil, err
-	}
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
-	// Preallocate the buffer, as git-module's Blob.Bytes does, so that a big
-	// file is not read through repeated doubling. Size runs a short
-	// `cat-file -s` without a context (git-module caches the size per entry
-	// and this version does not take it from ls-tree), which is why the
-	// context is checked first.
-	if size := f.Blob.Size(); size > 0 {
+	// Preallocate the buffer from the listed size, so that a big file is
+	// not read through repeated doubling.
+	if size := f.Size(); size > 0 {
 		stdout.Grow(int(size))
 	}
 	if err := f.Pipeline(stdout, stderr); err != nil {
@@ -408,8 +511,7 @@ func (f *File) ContentsLimit(limit int64) ([]byte, error) {
 	if size := f.Size(); size > limit {
 		return nil, fmt.Errorf("%w: %d bytes, limit is %d", ErrFileTooLarge, size, limit)
 	}
-	// Size is looked up separately and is 0 when the lookup fails, so cap
-	// the read as well.
+	// Cap the read as well, in case the listed size is wrong.
 	w := &limitWriter{limit: limit}
 	stderr := new(bytes.Buffer)
 	if err := f.Pipeline(w, stderr); err != nil {

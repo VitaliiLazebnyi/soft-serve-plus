@@ -2,10 +2,52 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
+	"path"
+	"strconv"
+	"strings"
 	"testing"
 
+	sgit "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
+
+// R10: `repo tree` on a directory with more than git.MaxTreeEntries entries
+// lists the first ones and says on stderr that the listing is cut. Paths
+// past the cap can still be read.
+func TestRepoTreeTruncated(t *testing.T) {
+	ctx, git := diffRepo(t)
+	blob := git("x", "hash-object", "-w", "--stdin")
+	var in strings.Builder
+	for i := range sgit.MaxTreeEntries + 1 {
+		fmt.Fprintf(&in, "100644 blob %s\tf%06d\n", blob, i)
+	}
+	big := git(in.String(), "mktree")
+	git("", "read-tree", "--prefix=big/", big)
+	git("", "commit", "-q", "-m", "big")
+	git("", "push", "-q", "origin", "main")
+
+	stdout, stderr, err := runRepoOutput(t, ctx, "tree", "diffs", "big")
+	if err != nil {
+		t.Fatalf("tree: %v", err)
+	}
+	if n := strings.Count(stdout, "\n"); n != sgit.MaxTreeEntries {
+		t.Errorf("tree printed %d lines, want %d", n, sgit.MaxTreeEntries)
+	}
+	if !strings.Contains(stderr, "truncated") || !strings.Contains(stderr, strconv.Itoa(sgit.MaxTreeEntries)) {
+		t.Errorf("tree stderr = %q, want a note that the listing is truncated", stderr)
+	}
+
+	last := fmt.Sprintf("big/f%06d", sgit.MaxTreeEntries)
+	stdout, stderr, err = runRepoOutput(t, ctx, "tree", "diffs", "main", last)
+	if err != nil || stdout != "-rw-r--r--\t1 B\t "+path.Base(last)+"\n" || stderr != "" {
+		t.Errorf("tree of an entry past the cap = %q, %q, %v", stdout, stderr, err)
+	}
+	stdout, _, err = runRepoOutput(t, ctx, "blob", "diffs", last)
+	if err != nil || stdout != "x\n" {
+		t.Errorf("blob of an entry past the cap = %q, %v", stdout, err)
+	}
+}
 
 // treeRepo pushes a commit holding every kind of tree entry to the
 // repository "diffs" and returns a function that runs `repo tree diffs`

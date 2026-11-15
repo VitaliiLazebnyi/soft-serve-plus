@@ -2,7 +2,9 @@ package repo
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,62 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
+
+// R10: a directory with more than git.MaxTreeEntries entries is listed in
+// part, and the status bar says the listing is truncated.
+func TestFilesListingTruncated(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
+	out := func(stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		b, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(b))
+	}
+	blob := out("x", "hash-object", "-w", "--stdin")
+	var in strings.Builder
+	for i := range git.MaxTreeEntries + 1 {
+		fmt.Fprintf(&in, "100644 blob %s\tf%06d\n", blob, i)
+	}
+	gitRun(t, dir, "read-tree", "--prefix=big/", out(in.String(), "mktree"))
+	gitRun(t, dir, "commit", "-q", "-m", "big")
+
+	r, err := git.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := r.HEAD()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(t.Context(), config.DefaultConfig())
+	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(RefMsg{Ref: ref})
+
+	msg, ok := f.updateFilesCmd()().(FileItemsMsg)
+	if !ok || msg.truncated || len(msg.items) != 1 {
+		t.Fatalf("root listing = %d items, truncated %v; want the one directory in full", len(msg.items), msg.truncated)
+	}
+	f.Update(msg)
+	if got := f.StatusBarInfo(); got != "# 1/1" {
+		t.Errorf("status bar = %q, want %q", got, "# 1/1")
+	}
+
+	f.path = "big"
+	msg, ok = f.updateFilesCmd()().(FileItemsMsg)
+	if !ok || !msg.truncated || len(msg.items) != git.MaxTreeEntries {
+		t.Fatalf("big listing = %d items, truncated %v; want %d and truncated", len(msg.items), msg.truncated, git.MaxTreeEntries)
+	}
+	f.Update(msg)
+	if got, want := f.StatusBarInfo(), fmt.Sprintf("# 1/%d (truncated)", git.MaxTreeEntries); got != want {
+		t.Errorf("status bar = %q, want %q", got, want)
+	}
+}
 
 // Opening a file larger than max_blob_size is refused without reading it,
 // and a file that fits is shown.

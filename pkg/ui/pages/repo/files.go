@@ -52,6 +52,9 @@ var (
 type FileItemsMsg struct {
 	items []selector.IdentifiableItem
 	gen   uint64
+	// truncated is set when the directory has more than
+	// git.MaxTreeEntries entries and items holds only the first ones.
+	truncated bool
 }
 
 func (m FileItemsMsg) generation() uint64 { return m.gen }
@@ -101,6 +104,9 @@ type Files struct {
 	spinner        spinner.Model
 	cursor         int
 	blameView      bool
+	// truncated is set while the listing shows only the first
+	// git.MaxTreeEntries entries of the directory.
+	truncated bool
 	// load counts the file and blame loads. A FileContentMsg or FileBlameMsg
 	// from an earlier load arrived after the user or a ref change moved on,
 	// and is dropped.
@@ -265,6 +271,7 @@ func (f *Files) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 		cmds = append(cmds,
 			f.selector.SetItems(msg.items),
 		)
+		f.truncated = msg.truncated
 		f.activeView = filesViewFiles
 		if f.cursor >= 0 {
 			f.selector.Select(f.cursor)
@@ -445,6 +452,9 @@ func (f *Files) StatusBarInfo() string {
 		if total == 0 {
 			return "# 0/0"
 		}
+		if f.truncated {
+			return fmt.Sprintf("# %d/%d (truncated)", f.selector.Index()+1, total)
+		}
 		return fmt.Sprintf("# %d/%d", f.selector.Index()+1, total)
 	case filesViewContent:
 		return common.ScrollPercent(f.code.ScrollPosition())
@@ -471,8 +481,11 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 		if err != nil {
 			return common.ErrorMsg(err)
 		}
-		ents, err := t.EntriesWithSizes()
-		if err != nil {
+		ents, err := t.Entries()
+		// A directory with too many entries is listed in part, and the
+		// status bar says so.
+		truncated := errors.Is(err, git.ErrTreeTruncated)
+		if err != nil && !truncated {
 			return common.ErrorMsg(err)
 		}
 		ents.Sort()
@@ -485,7 +498,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), gen: gen}
+		return FileItemsMsg{items: append(dirs, files...), gen: gen, truncated: truncated}
 	}
 }
 
