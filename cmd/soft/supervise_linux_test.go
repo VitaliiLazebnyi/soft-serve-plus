@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,7 +58,9 @@ func TestSuperviseHelper(t *testing.T) {
 		t.Fatalf("prctl(PR_SET_CHILD_SUBREAPER): %v", errno)
 	}
 	sigs := make(chan os.Signal, 1)
-	child := exec.CommandContext(t.Context(), "sh", "-c", "")
+	shell := "sh"
+	var stdin io.Reader
+	var stdout io.Writer
 	var script, extra string
 	var terminal chan string // the "terminal" scenario's findings
 	var terminalOut *os.File // and the write end of the child's stdout
@@ -73,7 +78,7 @@ func TestSuperviseHelper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		child.Stdout = w
+		stdout = w
 		go func() {
 			line, _ := bufio.NewReader(r).ReadString('\n')
 			if line == "ready\n" {
@@ -99,12 +104,12 @@ func TestSuperviseHelper(t *testing.T) {
 		// which is sent once the terminal's foreground group, or the
 		// error asking for it, has been noted.
 		script = `trap 'exit 7' TERM; cut -d' ' -f5 /proc/$$/stat; while :; do sleep 0.05; done`
-		child.Stdin = os.Stdin
+		stdin = os.Stdin
 		r, w, err := os.Pipe()
 		if err != nil {
 			t.Fatal(err)
 		}
-		child.Stdout, terminalOut = w, w
+		stdout, terminalOut = w, w
 		terminal = make(chan string, 1)
 		go func() {
 			line, _ := bufio.NewReader(r).ReadString('\n')
@@ -118,11 +123,29 @@ func TestSuperviseHelper(t *testing.T) {
 			terminal <- fmt.Sprintf("owngroup=%v foreground=%s", pgid != syscall.Getpgrp(), foreground)
 			sigs <- syscall.SIGTERM
 		}()
+	case "nopath":
+		// Both starts fail: with the terminal, which is not this
+		// process's controlling terminal, and then without it.
+		shell = "/nonexistent/sh"
+		stdin = os.Stdin
 	default:
 		t.Fatalf("unknown scenario %q", scenario)
 	}
-	child.Args[2] = script
-	code, err := supervise(child, sigs)
+	newChild := func() *exec.Cmd {
+		child := exec.CommandContext(t.Context(), shell, "-c", script)
+		child.Stdin, child.Stdout = stdin, stdout
+		return child
+	}
+	code, err := supervise(newChild, sigs)
+	if scenario == "nopath" {
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		fmt.Printf("RESULT notexist=%v notty=%v\n", errors.Is(err, fs.ErrNotExist),
+			strings.Contains(msg, syscall.ENOTTY.Error()))
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +284,21 @@ func TestSuperviseTerminalNotControlling(t *testing.T) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	})
 	if want := "code=7 zombies=0 owngroup=true foreground=" + syscall.ENOTTY.Error(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestSuperviseReportsBothStartErrors checks that, when the child can be
+// started neither with the terminal nor without it, the error returned holds
+// both causes.
+func TestSuperviseReportsBothStartErrors(t *testing.T) {
+	t.Parallel()
+	tty := openPty(t)
+	got := runSuperviseScenario(t, "nopath", func(cmd *exec.Cmd) {
+		cmd.Stdin = tty
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	})
+	if want := "notexist=true notty=true"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

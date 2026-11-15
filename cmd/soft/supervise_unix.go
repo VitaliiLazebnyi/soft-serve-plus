@@ -43,8 +43,11 @@ func superviseIfInit() {
 	if err == nil {
 		// The server must outlive any context: it stops when it is sent
 		// a signal, never because this process gave up on it.
-		child := exec.CommandContext(context.Background(), exe, os.Args[1:]...)
-		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+		newChild := func() *exec.Cmd {
+			child := exec.CommandContext(context.Background(), exe, os.Args[1:]...)
+			child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+			return child
+		}
 		sigs := make(chan os.Signal, 16)
 		signal.Notify(sigs, forwardedSignals...)
 		// The configuration is not read yet; match the server's default
@@ -53,7 +56,7 @@ func superviseIfInit() {
 		log.Info("soft is PID 1: running the server as a child process and reaping exited processes; " +
 			"an init such as tini (docker run --init, init: true in compose) uses less memory")
 		var code int
-		code, err = supervise(child, sigs)
+		code, err = supervise(newChild, sigs)
 		if err == nil {
 			os.Exit(code)
 		}
@@ -75,29 +78,25 @@ func superviseIfInit() {
 // group becomes the terminal's foreground group: the terminal then signals
 // only the child, and the child may read from it. That fails when the
 // terminal is not this process's controlling terminal; the child is then
-// started again without the terminal.
-func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
+// started again without the terminal. newChild returns a new, unstarted
+// command for the child each time it is called, as a Cmd cannot be started
+// twice.
+func supervise(newChild func() *exec.Cmd, sigs <-chan os.Signal) (int, error) {
+	child := newChild()
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var withoutTerminal *exec.Cmd
-	if f, ok := child.Stdin.(*os.File); ok && term.IsTerminal(f.Fd()) {
-		// A Cmd cannot be started twice, so the retry needs a copy. It
-		// copies only the fields superviseIfInit sets; keep it in step
-		// if that ever sets another.
-		withoutTerminal = &exec.Cmd{
-			Path: child.Path, Args: child.Args, Env: child.Env, Dir: child.Dir,
-			Stdin: child.Stdin, Stdout: child.Stdout, Stderr: child.Stderr,
-			ExtraFiles:  child.ExtraFiles,
-			SysProcAttr: &syscall.SysProcAttr{Setpgid: true},
-		}
+	f, ok := child.Stdin.(*os.File)
+	terminal := ok && term.IsTerminal(f.Fd())
+	if terminal {
 		child.SysProcAttr.Foreground = true
 		child.SysProcAttr.Ctty = 0 // the child's stdin
 	}
 	err := child.Start()
-	if err != nil && withoutTerminal != nil {
+	if err != nil && terminal {
 		// Retry after any error, not only ENOTTY: a child in a group
 		// of its own beats an unsupervised server, and if the cause
 		// was something else, the retry fails too.
-		child = withoutTerminal
+		child = newChild()
+		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if retryErr := child.Start(); retryErr != nil {
 			err = fmt.Errorf("%w; without the terminal: %w", err, retryErr)
 		} else {
@@ -118,11 +117,11 @@ func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
 	pid := child.Process.Pid
 	for {
 		var ws syscall.WaitStatus
-		wpid, err := syscall.Wait4(-1, &ws, 0, nil)
-		if errors.Is(err, syscall.EINTR) {
+		wpid, waitErr := syscall.Wait4(-1, &ws, 0, nil)
+		if errors.Is(waitErr, syscall.EINTR) {
 			continue
 		}
-		if err != nil {
+		if waitErr != nil {
 			// ECHILD: nothing left to wait for, so the child is gone
 			// without its status having been seen here.
 			return 1, nil
