@@ -99,12 +99,6 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 			_, err := tr.TreeEntry("bat")
 			return err
 		},
-		"IsBinary": func(r *Repository) error {
-			e := *entry
-			e.repo = entry.repo.WithContext(ctx)
-			_, err := e.File().IsBinary()
-			return err
-		},
 	}
 	for name, fn := range cases {
 		// Open the repository afresh for each case: git-module caches trees

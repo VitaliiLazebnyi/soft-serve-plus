@@ -1,5 +1,6 @@
 // Package gittest builds commit objects for tests, including malformed ones
-// that git accepts in a push but git-module's parser cannot read.
+// that git accepts in a push but git-module's parser cannot read. It also
+// counts the git processes a test starts.
 package gittest
 
 import (

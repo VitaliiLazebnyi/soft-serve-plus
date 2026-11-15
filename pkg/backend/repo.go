@@ -27,7 +27,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	gitcfg "github.com/go-git/go-git/v5/plumbing/format/config"
 )
 
 // RemotePolicy returns the policy for git remotes supplied on behalf of user:
@@ -735,15 +734,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 		return nil, err
 	}
 
-	rcfg, err := rr.Config()
-	if err != nil {
-		d.logger.Error("failed to get repository config", "err", err, "path", imp.path)
-		return nil, err
-	}
-
-	rcfg.Section("lfs").SetOption("url", imp.lfsEndpoint)
-
-	if err := rr.SetConfig(rcfg); err != nil {
+	if err := rr.ConfigSet("lfs.url", imp.lfsEndpoint); err != nil {
 		d.logger.Error("failed to set repository config", "err", err, "path", imp.path)
 		return nil, err
 	}
@@ -1243,8 +1234,8 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	if err != nil {
 		return err
 	}
-	urls := remoteURLs(rcfg)
-	lfsURL := rcfg.Section("lfs").Option("url")
+	urls := rcfg.urls()
+	lfsURL := rcfg.lfsURL
 	if mirror && len(urls) == 0 {
 		return errors.New("cannot enable mirror mode: repository has no remote URL configured")
 	}
@@ -1273,18 +1264,16 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 			return err
 		}
 		if cur.ID != m.ID || cur.UserID != m.UserID ||
-			!slices.Equal(remoteURLs(rcfg), urls) || rcfg.Section("lfs").Option("url") != lfsURL {
+			!slices.Equal(rcfg.urls(), urls) || rcfg.lfsURL != lfsURL {
 			return errRepoChangedDuringMirror
 		}
-
-		setRemotesMirror(rcfg, mirror)
 
 		// The flag is written first and the git config last, so a failure
 		// writing the config rolls the flag back and the two stay in step.
 		if err := d.store.SetRepoIsMirrorByName(ctx, tx, name, mirror); err != nil {
 			return err
 		}
-		if err := r.SetConfig(rcfg); err != nil {
+		if err := setRemotesMirror(r, rcfg, mirror); err != nil {
 			d.logger.Error("failed to set repository config", "err", err, "path", rp)
 			return errRepoUpdate
 		}
@@ -1292,48 +1281,93 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	}))
 }
 
-// openRepoConfig opens the repository at rp and reads its git config. The
-// raw errors carry the server data path, so they are logged and a generic
-// one is returned.
-func (d *Backend) openRepoConfig(rp string) (*git.Repository, *gitcfg.Config, error) {
-	r, err := git.Open(rp)
-	if err != nil {
-		d.logger.Error("failed to open repository", "err", err, "path", rp)
-		return nil, nil, errRepoUpdate
-	}
-	rcfg, err := r.Config()
-	if err != nil {
-		d.logger.Error("failed to read repository config", "err", err, "path", rp)
-		return nil, nil, errRepoUpdate
-	}
-	return r, rcfg, nil
+// repoConfig is what SetMirror reads from a repository's git config.
+type repoConfig struct {
+	// remotes are the remotes that have a URL, in config order.
+	remotes []configRemote
+	// lfsURL is lfs.url, "" when it is not set.
+	lfsURL string
 }
 
-// remoteURLs returns the URL of every remote in rcfg that has one, in
-// config order.
-func remoteURLs(rcfg *gitcfg.Config) []string {
-	var urls []string
-	for _, sub := range rcfg.Section("remote").Subsections {
-		if u := sub.Option("url"); u != "" {
-			urls = append(urls, u)
-		}
+// configRemote is a remote of a repository's git config and its URL.
+type configRemote struct {
+	name, url string
+}
+
+// urls returns the URL of every remote in c, in config order.
+func (c repoConfig) urls() []string {
+	urls := make([]string, len(c.remotes))
+	for i, rm := range c.remotes {
+		urls[i] = rm.url
 	}
 	return urls
 }
 
-// setRemotesMirror sets, or with mirror false removes, the mirror option on
-// every remote in rcfg that has a URL.
-func setRemotesMirror(rcfg *gitcfg.Config, mirror bool) {
-	for _, sub := range rcfg.Section("remote").Subsections {
-		if sub.Option("url") == "" {
-			continue
+// openRepoConfig opens the repository at rp and reads its remotes and LFS
+// endpoint from its git config file. The raw errors carry the server data
+// path, so they are logged and a generic one is returned.
+func (d *Backend) openRepoConfig(rp string) (*git.Repository, repoConfig, error) {
+	r, err := git.Open(rp)
+	if err != nil {
+		d.logger.Error("failed to open repository", "err", err, "path", rp)
+		return nil, repoConfig{}, errRepoUpdate
+	}
+	rcfg, err := readRepoConfig(r)
+	if err != nil {
+		d.logger.Error("failed to read repository config", "err", err, "path", rp)
+		return nil, repoConfig{}, errRepoUpdate
+	}
+	return r, rcfg, nil
+}
+
+// readRepoConfig reads the remotes and the LFS endpoint from r's config
+// file. A remote with several url values is listed with its last one, and a
+// remote whose URL is empty is left out. (The mirror job validates every
+// url of every remote; see pkg/jobs.)
+func readRepoConfig(r *git.Repository) (repoConfig, error) {
+	var rcfg repoConfig
+	lfsURL, _, err := r.ConfigGet("lfs.url")
+	if err != nil {
+		return rcfg, err
+	}
+	rcfg.lfsURL = lfsURL
+	entries, err := r.ConfigGetRegexp(`^remote\..*\.url$`)
+	if err != nil {
+		return rcfg, err
+	}
+	last := map[string]string{}
+	var names []string
+	for _, e := range entries {
+		name := strings.TrimSuffix(strings.TrimPrefix(e.Key, "remote."), ".url")
+		if _, ok := last[name]; !ok {
+			names = append(names, name)
 		}
-		if mirror {
-			sub.SetOption("mirror", "true")
-		} else {
-			sub.RemoveOption("mirror")
+		last[name] = e.Value
+	}
+	for _, name := range names {
+		if u := last[name]; u != "" {
+			rcfg.remotes = append(rcfg.remotes, configRemote{name: name, url: u})
 		}
 	}
+	return rcfg, nil
+}
+
+// setRemotesMirror sets, or with mirror false removes, the mirror option on
+// every remote in rcfg, each with one `git config`.
+func setRemotesMirror(r *git.Repository, rcfg repoConfig, mirror bool) error {
+	for _, rm := range rcfg.remotes {
+		key := "remote." + rm.name + ".mirror"
+		var err error
+		if mirror {
+			err = r.ConfigSet(key, "true")
+		} else {
+			err = r.ConfigUnset(key)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkMirrorRemotes refuses to switch on mirroring for repo m, whose git
@@ -1349,7 +1383,7 @@ func setRemotesMirror(rcfg *gitcfg.Config, mirror bool) {
 //
 // ctx bounds the hostname lookups validation makes. No transaction may be
 // open across this call, for the same reason.
-func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *gitcfg.Config) error {
+func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg repoConfig) error {
 	// As in the job, an owner that cannot be looked up is nobody.
 	var owner proto.User
 	if m.UserID.Valid {
@@ -1362,7 +1396,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 	}
 	policy := RemotePolicy(d.cfg, owner)
 
-	for _, u := range remoteURLs(rcfg) {
+	for _, u := range rcfg.urls() {
 		_, err := validateImportRemote(ctx, u, policy)
 		if errors.Is(err, proto.ErrUnauthorized) {
 			d.logger.Warn("refusing to enable mirror: owner is not an admin, so the mirror job could not sync it",
@@ -1374,7 +1408,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg *g
 		}
 	}
 
-	if u := rcfg.Section("lfs").Option("url"); d.cfg.LFS.Enabled && u != "" {
+	if u := rcfg.lfsURL; d.cfg.LFS.Enabled && u != "" {
 		if _, err := validateImportRemote(ctx, u, policy); err != nil {
 			d.logger.Warn("enabling mirror, but the mirror job will skip LFS objects: endpoint failed validation",
 				"repo", m.Name, "endpoint", redactRemote(u), "err", err)

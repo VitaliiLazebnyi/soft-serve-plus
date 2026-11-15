@@ -1,11 +1,11 @@
 package git
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
-
-	"github.com/gobwas/glob"
 )
 
 // maxSymlinkHops is how many symlinks LatestFile follows from a matching
@@ -16,16 +16,19 @@ const maxSymlinkHops = 8
 const maxSymlinkTarget = 4096
 
 // LatestFile returns the contents of the first text file at the specified
-// path pattern in the repository and its file path. Binary files and files
-// larger than maxSize bytes are skipped; when only files too large match, an
-// error wrapping ErrFileTooLarge is returned. A maxSize of 0 or less means no
-// limit.
+// path pattern in the repository and its file path. The pattern has
+// path.Match syntax, and only its last element may hold wildcards. Binary
+// files and files larger than maxSize bytes are skipped; when only files too
+// large match, an error wrapping ErrFileTooLarge is returned. A maxSize of 0
+// or less means no limit.
 // A matching symlink is followed, through further symlinks, to the file it
 // points to within the repository, and the returned path is that file's.
 // Matching directories and submodules, and symlinks that do not lead to a
 // file, are skipped.
 func LatestFile(repo *Repository, ref *Reference, pattern string, maxSize int64) (string, string, error) {
-	g := glob.MustCompile(pattern)
+	if _, err := path.Match(pattern, ""); err != nil {
+		return "", "", fmt.Errorf("pattern %q: %w", pattern, err)
+	}
 	dir := path.Dir(pattern)
 	if ref == nil {
 		head, err := repo.HEAD()
@@ -47,7 +50,10 @@ func LatestFile(repo *Repository, ref *Reference, pattern string, maxSize int64)
 	var tooLarge error
 	for _, te := range ents {
 		fp := path.Join(dir, te.Name())
-		if te.IsTree() || te.IsCommit() || !g.Match(fp) {
+		if te.IsTree() || te.IsCommit() {
+			continue
+		}
+		if ok, _ := path.Match(pattern, fp); !ok {
 			continue
 		}
 		if te.IsSymlink() {
@@ -62,13 +68,8 @@ func LatestFile(repo *Repository, ref *Reference, pattern string, maxSize int64)
 				continue
 			}
 		}
-		f := te.File()
-		if bin, err := f.IsBinary(); err != nil {
-			return "", "", err
-		} else if bin {
-			continue
-		}
-		bts, err := f.ContentsLimit(maxSize)
+		// Read the file once and sniff the bytes in hand.
+		bts, err := te.File().ContentsLimit(maxSize)
 		if errors.Is(err, ErrFileTooLarge) {
 			// A later match may still fit.
 			tooLarge = err
@@ -76,6 +77,9 @@ func LatestFile(repo *Repository, ref *Reference, pattern string, maxSize int64)
 		}
 		if err != nil {
 			return "", "", err
+		}
+		if bin, _ := IsBinary(bytes.NewReader(bts)); bin {
+			continue
 		}
 		return string(bts), fp, nil
 	}

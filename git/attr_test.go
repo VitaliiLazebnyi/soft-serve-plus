@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/git/gittest"
 	"github.com/matryer/is"
 )
 
@@ -143,5 +144,26 @@ func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
 				t.Fatalf("attributes for %q = %v, want binary set and text unset", name, attrs)
 			}
 		})
+	}
+}
+
+// N:git: CheckAttributes ran `git version` on every call, one extra process
+// each time a file is opened. The version is read once.
+func TestCheckAttributesReadsVersionOnce(t *testing.T) { //nolint: paralleltest
+	repo, ref := setupAttrRepo(t, "a.bin")
+	calls := gittest.CountGit(t)
+	for i := range 3 {
+		if _, err := repo.CheckAttributes(ref, "a.bin"); err != nil {
+			t.Fatalf("CheckAttributes %d: %v", i, err)
+		}
+	}
+	versions := 0
+	for _, c := range calls() {
+		if c == "version" {
+			versions++
+		}
+	}
+	if versions > 1 {
+		t.Errorf("three CheckAttributes calls ran git version %d times, want at most once", versions)
 	}
 }

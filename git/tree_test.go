@@ -242,42 +242,6 @@ func allocated(fn func()) uint64 {
 	return after.TotalAlloc - before.TotalAlloc
 }
 
-func TestFileIsBinary(t *testing.T) {
-	const bigSize = 16 << 20
-	big := bytes.Repeat([]byte("0123456789abcde\n"), bigSize/16)
-	lateNUL := append(bytes.Repeat([]byte("a"), sniffLen), 0)
-	bin := append([]byte{0}, bytes.Repeat([]byte("b"), bigSize)...)
-	repo, ref := newFilesRepo(t, map[string][]byte{
-		"big.txt":   big,
-		"late.txt":  lateNUL,
-		"bin.dat":   bin,
-		"small.txt": []byte("hello\n"),
-		"empty.txt": {},
-	})
-
-	for name, want := range map[string]bool{
-		"big.txt":   false,
-		"late.txt":  false, // the NUL is past the sniffed prefix
-		"bin.dat":   true,
-		"small.txt": false,
-		"empty.txt": false,
-	} {
-		got, err := treeFile(t, repo, ref, name).IsBinary()
-		if err != nil {
-			t.Fatalf("%s: IsBinary: %v", name, err)
-		}
-		if got != want {
-			t.Errorf("%s: IsBinary = %v, want %v", name, got, want)
-		}
-	}
-
-	// Sniffing a large file must not buffer the whole blob.
-	f := treeFile(t, repo, ref, "big.txt")
-	if n := allocated(func() { _, _ = f.IsBinary() }); n > bigSize/4 {
-		t.Errorf("IsBinary allocated %d bytes for a %d byte file", n, bigSize)
-	}
-}
-
 func TestFileContentsLimit(t *testing.T) {
 	const bigSize = 16 << 20
 	big := bytes.Repeat([]byte("x"), bigSize)

@@ -19,7 +19,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -307,8 +306,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
 		d.fatal(c, git.ErrTimeout)
 	})
-	s := pktline.NewScanner(c)
-	scanned := s.Scan()
+	line, err := git.ReadPkt(c)
 	if !stopRead() {
 		// The server's context ended and the client has been answered.
 		return
@@ -318,15 +316,14 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	// wait on the client for what was left of the request timeout.
 	left := time.Until(c.initDeadline)
 	c.initDeadline = time.Time{}
-	if !scanned {
-		err := s.Err()
+	if err != nil {
 		var nerr net.Error
 		switch {
-		case err == nil:
+		case errors.Is(err, io.EOF):
 			// The client hung up without sending a request.
 		case errors.As(err, &nerr) && nerr.Timeout():
 			d.refuse(c, git.ErrTimeout, left)
-		case errors.Is(err, pktline.ErrInvalidPktLen), isErrorLine(err):
+		case errors.Is(err, git.ErrInvalidPktLen), isErrorLine(err):
 			d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
 			d.refuse(c, git.ErrInvalidRequest, left)
 		default:
@@ -337,7 +334,6 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		return
 	}
 
-	line := s.Bytes()
 	split := bytes.SplitN(line, []byte{' '}, 2)
 	if len(split) != 2 {
 		d.refuse(c, git.ErrInvalidRequest, left)
@@ -522,7 +518,7 @@ func (d *GitDaemon) Shutdown(ctx context.Context) error {
 
 // isErrorLine reports whether err is an ERR packet the client sent.
 func isErrorLine(err error) bool {
-	var el *pktline.ErrorLine
+	var el *git.PktlineError
 	return errors.As(err, &el)
 }
 

@@ -28,7 +28,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
@@ -114,22 +113,19 @@ func dialDaemon(t *testing.T) net.Conn {
 }
 
 // readPktline reads one pkt-line. An ERR packet is returned as a
-// *pktline.ErrorLine carrying the daemon's message.
+// *git.PktlineError carrying the daemon's message.
 func readPktline(c net.Conn) (string, error) {
-	pktout := pktline.NewScanner(c)
-	if !pktout.Scan() {
-		if err := pktout.Err(); err != nil {
-			return "", err
-		}
-		return "", io.EOF
+	line, err := git.ReadPkt(c)
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(string(pktout.Bytes())), nil
+	return strings.TrimSpace(string(line)), nil
 }
 
 // wantErrLine fails the test unless err is an ERR packet carrying want.
 func wantErrLine(t *testing.T, what string, err error, want error) {
 	t.Helper()
-	var errLine *pktline.ErrorLine
+	var errLine *git.PktlineError
 	if !errors.As(err, &errLine) {
 		t.Errorf("%s: expected ERR %q, got %v", what, want, err)
 		return
@@ -153,13 +149,6 @@ func TestIdleTimeout(t *testing.T) {
 // TestBadRequests verifies the daemon answers malformed requests and pushes
 // with a reply that says what is wrong.
 func TestBadRequests(t *testing.T) {
-	pkt := func(s string) []byte {
-		var b bytes.Buffer
-		if err := pktline.NewEncoder(&b).EncodeString(s); err != nil {
-			t.Fatal(err)
-		}
-		return b.Bytes()
-	}
 	cases := []struct {
 		name string
 		raw  []byte
@@ -169,9 +158,9 @@ func TestBadRequests(t *testing.T) {
 		// would make Windows reset the connection when the daemon closes it,
 		// discarding the reply before the client reads it.
 		{"invalid pkt-len", []byte("zzzz"), git.ErrInvalidRequest},
-		{"client error packet", pkt("ERR boom\n"), git.ErrInvalidRequest},
-		{"unknown service", pkt("git-frobnicate /repo.git\x00"), git.ErrInvalidRequest},
-		{"push", pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported},
+		{"client error packet", []byte(pkt("ERR boom\n")), git.ErrInvalidRequest},
+		{"unknown service", []byte(pkt("git-frobnicate /repo.git\x00")), git.ErrInvalidRequest},
+		{"push", []byte(pkt("git-receive-pack /repo.git\x00host=localhost\x00")), ErrPushNotSupported},
 	}
 	for _, tc := range cases {
 		line, err := rawRequest(t, tc.raw)
@@ -326,11 +315,7 @@ func TestFailedRequestDoesNotLeak(t *testing.T) {
 // line it answers with, or the error it answers with.
 func requestUploadPack(t *testing.T, repo string) (string, error) {
 	t.Helper()
-	var b bytes.Buffer
-	if err := pktline.NewEncoder(&b).EncodeString("git-upload-pack /" + repo + ".git\x00"); err != nil {
-		t.Fatalf("expected nil, got error: %v", err)
-	}
-	return rawRequest(t, b.Bytes())
+	return rawRequest(t, []byte(pkt("git-upload-pack /"+repo+".git\x00")))
 }
 
 // rawRequest sends raw bytes to the daemon and returns the first line it
@@ -451,11 +436,15 @@ func TestGitStderrNotSentToClient(t *testing.T) {
 		}
 	}
 	// Everything the daemon sent must parse as pkt-lines.
-	sc := pktline.NewScanner(bytes.NewReader(out))
-	for sc.Scan() { //nolint:revive
-	}
-	if err := sc.Err(); err != nil {
-		t.Errorf("answer is not a valid pkt-line stream: %v: %q", err, out)
+	for r := bytes.NewReader(out); ; {
+		_, err := git.ReadPkt(r)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Errorf("answer is not a valid pkt-line stream: %v: %q", err, out)
+			break
+		}
 	}
 }
 
@@ -914,7 +903,7 @@ func TestNoErrAfterOutput(t *testing.T) {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	if err := pktline.NewEncoder(c).EncodeString("git-upload-pack /" + name + ".git\x00"); err != nil {
+	if _, err := io.WriteString(c, pkt("git-upload-pack /"+name+".git\x00")); err != nil {
 		t.Fatal(err)
 	}
 	// Stay silent until the daemon gives up on the connection, then
