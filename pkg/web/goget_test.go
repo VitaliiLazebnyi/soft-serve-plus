@@ -151,7 +151,16 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 	// some systems (Windows) answer with a reset that can discard the
 	// reply; a request only a little over the limit leaves little unread.
 	get := func(path string) int {
-		conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", l.Addr().String())
+		// A loaded macOS drops a loopback connect now and then, which
+		// then times out; try again rather than fail.
+		var conn net.Conn
+		var err error
+		for range 3 {
+			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String())
+			if err == nil {
+				break
+			}
+		}
 		is.NoErr(err)
 		defer conn.Close() //nolint:errcheck
 		is.NoErr(conn.SetDeadline(time.Now().Add(30 * time.Second)))
