@@ -72,14 +72,29 @@ func superviseIfInit() {
 // process's group (a terminal's ^C) reaches it once, through sigs, and not a
 // second time directly. When the child's stdin is a terminal, the child's
 // group becomes the terminal's foreground group: the terminal then signals
-// only the child, and the child may read from it.
+// only the child, and the child may read from it. That fails when the
+// terminal is not this process's controlling terminal; the child is then
+// started again without the terminal.
 func supervise(child *exec.Cmd, sigs <-chan os.Signal) (int, error) {
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var withoutTerminal *exec.Cmd
 	if f, ok := child.Stdin.(*os.File); ok && term.IsTerminal(f.Fd()) {
+		// A Cmd cannot be started twice, so the retry needs a copy.
+		withoutTerminal = &exec.Cmd{
+			Path: child.Path, Args: child.Args, Env: child.Env, Dir: child.Dir,
+			Stdin: child.Stdin, Stdout: child.Stdout, Stderr: child.Stderr,
+			ExtraFiles:  child.ExtraFiles,
+			SysProcAttr: &syscall.SysProcAttr{Setpgid: true},
+		}
 		child.SysProcAttr.Foreground = true
 		child.SysProcAttr.Ctty = 0 // the child's stdin
 	}
-	if err := child.Start(); err != nil {
+	err := child.Start()
+	if err != nil && withoutTerminal != nil {
+		child = withoutTerminal
+		err = child.Start()
+	}
+	if err != nil {
 		return 0, err
 	}
 	go func() {
