@@ -49,6 +49,8 @@ func roundTripConfig(t *testing.T) *Config {
 			MaxTimeout:     13,
 			IdleTimeout:    14,
 			MaxConnections: 15,
+			// Set apart from MaxConnections so a swap of the two shows.
+			MaxConnectionsPerIP: 16,
 		},
 		HTTP: HTTPConfig{
 			Enabled:        false,

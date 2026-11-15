@@ -347,9 +347,19 @@ git:
   # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: 3
 
-  # The maximum number of concurrent connections; at least 1. Connections
-  # beyond it are refused with "too many connections".
+  # The maximum number of concurrent connections, in total (at least 1)
+  # and from one client address (one IPv4 address or one IPv6 /64; 0 means
+  # no limit). Connections beyond either are refused with "too many
+  # connections". Loopback clients (127.0.0.0/8, ::1) have no per-address
+  # limit. Behind a TCP proxy that connects from a non-loopback address,
+  # such as another host or another container, every client has the
+  # proxy's address and shares one address's limit: set
+  # max_connections_per_ip to 0 there and limit clients at the proxy. Raise
+  # it when many clients share one NAT or CI egress address. The
+  # per-address limit keeps one address from taking every connection, not
+  # a few addresses together.
   max_connections: 32
+  max_connections_per_ip: 8
 
 # The HTTP server configuration.
 http:
@@ -567,11 +577,11 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_SSH_KEY_PATH`: SSH host key-pair path
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
-- `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The maximum number of simultaneous connections to git daemon (at least 1)
+- `SOFT_SERVE_GIT_MAX_CONNECTIONS`, `SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP`: How many git daemon connections are open at once, in total (default `32`, at least 1) and from one client address (default `8`, one IPv4 address or one IPv6 /64); more are refused with "too many connections". `0` means no per-address limit. Loopback clients (127.0.0.0/8, `::1`) have no per-address limit. Behind a TCP proxy that connects from a non-loopback address, such as another host or another container, every client has the proxy's address and all share 8: set the per-address limit to `0` there and limit clients at the proxy. The per-address limit stops one address from taking every connection; four addresses together still can, at the defaults
 - `SOFT_SERVE_SSH_MAX_TIMEOUT`, `SOFT_SERVE_GIT_MAX_TIMEOUT`: Seconds an SSH or git daemon connection may last in all (default `21600`, 6 hours). `0` means no limit
 - `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`: Seconds an HTTP request may take in all (default `21600`, 6 hours) or go without reading the request body or writing the response (default `60`). `0` means no limit
 - `SOFT_SERVE_HTTP_MAX_CONNECTIONS`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP`: How many git or LFS requests over HTTP are served at once, in total (default `64`) and from one client address (default `16`); more get 503. `0` means no limit. Loopback clients (127.0.0.0/8, `::1`) have no per-address limit, so a reverse proxy on the same host is bound only by the total. Behind a reverse proxy that connects from a non-loopback address, such as another host or another container, every client has the proxy's address and all share 16: set the per-address limit to `0` there and limit clients at the proxy. The per-address limit stops one address from taking every slot; four addresses together still can, at the defaults
-- Upgrading: `config.yaml` is written only on first start, so a server upgraded from a version whose `max_timeout` default was `0` keeps `max_timeout: 0` for SSH, the git daemon and HTTP; the server logs a warning at startup for each enabled server whose `max_timeout` is `0`. An older `config.yaml` has no `http.max_connections_per_ip` key, so the default of `16` applies after the upgrade; set it to `0` behind a reverse proxy that connects from a non-loopback address
+- Upgrading: `config.yaml` is written only on first start, so a server upgraded from a version whose `max_timeout` default was `0` keeps `max_timeout: 0` for SSH, the git daemon and HTTP; the server logs a warning at startup for each enabled server whose `max_timeout` is `0`. An older `config.yaml` has no `http.max_connections_per_ip` or `git.max_connections_per_ip` key, so the defaults of `16` and `8` apply after the upgrade; set them to `0` behind a proxy that connects from a non-loopback address
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.

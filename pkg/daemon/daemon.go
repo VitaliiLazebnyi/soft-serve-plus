@@ -112,7 +112,7 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 		finished:       make(chan struct{}, 1),
 		cfg:            cfg,
 		be:             backend.FromContext(ctx),
-		conns:          connections{m: make(map[net.Conn]struct{})},
+		conns:          newConnections(),
 		logger:         log.FromContext(ctx).WithPrefix("gitdaemon"),
 
 		accessTimeout: defaultAccessTimeout,
@@ -182,11 +182,12 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 		// accepted while the daemon closes is closed with the rest.
 		ctx, cancel := d.requestContext()
 		c := d.newServerConn(conn, cancel)
-		if err := d.conns.Add(c, d.cfg.Git.MaxConnections); err != nil {
+		if err := d.conns.Add(c, d.cfg.Git.MaxConnections, d.cfg.Git.MaxConnectionsPerIP); err != nil {
 			if errors.Is(err, git.ErrMaxConnections) {
-				// Close connection if there are too many open connections.
-				d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
-				d.refuseAsync(c, err)
+				// Close connection if there are too many open connections,
+				// in all or from its address.
+				d.logger.Debugf("git: %v, closing %s", err, conn.RemoteAddr())
+				d.refuseAsync(c, git.ErrMaxConnections)
 			} else {
 				c.Close() //nolint: errcheck
 			}

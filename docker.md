@@ -84,6 +84,11 @@ every client it forwards shares those 16. Set
 proxy. An older `config.yaml` has no such key, so 16 applies after an upgrade
 too.
 
+The git daemon likewise accepts at most 8 connections at once from one client
+address (`git.max_connections_per_ip`). Behind a TCP proxy in another
+container, or Docker's userland proxy, set
+`SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP=0` and limit clients at the proxy.
+
 ## Health check
 
 The image declares a Docker health check that requests `/readyz` from the HTTP

@@ -139,6 +139,13 @@ type GitConfig struct {
 	// MaxConnections is the maximum number of concurrent connections. It must
 	// be at least 1 while the daemon is enabled.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
+	// MaxConnectionsPerIP is the maximum number of concurrent connections
+	// from one client address (one IPv4 address, or one IPv6 /64). 0 means
+	// no limit. Loopback clients are not limited by it; behind a TCP proxy
+	// that connects from a non-loopback address every client has the
+	// proxy's address, so set it to 0 there and limit clients at the proxy.
+	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
 }
 
 // CORSConfig is the CORS configuration for the server.
@@ -448,6 +455,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_GIT_MAX_TIMEOUT=%d", c.Git.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_GIT_IDLE_TIMEOUT=%d", c.Git.IdleTimeout),
 		fmt.Sprintf("SOFT_SERVE_GIT_MAX_CONNECTIONS=%d", c.Git.MaxConnections),
+		fmt.Sprintf("SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP=%d", c.Git.MaxConnectionsPerIP),
 		fmt.Sprintf("SOFT_SERVE_HTTP_ENABLED=%t", c.HTTP.Enabled),
 		fmt.Sprintf("SOFT_SERVE_HTTP_LISTEN_ADDR=%s", c.HTTP.ListenAddr),
 		fmt.Sprintf("SOFT_SERVE_HTTP_TLS_KEY_PATH=%s", c.HTTP.TLSKeyPath),
@@ -803,12 +811,13 @@ func DefaultConfig() *Config {
 			MaxSessions:                 10,
 		},
 		Git: GitConfig{
-			Enabled:        true,
-			ListenAddr:     ":9418",
-			PublicURL:      "git://localhost",
-			MaxTimeout:     DefaultMaxTimeout,
-			IdleTimeout:    3,
-			MaxConnections: 32,
+			Enabled:             true,
+			ListenAddr:          ":9418",
+			PublicURL:           "git://localhost",
+			MaxTimeout:          DefaultMaxTimeout,
+			IdleTimeout:         3,
+			MaxConnections:      32,
+			MaxConnectionsPerIP: 8,
 		},
 		HTTP: HTTPConfig{
 			Enabled:             true,
@@ -950,6 +959,10 @@ func (c *Config) Validate() error {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
 		}
+	}
+
+	if c.Git.MaxConnectionsPerIP < 0 {
+		return fmt.Errorf("git.max_connections_per_ip: %d is negative; use 0 for no limit", c.Git.MaxConnectionsPerIP)
 	}
 
 	for _, v := range []struct {
