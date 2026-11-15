@@ -145,6 +145,69 @@ func TestServiceFailureAfterClientGone(t *testing.T) {
 	}
 }
 
+// git for Windows dies of a closed output with die()'s 128 and "fwrite
+// error: Invalid argument", not of SIGPIPE or 141; after a failed client
+// write that is the client going away. With another message, 128 is still
+// a git failure.
+func TestServiceClientGoneExit128(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	for _, tc := range []struct {
+		msg      string
+		canceled bool
+	}{
+		{"fatal: fwrite error: Invalid argument", true},
+		{"fatal: write error: Broken pipe", true},
+		{"fatal: write failure on 'standard output': Invalid argument", true},
+		{"fatal: disk full", false},
+	} {
+		err := UploadPack(t.Context(), ServiceCommand{
+			Stdout: failingWriter{err: io.EOF},
+			Dir:    t.TempDir(),
+			CmdFunc: func(c *exec.Cmd) {
+				c.Path = sh
+				c.Args = []string{"sh", "-c", "printf x; sleep 0.3; echo \"$0\" >&2; exit 128", tc.msg}
+			},
+		})
+		if got := errors.Is(err, context.Canceled); got != tc.canceled {
+			t.Errorf("%q: err = %v, cancellation = %v, want %v", tc.msg, err, got, tc.canceled)
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.msg) {
+			t.Errorf("%q: err = %v, want git's stderr in it", tc.msg, err)
+		}
+	}
+}
+
+func TestOutputClosedExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	exit := func(code string) error {
+		return exec.CommandContext(t.Context(), "sh", "-c", "exit "+code).Run()
+	}
+	for _, tc := range []struct {
+		err    error
+		stderr string
+		want   bool
+	}{
+		{exit("141"), "", true},
+		{exit("128"), "fatal: fwrite error: Invalid argument", true},
+		{exit("128"), "fatal: packet write failed", true},
+		{exit("128"), "fatal: not a git repository", false},
+		{exit("3"), "fatal: fwrite error: Invalid argument", false},
+		{errors.New("other"), "fatal: write error", false},
+	} {
+		if got := outputClosedExit(tc.err, tc.stderr); got != tc.want {
+			t.Errorf("outputClosedExit(%v, %q) = %v, want %v", tc.err, tc.stderr, got, tc.want)
+		}
+	}
+}
+
 func TestBrokenPipeExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
@@ -178,6 +241,21 @@ func TestServiceCmdFuncOutputRefused(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "stdout already set") {
 		t.Fatalf("err = %v, want stdout already set", err)
+	}
+}
+
+// A CmdFunc that sets git's input while the command has one is refused by
+// StdinPipe, which runs after CmdFunc and the output pipes, and the output
+// pipes made by then are closed.
+func TestServiceCmdFuncStdinRefused(t *testing.T) {
+	err := UploadPack(t.Context(), ServiceCommand{
+		Stdin:   strings.NewReader(""),
+		Stdout:  io.Discard,
+		Dir:     initBare(t),
+		CmdFunc: func(c *exec.Cmd) { c.Stdin = strings.NewReader("") },
+	})
+	if err == nil || !strings.Contains(err.Error(), "Stdin already set") {
+		t.Fatalf("err = %v, want Stdin already set", err)
 	}
 }
 

@@ -206,12 +206,14 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		// and git was stopped for it. Report the cancellation rather than
 		// how git ended so callers can tell it apart from a git failure.
 		return fmt.Errorf("%s: %w (%w)", svc, ctx.Err(), err)
-	case progress.clientGone.Load() && brokenPipeExit(err):
+	case progress.clientGone.Load() && outputClosedExit(err, errTail.lastLine()):
 		// A write to the client failed because the client closed its end,
-		// and git, whose output then went nowhere, died of the broken
-		// pipe. The context need not end with the client (an SSH session's
-		// is its connection's), so report this as a cancellation as well.
-		// A git that failed some other way after that is a failure, below.
+		// and git, whose output then went nowhere, died of it. The context
+		// need not end with the client (an SSH session's is its
+		// connection's), so report this as a cancellation as well. A git
+		// that failed some other way after that is a failure, below; see
+		// outputClosedExit for how the two are told apart and what that
+		// misses.
 		if msg := errTail.String(); msg != "" {
 			return fmt.Errorf("%s: client went away: %w (%w): %s", svc, context.Canceled, err, msg)
 		}
@@ -311,6 +313,13 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 		b.truncated = true
 	}
 	return n, nil
+}
+
+// lastLine returns the last non-empty line kept, trimmed: the message git
+// died with, if it did.
+func (b *tailBuffer) lastLine() string {
+	lines := strings.Split(strings.TrimSpace(string(b.buf)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // String returns the non-empty lines kept, trimmed and joined with "; " so
@@ -569,6 +578,48 @@ func brokenPipeExit(err error) bool {
 		return true
 	}
 	return exitErr.ExitCode() == gitPipeExitCode
+}
+
+// outputClosedExit reports whether err, returned by Wait for git, with
+// lastStderr the last line git wrote to stderr, means git died because its
+// output was closed: of a broken pipe (brokenPipeExit), or with die()'s
+// status 128 after a failed write to its output.
+//
+// The second case is Windows: git for Windows writes most output through
+// stdio, where a write to a closed pipe fails with EINVAL rather than EPIPE,
+// so maybe_flush_or_die reports "fwrite error: Invalid argument" (or
+// write_or_die "write error") and exits 128 instead of 141. die() exits 128
+// for every failure, so only the message tells them apart, and only the
+// messages of a failed write to git's own output count. The trade-off:
+// a death the client caused with another message (a failed packet_flush,
+// or EOF on a read) is still logged as a failure.
+func outputClosedExit(err error, lastStderr string) bool {
+	if brokenPipeExit(err) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 128 {
+		return false
+	}
+	msg := strings.ToLower(lastStderr)
+	for _, m := range outputWriteFailures {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// outputWriteFailures are the messages, lowercased, git dies with when a
+// write to its stdout or stderr fails: maybe_flush_or_die's "fwrite error"
+// and "write failure on 'standard output'", write_or_die's "write error",
+// pkt-line's "packet write failed", and strerror's "broken pipe".
+var outputWriteFailures = []string{
+	"fwrite error",
+	"write error",
+	"write failure",
+	"packet write",
+	"broken pipe",
 }
 
 // stoppedByContext reports whether err, returned by Wait for a command run
