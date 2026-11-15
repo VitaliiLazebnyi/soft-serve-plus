@@ -113,15 +113,7 @@ docker run ... \
 > (the example above binds it to the host's loopback interface), or keep it
 > unpublished and scrape it from a container on the same Docker network.
 
-## Building the image yourself
-
-The `Dockerfile` copies a prebuilt binary from `<os>/<arch>/soft`, so build that
-for Linux first:
-
-```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/soft ./cmd/soft
-docker build --platform linux/amd64 -t soft-serve-plus:latest .
-```
+## Hooks and bash
 
 The image does not ship bash; hooks run with BusyBox `sh`. Rewrite an admin
 hook that starts with `#!/bin/bash` for `sh`, or add bash in a derived image:
@@ -131,6 +123,16 @@ FROM ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
 USER root
 RUN apk add --no-cache bash
 USER soft:soft
+```
+
+## Building the image yourself
+
+The `Dockerfile` copies a prebuilt binary from `<os>/<arch>/soft`, so build that
+for Linux first:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/soft ./cmd/soft
+docker build --platform linux/amd64 -t soft-serve-plus:latest .
 ```
 
 ## Reaping background git processes
