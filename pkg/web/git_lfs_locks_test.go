@@ -66,7 +66,7 @@ func TestLFSLocksGetRejectsInvalidParams(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocks(w, req)
+			serveRoute((*gitServer).serviceLfsLocks, w, req)
 
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusBadRequest, w.Body)
@@ -104,7 +104,7 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocks(w, req)
+			serveRoute((*gitServer).serviceLfsLocks, w, req)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -131,7 +131,7 @@ func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) {
 		req.Header.Set("Content-Type", lfs.MediaType)
 		req.Header.Set("Accept", lfs.MediaType)
 		w := httptest.NewRecorder()
-		serviceLfsLocksVerify(w, req)
+		serveRoute((*gitServer).serviceLfsLocksVerify, w, req)
 		return w
 	}
 
@@ -234,7 +234,7 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?limit=4&cursor="+cursor, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocks(w, req)
+			serveRoute((*gitServer).serviceLfsLocks, w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
 			}
@@ -278,7 +278,7 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 			req.Header.Set("Content-Type", lfs.MediaType)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocksVerify(w, req)
+			serveRoute((*gitServer).serviceLfsLocksVerify, w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
 			}
@@ -340,10 +340,11 @@ func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
 		}
 	}
 
-	if got := authorize("", "info/lfs/locks", http.MethodGet, true, access.ReadOnlyAccess, false, false); got != serve {
+	locks := gitRouteFor(t, "/info/lfs/locks")
+	if got := authorize(locks.access(http.MethodGet, ""), true, access.ReadOnlyAccess, false, false); got != serve {
 		t.Errorf("reader lock list: got %v, want serve", got)
 	}
-	if got := authorize("", "info/lfs/locks", http.MethodPost, true, access.ReadOnlyAccess, false, false); got != forbidLFSWrite {
+	if got := authorize(locks.access(http.MethodPost, ""), true, access.ReadOnlyAccess, false, false); got != forbidLFSWrite {
 		t.Errorf("reader lock create: got %v, want forbidLFSWrite", got)
 	}
 }
@@ -358,7 +359,7 @@ func TestLFSLocksListFilterNoMatch(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocks(w, req)
+			serveRoute((*gitServer).serviceLfsLocks, w, req)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -391,7 +392,7 @@ func TestLFSLockCreateConflictReturnsLock(t *testing.T) {
 	req.Header.Set("Accept", lfs.MediaType)
 	req.Header.Set("Content-Type", lfs.MediaType)
 	w := httptest.NewRecorder()
-	serviceLfsLocks(w, req)
+	serveRoute((*gitServer).serviceLfsLocks, w, req)
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusConflict, w.Body)
@@ -428,7 +429,7 @@ func TestLFSLockForceUnlockWrapsLock(t *testing.T) {
 	req.Header.Set("Content-Type", lfs.MediaType)
 	req = mux.SetURLVars(req, map[string]string{"lock_id": id})
 	w := httptest.NewRecorder()
-	serviceLfsLocksDelete(w, req)
+	serveRoute((*gitServer).serviceLfsLocksDelete, w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -461,16 +462,16 @@ func TestLFSLocksAnonymousWriterAsksForCredentials(t *testing.T) {
 
 	for name, rq := range map[string]struct {
 		req     *http.Request
-		handler http.HandlerFunc
+		handler gitHandler
 	}{
-		"create": {create, serviceLfsLocks},
-		"unlock": {unlock, serviceLfsLocksDelete},
+		"create": {create, (*gitServer).serviceLfsLocks},
+		"unlock": {unlock, (*gitServer).serviceLfsLocksDelete},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rq.req.Header.Set("Accept", lfs.MediaType)
 			rq.req.Header.Set("Content-Type", lfs.MediaType)
 			w := httptest.NewRecorder()
-			rq.handler(w, rq.req)
+			serveRoute(rq.handler, w, rq.req)
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusUnauthorized, w.Body)
 			}

@@ -18,29 +18,130 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// GitRoute is a route for git services.
+// GitRoute is a route for git services. It holds the access its requests
+// need, so the rule sits next to the route: see access.
 type GitRoute struct {
 	method  []string
-	handler http.HandlerFunc
+	handler gitHandler
 	path    string
-	// pending tracks repositories created by push-to-create; see
-	// pushCreates. GitController sets it.
-	pending *pushCreates
-	// limits bounds the requests the git routes serve; see requestLimits.
-	// GitController sets it.
-	limits *requestLimits
+	// lfs is set on the Git LFS routes. They are served only when LFS is
+	// enabled, and answer refusals with an LFS JSON body.
+	lfs bool
+	// write lists the methods that need write access. The others need
+	// read access.
+	write []string
+	// service is set on the routes the git service of the request decides:
+	// receive-pack needs write access and may create a missing repository
+	// (push-to-create); the other services need read access.
+	service bool
+	// server serves the route. gitController sets it.
+	server *gitServer
 }
 
 var _ http.Handler = GitRoute{}
+
+// gitHandler serves a request of a git route once withAccess has let it
+// through. gr is never nil, and gr.repo is the repository the caller may
+// read.
+type gitHandler func(s *gitServer, w http.ResponseWriter, r *http.Request, gr *gitRequest)
+
+// gitServer holds what the git routes share.
+type gitServer struct {
+	cfg       *config.Config
+	be        *backend.Backend
+	dbx       *db.DB
+	datastore store.Store
+	// pending tracks repositories created by push-to-create; see
+	// pushCreates.
+	pending *pushCreates
+	// limits bounds the requests the git routes serve; see requestLimits.
+	limits *requestLimits
+}
+
+// newGitServer returns a server for the git routes, using the config,
+// backend, database and store in ctx.
+func newGitServer(ctx context.Context, pending *pushCreates) *gitServer {
+	cfg := config.FromContext(ctx)
+	return &gitServer{
+		cfg:       cfg,
+		be:        backend.FromContext(ctx),
+		dbx:       db.FromContext(ctx),
+		datastore: store.FromContext(ctx),
+		pending:   pending,
+		limits:    newRequestLimits(cfg.HTTP),
+	}
+}
+
+// gitRequest is what a git route knows about a request. The route fills in
+// the repository's name, directory, the path inside it and the git service;
+// withAccess adds the caller, the repository and the caller's access level.
+type gitRequest struct {
+	// name is the sanitized repository name.
+	name string
+	// dir is the repository's directory.
+	dir string
+	// file is the request path inside the repository, such as "info/refs".
+	file string
+	// service is the git service named by the RPC path or, on the ref
+	// advertisement, by ?service=; empty on other routes.
+	service git.Service
+	user    proto.User
+	// repo is nil until withAccess finds the caller may read it.
+	repo  proto.Repository
+	level access.AccessLevel
+}
+
+// newRequest returns what the route knows about r.
+func (g GitRoute) newRequest(r *http.Request) *gitRequest {
+	vars := mux.Vars(r)
+	repo := vars["repo"]
+	gr := &gitRequest{
+		file: strings.TrimPrefix(r.URL.Path, "/"+repo+"/"),
+		// The RPC route carries the service in its path; the
+		// caller-supplied ?service= only means something on the ref
+		// advertisement.
+		service: git.Service(vars["service"]),
+		name:    utils.SanitizeRepo(repo),
+	}
+	if gr.service == "" && gr.file == "info/refs" {
+		gr.service = getServiceType(r)
+	}
+	gr.dir = filepath.Join(g.server.cfg.DataPath, "repos", gr.name+".git")
+	return gr
+}
+
+// routeAccess is the access a request of a route needs.
+type routeAccess struct {
+	// lfs: the route is a Git LFS route.
+	lfs bool
+	// write: the request needs write access, not just read access.
+	write bool
+	// create: a caller who may create repositories creates a missing one.
+	create bool
+}
+
+// access returns the access a request with method and service needs.
+func (g GitRoute) access(method string, service git.Service) routeAccess {
+	a := routeAccess{lfs: g.lfs, write: slices.Contains(g.write, method)}
+	if g.service && service == git.ReceivePackService {
+		a.write = true
+		// HEAD is answered like GET, but only to check the route, so it
+		// does not create the repository.
+		a.create = method != http.MethodHead
+	}
+	return a
+}
 
 // ServeHTTP implements http.Handler. The method is checked before
 // authorization so a mismatched method can neither probe nor create a
@@ -52,7 +153,9 @@ func (g GitRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g.limits.serve(w, r, withAccess(g.pending, g.handler))
+	g.server.limits.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.server.withAccess(g, w, r)
+	}))
 }
 
 // allowed returns the methods the route answers: a route that answers GET
@@ -83,28 +186,13 @@ var (
 	}, []string{"repo", "file"})
 )
 
+// withParams sanitizes the repository name in the URL variables of the go
+// get route.
 func withParams(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		cfg := config.FromContext(ctx)
 		vars := mux.Vars(r)
-		repo := vars["repo"]
-
-		// Construct "file" param from path
-		vars["file"] = strings.TrimPrefix(r.URL.Path, "/"+repo+"/")
-
-		// The RPC route carries the service in its path; the caller-supplied
-		// ?service= only means something on the ref advertisement.
-		if vars["service"] == "" && vars["file"] == "info/refs" {
-			vars["service"] = getServiceType(r).String()
-		}
-
-		repo = utils.SanitizeRepo(repo)
-		vars["repo"] = repo
-		vars["dir"] = filepath.Join(cfg.DataPath, "repos", repo+".git")
-		r = mux.SetURLVars(r, vars)
-
-		next.ServeHTTP(w, r)
+		vars["repo"] = utils.SanitizeRepo(vars["repo"])
+		next.ServeHTTP(w, mux.SetURLVars(r, vars))
 	})
 }
 
@@ -117,7 +205,7 @@ func GitController(ctx context.Context, r *mux.Router) {
 // create in pending.
 func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	basePrefix := "/{repo:.*}"
-	limits := newRequestLimits(config.FromContext(ctx).HTTP)
+	server := newGitServer(ctx, pending)
 
 	goGet := withParams(withCaller(http.HandlerFunc(GoGetHandler)))
 
@@ -141,11 +229,8 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	})
 
 	for _, route := range gitRoutes {
-		route.pending = pending
-		route.limits = limits
-		// NOTE: withParams must always be the outermost wrapper, otherwise the
-		// request vars will not be set.
-		r.Handle(basePrefix+route.path, withParams(route))
+		route.server = server
+		r.Handle(basePrefix+route.path, route)
 	}
 
 	// Handle go-get
@@ -192,46 +277,63 @@ var gitRoutes = []GitRoute{
 	// wraps each of them in withAccess.
 	{
 		method:  []string{http.MethodPost},
-		handler: serviceRpc,
+		handler: (*gitServer).serviceRpc,
 		path:    "/{service:(?:git-upload-archive|git-upload-pack|git-receive-pack)$}",
+		service: true,
 	},
 	{
 		method:  []string{http.MethodGet},
-		handler: getInfoRefs,
+		handler: (*gitServer).getInfoRefs,
 		path:    "/info/refs",
+		service: true,
 	},
 	// Git LFS
+	// https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md
 	{
+		// An upload batch needs write access; serviceLfsBatch checks
+		// that, since the operation is in the body.
 		method:  []string{http.MethodPost},
-		handler: serviceLfsBatch,
+		handler: (*gitServer).serviceLfsBatch,
 		path:    "/info/lfs/objects/batch",
+		lfs:     true,
 	},
 	{
 		// Git LFS basic object handler
 		method:  []string{http.MethodGet, http.MethodPut},
-		handler: serviceLfsBasic,
+		handler: (*gitServer).serviceLfsBasic,
 		path:    "/info/lfs/objects/basic/{oid:[0-9a-f]{64}$}",
+		lfs:     true,
+		write:   []string{http.MethodPut},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: serviceLfsBasicVerify,
+		handler: (*gitServer).serviceLfsBasicVerify,
 		path:    "/info/lfs/objects/basic/verify",
+		lfs:     true,
 	},
 	// Git LFS locks
+	// https://github.com/git-lfs/git-lfs/blob/main/docs/api/locking.md
 	{
+		// GET lists locks, which only needs read access.
 		method:  []string{http.MethodPost, http.MethodGet},
-		handler: serviceLfsLocks,
+		handler: (*gitServer).serviceLfsLocks,
 		path:    "/info/lfs/locks",
+		lfs:     true,
+		write:   []string{http.MethodPost},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: serviceLfsLocksVerify,
+		handler: (*gitServer).serviceLfsLocksVerify,
 		path:    "/info/lfs/locks/verify",
+		lfs:     true,
+		write:   []string{http.MethodPost},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: serviceLfsLocksDelete,
+		handler: (*gitServer).serviceLfsLocksDelete,
 		path:    "/info/lfs/locks/{lock_id:[0-9]+}/unlock",
+		lfs:     true,
+		write:   []string{http.MethodPost},
 	},
 }
 
@@ -320,27 +422,6 @@ func denyRead(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) {
 	}
 }
 
-// lfsNeedsWrite reports whether an LFS request needs write access.
-// https://github.com/git-lfs/git-lfs/blob/main/docs/api/locking.md
-func lfsNeedsWrite(file, method string) bool {
-	switch {
-	case strings.HasPrefix(file, "info/lfs/locks"):
-		// GET lists locks, which only needs read access.
-		return strings.HasSuffix(file, "lfs/locks") && method == http.MethodPost ||
-			strings.HasSuffix(file, "lfs/locks/verify") ||
-			strings.HasSuffix(file, "/unlock") && method == http.MethodPost
-	case strings.HasPrefix(file, "info/lfs/objects/basic"):
-		return method == http.MethodPut
-	}
-	return false
-}
-
-// isPushEndpoint reports whether a receive-pack request on file may create
-// the repository: only the ref advertisement and the RPC itself.
-func isPushEndpoint(file string) bool {
-	return file == "info/refs" || file == git.ReceivePackService.String()
-}
-
 // verdict is the outcome of authorizing a git or LFS request.
 type verdict int
 
@@ -367,38 +448,37 @@ const (
 	unauthorizedLFS
 )
 
-// authorize decides what to do with a request without touching the
-// response, so the decision order can be tested as a table. readable is
-// whether the caller may read an existing repository; a private repository
-// the caller cannot read and a missing one both arrive as !readable, so
-// they get the same verdict. Bad credentials are rejected before a push can
-// create anything.
-func authorize(service git.Service, file, method string, readable bool, level access.AccessLevel, anonymous, badCreds bool) verdict {
+// authorize decides what to do with a request that needs need, without
+// touching the response, so the decision order can be tested as a table.
+// readable is whether the caller may read an existing repository; a private
+// repository the caller cannot read and a missing one both arrive as
+// !readable, so they get the same verdict. Bad credentials are rejected
+// before a push can create anything.
+func authorize(need routeAccess, readable bool, level access.AccessLevel, anonymous, badCreds bool) verdict {
+	canWrite := level >= access.ReadWriteAccess
 	switch {
-	case strings.HasPrefix(file, "info/lfs"):
+	case need.lfs:
 		switch {
 		case !readable:
 			return denyUnreadable
 		case badCreds:
 			return forbid
-		case lfsNeedsWrite(file, method) && level < access.ReadWriteAccess && anonymous:
+		case need.write && !canWrite && anonymous:
 			return unauthorizedLFS
-		case lfsNeedsWrite(file, method) && level < access.ReadWriteAccess:
+		case need.write && !canWrite:
 			return forbidLFSWrite
 		}
-	case service == git.ReceivePackService:
+	case need.write:
 		switch {
 		case badCreds:
 			return forbid
-		case !readable && level >= access.ReadWriteAccess && isPushEndpoint(file) && method != http.MethodHead:
-			// HEAD is answered like GET, but only to check the
-			// route, so it does not create the repository.
+		case !readable && canWrite && need.create:
 			return createThenServe
 		case !readable:
 			return denyUnreadable
-		case level < access.ReadWriteAccess && anonymous:
+		case !canWrite && anonymous:
 			return unauthorized
-		case level < access.ReadWriteAccess:
+		case !canWrite:
 			return forbid
 		}
 	default:
@@ -461,162 +541,158 @@ func pathAncestors(p string) []string {
 	}
 }
 
-// withAccess authenticates the caller and authorizes them for the requested
-// repository. A repository created by push-to-create is recorded in pending,
-// which removes it if the push fails, or never arrives, without any ref.
-func withAccess(pending *pushCreates, next http.Handler) http.HandlerFunc {
-	var serve http.HandlerFunc
-	serve = func(w http.ResponseWriter, r *http.Request) {
-		orig := r
-		r, err := identify(r, mux.Vars(r)["repo"])
-		if !requireCaller(w, r) {
-			return
-		}
-
-		ctx := r.Context()
-		cfg := config.FromContext(ctx)
-		logger := log.FromContext(ctx)
-		be := backend.FromContext(ctx)
-		repoName := mux.Vars(r)["repo"]
-		user := proto.UserFromContext(ctx)
-		file := mux.Vars(r)["file"]
-		service := git.Service(mux.Vars(r)["service"])
-		lfsJSON := strings.HasPrefix(file, "info/lfs")
-
-		if lfsJSON && !cfg.LFS.Enabled {
-			logger.Debug("LFS is not enabled, skipping")
-			renderNotFound(w, r)
-			return
-		}
-
-		// repo is nil unless the caller may read it, so a private and a
-		// missing repository are already indistinguishable here.
-		repo, accessLevel := be.Readable(ctx, repoName, user)
-		ctx = proto.WithRepositoryContext(ctx, repo)
-		ctx = access.WithContext(ctx, accessLevel)
-		r = r.WithContext(ctx)
-
-		v := authorize(service, file, r.Method, repo != nil, accessLevel, user == nil, badCredentials(err))
-		if v == createThenServe {
-			if verr := utils.ValidateRepo(utils.SanitizeRepo(repoName)); verr != nil {
-				logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
-				// git shows a text/plain error body to the user.
-				http.Error(w, verr.Error(), http.StatusBadRequest)
-				return
-			}
-			private, cerr := be.DefaultPrivate(ctx, user)
-			if errors.Is(cerr, proto.ErrAnonymousPrivate) {
-				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
-				// Ask for credentials, as for the unauthorized verdict: git
-				// sends none on its first request, and only retries with
-				// them after a 401. A signed-in user then creates the
-				// repository; an anonymous client sees this body.
-				askCredentials(w, r)
-				http.Error(w, cerr.Error()+"; authenticate to create a repository by pushing, or ask an admin", http.StatusUnauthorized)
-				return
-			}
-			if cerr == nil {
-				if testHookBeforePushCreate != nil {
-					testHookBeforePushCreate()
-				}
-				repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
-			}
-			switch {
-			case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
-				logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
-				// As above: git sends credentials only after a 401, so ask
-				// for them. A signed-in admin then creates the repository; an
-				// anonymous client sees this body.
-				askCredentials(w, r)
-				http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
-				return
-			case errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized):
-				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
-				http.Error(w, cerr.Error(), http.StatusForbidden)
-				return
-			case errors.Is(cerr, proto.ErrRepoExist):
-				// Another request created the name since it was looked
-				// up. Authorize the caller for the repository now there,
-				// as if it had been there all along.
-				repo, accessLevel = be.Readable(ctx, repoName, user)
-				ctx = proto.WithRepositoryContext(ctx, repo)
-				ctx = access.WithContext(ctx, accessLevel)
-				r = r.WithContext(ctx)
-				v = authorize(service, file, r.Method, repo != nil, accessLevel, user == nil, false)
-				if v == createThenServe {
-					// The name was freed again before it could be looked
-					// up, by a creation that failed or a removal.
-					logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
-					http.Error(w, cerr.Error(), http.StatusConflict)
-					return
-				}
-			case cerr != nil:
-				logger.Error("failed to create repository", "repo", repoName, "err", cerr)
-				renderInternalServerError(w, r)
-				return
-			default:
-				ctx = proto.WithRepositoryContext(ctx, repo)
-				r = r.WithContext(ctx)
-				pending.add(ctx, repoName, repo, mux.Vars(r)["dir"])
-			}
-		}
-
-		switch v {
-		case denyUnreadable:
-			denyRead(w, r, err, lfsJSON)
-			return
-		case forbid:
-			if lfsJSON {
-				// Only bad credentials forbid an LFS request.
-				renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
-			} else {
-				renderForbidden(w, r)
-			}
-			return
-		case unauthorized:
-			askCredentials(w, r)
-			renderUnauthorized(w, r)
-			return
-		case forbidLFSWrite, unauthorizedLFS:
-			denyLFSWrite(w, r)
-			return
-		}
-
-		// A mirror sync would undo any ref a push changes, so refuse the
-		// push, ref advertisement included, before git asks for the pack.
-		// Only a caller allowed to write gets here, so the answer tells
-		// them nothing they could not read from the repository already.
-		if service == git.ReceivePackService && repo != nil && repo.IsMirror() {
-			logger.Info("refusing push to a mirror", "repo", repoName)
-			// git shows a text/plain error body to the user.
-			http.Error(w, proto.ErrMirrorReadOnly.Error(), http.StatusForbidden)
-			return
-		}
-
-		ctx, done, waited := pending.begin(ctx, repoName)
-		if waited {
-			// The repository was being removed, so repo and accessLevel
-			// may describe one that is gone. Start over, as a request
-			// arriving now would.
-			serve(w, orig)
-			return
-		}
-		if done != nil {
-			defer done()
-			r = r.WithContext(ctx)
-		}
-
-		next.ServeHTTP(w, r)
+// withAccess authenticates the caller, authorizes them for the requested
+// repository as route needs, and serves the route's handler. A repository
+// created by push-to-create is recorded in pending, which removes it if the
+// push fails, or never arrives, without any ref.
+func (s *gitServer) withAccess(route GitRoute, w http.ResponseWriter, orig *http.Request) {
+	gr := route.newRequest(orig)
+	r, err := identify(orig, gr.name)
+	if !requireCaller(w, r) {
+		return
 	}
-	return serve
+
+	ctx := r.Context()
+	logger := log.FromContext(ctx)
+	be := s.be
+	repoName := gr.name
+	user := proto.UserFromContext(ctx)
+	need := route.access(r.Method, gr.service)
+	lfsJSON := need.lfs
+
+	if lfsJSON && !s.cfg.LFS.Enabled {
+		logger.Debug("LFS is not enabled, skipping")
+		renderNotFound(w, r)
+		return
+	}
+
+	// repo is nil unless the caller may read it, so a private and a
+	// missing repository are already indistinguishable here.
+	repo, accessLevel := be.Readable(ctx, repoName, user)
+	ctx = proto.WithRepositoryContext(ctx, repo)
+	ctx = access.WithContext(ctx, accessLevel)
+	r = r.WithContext(ctx)
+
+	v := authorize(need, repo != nil, accessLevel, user == nil, badCredentials(err))
+	if v == createThenServe {
+		if verr := utils.ValidateRepo(utils.SanitizeRepo(repoName)); verr != nil {
+			logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
+			// git shows a text/plain error body to the user.
+			http.Error(w, verr.Error(), http.StatusBadRequest)
+			return
+		}
+		private, cerr := be.DefaultPrivate(ctx, user)
+		if errors.Is(cerr, proto.ErrAnonymousPrivate) {
+			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+			// Ask for credentials, as for the unauthorized verdict: git
+			// sends none on its first request, and only retries with
+			// them after a 401. A signed-in user then creates the
+			// repository; an anonymous client sees this body.
+			askCredentials(w, r)
+			http.Error(w, cerr.Error()+"; authenticate to create a repository by pushing, or ask an admin", http.StatusUnauthorized)
+			return
+		}
+		if cerr == nil {
+			if testHookBeforePushCreate != nil {
+				testHookBeforePushCreate()
+			}
+			repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
+		}
+		switch {
+		case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
+			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+			// As above: git sends credentials only after a 401, so ask
+			// for them. A signed-in admin then creates the repository; an
+			// anonymous client sees this body.
+			askCredentials(w, r)
+			http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
+			return
+		case errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized):
+			logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
+			http.Error(w, cerr.Error(), http.StatusForbidden)
+			return
+		case errors.Is(cerr, proto.ErrRepoExist):
+			// Another request created the name since it was looked
+			// up. Authorize the caller for the repository now there,
+			// as if it had been there all along.
+			repo, accessLevel = be.Readable(ctx, repoName, user)
+			ctx = proto.WithRepositoryContext(ctx, repo)
+			ctx = access.WithContext(ctx, accessLevel)
+			r = r.WithContext(ctx)
+			v = authorize(need, repo != nil, accessLevel, user == nil, false)
+			if v == createThenServe {
+				// The name was freed again before it could be looked
+				// up, by a creation that failed or a removal.
+				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
+				http.Error(w, cerr.Error(), http.StatusConflict)
+				return
+			}
+		case cerr != nil:
+			logger.Error("failed to create repository", "repo", repoName, "err", cerr)
+			renderInternalServerError(w, r)
+			return
+		default:
+			ctx = proto.WithRepositoryContext(ctx, repo)
+			r = r.WithContext(ctx)
+			s.pending.add(ctx, repoName, repo, gr.dir)
+		}
+	}
+
+	switch v {
+	case denyUnreadable:
+		denyRead(w, r, err, lfsJSON)
+		return
+	case forbid:
+		if lfsJSON {
+			// Only bad credentials forbid an LFS request.
+			renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+		} else {
+			renderForbidden(w, r)
+		}
+		return
+	case unauthorized:
+		askCredentials(w, r)
+		renderUnauthorized(w, r)
+		return
+	case forbidLFSWrite, unauthorizedLFS:
+		denyLFSWrite(w, r)
+		return
+	}
+
+	// A mirror sync would undo any ref a push changes, so refuse the
+	// push, ref advertisement included, before git asks for the pack.
+	// Only a caller allowed to write gets here, so the answer tells
+	// them nothing they could not read from the repository already.
+	if gr.service == git.ReceivePackService && repo != nil && repo.IsMirror() {
+		logger.Info("refusing push to a mirror", "repo", repoName)
+		// git shows a text/plain error body to the user.
+		http.Error(w, proto.ErrMirrorReadOnly.Error(), http.StatusForbidden)
+		return
+	}
+
+	ctx, done, waited := s.pending.begin(ctx, repoName)
+	if waited {
+		// The repository was being removed, so repo and accessLevel
+		// may describe one that is gone. Start over, as a request
+		// arriving now would.
+		s.withAccess(route, w, orig)
+		return
+	}
+	if done != nil {
+		defer done()
+		r = r.WithContext(ctx)
+	}
+
+	gr.user, gr.repo, gr.level = user, repo, accessLevel
+	route.handler(s, w, r, gr)
 }
 
 //nolint:revive
-func serviceRpc(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
-	cfg := config.FromContext(ctx)
+	cfg := s.cfg
 	logger := log.FromContext(ctx)
-	service, dir, repoName := git.Service(mux.Vars(r)["service"]), mux.Vars(r)["dir"], mux.Vars(r)["repo"]
+	service, dir, repoName := gr.service, gr.dir, gr.name
 
 	// git http-backend answers 415 to any other content type.
 	if !hasMediaType(r, fmt.Sprintf("application/x-%s-request", service)) {
@@ -673,7 +749,7 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 		cmd.Args = append(cmd.Args, "--stateless-rpc")
 	}
 
-	user := proto.UserFromContext(ctx)
+	user := gr.user
 	cmd.Env = cfg.Environ()
 	cmd.Env = append(cmd.Env, []string{
 		"SOFT_SERVE_REPO_NAME=" + repoName,
@@ -719,12 +795,11 @@ func serviceRpc(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getInfoRefs(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
-	cfg := config.FromContext(ctx)
+	cfg := s.cfg
 	logger := log.FromContext(ctx)
-	dir, repoName, file := mux.Vars(r)["dir"], mux.Vars(r)["repo"], mux.Vars(r)["file"]
-	service := git.Service(mux.Vars(r)["service"])
+	dir, repoName, file, service := gr.dir, gr.name, gr.file, gr.service
 	protocol := r.Header.Get("Git-Protocol")
 
 	if !isSmartService(service) {
@@ -761,7 +836,7 @@ func getInfoRefs(w http.ResponseWriter, r *http.Request) {
 		Args:   []string{"--stateless-rpc", "--advertise-refs"},
 	}
 
-	user := proto.UserFromContext(ctx)
+	user := gr.user
 	cmd.Env = cfg.Environ()
 	cmd.Env = append(cmd.Env, []string{
 		"SOFT_SERVE_REPO_NAME=" + repoName,

@@ -180,7 +180,7 @@ func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
 			req.Header.Set("Accept", lfs.MediaType)
 			req.Header.Set("Content-Type", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serviceLfsLocks(w, req)
+			serveRoute((*gitServer).serviceLfsLocks, w, req)
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusUnprocessableEntity, w.Body)
 			}
@@ -197,7 +197,7 @@ func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
 	req.Header.Set("Accept", lfs.MediaType)
 	req.Header.Set("Content-Type", lfs.MediaType)
 	w := httptest.NewRecorder()
-	serviceLfsLocks(w, req)
+	serveRoute((*gitServer).serviceLfsLocks, w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusCreated, w.Body)
 	}

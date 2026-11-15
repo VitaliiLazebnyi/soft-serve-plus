@@ -82,7 +82,7 @@ func newServiceRpcServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 			"dir":     dir,
 			"repo":    "repo",
 		})
-		serviceRpc(fw, r)
+		serveRoute((*gitServer).serviceRpc, fw, r)
 		h.reading = body.reading.Load()
 		h.endErr = r.Context().Err()
 		rc <- h

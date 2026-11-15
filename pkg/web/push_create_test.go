@@ -183,18 +183,18 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 	waits := make(chan string, 1)
 	pending.waiting = func(name string) { waits <- name }
 	var reached proto.Repository
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = proto.RepositoryFromContext(r.Context())
+	next := func(_ *gitServer, w http.ResponseWriter, _ *http.Request, gr *gitRequest) {
+		reached = gr.repo
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}
 	router := mux.NewRouter()
-	router.Handle("/{repo:.*}/info/refs", withParams(GitRoute{
+	router.Handle("/{repo:.*}/info/refs", GitRoute{
 		method:  []string{http.MethodGet},
 		handler: next,
 		path:    "/info/refs",
-		pending: pending,
-		limits:  &requestLimits{},
-	}))
+		service: true,
+		server:  &gitServer{cfg: config.FromContext(f.ctx), be: f.be, pending: pending, limits: &requestLimits{}},
+	})
 	handler := NewContextHandler(f.ctx)(router)
 
 	// fetch sends the owner's ref advertisement request for name while a

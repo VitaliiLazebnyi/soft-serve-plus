@@ -2,7 +2,6 @@ package web
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -17,21 +16,22 @@ import (
 // name), so the level alone must not change the answer.
 func TestAuthorize(t *testing.T) {
 	type route struct {
-		name    string
-		service git.Service
-		file    string
-		method  string
+		name string
+		need routeAccess
 	}
-	isLFS := func(rt route) bool { return strings.HasPrefix(rt.file, "info/lfs") }
+	isLFS := func(rt route) bool { return rt.need.lfs }
+	infoRefs := gitRouteFor(t, "/info/refs")
+	rpc := gitRouteFor(t, "/{service:(?:git-upload-archive|git-upload-pack|git-receive-pack)$}")
+	basic := gitRouteFor(t, "/info/lfs/objects/basic/{oid:[0-9a-f]{64}$}")
 	routes := []route{
-		{"fetch advert", git.UploadPackService, "info/refs", http.MethodGet},
-		{"fetch rpc", git.UploadPackService, "git-upload-pack", http.MethodPost},
-		{"push advert", git.ReceivePackService, "info/refs", http.MethodGet},
-		{"push rpc", git.ReceivePackService, "git-receive-pack", http.MethodPost},
-		{"lfs batch", "", "info/lfs/objects/batch", http.MethodPost},
-		{"lfs upload", "", "info/lfs/objects/basic/00", http.MethodPut},
-		{"lfs lock", "", "info/lfs/locks", http.MethodPost},
-		{"push advert head", git.ReceivePackService, "info/refs", http.MethodHead},
+		{"fetch advert", infoRefs.access(http.MethodGet, git.UploadPackService)},
+		{"fetch rpc", rpc.access(http.MethodPost, git.UploadPackService)},
+		{"push advert", infoRefs.access(http.MethodGet, git.ReceivePackService)},
+		{"push rpc", rpc.access(http.MethodPost, git.ReceivePackService)},
+		{"lfs batch", gitRouteFor(t, "/info/lfs/objects/batch").access(http.MethodPost, "")},
+		{"lfs upload", basic.access(http.MethodPut, "")},
+		{"lfs lock", gitRouteFor(t, "/info/lfs/locks").access(http.MethodPost, "")},
+		{"push advert head", infoRefs.access(http.MethodHead, git.ReceivePackService)},
 	}
 
 	type caller struct {
@@ -52,15 +52,15 @@ func TestAuthorize(t *testing.T) {
 	// cannot read the private repository.
 	for _, c := range callers {
 		for _, rt := range routes {
-			private := authorize(rt.service, rt.file, rt.method, false, access.NoAccess, c.anonymous, c.badCreds)
-			missing := authorize(rt.service, rt.file, rt.method, false, c.missing, c.anonymous, c.badCreds)
+			private := authorize(rt.need, false, access.NoAccess, c.anonymous, c.badCreds)
+			missing := authorize(rt.need, false, c.missing, c.anonymous, c.badCreds)
 			want := denyUnreadable
 			switch {
 			case c.badCreds && !isLFS(rt):
 				// LFS renders bad credentials from denyRead so the body
 				// is JSON; the verdict stays denyUnreadable.
 				want = forbid
-			case rt.service == git.ReceivePackService && !c.anonymous && isPushEndpoint(rt.file) && rt.method != http.MethodHead:
+			case rt.need.create && !c.anonymous:
 				// The one inherent difference: a push to a new name by a
 				// user who may create repositories creates it.
 				if missing != createThenServe {
@@ -103,7 +103,7 @@ func TestAuthorize(t *testing.T) {
 		{"writer push head", routes[7], access.ReadWriteAccess, false, serve},
 	}
 	for _, tt := range tests {
-		got := authorize(tt.route.service, tt.route.file, tt.route.method, true, tt.level, tt.anonymous, false)
+		got := authorize(tt.route.need, true, tt.level, tt.anonymous, false)
 		if got != tt.want {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
@@ -112,20 +112,31 @@ func TestAuthorize(t *testing.T) {
 	// Bad credentials on a readable repository are refused, and never
 	// create anything even when the anonymous level would allow a push.
 	for _, rt := range routes {
-		if got := authorize(rt.service, rt.file, rt.method, true, access.ReadOnlyAccess, true, true); got != forbid {
+		if got := authorize(rt.need, true, access.ReadOnlyAccess, true, true); got != forbid {
 			t.Errorf("bad creds on readable %s: got %v, want forbid", rt.name, got)
 		}
 		want := forbid
 		if isLFS(rt) {
 			want = denyUnreadable
 		}
-		if got := authorize(rt.service, rt.file, rt.method, false, access.ReadWriteAccess, true, true); got != want {
+		if got := authorize(rt.need, false, access.ReadWriteAccess, true, true); got != want {
 			t.Errorf("bad creds on missing %s: got %v, want %v", rt.name, got, want)
 		}
 	}
 
 	// A push may only create from the push endpoints, and not on HEAD.
-	if got := authorize(git.ReceivePackService, "HEAD", http.MethodGet, false, access.ReadWriteAccess, false, false); got != denyUnreadable {
-		t.Errorf("push service on HEAD: got %v, want denyUnreadable", got)
+	if got := authorize(routeAccess{write: true}, false, access.ReadWriteAccess, false, false); got != denyUnreadable {
+		t.Errorf("write without create: got %v, want denyUnreadable", got)
+	}
+	for _, rt := range gitRoutes {
+		for _, method := range rt.allowed() {
+			for _, service := range []git.Service{"", git.UploadPackService, git.UploadArchiveService, git.ReceivePackService} {
+				need := rt.access(method, service)
+				wantCreate := rt.service && service == git.ReceivePackService && method != http.MethodHead
+				if need.create != wantCreate {
+					t.Errorf("%s %s %q: create = %v, want %v", method, rt.path, service, need.create, wantCreate)
+				}
+			}
+		}
 	}
 }

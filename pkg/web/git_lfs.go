@@ -16,10 +16,8 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -108,7 +106,7 @@ func lfsBodyTooLarge(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md
 // TODO: support refname
 // POST: /<repo>.git/info/lfs/objects/batch
-func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithPrefix("http.lfs")
 
@@ -174,15 +172,12 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := mux.Vars(r)["repo"]
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	name := gr.name
+	repo := gr.repo
 
-	cfg := config.FromContext(ctx)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	cfg := s.cfg
+	dbx := s.dbx
+	datastore := s.datastore
 	// TODO: support S3 storage
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
@@ -266,8 +261,7 @@ func serviceLfsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	case lfs.OperationUpload:
 		// Check authorization
-		accessLevel := access.FromContext(ctx)
-		if accessLevel < access.ReadWriteAccess {
+		if gr.level < access.ReadWriteAccess {
 			denyLFSWrite(w, r)
 			return
 		}
@@ -356,25 +350,22 @@ func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, dat
 
 // serviceLfsBasic implements Git LFS basic transfer API
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md
-func serviceLfsBasic(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		serviceLfsBasicDownload(w, r)
+		s.serviceLfsBasicDownload(w, r, gr)
 	case http.MethodPut:
-		serviceLfsBasicUpload(w, r)
+		s.serviceLfsBasicUpload(w, r, gr)
 	}
 }
 
 // GET: /<repo>.git/info/lfs/objects/basic/<oid>
-func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
 	oid := mux.Vars(r)["oid"]
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	repo := gr.repo
 
-	cfg := config.FromContext(ctx)
+	cfg := s.cfg
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
@@ -408,7 +399,7 @@ func serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
-func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !hasMediaType(r, "application/octet-stream") {
 		renderJSON(w, r, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
 			Message: "invalid content type",
@@ -418,22 +409,12 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Checked in withAccess too. Repeated here so a routing or middleware
-	// mistake cannot turn into an unauthenticated write.
-	if access.FromContext(ctx) < access.ReadWriteAccess {
-		denyLFSWrite(w, r)
-		return
-	}
-
 	oid := mux.Vars(r)["oid"]
-	cfg := config.FromContext(ctx)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	cfg := s.cfg
+	dbx := s.dbx
+	datastore := s.datastore
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	repo := gr.repo
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
@@ -504,7 +485,7 @@ func serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST: /<repo>.git/info/lfs/objects/basic/verify
-func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r) {
 		return
 	}
@@ -512,10 +493,7 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 	var pointer lfs.Pointer
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	repo := gr.repo
 
 	defer r.Body.Close() //nolint: errcheck
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
@@ -540,9 +518,9 @@ func serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := config.FromContext(ctx)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	cfg := s.cfg
+	dbx := s.dbx
+	datastore := s.datastore
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 	if stat, err := strg.Stat(path.Join("objects", pointer.RelativePath())); err == nil {
@@ -632,18 +610,4 @@ func lfsMediaTypes(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
-}
-
-// lfsRepository returns the repository that withAccess stored in the request
-// context, answering 404 if there is none.
-func lfsRepository(w http.ResponseWriter, r *http.Request) (proto.Repository, bool) {
-	repo := proto.RepositoryFromContext(r.Context())
-	if repo == nil {
-		log.FromContext(r.Context()).Error("error getting repository from context")
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
-			Message: "repository not found",
-		})
-		return nil, false
-	}
-	return repo, true
 }
