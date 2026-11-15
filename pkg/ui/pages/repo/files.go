@@ -618,7 +618,9 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 	}
 	f.cursor = index
 	f.activeView = filesViewFiles
-	f.code.SetSideNote("")
+	// The list is shown next; the file is rendered again when it is
+	// opened, without the blame.
+	f.code.ClearSideNote()
 	f.blameView = false
 	f.currentBlame = nil
 	f.code.UseGlamour = false

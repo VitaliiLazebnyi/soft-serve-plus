@@ -31,9 +31,29 @@ const (
 const HighlightMax = 256 << 10
 
 // HighlightLineMax is the longest line, in bytes, of content that is
-// highlighted. chroma's time grows much faster than the length of a token:
-// one identifier of 64 KiB takes seconds, one of 1 MiB minutes.
+// highlighted or rendered as markdown. chroma's time grows much faster than
+// the length of a token: one identifier of 64 KiB takes seconds, one of
+// 1 MiB minutes, and glamour highlights code blocks with chroma.
 const HighlightLineMax = 4 << 10
+
+// HighlightMaxLines is the most lines content may have to be highlighted.
+// chroma's cost grows with the tokens, so many short lines cost far more
+// than their bytes.
+const HighlightMaxLines = 10000
+
+// GlamourMax is the largest content, in bytes, that is rendered as
+// markdown. glamour's cost is far from linear: 240 KiB of short paragraphs
+// took 20 s and 8 GiB.
+const GlamourMax = 32 << 10
+
+// GlamourMaxLines is the most lines content may have to be rendered as
+// markdown: glamour takes about half a millisecond for a list item.
+const GlamourMaxLines = 1000
+
+// GlamourMaxDepth is the deepest nesting of block quotes, lists and
+// indentation at the start of a line that is rendered as markdown. glamour's
+// time grows exponentially with it.
+const GlamourMaxDepth = 16
 
 // lastID numbers the Code views, so a RenderedMsg finds its view.
 var lastID atomic.Int64
@@ -43,6 +63,8 @@ var lastID atomic.Int64
 type RenderedMsg struct {
 	id     int64
 	render int
+	// epoch is the common.RenderGate epoch the render started in.
+	epoch int
 	lines  []string
 	// numbers holds, for each line, the number of the line of content it
 	// starts, or 0 for a line that continues a wrapped one.
@@ -71,10 +93,13 @@ type Code struct {
 	// that the result of an earlier one is dropped.
 	id     int64
 	render int
-	// pending is set while a render runs, and shown once the current
-	// content has been on screen.
+	// pending is set while a render of the current content is wanted and
+	// has not returned, and shown once the current content has been on
+	// screen.
 	pending bool
 	shown   bool
+	// renders keeps one render in flight.
+	renders common.RenderGate
 	// winWidth is the window width of the last tea.WindowSizeMsg. The
 	// content is wrapped to the width, so it is rendered again only when
 	// that changes.
@@ -154,6 +179,12 @@ func (r *Code) SetSideNote(s string) tea.Cmd {
 	return r.Init()
 }
 
+// ClearSideNote removes the sidenote from the next render without
+// rendering, for a view that is about to be hidden or given new content.
+func (r *Code) ClearSideNote() {
+	r.sidenote = ""
+}
+
 // Rendering reports whether the current content is being rendered and
 // nothing of it is on screen yet. A render after a resize or an option
 // change leaves the previous one on screen meanwhile.
@@ -162,7 +193,9 @@ func (r *Code) Rendering() bool {
 }
 
 // Init implements tea.Model. It returns a command that renders the content;
-// its RenderedMsg must come back to Update.
+// its RenderedMsg must come back to Update. While a render is in flight it
+// returns nil, and the content is rendered once that one returns, so that
+// key presses and resizes cost one render at a time.
 func (r *Code) Init() tea.Cmd {
 	r.render++
 	if r.content == "" {
@@ -173,6 +206,16 @@ func (r *Code) Init() tea.Cmd {
 		return nil
 	}
 	r.pending = true
+	epoch, ok := r.renders.Start()
+	if !ok {
+		return nil
+	}
+	return r.startRender(epoch)
+}
+
+// startRender returns the command of a render RenderGate let start in
+// epoch.
+func (r *Code) startRender(epoch int) tea.Cmd {
 	j := renderJob{
 		content:       r.content,
 		extension:     r.extension,
@@ -188,7 +231,7 @@ func (r *Code) Init() tea.Cmd {
 	id, render := r.id, r.render
 	return func() tea.Msg {
 		msg := j.run()
-		msg.id, msg.render = id, render
+		msg.id, msg.render, msg.epoch = id, render, epoch
 		return msg
 	}
 }
@@ -198,8 +241,20 @@ func (r *Code) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RenderedMsg:
-		if msg.id != r.id || msg.render != r.render || !r.pending {
-			// Another view's, an earlier render's, or delivered twice.
+		if msg.id != r.id || !r.renders.InFlight() {
+			// Another view's, or delivered twice.
+			return nil
+		}
+		again := r.renders.Done(msg.epoch)
+		if msg.render != r.render || !r.pending {
+			// The content, an option or the width changed while it was
+			// rendered: render what is wanted now, once for every change
+			// meanwhile.
+			if again && r.pending {
+				if epoch, ok := r.renders.Start(); ok {
+					return r.startRender(epoch)
+				}
+			}
 			return nil
 		}
 		r.pending = false
@@ -311,6 +366,7 @@ func (j renderJob) run() RenderedMsg {
 	// with spaces.
 	content = strings.ReplaceAll(content, "\t", strings.Repeat(" ", j.tabWidth))
 	small := len(content) <= HighlightMax
+	longest := longestLine(content)
 
 	if j.sidenote != "" {
 		msg.sidenote = strings.Split(j.sidenote, "\n")
@@ -321,7 +377,8 @@ func (j renderJob) run() RenderedMsg {
 	}
 	width := j.width - msg.sideWidth
 
-	if j.glamour && small {
+	if j.glamour && len(content) <= GlamourMax && longest <= HighlightLineMax &&
+		strings.Count(content, "\n") <= GlamourMaxLines && markdownDepth(content) <= GlamourMaxDepth {
 		md := j.isMarkdown
 		if md == nil {
 			v := common.IsFileMarkdown(content, j.extension)
@@ -334,10 +391,14 @@ func (j renderJob) run() RenderedMsg {
 				msg.err = err
 				return msg
 			}
-			// Each line of glamour's output is a line of its own.
-			for i, l := range wrapLine(out, width) {
-				msg.lines = append(msg.lines, l)
-				msg.numbers = append(msg.numbers, i+1)
+			// Each line of glamour's output is a line of its own; wrap
+			// them one by one, as wrapping the whole output at once
+			// costs far more.
+			for l := range strings.SplitSeq(out, "\n") {
+				for _, w := range wrapLine(l, width) {
+					msg.lines = append(msg.lines, w)
+					msg.numbers = append(msg.numbers, len(msg.numbers)+1)
+				}
 			}
 			return msg
 		}
@@ -356,7 +417,7 @@ func (j renderJob) run() RenderedMsg {
 	if !j.lineNumbers && j.styleConfig.CodeBlock.Margin != nil {
 		margin = int(*j.styleConfig.CodeBlock.Margin)
 	}
-	if small && longestLine(content) <= HighlightLineMax {
+	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
 		out, err := highlight(j.styleConfig, j.extension, content, j.lineNumbers)
 		if err != nil {
 			msg.err = err
@@ -399,6 +460,29 @@ func wrapLine(s string, width int) []string {
 		return []string{s}
 	}
 	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
+}
+
+// markdownDepth returns the deepest nesting at the start of a line of s:
+// block quote and list markers, plus one for every two columns of
+// indentation.
+func markdownDepth(s string) int {
+	deepest := 0
+	for line := range strings.SplitSeq(s, "\n") {
+		depth, spaces := 0, 0
+	scan:
+		for _, c := range line {
+			switch c {
+			case '>', '-', '*', '+':
+				depth++
+			case ' ':
+				spaces++
+			default:
+				break scan
+			}
+		}
+		deepest = max(deepest, depth+spaces/2)
+	}
+	return deepest
 }
 
 // longestLine returns the length in bytes of the longest line of s.
