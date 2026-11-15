@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/internal/safego"
 )
 
@@ -98,7 +99,9 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	cmd.Args = append(cmd.Args, svc.Name())
 	cmd.Args = append(cmd.Args, scmd.Args...)
 	cmd.Args = append(cmd.Args, ".")
-	cmd.Env = serviceEnv(os.Environ(), scmd.Env)
+	// git.WithServerConfig keeps automatic maintenance after a push in the
+	// foreground, so it does not leave an orphan (see git.ServerConfig).
+	cmd.Env = git.WithServerConfig(serviceEnv(os.Environ(), scmd.Env))
 
 	// stdin is git's input pipe, set below once the output pipes are.
 	var stdin io.WriteCloser

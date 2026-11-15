@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/soft-serve/git"
 )
 
 var (
@@ -49,10 +51,7 @@ const (
 )
 
 // GitConfigEntry is a single git configuration key/value pair.
-type GitConfigEntry struct {
-	Key   string
-	Value string
-}
+type GitConfigEntry = git.ConfigEntry
 
 // ValidatedGitRemote is the result of validating a git remote URL.
 type ValidatedGitRemote struct {
@@ -74,6 +73,10 @@ type ValidatedGitRemote struct {
 // redirects, turns off any proxy, and pins each validated address. Callers
 // MUST apply it to every git command that touches the remote, after the
 // server's own environment so that it wins, or the validation means nothing.
+//
+// It replaces any GIT_CONFIG_* in the server's environment, and so also
+// carries git.ServerConfig, which keeps a fetch's automatic maintenance in
+// the foreground.
 //
 // It also aborts an http transfer that stalls (see GitLowSpeedLimit), so a
 // remote that stops sending cannot hold the git process open forever.
@@ -106,14 +109,11 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 	for _, r := range remotes {
 		entries = append(entries, r.Config...)
 	}
+	// This environment replaces the GIT_CONFIG_* of the server's own, so it
+	// carries the settings the server applies to every git process.
+	entries = append(entries, git.ServerConfig()...)
 
-	env := []string{fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(entries))}
-	for i, e := range entries {
-		env = append(env,
-			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, e.Key),
-			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, e.Value),
-		)
-	}
+	env := git.ConfigEnv(entries...)
 	// git:// remotes go through GIT_PROXY_COMMAND or core.gitProxy when one
 	// is set, which likewise resolves and connects on its own. An empty
 	// GIT_PROXY_COMMAND disables both, since git reads core.gitProxy only
