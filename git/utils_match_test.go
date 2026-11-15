@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -96,5 +97,55 @@ func TestLatestFileReadsOnce(t *testing.T) { //nolint: paralleltest
 	}
 	if reads != 1 {
 		t.Errorf("LatestFile read the file %d times, want once", reads)
+	}
+}
+
+// A binary match is skipped after its first bytes, with or without a size
+// limit, rather than read in full; one over the limit is skipped as binary,
+// not reported as too large.
+func TestLatestFileSniffsBinary(t *testing.T) {
+	const bigSize = 16 << 20
+	bin := append([]byte{0}, bytes.Repeat([]byte("b"), bigSize)...)
+	repo, ref := newFilesRepo(t, map[string][]byte{
+		"a/README":    bin,
+		"b/README":    bin,
+		"b/readme.md": []byte("text\n"),
+	})
+	for _, limit := range []int64{0, 1 << 20} {
+		var err error
+		n := allocated(func() { _, _, err = LatestFile(repo, ref, "a/README*", limit) })
+		if !errors.Is(err, ErrFileNotFound) {
+			t.Errorf("limit %d: err = %v, want ErrFileNotFound", limit, err)
+		}
+		if n > 1<<20 {
+			t.Errorf("limit %d: skipping a %d MiB binary file allocated %d KiB", limit, bigSize>>20, n>>10)
+		}
+		content, fp, err := LatestFile(repo, ref, "b/[rR][eE][aA][dD][mM][eE]*", limit)
+		if err != nil || fp != "b/readme.md" || content != "text\n" {
+			t.Errorf("limit %d: LatestFile = %q, %q, %v; want b/readme.md", limit, content, fp, err)
+		}
+	}
+}
+
+func TestTextWriter(t *testing.T) {
+	t.Parallel()
+	w := &textWriter{limit: 10}
+	if _, err := w.Write([]byte("0123456789")); err != nil || w.over || w.binary {
+		t.Fatalf("10 bytes at limit 10: %v", err)
+	}
+	if _, err := w.Write([]byte("x")); !errors.Is(err, ErrFileTooLarge) || !w.over {
+		t.Fatalf("past the limit: %v", err)
+	}
+
+	w = &textWriter{}
+	if _, err := w.Write(bytes.Repeat([]byte("a"), sniffLen-1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte{0}); !errors.Is(err, errBinary) || !w.binary {
+		t.Fatalf("NUL at byte %d: %v", sniffLen-1, err)
+	}
+	w = &textWriter{}
+	if _, err := w.Write(append(bytes.Repeat([]byte("a"), sniffLen), 0)); err != nil || w.binary {
+		t.Fatalf("NUL past the sniffed bytes: %v", err)
 	}
 }

@@ -36,8 +36,13 @@ type PktlineError struct {
 // Error implements error.
 func (e *PktlineError) Error() string { return e.Text }
 
-// WritePkt writes payload to w as one pkt-line, in a single write.
+// WritePkt writes payload to w as one pkt-line, in a single write. An empty
+// payload has no pkt-line of its own ("0004" is not one git sends), so it
+// is written as a flush-pkt, as go-git's encoder did.
 func WritePkt(w io.Writer, payload []byte) error {
+	if len(payload) == 0 {
+		return WriteFlush(w)
+	}
 	if len(payload) > maxPktPayload {
 		return errPktTooLong
 	}

@@ -1268,8 +1268,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 			return errRepoChangedDuringMirror
 		}
 
-		// The flag is written first and the git config last, so a failure
-		// writing the config rolls the flag back and the two stay in step.
+		// The flag is written first and the git config last, one `git
+		// config` per remote, so a failure writing the config rolls the
+		// flag back. A failure partway may leave some remotes changed;
+		// setting or removing the option is idempotent, so a retry
+		// brings the remotes and the flag back in step.
 		if err := d.store.SetRepoIsMirrorByName(ctx, tx, name, mirror); err != nil {
 			return err
 		}

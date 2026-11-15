@@ -64,11 +64,17 @@ func TestWritePkt(t *testing.T) {
 	if err := WriteFlush(&b); err != nil {
 		t.Fatal(err)
 	}
+	// An empty payload is a flush, which reads back as an empty line.
 	if err := WritePkt(&b, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := b.String(); got != "000ahello\n00000004" {
+	if got := b.String(); got != "000ahello\n00000000" {
 		t.Errorf("wrote %q", got)
+	}
+	for _, want := range []string{"hello\n", "", ""} {
+		if got, err := ReadPkt(&b); err != nil || string(got) != want {
+			t.Errorf("read back %q, %v; want %q", got, err, want)
+		}
 	}
 	if err := WritePkt(&b, make([]byte, maxPktPayload)); err != nil {
 		t.Errorf("largest payload: %v", err)
