@@ -126,6 +126,8 @@ func init() {
 }
 
 func main() {
+	superviseIfInit()
+
 	ctx := context.Background()
 	cfg := config.DefaultConfig()
 	if err := cfg.CheckConfigLocation(); err != nil {

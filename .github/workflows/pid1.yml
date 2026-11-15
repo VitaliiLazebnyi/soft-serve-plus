@@ -1,0 +1,42 @@
+name: pid1
+
+# Runs the container image with soft as PID 1 (entrypoint replaced, no tini and
+# no --init) and checks that pushes leave no zombie processes and that
+# `docker stop` ends the container cleanly. See .github/scripts/check-pid1-reaping.sh.
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pid1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the image
+        run: |
+          ctx=$(mktemp -d)
+          mkdir -p "$ctx/linux/amd64"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$ctx/linux/amd64/soft" ./cmd/soft
+          cp Dockerfile "$ctx/"
+          docker build -t soft-pid1:ci "$ctx"
+      - name: Check reaping with soft as PID 1
+        run: .github/scripts/check-pid1-reaping.sh soft-pid1:ci 10

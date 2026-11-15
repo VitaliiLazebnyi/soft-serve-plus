@@ -33,7 +33,9 @@ EXPOSE 9418/tcp
 # Run soft under tini so it is not PID 1. Git starts detached background
 # processes (e.g. "git maintenance run --auto --detach" after a push or fetch).
 # When the git process that started one exits, the orphan is re-parented to
-# PID 1, which must reap it when it exits in turn; tini does, soft would not.
+# PID 1, which must reap it when it exits in turn. soft started as PID 1 does
+# this too, by supervising itself, but that costs a second copy of the server
+# process; tini costs well under 1 MB.
 # -s registers tini as a child subreaper, so it still reaps them (and does not
 # warn) when the container is started with --init and tini is not PID 1.
 ENTRYPOINT [ "/sbin/tini", "-s", "--", "/usr/local/bin/soft", "serve" ]
