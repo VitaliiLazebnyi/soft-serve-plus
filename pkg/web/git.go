@@ -64,7 +64,9 @@ type gitServer struct {
 	// pending tracks repositories created by push-to-create; see
 	// pushCreates.
 	pending *pushCreates
-	// limits bounds the requests the git routes serve; see requestLimits.
+	// limits bounds how many requests the git routes serve at once; see
+	// requestLimits. The router bounds the time of every request; see
+	// requestDeadlines.
 	limits *requestLimits
 }
 

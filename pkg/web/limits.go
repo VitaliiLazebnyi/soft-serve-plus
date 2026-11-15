@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -11,52 +12,127 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/git"
 )
 
-// requestLimits bounds the git and LFS requests the HTTP server serves, as
-// the git daemon bounds its connections: how many run at once, how long one
-// may make no progress reading its body or writing its response, and how long
-// one may take in all.
+// requestLimits bounds how many git and LFS requests the HTTP server serves
+// at once, as the git daemon bounds its connections: in total, and from one
+// client address, so a single client cannot take every slot and turn all
+// other clients away. The zero value sets no limit.
 type requestLimits struct {
-	// slots holds a token for every request being served. It is nil when
-	// the number of requests is not limited.
-	slots chan struct{}
-	idle  time.Duration
-	max   time.Duration
+	// max is the number of requests served at once, or 0 for no limit.
+	max int
+	// maxPerAddr is the number of requests served at once from one client
+	// address (an IPv4 address, or an IPv6 /64), or 0 for no limit.
+	maxPerAddr int
+
+	mu      sync.Mutex
+	total   int
+	perAddr map[netip.Prefix]int
 }
 
 // newRequestLimits returns the limits cfg sets. A zero value means no limit.
 func newRequestLimits(cfg config.HTTPConfig) *requestLimits {
-	l := &requestLimits{
+	return &requestLimits{
+		max:        cfg.MaxConnections,
+		maxPerAddr: cfg.MaxConnectionsPerIP,
+	}
+}
+
+// clientPrefix returns the key a request from remoteAddr, as in
+// http.Request.RemoteAddr, is counted under: the address itself for IPv4,
+// and its /64 for IPv6, since one client usually holds a whole /64. ok is
+// false when remoteAddr holds no IP address; such a request only counts
+// towards the total.
+func clientPrefix(remoteAddr string) (netip.Prefix, bool) {
+	ap, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	ip := ap.Addr().Unmap()
+	bits := 32
+	if ip.Is6() {
+		bits = 64
+	}
+	p, err := ip.Prefix(bits)
+	return p, err == nil
+}
+
+// acquire takes a slot for a request from remoteAddr, and reports whether
+// one was free. A request over the share of its address takes no slot of the
+// total. release gives the slot back.
+func (l *requestLimits) acquire(remoteAddr string) (release func(), ok bool) {
+	key, keyed := clientPrefix(remoteAddr)
+	keyed = keyed && l.maxPerAddr > 0
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.max > 0 && l.total >= l.max {
+		return nil, false
+	}
+	if keyed && l.perAddr[key] >= l.maxPerAddr {
+		return nil, false
+	}
+	l.total++
+	if keyed {
+		if l.perAddr == nil {
+			l.perAddr = make(map[netip.Prefix]int)
+		}
+		l.perAddr[key]++
+	}
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.total--
+		if keyed {
+			if l.perAddr[key]--; l.perAddr[key] == 0 {
+				delete(l.perAddr, key)
+			}
+		}
+	}, true
+}
+
+// serve runs next within the limits. A request over a limit is turned away
+// with 503 Service Unavailable, as the git daemon turns away a connection
+// over its limit.
+func (l *requestLimits) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	release, ok := l.acquire(r.RemoteAddr)
+	if !ok {
+		w.Header().Set("Retry-After", "1")
+		if r.ProtoMajor == 1 {
+			// Without this, the HTTP/1 server reads the body the
+			// request announced before it sends the reply, for up to
+			// the idle timeout.
+			w.Header().Set("Connection", "close")
+		}
+		http.Error(w, git.ErrMaxConnections.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer release()
+	next.ServeHTTP(w, r)
+}
+
+// requestDeadlines bounds every request the HTTP server serves: how long one
+// may make no progress reading its body or writing its response, and how
+// long one may take in all. It covers every route, not only the git ones:
+// net/http reads the body a request announced and its handler left unread
+// before it answers, and without a deadline a client that announces a body
+// and never sends it holds its connection for ever.
+type requestDeadlines struct {
+	idle time.Duration
+	max  time.Duration
+}
+
+// withDeadlines returns h bound by the deadlines cfg sets. A zero value
+// means no limit.
+func withDeadlines(cfg config.HTTPConfig, h http.Handler) http.Handler {
+	l := &requestDeadlines{
 		idle: time.Duration(cfg.IdleTimeout) * time.Second,
 		max:  time.Duration(cfg.MaxTimeout) * time.Second,
 	}
-	if cfg.MaxConnections > 0 {
-		l.slots = make(chan struct{}, cfg.MaxConnections)
-	}
-	return l
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l.serve(w, r, h)
+	})
 }
 
-// serve runs next within the limits. A request over the concurrency limit is
-// turned away with 503 Service Unavailable, as the git daemon turns away a
-// connection over its limit.
-func (l *requestLimits) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	if l.slots != nil {
-		select {
-		case l.slots <- struct{}{}:
-			defer func() { <-l.slots }()
-		default:
-			w.Header().Set("Retry-After", "1")
-			if r.ProtoMajor == 1 {
-				// Without this, the HTTP/1 server reads the body
-				// the request announced before it sends the reply,
-				// and waits with no deadline for a client that
-				// stalls.
-				w.Header().Set("Connection", "close")
-			}
-			http.Error(w, git.ErrMaxConnections.Error(), http.StatusServiceUnavailable)
-			return
-		}
-	}
-
+// serve runs next within the deadlines.
+func (l *requestDeadlines) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	if l.idle <= 0 && l.max <= 0 {
 		next.ServeHTTP(w, r)
 		return
