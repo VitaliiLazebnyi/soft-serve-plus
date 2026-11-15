@@ -101,6 +101,10 @@ func TestUIDiffRenderAfterLeavingRepository(t *testing.T) {
 		t.Fatal("esc did not leave the repository page")
 	}
 	// The UI hands the render to the repository page, which is not shown.
+	// This check is the part of the test that tests the routing. The end
+	// to end half below passes even when the render is lost: opening a
+	// commit resets the tab's render gate, so the diff opened again renders
+	// whether or not the late render arrived.
 	routing, shown := newTestUI(t, selectionPage)
 	routing.Update(late[0])
 	if got := routing.pages[repoPage].(*recordingPage).msgs; len(got) != 1 || len(shown.msgs) != 0 {

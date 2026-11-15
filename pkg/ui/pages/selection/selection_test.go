@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -104,10 +105,10 @@ func listedNames(s *Selection) []string {
 	return names
 }
 
-// runLoad runs cmd and the commands it batches, and feeds every ReposMsg
-// they return back to Update, as bubbletea would. Commands that do not
-// return promptly (timers, spinners) are skipped. It reports whether a
-// ReposMsg was delivered.
+// runLoad runs cmd and the commands it batches to completion, however slow
+// the machine, and feeds every ReposMsg they return back to Update, as
+// bubbletea would. Other messages, timers such as a cursor blink included,
+// are dropped by their type. It reports whether a ReposMsg was delivered.
 func runLoad(t *testing.T, s *Selection, cmd tea.Cmd) bool {
 	t.Helper()
 	if cmd == nil {
@@ -118,8 +119,8 @@ func runLoad(t *testing.T, s *Selection, cmd tea.Cmd) bool {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(2 * time.Second):
-		return false
+	case <-time.After(uitest.HangGuard):
+		t.Fatal("command did not return")
 	}
 	switch msg := msg.(type) {
 	case tea.BatchMsg:
@@ -202,6 +203,7 @@ func TestSelectionRefreshKeyIgnoredWhileFiltering(t *testing.T) {
 	if !runLoad(t, s, s.Init()) {
 		t.Fatal("init did not load the repositories")
 	}
+	noBlink(s)
 
 	press(s, '/')
 	if !s.IsFiltering() {

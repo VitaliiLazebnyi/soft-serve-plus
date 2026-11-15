@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type filesView int
@@ -30,6 +29,9 @@ var (
 	errBinaryFile     = common.NewUserError("binary file")
 	errInvalidFile    = common.NewUserError("invalid file")
 	errFileTooLarge   = common.NewUserError("file too large")
+	// errSubmodule is reported for a submodule in the file list: its commit
+	// is in another repository, so there is nothing here to show.
+	errSubmodule = common.NewUserError("submodule")
 )
 
 var (
@@ -112,6 +114,10 @@ type Files struct {
 	lineNumber     bool
 	cursor         int
 	blameView      bool
+	// glamourBeforeBlame is whether a Markdown file was rendered, rather
+	// than shown as source, when blame was turned on; turning blame off
+	// restores it.
+	glamourBeforeBlame bool
 	// truncated is set while the listing shows only the first entries
 	// of the directory that fit.
 	truncated bool
@@ -382,10 +388,12 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 				f.blameView = !f.blameView
 				f.load++
 				if f.blameView {
+					f.glamourBeforeBlame = f.code.UseGlamour
 					cmds = append(cmds, f.fetchBlameCmd())
 				} else {
 					f.fileLoad.Stop()
 					f.activeView = filesViewContent
+					f.code.UseGlamour = f.glamourBeforeBlame
 					cmds = append(cmds, f.code.SetSideNote(""))
 				}
 			case key.Matches(msg, preview) &&
@@ -458,6 +466,8 @@ func (f *Files) Loading() (string, bool) {
 }
 
 func (f *Files) id() paneID { return paneFiles }
+
+func (f *Files) ownsRender(msg code.RenderedMsg) bool { return f.code.Owns(msg) }
 
 // StatusBarValue returns the status bar value.
 func (f *Files) StatusBarValue() string {
@@ -548,6 +558,9 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		}
 		if item.entry.IsTree() || item.Mode().IsDir() {
 			return loadError(ctx, paneFiles, gen, errInvalidFile)
+		}
+		if item.entry.IsCommit() {
+			return loadError(ctx, paneFiles, gen, errSubmodule)
 		}
 		if repo == nil || ref == nil {
 			return loadError(ctx, paneFiles, gen, errNoFileSelected)
@@ -642,10 +655,10 @@ func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
 		if commit == nil {
 			break
 		}
-		who := utils.Sanitize(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
+		who := common.SanitizeText(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
 		line := fmt.Sprintf("%s %s %s",
 			c.Styles.Tree.Blame.Hash.Render(commit.ID.String()[:7]),
-			c.Styles.Tree.Blame.Message.Render(utils.Sanitize(commit.Summary())),
+			c.Styles.Tree.Blame.Message.Render(common.SanitizeText(commit.Summary())),
 			c.Styles.Tree.Blame.Who.Render(who),
 		)
 		if line != prev {

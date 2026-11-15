@@ -17,7 +17,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/statusbar"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 type state int
@@ -374,14 +373,24 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, active.Update(msg))
 	}
 
-	// Update the status bar on these events
-	// Must come after we've updated the active tab
-	switch msg.(type) {
-	case RepoMsg, RefMsg, tabs.ActiveTabMsg, tea.KeyPressMsg,
-		tea.MouseClickMsg, tea.MouseWheelMsg, FileItemsMsg, FileContentMsg,
-		FileBlameMsg, selector.ActiveMsg, LogItemsMsg, GoBackMsg, LogDiffMsg,
-		EmptyRepoMsg, StashListMsg, StashPatchMsg, diffRenderedMsg,
-		code.RenderedMsg:
+	// Refresh the status bar on anything that can change what the tabs
+	// show: input, a tab or ref change, and every result of a tab's load
+	// or render. It must come after the tabs have handled the message. A
+	// result for a hidden tab changes nothing the status bar shows, and a
+	// refresh would clear a copy notice early.
+	switch msg := msg.(type) {
+	case paneMsg:
+		if r.state == failedState || msg.pane() == paneRepo || msg.pane() == r.panes[r.activeTab].id() {
+			r.setStatusBarInfo()
+		}
+	case code.RenderedMsg:
+		// A render of a code view, which only the tab that shows it has.
+		if v, ok := r.panes[r.activeTab].(codeView); ok && r.state != failedState && v.ownsRender(msg) {
+			r.setStatusBarInfo()
+		}
+	case RepoMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
+		selector.ActiveMsg, tea.KeyPressMsg, tea.MouseClickMsg,
+		tea.MouseWheelMsg:
 		r.setStatusBarInfo()
 	}
 
@@ -448,13 +457,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.common.Width)
-	header := utils.Sanitize(r.selectedRepo.ProjectName())
+	header := common.SanitizeText(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(utils.Sanitize(r.selectedRepo.Description()))
+	desc := strings.TrimSpace(common.SanitizeText(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,

@@ -80,7 +80,9 @@ func renderDiffView(header string, diff *git.Diff, st *styles.Styles, width int)
 }
 
 func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
-	stats := strings.Split(utils.Sanitize(diff.Stat), "\n")
+	// The summary names files: like file names elsewhere, they lose
+	// bidirectional controls. The patch keeps them, as file contents do.
+	stats := strings.Split(common.SanitizeText(diff.Stat), "\n")
 	for i, line := range stats {
 		ch := strings.Split(line, "|")
 		if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {

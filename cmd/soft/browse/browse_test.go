@@ -2,6 +2,7 @@ package browse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +13,11 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func hasHelp(bindings []key.Binding, k string) bool {
@@ -40,7 +44,7 @@ func msgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(time.Minute):
+	case <-time.After(uitest.HangGuard):
 		t.Fatal("command did not return")
 	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
@@ -155,5 +159,23 @@ func TestBrowseHelpShowsQuitAndHelp(t *testing.T) {
 		if !hasHelp(full, k) {
 			t.Errorf("full help lacks %q", k)
 		}
+	}
+}
+
+// The error screen sanitises the error, which can carry bytes from the
+// repository: no escape sequence or bidirectional control reaches the
+// terminal.
+func TestBrowseErrorSanitised(t *testing.T) {
+	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	m := newModel(ctx, newDriveRepo(t))
+	t.Cleanup(m.common.Zone.Close)
+	m.SetSize(80, 24)
+	m.Update(common.ErrorMsg{Err: errors.New("bad \x1b]0;title\x07ref \u202edetails")})
+	v := m.View().Content
+	if strings.Contains(v, "\x1b]0;") || strings.ContainsRune(v, '\u202e') {
+		t.Fatalf("the error screen shows the raw error: %q", v)
+	}
+	if !strings.Contains(ansi.Strip(v), "bad ref details") {
+		t.Fatalf("the error screen lacks the error:\n%s", ansi.Strip(v))
 	}
 }

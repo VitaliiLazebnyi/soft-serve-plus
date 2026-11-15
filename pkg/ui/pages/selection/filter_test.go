@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // cursorPkg is the package of the cursor blink messages.
@@ -26,9 +27,9 @@ type filterDriver struct {
 }
 
 // run runs cmd to completion, however slow the machine, and returns its
-// messages. The filter input's cursor blinks for as long as it is focused,
-// so blink messages are dropped instead of delivered: delivering one would
-// schedule the next.
+// messages. The test turns off the filter input's cursor blinking, whose
+// every blink waits half a second; the cursor messages left are dropped
+// instead of delivered, as delivering one could schedule another.
 func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 	d.t.Helper()
 	if cmd == nil {
@@ -39,7 +40,7 @@ func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(time.Minute):
+	case <-time.After(uitest.HangGuard):
 		d.t.Fatal("command did not return")
 	}
 	if msg != nil && reflect.TypeOf(msg).PkgPath() == cursorPkg {
@@ -56,6 +57,14 @@ func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 		return nil
 	}
 	return []tea.Msg{msg}
+}
+
+// noBlink turns off the blinking of the filter input's cursor, so that a
+// test does not wait half a second for each blink.
+func noBlink(s *Selection) {
+	st := s.selector.FilterInput.Styles()
+	st.Cursor.Blink = false
+	s.selector.FilterInput.SetStyles(st)
 }
 
 func (d *filterDriver) send(msg tea.Msg) {
@@ -99,6 +108,7 @@ func TestSelectionFilterFlow(t *testing.T) {
 		its = append(its, NewItem(c, fakeRepo{name: n}))
 	}
 	s.setItems(its)
+	noBlink(s)
 	d := &filterDriver{t: t, s: s}
 	key := func(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
 

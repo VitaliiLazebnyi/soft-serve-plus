@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // gatedRepo is a repository whose Open waits for gate while gating is set,
@@ -102,7 +103,7 @@ func (l *loop) deliver(msg tea.Msg) {
 // settle delivers messages until every running command is waiting at the
 // gate.
 func (l *loop) settle(waiting *atomic.Int32) {
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(uitest.HangGuard)
 	for l.running.Load() > waiting.Load() {
 		if time.Now().After(deadline) {
 			l.t.Fatal("commands never settle")
@@ -166,7 +167,7 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 		select {
 		case <-l.results:
 			l.running.Add(-1)
-		case <-time.After(30 * time.Second):
+		case <-time.After(uitest.HangGuard):
 			t.Fatal("loads never finish")
 		}
 	}

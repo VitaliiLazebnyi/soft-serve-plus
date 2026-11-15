@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 )
 
 // paneID names a tab of the repository page.
@@ -56,6 +57,11 @@ type Pane interface {
 	Loading() (text string, ok bool)
 
 	id() paneID
+}
+
+// codeView is a tab with a code view, whose renders are code.RenderedMsg.
+type codeView interface {
+	ownsRender(msg code.RenderedMsg) bool
 }
 
 // paneMsg is the result of a load a tab started. The repository page

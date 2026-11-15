@@ -12,7 +12,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/dustin/go-humanize"
 )
 
@@ -28,7 +27,7 @@ func (i RefItem) ID() string {
 
 // Title implements list.DefaultItem.
 func (i RefItem) Title() string {
-	return utils.Sanitize(i.Reference.Name().Short())
+	return common.SanitizeText(i.Reference.Name().Short())
 }
 
 // Description implements list.DefaultItem.
@@ -120,7 +119,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 
 	// A ref name cannot hold C0 controls, but it can hold C1 ones encoded
 	// as UTF-8.
-	ref := utils.Sanitize(i.Short())
+	ref := common.SanitizeText(i.Short())
 
 	var desc string
 	if isTag {
@@ -132,7 +131,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 			desc += " " + st.ItemDesc.Render(date)
 		}
 
-		if msg := strings.TrimSpace(utils.Sanitize(i.TagSubject)); msg != "" {
+		if msg := strings.TrimSpace(common.SanitizeText(i.TagSubject)); msg != "" {
 			msgSt := st.ItemDesc.Faint(false)
 			msgMargin := m.Width() -
 				horizontalFrameSize -
