@@ -182,17 +182,22 @@ func (r *Repository) Patch(commit *Commit) (*Diff, error) {
 }
 
 // changedBlobsFit reports whether every blob the diff named by args changes,
-// before and after, is at most limit bytes. A raw listing over limit bytes
-// means a patch over it too, so that does not fit either.
+// before and after, is at most limit bytes.
+//
+// The listing has no -M: rename detection would load both blobs of a
+// renamed file to compare them, which is the cost this check avoids. A
+// rename then shows as a delete and an add of the same two blobs, so the
+// sizes are the same.
+//
+// The listing is capped at twice limit. A raw record (about 100 bytes plus
+// the path) can be longer than the patch it stands for, as for a change of
+// mode only, so the same cap would refuse patches that fit; a listing over
+// twice the cap still means a patch too large to be worth making.
 func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
-	raw := &cappedBuffer{max: int(limit)}
+	raw := &cappedBuffer{max: int(2 * limit)}
 	var stderr bytes.Buffer
-	err := git.NewCommand("diff-tree").
-		AddOptions(git.CommandOptions{
-			Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
-			Context: r.Context(),
-		}).
-		AddArgs("-r", "-M", "--raw", "-z", "--full-index").
+	err := r.plainCommand("diff-tree").
+		AddArgs("-r", "--raw", "-z", "--full-index").
 		AddArgs(args...).
 		RunInDirPipeline(raw, &stderr, r.Path)
 	if raw.over {
@@ -202,29 +207,18 @@ func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
 		return false, fmt.Errorf("diff-tree: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 
-	// -z gives ":<mode> <mode> <id> <id> <status>" and then the path or
-	// paths, each ended by a NUL.
-	var ids bytes.Buffer
-	for _, rec := range strings.Split(raw.buf.String(), "\x00") {
-		f := strings.Fields(strings.TrimPrefix(rec, ":"))
-		if !strings.HasPrefix(rec, ":") || len(f) < 4 {
-			continue
-		}
-		for i, id := range f[2:4] {
-			// A submodule's commit is not in this repository.
-			if f[i] == "160000" || strings.Trim(id, "0") == "" {
-				continue
-			}
-			ids.WriteString(id + "\n")
-		}
+	ids, err := rawBlobIDs(raw.buf.String())
+	if err != nil {
+		return false, err
 	}
-	if ids.Len() == 0 {
+	if len(ids) == 0 {
 		return true, nil
 	}
+	in := strings.NewReader(strings.Join(ids, "\n") + "\n")
 	var out bytes.Buffer
 	stderr.Reset()
-	if err := git.NewCommandWithContext(r.Context(), "cat-file", "--batch-check=%(objectsize)").
-		RunInDirWithOptions(r.Path, git.RunInDirOptions{Stdin: &ids, Stdout: &out, Stderr: &stderr}); err != nil {
+	if err := r.plainCommand("cat-file", "--batch-check=%(objectsize)").
+		RunInDirWithOptions(r.Path, git.RunInDirOptions{Stdin: in, Stdout: &out, Stderr: &stderr}); err != nil {
 		return false, fmt.Errorf("cat-file: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	for line := range strings.Lines(out.String()) {
@@ -233,6 +227,67 @@ func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// plainCommand returns a git command under r's context without user or
+// system config.
+func (r *Repository) plainCommand(args ...string) *git.Command {
+	return git.NewCommand(args...).AddOptions(git.CommandOptions{
+		Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+		Context: r.Context(),
+	})
+}
+
+// rawBlobIDs returns the blob IDs, before and after, of each change in
+// raw, the output of diff-tree --raw -z --full-index. Each change is a
+// header ":<mode> <mode> <id> <id> <status>" and then one path, or two
+// for a rename or copy (status R or C), each ended by a NUL. Paths are raw
+// bytes and can look like a header, so records are read by position, never
+// by their look, and only a full hex object ID is taken: anything else
+// would reach cat-file as a revision to resolve. A submodule's commit and
+// the zero ID of an added or deleted file are left out.
+func rawBlobIDs(raw string) ([]string, error) {
+	recs := strings.Split(raw, "\x00")
+	var ids []string
+	for i := 0; i < len(recs); {
+		rec := recs[i]
+		if rec == "" && i == len(recs)-1 {
+			break
+		}
+		f := strings.Fields(strings.TrimPrefix(rec, ":"))
+		if !strings.HasPrefix(rec, ":") || len(f) != 5 {
+			return nil, fmt.Errorf("diff-tree: unexpected raw record %q", rec)
+		}
+		paths := 1
+		if s := f[4]; s != "" && (s[0] == 'R' || s[0] == 'C') {
+			paths = 2
+		}
+		i += 1 + paths
+		for j, id := range f[2:4] {
+			if f[j] == "160000" || strings.Trim(id, "0") == "" {
+				continue
+			}
+			if !isObjectID(id) {
+				return nil, fmt.Errorf("diff-tree: unexpected object ID %q", id)
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// isObjectID reports whether s is a full SHA-1 or SHA-256 object ID in
+// lowercase hex.
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // cappedBuffer keeps up to max bytes and fails the write that would go over.

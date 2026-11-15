@@ -422,8 +422,23 @@ func TestPatchRefusesLargeBlob(t *testing.T) {
 	r.rm("big.bin")
 	removed := r.commit("remove big")
 
+	r.put("big.bin", big)
+	r.commit("add big again")
+	r.rm("big.bin")
+	r.put("moved.bin", big+"edited")
+	renamed := r.commit("rename and edit big")
+	// A submodule (gitlink) change: its commit is not in this repository
+	// and must not be looked up.
+	r.git("", "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("1", 40)+",sub")
+	r.commit("add submodule")
+	r.git("", "update-index", "--cacheinfo", "160000,"+strings.Repeat("2", 40)+",sub")
+	gitlink := r.commit("move submodule")
+
 	repo := r.open()
-	for name, c := range map[string]*Commit{"added": added, "removed": removed} {
+	if d, err := repo.Patch(gitlink); err != nil || d.Truncated || !strings.Contains(d.Patch, "Subproject commit") {
+		t.Errorf("gitlink change: %+v, %v; want the patch", d, err)
+	}
+	for name, c := range map[string]*Commit{"added": added, "removed": removed, "renamed": renamed} {
 		d, err := repo.Patch(c)
 		if err != nil {
 			t.Fatal(err)
@@ -438,6 +453,50 @@ func TestPatchRefusesLargeBlob(t *testing.T) {
 	}
 	if d.Truncated || !strings.Contains(d.Patch, "+changed\n") {
 		t.Errorf("a small change was refused: %+v", d)
+	}
+}
+
+// A path that looks like a raw header must not be read as one: its "IDs"
+// would reach cat-file as revisions, where ":/text" walks the whole history
+// and "HEAD:big.bin" names a large blob that is not part of the change.
+func TestPatchHeaderLikePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("git refuses ':' in a path on Windows")
+	}
+	prev := DiffMaxBytes
+	DiffMaxBytes = 2000
+	t.Cleanup(func() { DiffMaxBytes = prev })
+
+	r := newDiffRepo(t)
+	r.put("big.bin", strings.Repeat("\x00binary\x01", 1000))
+	r.commit("root")
+	for _, path := range []string{
+		":100644 100644 HEAD :/zzz M",
+		":100644 100644 HEAD:big.bin HEAD:big.bin M",
+	} {
+		r.put(path, "small\n")
+	}
+	c := r.commit("header-like paths")
+	d, err := r.open().Patch(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Truncated || !strings.Contains(d.Patch, "+small\n") {
+		t.Errorf("Truncated = %v; want the patch:\n%s", d.Truncated, d.Patch)
+	}
+
+	// Read by position, the listing's IDs are only the two new blobs.
+	ids, err := rawBlobIDs(":000000 100644 " + strings.Repeat("0", 40) + " " + strings.Repeat("a", 40) + " A\x00" +
+		":100644 100644 HEAD :/zzz M\x00" +
+		":100644 100644 " + strings.Repeat("b", 40) + " " + strings.Repeat("c", 40) + " R100\x00old\x00:1 2 HEAD x y\x00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)}; strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Errorf("rawBlobIDs = %q, want %q", ids, want)
+	}
+	if _, err := rawBlobIDs(":100644 100644 HEAD :/zzz M\x00p\x00"); err == nil {
+		t.Error("rawBlobIDs took revisions for IDs")
 	}
 }
 
