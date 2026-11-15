@@ -116,7 +116,7 @@ func TestGitServiceOutputCopyErrorLevel(t *testing.T) {
 			}
 			// The result does not matter here, only how the copy failure
 			// is logged.
-			_ = UploadPack(ctx, ServiceCommand{Stdout: w, Dir: dir})
+			_ = UploadPackService.Handler(ctx, ServiceCommand{Stdout: w, Dir: dir})
 
 			msg := "gitServiceHandler: failed to copy stdout: " + tc.err.Error()
 			if got := levels()[msg]; got != tc.want {
@@ -209,7 +209,7 @@ func TestGitServiceInputCopyErrorLevel(t *testing.T) {
 			}
 			// The result does not matter here, only how the copy failure
 			// is logged.
-			_ = UploadPack(ctx, ServiceCommand{Stdin: stdin, Dir: dir})
+			_ = UploadPackService.Handler(ctx, ServiceCommand{Stdin: stdin, Dir: dir})
 
 			if msg, level := waitForLog(t, levels, prefix); level != tc.want {
 				t.Errorf("%q logged at %q, want %q", msg, level, tc.want)

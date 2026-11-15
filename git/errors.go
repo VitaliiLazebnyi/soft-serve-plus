@@ -9,8 +9,6 @@ import (
 var (
 	// ErrFileNotFound is returned when a file is not found.
 	ErrFileNotFound = errors.New("file not found")
-	// ErrDirectoryNotFound is returned when a directory is not found.
-	ErrDirectoryNotFound = errors.New("directory not found")
 	// ErrReferenceNotExist is returned when a reference does not exist.
 	ErrReferenceNotExist = git.ErrReferenceNotExist
 	// ErrRevisionNotExist is returned when a revision is not found.

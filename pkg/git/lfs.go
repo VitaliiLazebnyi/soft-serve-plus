@@ -164,16 +164,24 @@ func processCommandsOnce(p *transfer.Processor, handler *transfer.Pktline, op st
 
 // processCommandsFunc is the function whose own unguarded index panics on a
 // bare "version" command.
+//
+// isBareVersionPanic relies on msgs[1] being the only runtime error
+// ProcessCommands can raise in its own frame. Re-check that against
+// ProcessCommands on every bump of github.com/charmbracelet/git-lfs-transfer
+// in go.mod: a second unguarded index or dereference there would be answered
+// as a bare version.
 const processCommandsFunc = "github.com/charmbracelet/git-lfs-transfer/transfer.(*Processor).ProcessCommands"
 
 // isBareVersionPanic reports whether r is the processor indexing past the
 // single field of a bare "version" command. It must be called from the
 // deferred function that recovered r, while the panicking frames are still on
-// the stack: the index error has to come from ProcessCommands itself, not
-// from a backend method it called.
+// the stack: the runtime error has to be raised in ProcessCommands itself,
+// not in a backend method it called. ProcessCommands has one unguarded index
+// (msgs[1] for "version") and dereferences nothing that can be nil, so a
+// runtime error raised in its own frame is that index. The runtime's message
+// text is not matched: it is not part of any API.
 func isBareVersionPanic(r any) bool {
-	rerr, ok := r.(runtime.Error)
-	if !ok || !strings.Contains(rerr.Error(), "index out of range [1] with length 1") {
+	if _, ok := r.(runtime.Error); !ok {
 		return false
 	}
 	pcs := make([]uintptr, 32)

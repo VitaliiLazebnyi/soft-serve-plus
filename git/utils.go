@@ -2,9 +2,7 @@ package git
 
 import (
 	"errors"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/gobwas/glob"
@@ -116,26 +114,4 @@ func resolveSymlink(root *Tree, te *TreeEntry, fp string) (*TreeEntry, string) {
 		}
 	}
 	return nil, ""
-}
-
-// Returns true if path is a directory containing an `objects` directory and a
-// `HEAD` file.
-func isGitDir(path string) bool {
-	stat, err := os.Stat(filepath.Join(path, "objects"))
-	if err != nil {
-		return false
-	}
-	if !stat.IsDir() {
-		return false
-	}
-
-	stat, err = os.Stat(filepath.Join(path, "HEAD"))
-	if err != nil {
-		return false
-	}
-	if stat.IsDir() {
-		return false
-	}
-
-	return true
 }
