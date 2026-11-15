@@ -470,22 +470,28 @@ func TestFilterEnvRequests(t *testing.T) {
 
 // Window changes before a command are refused; after a shell starts, the
 // handler gets them, and a second pty-req is refused as before.
+//
+// The handler reads window changes until the session ends, rather than
+// exiting once it has the size it waits for: charm.land/ssh sends a size to
+// the handler before it replies to the request, so a handler that exited on
+// receipt could close the channel before that reply, and the client's
+// want-reply request would end with EOF. The client closes the session only
+// once it has the reply.
 func TestFilterWindowChanges(t *testing.T) {
 	sizes := make(chan ssh.Window, 10)
+	done := make(chan struct{})
 	addr := startFilterServer(t, func(s ssh.Session) {
+		defer close(done)
 		_, winch, ok := s.Pty()
 		if !ok {
 			_ = s.Exit(1)
 			return
 		}
 		_, _ = fmt.Fprintln(s, "ready")
+		// The request loop closes winch when the session ends.
 		for w := range winch {
 			sizes <- w
-			if w.Width == 0 || w.Width == 200 {
-				break
-			}
 		}
-		_ = s.Exit(0)
 	})
 	c, err := dialClient(t, addr)
 	if err != nil {
@@ -512,7 +518,13 @@ func TestFilterWindowChanges(t *testing.T) {
 	if !sendRequest(t, s, "window-change", windowPayload(200, 60)) {
 		t.Error("window-change after shell refused")
 	}
-	_ = s.Wait()
+	// End the session; the handler's loop ends with it.
+	_ = s.Close()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler still running after the session closed")
+	}
 
 	var got []ssh.Window
 	for len(sizes) > 0 {
