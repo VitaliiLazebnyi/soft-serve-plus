@@ -148,4 +148,12 @@ func TestTextWriter(t *testing.T) {
 	if _, err := w.Write(append(bytes.Repeat([]byte("a"), sniffLen), 0)); err != nil || w.binary {
 		t.Fatalf("NUL past the sniffed bytes: %v", err)
 	}
+	// Exactly sniffLen bytes, then a NUL in a write of its own.
+	w = &textWriter{}
+	if _, err := w.Write(bytes.Repeat([]byte("a"), sniffLen)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte{0}); err != nil || w.binary {
+		t.Fatalf("NUL in its own write past the sniffed bytes: %v", err)
+	}
 }
