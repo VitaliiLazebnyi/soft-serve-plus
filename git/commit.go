@@ -2,8 +2,10 @@ package git
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -52,7 +54,9 @@ func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions)
 	}
 	opt.CommandOptions = r.withCtx(opt.CommandOptions)
 	malformed := func(reason any) error {
-		log.FromContext(r.Context()).Warn("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
+		// Debug, not Warn: nothing caches a failed parse, so anyone who
+		// can push such a commit could otherwise fill the log.
+		log.FromContext(r.Context()).Debug("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
 		return fmt.Errorf("%w: %s", ErrMalformedCommit, rev)
 	}
 	defer func() {
@@ -62,10 +66,7 @@ func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions)
 	}()
 	c, err = r.Repository.CatFileCommit(rev, opt)
 	if err != nil {
-		// parseSignature's errors for a date it cannot read.
-		var timeErr *time.ParseError
-		var numErr *strconv.NumError
-		if errors.As(err, &timeErr) || errors.As(err, &numErr) {
+		if isParseError(err) {
 			return nil, malformed(err)
 		}
 		return nil, err
@@ -140,7 +141,7 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 		// also for a repository it cannot read. Only a revision that does
 		// not resolve to a commit either is a missing revision.
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && !r.resolvesToCommit(rev) {
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && r.revisionMissing(rev, opt) {
 			return nil, ErrRevisionNotExist
 		}
 		return nil, err
@@ -151,12 +152,37 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 	return r.CatFileCommit(ids[0], git.CatFileCommitOptions{Timeout: opt.Timeout}) //nolint:staticcheck
 }
 
-// resolvesToCommit reports whether rev names a commit.
-func (r *Repository) resolvesToCommit(rev string) bool {
-	_, err := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}").
-		AddOptions(r.cmdOpts()).
-		RunInDir(r.Path)
-	return err == nil
+// revisionMissing reports whether git says rev names no commit. "rev-parse
+// --verify --quiet" exits with 1 for that, and with 128 for a fatal error
+// such as a repository it cannot read, which is not a missing revision.
+// It runs under the caller's context and timeout.
+func (r *Repository) revisionMissing(rev string, opt git.CommitByRevisionOptions) bool {
+	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}").
+		AddOptions(r.withCtx(git.CommandOptions{
+			Context: opt.Context,
+			Timeout: opt.CommandOptions.Timeout,
+		}))
+	if opt.Timeout != 0 {
+		cmd = cmd.WithTimeout(opt.Timeout)
+	}
+	err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
+}
+
+// isParseError reports whether err is one of the errors git-module's commit
+// parser returns for a header it cannot read, rather than a failure to run
+// git: a date that is not a date (parseSignature), or a tree, object or
+// parent ID that is not 40 hex digits (NewIDFromString). git itself ignores
+// tree and parent headers after the first ones, so a push accepts those.
+func isParseError(err error) bool {
+	var timeErr *time.ParseError
+	var numErr *strconv.NumError
+	var hexErr hex.InvalidByteError
+	return errors.As(err, &timeErr) || errors.As(err, &numErr) ||
+		errors.As(err, &hexErr) || errors.Is(err, hex.ErrLength) ||
+		// git-module has no sentinel for this one (sha1.go).
+		err.Error() == "length must be 40"
 }
 
 // logIDs runs git log for rev with opt, as git-module's Log does, and

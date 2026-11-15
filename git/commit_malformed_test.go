@@ -2,6 +2,7 @@ package git
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -200,6 +201,24 @@ func TestMalformedCommitErrorHidesParser(t *testing.T) {
 		_, err := r.CatFileCommit(rev)
 		if want := ErrMalformedCommit.Error() + ": " + rev; err == nil || err.Error() != want {
 			t.Errorf("CatFileCommit(%s) error = %v; want %q", rev, err, want)
+		}
+	}
+}
+
+// TestCommitByRevisionBrokenRepository checks that a repository git cannot
+// read at all, here because its objects directory is gone, is reported as
+// git's error: "rev-parse --verify --quiet" exits with 128 for it, and only
+// its exit status 1 means a missing revision.
+func TestCommitByRevisionBrokenRepository(t *testing.T) {
+	t.Parallel()
+	r, _, _ := malformedRepo(t)
+	if err := os.RemoveAll(filepath.Join(r.Path, "objects")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rev := range []string{"main", "nope"} {
+		if _, err := r.CommitByRevision(rev); err == nil || errors.Is(err, ErrRevisionNotExist) {
+			t.Errorf("CommitByRevision(%q) without objects/ = %v; want git's error", rev, err)
 		}
 	}
 }

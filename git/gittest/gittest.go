@@ -37,12 +37,19 @@ const (
 	NoCommitter Kind = "no-committer"
 	// CommitterNoEmail has a committer without "<email>".
 	CommitterNoEmail Kind = "committer-no-email"
+	// ExtraBadParent has a "parent 1234" header after the committer, which
+	// git ignores and git-module reads as an ID of the wrong length.
+	ExtraBadParent Kind = "extra-bad-parent"
+	// ExtraNonHexTree has a "tree" header of 40 characters that are not hex
+	// digits after the committer, which git ignores.
+	ExtraNonHexTree Kind = "extra-non-hex-tree"
 )
 
 // Malformed lists every kind except Valid.
 var Malformed = []Kind{
 	HeaderNoSpace, AuthorNoEmail, AuthorNoDate, NoAuthor,
 	AuthorBadDate, CommitterBadDate, NoCommitter, CommitterNoEmail,
+	ExtraBadParent, ExtraNonHexTree,
 }
 
 // Git runs git with args in dir, with no system or global configuration,
@@ -109,6 +116,10 @@ func Commit(t testing.TB, dir string, kind Kind, tree, message string, parents .
 		b.WriteString(author)
 	case CommitterNoEmail:
 		b.WriteString(author + "committer C O Mitter 1700000000 +0000\n")
+	case ExtraBadParent:
+		b.WriteString(author + committer + "parent 1234\n")
+	case ExtraNonHexTree:
+		b.WriteString(author + committer + "tree " + strings.Repeat("z", 40) + "\n")
 	default:
 		t.Fatalf("unknown commit kind %q", kind)
 	}
