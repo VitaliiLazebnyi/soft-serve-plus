@@ -357,7 +357,7 @@ func identify(r *http.Request, repos ...string) (*http.Request, error) {
 	logger := log.FromContext(ctx)
 
 	// authenticate logs why credentials failed, and returns only bad
-	// credentials or proto.ErrUserNotFound.
+	// credentials, errAuthUnavailable or proto.ErrUserNotFound.
 	user, audience, err := authenticate(r, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
@@ -393,6 +393,27 @@ func callerFor(ctx context.Context, repo string) proto.User {
 // badCredentials reports whether the caller sent credentials that failed.
 func badCredentials(err error) bool {
 	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword)
+}
+
+// authRetryAfter is the Retry-After, in seconds, of the answer to a request
+// whose credentials could not be checked.
+const authRetryAfter = "10"
+
+// refuseUnchecked answers a request whose credentials could not be checked,
+// see errAuthUnavailable, with 503 Service Unavailable, and reports whether
+// it did. The answer carries no credentials challenge, so git keeps the
+// stored credential, and authenticate has already logged the fault.
+func refuseUnchecked(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) bool {
+	if !errors.Is(err, errAuthUnavailable) {
+		return false
+	}
+	w.Header().Set("Retry-After", authRetryAfter)
+	if lfsJSON {
+		renderJSON(w, r, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
+	} else {
+		renderStatus(http.StatusServiceUnavailable)(w, r)
+	}
+	return true
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
@@ -525,7 +546,7 @@ func withCaller(next http.Handler) http.HandlerFunc {
 			repos = pathAncestors(mux.Vars(r)["repo"])
 		}
 		r, err := identify(r, repos...)
-		if !requireCaller(w, r) {
+		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r) {
 			return
 		}
 
@@ -584,7 +605,9 @@ func pathAncestors(p string) []string {
 func (s *gitServer) withAccess(route GitRoute, w http.ResponseWriter, orig *http.Request) {
 	gr := route.newRequest(orig)
 	r, err := identify(orig, gr.name)
-	if !requireCaller(w, r) {
+	need := route.access(r.Method, gr.service)
+	lfsJSON := need.lfs
+	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r) {
 		return
 	}
 
@@ -593,8 +616,6 @@ func (s *gitServer) withAccess(route GitRoute, w http.ResponseWriter, orig *http
 	be := s.be
 	repoName := gr.name
 	user := proto.UserFromContext(ctx)
-	need := route.access(r.Method, gr.service)
-	lfsJSON := need.lfs
 
 	if lfsJSON && !s.cfg.LFS.Enabled {
 		logger.Debug("LFS is not enabled, skipping")

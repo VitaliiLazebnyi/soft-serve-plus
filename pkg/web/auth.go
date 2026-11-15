@@ -19,19 +19,44 @@ import (
 // authenticate authenticates the user from the request. A bearer token must
 // name one of repos in its audience, and its audience is returned; it is nil
 // for other credentials, which are not scoped to repositories. The error is
-// ErrInvalidToken or ErrInvalidPassword for bad credentials, and
-// proto.ErrUserNotFound otherwise.
+// ErrInvalidToken or ErrInvalidPassword for bad credentials, errAuthUnavailable
+// when the credentials could not be checked, and proto.ErrUserNotFound
+// otherwise.
 func authenticate(r *http.Request, repos ...string) (proto.User, []string, error) {
 	// Prefer the Authorization header
 	user, audience, err := parseAuthHdr(r, repos)
 	if err != nil || user == nil {
-		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) {
+		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrInvalidPassword) || errors.Is(err, errAuthUnavailable) {
 			return nil, nil, err
 		}
 		return nil, nil, proto.ErrUserNotFound
 	}
 
 	return user, audience, nil
+}
+
+// errAuthUnavailable is returned when credentials could not be checked
+// because a lookup failed, as when the database is down. The caller sent
+// credentials that may well be valid, so the request is neither anonymous
+// nor a failed login: answering either way would make git discard a good
+// stored credential, or serve the caller as anonymous.
+var errAuthUnavailable = errors.New("authentication unavailable")
+
+// lookupFailed reports whether err, from a user or access token lookup, is
+// a server fault rather than a missing user or a bad or expired token.
+func lookupFailed(err error) bool {
+	return err != nil && !errors.Is(err, proto.ErrUserNotFound) && !errors.Is(err, proto.ErrTokenExpired)
+}
+
+// authUnavailable logs a failed lookup as the server error it is, unless the
+// client went away and canceled it, and returns it as errAuthUnavailable.
+func authUnavailable(ctx context.Context, logger *log.Logger, err error) error {
+	if ctx.Err() != nil {
+		logger.Debug("credential lookup canceled", "err", err)
+	} else {
+		logger.Error("failed to look up credentials", "err", err)
+	}
+	return fmt.Errorf("%w: %w", errAuthUnavailable, err)
 }
 
 // ErrInvalidPassword is returned for HTTP Basic credentials that hold no
@@ -75,6 +100,9 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 		if err == nil {
 			return owner, nil
 		}
+		if lookupFailed(err) {
+			return nil, authUnavailable(ctx, logger, err)
+		}
 	}
 
 	if username != "" {
@@ -83,6 +111,9 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 		owner, err := be.UserByAccessToken(ctx, username)
 		if err == nil {
 			return owner, nil
+		}
+		if lookupFailed(err) {
+			return nil, authUnavailable(ctx, logger, err)
 		}
 		if password == "" {
 			logger.Info("invalid access token", "err", err)
@@ -127,15 +158,14 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 	case "token":
 		user, err := be.UserByAccessToken(ctx, parts[1])
 		if err != nil {
+			if lookupFailed(err) {
+				return nil, nil, authUnavailable(ctx, logger, err)
+			}
 			// An unknown or expired token is a failed login, not an
 			// anonymous request: answering it as anonymous would let it
 			// through wherever anonymous users may go.
-			if errors.Is(err, proto.ErrUserNotFound) || errors.Is(err, proto.ErrTokenExpired) {
-				logger.Info("invalid token", "err", err)
-				return nil, nil, ErrInvalidToken
-			}
-			logger.Error("failed to get user", "err", err)
-			return nil, nil, err
+			logger.Info("invalid token", "err", err)
+			return nil, nil, ErrInvalidToken
 		}
 
 		return user, nil, nil
@@ -148,20 +178,22 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 		// Find the user
 		// A valid signature on a token whose user is gone, or was
 		// replaced by another of the same name, is still a failed login.
+		// A name that is not a valid username names no user; the
+		// lookup would refuse it with an error that is not
+		// proto.ErrUserNotFound.
 		parts := strings.SplitN(claims.Subject, "#", 2)
-		if len(parts) != 2 {
+		if len(parts) != 2 || utils.ValidateUsername(parts[0]) != nil {
 			logger.Info("invalid jwt subject", "subject", claims.Subject)
 			return nil, nil, ErrInvalidToken
 		}
 
 		user, err := be.User(ctx, parts[0])
 		if err != nil {
-			if errors.Is(err, proto.ErrUserNotFound) {
-				logger.Info("jwt user not found", "subject", claims.Subject)
-				return nil, nil, ErrInvalidToken
+			if lookupFailed(err) {
+				return nil, nil, authUnavailable(ctx, logger, err)
 			}
-			logger.Error("failed to get user", "err", err)
-			return nil, nil, err
+			logger.Info("jwt user not found", "subject", claims.Subject)
+			return nil, nil, ErrInvalidToken
 		}
 
 		expectedSubject := jwk.Subject(user)
