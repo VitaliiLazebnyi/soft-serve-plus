@@ -99,6 +99,30 @@ func TestWarnIfAnonAdminAccess(t *testing.T) {
 	}
 }
 
+// A server with no total time limit is warned about at startup, once per
+// enabled server: a config.yaml from before the non-zero default keeps
+// max_timeout: 0. A disabled server is not.
+func TestWarnUnboundedTimeouts(t *testing.T) {
+	is := is.New(t)
+	warnings := func(cfg *config.Config) string {
+		var buf bytes.Buffer
+		warnUnboundedTimeouts(cfg, log.New(&buf))
+		return buf.String()
+	}
+
+	is.Equal(warnings(config.DefaultConfig()), "")
+
+	cfg := config.DefaultConfig()
+	cfg.SSH.MaxTimeout, cfg.Git.MaxTimeout, cfg.HTTP.MaxTimeout = 0, 0, 0
+	cfg.Git.Enabled = false
+	got := warnings(cfg)
+	is.True(strings.Contains(got, "WARN"))
+	is.True(strings.Contains(got, "ssh.max_timeout"))
+	is.True(strings.Contains(got, "http.max_timeout"))
+	is.True(!strings.Contains(got, "git.max_timeout"))
+	is.True(strings.Contains(got, "recommended=21600"))
+}
+
 func TestEnsureDefaultRepoDisabled(t *testing.T) {
 	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)

@@ -125,6 +125,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}
 
 	warnIfAnonAdminAccess(ctx, be, logger)
+	warnUnboundedTimeouts(cfg, logger)
 
 	// The backend decides this on its own; surface it once at startup so the
 	// operator does not learn about it from the first failed import.
@@ -152,6 +153,18 @@ func warnIfAnonAdminAccess(ctx context.Context, be *backend.Backend, logger *log
 	logger.Warn("# This is intended for local/dev use only. Do not expose this  #")
 	logger.Warn("# server to an untrusted network.                              #")
 	logger.Warn("################################################################")
+}
+
+// warnUnboundedTimeouts warns about each enabled server whose max_timeout is
+// 0. The idle timeouts are reset by every byte, so with no total limit a
+// client that trickles bytes keeps its connection and its place under
+// max_connections for as long as it likes. A config.yaml written before the
+// default became non-zero still says 0, and the file is never rewritten.
+func warnUnboundedTimeouts(cfg *config.Config, logger *log.Logger) {
+	for _, name := range cfg.UnboundedTimeouts() {
+		logger.Warn("no total time limit on connections; a non-zero value is recommended",
+			"setting", name, "recommended", config.DefaultMaxTimeout)
+	}
 }
 
 // ensureDefaultRepo creates the repo named by cfg.DefaultRepo if it does not

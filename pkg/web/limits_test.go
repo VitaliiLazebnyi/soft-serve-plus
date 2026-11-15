@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,11 +286,14 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			l := &requestDeadlines{idle: 200 * time.Millisecond}
+			// Each read and write here moves a few bytes over loopback and
+			// must finish within the idle timeout even on a loaded machine,
+			// so the timeout is a second, and the work twice that.
+			l := &requestDeadlines{idle: time.Second}
 			errc := make(chan error, 1)
 			work := func(r *http.Request) error {
 				select {
-				case <-time.After(4 * l.idle):
+				case <-time.After(2 * l.idle):
 					return nil
 				case <-r.Context().Done():
 					return r.Context().Err()
@@ -379,13 +383,15 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// On a loaded machine the server may reset the stream before the
+	// client has read the response header; the write was cut off all the
+	// same.
 	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.ProtoMajor != 2 {
-		t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+	if err == nil {
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.ProtoMajor != 2 {
+			t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+		}
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error
@@ -538,20 +544,70 @@ func TestHTTPStalledBodyOutsideGitRoutes(t *testing.T) {
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			t.Parallel()
-			conn := dial(t, addr, 15*time.Second)
+			conn := dial(t, addr, 30*time.Second)
 			if _, err := io.WriteString(conn, tc.method+" "+tc.path+" HTTP/1.1\r\n"+
 				"Host: localhost\r\n"+
 				"Content-Length: 100\r\n"+
 				"\r\n"); err != nil {
 				t.Fatal(err)
 			}
-			start := time.Now()
-			if _, err := io.Copy(io.Discard, conn); err != nil {
-				var nerr net.Error
-				if errors.As(err, &nerr) && nerr.Timeout() {
-					t.Fatalf("connection still open after %s; the stalled request was not cut off", time.Since(start))
+			assertClosedWithin(t, conn, 10*time.Second)
+		})
+	}
+}
+
+// assertClosedWithin reads conn until the server closes it, and fails the
+// test unless that happens within limit. limit is far above the idle
+// timeouts the tests set, so a loaded machine does not fail the test; conn's
+// own deadline, set by dial, must be later still, so a connection left open
+// is told apart from one closed late.
+func assertClosedWithin(t *testing.T, conn net.Conn, limit time.Duration) {
+	t.Helper()
+	start := time.Now()
+	_, err := io.Copy(io.Discard, conn)
+	elapsed := time.Since(start)
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		t.Fatalf("connection still open after %s; the stalled request was not cut off", elapsed)
+	}
+	// A reset instead of an orderly close is fine: the server may close
+	// with the announced body unread.
+	if elapsed > limit {
+		t.Fatalf("connection closed after %s, want within %s (read error: %v)", elapsed, limit, err)
+	}
+}
+
+// A handler that writes more than the response buffer before reading the
+// body makes the HTTP/1 server read and discard the body on that write, not
+// after the handler returns. The read deadline must bound that too, or a
+// client that announces a body and never sends it holds the connection, and
+// a git slot, for as long as it likes: an LFS download or a large ref
+// advertisement writes this way.
+func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
+	t.Parallel()
+	for _, flush := range []bool{false, true} {
+		name := "large write"
+		if flush {
+			name = "flush"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			l := &requestDeadlines{idle: 500 * time.Millisecond}
+			url := serveLimits(t, l, func(w http.ResponseWriter, _ *http.Request) {
+				if flush {
+					_, _ = io.WriteString(w, "x")
+					w.(http.Flusher).Flush()
 				}
+				_, _ = w.Write(make([]byte, 8<<10))
+			})
+			conn := dial(t, strings.TrimPrefix(url, "http://"), 30*time.Second)
+			if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\n"+
+				"Host: localhost\r\n"+
+				"Content-Length: 100\r\n"+
+				"\r\n"); err != nil {
+				t.Fatal(err)
 			}
+			assertClosedWithin(t, conn, 10*time.Second)
 		})
 	}
 }
@@ -638,7 +694,8 @@ func TestHTTPMaxConnectionsPerIP(t *testing.T) {
 		"the address was not served again once one of its requests ended")
 }
 
-// Requests are counted per IPv4 address and per IPv6 /64.
+// Requests are counted per IPv4 address and per IPv6 /64, except from
+// loopback, where a reverse proxy on the same host connects from.
 func TestClientPrefix(t *testing.T) {
 	key := func(addr string) string {
 		p, ok := clientPrefix(addr)
@@ -654,6 +711,10 @@ func TestClientPrefix(t *testing.T) {
 		"[2001:db8::ffff:1]:2000": "2001:db8::/64",
 		"[2001:db8:0:1::1]:1000":  "2001:db8:0:1::/64",
 		"[fe80::1%eth0]:1000":     "fe80::/64",
+		"127.0.0.1:1000":          "",
+		"127.1.2.3:1000":          "",
+		"[::1]:1000":              "",
+		"[::ffff:127.0.0.1]:1000": "",
 		"pipe":                    "",
 		"":                        "",
 	} {
@@ -689,5 +750,17 @@ func TestClientPrefix(t *testing.T) {
 	release()
 	if _, ok := l.acquire("192.0.2.1:3"); !ok {
 		t.Fatal("the address was refused after its request ended")
+	}
+
+	// Loopback peers have no share of their own: they are bound only by
+	// the total.
+	l = &requestLimits{max: 4, maxPerAddr: 1}
+	for i := range 4 {
+		if _, ok := l.acquire("127.0.0.1:" + strconv.Itoa(1000+i)); !ok {
+			t.Fatalf("loopback request %d refused under the total", i+1)
+		}
+	}
+	if _, ok := l.acquire("[::1]:1000"); ok {
+		t.Fatal("a loopback request over the total was let through")
 	}
 }

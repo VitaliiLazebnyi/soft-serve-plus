@@ -23,10 +23,10 @@ import (
 // push is never cut off mid-transfer. The trade-off is that a handler that
 // stays up holds the connection open for as long as it runs: an idle TUI
 // session, or a git command left waiting for the client's input, pauses the
-// clock indefinitely. Nothing here bounds that; only a non-zero max_timeout
-// would, and its default is 0 today (raising it is a later change). What
-// this does bound is the keepalive-only attack of SSH-9, where a connection
-// that runs no command holds its place for as long as it likes.
+// clock indefinitely. Nothing here bounds that; max_timeout bounds that; it
+// defaults to 6 hours (config.DefaultMaxTimeout). What this does bound is
+// the keepalive-only attack of SSH-9, where a connection that runs no
+// command holds its place for as long as it likes.
 const noAccountLifetime = 10 * time.Minute
 
 // connLifetimeKey is the connection context key of the connection's

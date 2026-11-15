@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/clientaddr"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 )
@@ -37,22 +38,17 @@ func newRequestLimits(cfg config.HTTPConfig) *requestLimits {
 }
 
 // clientPrefix returns the key a request from remoteAddr, as in
-// http.Request.RemoteAddr, is counted under: the address itself for IPv4,
-// and its /64 for IPv6, since one client usually holds a whole /64. ok is
-// false when remoteAddr holds no IP address; such a request only counts
-// towards the total.
+// http.Request.RemoteAddr, is counted under against maxPerAddr; see
+// clientaddr.Prefix. ok is false when remoteAddr holds no IP address, or a
+// loopback one; such a request only counts towards the total. A reverse
+// proxy on the same host connects from loopback, and every client it
+// forwards would otherwise share one address's share.
 func clientPrefix(remoteAddr string) (netip.Prefix, bool) {
 	ap, err := netip.ParseAddrPort(remoteAddr)
-	if err != nil {
+	if err != nil || ap.Addr().Unmap().IsLoopback() {
 		return netip.Prefix{}, false
 	}
-	ip := ap.Addr().Unmap()
-	bits := 32
-	if ip.Is6() {
-		bits = 64
-	}
-	p, err := ip.Prefix(bits)
-	return p, err == nil
+	return clientaddr.Prefix(ap.Addr())
 }
 
 // acquire takes a slot for a request from remoteAddr, and reports whether
@@ -177,8 +173,11 @@ type deadlines struct {
 	// max is when the request must be done, or zero for no limit.
 	max time.Time
 
-	// mu guards done and every deadline set through rc.
+	// mu guards done, reading, writing and every deadline set through rc.
 	mu sync.Mutex
+	// reading and writing count the reads of the body and the writes of
+	// the response in progress.
+	reading, writing int
 	// done is set once the handler has returned. The connection then
 	// belongs to the server again: over HTTP/2 the stream's state is
 	// gone, and setting a deadline through rc panics; over HTTP/1 it
@@ -216,41 +215,73 @@ func (d *deadlines) extend() {
 	_ = d.rc.SetWriteDeadline(t)
 }
 
-// setRead sets the read deadline to the one when returns, unless the handler
-// has returned. The lock is held across the call, so the handler cannot
-// return while it runs.
-func (d *deadlines) setRead(when func() time.Time) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// setRead sets the read deadline to t, unless the handler has returned. The
+// caller holds mu, so the handler cannot return while it runs.
+func (d *deadlines) setRead(t time.Time) {
 	if !d.done {
-		_ = d.rc.SetReadDeadline(when())
+		_ = d.rc.SetReadDeadline(t)
 	}
 }
 
 // setWrite is setRead for the write deadline.
-func (d *deadlines) setWrite(when func() time.Time) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (d *deadlines) setWrite(t time.Time) {
 	if !d.done {
-		_ = d.rc.SetWriteDeadline(when())
+		_ = d.rc.SetWriteDeadline(t)
 	}
 }
 
-// maxDeadline returns max, for setRead and setWrite.
-func (d *deadlines) maxDeadline() time.Time { return d.max }
-
 // read runs a read of the body bound by the idle deadline.
 func (d *deadlines) read(f func()) {
-	d.setRead(d.next)
+	d.mu.Lock()
+	d.reading++
+	d.setRead(d.next())
+	d.mu.Unlock()
+
 	f()
-	d.setRead(d.maxDeadline)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.reading--
+	if d.reading > 0 {
+		return
+	}
+	if d.writing > 0 {
+		// A write in progress may be reading the body; see write.
+		d.setRead(d.next())
+	} else {
+		d.setRead(d.max)
+	}
 }
 
 // write runs a write of the response bound by the idle deadline.
+//
+// The read deadline is bound by it too while no read of the body is in
+// progress: unless full duplex is enabled, the HTTP/1 server reads and
+// discards the body the handler has not read once the response header goes
+// out, which is on the first write that fills its buffer or on a flush. A
+// read in progress keeps the deadline it set, so a full-duplex handler that
+// reads and writes at once is unaffected.
 func (d *deadlines) write(f func()) {
-	d.setWrite(d.next)
+	d.mu.Lock()
+	d.writing++
+	t := d.next()
+	d.setWrite(t)
+	if d.reading == 0 {
+		d.setRead(t)
+	}
+	d.mu.Unlock()
+
 	f()
-	d.setWrite(d.maxDeadline)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.writing--
+	if d.writing == 0 {
+		d.setWrite(d.max)
+		if d.reading == 0 {
+			d.setRead(d.max)
+		}
+	}
 }
 
 // deadlineBody is a request body whose reads are bound by the idle deadline.

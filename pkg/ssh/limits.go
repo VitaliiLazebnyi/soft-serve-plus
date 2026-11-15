@@ -10,6 +10,7 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
+	"github.com/charmbracelet/soft-serve/internal/clientaddr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	gossh "golang.org/x/crypto/ssh"
@@ -34,10 +35,9 @@ func newConnLimiter(maxConns, maxPerIP int) *connLimiter {
 	}
 }
 
-// clientKey returns the key a client address is counted under: the address
-// itself for IPv4, and its /64 for IPv6, since a single client usually holds
-// a whole /64. ok is false when addr carries no IP, such as a pipe in tests;
-// such connections only count towards the total.
+// clientKey returns the key a client address is counted under; see
+// clientaddr.Prefix. ok is false when addr carries no IP, such as a pipe in
+// tests; such connections only count towards the total.
 func clientKey(addr net.Addr) (netip.Prefix, bool) {
 	var ip netip.Addr
 	switch a := addr.(type) {
@@ -53,19 +53,7 @@ func clientKey(addr net.Addr) (netip.Prefix, bool) {
 		}
 		ip = ap.Addr()
 	}
-	if !ip.IsValid() {
-		return netip.Prefix{}, false
-	}
-	ip = ip.Unmap()
-	bits := 32
-	if ip.Is6() {
-		bits = 64
-	}
-	p, err := ip.Prefix(bits)
-	if err != nil {
-		return netip.Prefix{}, false
-	}
-	return p, true
+	return clientaddr.Prefix(ip)
 }
 
 // Reasons a connection is refused, used as the label of

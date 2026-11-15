@@ -181,8 +181,10 @@ type HTTPConfig struct {
 
 	// MaxConnectionsPerIP is the maximum number of git and LFS requests
 	// served at once from one client address (one IPv4 address, or one IPv6
-	// /64). 0 means no limit. Behind a reverse proxy every client has the
-	// proxy's address, so set it to 0 there and limit clients at the proxy.
+	// /64). 0 means no limit. Loopback clients are not limited by it, so a
+	// reverse proxy on the same host is not; behind a proxy on another host
+	// every client has the proxy's address, so set it to 0 there and limit
+	// clients at the proxy.
 	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
 
 	// CORS is the cross-origin configuration for the HTTP server.
@@ -755,6 +757,27 @@ func (c *Config) Exist() bool {
 // and set no total limit, so they cut off no transfer that makes progress;
 // neither does a limit this long in practice.
 const DefaultMaxTimeout = 6 * 60 * 60
+
+// UnboundedTimeouts returns the max_timeout settings, such as
+// "http.max_timeout", of the enabled servers that set no total time limit.
+// A config.yaml written before DefaultMaxTimeout keeps max_timeout: 0.
+func (c *Config) UnboundedTimeouts() []string {
+	var names []string
+	for _, v := range []struct {
+		name    string
+		enabled bool
+		value   int
+	}{
+		{"ssh.max_timeout", c.SSH.Enabled, c.SSH.MaxTimeout},
+		{"git.max_timeout", c.Git.Enabled, c.Git.MaxTimeout},
+		{"http.max_timeout", c.HTTP.Enabled, c.HTTP.MaxTimeout},
+	} {
+		if v.enabled && v.value == 0 {
+			names = append(names, v.name)
+		}
+	}
+	return names
+}
 
 // DefaultConfig returns the default Config. All the path values are relative
 // to the data directory.

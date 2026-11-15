@@ -238,9 +238,13 @@ http:
   # The maximum number of git and LFS requests served at once, in total and
   # from one client address (one IPv4 address or one IPv6 /64). Requests
   # over a limit get 503 Service Unavailable. A value of 0 means no limit.
-  # Behind a reverse proxy, or many clients behind one NAT or CI egress
-  # address, every client shares one address: set max_connections_per_ip
-  # to 0 there, or raise it, and limit clients at the proxy instead.
+  # Loopback clients (127.0.0.0/8, ::1) have no per-address limit, so a
+  # reverse proxy on the same host is bound only by max_connections. Behind
+  # a reverse proxy on another host every client has the proxy's address
+  # and shares one address's limit: set max_connections_per_ip to 0 there
+  # and limit clients at the proxy. Raise it when many clients share one
+  # NAT or CI egress address. The per-address limit keeps one address from
+  # taking every request slot, not a few addresses together.
   max_connections: {{ .HTTP.MaxConnections }}
   max_connections_per_ip: {{ .HTTP.MaxConnectionsPerIP }}
 
