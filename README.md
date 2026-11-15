@@ -901,9 +901,8 @@ You can generate user access tokens through the SSH command line interface. Acce
 
 There is no password login over HTTP: HTTP Basic credentials must carry an
 access token, as the username or as the password. With the token as the
-password, the username must be your username, or any name that is not
-another user's. Any other password is refused at once, without being
-checked.
+password, any username works: the token decides the user. Any other
+password is refused at once, without being checked.
 
 ```sh
 # Create a user token
@@ -916,13 +915,12 @@ ss_98fghi1234abc56789012345678901234de246d7
 ```
 
 Now you can access repos that require `read-write` access. Give git the token
-as the password (with your username, or any name that is not another user's)
-through a credential helper, so it is not stored in the remote URL:
+as the password (with any username) through a credential helper, so it is not
+stored in the remote URL:
 
 ```sh
 git clone http://localhost:23232/my-private-repo.git my-private-repo
-# When prompted, enter your username (or any name that is not another
-# user's) and the token as the password.
+# When prompted, enter any username and the token as the password.
 # Your credential helper (e.g. osxkeychain, manager, libsecret) remembers it.
 # Make changes and push
 ```

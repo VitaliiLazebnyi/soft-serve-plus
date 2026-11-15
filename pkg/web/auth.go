@@ -42,16 +42,15 @@ var ErrInvalidPassword = errors.New("invalid password")
 // parseUsernamePassword authenticates HTTP Basic credentials. There is no
 // password login: a Basic login must carry an access token. It accepts:
 //
-//   - an access token as the password, with an empty username, the token
-//     owner's username, or a placeholder that names no registered user (such
-//     as "git" or "x-access-token");
+//   - an access token as the password, with any username or none: the token
+//     decides the user, as on GitHub, so placeholders such as "git" or
+//     "x-access-token" work whoever has that name, and the answer does not
+//     reveal whether the name is registered;
 //   - an access token as the username, with any password or none, the way
 //     GitHub clients send it (e.g. "<token>:x-oauth-basic").
 //
-// A token sent as the password with the name of another registered user is
-// refused: "alice:<bob's token>" must not log in as bob. Anything else is
-// refused after at most two token lookups, which are hashes, so a failed
-// login costs no bcrypt and waits for nothing.
+// Anything else is refused after at most two token lookups, which are
+// hashes, so a failed login costs no bcrypt and waits for nothing.
 func parseUsernamePassword(ctx context.Context, username, password string) (proto.User, error) {
 	logger := log.FromContext(ctx)
 	be := backend.FromContext(ctx)
@@ -69,19 +68,11 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 	}
 
 	if password != "" {
-		// Access token as the password. The lookup is a hash that does not
-		// depend on the username.
+		// Access token as the password. The token's owner is the user,
+		// whatever the username, which is not looked up.
+		// When both fields are valid tokens of different users, the password's wins.
 		owner, err := be.UserByAccessToken(ctx, password)
 		if err == nil {
-			ok, err := tokenMatchesUsername(ctx, owner, username)
-			if err != nil {
-				logger.Info("failed to look up the user named with an access token", "err", err)
-				return nil, ErrInvalidPassword
-			}
-			if !ok {
-				logger.Info("access token does not belong to the named user")
-				return nil, ErrInvalidPassword
-			}
 			return owner, nil
 		}
 	}
@@ -101,28 +92,6 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 
 	logger.Info("invalid password or token")
 	return nil, ErrInvalidPassword
-}
-
-// tokenMatchesUsername reports whether an access token owned by owner may be
-// used with username as the HTTP Basic username: it may when username is
-// empty, is owner's name, or is a placeholder that names no registered user.
-// A failed user lookup returns an error, so the login fails closed.
-func tokenMatchesUsername(ctx context.Context, owner proto.User, username string) (bool, error) {
-	if username == "" || strings.EqualFold(username, owner.Username()) {
-		return true, nil
-	}
-	// A name that is not a valid username cannot be a registered user.
-	if utils.ValidateUsername(username) != nil {
-		return true, nil
-	}
-	named, err := backend.FromContext(ctx).User(ctx, username)
-	if errors.Is(err, proto.ErrUserNotFound) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return named.ID() == owner.ID(), nil
 }
 
 // ErrInvalidHeader is returned when the authorization header is invalid.
