@@ -2,10 +2,13 @@ package buildcheck
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -315,7 +318,7 @@ func TestReleaseArtifactsAreReproducible(t *testing.T) {
 		cmd := hookCommand(h)
 		if strings.HasPrefix(cmd, "touch ") && strings.Contains(cmd, commitDate) {
 			for _, f := range strings.Fields(cmd) {
-				touched = append(touched, filepath.Clean(f))
+				touched = append(touched, path.Clean(f))
 			}
 		}
 		if strings.Contains(cmd, "./cmd/soft man") {
@@ -332,8 +335,164 @@ func TestReleaseArtifactsAreReproducible(t *testing.T) {
 		t.Error("no hook generates the man page; update this test")
 	}
 	for _, f := range scripts {
-		if !slices.Contains(touched, filepath.Clean(f)) {
+		if !slices.Contains(touched, path.Clean(f)) {
 			t.Errorf("package script %s is not dated by a `touch -d %q` before hook", f, commitDate)
 		}
 	}
+}
+
+// TestPostinstallAppliesOnlyItsOwnRules checks that the package's postinstall
+// script runs systemd-sysusers and systemd-tmpfiles on the rule files the
+// package installs. Without a file argument they apply the rules of every
+// package on the host, and with set -e another package's failing rule fails
+// this install.
+func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	if len(c.NFPMs) == 0 {
+		t.Fatal("no nfpms in .goreleaser.yml; update this test")
+	}
+	for i, n := range c.NFPMs {
+		if n.Scripts.PostInstall == "" {
+			t.Fatalf("nfpms[%d]: no postinstall script; update this test", i)
+		}
+		b, err := os.ReadFile(filepath.Join(repoRoot, n.Scripts.PostInstall))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dsts []string
+		for _, f := range n.Contents {
+			dsts = append(dsts, f.Dst)
+		}
+		for _, p := range postinstallProblems(string(b), ruleFiles(dsts)) {
+			t.Errorf("nfpms[%d]: %s %s", i, n.Scripts.PostInstall, p)
+		}
+	}
+}
+
+// TestPostinstallCheckIsPortable checks ruleFiles and postinstallProblems on
+// input whose form depends on the OS the test runs on: package paths, which
+// are slash paths on every OS, and a script checked out with CRLF line
+// endings, as Git does on Windows with core.autocrlf.
+func TestPostinstallCheckIsPortable(t *testing.T) {
+	t.Parallel()
+	installed := ruleFiles([]string{
+		"/usr/lib/sysusers.d/soft-serve.conf",
+		"/usr/lib/tmpfiles.d/soft-serve.conf",
+		"/usr/lib/systemd/system/soft-serve.service",
+	})
+	want := map[string]string{"systemd-sysusers": "soft-serve.conf", "systemd-tmpfiles": "soft-serve.conf"}
+	if !maps.Equal(installed, want) {
+		t.Fatalf("ruleFiles = %v, want %v", installed, want)
+	}
+	good := "if command -v systemd-sysusers >/dev/null; then\n" +
+		"\tsystemd-sysusers \\\n\t\tsoft-serve.conf # comment\n" +
+		"fi\n" +
+		"if command -v systemd-tmpfiles >/dev/null; then systemd-tmpfiles --create soft-serve.conf; fi\n"
+	bad := strings.Replace(good, "\\\n\t\tsoft-serve.conf", "\n", 1)
+	for _, eol := range []string{"\n", "\r\n"} {
+		name := strconv.Quote(eol)
+		if p := postinstallProblems(strings.ReplaceAll(good, "\n", eol), installed); len(p) > 0 {
+			t.Errorf("%s endings: problems in a good script: %q", name, p)
+		}
+		if p := postinstallProblems(strings.ReplaceAll(bad, "\n", eol), installed); len(p) == 0 {
+			t.Errorf("%s endings: no problem found in a bare systemd-sysusers call", name)
+		}
+	}
+}
+
+// ruleFiles returns, for systemd-sysusers and systemd-tmpfiles, the name of
+// the rule file among the package destinations dsts. The destinations are
+// slash paths on every OS, so this uses path, not path/filepath.
+func ruleFiles(dsts []string) map[string]string {
+	installed := map[string]string{}
+	for _, dst := range dsts {
+		for _, tool := range []string{"sysusers", "tmpfiles"} {
+			if path.Dir(dst) == "/usr/lib/"+tool+".d" {
+				installed["systemd-"+tool] = path.Base(dst)
+			}
+		}
+	}
+	return installed
+}
+
+// postinstallProblems checks how script runs systemd-sysusers and
+// systemd-tmpfiles: each call must name the package's rule file in installed
+// and sit inside an `if command -v` block for its tool, and each tool with a
+// rule file must be run.
+func postinstallProblems(script string, installed map[string]string) []string {
+	var problems []string
+	calls := map[string]int{}
+	// guards has one entry per enclosing if block: the tool its condition
+	// checks with `command -v`, or "" for any other condition and for an
+	// else branch.
+	var guards []string
+	for _, line := range scriptLines(script) {
+		f := strings.Fields(strings.ReplaceAll(line, ";", " ; "))
+		for j, w := range f {
+			switch w {
+			case "if", "elif":
+				g := ""
+				if j+3 < len(f) && f[j+1] == "command" && (f[j+2] == "-v" || f[j+2] == "-V") {
+					g = f[j+3]
+				}
+				if w == "if" {
+					guards = append(guards, g)
+				} else if len(guards) > 0 {
+					guards[len(guards)-1] = g
+				}
+			case "else":
+				if len(guards) > 0 {
+					guards[len(guards)-1] = ""
+				}
+			case "fi":
+				if len(guards) > 0 {
+					guards = guards[:len(guards)-1]
+				}
+			case "systemd-sysusers", "systemd-tmpfiles":
+				// `command -v TOOL` checks for the tool; it does not run it.
+				if j > 0 && (f[j-1] == "-v" || f[j-1] == "-V") {
+					continue
+				}
+				calls[w]++
+				// With set -e, a systemd host without the tool would fail
+				// the install.
+				if !slices.Contains(guards, w) {
+					problems = append(problems, fmt.Sprintf("runs %q outside an `if command -v %s` block", line, w))
+				}
+				conf, ok := installed[w]
+				if !ok {
+					problems = append(problems, fmt.Sprintf("runs %s, but the package installs no rule file for it", w))
+					continue
+				}
+				if !slices.Contains(f[j+1:], conf) {
+					problems = append(problems, fmt.Sprintf("runs %q, which applies every package's rules; name %s", line, conf))
+				}
+			}
+		}
+	}
+	for _, tool := range slices.Sorted(maps.Keys(installed)) {
+		if calls[tool] == 0 {
+			problems = append(problems, fmt.Sprintf("does not run %s, though the package installs a rule file for it", tool))
+		}
+	}
+	return problems
+}
+
+// scriptLines returns the lines of a shell script, with CRLF line endings (as
+// in a Windows checkout) treated as LF, backslash continuations joined and
+// comments dropped. It does not understand quoting, which the package scripts
+// do not need.
+func scriptLines(script string) []string {
+	script = strings.ReplaceAll(script, "\r\n", "\n")
+	var out []string
+	for line := range strings.SplitSeq(strings.ReplaceAll(script, "\\\n", " "), "\n") {
+		if i := strings.Index(line, "#"); i >= 0 && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			line = line[:i]
+		}
+		if strings.TrimSpace(line) != "" {
+			out = append(out, strings.TrimSpace(line))
+		}
+	}
+	return out
 }
