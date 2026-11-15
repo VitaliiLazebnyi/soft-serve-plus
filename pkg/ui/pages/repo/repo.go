@@ -44,9 +44,6 @@ type genMsg interface {
 	generation() uint64
 }
 
-// CopyURLMsg is a message to copy the URL of the current repository.
-type CopyURLMsg struct{}
-
 // RepoMsg is a message that contains a repository.
 type RepoMsg proto.Repository //nolint:revive
 

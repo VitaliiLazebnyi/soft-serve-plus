@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -13,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
-	"github.com/charmbracelet/soft-serve/pkg/ui/components/header"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/selection"
@@ -42,7 +42,6 @@ type UI struct {
 	pages       []common.Component
 	activePage  page
 	state       sessionState
-	header      *header.Header
 	footer      *footer.Footer
 	showFooter  bool
 	error       error
@@ -61,15 +60,12 @@ type repoOpenedMsg struct {
 
 // NewUI returns a new UI model.
 func NewUI(c common.Common, initialRepo string) *UI {
-	serverName := c.Config().Name
-	h := header.New(c, serverName)
 	ui := &UI{
-		serverName:  serverName,
+		serverName:  c.Config().Name,
 		common:      c,
 		pages:       make([]common.Component, 2), // selection & repo
 		activePage:  selectionPage,
 		state:       loadingState,
-		header:      h,
 		initialRepo: initialRepo,
 		showFooter:  true,
 	}
@@ -133,7 +129,6 @@ func (ui *UI) FullHelp() [][]key.Binding {
 func (ui *UI) SetSize(width, height int) {
 	ui.common.SetSize(width, height)
 	wm, hm := ui.getMargins()
-	ui.header.SetSize(width-wm, height-hm)
 	ui.footer.SetSize(width-wm, height-hm)
 	for _, p := range ui.pages {
 		if p != nil {
@@ -279,11 +274,6 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	h, cmd := ui.header.Update(msg)
-	ui.header = h.(*header.Header)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
 	f, cmd := ui.footer.Update(msg)
 	ui.footer = f.(*footer.Footer)
 	if cmd != nil {
@@ -331,7 +321,9 @@ func (ui *UI) View() tea.View {
 		view = "Unknown state :/ this is a bug!"
 	}
 	if ui.activePage == selectionPage {
-		view = lipgloss.JoinVertical(lipgloss.Left, ui.header.View(), view)
+		view = lipgloss.JoinVertical(lipgloss.Left,
+			ui.common.Styles.ServerName.Render(strings.TrimSpace(ui.serverName)),
+			view)
 	}
 	if ui.showFooter {
 		view = lipgloss.JoinVertical(lipgloss.Left, view, ui.footer.View())

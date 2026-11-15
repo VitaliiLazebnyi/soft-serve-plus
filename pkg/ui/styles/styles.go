@@ -11,7 +11,6 @@ import (
 
 // Styles defines styles for the UI.
 type Styles struct {
-	ActiveBorderColor   color.Color
 	InactiveBorderColor color.Color
 
 	App                  lipgloss.Style
@@ -20,8 +19,7 @@ type Styles struct {
 	TopLevelActiveTab    lipgloss.Style
 	TopLevelActiveTabDot lipgloss.Style
 
-	MenuItem       lipgloss.Style
-	MenuLastUpdate lipgloss.Style
+	MenuItem lipgloss.Style
 
 	RepoSelector struct {
 		Normal struct {
@@ -42,20 +40,16 @@ type Styles struct {
 
 	Repo struct {
 		Base       lipgloss.Style
-		Title      lipgloss.Style
-		Command    lipgloss.Style
 		Body       lipgloss.Style
 		Header     lipgloss.Style
 		HeaderName lipgloss.Style
 		HeaderDesc lipgloss.Style
 	}
 
-	Footer      lipgloss.Style
-	Branch      lipgloss.Style
-	HelpKey     lipgloss.Style
-	HelpValue   lipgloss.Style
-	HelpDivider lipgloss.Style
-	URLStyle    lipgloss.Style
+	Footer    lipgloss.Style
+	HelpKey   lipgloss.Style
+	HelpValue lipgloss.Style
+	URLStyle  lipgloss.Style
 
 	Error      lipgloss.Style
 	ErrorTitle lipgloss.Style
@@ -79,14 +73,12 @@ type Styles struct {
 	}
 
 	Log struct {
-		Commit         lipgloss.Style
 		CommitHash     lipgloss.Style
 		CommitAuthor   lipgloss.Style
 		CommitDate     lipgloss.Style
 		CommitBody     lipgloss.Style
 		CommitStatsAdd lipgloss.Style
 		CommitStatsDel lipgloss.Style
-		Paginator      lipgloss.Style
 	}
 
 	Ref struct {
@@ -105,8 +97,6 @@ type Styles struct {
 			ItemHash lipgloss.Style
 		}
 		ItemSelector lipgloss.Style
-		Paginator    lipgloss.Style
-		Selector     lipgloss.Style
 	}
 
 	Tree struct {
@@ -122,10 +112,8 @@ type Styles struct {
 			FileMode lipgloss.Style
 			FileSize lipgloss.Style
 		}
-		Selector    lipgloss.Style
-		FileContent lipgloss.Style
-		Paginator   lipgloss.Style
-		Blame       struct {
+		Selector lipgloss.Style
+		Blame    struct {
 			Hash    lipgloss.Style
 			Message lipgloss.Style
 			Who     lipgloss.Style
@@ -175,7 +163,6 @@ func DefaultStyles() *Styles {
 
 	s := new(Styles)
 
-	s.ActiveBorderColor = lipgloss.Color("62")
 	s.InactiveBorderColor = lipgloss.Color("241")
 
 	s.App = lipgloss.NewStyle().
@@ -238,17 +225,7 @@ func DefaultStyles() *Styles {
 		}, false, false, false, true).
 		Height(3)
 
-	s.MenuLastUpdate = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Align(lipgloss.Right)
-
 	s.Repo.Base = lipgloss.NewStyle()
-
-	s.Repo.Title = lipgloss.NewStyle().
-		Padding(0, 2)
-
-	s.Repo.Command = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("168"))
 
 	s.Repo.Body = lipgloss.NewStyle().
 		Margin(1, 0)
@@ -270,20 +247,11 @@ func DefaultStyles() *Styles {
 		Padding(0, 1).
 		Height(1)
 
-	s.Branch = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("203")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 1)
-
 	s.HelpKey = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
 	s.HelpValue = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("239"))
-
-	s.HelpDivider = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("237")).
-		SetString(" • ")
 
 	s.URLStyle = lipgloss.NewStyle().
 		MarginLeft(1).
@@ -336,9 +304,6 @@ func DefaultStyles() *Styles {
 	s.LogItem.Active.Hash = lipgloss.NewStyle().
 		Foreground(highlightColor)
 
-	s.Log.Commit = lipgloss.NewStyle().
-		Margin(0, 2)
-
 	s.Log.CommitHash = lipgloss.NewStyle().
 		Foreground(hashColor).
 		Bold(true)
@@ -354,10 +319,6 @@ func DefaultStyles() *Styles {
 	s.Log.CommitStatsDel = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("203")).
 		Bold(true)
-
-	s.Log.Paginator = lipgloss.NewStyle().
-		Margin(0).
-		Align(lipgloss.Center)
 
 	s.Ref.Normal.Item = lipgloss.NewStyle()
 
@@ -395,10 +356,6 @@ func DefaultStyles() *Styles {
 		Foreground(highlightColor).
 		Bold(true)
 
-	s.Ref.Paginator = s.Log.Paginator
-
-	s.Ref.Selector = lipgloss.NewStyle()
-
 	s.Tree.Selector = s.Tree.Normal.FileName.
 		Width(1).
 		Foreground(selectorColor)
@@ -428,10 +385,6 @@ func DefaultStyles() *Styles {
 
 	s.Tree.Active.FileSize = s.Tree.Normal.FileName.
 		Foreground(highlightColorDim)
-
-	s.Tree.FileContent = lipgloss.NewStyle()
-
-	s.Tree.Paginator = s.Log.Paginator
 
 	s.Tree.Blame.Hash = lipgloss.NewStyle().
 		Foreground(hashColor).

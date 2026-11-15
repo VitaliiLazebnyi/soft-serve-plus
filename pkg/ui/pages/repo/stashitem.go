@@ -33,20 +33,6 @@ func (i StashItem) Description() string {
 // FilterValue implements list.Item.
 func (i StashItem) FilterValue() string { return i.Title() }
 
-// StashItems is a list of stash items.
-type StashItems []StashItem
-
-// Len implements sort.Interface.
-func (cl StashItems) Len() int { return len(cl) }
-
-// Swap implements sort.Interface.
-func (cl StashItems) Swap(i, j int) { cl[i], cl[j] = cl[j], cl[i] }
-
-// Less implements sort.Interface.
-func (cl StashItems) Less(i, j int) bool {
-	return cl[i].Index < cl[j].Index
-}
-
 // StashItemDelegate is a delegate for stash items.
 type StashItemDelegate struct {
 	common *common.Common

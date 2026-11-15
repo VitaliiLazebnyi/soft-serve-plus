@@ -20,7 +20,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
-	"github.com/charmbracelet/soft-serve/pkg/ui/components/header"
 )
 
 // newTestUIContext returns a context holding a config, store and backend
@@ -120,7 +119,7 @@ func newFilteringUI(t *testing.T) (*UI, *filteringPage) {
 		pages:      []common.Component{page, page},
 		activePage: selectionPage,
 		state:      readyState,
-		header:     header.New(c, "test"),
+		serverName: "test",
 		showFooter: true,
 	}
 	ui.footer = footer.New(c, ui)
@@ -216,7 +215,7 @@ func newTestUI(t *testing.T, active page) (*UI, *recordingPage) {
 		pages:      []common.Component{&recordingPage{}, &recordingPage{}},
 		activePage: active,
 		state:      readyState,
-		header:     header.New(c, "test"),
+		serverName: "test",
 		showFooter: true,
 	}
 	ui.pages[active] = p
