@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -254,5 +256,34 @@ func TestSanitizeTextBidi(t *testing.T) {
 	}
 	if got := common.SanitizeText("plain\ttext\n"); got != "plain\ttext\n" {
 		t.Fatalf("plain text changed to %q", got)
+	}
+}
+
+// A code view render of a hidden tab leaves the status bar alone, so a copy
+// notice stays; a render of the tab shown refreshes it.
+func TestStatusBarKeepsNoticeOnHiddenTabRender(t *testing.T) {
+	p := newPinPage(t)
+	p.open()
+	notice := func() bool {
+		return strings.Contains(ansi.Strip(p.r.statusbar.View()), "Commit hash copied")
+	}
+	render := func(c interface{ SetContent(string, string) tea.Cmd }) tea.Msg {
+		t.Helper()
+		return findMsg[code.RenderedMsg](t, runCmd(c.SetContent("body\n", "f.txt")))
+	}
+
+	p.tab(2)
+	p.update(CopyMsg{Text: "x", Message: "Commit hash copied"})
+	p.update(render(p.files.code))
+	p.update(render(p.readme.code))
+	if !notice() {
+		t.Fatal("a hidden tab's render cleared the copy notice")
+	}
+
+	p.tab(1)
+	p.update(CopyMsg{Text: "x", Message: "Commit hash copied"})
+	p.update(render(p.files.code))
+	if notice() {
+		t.Fatal("a render of the tab shown kept the copy notice")
 	}
 }

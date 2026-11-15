@@ -290,6 +290,11 @@ func (r *Code) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// Owns reports whether msg is a render of this view.
+func (r *Code) Owns(msg RenderedMsg) bool {
+	return msg.id == r.id
+}
+
 // Resizes returns how many window size messages the view has handled. Tests
 // use it to check that a parent delivers each resize to the view only once.
 func (r *Code) Resizes() int {

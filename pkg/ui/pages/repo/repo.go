@@ -383,9 +383,14 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		if r.state == failedState || msg.pane() == paneRepo || msg.pane() == r.panes[r.activeTab].id() {
 			r.setStatusBarInfo()
 		}
+	case code.RenderedMsg:
+		// A render of a code view, which only the tab that shows it has.
+		if v, ok := r.panes[r.activeTab].(codeView); ok && r.state != failedState && v.ownsRender(msg) {
+			r.setStatusBarInfo()
+		}
 	case RepoMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
 		selector.ActiveMsg, tea.KeyPressMsg, tea.MouseClickMsg,
-		tea.MouseWheelMsg, code.RenderedMsg:
+		tea.MouseWheelMsg:
 		r.setStatusBarInfo()
 	}
 

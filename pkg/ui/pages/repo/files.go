@@ -467,6 +467,8 @@ func (f *Files) Loading() (string, bool) {
 
 func (f *Files) id() paneID { return paneFiles }
 
+func (f *Files) ownsRender(msg code.RenderedMsg) bool { return f.code.Owns(msg) }
+
 // StatusBarValue returns the status bar value.
 func (f *Files) StatusBarValue() string {
 	p := f.path

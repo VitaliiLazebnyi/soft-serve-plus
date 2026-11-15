@@ -157,6 +157,8 @@ func (r *Readme) Loading() (string, bool) {
 
 func (r *Readme) id() paneID { return paneReadme }
 
+func (r *Readme) ownsRender(msg code.RenderedMsg) bool { return r.code.Owns(msg) }
+
 // StatusBarValue implements statusbar.StatusBar.
 func (r *Readme) StatusBarValue() string {
 	dir := path.Dir(r.readmePath)
