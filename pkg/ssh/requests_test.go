@@ -523,18 +523,50 @@ func TestFilterWindowChanges(t *testing.T) {
 	}
 }
 
-// discard keeps a session's request loop answering window changes nobody
-// reads.
-func TestDiscardWindowChanges(t *testing.T) {
+// startForwardServer starts a bare SSH server wired like the real one: an
+// emulated pty, session channels through filterSessionRequests, and handler
+// behind forwardWindowChanges.
+func startForwardServer(t *testing.T, handler ssh.Handler) string {
+	t.Helper()
+	srv := &ssh.Server{
+		Handler:          forwardWindowChanges(handler),
+		PublicKeyHandler: func(ssh.Context, ssh.PublicKey) bool { return true },
+		ChannelHandlers: map[string]ssh.ChannelHandler{
+			"session": filterSessionRequests(ssh.DefaultSessionHandler),
+		},
+	}
+	if err := ssh.EmulatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
+	srv.AddHostKey(newSigner(t))
+	return testsession.Listen(t, srv)
+}
+
+// A handler that blocks without draining its window changes -- stuck on a
+// write to a client that is not reading (the length or auth check, the
+// session-limit refusal, the "no access" message) or inside a TUI whose
+// renderer the client has stalled -- used to deadlock the session's request
+// loop. The loop fills the one-element window channel and then blocks on the
+// next window-change, so it stops answering requests; x/crypto's request
+// buffer fills and the connection read loop blocks behind it, and the server
+// never sees another request, the disconnect or a timeout.
+//
+// forwardWindowChanges drains the window changes whatever the handler does,
+// so the loop keeps answering. This sends window-changes that want a reply
+// while the handler is blocked and checks every one is answered; without the
+// fix the second never is (the loop is stuck sending the first to a channel
+// nobody reads). A blocked handler stands in for the reviewer's zero-window
+// client, whose first byte written blocks the same way.
+func TestForwardWindowChangesKeepsLoopAnswering(t *testing.T) {
+	ready := make(chan struct{})
 	release := make(chan struct{})
-	addr := startFilterServer(t, func(s ssh.Session) {
-		_, winch, _ := s.Pty()
-		discard(winch)
-		_, _ = fmt.Fprintln(s, "ready")
-		<-release
-		_ = s.Exit(0)
+	addr := startForwardServer(t, func(s ssh.Session) {
+		_, _, _ = s.Pty()
+		close(ready)
+		<-release // block without reading the window changes
 	})
 	defer close(release)
+
 	c, err := dialClient(t, addr)
 	if err != nil {
 		t.Fatal(err)
@@ -547,11 +579,95 @@ func TestDiscardWindowChanges(t *testing.T) {
 	if err := s.RequestPty("xterm", 40, 80, nil); err != nil {
 		t.Fatal(err)
 	}
-	readyAfterShell(t, s)()
-	for i := uint32(0); i < 5; i++ {
+	if _, err := s.SendRequest("exec", true, execPayload("x")); err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	// sendRequest fails the test if a reply does not come within five
+	// seconds, which is what a blocked request loop would do.
+	for i := uint32(0); i < 32; i++ {
 		if !sendRequest(t, s, "window-change", windowPayload(100+i, 50)) {
-			t.Fatal("window-change refused")
+			t.Fatalf("window-change %d refused", i)
 		}
+	}
+}
+
+// forwardWindowChanges gives the handler the newest window size and never
+// blocks the request loop. The handler reads its pty first and prints
+// "ready"; the client sends its resizes only after, so no resize races with
+// the one read of the library's pty (charm.land/ssh writes the window
+// without a lock), and this test needs no race skip.
+func TestForwardWindowChangesLatest(t *testing.T) {
+	type result struct {
+		w  ssh.Window
+		ok bool
+	}
+	got := make(chan result, 1)
+	addr := startForwardServer(t, func(s ssh.Session) {
+		_, winch, ok := s.Pty()
+		_, _ = fmt.Fprintln(s, "ready")
+		// Wait for the client's go-ahead byte, sent after its resizes, so
+		// the library has already processed them all.
+		_, _ = bufio.NewReader(s).ReadByte()
+		// Read until the newest size arrives. Latest-wins may collapse the
+		// ones in between, but the final one always comes through.
+		var last ssh.Window
+		for w := range winch {
+			last = w
+			if w.Width == 163 && w.Height == 113 {
+				break
+			}
+		}
+		got <- result{last, ok}
+		_ = s.Exit(0)
+	})
+
+	c, err := dialClient(t, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+	s, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := s.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := s.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < 64; i++ {
+		if !sendRequest(t, s, "window-change", windowPayload(100+i, 50+i)) {
+			t.Fatalf("window-change %d refused", i)
+		}
+	}
+	if _, err := stdin.Write([]byte{'x'}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case r := <-got:
+		if !r.ok {
+			t.Fatal("handler had no pty")
+		}
+		// Latest-wins keeps the newest; it may miss ones in between.
+		if r.w.Width != 163 || r.w.Height != 113 {
+			t.Errorf("handler saw %dx%d, want the newest 163x113", r.w.Width, r.w.Height)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not report the window")
 	}
 }
 

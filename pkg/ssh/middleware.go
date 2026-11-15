@@ -143,14 +143,12 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 		rootCmd := newRootCommand(cfg, args)
 
 		// A session with a pty opens the TUI unless its command is one to
-		// run (see runWithPty).
-		if _, winch, ptyReq := s.Pty(); ptyReq {
-			if !runWithPty(ctx, rootCmd, args) {
-				sh(s)
-				return
-			}
-			// No TUI reads the window changes of a command.
-			discard(winch)
+		// run (see runWithPty). A command has no TUI to read the window
+		// changes forwardWindowChanges forwards, so they are dropped
+		// there; nothing to do here.
+		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(ctx, rootCmd, args) {
+			sh(s)
+			return
 		}
 
 		cliCommandCounter.WithLabelValues(commandLabel(rootCmd, args)).Inc()

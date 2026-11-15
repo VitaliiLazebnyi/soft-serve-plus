@@ -217,11 +217,11 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 // channels it accepts: ssh.DefaultSessionHandler behind
 // filterSessionRequests, limited by limitSessions, running srv.Handler,
 // which must already be set, limited by limitHandlers, both to maxSessions.
-// discardWindowChangesAfter wraps the limit too, so a session it refuses
-// still has its window changes drained.
+// forwardWindowChanges wraps the limit too, so a session it refuses still
+// has its window changes forwarded.
 func setSessionHandlers(srv *ssh.Server, maxSessions int) {
 	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
 		"session": limitSessions(filterSessionRequests(ssh.DefaultSessionHandler), maxSessions),
 	}
-	srv.Handler = discardWindowChangesAfter(limitHandlers(srv.Handler, maxSessions))
+	srv.Handler = forwardWindowChanges(limitHandlers(srv.Handler, maxSessions))
 }

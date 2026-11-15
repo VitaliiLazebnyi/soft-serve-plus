@@ -33,7 +33,7 @@ const maxGitProtocolLength = 256
 // window-change until a shell or exec request has started the session's
 // handler (the server has no subsystems), and accepts one short GIT_PROTOCOL
 // and no other env request, as OpenSSH does without AcceptEnv. Once the
-// handler runs, discard keeps the loop from blocking. Refused
+// handler runs, forwardWindowChanges keeps the loop from blocking. Refused
 // requests get a false reply when the client wants one; clients carry on
 // without them.
 func filterSessionRequests(next ssh.ChannelHandler) ssh.ChannelHandler {
@@ -93,32 +93,71 @@ func isGitProtocolEnv(payload []byte) bool {
 	return kv.Key == gitProtocolEnv && len(kv.Value) <= maxGitProtocolLength
 }
 
-// discardWindowChangesAfter wraps a session handler so that the session's
-// window changes are discarded once the handler returns. The TUI reads them
-// while it runs, and nothing does after it exits. It must wrap every
-// middleware that may end a session, including the session limit.
-func discardWindowChangesAfter(next ssh.Handler) ssh.Handler {
+// forwardWindowChanges wraps a session handler so that, from the moment the
+// handler starts, the session's window changes are read from the library's
+// one-element channel and never left to block its request loop. It is the
+// outermost session wrapper, so the loop keeps draining through every inner
+// middleware.
+//
+// charm.land/ssh fills that channel from the request loop and only a running
+// TUI drains it. Without another reader the loop blocks on the next
+// window-change, and the whole connection then stops: the loop stops reading
+// requests, x/crypto's request buffer fills, and the connection read loop
+// blocks behind it, so the server never sees the window adjust, the
+// disconnect or a timeout. Draining only after the handler returns is not
+// enough, because the handler can block first -- on a write the client is
+// not reading (the length or auth check, the session-limit refusal, the "no
+// access" message) or inside the TUI whose renderer the client has stalled.
+//
+// So this reads the channel for the whole life of the handler and hands the
+// inner middleware a session whose Pty returns a latest-wins copy of it: the
+// TUI still resizes, and every other middleware can write to the client
+// without the loop blocking behind it.
+//
+// The forwarding goroutine reads only the channel, never the session's pty,
+// so it does not race with the library's unlocked write of the pty's window
+// on each change. It ends when the library closes the channel, which it does
+// when the request loop returns at session end. The context is not used to
+// stop it: a goroutine that stopped early could leave the loop blocked on a
+// send with no reader, the very deadlock this prevents.
+func forwardWindowChanges(next ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
-		// Take the channel now, as the other middleware read the pty when
-		// the session starts: Pty also copies the window size, which the
-		// library's request loop writes without a lock on every window
-		// change, so a later call would race with one more of them.
-		_, winch, _ := s.Pty()
-		defer discard(winch)
-		next(s)
+		// Read the pty once, here at the start. Pty copies the window the
+		// request loop writes without a lock, so a later read by inner
+		// middleware would race with a window-change; windowSession hands
+		// them this captured value instead. This first read can still race
+		// with a change in flight, which is the library's own race.
+		pty, winch, ok := s.Pty()
+		if winch == nil {
+			next(s)
+			return
+		}
+		latest := make(chan ssh.Window, 1)
+		go func() {
+			defer close(latest)
+			for w := range winch {
+				// Keep only the newest size, and never block the loop.
+				select {
+				case <-latest:
+				default:
+				}
+				latest <- w
+			}
+		}()
+		next(windowSession{Session: s, pty: pty, winch: latest, ok: ok})
 	}
 }
 
-// discard reads and drops the window changes on winch, if any, until the
-// request loop closes it, so the loop never blocks on a window change nobody
-// reads (see filterSessionRequests). CommandMiddleware calls it for a
-// command run with a pty, which has no TUI to read them.
-func discard(winch <-chan ssh.Window) {
-	if winch == nil {
-		return
-	}
-	go func() {
-		for range winch {
-		}
-	}()
+// windowSession is a session whose Pty returns a window-change channel that
+// never blocks the library's request loop (see forwardWindowChanges), and
+// the pty captured when the handler started.
+type windowSession struct {
+	ssh.Session
+	pty   ssh.Pty
+	winch <-chan ssh.Window
+	ok    bool
+}
+
+func (s windowSession) Pty() (ssh.Pty, <-chan ssh.Window, bool) {
+	return s.pty, s.winch, s.ok
 }
