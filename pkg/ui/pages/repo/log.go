@@ -90,6 +90,8 @@ type Log struct {
 	gen            uint64
 	// render counts the renders of currentDiff; see diffRenderedMsg.
 	render int
+	// renders keeps one render in flight.
+	renders common.RenderGate
 	// winWidth is the window width of the last tea.WindowSizeMsg. The diff
 	// is rendered again only when it changes.
 	winWidth int
@@ -315,16 +317,20 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		l.currentDiff = msg.diff
 		cmds = append(cmds, l.renderDiffCmd())
 	case diffRenderedMsg:
-		if msg.render != l.render || l.selectedCommit == nil || l.currentDiff == nil {
-			// The diff or the width changed while it was rendered.
-			break
+		again := l.renders.Done()
+		if msg.render == l.render && l.selectedCommit != nil && l.currentDiff != nil {
+			l.vp.SetContent(msg.content)
+			if l.activeView == logViewLoading {
+				// The first render of this diff; a later one follows a
+				// resize and keeps the scroll position.
+				l.vp.GotoTop()
+				l.activeView = logViewDiff
+			}
 		}
-		l.vp.SetContent(msg.content)
-		if l.activeView == logViewLoading {
-			// The first render of this diff; a later one follows a
-			// resize and keeps the scroll position.
-			l.vp.GotoTop()
-			l.activeView = logViewDiff
+		// Otherwise the diff or the width changed while it was rendered:
+		// render what is shown now, once for every change meanwhile.
+		if again && l.selectedCommit != nil && l.currentDiff != nil && l.renders.Start() {
+			cmds = append(cmds, l.startRender())
 		}
 	case LogDiffErrorMsg:
 		// Leave the loading view for the commit list, so the spinner does not
@@ -461,14 +467,24 @@ func (l *Log) goBack() {
 func (l *Log) clearDiff() {
 	l.currentDiff = nil
 	l.render++
+	l.vp.SetContent("")
 }
 
 // renderDiffCmd returns a command that renders the selected commit and its
-// diff for the viewport.
+// diff for the viewport, or nil while a render is in flight: the next one
+// starts when it returns.
 func (l *Log) renderDiffCmd() tea.Cmd {
 	l.render++
+	if !l.renders.Start() {
+		return nil
+	}
+	return l.startRender()
+}
+
+// startRender returns the command of a render RenderGate let start.
+func (l *Log) startRender() tea.Cmd {
 	commit, st, width := l.selectedCommit, l.common.Styles, l.common.Width
-	return renderDiffCmd(paneLog, l.render, l.gen, st, width, l.currentDiff, func() string {
+	return renderDiffCmd(paneLog, l.render, st, width, l.currentDiff, func() string {
 		return renderCommit(commit, st, width)
 	})
 }

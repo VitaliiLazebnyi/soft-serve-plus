@@ -16,6 +16,11 @@ import (
 // sanitising and wrapping, and a diff may hold up to git.DiffMaxBytes.
 const diffHighlightMax = 256 << 10
 
+// diffHighlightMaxLines is the most lines a highlighted patch may have.
+// chroma's cost grows with the tokens, so many short lines cost far more
+// than their bytes: 256 KiB of "+" lines took 700 MB to highlight.
+const diffHighlightMaxLines = 10000
+
 // diffTruncatedNote tops a diff that was cut to its limits.
 const diffTruncatedNote = "This diff is too large to show in full; the rest is left out."
 
@@ -26,12 +31,11 @@ type diffRenderedMsg struct {
 	to      paneID
 	// render is the pane's render count when the render started. A pane
 	// drops a result from an earlier render: the diff or the width it was
-	// rendered for has changed since.
+	// rendered for has changed since. It has no generation, so that the
+	// repository page never drops it: the pane must see every render it
+	// started return, to start the next one (see common.RenderGate).
 	render int
-	gen    uint64
 }
-
-func (m diffRenderedMsg) generation() uint64 { return m.gen }
 
 func (m diffRenderedMsg) pane() paneID { return m.to }
 
@@ -39,13 +43,12 @@ func (m diffRenderedMsg) pane() paneID { return m.to }
 // viewport width columns wide. Sanitising, highlighting and wrapping a diff
 // of a few MiB takes seconds, so it runs in a command and not in Update,
 // which would block the session meanwhile. header runs in the command too.
-func renderDiffCmd(to paneID, render int, gen uint64, st *styles.Styles, width int, diff *git.Diff, header func() string) tea.Cmd {
+func renderDiffCmd(to paneID, render int, st *styles.Styles, width int, diff *git.Diff, header func() string) tea.Cmd {
 	return func() tea.Msg {
 		return diffRenderedMsg{
 			content: renderDiffView(header(), diff, st, width),
 			to:      to,
 			render:  render,
-			gen:     gen,
 		}
 	}
 }
@@ -78,10 +81,10 @@ func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
 }
 
 // renderDiff sanitises, highlights and wraps diff's patch. A patch over
-// diffHighlightMax is not highlighted.
+// diffHighlightMax bytes or diffHighlightMaxLines lines is not highlighted.
 func renderDiff(diff *git.Diff, width int) string {
 	patch := utils.Sanitize(diff.Patch)
-	if len(patch) > diffHighlightMax {
+	if len(patch) > diffHighlightMax || strings.Count(patch, "\n") > diffHighlightMaxLines {
 		return wrapText("\n"+patch, width)
 	}
 	var s strings.Builder

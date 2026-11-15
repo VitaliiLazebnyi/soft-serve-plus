@@ -151,6 +151,12 @@ func TestLargeDiffNotHighlighted(t *testing.T) {
 	if !strings.Contains(out, "+xxxx") {
 		t.Fatal("the patch is missing from the render")
 	}
+	// Short lines cost chroma far more than their bytes: a patch of many
+	// lines is not highlighted either, however small.
+	lines := &git.Diff{Patch: strings.Repeat("+\n", 20000)}
+	if strings.Contains(renderDiff(lines, 120), "\x1b[") {
+		t.Fatal("a patch of 20000 lines was highlighted")
+	}
 	small := &git.Diff{Patch: "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n"}
 	if !strings.Contains(renderDiff(small, 120), "\x1b[") {
 		t.Fatal("a small patch was not highlighted")

@@ -54,6 +54,8 @@ type Stash struct {
 	currentTitle string
 	// render counts the renders of currentPatch; see diffRenderedMsg.
 	render int
+	// renders keeps one render in flight.
+	renders common.RenderGate
 	// winWidth is the window width of the last tea.WindowSizeMsg. The patch
 	// is rendered again only when it changes.
 	winWidth int
@@ -208,6 +210,7 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 	case StashPatchMsg:
 		s.currentPatch = msg
 		if msg.Diff == nil {
+			s.vp.SetContent("")
 			s.state = stashStatePatch
 			break
 		}
@@ -219,16 +222,20 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		s.state = stashStateLoading
 		cmds = append(cmds, s.renderPatchCmd())
 	case diffRenderedMsg:
-		if msg.render != s.render || s.currentPatch.Diff == nil {
-			// The patch or the width changed while it was rendered.
-			break
+		again := s.renders.Done()
+		if msg.render == s.render && s.currentPatch.Diff != nil {
+			s.vp.SetContent(msg.content)
+			if s.state == stashStateLoading {
+				// The first render of this patch; a later one follows a
+				// resize and keeps the scroll position.
+				s.vp.GotoTop()
+				s.state = stashStatePatch
+			}
 		}
-		s.vp.SetContent(msg.content)
-		if s.state == stashStateLoading {
-			// The first render of this patch; a later one follows a
-			// resize and keeps the scroll position.
-			s.vp.GotoTop()
-			s.state = stashStatePatch
+		// Otherwise the patch or the width changed while it was rendered:
+		// render what is shown now, once for every change meanwhile.
+		if again && s.currentPatch.Diff != nil && s.renders.Start() {
+			cmds = append(cmds, s.startRender())
 		}
 	case selector.SelectMsg:
 		switch msg.IdentifiableItem.(type) {
@@ -266,10 +273,21 @@ func (s *Stash) View() string {
 // The patch is highlighted by renderDiff, so it goes straight into the
 // viewport rather than through the code component, which would highlight it
 // again.
+//
+// It returns nil while a render is in flight: the next one starts when it
+// returns.
 func (s *Stash) renderPatchCmd() tea.Cmd {
 	s.render++
+	if !s.renders.Start() {
+		return nil
+	}
+	return s.startRender()
+}
+
+// startRender returns the command of a render RenderGate let start.
+func (s *Stash) startRender() tea.Cmd {
 	title := s.common.Styles.Stash.Title.Render(s.currentTitle) + "\n"
-	return renderDiffCmd(paneStash, s.render, s.gen, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
+	return renderDiffCmd(paneStash, s.render, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
 		return title
 	})
 }
@@ -278,6 +296,7 @@ func (s *Stash) renderPatchCmd() tea.Cmd {
 func (s *Stash) clearPatch() {
 	s.currentPatch = StashPatchMsg{}
 	s.render++
+	s.vp.SetContent("")
 }
 
 // fetchStashCmd returns a command that lists the stashes of the repository.
