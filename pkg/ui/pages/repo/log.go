@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
@@ -39,6 +38,8 @@ type LogCountMsg struct {
 
 func (m LogCountMsg) generation() uint64 { return m.gen }
 
+func (m LogCountMsg) pane() paneID { return paneLog }
+
 // LogItemsMsg is a message that contains a slice of LogItem.
 type LogItemsMsg struct {
 	items []selector.IdentifiableItem
@@ -50,8 +51,7 @@ type LogItemsMsg struct {
 
 func (m LogItemsMsg) generation() uint64 { return m.gen }
 
-// LogCommitMsg is a message that contains a git commit.
-type LogCommitMsg *git.Commit
+func (m LogItemsMsg) pane() paneID { return paneLog }
 
 // LogDiffMsg is a message that contains the diff of a git commit.
 type LogDiffMsg struct {
@@ -62,6 +62,8 @@ type LogDiffMsg struct {
 
 func (m LogDiffMsg) generation() uint64 { return m.gen }
 
+func (m LogDiffMsg) pane() paneID { return paneLog }
+
 // LogDiffErrorMsg reports that a selected commit's diff failed to load.
 type LogDiffErrorMsg struct {
 	commit *git.Commit
@@ -70,6 +72,8 @@ type LogDiffErrorMsg struct {
 }
 
 func (m LogDiffErrorMsg) generation() uint64 { return m.gen }
+
+func (m LogDiffErrorMsg) pane() paneID { return paneLog }
 
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
@@ -85,7 +89,6 @@ type Log struct {
 	selectedCommit *git.Commit
 	currentDiff    *git.Diff
 	loadingTime    time.Time
-	spinner        spinner.Model
 	gen            uint64
 }
 
@@ -98,12 +101,10 @@ func NewLog(common common.Common) *Log {
 	}
 	selector := selector.NewPane(common, LogItemDelegate{&common})
 	l.selector = selector
-	s := common.NewSpinner()
-	l.spinner = s
 	return l
 }
 
-// Path implements common.TabComponent.
+// Path implements Pane.
 func (l *Log) Path() string {
 	switch l.activeView {
 	case logViewCommits:
@@ -197,10 +198,9 @@ func (l *Log) FullHelp() [][]key.Binding {
 	return b
 }
 
-func (l *Log) startLoading() tea.Cmd {
+func (l *Log) startLoading() {
 	l.loadingTime = time.Now()
 	l.activeView = logViewLoading
-	return l.spinner.Tick
 }
 
 // Init implements tea.Model.
@@ -210,11 +210,9 @@ func (l *Log) Init() tea.Cmd {
 	l.count = 0
 	l.activeCommit = nil
 	l.selectedCommit = nil
-	return tea.Batch(
-		l.countCommitsCmd(),
-		// start loading on init
-		l.startLoading(),
-	)
+	// start loading on init
+	l.startLoading()
+	return l.countCommitsCmd()
 }
 
 // Update implements common.Model.
@@ -271,10 +269,8 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			if l.selector.Page() != curPage {
 				l.nextPage = l.selector.Page()
 				l.selector.SetPage(curPage)
-				cmds = append(cmds,
-					l.updateCommitsCmd(),
-					l.startLoading(),
-				)
+				l.startLoading()
+				cmds = append(cmds, l.updateCommitsCmd())
 			}
 			cmds = append(cmds, cmd)
 		case logViewDiff:
@@ -301,14 +297,9 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		switch sel := msg.IdentifiableItem.(type) {
 		case LogItem:
 			l.selectedCommit = sel.Commit
-			cmds = append(cmds,
-				l.selectCommitCmd(sel.Commit),
-				l.startLoading(),
-			)
+			l.startLoading()
+			cmds = append(cmds, l.loadDiffCmd())
 		}
-	case LogCommitMsg:
-		l.selectedCommit = msg
-		cmds = append(cmds, l.loadDiffCmd())
 	case LogDiffMsg:
 		if l.selectedCommit == nil || l.selectedCommit != msg.commit || msg.diff == nil {
 			// The commit was deselected, another commit was opened, or the
@@ -355,7 +346,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			// spinner in the commits view, so a diff stays on screen.
 			cmds = append(cmds, l.updateCommitsCmd())
 			if l.activeView == logViewCommits {
-				cmds = append(cmds, l.startLoading())
+				l.startLoading()
 			}
 		}
 	case EmptyRepoMsg:
@@ -370,14 +361,6 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds,
 			l.setItems([]selector.IdentifiableItem{}),
 		)
-	case spinner.TickMsg:
-		if l.activeView == logViewLoading && l.spinner.ID() == msg.ID {
-			s, cmd := l.spinner.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			l.spinner = s
-		}
 	}
 	switch l.activeView {
 	case logViewDiff:
@@ -389,19 +372,9 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 // View implements tea.Model.
 func (l *Log) View() string {
 	switch l.activeView {
-	case logViewLoading:
-		if l.loadingTime.Add(waitBeforeLoading).Before(time.Now()) {
-			msg := fmt.Sprintf("%s loading commit", l.spinner.View())
-			if l.selectedCommit == nil {
-				msg += "s"
-			}
-			msg += "…"
-			return l.common.Styles.SpinnerContainer.
-				Height(l.common.Height).
-				Render(msg)
-		}
-		fallthrough
-	case logViewCommits:
+	case logViewLoading, logViewCommits:
+		// The repository page shows its spinner in place of the commit
+		// list once a load has taken waitBeforeLoading; see Loading.
 		return l.selector.View()
 	case logViewDiff:
 		return l.vp.View()
@@ -410,10 +383,23 @@ func (l *Log) View() string {
 	}
 }
 
-// SpinnerID implements common.TabComponent.
-func (l *Log) SpinnerID() int {
-	return l.spinner.ID()
+// Loading implements Pane. For the first waitBeforeLoading of a load it
+// returns no text, so the commit list stays on screen and a fast page load
+// does not flash the spinner.
+func (l *Log) Loading() (string, bool) {
+	if l.activeView != logViewLoading {
+		return "", false
+	}
+	if !l.loadingTime.Add(waitBeforeLoading).Before(time.Now()) {
+		return "", true
+	}
+	if l.selectedCommit == nil {
+		return "loading commits…", true
+	}
+	return "loading commit…", true
 }
+
+func (l *Log) id() paneID { return paneLog }
 
 // StatusBarValue returns the status bar value.
 func (l *Log) StatusBarValue() string {
@@ -518,12 +504,6 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 			items[idx] = LogItem{Commit: c}
 		}
 		return LogItemsMsg{items: items, limit: limit, gen: gen}
-	}
-}
-
-func (l *Log) selectCommitCmd(commit *git.Commit) tea.Cmd {
-	return func() tea.Msg {
-		return LogCommitMsg(commit)
 	}
 }
 

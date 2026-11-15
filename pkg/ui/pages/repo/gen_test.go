@@ -53,7 +53,9 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	files := NewFiles(c)
 	r := New(c, readme, files, NewRefs(c, git.RefsHeads))
 	r.SetSize(80, 40)
-	readmeView := func() string { return ansi.Strip(readme.View()) }
+	// The readme tab is the active one; the page shows its spinner in
+	// place of the tab while it loads.
+	readmeView := func() string { return ansi.Strip(r.View()) }
 
 	// Open A; its ref and loads start, but the user leaves before they
 	// arrive.

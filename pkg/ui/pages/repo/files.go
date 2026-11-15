@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -59,6 +58,8 @@ type FileItemsMsg struct {
 
 func (m FileItemsMsg) generation() uint64 { return m.gen }
 
+func (m FileItemsMsg) pane() paneID { return paneFiles }
+
 // FileContentMsg is a message that contains the content of a file.
 type FileContentMsg struct {
 	content string
@@ -77,6 +78,8 @@ type FileContentMsg struct {
 
 func (m FileContentMsg) generation() uint64 { return m.gen }
 
+func (m FileContentMsg) pane() paneID { return paneFiles }
+
 // FileBlameMsg is a message that contains the blame of a file.
 type FileBlameMsg struct {
 	blame *git.Blame
@@ -86,6 +89,8 @@ type FileBlameMsg struct {
 }
 
 func (m FileBlameMsg) generation() uint64 { return m.gen }
+
+func (m FileBlameMsg) pane() paneID { return paneFiles }
 
 // Files is the model for the files view.
 type Files struct {
@@ -101,7 +106,6 @@ type Files struct {
 	currentBlame   *git.Blame
 	lastSelected   []int
 	lineNumber     bool
-	spinner        spinner.Model
 	cursor         int
 	blameView      bool
 	// truncated is set while the listing shows only the first entries
@@ -136,12 +140,10 @@ func NewFiles(common common.Common) *Files {
 		key.WithKeys("right"),
 		key.WithHelp("→", "move right"),
 	)
-	s := common.NewSpinner()
-	f.spinner = s
 	return f
 }
 
-// Path implements common.TabComponent.
+// Path implements Pane.
 func (f *Files) Path() string {
 	path := f.path
 	if path == "." {
@@ -253,7 +255,7 @@ func (f *Files) Init() tea.Cmd {
 	f.currentBlame = nil
 	f.code.UseGlamour = false
 	f.load++
-	return tea.Batch(f.spinner.Tick, f.updateFilesCmd())
+	return f.updateFilesCmd()
 }
 
 // Update implements common.Model.
@@ -351,7 +353,6 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 					f.activeView = filesViewContent
 					cmds = append(cmds, f.code.SetSideNote(""))
 				}
-				cmds = append(cmds, f.spinner.Tick)
 			case key.Matches(msg, preview) &&
 				f.currentContent.isMarkdown && !f.blameView:
 				f.code.UseGlamour = !f.code.UseGlamour
@@ -389,14 +390,6 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.lastSelected = make([]int, 0)
 		f.selector.Select(0)
 		cmds = append(cmds, f.setItems([]selector.IdentifiableItem{}))
-	case spinner.TickMsg:
-		if f.activeView == filesViewLoading && f.spinner.ID() == msg.ID {
-			s, cmd := f.spinner.Update(msg)
-			f.spinner = s
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
 	}
 	switch f.activeView {
 	case filesViewFiles:
@@ -410,8 +403,6 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 // View implements tea.Model.
 func (f *Files) View() string {
 	switch f.activeView {
-	case filesViewLoading:
-		return renderLoading(f.common, f.spinner)
 	case filesViewFiles:
 		return f.selector.View()
 	case filesViewContent:
@@ -421,10 +412,12 @@ func (f *Files) View() string {
 	}
 }
 
-// SpinnerID implements common.TabComponent.
-func (f *Files) SpinnerID() int {
-	return f.spinner.ID()
+// Loading implements Pane.
+func (f *Files) Loading() (string, bool) {
+	return "loading…", f.activeView == filesViewLoading
 }
+
+func (f *Files) id() paneID { return paneFiles }
 
 // StatusBarValue returns the status bar value.
 func (f *Files) StatusBarValue() string {

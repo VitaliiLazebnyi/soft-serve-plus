@@ -56,8 +56,8 @@ type CopyMsg struct {
 	Message string
 }
 
-// SwitchTabMsg is a message to switch tabs.
-type SwitchTabMsg common.TabComponent
+// SwitchTabMsg is a message to switch to a tab.
+type SwitchTabMsg paneID
 
 // Repo is a view for a git repository.
 type Repo struct {
@@ -67,11 +67,14 @@ type Repo struct {
 	activeTab    int
 	tabs         *tabs.Tabs
 	statusbar    *statusbar.Model
-	panes        []common.TabComponent
+	panes        []Pane
 	ref          *git.Reference
 	state        state
-	spinner      spinner.Model
-	panesReady   []bool
+	// spinner turns while the page or one of its tabs loads; ticking is set
+	// while its ticks run.
+	spinner    spinner.Model
+	ticking    bool
+	panesReady []bool
 	// gen is the generation of the repository and ref shown; see genMsg.
 	gen uint64
 	// noMenu is set when there is no repository menu to go back to, as in
@@ -80,7 +83,7 @@ type Repo struct {
 }
 
 // New returns a new Repo.
-func New(c common.Common, comps ...common.TabComponent) *Repo {
+func New(c common.Common, comps ...Pane) *Repo {
 	sb := statusbar.New(c)
 	ts := make([]string, 0)
 	for _, c := range comps {
@@ -176,11 +179,28 @@ func (r *Repo) FullHelp() [][]key.Binding {
 func (r *Repo) Init() tea.Cmd {
 	r.state = loadingState
 	r.activeTab = 0
+	// A tick sent while another page was shown went to that page and
+	// stopped the spinner, so start it again. Duplicate ticks are dropped
+	// by the spinner.
+	r.ticking = true
 	return tea.Batch(
 		r.tabs.Init(),
 		r.statusbar.Init(),
 		r.spinner.Tick,
 	)
+}
+
+// busy reports whether the page or one of its tabs is loading.
+func (r *Repo) busy() bool {
+	if r.state == loadingState {
+		return true
+	}
+	for _, p := range r.panes {
+		if _, ok := p.Loading(); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Update implements common.Model.
@@ -266,40 +286,21 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
 		r.statusbar.SetMessage(msg.Message)
-	case ReadmeMsg:
-		cmds = append(cmds, r.updateTabComponent(&Readme{}, msg))
+	case paneMsg:
+		// A result goes to the tab that started the load, whichever tab is
+		// active now.
+		cmds = append(cmds, r.updatePane(msg.pane(), msg))
 		routed = true
-	case FileItemsMsg, FileContentMsg:
-		cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
-		routed = true
-	case LogItemsMsg, LogDiffMsg, LogDiffErrorMsg, LogCountMsg:
-		cmds = append(cmds, r.updateTabComponent(&Log{}, msg))
-		routed = true
-	case RefItemsMsg:
-		cmds = append(cmds, r.updateTabComponent(&Refs{refPrefix: msg.prefix}, msg))
-		routed = true
-	case StashListMsg, StashPatchMsg:
-		cmds = append(cmds, r.updateTabComponent(&Stash{}, msg))
-		routed = true
-	// We have two spinners, one is used to when loading the repository and the
-	// other is used when loading the log.
-	// Check if the spinner ID matches the spinner model.
 	case spinner.TickMsg:
-		// A tick belongs to exactly one spinner, so it never goes to the
-		// active pane unless that pane owns it.
+		// The spinner is the page's own; no tab gets its ticks.
 		routed = true
-		if r.state == loadingState && r.spinner.ID() == msg.ID {
-			s, cmd := r.spinner.Update(msg)
-			r.spinner = s
-			if cmd != nil {
+		if msg.ID == r.spinner.ID() {
+			if r.busy() {
+				var cmd tea.Cmd
+				r.spinner, cmd = r.spinner.Update(msg)
 				cmds = append(cmds, cmd)
-			}
-		} else {
-			for _, c := range r.panes {
-				if c.SpinnerID() == msg.ID {
-					cmds = append(cmds, c.Update(msg))
-					break
-				}
+			} else {
+				r.ticking = false
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -316,12 +317,12 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		// The file listing loads on every ref change, usually while another
 		// tab is shown, so the Files pane must see its error to leave its
 		// loading view. The active pane gets the message below.
-		if r.panes[r.activeTab].TabName() != (&Files{}).TabName() {
-			cmds = append(cmds, r.updateTabComponent(&Files{}, msg))
+		if r.panes[r.activeTab].id() != paneFiles {
+			cmds = append(cmds, r.updatePane(paneFiles, msg))
 		}
 	case SwitchTabMsg:
-		for i, c := range r.panes {
-			if c.TabName() == msg.TabName() {
+		for i, p := range r.panes {
+			if p.id() == paneID(msg) {
 				cmds = append(cmds, tabs.SelectTabCmd(i))
 				break
 			}
@@ -344,6 +345,12 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 
 	cmds = append(cmds, r.statusbar.Update(msg))
 
+	// Something started loading: turn the spinner.
+	if !r.ticking && r.busy() {
+		r.ticking = true
+		cmds = append(cmds, r.spinner.Tick)
+	}
+
 	return tea.Batch(cmds...)
 }
 
@@ -363,7 +370,16 @@ func (r *Repo) View() string {
 	case loadingState:
 		main = fmt.Sprintf("%s loading…", r.spinner.View())
 	case readyState:
-		main = r.panes[r.activeTab].View()
+		p := r.panes[r.activeTab]
+		if text, ok := p.Loading(); ok && text != "" {
+			// The same height the tab is given in SetSize.
+			_, phm := r.getMargins()
+			main = r.common.Styles.SpinnerContainer.
+				Height(r.common.Height - phm).
+				Render(r.spinner.View() + " " + text)
+		} else {
+			main = p.View()
+		}
 		statusbar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
@@ -435,15 +451,14 @@ func (r *Repo) setStatusBarInfo() {
 	r.statusbar.SetStatus(key, value, info, extra)
 }
 
-func (r *Repo) updateTabComponent(c common.TabComponent, msg tea.Msg) tea.Cmd {
-	cmds := make([]tea.Cmd, 0)
-	for _, b := range r.panes {
-		if b.TabName() == c.TabName() {
-			cmds = append(cmds, b.Update(msg))
-			break
+// updatePane delivers msg to the tab id.
+func (r *Repo) updatePane(id paneID, msg tea.Msg) tea.Cmd {
+	for _, p := range r.panes {
+		if p.id() == id {
+			return p.Update(msg)
 		}
 	}
-	return tea.Batch(cmds...)
+	return nil
 }
 
 func (r *Repo) updateModels(msg tea.Msg) tea.Cmd {
@@ -467,15 +482,8 @@ func goBackCmd() tea.Msg {
 	return GoBackMsg{}
 }
 
-func switchTabCmd(m common.TabComponent) tea.Cmd {
+func switchTabCmd(id paneID) tea.Cmd {
 	return func() tea.Msg {
-		return SwitchTabMsg(m)
+		return SwitchTabMsg(id)
 	}
-}
-
-func renderLoading(c common.Common, s spinner.Model) string {
-	msg := fmt.Sprintf("%s loading…", s.View())
-	return c.Styles.SpinnerContainer.
-		Height(c.Height).
-		Render(msg)
 }

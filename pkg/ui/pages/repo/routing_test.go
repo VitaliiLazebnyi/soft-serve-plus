@@ -14,12 +14,13 @@ import (
 
 // countingPane is a tab that counts the messages it receives by type.
 type countingPane struct {
+	pane paneID
 	name string
 	got  map[string]int
 }
 
-func newCountingPane(name string) *countingPane {
-	return &countingPane{name: name, got: map[string]int{}}
+func newCountingPane(id paneID, name string) *countingPane {
+	return &countingPane{pane: id, name: name, got: map[string]int{}}
 }
 
 func (p *countingPane) Init() tea.Cmd { return nil }
@@ -33,21 +34,22 @@ func (p *countingPane) FullHelp() [][]key.Binding { return nil }
 func (p *countingPane) SetSize(int, int)          {}
 func (p *countingPane) StatusBarValue() string    { return "" }
 func (p *countingPane) StatusBarInfo() string     { return "" }
-func (p *countingPane) SpinnerID() int            { return -1 }
+func (p *countingPane) Loading() (string, bool)   { return "", false }
+func (p *countingPane) id() paneID                { return p.pane }
 func (p *countingPane) TabName() string           { return p.name }
 func (p *countingPane) Path() string              { return "" }
 func (p *countingPane) count(msg tea.Msg) int     { return p.got[fmt.Sprintf("%T", msg)] }
 
-var _ common.TabComponent = (*countingPane)(nil)
+var _ Pane = (*countingPane)(nil)
 
 // Every message reaches each pane it is meant for exactly once, the active
 // pane included.
 func TestRepoDeliversMessagesOnce(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
 	c := common.NewCommon(ctx, 80, 40)
-	readme := newCountingPane((&Readme{}).TabName())
-	files := newCountingPane((&Files{}).TabName())
-	log := newCountingPane((&Log{}).TabName())
+	readme := newCountingPane(paneReadme, "Readme")
+	files := newCountingPane(paneFiles, "Files")
+	log := newCountingPane(paneLog, "Commits")
 	r := New(c, readme, files, log)
 
 	// Each message is built for the generation that is current when it is
@@ -63,6 +65,8 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 		{func(g uint64) tea.Msg { return ReadmeMsg{gen: g} }, map[*countingPane]int{readme: 1}},
 		{func(g uint64) tea.Msg { return FileContentMsg{gen: g} }, map[*countingPane]int{files: 1}},
 		{func(g uint64) tea.Msg { return LogCountMsg{count: 1, gen: g} }, map[*countingPane]int{log: 1}},
+		{func(g uint64) tea.Msg { return FileBlameMsg{gen: g} }, map[*countingPane]int{files: 1}},
+		{func(g uint64) tea.Msg { return LogDiffMsg{gen: g} }, map[*countingPane]int{log: 1}},
 		{func(uint64) tea.Msg { return spinner.TickMsg{ID: -2} }, map[*countingPane]int{}},
 	} {
 		// Each tab takes a turn as the active one, so that the tab a message is

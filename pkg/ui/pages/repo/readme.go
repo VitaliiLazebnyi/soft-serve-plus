@@ -4,7 +4,6 @@ import (
 	"path"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -23,6 +22,8 @@ type ReadmeMsg struct {
 
 func (m ReadmeMsg) generation() uint64 { return m.gen }
 
+func (m ReadmeMsg) pane() paneID { return paneReadme }
+
 // Readme is the readme component page.
 type Readme struct {
 	common     common.Common
@@ -30,7 +31,6 @@ type Readme struct {
 	ref        *git.Reference
 	repo       proto.Repository
 	readmePath string
-	spinner    spinner.Model
 	isLoading  bool
 	gen        uint64
 }
@@ -40,16 +40,14 @@ func NewReadme(common common.Common) *Readme {
 	readme := code.New(common, "", "")
 	readme.NoContentStyle = readme.NoContentStyle.SetString("No readme found.")
 	readme.UseGlamour = true
-	s := common.NewSpinner()
 	return &Readme{
 		code:      readme,
 		common:    common,
-		spinner:   s,
 		isLoading: true,
 	}
 }
 
-// Path implements common.TabComponent.
+// Path implements Pane.
 func (r *Readme) Path() string {
 	return ""
 }
@@ -96,7 +94,7 @@ func (r *Readme) FullHelp() [][]key.Binding {
 // Init implements tea.Model.
 func (r *Readme) Init() tea.Cmd {
 	r.isLoading = true
-	return tea.Batch(r.spinner.Tick, r.updateReadmeCmd())
+	return r.updateReadmeCmd()
 }
 
 // Update implements common.Model.
@@ -129,14 +127,6 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 		// The README comes from the repository; glamour passes escape
 		// sequences through to the terminal.
 		cmds = append(cmds, r.code.SetContent(utils.Sanitize(msg.Content), msg.Path))
-	case spinner.TickMsg:
-		if r.isLoading && r.spinner.ID() == msg.ID {
-			s, cmd := r.spinner.Update(msg)
-			r.spinner = s
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
 	}
 	cmds = append(cmds, r.code.Update(msg))
 	return tea.Batch(cmds...)
@@ -144,16 +134,15 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 
 // View implements tea.Model.
 func (r *Readme) View() string {
-	if r.isLoading {
-		return renderLoading(r.common, r.spinner)
-	}
 	return r.code.View()
 }
 
-// SpinnerID implements common.TabComponent.
-func (r *Readme) SpinnerID() int {
-	return r.spinner.ID()
+// Loading implements Pane.
+func (r *Readme) Loading() (string, bool) {
+	return "loading…", r.isLoading
 }
+
+func (r *Readme) id() paneID { return paneReadme }
 
 // StatusBarValue implements statusbar.StatusBar.
 func (r *Readme) StatusBarValue() string {
