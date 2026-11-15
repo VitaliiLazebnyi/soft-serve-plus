@@ -59,7 +59,13 @@ const GlamourMaxDepth = 8
 // lines, that content may have to be rendered as markdown. Each nested
 // container costs glamour far more than its text: 1,000 lines of ten
 // nested list markers took 7.6 s and 2.9 GiB.
-const GlamourMaxMarkers = 1000
+const GlamourMaxMarkers = 750
+
+// GlamourMaxCodeBlocks is the most code blocks content may have to be
+// rendered as markdown. glamour highlights each with chroma, which looks a
+// block without a known language up by matching every lexer's file name
+// patterns: about 2.4 ms a block, whatever its size.
+const GlamourMaxCodeBlocks = 200
 
 // lastID numbers the Code views, so a RenderedMsg finds its view.
 var lastID atomic.Int64
@@ -423,7 +429,8 @@ func (j renderJob) run() RenderedMsg {
 	if !j.lineNumbers && j.styleConfig.CodeBlock.Margin != nil {
 		margin = int(*j.styleConfig.CodeBlock.Margin)
 	}
-	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
+	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines &&
+		!manyMarkdownCodeBlocks(j.extension, content) {
 		out, err := highlight(j.styleConfig, j.extension, content, j.lineNumbers)
 		if err != nil {
 			msg.err = err
@@ -469,45 +476,92 @@ func wrapLine(s string, width int) []string {
 }
 
 // markdownNestingOK reports whether s nests block quotes and lists little
-// enough for glamour: no line deeper than GlamourMaxDepth, and no more than
-// GlamourMaxMarkers markers in all.
+// enough for glamour, and has few enough code blocks: no line deeper than
+// GlamourMaxDepth, no more than GlamourMaxMarkers markers and
+// GlamourMaxCodeBlocks code blocks in all.
 func markdownNestingOK(s string) bool {
-	deepest, markers := markdownNesting(s)
-	return deepest <= GlamourMaxDepth && markers <= GlamourMaxMarkers
+	deepest, markers, blocks := markdownNesting(s)
+	return deepest <= GlamourMaxDepth && markers <= GlamourMaxMarkers &&
+		blocks <= GlamourMaxCodeBlocks
 }
 
 // markdownNesting returns the deepest nesting at the start of a line of s,
-// and the number of block quote and list markers at the start of all its
-// lines. A marker is ">", "-", "*", "+", or up to nine digits followed by
-// "." or ")" and then a space or the end of the line; the nesting of a line
-// is its markers plus one for every two columns of indentation.
-func markdownNesting(s string) (deepest, markers int) {
+// the number of block quote and list markers at the start of all its lines,
+// and the number of code blocks it opens.
+//
+// A marker is ">", "-", "*", "+", or up to nine digits followed by "." or
+// ")" and then a space or the end of the line; the nesting of a line is its
+// markers plus one for every two columns of indentation. A code block opens
+// on a line that, after its markers and spaces, starts a ``` or ~~~ fence
+// outside a fence, or on a line with text after four or more spaces
+// following its last marker or the start of the line, unless it continues
+// an indented block on the line before. It may count more blocks than
+// CommonMark finds, which only means plain text sooner.
+func markdownNesting(s string) (deepest, markers, blocks int) {
+	inFence, prevIndented := false, false
 	for line := range strings.SplitSeq(s, "\n") {
-		depth, spaces := 0, 0
-		for i := 0; i < len(line); {
+		depth, spaces, run := 0, 0, 0
+		i := 0
+	scan:
+		for i < len(line) {
 			c := line[i]
 			switch {
 			case c == ' ':
 				spaces++
+				run++
 				i++
-				continue
 			case c == '>' || c == '-' || c == '*' || c == '+':
 				depth++
+				run = 0
 				i++
-				continue
 			case c >= '0' && c <= '9':
-				if n := orderedMarker(line[i:]); n > 0 {
-					depth++
-					i += n
-					continue
+				n := orderedMarker(line[i:])
+				if n == 0 {
+					break scan
 				}
+				depth++
+				run = 0
+				i += n
+			default:
+				break scan
 			}
-			break
 		}
 		markers += depth
 		deepest = max(deepest, depth+spaces/2)
+
+		rest := line[i:]
+		switch {
+		case strings.HasPrefix(rest, "```") || strings.HasPrefix(rest, "~~~"):
+			if !inFence {
+				blocks++
+			}
+			inFence = !inFence
+			prevIndented = false
+		case inFence || rest == "":
+			// Inside a fence, or a blank line, which an indented block
+			// runs through.
+		case run >= 4:
+			if depth > 0 || !prevIndented {
+				blocks++
+			}
+			prevIndented = true
+		default:
+			prevIndented = false
+		}
 	}
-	return deepest, markers
+	return deepest, markers, blocks
+}
+
+// manyMarkdownCodeBlocks reports whether content, named name, is markdown
+// with more than GlamourMaxCodeBlocks code blocks. chroma's markdown lexer
+// highlights each code block as glamour does, at the same cost.
+func manyMarkdownCodeBlocks(name, content string) bool {
+	lexer := lexers.Match(name)
+	if lexer == nil || lexer.Config() == nil || lexer.Config().Name != "markdown" {
+		return false
+	}
+	_, _, blocks := markdownNesting(content)
+	return blocks > GlamourMaxCodeBlocks
 }
 
 // orderedMarker returns the length of the ordered list marker s starts
