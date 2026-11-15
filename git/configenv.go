@@ -13,9 +13,9 @@ type ConfigEntry struct {
 	Value string
 }
 
-// ServerConfig returns the git configuration the server sets for every git
-// process it starts, through the environment (see WithServerConfig and
-// ssrf.GitEnv).
+// ServerConfig returns the git configuration the server sets, through the
+// environment, for every git process it starts that can start automatic
+// maintenance (see WithServerConfig and ssrf.GitEnv).
 //
 // git starts automatic maintenance after a push or fetch that writes to the
 // repository (receive.autogc, fetch's own auto maintenance). By default that
@@ -25,7 +25,7 @@ type ConfigEntry struct {
 // reaps it, so every push leaves a zombie. Running maintenance in the
 // foreground keeps it a child of the git process that started it, which
 // waits for it. The cost is that a push or fetch whose repository is due
-// for maintenance waits for it.
+// for maintenance waits for it, and git sends the client nothing meanwhile.
 //
 // maintenance.autoDetach falls back to gc.autoDetach when it is unset, and
 // git older than 2.47 knows only gc.autoDetach, so gc.autoDetach alone would
@@ -72,7 +72,8 @@ func ConfigEnv(entries ...ConfigEntry) []string {
 // older git). Configuration files cannot; the environment overrides them.
 //
 // When environ's GIT_CONFIG_* is malformed (a count that is not a number, or
-// a key or value missing below the count), environ is returned unchanged:
+// a key or value missing below the count, which includes any count larger
+// than the variables could satisfy), environ is returned unchanged:
 // git refuses to run with it either way, and its error names the problem.
 func WithServerConfig(environ []string) []string {
 	own, rest, ok := splitConfigEnv(environ)
@@ -103,8 +104,12 @@ func splitConfigEnv(environ []string) (entries []ConfigEntry, rest []string, ok 
 		// git treats an empty count as 0.
 		return nil, rest, true
 	}
-	count, err := strconv.Atoi(countStr)
-	if err != nil || count < 0 {
+	// git reads the count with strtoul, which skips leading white space.
+	count, err := strconv.Atoi(strings.TrimLeft(countStr, " \t\n\v\f\r"))
+	// Each entry takes a key and a value variable, so a count above the
+	// number of variables cannot be satisfied. Checking it first keeps an
+	// absurd count from sizing an allocation or a loop.
+	if err != nil || count < 0 || count > len(vars) {
 		return nil, nil, false
 	}
 	entries = make([]ConfigEntry, 0, count)

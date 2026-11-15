@@ -203,9 +203,33 @@ itself as described above.
 The server runs git's automatic maintenance in the foreground, so a push or a
 mirror sync does not leave a detached maintenance process behind. It sets
 `gc.autoDetach=false` and `maintenance.autoDetach=false` for every git process
-it starts: the git processes that serve pushes and fetches over SSH, HTTP and
-`git://`, and the fetches of mirror syncs and imports. The trade-off is that a
-push then waits for maintenance to finish whenever it has real work to do.
+it starts that can start automatic maintenance: the git processes that serve
+pushes and fetches over SSH, HTTP and `git://`, and the fetches of mirror syncs
+and imports. The trade-off is that a push then waits for maintenance to finish
+whenever it has real work to do.
+
+While maintenance runs, git sends the client nothing: the refs are already
+updated, and the push is only waiting for git to exit. On a large repository
+that can take long enough for the SSH idle timeout (`ssh.idle_timeout`,
+`SOFT_SERVE_SSH_IDLE_TIMEOUT`) or a reverse proxy's response timeout (about
+100 seconds behind Cloudflare, for example) to cut the connection, and the
+client then reports a failed push although the push went through. Where that
+is a risk, turn automatic maintenance off for pushes:
+
+```yaml
+GIT_CONFIG_COUNT: "1"
+GIT_CONFIG_KEY_0: receive.autogc
+GIT_CONFIG_VALUE_0: "false"
+```
+
+and run it instead from a job that waits for it, for example a cron job on the
+host that runs this through `docker exec` (as the image's `soft` user):
+
+```sh
+docker exec soft-serve-plus sh -c '
+  find /soft-serve/repos -name "*.git" -type d -prune |
+  while read -r r; do git -C "$r" maintenance run --auto; done'
+```
 
 The server passes the two keys through git's `GIT_CONFIG_*` variables, which
 override every configuration file, so a `gc.autoDetach` or
@@ -228,8 +252,8 @@ GIT_CONFIG_VALUE_1: "true"
 Mirror syncs and imports set their own `GIT_CONFIG_*` variables in place of the
 server's environment, as before, so they always run maintenance in the
 foreground. A malformed set of `GIT_CONFIG_*` variables in the server's
-environment (a count that is not a number, or a missing key or value) is passed
-to git unchanged, and git refuses to run with it.
+environment (a count that is not a number, or a missing key or value below the
+count) is passed to git unchanged, and git refuses to run with it.
 
 Running maintenance in the foreground does not cover interrupted transfers, so
 it does not replace an init.

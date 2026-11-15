@@ -91,6 +91,34 @@ func TestWithServerConfig(t *testing.T) {
 			want:    []string{"GIT_CONFIG_COUNT=x", "HOME=/h"},
 		},
 		{
+			// strtoul skips leading white space, so git reads 1.
+			name: "count with leading white space",
+			environ: []string{
+				"GIT_CONFIG_COUNT= \t1",
+				"GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1",
+			},
+			want: append(append([]string{countEnv(n + 1)}, server...),
+				"GIT_CONFIG_KEY_"+strconv.Itoa(n)+"=a.b", "GIT_CONFIG_VALUE_"+strconv.Itoa(n)+"=1",
+			),
+		},
+		{
+			name:    "white space only count left to git",
+			environ: []string{"GIT_CONFIG_COUNT= "},
+			want:    []string{"GIT_CONFIG_COUNT= "},
+		},
+		{
+			// Rejected before anything is sized by it: 1e15 would
+			// panic in make, 1e11 exhaust memory.
+			name:    "huge count left to git",
+			environ: []string{"GIT_CONFIG_COUNT=1000000000000000", "GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1"},
+			want:    []string{"GIT_CONFIG_COUNT=1000000000000000", "GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1"},
+		},
+		{
+			name:    "count past the variables left to git",
+			environ: []string{"GIT_CONFIG_COUNT=100000000000", "GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1"},
+			want:    []string{"GIT_CONFIG_COUNT=100000000000", "GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1"},
+		},
+		{
 			name:    "negative count left to git",
 			environ: []string{"GIT_CONFIG_COUNT=-1"},
 			want:    []string{"GIT_CONFIG_COUNT=-1"},
@@ -161,5 +189,28 @@ func TestWithServerConfigPrecedence(t *testing.T) {
 	}
 	if v := get(operator, "gc.autoDetach"); v != "false" {
 		t.Errorf("gc.autoDetach = %q with the operator's GIT_CONFIG_*, want the server's false", v)
+	}
+}
+
+// On Windows environment variable names are case-insensitive, so git reads
+// git_config_count and friends as GIT_CONFIG_COUNT: they are merged, not
+// left beside the server's variables for git to pick between.
+func TestWithServerConfigWindowsCase(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("environment variable names are case-sensitive here")
+	}
+	t.Parallel()
+
+	n := len(ServerConfig())
+	got := WithServerConfig([]string{
+		`Path=C:\Windows`,
+		"git_config_count=1",
+		"Git_Config_Key_0=core.compression", "git_config_value_0=1",
+	})
+	want := append(append([]string{`Path=C:\Windows`, "GIT_CONFIG_COUNT=" + strconv.Itoa(n+1)}, serverEnv(t)...),
+		"GIT_CONFIG_KEY_"+strconv.Itoa(n)+"=core.compression", "GIT_CONFIG_VALUE_"+strconv.Itoa(n)+"=1",
+	)
+	if !slices.Equal(got, want) {
+		t.Errorf("WithServerConfig()\n got %q\nwant %q", got, want)
 	}
 }
