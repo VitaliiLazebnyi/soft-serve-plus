@@ -59,6 +59,9 @@ type Stash struct {
 	// winWidth is the window width of the last tea.WindowSizeMsg. The patch
 	// is rendered again only when it changes.
 	winWidth int
+	// listLoad and patchLoad are the loads in flight of each kind: a new
+	// one cancels the one before.
+	listLoad, patchLoad common.Loader
 }
 
 // NewStash creates a new stash model.
@@ -157,6 +160,7 @@ func (s *Stash) id() paneID { return paneStash }
 func (s *Stash) Init() tea.Cmd {
 	s.state = stashStateLoading
 	s.clearPatch()
+	s.patchLoad.Stop()
 	return s.fetchStashCmd()
 }
 
@@ -249,6 +253,9 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 		}
 		s.state = stashStateList
 		s.clearPatch()
+		// A patch still loading would open the patch view when it
+		// arrives.
+		s.patchLoad.Stop()
 	}
 	switch s.state {
 	case stashStateList:
@@ -304,20 +311,24 @@ func (s *Stash) clearPatch() {
 // needs here instead of reading the model later.
 func (s *Stash) fetchStashCmd() tea.Cmd {
 	repo, gen := s.repo, s.gen
-	ctx := s.common.Context()
+	ctx := s.listLoad.Start(s.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil {
 			return StashListMsg{gen: gen}
 		}
 
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		stash, err := r.StashList()
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		return StashListMsg{stashes: stash, gen: gen}
@@ -328,20 +339,24 @@ func (s *Stash) fetchStashCmd() tea.Cmd {
 // stash.
 func (s *Stash) fetchStashPatchCmd() tea.Cmd {
 	repo, index, gen := s.repo, s.list.Index(), s.gen
-	ctx := s.common.Context()
+	ctx := s.patchLoad.Start(s.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil {
 			return StashPatchMsg{gen: gen}
 		}
 
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		diff, err := r.StashDiff(index)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		return StashPatchMsg{Diff: diff, gen: gen}

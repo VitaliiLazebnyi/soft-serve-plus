@@ -32,6 +32,8 @@ type Readme struct {
 	readmePath string
 	isLoading  bool
 	gen        uint64
+	// load is the readme load in flight: a new one cancels it.
+	load common.Loader
 }
 
 // NewReadme creates a new readme model.
@@ -111,6 +113,7 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 	case EmptyRepoMsg:
 		// No readme will be loaded for an empty repository, so stop
 		// loading here and show the quick start text instead.
+		r.load.Stop()
 		r.gen = msg.gen
 		r.isLoading = false
 		r.readmePath = ""
@@ -162,14 +165,23 @@ func (r *Readme) StatusBarInfo() string {
 // needs here instead of reading the model later.
 func (r *Readme) updateReadmeCmd() tea.Cmd {
 	repo, ref, gen := r.repo, r.ref, r.gen
-	ctx := r.common.Context()
+	ctx := r.load.Start(r.common.Context())
 	limit := r.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		m := ReadmeMsg{gen: gen}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
 		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
+		if ctx.Err() != nil {
+			// Cancelled while it ran: the readme may be missing because
+			// of it.
+			return nil
+		}
 		m.Content = rm
 		m.Path = rp
 		return m

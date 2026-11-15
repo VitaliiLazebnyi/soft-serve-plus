@@ -90,13 +90,13 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 		t.Fatalf("got %d files, want 1", len(items.items))
 	}
 
-	// Select the file, then clear the model before its command runs.
+	// Select the file, then clear the model before its command runs. The
+	// load is cancelled, and its command neither crashes nor sends a
+	// result.
 	cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	content := FileContentMsg{content: "hello\n", path: "file.txt", load: f.load, gen: f.gen}
 	f.Update(EmptyRepoMsg{})
-	content := findMsg[FileContentMsg](t, runCmd(cmd))
-	if content.content != "hello\n" {
-		t.Fatalf("content = %q, want the file", content.content)
-	}
+	noLoadResult(t, runCmd(cmd))
 	// The content of a file opened before the repository was emptied is
 	// dropped.
 	f.Update(content)
@@ -107,8 +107,10 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	// Content requested before a ref change is dropped too.
 	f.Update(RefMsg{Ref: ref})
 	cmd = f.Update(selector.SelectMsg{IdentifiableItem: items.items[0]})
+	content = FileContentMsg{content: "hello\n", path: "file.txt", load: f.load, gen: f.gen}
 	f.Update(RefMsg{Ref: ref})
-	f.Update(findMsg[FileContentMsg](t, runCmd(cmd)))
+	noLoadResult(t, runCmd(cmd))
+	f.Update(content)
 	if f.activeView == filesViewContent || f.Path() != "" {
 		t.Fatalf("stale content opened %q", f.Path())
 	}
@@ -121,11 +123,9 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 		t.Fatalf("path = %q, want file.txt", got)
 	}
 	cmd = f.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	blame := FileBlameMsg{blame: &git.Blame{}, load: f.load, gen: f.gen}
 	f.Update(EmptyRepoMsg{})
-	blame := findMsg[FileBlameMsg](t, runCmd(cmd))
-	if blame.blame == nil {
-		t.Fatal("blame is nil")
-	}
+	noLoadResult(t, runCmd(cmd))
 	// The blame of a file opened before the repository was emptied is
 	// dropped.
 	f.Update(blame)
@@ -140,17 +140,19 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	l := NewLog(cmdTestCommon())
 	l.Update(RepoMsg(repo))
 
-	// A new ref, then an empty repository, before the count command runs.
+	// A new ref, then the model changes before the count command runs. An
+	// empty repository would cancel the load, so clear the model by hand.
 	cmd := l.Update(RefMsg{Ref: ref})
-	l.Update(EmptyRepoMsg{})
+	l.repo, l.ref = nil, nil
 	count := findMsg[LogCountMsg](t, runCmd(cmd))
 	if count.count != 1 {
 		t.Fatalf("count = %d, want 1", count.count)
 	}
 
+	l.Update(RepoMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(count)
-	l.Update(EmptyRepoMsg{})
+	l.repo, l.ref = nil, nil
 	commits := findMsg[LogItemsMsg](t, runCmd(cmd))
 	if len(commits.items) != 1 || commits.items[0] == nil {
 		t.Fatalf("commits = %#v, want one commit", commits)
@@ -158,9 +160,10 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 
 	// Open a commit, then switch the ref before the diff command runs.
 	commit := commits.items[0].(LogItem).Commit
+	l.Update(RepoMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
-	l.Update(RefMsg{Ref: ref})
+	l.selectedCommit = nil
 	diff := findMsg[LogDiffMsg](t, runCmd(cmd))
 
 	// The diff of a commit that is no longer selected is dropped.
@@ -179,7 +182,10 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	}
 	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
 	otherCmd := l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: other}})
-	updateRendered(l, findMsg[LogDiffMsg](t, runCmd(cmd)))
+	// The first load was cancelled by the second; had it finished, its
+	// diff would still be dropped.
+	noLoadResult(t, runCmd(cmd))
+	updateRendered(l, LogDiffMsg{commit: commit, diff: &git.Diff{}, gen: l.gen})
 	if l.activeView == logViewDiff {
 		t.Fatal("the diff of a commit that is no longer selected was shown")
 	}
@@ -263,6 +269,20 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 		}
 		if got := f.selector.Index(); got != want.index {
 			t.Fatalf("in %q the cursor is on entry %d, want %d", want.path, got, want.index)
+		}
+	}
+}
+
+// noLoadResult fails if msgs holds the result of a load: a load that was
+// cancelled before it ran sends nothing.
+func noLoadResult(t *testing.T, msgs []tea.Msg) {
+	t.Helper()
+	for _, m := range msgs {
+		if _, ok := m.(paneMsg); ok {
+			t.Fatalf("a cancelled load sent %T", m)
+		}
+		if _, ok := m.(common.ErrorMsg); ok {
+			t.Fatalf("a cancelled load sent an error: %v", m)
 		}
 	}
 }

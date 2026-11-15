@@ -95,6 +95,9 @@ type Log struct {
 	// winWidth is the window width of the last tea.WindowSizeMsg. The diff
 	// is rendered again only when it changes.
 	winWidth int
+	// countLoad, pageLoad and diffLoad are the loads in flight of each
+	// kind: a new one cancels the one before.
+	countLoad, pageLoad, diffLoad common.Loader
 }
 
 // NewLog creates a new Log model.
@@ -216,6 +219,10 @@ func (l *Log) Init() tea.Cmd {
 	l.activeCommit = nil
 	l.selectedCommit = nil
 	l.clearDiff()
+	// A page or a diff of the previous ref is no longer wanted; the count
+	// starts again below.
+	l.pageLoad.Stop()
+	l.diffLoad.Stop()
 	// start loading on init
 	l.startLoading()
 	return l.countCommitsCmd()
@@ -365,6 +372,9 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case EmptyRepoMsg:
+		l.countLoad.Stop()
+		l.pageLoad.Stop()
+		l.diffLoad.Stop()
 		l.ref = nil
 		l.gen = msg.gen
 		l.activeView = logViewCommits
@@ -494,19 +504,23 @@ func (l *Log) renderDiffCmd() tea.Cmd {
 // needs here instead of reading the model later.
 func (l *Log) countCommitsCmd() tea.Cmd {
 	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
-	ctx := l.common.Context()
+	ctx := l.countLoad.Start(l.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil || ref == nil {
 			return nil
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		count, err := r.CountCommits(ref)
 		if err != nil {
 			logger.Debugf("error counting commits: %v", err)
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		return LogCountMsg{count: count, gen: gen}
 	}
@@ -515,15 +529,19 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 // updateCommitsCmd returns a command that loads the commits of the next page.
 func (l *Log) updateCommitsCmd() tea.Cmd {
 	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
-	ctx := l.common.Context()
+	ctx := l.pageLoad.Start(l.common.Context())
 	count, page, limit := l.count, l.nextPage, l.selector.PerPage()
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil || ref == nil {
 			return nil
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		if count == 0 {
@@ -536,7 +554,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 		cc, err := r.CommitsByPage(ref, page+1, limit)
 		if err != nil {
 			logger.Debugf("error loading commits: %v", err)
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		for i, c := range cc {
 			idx := i + skip
@@ -552,19 +570,29 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 // loadDiffCmd returns a command that loads the diff of the selected commit.
 func (l *Log) loadDiffCmd() tea.Cmd {
 	repo, commit, logger, gen := l.repo, l.selectedCommit, l.common.Logger, l.gen
-	ctx := l.common.Context()
+	ctx := l.diffLoad.Start(l.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil || commit == nil {
 			return nil
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
 			logger.Debugf("error loading diff repository: %v", err)
+			if ctx.Err() != nil {
+				return nil
+			}
 			return LogDiffErrorMsg{commit: commit, err: err, gen: gen}
 		}
 		diff, err := r.Diff(commit)
 		if err != nil {
 			logger.Debugf("error loading diff: %v", err)
+			if ctx.Err() != nil {
+				return nil
+			}
 			return LogDiffErrorMsg{commit: commit, err: err, gen: gen}
 		}
 		return LogDiffMsg{commit: commit, diff: diff, gen: gen}
