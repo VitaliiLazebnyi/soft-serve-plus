@@ -45,6 +45,10 @@ func newRouter(ctx context.Context, pending *pushCreates) http.Handler {
 	h = corsHandler(cfg)(h)
 	h = varyOrigin(h)
 
+	// Outermost, so every answer is bound by the deadlines, including the
+	// ones the middleware gives, such as a CORS preflight.
+	h = withDeadlines(cfg.HTTP, h)
+
 	return h
 }
 

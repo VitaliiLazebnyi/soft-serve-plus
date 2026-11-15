@@ -167,18 +167,26 @@ type HTTPConfig struct {
 	// PublicURL is the public URL of the HTTP server.
 	PublicURL string `env:"PUBLIC_URL" yaml:"public_url"`
 
-	// MaxTimeout is the maximum number of seconds a git or LFS request can
-	// take. 0 means no limit.
+	// MaxTimeout is the maximum number of seconds a request can take. 0
+	// means no limit.
 	MaxTimeout int `env:"MAX_TIMEOUT" yaml:"max_timeout"`
 
-	// IdleTimeout is the number of seconds a git or LFS request can go
-	// without reading from or writing to the client before it is closed.
-	// 0 means no limit.
+	// IdleTimeout is the number of seconds a request can go without reading
+	// from or writing to the client before it is closed. 0 means no limit.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
 	// MaxConnections is the maximum number of git and LFS requests served at
 	// once. 0 means no limit.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
+
+	// MaxConnectionsPerIP is the maximum number of git and LFS requests
+	// served at once from one client address (one IPv4 address, or one IPv6
+	// /64). 0 means no limit. Loopback clients are not limited by it, so a
+	// reverse proxy on the same host is not; behind a reverse proxy that
+	// connects from a non-loopback address, such as another host or another
+	// container, every client has the proxy's address, so set it to 0 there
+	// and limit clients at the proxy.
+	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
 
 	// CORS is the cross-origin configuration for the HTTP server.
 	CORS CORSConfig `envPrefix:"CORS_" yaml:"cors"`
@@ -448,6 +456,7 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_TIMEOUT=%d", c.HTTP.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_HTTP_IDLE_TIMEOUT=%d", c.HTTP.IdleTimeout),
 		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_CONNECTIONS=%d", c.HTTP.MaxConnections),
+		fmt.Sprintf("SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP=%d", c.HTTP.MaxConnectionsPerIP),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS=%s", strings.Join(c.HTTP.CORS.AllowedHeaders, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS=%s", strings.Join(c.HTTP.CORS.AllowedOrigins, ",")),
 		fmt.Sprintf("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS=%s", strings.Join(c.HTTP.CORS.AllowedMethods, ",")),
@@ -736,6 +745,41 @@ func (c *Config) Exist() bool {
 	return exist(c.ConfigPath())
 }
 
+// DefaultMaxTimeout is the default max_timeout of the SSH server, the git
+// daemon and the HTTP server, in seconds: 6 hours.
+//
+// The idle timeouts are re-armed by every byte, so without a total limit a
+// client that trickles a byte now and then keeps its connection, and its
+// place under max_connections, for ever. The limit must still let a large
+// clone over a slow link finish: 6 hours carries about 27 GB at 10 Mbit/s.
+// git daemon's --timeout and the timeouts of common reverse proxies (nginx's
+// proxy_read_timeout, HAProxy's timeout client and server, a cloud load
+// balancer's idle timeout) only bound inactivity, like idle_timeout here,
+// and set no total limit, so they cut off no transfer that makes progress;
+// neither does a limit this long in practice.
+const DefaultMaxTimeout = 6 * 60 * 60
+
+// UnboundedTimeouts returns the max_timeout settings, such as
+// "http.max_timeout", of the enabled servers that set no total time limit.
+// A config.yaml written before DefaultMaxTimeout keeps max_timeout: 0.
+func (c *Config) UnboundedTimeouts() []string {
+	var names []string
+	for _, v := range []struct {
+		name    string
+		enabled bool
+		value   int
+	}{
+		{"ssh.max_timeout", c.SSH.Enabled, c.SSH.MaxTimeout},
+		{"git.max_timeout", c.Git.Enabled, c.Git.MaxTimeout},
+		{"http.max_timeout", c.HTTP.Enabled, c.HTTP.MaxTimeout},
+	} {
+		if v.enabled && v.value == 0 {
+			names = append(names, v.name)
+		}
+	}
+	return names
+}
+
 // DefaultConfig returns the default Config. All the path values are relative
 // to the data directory.
 // Use Validate() to validate the config and ensure absolute paths.
@@ -751,7 +795,7 @@ func DefaultConfig() *Config {
 			KeyPath:                     filepath.Join("ssh", "soft_serve_host_ed25519"),
 			ClientKeyPath:               filepath.Join("ssh", "soft_serve_client_ed25519"),
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
-			MaxTimeout:                  0,
+			MaxTimeout:                  DefaultMaxTimeout,
 			IdleTimeout:                 10 * 60, // 10 minutes
 			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
 			MaxConnections:              256,
@@ -762,17 +806,18 @@ func DefaultConfig() *Config {
 			Enabled:        true,
 			ListenAddr:     ":9418",
 			PublicURL:      "git://localhost",
-			MaxTimeout:     0,
+			MaxTimeout:     DefaultMaxTimeout,
 			IdleTimeout:    3,
 			MaxConnections: 32,
 		},
 		HTTP: HTTPConfig{
-			Enabled:        true,
-			ListenAddr:     ":23232",
-			PublicURL:      "http://localhost:23232",
-			MaxTimeout:     0,
-			IdleTimeout:    60,
-			MaxConnections: 64,
+			Enabled:             true,
+			ListenAddr:          ":23232",
+			PublicURL:           "http://localhost:23232",
+			MaxTimeout:          DefaultMaxTimeout,
+			IdleTimeout:         60,
+			MaxConnections:      64,
+			MaxConnectionsPerIP: 16,
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "Accept-Language", "Content-Language", "Content-Type", "Origin", "X-Requested-With", "User-Agent", "Authorization", "Access-Control-Request-Method", "Access-Control-Allow-Origin"},
 				AllowedMethods: []string{"GET", "HEAD", "POST", "PUT", "OPTIONS"},
@@ -914,6 +959,7 @@ func (c *Config) Validate() error {
 		{"http.max_timeout", c.HTTP.MaxTimeout},
 		{"http.idle_timeout", c.HTTP.IdleTimeout},
 		{"http.max_connections", c.HTTP.MaxConnections},
+		{"http.max_connections_per_ip", c.HTTP.MaxConnectionsPerIP},
 	} {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)

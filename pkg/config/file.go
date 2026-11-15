@@ -74,8 +74,11 @@ ssh:
     # - "10.0.0.0/8"
 {{- end }}
 
-  # The maximum number of seconds a connection can take.
-  # A value of 0 means no timeout.
+  # The maximum number of seconds a connection can take, whatever it does.
+  # The idle timeout is reset by every packet, keepalives included, so this
+  # is what bounds a connection that stays busy or keeps a command running,
+  # such as a TUI session left open. The default of 6 hours lets a large
+  # clone over a slow link finish. A value of 0 means no timeout.
   max_timeout: {{ .SSH.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
@@ -180,8 +183,11 @@ git:
   # This is the address that will be used to clone repositories.
   public_url: {{ q .Git.PublicURL }}
 
-  # The maximum number of seconds a connection can take.
-  # A value of 0 means no timeout.
+  # The maximum number of seconds a connection can take. The idle timeout
+  # is reset by every byte, so this is what bounds a client that trickles
+  # its request or reads its pack slowly. The default of 6 hours lets a
+  # large clone over a slow link finish; git daemon's --timeout bounds only
+  # inactivity, like idle_timeout. A value of 0 means no timeout.
   max_timeout: {{ .Git.MaxTimeout }}
 
   # The number of seconds a connection can be idle before it is closed.
@@ -215,20 +221,33 @@ http:
   # Make sure to use https:// if you are using TLS.
   public_url: {{ q .HTTP.PublicURL }}
 
-  # The maximum number of seconds a git or LFS request can take.
-  # A value of 0 means no timeout.
+  # The maximum number of seconds a request can take. The idle timeout is
+  # reset by every byte, so this is what bounds a client that trickles its
+  # request or reads the response slowly. The default of 6 hours lets a
+  # large clone over a slow link finish; a reverse proxy's timeouts (such as
+  # nginx's proxy_read_timeout) usually bound only inactivity, like
+  # idle_timeout. A value of 0 means no timeout.
   max_timeout: {{ .HTTP.MaxTimeout }}
 
-  # The number of seconds a git or LFS request can go without reading from
-  # or writing to the client before it is closed. Time the server spends
-  # working between reads and writes does not count.
+  # The number of seconds a request can go without reading from or writing
+  # to the client before it is closed. Time the server spends working
+  # between reads and writes does not count.
   # A value of 0 means no timeout.
   idle_timeout: {{ .HTTP.IdleTimeout }}
 
-  # The maximum number of git and LFS requests served at once. Requests over
-  # the limit get 503 Service Unavailable.
-  # A value of 0 means no limit.
+  # The maximum number of git and LFS requests served at once, in total and
+  # from one client address (one IPv4 address or one IPv6 /64). Requests
+  # over a limit get 503 Service Unavailable. A value of 0 means no limit.
+  # Loopback clients (127.0.0.0/8, ::1) have no per-address limit, so a
+  # reverse proxy on the same host is bound only by max_connections. Behind
+  # a reverse proxy that connects from a non-loopback address, such as
+  # another host or another container, every client has the proxy's address
+  # and shares one address's limit: set max_connections_per_ip to 0 there
+  # and limit clients at the proxy. Raise it when many clients share one
+  # NAT or CI egress address. The per-address limit keeps one address from
+  # taking every request slot, not a few addresses together.
   max_connections: {{ .HTTP.MaxConnections }}
+  max_connections_per_ip: {{ .HTTP.MaxConnectionsPerIP }}
 
   # The cross-origin request security options
   cors:

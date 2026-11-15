@@ -14,6 +14,7 @@ var httpLimitsEnv = []string{
 	"SOFT_SERVE_HTTP_MAX_TIMEOUT",
 	"SOFT_SERVE_HTTP_IDLE_TIMEOUT",
 	"SOFT_SERVE_HTTP_MAX_CONNECTIONS",
+	"SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP",
 }
 
 func TestHTTPLimits(t *testing.T) {
@@ -25,24 +26,28 @@ func TestHTTPLimits(t *testing.T) {
 	}
 	cfg := DefaultConfig()
 	is.NoErr(cfg.ParseEnv())
-	is.Equal(cfg.HTTP.MaxTimeout, 0)
+	is.Equal(cfg.HTTP.MaxTimeout, DefaultMaxTimeout)
 	is.Equal(cfg.HTTP.IdleTimeout, 60)
 	is.Equal(cfg.HTTP.MaxConnections, 64)
+	is.Equal(cfg.HTTP.MaxConnectionsPerIP, 16)
 
 	t.Setenv("SOFT_SERVE_HTTP_MAX_TIMEOUT", "3600")
 	t.Setenv("SOFT_SERVE_HTTP_IDLE_TIMEOUT", "30")
 	t.Setenv("SOFT_SERVE_HTTP_MAX_CONNECTIONS", "8")
+	t.Setenv("SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP", "2")
 	cfg = DefaultConfig()
 	is.NoErr(cfg.ParseEnv())
 	is.Equal(cfg.HTTP.MaxTimeout, 3600)
 	is.Equal(cfg.HTTP.IdleTimeout, 30)
 	is.Equal(cfg.HTTP.MaxConnections, 8)
+	is.Equal(cfg.HTTP.MaxConnectionsPerIP, 2)
 	// Hooks re-read the config from the environment.
 	env := cfg.Environ()
 	for _, want := range []string{
 		"SOFT_SERVE_HTTP_MAX_TIMEOUT=3600",
 		"SOFT_SERVE_HTTP_IDLE_TIMEOUT=30",
 		"SOFT_SERVE_HTTP_MAX_CONNECTIONS=8",
+		"SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP=2",
 	} {
 		is.True(slices.Contains(env, want))
 	}
@@ -56,6 +61,7 @@ func TestHTTPLimits(t *testing.T) {
   max_timeout: 600
   idle_timeout: 0
   max_connections: 16
+  max_connections_per_ip: 0
 `), 0o600))
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
@@ -63,6 +69,7 @@ func TestHTTPLimits(t *testing.T) {
 	is.Equal(cfg.HTTP.MaxTimeout, 600)
 	is.Equal(cfg.HTTP.IdleTimeout, 0)
 	is.Equal(cfg.HTTP.MaxConnections, 16)
+	is.Equal(cfg.HTTP.MaxConnectionsPerIP, 0)
 
 	// The generated config file keeps the values.
 	out := filepath.Join(dir, "written.yaml")
@@ -73,6 +80,21 @@ func TestHTTPLimits(t *testing.T) {
 	is.Equal(got.HTTP.MaxTimeout, 600)
 	is.Equal(got.HTTP.IdleTimeout, 0)
 	is.Equal(got.HTTP.MaxConnections, 16)
+	is.Equal(got.HTTP.MaxConnectionsPerIP, 0)
+}
+
+// Every server has a total time limit by default: the idle timeouts are
+// re-armed by every byte, so without one a client that trickles bytes holds
+// its connection, and its place under max_connections, for ever.
+func TestDefaultMaxTimeout(t *testing.T) {
+	is := is.New(t)
+	cfg := DefaultConfig()
+	is.True(DefaultMaxTimeout > 0)
+	is.Equal(cfg.SSH.MaxTimeout, DefaultMaxTimeout)
+	is.Equal(cfg.Git.MaxTimeout, DefaultMaxTimeout)
+	is.Equal(cfg.HTTP.MaxTimeout, DefaultMaxTimeout)
+	// Long enough for a large clone over a slow link: hours, not minutes.
+	is.True(DefaultMaxTimeout >= 60*60)
 }
 
 func TestHTTPLimitsRejectNegative(t *testing.T) {
@@ -83,6 +105,7 @@ func TestHTTPLimitsRejectNegative(t *testing.T) {
 		{"http.max_timeout", func(c *HTTPConfig) { c.MaxTimeout = -1 }},
 		{"http.idle_timeout", func(c *HTTPConfig) { c.IdleTimeout = -1 }},
 		{"http.max_connections", func(c *HTTPConfig) { c.MaxConnections = -1 }},
+		{"http.max_connections_per_ip", func(c *HTTPConfig) { c.MaxConnectionsPerIP = -1 }},
 	} {
 		cfg := DefaultConfig()
 		cfg.DataPath = t.TempDir()

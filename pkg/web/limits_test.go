@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -202,8 +204,8 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	}
 }
 
-// serveLimits serves h within l over a real connection.
-func serveLimits(t *testing.T, l *requestLimits, h http.HandlerFunc) string {
+// serveLimits serves h within the deadlines l over a real connection.
+func serveLimits(t *testing.T, l *requestDeadlines, h http.HandlerFunc) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l.serve(w, r, h)
@@ -216,7 +218,7 @@ func serveLimits(t *testing.T, l *requestLimits, h http.HandlerFunc) string {
 // is not limited by the idle timeout: the request is neither cancelled nor
 // cut off.
 func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
-	l := &requestLimits{idle: 200 * time.Millisecond}
+	l := &requestDeadlines{idle: 200 * time.Millisecond}
 	errc := make(chan error, 1)
 	url := serveLimits(t, l, func(w http.ResponseWriter, r *http.Request) {
 		if _, err := io.ReadAll(r.Body); err != nil {
@@ -284,11 +286,14 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			l := &requestLimits{idle: 200 * time.Millisecond}
+			// Each read and write here moves a few bytes over loopback and
+			// must finish within the idle timeout even on a loaded machine,
+			// so the timeout is a second, and the work twice that.
+			l := &requestDeadlines{idle: time.Second}
 			errc := make(chan error, 1)
 			work := func(r *http.Request) error {
 				select {
-				case <-time.After(4 * l.idle):
+				case <-time.After(2 * l.idle):
 					return nil
 				case <-r.Context().Done():
 					return r.Context().Err()
@@ -356,7 +361,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 // after the idle timeout.
 func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	t.Parallel()
-	l := &requestLimits{idle: 200 * time.Millisecond}
+	l := &requestDeadlines{idle: 200 * time.Millisecond}
 	errc := make(chan error, 1)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -378,13 +383,15 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// On a loaded machine the server may reset the stream before the
+	// client has read the response header; the write was cut off all the
+	// same.
 	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.ProtoMajor != 2 {
-		t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+	if err == nil {
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.ProtoMajor != 2 {
+			t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
+		}
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error
@@ -412,7 +419,7 @@ func (b *releasedBody) Read([]byte) (int, error) {
 // handler, killing the server.
 func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	t.Parallel()
-	l := &requestLimits{idle: time.Minute}
+	l := &requestDeadlines{idle: time.Minute}
 	release := make(chan struct{})
 	readDone := make(chan struct{})
 	reading := make(chan struct{})
@@ -465,7 +472,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 // A client that stops reading the response is cut off after the idle
 // timeout, and the request is cancelled.
 func TestRequestLimitsIdleStalledReader(t *testing.T) {
-	l := &requestLimits{idle: 200 * time.Millisecond}
+	l := &requestDeadlines{idle: 200 * time.Millisecond}
 	errc := make(chan error, 1)
 	url := serveLimits(t, l, func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 32*1024)
@@ -513,5 +520,247 @@ func TestDeadlinesNext(t *testing.T) {
 	d = &deadlines{idle: 2 * time.Hour, max: limit}
 	if got := d.next(); !got.Equal(limit) {
 		t.Fatalf("next past max = %v, want %v", got, limit)
+	}
+}
+
+// A request that announces a body and never sends it is cut off after the
+// idle timeout on every route, not only on the git routes: net/http reads
+// the body a handler left unread before it answers, and used to wait for it
+// with no deadline.
+func TestHTTPStalledBodyOutsideGitRoutes(t *testing.T) {
+	t.Parallel()
+	addr := newLimitsServer(t, func(c *config.HTTPConfig) {
+		c.IdleTimeout = 1
+		c.MaxTimeout = 0
+	})
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/nothing-here"},            // not found
+		{http.MethodPut, "/repo.git/info/refs"},       // method not allowed
+		{http.MethodPut, "/repo.git/git-upload-pack"}, // method not allowed on a git route
+		{http.MethodGet, "/livez"},
+		{http.MethodGet, "/repo?go-get=1"},
+		{http.MethodOptions, "/repo.git/info/refs"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			t.Parallel()
+			conn := dial(t, addr, 30*time.Second)
+			if _, err := io.WriteString(conn, tc.method+" "+tc.path+" HTTP/1.1\r\n"+
+				"Host: localhost\r\n"+
+				"Content-Length: 100\r\n"+
+				"\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			assertClosedWithin(t, conn, 10*time.Second)
+		})
+	}
+}
+
+// assertClosedWithin reads conn until the server closes it, and fails the
+// test unless that happens within limit. limit is far above the idle
+// timeouts the tests set, so a loaded machine does not fail the test; conn's
+// own deadline, set by dial, must be later still, so a connection left open
+// is told apart from one closed late.
+func assertClosedWithin(t *testing.T, conn net.Conn, limit time.Duration) {
+	t.Helper()
+	start := time.Now()
+	_, err := io.Copy(io.Discard, conn)
+	elapsed := time.Since(start)
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		t.Fatalf("connection still open after %s; the stalled request was not cut off", elapsed)
+	}
+	// A reset instead of an orderly close is fine: the server may close
+	// with the announced body unread.
+	if elapsed > limit {
+		t.Fatalf("connection closed after %s, want within %s (read error: %v)", elapsed, limit, err)
+	}
+}
+
+// A handler that writes more than the response buffer before reading the
+// body makes the HTTP/1 server read and discard the body on that write, not
+// after the handler returns. The read deadline must bound that too, or a
+// client that announces a body and never sends it holds the connection, and
+// a git slot, for as long as it likes: an LFS download or a large ref
+// advertisement writes this way.
+func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
+	t.Parallel()
+	for _, flush := range []bool{false, true} {
+		name := "large write"
+		if flush {
+			name = "flush"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			l := &requestDeadlines{idle: 500 * time.Millisecond}
+			url := serveLimits(t, l, func(w http.ResponseWriter, _ *http.Request) {
+				if flush {
+					_, _ = io.WriteString(w, "x")
+					w.(http.Flusher).Flush()
+				}
+				_, _ = w.Write(make([]byte, 8<<10))
+			})
+			conn := dial(t, strings.TrimPrefix(url, "http://"), 30*time.Second)
+			if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\n"+
+				"Host: localhost\r\n"+
+				"Content-Length: 100\r\n"+
+				"\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			assertClosedWithin(t, conn, 10*time.Second)
+		})
+	}
+}
+
+// One client address cannot take every git slot: once it holds its share,
+// its next request is turned away while another address is still served,
+// and it is served again once one of its requests ends.
+func TestHTTPMaxConnectionsPerIP(t *testing.T) {
+	ctx, be, _ := newLFSTestContext(t)
+	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.FromContext(ctx).HTTP
+	cfg.IdleTimeout = 0
+	cfg.MaxConnections = 8
+	cfg.MaxConnectionsPerIP = 2
+	h := NewRouter(ctx)
+
+	const a, b = "192.0.2.1:1000", "198.51.100.7:1000"
+	status := func(addr string) int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/repo.git/info/refs?service=git-upload-pack", nil)
+		req.RemoteAddr = addr
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// held is an upload-pack request whose body stays open until body is
+	// closed, so it keeps its slot; done is closed once it is answered.
+	type held struct {
+		body *io.PipeWriter
+		done chan struct{}
+	}
+	var wg sync.WaitGroup
+	hold := func(addr string) held {
+		pr, pw := io.Pipe()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/repo.git/git-upload-pack", pr)
+		req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+		req.RemoteAddr = addr
+		hr := held{body: pw, done: make(chan struct{})}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(hr.done)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+		return hr
+	}
+	holds := []held{hold(a), hold(a)}
+	t.Cleanup(func() {
+		for _, hr := range holds {
+			_ = hr.body.Close()
+		}
+		wg.Wait()
+	})
+
+	// A probe may take a slot just before a held request asks for one,
+	// which is then turned away itself. Send such a request again until
+	// both are the ones holding the slots.
+	waitFor(t, func() bool {
+		if status(a) == http.StatusServiceUnavailable {
+			return true
+		}
+		for i, hr := range holds {
+			select {
+			case <-hr.done:
+				_ = hr.body.Close()
+				holds[i] = hold(a)
+			default:
+			}
+		}
+		return false
+	}, "an address holding its share of the slots was not turned away")
+	// Another port of the same address shares its share.
+	if got := status("192.0.2.1:2000"); got != http.StatusServiceUnavailable {
+		t.Fatalf("same address, other port: status = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if got := status(b); got != http.StatusOK {
+		t.Fatalf("other address: status = %d, want %d", got, http.StatusOK)
+	}
+
+	_ = holds[0].body.Close()
+	waitFor(t, func() bool { return status(a) == http.StatusOK },
+		"the address was not served again once one of its requests ended")
+}
+
+// Requests are counted per IPv4 address and per IPv6 /64, except from
+// loopback, where a reverse proxy on the same host connects from.
+func TestClientPrefix(t *testing.T) {
+	key := func(addr string) string {
+		p, ok := clientPrefix(addr)
+		if !ok {
+			return ""
+		}
+		return p.String()
+	}
+	for addr, want := range map[string]string{
+		"192.0.2.1:1000":          "192.0.2.1/32",
+		"[::ffff:192.0.2.1]:1000": "192.0.2.1/32",
+		"[2001:db8::1]:1000":      "2001:db8::/64",
+		"[2001:db8::ffff:1]:2000": "2001:db8::/64",
+		"[2001:db8:0:1::1]:1000":  "2001:db8:0:1::/64",
+		"[fe80::1%eth0]:1000":     "fe80::/64",
+		"127.0.0.1:1000":          "",
+		"127.1.2.3:1000":          "",
+		"[::1]:1000":              "",
+		"[::ffff:127.0.0.1]:1000": "",
+		"pipe":                    "",
+		"":                        "",
+	} {
+		if got := key(addr); got != want {
+			t.Errorf("clientPrefix(%q) = %q, want %q", addr, got, want)
+		}
+	}
+
+	// The zero value limits nothing; an address over its share takes no
+	// slot of the total.
+	var none requestLimits
+	for range 100 {
+		if _, ok := none.acquire("192.0.2.1:1"); !ok {
+			t.Fatal("the zero value refused a request")
+		}
+	}
+	l := &requestLimits{max: 3, maxPerAddr: 1}
+	release, ok := l.acquire("192.0.2.1:1")
+	if !ok {
+		t.Fatal("first request refused")
+	}
+	if _, ok := l.acquire("192.0.2.1:2"); ok {
+		t.Fatal("second request from the address was let through")
+	}
+	for _, addr := range []string{"192.0.2.2:1", "pipe"} {
+		if _, ok := l.acquire(addr); !ok {
+			t.Fatalf("request from %q refused", addr)
+		}
+	}
+	if _, ok := l.acquire("192.0.2.3:1"); ok {
+		t.Fatal("a request over the total was let through")
+	}
+	release()
+	if _, ok := l.acquire("192.0.2.1:3"); !ok {
+		t.Fatal("the address was refused after its request ended")
+	}
+
+	// Loopback peers have no share of their own: they are bound only by
+	// the total.
+	l = &requestLimits{max: 4, maxPerAddr: 1}
+	for i := range 4 {
+		if _, ok := l.acquire("127.0.0.1:" + strconv.Itoa(1000+i)); !ok {
+			t.Fatalf("loopback request %d refused under the total", i+1)
+		}
+	}
+	if _, ok := l.acquire("[::1]:1000"); ok {
+		t.Fatal("a loopback request over the total was let through")
 	}
 }

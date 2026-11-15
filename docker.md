@@ -73,6 +73,17 @@ docker run --rm --user 0:0 --entrypoint chown \
 To keep running as `root` instead, pass `--user 0:0` (or `user: "0:0"` in
 docker-compose).
 
+## Behind a reverse proxy
+
+The HTTP server serves at most 16 git and LFS requests at once from one client
+address (`http.max_connections_per_ip`). A reverse proxy in another container,
+such as nginx, Traefik or Caddy in the same compose project, or Docker's
+userland proxy for a published port, connects from a non-loopback address, so
+every client it forwards shares those 16. Set
+`SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP=0` there and limit clients at the
+proxy. An older `config.yaml` has no such key, so 16 applies after an upgrade
+too.
+
 ## Health check
 
 The image declares a Docker health check that requests `/readyz` from the HTTP

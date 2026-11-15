@@ -240,9 +240,12 @@ ssh:
     # - "gitlab.corp:2222"
     # - "10.0.0.0/8"
 
-  # The maximum number of seconds a connection can take.
-  # A value of 0 means no timeout.
-  max_timeout: 0
+  # The maximum number of seconds a connection can take, whatever it does.
+  # The idle timeout is reset by every packet, keepalives included, so this
+  # is what bounds a connection that stays busy or keeps a command running,
+  # such as a TUI session left open. The default of 6 hours lets a large
+  # clone over a slow link finish. A value of 0 means no timeout.
+  max_timeout: 21600
 
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
@@ -330,9 +333,12 @@ git:
   # This is the address that will be used to clone repositories.
   public_url: "git://localhost"
 
-  # The maximum number of seconds a connection can take.
-  # A value of 0 means no timeout.
-  max_timeout: 0
+  # The maximum number of seconds a connection can take. The idle timeout
+  # is reset by every byte, so this is what bounds a client that trickles
+  # its request or reads its pack slowly. The default of 6 hours lets a
+  # large clone over a slow link finish; git daemon's --timeout bounds only
+  # inactivity, like idle_timeout. A value of 0 means no timeout.
+  max_timeout: 21600
 
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
@@ -365,20 +371,33 @@ http:
   # Make sure to use https:// if you are using TLS.
   public_url: "http://localhost:23232"
 
-  # The maximum number of seconds a git or LFS request can take.
-  # A value of 0 means no timeout.
-  max_timeout: 0
+  # The maximum number of seconds a request can take. The idle timeout is
+  # reset by every byte, so this is what bounds a client that trickles its
+  # request or reads the response slowly. The default of 6 hours lets a
+  # large clone over a slow link finish; a reverse proxy's timeouts (such as
+  # nginx's proxy_read_timeout) usually bound only inactivity, like
+  # idle_timeout. A value of 0 means no timeout.
+  max_timeout: 21600
 
-  # The number of seconds a git or LFS request can go without reading from
-  # or writing to the client before it is closed. Time the server spends
-  # working between reads and writes does not count.
+  # The number of seconds a request can go without reading from or writing
+  # to the client before it is closed. Time the server spends working
+  # between reads and writes does not count.
   # A value of 0 means no timeout.
   idle_timeout: 60
 
-  # The maximum number of git and LFS requests served at once. Requests over
-  # the limit get 503 Service Unavailable.
-  # A value of 0 means no limit.
+  # The maximum number of git and LFS requests served at once, in total and
+  # from one client address (one IPv4 address or one IPv6 /64). Requests
+  # over a limit get 503 Service Unavailable. A value of 0 means no limit.
+  # Loopback clients (127.0.0.0/8, ::1) have no per-address limit, so a
+  # reverse proxy on the same host is bound only by max_connections. Behind
+  # a reverse proxy that connects from a non-loopback address, such as
+  # another host or another container, every client has the proxy's address
+  # and shares one address's limit: set max_connections_per_ip to 0 there
+  # and limit clients at the proxy. Raise it when many clients share one
+  # NAT or CI egress address. The per-address limit keeps one address from
+  # taking every request slot, not a few addresses together.
   max_connections: 64
+  max_connections_per_ip: 16
 
   # The cross-origin request security options
   cors:
@@ -549,7 +568,10 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_HTTP_LISTEN_ADDR`: HTTP listen address
 - `SOFT_SERVE_HTTP_PUBLIC_URL`: HTTP public URL used for cloning
 - `SOFT_SERVE_GIT_MAX_CONNECTIONS`: The maximum number of simultaneous connections to git daemon (at least 1)
-- `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS`: Seconds a git or LFS request over HTTP may take in all (default `0`, no limit) or go without reading the request body or writing the response (default `60`), and how many such requests are served at once (default `64`; more get 503). `0` means no limit
+- `SOFT_SERVE_SSH_MAX_TIMEOUT`, `SOFT_SERVE_GIT_MAX_TIMEOUT`: Seconds an SSH or git daemon connection may last in all (default `21600`, 6 hours). `0` means no limit
+- `SOFT_SERVE_HTTP_MAX_TIMEOUT`, `SOFT_SERVE_HTTP_IDLE_TIMEOUT`: Seconds an HTTP request may take in all (default `21600`, 6 hours) or go without reading the request body or writing the response (default `60`). `0` means no limit
+- `SOFT_SERVE_HTTP_MAX_CONNECTIONS`, `SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP`: How many git or LFS requests over HTTP are served at once, in total (default `64`) and from one client address (default `16`); more get 503. `0` means no limit. Loopback clients (127.0.0.0/8, `::1`) have no per-address limit, so a reverse proxy on the same host is bound only by the total. Behind a reverse proxy that connects from a non-loopback address, such as another host or another container, every client has the proxy's address and all share 16: set the per-address limit to `0` there and limit clients at the proxy. The per-address limit stops one address from taking every slot; four addresses together still can, at the defaults
+- Upgrading: `config.yaml` is written only on first start, so a server upgraded from a version whose `max_timeout` default was `0` keeps `max_timeout: 0` for SSH, the git daemon and HTTP; the server logs a warning at startup for each enabled server whose `max_timeout` is `0`. An older `config.yaml` has no `http.max_connections_per_ip` key, so the default of `16` applies after the upgrade; set it to `0` behind a reverse proxy that connects from a non-loopback address
 - `SOFT_SERVE_ANON_ACCESS`: Overrides the `anon-access` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.

@@ -59,6 +59,8 @@ func roundTripConfig(t *testing.T) *Config {
 			MaxTimeout:     17,
 			IdleTimeout:    18,
 			MaxConnections: 19,
+			// Set apart from MaxConnections so a swap of the two shows.
+			MaxConnectionsPerIP: 21,
 			CORS: CORSConfig{
 				AllowedHeaders: []string{"Accept", "X-Custom"},
 				AllowedOrigins: []string{"https://git.example.com", "https://other.example.com"},
