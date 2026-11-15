@@ -47,6 +47,9 @@ type Selection struct {
 	selector   *selector.Selector
 	activePane pane
 	tabs       *tabs.Tabs
+	// load is the listing in flight: a refresh cancels it and starts
+	// another.
+	load common.Loader
 }
 
 // New creates a new selection model.
@@ -209,7 +212,7 @@ func (s *Selection) Init() tea.Cmd {
 	if s.common.Config() == nil {
 		return nil
 	}
-	return loadReposCmd(s.common)
+	return loadReposCmd(s.common.WithContext(s.load.Start(s.common.Context())))
 }
 
 // loadReposCmd lists the repositories the caller may read, and the server
@@ -224,6 +227,10 @@ func loadReposCmd(c common.Common) tea.Cmd {
 
 func loadRepos(c common.Common) tea.Msg {
 	ctx := c.Context()
+	if ctx.Err() != nil {
+		// A refresh replaced this one before it started.
+		return nil
+	}
 	be := c.Backend()
 	pk := c.PublicKey()
 	if pk == nil && !be.AllowKeyless(ctx) {
@@ -232,7 +239,7 @@ func loadRepos(c common.Common) tea.Msg {
 
 	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
 	if err != nil {
-		return common.ErrorMsg(err)
+		return common.LoadError(ctx, err)
 	}
 	var msg ReposMsg
 	sortedItems := make(Items, 0, len(repos))
@@ -257,6 +264,11 @@ func loadRepos(c common.Common) tea.Msg {
 	msg.items = make([]selector.IdentifiableItem, len(sortedItems))
 	for i, it := range sortedItems {
 		msg.items[i] = it
+	}
+	if ctx.Err() != nil {
+		// Cancelled while it ran: the list or the readme may be missing
+		// because of it.
+		return nil
 	}
 	return msg
 }

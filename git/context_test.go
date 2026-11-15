@@ -43,6 +43,31 @@ func TestWithContextCopies(t *testing.T) {
 	}
 }
 
+// An entry listed under one context reads its contents under another.
+func TestTreeEntryWithContext(t *testing.T) {
+	repo, ref := setupTestRepo(t)
+	listed, cancel := context.WithCancel(context.Background())
+	tree, err := repo.WithContext(listed).TreePath(ref, "dot_config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ents, err := tree.Entries()
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("entries = %v, %v; want one", ents, err)
+	}
+	cancel()
+	if _, err := ents[0].File().Contents(); err == nil {
+		t.Fatal("read an entry under a cancelled context")
+	}
+	c, err := ents[0].WithContext(context.Background()).File().Contents()
+	if err != nil || string(c) != "test content" {
+		t.Fatalf("contents under a new context = %q, %v", c, err)
+	}
+	if _, err := ents[0].File().Contents(); err == nil {
+		t.Fatal("WithContext changed the original entry's context")
+	}
+}
+
 // TestCancelledContextStopsCommands checks that every helper the TUI uses
 // runs its git commands under the repository's context.
 func TestCancelledContextStopsCommands(t *testing.T) {

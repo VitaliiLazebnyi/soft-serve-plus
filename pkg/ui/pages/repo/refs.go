@@ -47,6 +47,8 @@ type Refs struct {
 	// do not depend on the selected reference, so switching branches does
 	// not list them again.
 	loaded bool
+	// load is the listing in flight: a new one cancels it.
+	load common.Loader
 }
 
 // NewRefs creates a new Refs component.
@@ -210,19 +212,23 @@ func (r *Refs) StatusBarInfo() string {
 // needs here instead of reading the model later.
 func (r *Refs) updateItemsCmd() tea.Cmd {
 	repo, prefix, logger, gen := r.repo, r.refPrefix, r.common.Logger, r.gen
-	ctx := r.common.Context()
+	ctx := r.load.Start(r.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil {
 			return common.ErrorMsg(common.ErrMissingRepo)
 		}
 		rr, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		refs, err := rr.RefInfos(prefix)
 		if err != nil {
 			logger.Debugf("error getting references: %v", err)
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		its := make(RefItems, len(refs))
 		for i, ref := range refs {
@@ -265,20 +271,24 @@ func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 // commands stop when ctx is done.
 func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		refs, err := r.References()
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		if len(refs) == 0 {
 			return EmptyRepoMsg{gen: gen}
 		}
 		ref, err := defaultRef(r, refs)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		if ref == nil {
 			return EmptyRepoMsg{gen: gen}

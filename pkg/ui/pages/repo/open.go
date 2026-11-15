@@ -15,5 +15,9 @@ func openWithContext(ctx context.Context, repo proto.Repository) (*git.Repositor
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		// The load was cancelled while the repository opened.
+		return nil, err
+	}
 	return r.WithContext(ctx), nil
 }

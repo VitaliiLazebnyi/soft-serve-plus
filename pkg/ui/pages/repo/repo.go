@@ -81,6 +81,9 @@ type Repo struct {
 	// noMenu is set when there is no repository menu to go back to, as in
 	// soft browse.
 	noMenu bool
+	// refLoad is the load of the reference to show: opening another
+	// repository cancels it.
+	refLoad common.Loader
 }
 
 // New returns a new Repo.
@@ -238,7 +241,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			r.Init(),
 			// This will set the selected repo in each pane's model.
 			r.updateModels(msg),
-			updateRefCmd(r.common.Context(), msg, r.gen),
+			updateRefCmd(r.refLoad.Start(r.common.Context()), msg, r.gen),
 		)
 		routed = true
 	case RefMsg:

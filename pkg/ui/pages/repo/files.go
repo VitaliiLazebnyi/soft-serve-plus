@@ -116,6 +116,9 @@ type Files struct {
 	// and is dropped.
 	load int
 	gen  uint64
+	// nav is the listing, file or blame load in flight. The pane shows one
+	// of them, so a new one cancels the one before.
+	nav common.Loader
 }
 
 // NewFiles creates a new files model.
@@ -352,6 +355,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 				if f.blameView {
 					cmds = append(cmds, f.fetchBlameCmd())
 				} else {
+					f.nav.Stop()
 					f.activeView = filesViewContent
 					cmds = append(cmds, f.code.SetSideNote(""))
 				}
@@ -362,11 +366,10 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case tea.WindowSizeMsg:
+		// A listing does not depend on the size, so a resize loads
+		// nothing. The content view re-renders through f.code.Update
+		// below.
 		f.SetSize(msg.Width, msg.Height)
-		// The content view re-renders through f.code.Update below.
-		if f.activeView == filesViewFiles && f.repo != nil {
-			cmds = append(cmds, f.updateFilesCmd())
-		}
 	case common.ErrorMsg:
 		// A listing or blame that failed to load never sends its result, so
 		// leave the loading view rather than spin until the next reload.
@@ -383,6 +386,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case EmptyRepoMsg:
+		f.nav.Stop()
 		f.ref = nil
 		f.gen = msg.gen
 		f.load++
@@ -459,25 +463,29 @@ func (f *Files) StatusBarInfo() string {
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
 	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
-	ctx := f.common.Context()
+	ctx := f.nav.Start(f.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil || ref == nil {
 			return nil
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		t, err := r.TreePath(ref, path)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		ents, err := t.Entries()
 		// A directory with too many entries is listed in part, and the
 		// status bar says so.
 		truncated := errors.Is(err, git.ErrTreeTruncated)
 		if err != nil && !truncated {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 		ents.Sort()
 		files := make([]selector.IdentifiableItem, 0)
@@ -497,16 +505,22 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 // filePath and at position index of its directory listing.
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
-	ctx := f.common.Context()
+	ctx := f.nav.Start(f.common.Context())
 	limit := f.common.Config().BlobSizeLimit()
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if item.entry.IsTree() || item.Mode().IsDir() {
-			return common.ErrorMsg(errInvalidFile)
+			return common.LoadError(ctx, errInvalidFile)
 		}
 		if repo == nil || ref == nil {
-			return common.ErrorMsg(errNoFileSelected)
+			return common.LoadError(ctx, errNoFileSelected)
 		}
-		fi := item.entry.File()
+		// The entry was listed under the listing's context, which this
+		// load cancelled when it started.
+		fi := item.entry.WithContext(ctx).File()
 
 		var bin bool
 		r, err := openWithContext(ctx, repo)
@@ -524,7 +538,7 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		}
 
 		if bin {
-			return common.ErrorMsg(errBinaryFile)
+			return common.LoadError(ctx, errBinaryFile)
 		}
 
 		// Read the file once, capped by the size limit, and sniff the
@@ -532,14 +546,14 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		c, err := fi.ContentsLimit(limit)
 		if errors.Is(err, git.ErrFileTooLarge) {
 			// Tell the user, and keep the size details for the log.
-			return common.ErrorMsg(fmt.Errorf("%w: %w", errFileTooLarge, err))
+			return common.LoadError(ctx, fmt.Errorf("%w: %w", errFileTooLarge, err))
 		}
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
-			return common.ErrorMsg(errBinaryFile)
+			return common.LoadError(ctx, errBinaryFile)
 		}
 
 		content, name := string(c), item.entry.Name()
@@ -558,19 +572,23 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 // fetchBlameCmd returns a command that loads the blame of the current file.
 func (f *Files) fetchBlameCmd() tea.Cmd {
 	repo, ref, item, load, gen := f.repo, f.ref, f.currentItem, f.load, f.gen
-	ctx := f.common.Context()
+	ctx := f.nav.Start(f.common.Context())
 	return func() tea.Msg {
+		if ctx.Err() != nil {
+			// A newer load replaced this one before it started.
+			return nil
+		}
 		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
-			return common.ErrorMsg(errNoFileSelected)
+			return common.LoadError(ctx, errNoFileSelected)
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		b, err := r.BlameFile(ref.ID, item.entry.File().Path())
 		if err != nil {
-			return common.ErrorMsg(err)
+			return common.LoadError(ctx, err)
 		}
 
 		return FileBlameMsg{blame: b, load: load, gen: gen}

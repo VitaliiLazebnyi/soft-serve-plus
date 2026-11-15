@@ -21,19 +21,27 @@ func TestOpenWithContext(t *testing.T) {
 		t.Fatalf("HEAD with a live context: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	r, err = openWithContext(ctx, openRepo{path: dir})
+	live, cancelLive := context.WithCancel(t.Context())
+	r, err = openWithContext(live, openRepo{path: dir})
 	if err != nil {
 		t.Fatalf("openWithContext: %v", err)
 	}
-	if r.Context() != ctx {
+	if r.Context() != live {
 		t.Fatal("openWithContext did not bind the context")
 	}
+	cancelLive()
 	if _, err := r.HEAD(); err == nil {
 		t.Fatal("HEAD with a cancelled context succeeded; want an error")
 	}
-	if msg, ok := updateRefCmd(ctx, openRepo{path: dir}, 0)().(RefMsg); ok {
-		t.Fatalf("updateRefCmd with a cancelled context = %v; want no reference", msg)
+
+	// A load cancelled before or while it opens the repository goes no
+	// further, and sends nothing.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := openWithContext(ctx, openRepo{path: dir}); err == nil {
+		t.Fatal("openWithContext with a cancelled context succeeded; want an error")
+	}
+	if msg := updateRefCmd(ctx, openRepo{path: dir}, 0)(); msg != nil {
+		t.Fatalf("updateRefCmd with a cancelled context = %v; want nothing", msg)
 	}
 }

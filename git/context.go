@@ -28,6 +28,16 @@ func (r *Repository) Context() context.Context {
 	return r.ctx
 }
 
+// WithContext returns a copy of e whose contents are read under ctx, in
+// place of the context of the repository it was listed from.
+func (e *TreeEntry) WithContext(ctx context.Context) *TreeEntry {
+	ee := *e
+	if ee.repo != nil {
+		ee.repo = ee.repo.WithContext(ctx)
+	}
+	return &ee
+}
+
 // cmdOpts returns git-module command options that run a command under r's
 // context.
 func (r *Repository) cmdOpts() git.CommandOptions {

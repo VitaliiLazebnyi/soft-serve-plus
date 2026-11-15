@@ -74,6 +74,13 @@ func (c *Common) Context() context.Context {
 	return c.ctx
 }
 
+// WithContext returns a copy of c whose context is ctx, such as a context
+// derived from c's for one load.
+func (c Common) WithContext(ctx context.Context) Common {
+	c.ctx = ctx
+	return c
+}
+
 // Config returns the server config.
 func (c *Common) Config() *config.Config {
 	return config.FromContext(c.ctx)
