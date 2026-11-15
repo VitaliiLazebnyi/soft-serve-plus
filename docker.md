@@ -113,6 +113,18 @@ docker run ... \
 > (the example above binds it to the host's loopback interface), or keep it
 > unpublished and scrape it from a container on the same Docker network.
 
+## Hooks and bash
+
+The image does not ship bash; hooks run with BusyBox `sh`. Rewrite an admin
+hook that starts with `#!/bin/bash` for `sh`, or add bash in a derived image:
+
+```dockerfile
+FROM ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
+USER root
+RUN apk add --no-cache bash
+USER soft:soft
+```
+
 ## Building the image yourself
 
 The `Dockerfile` copies a prebuilt binary from `<os>/<arch>/soft`, so build that
@@ -216,8 +228,3 @@ With an init, the number of processes in the container
 pushes the server handles.
 
 [ghcr]: https://github.com/VitaliiLazebnyi/soft-serve-plus/pkgs/container/soft-serve-plus
-
-> **Warning**
->
-> Make sure to run the image without a TTY, i.e.: do not use the `--tty`/`-t`
-> flags.

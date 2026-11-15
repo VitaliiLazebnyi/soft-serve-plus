@@ -1,7 +1,10 @@
 # Pinned by digest so a rebuild gets the same base; Dependabot bumps it.
 FROM alpine:3.24@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a
 
-RUN apk add --no-cache git bash openssh tini
+# git serves the repositories, and runs ssh to mirror over ssh:// URLs; only
+# the OpenSSH client is needed (the server speaks SSH itself). Hooks the server
+# generates use /bin/sh, so no bash.
+RUN apk add --no-cache git openssh-client-default tini
 
 # Run as an unprivileged user. The data directory belongs to it, so a new
 # named volume mounted there does too.
@@ -17,8 +20,6 @@ VOLUME /soft-serve
 
 # Environment variables
 ENV SOFT_SERVE_DATA_PATH="/soft-serve"
-# workaround to prevent slowness in docker when running with a tty
-ENV CI="1"
 
 # Expose ports
 # SSH
