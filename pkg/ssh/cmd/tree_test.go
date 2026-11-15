@@ -1,16 +1,84 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	sgit "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
+
+// blockLsTree puts a wrapper named git first on PATH that, for an ls-tree,
+// creates the returned marker file and then hangs, and runs git for
+// anything else. The wrapper is a shell script, so the test is skipped on
+// Windows. It uses t.Setenv, so the test must not be parallel.
+func blockLsTree(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the blocking git wrapper is a shell script")
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ls-tree-started")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	script := "#!/bin/sh\nfor a in \"$@\"; do\n\tif [ \"$a\" = ls-tree ]; then\n\t\t: > " + quote(marker) +
+		"\n\t\texec sleep 300\n\tfi\ndone\nexec " + quote(gitPath) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return marker
+}
+
+// R10: `repo tree` and `repo blob` run git under the session's context, so
+// git stops when the session ends instead of running on to git-module's
+// one-minute timeout.
+func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
+	ctx, _ := viewRepo(t)
+	marker := blockLsTree(t)
+	for _, args := range [][]string{{"tree", "view"}, {"blob", "view", "README.md"}} {
+		cctx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := runRepoOutput(t, cctx, args...)
+			done <- err
+		}()
+		for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(marker); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatalf("%v: git ls-tree never started", args)
+			}
+		}
+		cancel()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%v: succeeded after the session ended", args)
+			}
+		case <-time.After(20 * time.Second):
+			t.Errorf("%v: git still running 20s after the session ended", args)
+		}
+		if err := os.Remove(marker); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // R10: `repo tree` on a directory with more than git.MaxTreeEntries entries
 // lists the first ones and says on stderr that the listing is cut. Paths

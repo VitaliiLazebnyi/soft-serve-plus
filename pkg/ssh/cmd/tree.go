@@ -67,7 +67,7 @@ func treeCommand() *cobra.Command {
 					printEntries(cmd, git.Entries{te})
 					return nil
 				}
-				tree, err = tree.SubTree(path)
+				tree, err = te.Tree()
 				if err != nil {
 					return err
 				}

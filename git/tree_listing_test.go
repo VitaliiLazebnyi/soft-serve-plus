@@ -235,3 +235,68 @@ func TestTreeEntriesAtCap(t *testing.T) {
 		t.Fatalf("Entries = %d entries, %v; want %d and no error", len(ents), err, MaxTreeEntries)
 	}
 }
+
+// Long names cannot multiply the cost of a listing: it stops once the names
+// kept pass maxTreeNameBytes, well before MaxTreeEntries.
+func TestTreeEntriesNameBudget(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, "", "", "init", "-q", "--bare", dir)
+	blob := gitRun(t, dir, "x", "hash-object", "-w", "--stdin")
+	const nameLen, n = 4000, 1000
+	var in strings.Builder
+	for i := range n {
+		fmt.Fprintf(&in, "100644 blob %s\t%04d%s\n", blob, i, strings.Repeat("n", nameLen-4))
+	}
+	id := gitRun(t, dir, in.String(), "mktree")
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	tree, err := repo.LsTree(id)
+	if err != nil {
+		t.Fatalf("LsTree: %v", err)
+	}
+	var ents Entries
+	alloc := allocated(func() { ents, err = tree.Entries() })
+	if !errors.Is(err, ErrTreeTruncated) {
+		t.Fatalf("Entries error = %v, want ErrTreeTruncated", err)
+	}
+	if want := maxTreeNameBytes / nameLen; len(ents) != want {
+		t.Errorf("Entries kept %d entries, want %d", len(ents), want)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprint(len(ents))) {
+		t.Errorf("error %q does not give the number of entries shown", err)
+	}
+	t.Logf("listing of %d long names allocated %d KiB", len(ents), alloc>>10)
+	if alloc > 12<<20 {
+		t.Errorf("listing allocated %d MiB, want under 12 MiB", alloc>>20)
+	}
+}
+
+// A blob missing from the repository lists with size 0 rather than failing
+// the listing: ls-tree -l prints its size as BAD.
+func TestTreeEntriesMissingBlob(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	gitRun(t, "", "", "init", "-q", "--bare", dir)
+	blob := gitRun(t, dir, "x", "hash-object", "-w", "--stdin")
+	const missing = "0123456789abcdef0123456789abcdef01234567"
+	id := gitRun(t, dir, "100644 blob "+missing+"\tgone\n100644 blob "+blob+"\there\n", "mktree", "--missing")
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	tree, err := repo.LsTree(id)
+	if err != nil {
+		t.Fatalf("LsTree: %v", err)
+	}
+	ents, err := tree.Entries()
+	if err != nil || len(ents) != 2 {
+		t.Fatalf("Entries = %d entries, %v; want both", len(ents), err)
+	}
+	if ents[0].Name() != "gone" || ents[0].Size() != 0 || ents[1].Size() != 1 {
+		t.Errorf("Entries = %q of %d bytes, %q of %d bytes", ents[0].Name(), ents[0].Size(), ents[1].Name(), ents[1].Size())
+	}
+	if te, err := tree.TreeEntry("gone"); err != nil || te.Size() != 0 {
+		t.Errorf("TreeEntry(gone) = %v", err)
+	}
+}

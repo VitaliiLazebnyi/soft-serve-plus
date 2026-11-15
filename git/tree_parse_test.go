@@ -18,7 +18,9 @@ func TestParseLsTreeRecord(t *testing.T) {
 		name string
 	}{
 		{"100644 blob " + id + "      12\tfile", true, "blob", 12, "file"},
-		{"100664 blob " + id + "       0\told mode", true, "blob", 0, "old mode"},
+		{"100644 blob " + id + "     BAD\tmissing", true, "blob", 0, "missing"},
+		{"100664 blob " + id + "       0\told mode", false, "", 0, ""},
+		{"040000 tree " + id + "     BAD\td", false, "", 0, ""},
 		{"100755 blob " + id + " 1234567890\tx", true, "exec", 1234567890, "x"},
 		{"120000 blob " + id + "       3\tl", true, "symlink", 3, "l"},
 		{"040000 tree " + id + "       -\td", true, "tree", 0, "d"},

@@ -17,16 +17,23 @@ import (
 
 // MaxTreeEntries is the most entries a directory listing returns; see
 // Tree.Entries. A listing is for a person to read, in the TUI or from `repo
-// tree`, and ten thousand lines are already more than anyone scrolls. It
-// bounds the memory of one listing to a few MiB (an entry costs a few hundred
-// bytes, and a name is at most maxTreeRecord bytes), where a tree with half a
-// million entries used to cost hundreds of MiB.
+// tree`, and ten thousand lines are already more than anyone scrolls.
+// Together with maxTreeNameBytes it bounds the memory of one listing to a few
+// MiB (an entry costs about two hundred bytes plus two copies of its name),
+// where a tree with half a million entries used to cost hundreds of MiB.
 const MaxTreeEntries = 10_000
+
+// maxTreeNameBytes is the most bytes of names a directory listing keeps. A
+// listing stops at whichever of it and MaxTreeEntries comes first, so long
+// names cannot multiply the cost of the entries kept.
+const maxTreeNameBytes = 2 << 20
 
 // maxTreeRecord is the longest `ls-tree -l -z` record, in bytes, a listing
 // accepts: the mode, type, ID and size, and a name or path as long as the
-// usual PATH_MAX. A longer one fails the listing, so a hostile tree cannot
-// make a single name cost unbounded memory.
+// usual PATH_MAX. A longer one fails the whole listing, so a hostile tree
+// with one such name cannot be listed, by directory listing or by lookup of
+// any of its entries; git itself has no such limit, but no file system can
+// check such a name out.
 const maxTreeRecord = 4096 + 128
 
 // Tree is a tree object of a repository: a directory at a revision.
@@ -168,24 +175,30 @@ func (t *Tree) SubTree(path string) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
+	return e.Tree()
+}
+
+// Tree returns the tree the entry is, or ErrRevisionNotExist when the entry
+// is not a directory.
+func (e *TreeEntry) Tree() (*Tree, error) {
 	if !e.IsTree() {
 		return nil, ErrRevisionNotExist
 	}
-	return &Tree{id: e.id, Path: e.path, Repository: t.Repository}, nil
+	return &Tree{id: e.id, Path: e.path, Repository: e.repo}, nil
 }
 
 // Entries returns the entries of the tree, in git's order, read by one git
 // process that also reports their sizes. A tree with more than
-// MaxTreeEntries entries gives the first MaxTreeEntries along with an error
-// wrapping ErrTreeTruncated; git is stopped there, so a huge tree costs no
-// more than that.
+// MaxTreeEntries entries, or with more than maxTreeNameBytes of names, gives
+// the first entries that fit along with an error wrapping ErrTreeTruncated;
+// git is stopped there, so a huge tree costs no more than that.
 func (t *Tree) Entries() (Entries, error) {
 	ents, truncated, err := t.lsTree("", MaxTreeEntries)
 	if err != nil {
 		return nil, err
 	}
 	if truncated {
-		return ents, fmt.Errorf("%w: showing the first %d entries", ErrTreeTruncated, MaxTreeEntries)
+		return ents, fmt.Errorf("%w: showing the first %d entries", ErrTreeTruncated, len(ents))
 	}
 	return ents, nil
 }
@@ -193,6 +206,12 @@ func (t *Tree) Entries() (Entries, error) {
 // TreeEntry returns the TreeEntry for the file path, relative to t. It asks
 // git for that one path, so a lookup does not list the directories on the
 // way.
+//
+// The path is a git pathspec, taken literally. Git for Windows reads a
+// backslash in it as a directory separator, so there an entry whose name
+// holds a backslash cannot be looked up (nor checked out). In a malformed
+// tree whose entry names hold a slash, such an entry, "a/b" in the root,
+// can be what a lookup of "a/b" finds.
 func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
 	path, ok := cleanTreePath(path)
 	if !ok {
@@ -272,6 +291,7 @@ type lsTreeParser struct {
 	dir       string
 	limit     int
 	ents      Entries
+	nameBytes int
 	pending   []byte
 	truncated bool
 	err       error
@@ -314,6 +334,10 @@ func (p *lsTreeParser) Write(b []byte) (int, error) {
 			p.err = err
 			return 0, err
 		}
+		if p.nameBytes += len(e.name); p.nameBytes > maxTreeNameBytes {
+			p.truncated = true
+			return 0, errListingFull
+		}
 		e.repo = p.repo
 		e.path = gopath.Join(p.dir, e.name)
 		p.ents = append(p.ents, e)
@@ -322,13 +346,13 @@ func (p *lsTreeParser) Write(b []byte) (int, error) {
 }
 
 // lsTreeModes maps the modes ls-tree prints to an entry mode and the object
-// type that goes with it. 100664 is a blob mode old versions of git wrote.
+// type that goes with it. ls-tree prints a mode as git normalises it, so an
+// old 100664 blob shows as 100644.
 var lsTreeModes = map[string]struct {
 	mode git.EntryMode
 	typ  git.ObjectType
 }{
 	"100644": {git.EntryBlob, git.ObjectBlob},
-	"100664": {git.EntryBlob, git.ObjectBlob},
 	"100755": {git.EntryExec, git.ObjectBlob},
 	"120000": {git.EntrySymlink, git.ObjectBlob},
 	"160000": {git.EntryCommit, git.ObjectCommit},
@@ -361,6 +385,11 @@ func parseLsTreeRecord(rec []byte) (*TreeEntry, error) {
 	}
 	e := &TreeEntry{mode: m.mode, typ: m.typ, id: string(id), name: string(name)}
 	if m.typ == git.ObjectBlob {
+		if string(size) == "BAD" {
+			// The blob is missing from the repository; it lists with
+			// size 0, as Size gave it before.
+			return e, nil
+		}
 		n, err := strconv.ParseInt(string(size), 10, 64)
 		if err != nil || n < 0 {
 			return bad(fmt.Sprintf("size %q", size))
