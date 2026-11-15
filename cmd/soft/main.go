@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -57,8 +58,12 @@ var (
 		Short:  "Generate man pages",
 		Args:   cobra.NoArgs,
 		Hidden: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			manPage, err := mcobra.NewManPage(1, rootCmd) //.
+			if err != nil {
+				return err
+			}
+			date, err := sourceDate(os.Getenv("SOURCE_DATE_EPOCH"))
 			if err != nil {
 				return err
 			}
@@ -66,11 +71,38 @@ var (
 			manPage = manPage.WithSection("Copyright", "(C) 2021-2023 Charmbracelet, Inc.\n"+
 				"Soft Serve Plus changes (C) their contributors.\n"+
 				"Released under MIT license.")
-			fmt.Println(manPage.Build(roff.NewDocument()))
-			return nil
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), manPage.Build(datedDocument{roff.NewDocument(), date}))
+			return err
 		},
 	}
 )
+
+// sourceDate returns the time SOURCE_DATE_EPOCH names (seconds since the Unix
+// epoch, https://reproducible-builds.org/specs/source-date-epoch/), or the
+// current time when it is empty. The release build sets it to the commit time,
+// so the man page does not depend on the day it is built.
+func sourceDate(epoch string) (time.Time, error) {
+	if epoch == "" {
+		return time.Now(), nil
+	}
+	sec, err := strconv.ParseInt(epoch, 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid SOURCE_DATE_EPOCH %q: %w", epoch, err)
+	}
+	return time.Unix(sec, 0).UTC(), nil
+}
+
+// datedDocument is a roff document whose title heading carries date instead
+// of the time the page is built.
+type datedDocument struct {
+	*roff.Document
+	date time.Time
+}
+
+// Heading writes the title heading with d.date.
+func (d datedDocument) Heading(section uint, title, description string, _ time.Time) {
+	d.Document.Heading(section, title, description, d.date)
+}
 
 // rootArgs lets "soft PATH" browse the repository at PATH like "soft browse
 // PATH". An argument that is not an existing path is reported as an unknown
