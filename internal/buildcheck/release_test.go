@@ -48,11 +48,15 @@ func readWorkflow(t *testing.T, name string) workflow {
 func TestReleaseWorkflowDoesNotTrustSharedState(t *testing.T) {
 	t.Parallel()
 	w := readWorkflow(t, "goreleaser.yml")
+	var setupGo, goreleaser int
 	for jobName, job := range w.Jobs {
 		verified := false
 		for i, step := range job.Steps {
 			switch {
+			case strings.HasPrefix(step.Uses, "actions/cache"):
+				t.Errorf("job %s step %d: %s restores a cache other runs can write", jobName, i, step.Uses)
 			case strings.HasPrefix(step.Uses, "actions/setup-go@"):
+				setupGo++
 				if v, ok := step.With["cache"]; !ok || v != false {
 					t.Errorf("job %s step %d (setup-go): cache must be false, got %v", jobName, i, v)
 				}
@@ -62,11 +66,20 @@ func TestReleaseWorkflowDoesNotTrustSharedState(t *testing.T) {
 				}
 			case strings.Contains(step.Run, "go mod verify"):
 				verified = true
-			case strings.HasPrefix(step.Uses, "goreleaser/goreleaser-action@"):
+			case strings.HasPrefix(step.Uses, "goreleaser/goreleaser-action@"),
+				strings.Contains(step.Run, "goreleaser"):
+				goreleaser++
 				if !verified {
 					t.Errorf("job %s: GoReleaser runs before `go mod verify`", jobName)
 				}
 			}
 		}
+	}
+	// If the workflow stops using these steps, the checks above check nothing.
+	if setupGo == 0 {
+		t.Error("no actions/setup-go step found; update this test")
+	}
+	if goreleaser == 0 {
+		t.Error("no GoReleaser step found; update this test")
 	}
 }
