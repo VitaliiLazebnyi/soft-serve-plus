@@ -189,6 +189,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case footer.ToggleFooterMsg:
 		m.footer.SetShowAll(!m.footer.ShowAll())
 		m.showFooter = !m.showFooter
+		// Size the repository page for the footer now, before it gets the
+		// message: the Commits tab loads its page by the size it has then.
+		m.SetSize(m.common.Width, m.common.Height)
 	case common.ErrorMsg:
 		m.error = msg.Err
 		if m.error == nil {
