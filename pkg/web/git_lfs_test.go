@@ -126,7 +126,7 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 	req.Header.Set("Accept", lfs.MediaType)
 
 	w := httptest.NewRecorder()
-	serviceLfsLocks(w, req)
+	serveRoute((*gitServer).serviceLfsLocks, w, req)
 
 	body := w.Body.String()
 	if strings.Contains(body, "secret/plans.bin") {
@@ -144,7 +144,7 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 	req.Header.Set("Accept", lfs.MediaType)
 
 	w = httptest.NewRecorder()
-	serviceLfsLocks(w, req)
+	serveRoute((*gitServer).serviceLfsLocks, w, req)
 	is.Equal(w.Code, http.StatusOK)
 
 	var resp lfs.LockListResponse
@@ -186,7 +186,7 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 	req = mux.SetURLVars(req, map[string]string{"lock_id": strconv.FormatInt(victimLock.ID, 10)})
 
 	w := httptest.NewRecorder()
-	serviceLfsLocksDelete(w, req)
+	serveRoute((*gitServer).serviceLfsLocksDelete, w, req)
 
 	// Guard against the request never reaching the lookup: a missing or
 	// unparseable lock_id would make this test vacuously pass.

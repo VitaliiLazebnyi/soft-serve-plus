@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
@@ -16,31 +15,24 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func serviceLfsLocks(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsLocks(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	// GitRoute has already refused any other method.
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		serviceLfsLocksGet(w, r)
+		s.serviceLfsLocksGet(w, r, gr)
 	case http.MethodPost:
-		serviceLfsLocksCreate(w, r)
+		s.serviceLfsLocksCreate(w, r, gr)
 	}
 }
 
 // POST: /<repo>.git/info/lfs/locks
-func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r) {
 		return
 	}
 
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-locks")
-
-	// Checked in withAccess too. Repeated here so a routing or middleware
-	// mistake cannot turn into an unauthorized lock.
-	if access.FromContext(ctx) < access.ReadWriteAccess {
-		denyLFSWrite(w, r)
-		return
-	}
 
 	var req lfs.LockCreateRequest
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
@@ -64,14 +56,11 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	repo := gr.repo
 
 	// A lock has an owner, so even with anonymous write access the caller
 	// must sign in. git-lfs only asks for credentials after a 401.
-	user := proto.UserFromContext(ctx)
+	user := gr.user
 	if user == nil {
 		logger.Info("anonymous caller cannot create a lock")
 		askCredentials(w, r)
@@ -81,8 +70,8 @@ func serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
+	dbx := s.dbx
+	datastore := s.datastore
 	if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
 		// key; report it as gone.
@@ -161,7 +150,7 @@ func locksLimit(limit int) (int, error) {
 }
 
 // GET: /<repo>.git/info/lfs/locks
-func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsAccepts(w, r) {
 		return
 	}
@@ -207,12 +196,9 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-locks")
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	dbx := s.dbx
+	datastore := s.datastore
+	repo := gr.repo
 
 	if id > 0 {
 		lock, err := datastore.GetLFSLockByID(ctx, dbx, repo.ID(), id)
@@ -334,17 +320,14 @@ func serviceLfsLocksGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST: /<repo>.git/info/lfs/locks/verify
-func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r) {
 		return
 	}
 
 	ctx := r.Context()
 	logger := log.FromContext(ctx).WithPrefix("http.lfs-locks")
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	repo := gr.repo
 
 	var req lfs.LockVerifyRequest
 	body := http.MaxBytesReader(w, r.Body, maxLfsJSONBodySize)
@@ -375,9 +358,9 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	user := proto.UserFromContext(ctx)
+	dbx := s.dbx
+	datastore := s.datastore
+	user := gr.user
 	ours := make([]lfs.Lock, 0)
 	theirs := make([]lfs.Lock, 0)
 
@@ -431,7 +414,7 @@ func serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST: /<repo>.git/info/lfs/locks/:lockID/unlock
-func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
+func (s *gitServer) serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r) {
 		return
 	}
@@ -472,7 +455,7 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 	// Only a lock's owner or an admin may unlock, so even with anonymous
 	// write access the caller must sign in. git-lfs only asks for
 	// credentials after a 401.
-	user := proto.UserFromContext(ctx)
+	user := gr.user
 	if user == nil {
 		logger.Info("anonymous caller cannot delete a lock")
 		askCredentials(w, r)
@@ -482,12 +465,9 @@ func serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	repo, ok := lfsRepository(w, r)
-	if !ok {
-		return
-	}
+	dbx := s.dbx
+	datastore := s.datastore
+	repo := gr.repo
 
 	// The lock being deleted. Looked up scoped to this repository so that a
 	// lock ID belonging to another repository cannot be read through it.
