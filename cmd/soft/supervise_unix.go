@@ -88,7 +88,9 @@ func supervise(newChild func() *exec.Cmd, sigs <-chan os.Signal) (int, error) {
 	terminal := ok && term.IsTerminal(f.Fd())
 	if terminal {
 		child.SysProcAttr.Foreground = true
-		child.SysProcAttr.Ctty = 0 // the child's stdin
+		// With Foreground, Ctty is a descriptor in this process: the
+		// one just checked to be a terminal.
+		child.SysProcAttr.Ctty = int(f.Fd())
 	}
 	err := child.Start()
 	if err != nil && terminal {
