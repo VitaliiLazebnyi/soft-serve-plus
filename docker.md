@@ -19,6 +19,7 @@ docker run \
   --publish 23231:23231 \
   --publish 23232:23232 \
   --publish 9418:9418 \
+  --init \
   -e SOFT_SERVE_INITIAL_ADMIN_KEYS="YOUR_ADMIN_KEY_HERE" \
   --restart unless-stopped \
   ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
@@ -32,6 +33,7 @@ services:
   soft-serve-plus:
     image: ghcr.io/vitaliilazebnyi/soft-serve-plus:latest
     container_name: soft-serve-plus
+    init: true
     volumes:
       - /path/to/data:/soft-serve
     ports:
@@ -42,6 +44,9 @@ services:
       SOFT_SERVE_INITIAL_ADMIN_KEYS: "YOUR_ADMIN_KEY_HERE"
     restart: unless-stopped
 ```
+
+`--init` and `init: true` are a safeguard rather than a requirement with this
+image; see [Reaping background git processes](#reaping-background-git-processes).
 
 The container runs Soft Serve Plus as the unprivileged `soft` user (UID and GID
 `1000`), so the data directory must be writable by that user. A new named volume
@@ -120,19 +125,83 @@ docker build --platform linux/amd64 -t soft-serve-plus:latest .
 
 ## Reaping background git processes
 
-Git starts detached background processes (for example
-`git maintenance run --auto --detach` after a push or a mirror sync). When the
-git process that started one exits, the orphan is re-parented to PID 1 of the
-container, which must reap it when it exits in turn, or such processes pile up
-as zombie (`<defunct>`) processes. The image runs Soft Serve Plus under
-[tini](https://github.com/krallin/tini) for this reason, so no extra flags are
-needed: `docker run --init` and `init: true` in docker-compose are no longer
-required with this image. They are harmless if you already use them, because
-tini is registered as a child subreaper and reaps the processes itself.
+Git leaves orphaned processes behind: since git 2.47, one
+`git maintenance run --auto --detach` for each push that updates a ref, plus a
+helper for each transfer that is cut off part-way. The kernel re-parents each
+orphan to PID 1 of the container, which must reap it when it exits. If nothing
+does, it stays a zombie (`<defunct>`) process that counts against the
+container's PID limit (`--pids-limit`, `pids_limit:` in docker-compose) until
+the server can no longer start git.
 
-If you build your own image with `soft serve` as the entrypoint, or run an older
-image that does not include tini, run the container with an init process:
-`docker run --init ...`, or `init: true` for the service in docker-compose.
+The image already handles this in two ways:
+
+- Its entrypoint is `/sbin/tini -s -- /usr/local/bin/soft serve`, so
+  [tini](https://github.com/krallin/tini) is PID 1 and reaps the orphans.
+  `-s` makes tini a child subreaper, so it still reaps them when another init
+  is PID 1.
+- When `soft` itself runs as PID 1, it starts the server again as a child,
+  forwards signals to it and reaps every process that exits. It logs
+  `soft is PID 1: running the server as a child process ...` when it does
+  this. This costs a second `soft` process, so an init is still preferred. If
+  it cannot start the child, it logs the warning
+  `soft is PID 1 and cannot supervise itself ...` and the server runs without
+  anything reaping its orphans.
+
+The examples above still add `--init` (`init: true`). With this image it is
+belt-and-braces, and it works with `read_only: true`, `cap_drop: [ALL]` and
+`no-new-privileges`. It is what protects you when the entrypoint is
+overridden (for example `--entrypoint /usr/local/bin/soft`), or when you run
+`soft serve` from your own image or an older image without tini.
+
+### Kubernetes
+
+A container's `command:` replaces the image's entrypoint, and so removes tini.
+Pass options with `args:` instead, which are appended to
+`/usr/local/bin/soft serve`. If you do set `command:`, keep tini in front of it:
+
+```yaml
+command: ["/sbin/tini", "-s", "--", "/usr/local/bin/soft", "serve"]
+```
+
+or set `shareProcessNamespace: true` on the pod, which makes the pod's pause
+container PID 1 and the reaper. Otherwise `soft` falls back to supervising
+itself as described above.
+
+### Not starting background maintenance
+
+Optionally, tell git to run automatic maintenance in the foreground instead of
+detaching it, which removes the orphan each push leaves behind. Add the setting
+through git's `GIT_CONFIG_*` variables (if you already set some, append to them
+and raise `GIT_CONFIG_COUNT`):
+
+```yaml
+    environment:
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: maintenance.autoDetach
+      GIT_CONFIG_VALUE_0: "false"
+      # git older than 2.47 runs "git gc --auto" instead, which reads this key:
+      GIT_CONFIG_KEY_1: gc.autoDetach
+      GIT_CONFIG_VALUE_1: "false"
+```
+
+The trade-off is that a push then waits for maintenance to finish whenever it
+has real work to do. The setting reaches the git processes that serve pushes;
+mirror syncs and imports set their own `GIT_CONFIG_*` variables and do not pick
+it up. It does not cover interrupted transfers either, so it does not
+replace an init. The server does not set these keys itself.
+
+### Checking for zombies
+
+Zombie processes show the state `Z`. This lists them inside the container, and
+prints nothing when there are none:
+
+```sh
+docker exec soft-serve-plus ps -o stat,pid,comm | grep '^Z'
+```
+
+With an init, the number of processes in the container
+(`docker exec soft-serve-plus ps | wc -l`) stays small and stable however many
+pushes the server handles.
 
 [ghcr]: https://github.com/VitaliiLazebnyi/soft-serve-plus/pkgs/container/soft-serve-plus
 
