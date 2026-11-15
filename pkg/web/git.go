@@ -127,9 +127,11 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	// package whose path ends in one of these names, such as "group/HEAD"
 	// or "repo/info/refs", is a go get request. The ref advertisement route
 	// would take a go get request for info/refs, so it is sent to the go get
-	// handler here.
-	r.Handle(basePrefix+"/info/refs", goGet).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
-		return !isSmartService(getServiceType(r)) && isGoGet(r)
+	// handler here. The route matches the whole path, so the handler gets
+	// the full path as the repository and walks up from it, as it does for
+	// "group/HEAD".
+	r.Handle(basePrefix, goGet).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return strings.HasSuffix(r.URL.Path, "/info/refs") && !isSmartService(getServiceType(r)) && isGoGet(r)
 	})
 	r.Handle(basePrefix+"/info/refs", http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
 		return !isSmartService(getServiceType(r)) && !isGoGet(r)

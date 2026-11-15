@@ -103,12 +103,15 @@ func TestGoGetPathEndingInDumbFile(t *testing.T) {
 	is.NoErr(err)
 	_, err = f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
+	_, err = f.be.CreateRepository(f.ctx, "deep/info/refs", f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
 
 	for _, tc := range []struct{ path, repo string }{
 		{"/group/HEAD?go-get=1", "group/HEAD"},
 		{"/group/HEAD/objects/info/packs?go-get=1", "group/HEAD"}, // a package inside it
 		{"/pub/info/refs?go-get=1", "pub"},                        // a package "info/refs"
 		{"/pub.git/info/refs?go-get=1", "pub"},
+		{"/deep/info/refs?go-get=1", "deep/info/refs"}, // a repository "info/refs"
 	} {
 		w := f.do(http.MethodGet, tc.path, "")
 		is.Equal(w.Code, http.StatusOK) // go get page
