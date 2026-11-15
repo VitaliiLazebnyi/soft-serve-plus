@@ -5,15 +5,23 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
+	"charm.land/ssh"
+	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -229,5 +237,92 @@ func TestAuthenticationRefusesClaimedAdminKey(t *testing.T) {
 	}
 	if n := tokenCount(ctx, t, mallory); n != 0 {
 		t.Errorf("mallory has %d tokens, want 0", n)
+	}
+}
+
+// TestAuthenticationAfterOfferedKey checks that a session runs as the owner
+// of the key that signed, not of a key the client offered before it. The
+// client asks about each key before it signs, so PublicKeyHandler approves
+// the offered key first. The server has no check of its own that the two
+// agree: it relies on charm.land/ssh giving the session the key that signed,
+// and this test guards that.
+func TestAuthenticationAfterOfferedKey(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	ctx := serverContext(t, cfg, log.Default())
+	be := backend.FromContext(ctx)
+
+	alice, bob, stranger := newSigner(t), newSigner(t), newSigner(t)
+	for name, key := range map[string]gossh.Signer{"alice": alice, "bob": bob} {
+		if _, err := be.CreateUser(ctx, name, proto.UserOptions{
+			PublicKeys: []gossh.PublicKey{key.PublicKey()},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var mu sync.Mutex
+	var approved []string
+	sshSrv := &SSHServer{be: be}
+	srv := &ssh.Server{
+		PublicKeyHandler: func(ctx ssh.Context, pk ssh.PublicKey) bool {
+			ok := sshSrv.PublicKeyHandler(ctx, pk)
+			if ok {
+				mu.Lock()
+				approved = append(approved, gossh.FingerprintSHA256(pk))
+				mu.Unlock()
+			}
+			return ok
+		},
+		// The handler prints the session's user, or "anon" without one,
+		// and the fingerprint of the session's key.
+		Handler: ContextMiddleware(cfg, db.FromContext(ctx), store.FromContext(ctx), be, log.Default())(AuthenticationMiddleware(func(s ssh.Session) {
+			name := "anon"
+			if u := proto.UserFromContext(s.Context()); u != nil {
+				name = u.Username()
+			}
+			_, _ = fmt.Fprintf(s, "%s %s", name, gossh.FingerprintSHA256(s.PublicKey()))
+			_ = s.Exit(0)
+		})),
+	}
+	addr := testsession.Listen(t, srv)
+
+	for _, tc := range []struct {
+		name     string
+		offered  gossh.Signer
+		signer   gossh.Signer
+		wantUser string
+	}{
+		{"offer alice, sign as bob", alice, bob, "bob"},
+		{"offer bob, sign as alice", bob, alice, "alice"},
+		{"offer alice, sign with an unregistered key", alice, stranger, "anon"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			approved = nil
+			mu.Unlock()
+			sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+				User: "test",
+				Auth: []gossh.AuthMethod{gossh.PublicKeys(offeredKey{pub: tc.offered.PublicKey()}, tc.signer)},
+			})
+			if err != nil {
+				t.Fatalf("handshake: %v", err)
+			}
+			out, err := sess.Output("whoami")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			mu.Lock()
+			wasApproved := slices.Contains(approved, gossh.FingerprintSHA256(tc.offered.PublicKey()))
+			mu.Unlock()
+			if !wasApproved {
+				t.Fatal("the server never approved the offered key, so the test checks nothing")
+			}
+			want := tc.wantUser + " " + gossh.FingerprintSHA256(tc.signer.PublicKey())
+			if string(out) != want {
+				t.Fatalf("session ran as %q, want %q", out, want)
+			}
+		})
 	}
 }

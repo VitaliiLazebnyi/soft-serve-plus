@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -328,7 +330,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // startSessionLimitServer starts a bare SSH server whose session channels are
 // limited by limitSessions to maxSessions, running handler for each shell or
-// exec request and sub for the "test" subsystem.
+// exec request and sub for the "test" subsystem, both limited by
+// limitHandlers to maxSessions running at once.
 func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler, sub ssh.SubsystemHandler) string {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -340,10 +343,12 @@ func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler,
 		t.Fatal(err)
 	}
 	srv := &ssh.Server{
-		Handler:           handler,
-		SubsystemHandlers: map[string]ssh.SubsystemHandler{"test": sub},
-		PublicKeyHandler:  func(ssh.Context, ssh.PublicKey) bool { return true },
-		ConnCallback:      connCallback(newConnLimiter(0, 0), log.Default()),
+		Handler: limitHandlers(handler, maxSessions),
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"test": ssh.SubsystemHandler(limitHandlers(ssh.Handler(sub), maxSessions)),
+		},
+		PublicKeyHandler: func(ssh.Context, ssh.PublicKey) bool { return true },
+		ConnCallback:     connCallback(newConnLimiter(0, 0), log.Default()),
 		ChannelHandlers: map[string]ssh.ChannelHandler{
 			"session": limitSessions(ssh.DefaultSessionHandler, maxSessions),
 		},
@@ -358,11 +363,12 @@ func startSessionLimitServer(t *testing.T, maxSessions int, handler ssh.Handler,
 	return l.Addr().String()
 }
 
-// TestLimitSessionsHoldsPlaceWhileHandlerRuns checks that a session keeps its
-// place until the command it started has returned, not just until the client
-// closes the channel, so a client cannot run more commands on one connection
-// than max_sessions by closing each channel as soon as it has started it.
-func TestLimitSessionsHoldsPlaceWhileHandlerRuns(t *testing.T) {
+// TestLimitHandlersWhileClosedSessionRuns checks that a command keeps its
+// place until it has returned, not just until the client closes its channel,
+// so a client cannot run more commands on one connection than max_sessions by
+// closing each channel as soon as it has started it. The closed channel
+// itself gives its place back.
+func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		start func(*gossh.Session) error
@@ -399,28 +405,52 @@ func TestLimitSessionsHoldsPlaceWhileHandlerRuns(t *testing.T) {
 			<-started
 			_ = s.Close()
 
-			// The handler still runs, so the only place stays taken however
-			// long the client waits after closing its channel.
-			for i := 0; i < 10; i++ {
-				s2, err := c.NewSession()
-				if err == nil {
-					_ = s2.Close()
-					t.Fatal("session accepted while a closed session's handler still runs")
+			// The channel's place comes back once the server has seen the
+			// close, but the command still runs, so a second one is
+			// refused however long the client waits.
+			for i := 0; i < 3; i++ {
+				var s2 *gossh.Session
+				waitFor(t, "the closed channel's place", func() bool {
+					s2, err = c.NewSession()
+					return err == nil
+				})
+				stderr, err := s2.StderrPipe()
+				if err != nil {
+					t.Fatal(err)
 				}
-				if oce, ok := err.(*gossh.OpenChannelError); !ok || oce.Reason != gossh.ResourceShortage {
-					t.Fatalf("err = %v, want resource shortage", err)
+				if err := tc.start(s2); err != nil {
+					t.Fatal(err)
+				}
+				// The server ends the session, which ends stderr.
+				msg, _ := io.ReadAll(stderr)
+				if !strings.Contains(string(msg), errTooManySessions) {
+					t.Errorf("stderr = %q, want %q", msg, errTooManySessions)
+				}
+				_ = s2.Close()
+				select {
+				case <-started:
+					t.Fatal("a second command started while a closed session's command still runs")
+				default:
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
 
 			release()
-			waitFor(t, "the place to be freed after the handler returned", func() bool {
+			waitFor(t, "a command to start after the first returned", func() bool {
 				s2, err := c.NewSession()
 				if err != nil {
 					return false
 				}
-				_ = s2.Close()
-				return true
+				defer s2.Close() //nolint: errcheck
+				if err := tc.start(s2); err != nil {
+					return false
+				}
+				select {
+				case <-started:
+					return true
+				case <-time.After(time.Second):
+					return false
+				}
 			})
 		})
 	}
