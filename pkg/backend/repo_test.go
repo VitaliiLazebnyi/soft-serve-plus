@@ -349,13 +349,10 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 		is.NoErr(err)
 		r, err := git.Open(be.repoPath(name))
 		is.NoErr(err)
-		rcfg, err := r.Config()
-		is.NoErr(err)
-		rcfg.Section("remote").Subsection("origin").SetOption("url", remote)
+		is.NoErr(r.ConfigSet("remote.origin.url", remote))
 		if lfsURL != "" {
-			rcfg.Section("lfs").SetOption("url", lfsURL)
+			is.NoErr(r.ConfigSet("lfs.url", lfsURL))
 		}
-		is.NoErr(r.SetConfig(rcfg))
 	}
 	isMirror := func(name string) bool {
 		t.Helper()
@@ -376,9 +373,9 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	is.True(!isMirror("alice-ssh"))
 	r, err := git.Open(be.repoPath("alice-ssh"))
 	is.NoErr(err)
-	rcfg, err := r.Config()
+	_, set, err := r.ConfigGet("remote.origin.mirror")
 	is.NoErr(err)
-	is.Equal(rcfg.Section("remote").Subsection("origin").Option("mirror"), "")
+	is.True(!set)
 
 	// An LFS endpoint that fails validation does not refuse the switch,
 	// with LFS on or off: the job syncs the git data regardless and skips
@@ -438,10 +435,7 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 	is.NoErr(err)
 	r, err := git.Open(be.repoPath("slow"))
 	is.NoErr(err)
-	rcfg, err := r.Config()
-	is.NoErr(err)
-	rcfg.Section("remote").Subsection("origin").SetOption("url", "https://1.1.1.1/x.git")
-	is.NoErr(r.SetConfig(rcfg))
+	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 
 	entered := make(chan bool, 1)
 	release := make(chan struct{})

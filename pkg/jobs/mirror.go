@@ -204,13 +204,11 @@ func (m mirrorPull) Func(ctx context.Context) func() {
 					}
 
 					if cfg.LFS.Enabled {
-						rcfg, err := r.Config()
+						lfsEndpoint, _, err := r.WithContext(ctx).ConfigGet("lfs.url")
 						if err != nil {
 							logger.Error("error getting git config", "repo", name, "err", err)
 							return
 						}
-
-						lfsEndpoint := rcfg.Section("lfs").Option("url")
 						if lfsEndpoint == "" {
 							// If there is no LFS url defined, means the repo
 							// doesn't use LFS and we can skip it.

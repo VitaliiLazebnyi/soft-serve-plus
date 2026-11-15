@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -14,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -72,7 +72,7 @@ func request(t *testing.T, d *GitDaemon, service git.Service, repo string) strin
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	if err := pktline.NewEncoder(c).EncodeString(service.String() + " /" + repo + ".git\x00host=localhost\x00"); err != nil {
+	if _, err := io.WriteString(c, pkt(service.String()+" /"+repo+".git\x00host=localhost\x00")); err != nil {
 		t.Fatalf("failed to send request: %v", err)
 	}
 	line, err := readPktline(c)

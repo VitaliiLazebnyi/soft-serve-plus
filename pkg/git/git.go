@@ -3,47 +3,25 @@ package git
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
 	"charm.land/log/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 )
-
-// WritePktline encodes and writes a pktline to the given writer.
-func WritePktline(w io.Writer, v ...interface{}) error {
-	msg := fmt.Sprintln(v...)
-	pkt := pktline.NewEncoder(w)
-	if err := pkt.EncodeString(msg); err != nil {
-		return fmt.Errorf("git: error writing pkt-line message: %w", err)
-	}
-	if err := pkt.Flush(); err != nil {
-		return fmt.Errorf("git: error flushing pkt-line message: %w", err)
-	}
-
-	return nil
-}
-
-// WritePktlineErr writes an error pktline to the given writer.
-func WritePktlineErr(w io.Writer, err error) error {
-	return WritePktline(w, "ERR", err.Error())
-}
 
 // EnsureWithin ensures the given repo is within the repos directory.
 func EnsureWithin(reposDir string, repo string) error {
 	repoDir := filepath.Join(reposDir, repo)
 	absRepos, err := filepath.Abs(reposDir)
 	if err != nil {
-		log.Debugf("failed to get absolute path for repo: %s", err)
+		log.Debugf("failed to get absolute path for repos: %s", err)
 		return ErrSystemMalfunction
 	}
 	absRepo, err := filepath.Abs(repoDir)
 	if err != nil {
-		log.Debugf("failed to get absolute path for repos: %s", err)
+		log.Debugf("failed to get absolute path for repo: %s", err)
 		return ErrSystemMalfunction
 	}
 
@@ -67,6 +45,13 @@ func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 	if err != nil {
 		return err
 	}
+	r = r.WithContext(ctx)
+	// HEAD resolves after almost every push, so look at it before listing
+	// the branches, of which there can be many.
+	_, headErr := r.HEAD()
+	if headErr == nil {
+		return nil
+	}
 	// Not r.Branches: git show-ref fails when nothing matches, which would
 	// make a real failure indistinguishable from having no branches.
 	out, err := gitm.NewCommandWithContext(ctx, "for-each-ref", "--format=%(refname)", git.RefsHeads).RunInDir(repoPath)
@@ -80,28 +65,18 @@ func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
 	if len(brs) == 0 {
 		return nil
 	}
-	// Rename the default branch to the first branch available
-	_, err = r.HEAD()
-	if errors.Is(err, git.ErrReferenceNotExist) {
-		branch := brs[0]
-		// Prefer "main" or "master" as the default branch
-		for _, b := range brs {
-			if b == "main" || b == "master" {
-				branch = b
-				break
-			}
-		}
-
-		if _, err := r.SymbolicRef(git.HEAD, git.RefsHeads+branch, gitm.SymbolicRefOptions{
-			CommandOptions: gitm.CommandOptions{
-				Context: ctx,
-			},
-		}); err != nil {
-			return err
+	if !errors.Is(headErr, git.ErrReferenceNotExist) {
+		return headErr
+	}
+	// Point HEAD at the first branch available, preferring "main" or
+	// "master".
+	branch := brs[0]
+	for _, b := range brs {
+		if b == "main" || b == "master" {
+			branch = b
+			break
 		}
 	}
-	if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
-		return err
-	}
-	return nil
+	_, err = r.SymbolicRef(git.HEAD, git.RefsHeads+branch)
+	return err
 }

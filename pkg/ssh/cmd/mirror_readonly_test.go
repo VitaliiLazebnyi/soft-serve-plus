@@ -24,10 +24,7 @@ func TestMirrorRefusesRefDeletes(t *testing.T) {
 	is.NoErr(err)
 	r, err := git.Open(filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git"))
 	is.NoErr(err)
-	rcfg, err := r.Config()
-	is.NoErr(err)
-	rcfg.Section("remote").Subsection("origin").SetOption("url", "https://1.1.1.1/x.git")
-	is.NoErr(r.SetConfig(rcfg))
+	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	is.NoErr(be.SetMirror(adminCtx, "m", true))
 
 	for _, args := range [][]string{

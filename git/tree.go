@@ -8,7 +8,7 @@ import (
 	"io"
 	"io/fs"
 	gopath "path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -97,40 +97,18 @@ func (e *TreeEntry) Size() int64 { return e.size }
 // Entries is a list of tree entries.
 type Entries []*TreeEntry
 
-var sorters = []func(t1, t2 *TreeEntry) bool{
-	func(t1, t2 *TreeEntry) bool {
-		return (t1.IsTree() || t1.IsCommit()) && !t2.IsTree() && !t2.IsCommit()
-	},
-	func(t1, t2 *TreeEntry) bool {
-		return t1.Name() < t2.Name()
-	},
-}
-
-// Len implements sort.Interface.
-func (es Entries) Len() int { return len(es) }
-
-// Swap implements sort.Interface.
-func (es Entries) Swap(i, j int) { es[i], es[j] = es[j], es[i] }
-
-// Less implements sort.Interface.
-func (es Entries) Less(i, j int) bool {
-	t1, t2 := es[i], es[j]
-	var k int
-	for k = 0; k < len(sorters)-1; k++ {
-		sorter := sorters[k]
-		switch {
-		case sorter(t1, t2):
-			return true
-		case sorter(t2, t1):
-			return false
-		}
-	}
-	return sorters[k](t1, t2)
-}
-
-// Sort sorts the entries in the tree.
+// Sort sorts the entries for display: directories and submodules first,
+// then each group by name in byte order.
 func (es Entries) Sort() {
-	sort.Sort(es)
+	slices.SortFunc(es, func(a, b *TreeEntry) int {
+		if ad, bd := a.IsTree() || a.IsCommit(), b.IsTree() || b.IsCommit(); ad != bd {
+			if ad {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name(), b.Name())
+	})
 }
 
 // File is a file of a tree, read through its entry.
@@ -451,39 +429,6 @@ func (f *File) Pipeline(stdout, stderr io.Writer) error {
 	r := f.Entry.repo
 	return git.NewCommandWithContext(r.Context(), "show", f.Entry.id).
 		RunInDirPipeline(stdout, stderr, r.Path)
-}
-
-// IsBinary returns true if the file is binary. Only the first sniffLen bytes
-// of the file are read.
-func (f *File) IsBinary() (bool, error) {
-	w := &sniffWriter{}
-	err := f.Pipeline(w, io.Discard)
-	if err != nil && !w.full() {
-		return false, err
-	}
-	// Once enough bytes are in, git is stopped by the write error, so err
-	// does not matter.
-	return IsBinary(bytes.NewReader(w.buf))
-}
-
-// errSniffDone stops a blob read once sniffWriter has enough bytes.
-var errSniffDone = errors.New("sniffed enough bytes")
-
-// sniffWriter keeps the first sniffLen bytes written to it and then fails,
-// which stops the git process feeding it.
-type sniffWriter struct {
-	buf []byte
-}
-
-func (w *sniffWriter) full() bool { return len(w.buf) >= sniffLen }
-
-func (w *sniffWriter) Write(p []byte) (int, error) {
-	n := min(len(p), sniffLen-len(w.buf))
-	w.buf = append(w.buf, p[:n]...)
-	if n < len(p) {
-		return n, errSniffDone
-	}
-	return n, nil
 }
 
 // Mode returns the mode of the file in fs.FileMode format. Git modes are not

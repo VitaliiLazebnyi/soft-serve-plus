@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 )
 
 // Attribute represents a Git attribute.
@@ -16,11 +17,32 @@ type Attribute struct {
 // --source, which reads .gitattributes straight from a tree-ish.
 var minAttrSourceVersion = Version{Major: 2, Minor: 40}
 
-// attrSourceSupported reports whether check-attr supports --source. It is a
-// variable so tests can exercise the temporary-index fallback.
+// attrSource holds whether check-attr supports --source once git's version
+// has been read: 0 not yet, 1 yes, 2 no. A failed read is not kept, so a
+// passing failure does not stick (see BinVersion).
+var attrSource atomic.Int32
+
+// attrSourceSupported reports whether check-attr supports --source. It runs
+// `git version` only until it gets an answer. It is a variable so tests can
+// exercise the temporary-index fallback.
 var attrSourceSupported = func() bool {
+	switch attrSource.Load() {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
 	v, err := BinVersion()
-	return err == nil && !v.Less(minAttrSourceVersion)
+	if err != nil {
+		return false
+	}
+	ok := !v.Less(minAttrSourceVersion)
+	if ok {
+		attrSource.Store(1)
+	} else {
+		attrSource.Store(2)
+	}
+	return ok
 }
 
 // CheckAttributes checks the attributes of the given ref and path.
