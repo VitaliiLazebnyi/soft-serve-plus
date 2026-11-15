@@ -53,8 +53,8 @@ func (t *Tabs) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model.
-func (t *Tabs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (t *Tabs) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -82,7 +82,7 @@ func (t *Tabs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			t.activeTab = int(msg)
 		}
 	}
-	return t, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

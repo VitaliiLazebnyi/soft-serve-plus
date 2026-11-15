@@ -194,18 +194,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showFooter = true
 	}
 
-	f, cmd := m.footer.Update(msg)
-	m.footer = f.(*footer.Footer)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	cmds = append(cmds, m.footer.Update(msg))
 
 	if forwardInput || !common.IsInputMsg(msg) {
-		r, cmd := m.model.Update(msg)
-		m.model = r.(*repo.Repo)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, m.model.Update(msg))
 	}
 
 	// This fixes determining the height margin of the footer.

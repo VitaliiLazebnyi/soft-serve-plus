@@ -61,13 +61,13 @@ func (s *Model) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model.
-func (s *Model) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (s *Model) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.SetSize(msg.Width, msg.Height)
 	}
-	return s, nil
+	return nil
 }
 
 // HelpZoneID returns the mouse zone ID of the status bar's help button.

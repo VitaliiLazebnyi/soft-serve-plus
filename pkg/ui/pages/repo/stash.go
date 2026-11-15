@@ -151,8 +151,8 @@ func (s *Stash) Init() tea.Cmd {
 	return tea.Batch(s.spinner.Tick, s.fetchStashCmd())
 }
 
-// Update updates the model.
-func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
@@ -226,19 +226,11 @@ func (s *Stash) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 	}
 	switch s.state {
 	case stashStateList:
-		l, cmd := s.list.Update(msg)
-		s.list = l.(*selector.Selector)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.list.Update(msg))
 	case stashStatePatch:
-		v, cmd := s.vp.Update(msg)
-		s.vp = v.(*viewport.Viewport)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, s.vp.Update(msg))
 	}
-	return s, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // View returns the view.

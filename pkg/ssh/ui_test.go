@@ -97,11 +97,11 @@ func TestUIErrorScreenHidesInternalErrors(t *testing.T) {
 type filteringPage struct{ keys []string }
 
 func (p *filteringPage) Init() tea.Cmd { return nil }
-func (p *filteringPage) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+func (p *filteringPage) Update(msg tea.Msg) tea.Cmd {
 	if k, ok := msg.(tea.KeyPressMsg); ok {
 		p.keys = append(p.keys, k.String())
 	}
-	return p, nil
+	return nil
 }
 func (p *filteringPage) View() string              { return "" }
 func (p *filteringPage) SetSize(int, int)          {}
@@ -187,9 +187,9 @@ type recordingPage struct {
 
 func (p *recordingPage) Init() tea.Cmd { return nil }
 
-func (p *recordingPage) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+func (p *recordingPage) Update(msg tea.Msg) tea.Cmd {
 	p.msgs = append(p.msgs, msg)
-	return p, nil
+	return nil
 }
 
 func (p *recordingPage) View() string              { return "" }
@@ -295,11 +295,11 @@ func TestUIDismissErrorOnRepoPageFollowsShowAll(t *testing.T) {
 type resizeCountingPage struct{ resizes int }
 
 func (p *resizeCountingPage) Init() tea.Cmd { return nil }
-func (p *resizeCountingPage) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+func (p *resizeCountingPage) Update(msg tea.Msg) tea.Cmd {
 	if _, ok := msg.(tea.WindowSizeMsg); ok {
 		p.resizes++
 	}
-	return p, nil
+	return nil
 }
 func (p *resizeCountingPage) View() string              { return "" }
 func (p *resizeCountingPage) ShortHelp() []key.Binding  { return nil }

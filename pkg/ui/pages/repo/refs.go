@@ -123,8 +123,8 @@ func (r *Refs) Init() tea.Cmd {
 	return tea.Batch(r.spinner.Tick, r.updateItemsCmd())
 }
 
-// Update implements tea.Model.
-func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+// Update implements common.Model.
+func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case RepoMsg:
@@ -182,12 +182,8 @@ func (r *Refs) Update(msg tea.Msg) (common.Model, tea.Cmd) {
 			r.spinner = s
 		}
 	}
-	m, cmd := r.selector.Update(msg)
-	r.selector = m.(*selector.Selector)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	return r, tea.Batch(cmds...)
+	cmds = append(cmds, r.selector.Update(msg))
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.

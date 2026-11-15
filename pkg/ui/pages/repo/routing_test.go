@@ -23,9 +23,9 @@ func newCountingPane(name string) *countingPane {
 }
 
 func (p *countingPane) Init() tea.Cmd { return nil }
-func (p *countingPane) Update(msg tea.Msg) (common.Model, tea.Cmd) {
+func (p *countingPane) Update(msg tea.Msg) tea.Cmd {
 	p.got[fmt.Sprintf("%T", msg)]++
-	return p, nil
+	return nil
 }
 func (p *countingPane) View() string              { return "" }
 func (p *countingPane) ShortHelp() []key.Binding  { return nil }

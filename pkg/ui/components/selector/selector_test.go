@@ -50,7 +50,7 @@ func TestSelectItemCmdDoesNotReadModel(t *testing.T) {
 	items := []IdentifiableItem{testItem("a"), testItem("b")}
 	s := New(c, items, list.NewDefaultDelegate())
 
-	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter returned no command")
 	}
@@ -169,7 +169,7 @@ func render(t *testing.T, s *Selector, want string, y int) {
 // click sends a left click at row y and returns the messages its commands
 // produce.
 func click(s *Selector, y int) []tea.Msg {
-	_, cmd := s.Update(tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
+	cmd := s.Update(tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
 	var msgs []tea.Msg
 	var run func(tea.Cmd)
 	run = func(cmd tea.Cmd) {
@@ -279,8 +279,7 @@ func TestMouseWheelMovesCursor(t *testing.T) {
 		{tea.MouseWheelDown, 2},
 		{tea.MouseWheelUp, 1},
 	} {
-		m, _ := s.Update(tea.MouseWheelMsg{Button: step.button})
-		s = m.(*Selector)
+		s.Update(tea.MouseWheelMsg{Button: step.button})
 		if got := s.Index(); got != step.want {
 			t.Fatalf("after %v: index = %d; want %d", step.button, got, step.want)
 		}

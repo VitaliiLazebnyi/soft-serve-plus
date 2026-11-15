@@ -147,9 +147,7 @@ func (d *driver) send(msg tea.Msg) {
 			}
 			continue
 		}
-		m, cmd := d.m.Update(msg)
-		d.m = m
-		queue = append(queue, d.run(cmd))
+		queue = append(queue, d.run(d.m.Update(msg)))
 	}
 }
 
