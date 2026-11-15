@@ -18,32 +18,65 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// sessionLoops returns how many charm.land/ssh session request loops are
-// running.
-func sessionLoops() int {
+// allStacks returns the stacks of every goroutine.
+func allStacks() string {
 	buf := make([]byte, 1<<20)
 	for {
 		n := runtime.Stack(buf, true)
 		if n < len(buf) {
-			buf = buf[:n]
-			break
+			return string(buf[:n])
 		}
 		buf = make([]byte, 2*len(buf))
 	}
-	return strings.Count(string(buf), "charm.land/ssh.(*session).handleRequests(")
 }
 
-// waitSessionLoops waits until no more than want session request loops run.
+// sessionLoopFrame is the stack frame of a charm.land/ssh session request
+// loop.
+const sessionLoopFrame = "charm.land/ssh.(*session).handleRequests("
+
+// sessionLoops returns how many charm.land/ssh session request loops are
+// running.
+func sessionLoops() int {
+	return strings.Count(allStacks(), sessionLoopFrame)
+}
+
+// blockedSessionLoops returns how many of the session request loops in
+// stacks are blocked on a channel send, as a loop sending a window size
+// nobody reads is. A loop that waits for its next request is not leaked: it
+// ends once the server reads the client's close.
+func blockedSessionLoops(stacks string) int {
+	n := 0
+	for _, g := range strings.Split(stacks, "\n\n") {
+		if strings.Contains(g, sessionLoopFrame) && strings.Contains(g, "[chan send") {
+			n++
+		}
+	}
+	return n
+}
+
+// sessionLoopsWait bounds how long waitSessionLoops waits for the session
+// request loops to end. A loop ends only once the server has read the
+// client's close, and on a loaded machine whose loopback connections stall
+// that has taken 15 seconds. A leaked loop never ends, so a long bound only
+// slows down a run that fails.
+const sessionLoopsWait = 60 * time.Second
+
+// waitSessionLoops waits until no more than want session request loops run,
+// polling until the count comes down. On a timeout it logs the stack of
+// every goroutine, so the failure shows where the loops left over are.
 func waitSessionLoops(t *testing.T, want int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(sessionLoopsWait)
 	for {
-		n := sessionLoops()
+		stacks := allStacks()
+		n := strings.Count(stacks, sessionLoopFrame)
 		if n <= want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d session request loops still run after every connection closed, want at most %d", n, want)
+			t.Logf("goroutines:\n%s", stacks)
+			t.Fatalf("%d session request loops (%d blocked on a send) still run %v after every connection closed, want at most %d",
+				n, blockedSessionLoops(stacks), sessionLoopsWait, want)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
