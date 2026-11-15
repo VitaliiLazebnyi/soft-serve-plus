@@ -484,19 +484,118 @@ func TestPatchHeaderLikePath(t *testing.T) {
 	if d.Truncated || !strings.Contains(d.Patch, "+small\n") {
 		t.Errorf("Truncated = %v; want the patch:\n%s", d.Truncated, d.Patch)
 	}
+}
 
-	// Read by position, the listing's IDs are only the two new blobs.
-	ids, err := rawBlobIDs(":000000 100644 " + strings.Repeat("0", 40) + " " + strings.Repeat("a", 40) + " A\x00" +
-		":100644 100644 HEAD :/zzz M\x00" +
-		":100644 100644 " + strings.Repeat("b", 40) + " " + strings.Repeat("c", 40) + " R100\x00old\x00:1 2 HEAD x y\x00")
+// A mass rename of short paths has a raw listing (a delete and an add per
+// file) well over twice its patch; a patch that fits its cap must not be
+// refused for it.
+func TestPatchMassRenameFits(t *testing.T) {
+	r := newDiffRepo(t)
+	for i := range 50 {
+		r.put(fmt.Sprintf("a%02d", i), fmt.Sprintf("content %d\n", i))
+	}
+	r.commit("root")
+	for i := range 50 {
+		r.rm(fmt.Sprintf("a%02d", i))
+		r.put(fmt.Sprintf("b%02d", i), fmt.Sprintf("content %d\n", i))
+	}
+	c := r.commit("rename all")
+	full, err := r.open().Patch(c)
+	if err != nil || full.Truncated {
+		t.Fatalf("Patch = %+v, %v", full, err)
+	}
+
+	prev := DiffMaxBytes
+	DiffMaxBytes = len(full.Patch) + 100
+	t.Cleanup(func() { DiffMaxBytes = prev })
+	d, err := r.open().Patch(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)}; strings.Join(ids, ",") != strings.Join(want, ",") {
-		t.Errorf("rawBlobIDs = %q, want %q", ids, want)
+	if d.Truncated {
+		t.Errorf("a %d-byte rename patch under a %d-byte cap was refused", len(full.Patch), DiffMaxBytes)
 	}
-	if _, err := rawBlobIDs(":100644 100644 HEAD :/zzz M\x00p\x00"); err == nil {
-		t.Error("rawBlobIDs took revisions for IDs")
+}
+
+// rawBlobIDs reads diff-tree --raw -z by position: a header, then one path,
+// or two for R and C, whatever the paths look like; it takes only full hex
+// IDs and leaves out zero IDs and submodule commits.
+func TestRawBlobIDs(t *testing.T) {
+	id := func(c string, n int) string { return strings.Repeat(c, n) }
+	zero := id("0", 40)
+	for _, tc := range []struct {
+		name, raw string
+		want      []string
+		err       bool
+	}{
+		{"empty", "", nil, false},
+		{
+			"add, then a path that looks like a header",
+			":000000 100644 " + zero + " " + id("a", 40) + " A\x00:100644 100644 HEAD :/zzz M\x00",
+			[]string{id("a", 40)},
+			false,
+		},
+		{
+			"delete",
+			":100644 000000 " + id("a", 40) + " " + zero + " D\x00p\x00",
+			[]string{id("a", 40)},
+			false,
+		},
+		{
+			"rename, two paths",
+			":100644 100644 " + id("b", 40) + " " + id("c", 40) + " R100\x00old\x00:1 2 HEAD x y\x00",
+			[]string{id("b", 40), id("c", 40)},
+			false,
+		},
+		{
+			"copy, two paths",
+			":100644 100644 " + id("b", 40) + " " + id("c", 40) + " C075\x00from\x00to\x00",
+			[]string{id("b", 40), id("c", 40)},
+			false,
+		},
+		{
+			"type change",
+			":120000 100644 " + id("d", 40) + " " + id("e", 40) + " T\x00p\x00",
+			[]string{id("d", 40), id("e", 40)},
+			false,
+		},
+		{
+			"mode change only",
+			":100644 100755 " + id("f", 40) + " " + id("f", 40) + " M\x00p\x00",
+			[]string{id("f", 40), id("f", 40)},
+			false,
+		},
+		{
+			"file replaced by a submodule",
+			":100644 160000 " + id("a", 40) + " " + id("1", 40) + " T\x00sub\x00",
+			[]string{id("a", 40)},
+			false,
+		},
+		{
+			"submodule moved",
+			":160000 160000 " + id("1", 40) + " " + id("2", 40) + " M\x00sub\x00",
+			nil, false,
+		},
+		{
+			"SHA-256 IDs",
+			":100644 100644 " + id("a", 64) + " " + id("b", 64) + " M\x00p\x00",
+			[]string{id("a", 64), id("b", 64)},
+			false,
+		},
+		{"revisions for IDs", ":100644 100644 HEAD :/zzz M\x00p\x00", nil, true},
+		{"short IDs", ":100644 100644 abc def M\x00p\x00", nil, true},
+		{"uppercase IDs", ":100644 100644 " + id("A", 40) + " " + id("B", 40) + " M\x00p\x00", nil, true},
+		{"path where a header belongs", "p\x00", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids, err := rawBlobIDs(tc.raw)
+			if (err != nil) != tc.err {
+				t.Fatalf("err = %v, want error %v", err, tc.err)
+			}
+			if strings.Join(ids, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("rawBlobIDs = %q, want %q", ids, tc.want)
+			}
+		})
 	}
 }
 

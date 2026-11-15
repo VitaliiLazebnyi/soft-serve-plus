@@ -189,12 +189,15 @@ func (r *Repository) Patch(commit *Commit) (*Diff, error) {
 // rename then shows as a delete and an add of the same two blobs, so the
 // sizes are the same.
 //
-// The listing is capped at twice limit. A raw record (about 100 bytes plus
-// the path) can be longer than the patch it stands for, as for a change of
-// mode only, so the same cap would refuse patches that fit; a listing over
-// twice the cap still means a patch too large to be worth making.
+// The listing is capped at rawListingFactor times limit, as it can be
+// longer than the patch it stands for: a raw record is about 100 bytes
+// (SHA-1) or 150 (SHA-256) plus the path, and without -M a rename is two
+// records, a delete and an add. For a mass rename of short paths the
+// listing measured 2.56 (SHA-1) to 3.74 (SHA-256) times the patch, so a
+// smaller factor would refuse patches that fit; a listing over the cap
+// still means a patch too large to be worth making.
 func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
-	raw := &cappedBuffer{max: int(2 * limit)}
+	raw := &cappedBuffer{max: int(rawListingFactor * limit)}
 	var stderr bytes.Buffer
 	err := r.plainCommand("diff-tree").
 		AddArgs("-r", "--raw", "-z", "--full-index").
@@ -228,6 +231,10 @@ func (r *Repository) changedBlobsFit(args []string, limit int64) (bool, error) {
 	}
 	return true, nil
 }
+
+// rawListingFactor is how much longer than the patch cap the raw listing
+// changedBlobsFit reads may be.
+const rawListingFactor = 5
 
 // plainCommand returns a git command under r's context without user or
 // system config.
