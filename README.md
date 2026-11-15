@@ -1118,6 +1118,13 @@ git remote add soft ssh://localhost:23231/my-team/icecream
 git push soft main
 ```
 
+A new repository name has at most 32 path segments (`a/b/c` has three), so a
+request with a deep package path costs a bounded amount of work. The server
+resolves a `go get` path only within its first 32 segments, so a repository
+nested deeper, created before this limit, is found only when the import path
+names the repository itself; a bearer token for such a repository gets 403 on
+the `go get` paths of its subpackages.
+
 ### Mirrors
 
 You can also *import* repositories from any public remote. Use the `repo import` command.

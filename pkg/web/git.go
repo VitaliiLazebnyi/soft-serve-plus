@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -187,10 +186,16 @@ var (
 )
 
 // withParams sanitizes the repository name in the URL variables of the go
-// get route.
+// get route. A path longer than maxGoGetPathLen names no repository, so it
+// is answered 404 before anything else is done with it: the go get route
+// serves anonymous requests, and the work on a path grows with its length.
 func withParams(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
+		if len(vars["repo"]) > maxGoGetPathLen {
+			renderNotFound(w, r)
+			return
+		}
 		vars["repo"] = utils.SanitizeRepo(vars["repo"])
 		next.ServeHTTP(w, mux.SetURLVars(r, vars))
 	})
@@ -508,9 +513,16 @@ func requireCaller(w http.ResponseWriter, r *http.Request) bool {
 // callerFor the repository: the request is for a path inside a repository,
 // so a bearer token is accepted when it names the path or any directory
 // above it, but it only stands for the caller on the repositories it names.
+//
+// The list of those directories is built only for a bearer token, the only
+// credential scoped to repositories.
 func withCaller(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r, err := identify(r, pathAncestors(mux.Vars(r)["repo"])...)
+		var repos []string
+		if isBearer(r.Header.Get("Authorization")) {
+			repos = pathAncestors(mux.Vars(r)["repo"])
+		}
+		r, err := identify(r, repos...)
 		if !requireCaller(w, r) {
 			return
 		}
@@ -528,17 +540,39 @@ func withCaller(next http.Handler) http.HandlerFunc {
 // missing name was authorized and before the repository is created.
 var testHookBeforePushCreate func()
 
-// pathAncestors returns p followed by each of its parent directories, each
-// spelled as a sanitized repository name, which is what `soft jwt` mints.
+// isBearer reports whether the Authorization header value hdr carries a
+// bearer token. The scheme is case-insensitive, as parseAuthHdr reads it.
+func isBearer(hdr string) bool {
+	scheme, _, ok := strings.Cut(hdr, " ")
+	return ok && strings.EqualFold(scheme, "bearer")
+}
+
+// maxPathAncestors bounds how many parent directories pathAncestors lists.
+// Each costs a copy of the path, so listing every one would make the work of
+// a request quadratic in its path length. The parents kept are the ones
+// nearest the root, where repositories are: a go get path is a repository
+// followed by a package path, which may be deep. A new repository name has
+// at most this many segments, so it is always among them.
+const maxPathAncestors = utils.MaxRepoSegments
+
+// pathAncestors returns p followed by its parent directories, each spelled
+// as a sanitized repository name, which is what `soft jwt` mints. Only the
+// maxPathAncestors parents nearest the root are listed.
 func pathAncestors(p string) []string {
 	ancestors := []string{p}
-	for {
-		p = path.Dir(p)
-		if p == "." || p == "/" {
-			return ancestors
+	// The parents nearest the root end at the first slashes of p, in order.
+	var ends []int
+	for i := 0; i < len(p) && len(ends) < maxPathAncestors; i++ {
+		if p[i] == '/' && i > 0 {
+			ends = append(ends, i)
 		}
-		ancestors = append(ancestors, utils.SanitizeRepo(p))
 	}
+	for _, end := range slices.Backward(ends) {
+		if parent := utils.SanitizeRepo(p[:end]); parent != "" && parent != ancestors[len(ancestors)-1] {
+			ancestors = append(ancestors, parent)
+		}
+	}
+	return ancestors
 }
 
 // withAccess authenticates the caller, authorizes them for the requested
