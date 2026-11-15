@@ -89,7 +89,7 @@ func runCancelled(t *testing.T, scmd ServiceCommand, atCancel func(line string))
 
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(ctx, scmd)
+		errc <- UploadPackService.Handler(ctx, scmd)
 		stdoutW.Close() //nolint: errcheck
 	}()
 
@@ -169,7 +169,7 @@ func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
 	var stdout, stderr syncBuffer
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdout: &stdout,
 			Stderr: &stderr,
 			Dir:    t.TempDir(),
@@ -251,7 +251,7 @@ func TestServiceSlowClientGetsAllOutput(t *testing.T) {
 	w := &slowWriter{delay: 50 * time.Millisecond}
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdout: w,
 			Dir:    t.TempDir(),
 			CmdFunc: func(c *exec.Cmd) {
@@ -283,7 +283,7 @@ func TestUploadPackFailsAfterCancel(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(ctx, ServiceCommand{
+		errc <- UploadPackService.Handler(ctx, ServiceCommand{
 			Stdin:  stdin,
 			Stdout: stdoutW,
 			Dir:    initBare(t),
@@ -363,7 +363,7 @@ func TestServiceErrorCarriesStderr(t *testing.T) {
 			if tc.stderr != nil {
 				scmd.Stderr = tc.stderr
 			}
-			err := UploadPack(ctx, scmd)
+			err := UploadPackService.Handler(ctx, scmd)
 			if err == nil {
 				t.Fatal("upload-pack succeeded outside a repository")
 			}

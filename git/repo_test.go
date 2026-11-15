@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -251,5 +252,38 @@ func TestLsTreeRejectsBadRefs(t *testing.T) {
 		if _, err := tree.TreeEntry("dot_config/bat"); err != nil {
 			t.Fatalf("LsTree(%q).TreeEntry: %v", good, err)
 		}
+	}
+}
+
+// TestTreeIDMatchesExitCode checks that only git's exit status 128 means a
+// missing revision. A git that fails otherwise is reported as it failed,
+// with its stderr, even when that stderr happens to read like the text of
+// an exit status 128.
+func TestTreeIDMatchesExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as git")
+	}
+	repo, _ := setupTestRepo(t)
+
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'fatal: exit status 128' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := repo.LsTree("HEAD")
+	if err == nil {
+		t.Fatal("LsTree succeeded with a git that fails")
+	}
+	if errors.Is(err, ErrRevisionNotExist) {
+		t.Fatalf("exit status 1 reported as a missing revision: %v", err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("error = %v, want one that wraps git's *exec.ExitError with code 1", err)
+	}
+	if !strings.Contains(err.Error(), "fatal: exit status 128") {
+		t.Errorf("error = %v, want git's stderr in it", err)
 	}
 }

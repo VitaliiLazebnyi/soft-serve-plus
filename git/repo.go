@@ -26,11 +26,6 @@ type Repository struct {
 	ctx context.Context
 }
 
-// Clone clones a repository.
-func Clone(src, dst string, opts ...git.CloneOptions) error {
-	return git.Clone(src, dst, opts...)
-}
-
 // Init initializes and opens a new git repository.
 func Init(path string, bare bool) (*Repository, error) {
 	if bare {
@@ -194,14 +189,22 @@ func (r *Repository) References() ([]*Reference, error) {
 // parsed strictly: a ref git cannot resolve, or one that does not resolve to
 // a single object ID, is an ErrRevisionNotExist.
 func (r *Repository) treeID(ref string) (string, error) {
-	out, err := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--end-of-options", ref+"^{tree}").RunInDir(r.Path)
-	if err != nil {
-		if strings.Contains(err.Error(), "exit status 128") {
+	var out, stderr bytes.Buffer
+	cmd := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--end-of-options", ref+"^{tree}")
+	if err := cmd.RunInDirPipeline(&out, &stderr, r.Path); err != nil {
+		// git exits with 128 when it cannot resolve the revision. The
+		// error is read directly, not through RunInDir, which folds
+		// stderr into a new error that is no longer an *exec.ExitError.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 {
 			return "", ErrRevisionNotExist
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("%w - %s", err, msg)
 		}
 		return "", err
 	}
-	id, err := git.NewIDFromString(string(out))
+	id, err := git.NewIDFromString(out.String())
 	if err != nil {
 		return "", ErrRevisionNotExist
 	}

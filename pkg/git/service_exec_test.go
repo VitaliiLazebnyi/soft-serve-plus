@@ -89,7 +89,7 @@ func TestServiceOutputCopyFailureStopsGit(t *testing.T) {
 	var cmd *exec.Cmd
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(ctx, ServiceCommand{
+		errc <- UploadPackService.Handler(ctx, ServiceCommand{
 			Stdin:   stdin,
 			Stdout:  &eofAfterWriter{},
 			Dir:     dir,
@@ -123,7 +123,7 @@ func TestServiceFailureAfterClientGone(t *testing.T) {
 	if err != nil {
 		t.Skip("sh not found")
 	}
-	err = UploadPack(t.Context(), ServiceCommand{
+	err = UploadPackService.Handler(t.Context(), ServiceCommand{
 		Stdout: failingWriter{err: io.EOF},
 		Dir:    t.TempDir(),
 		// Stand in for git: write once (the client write fails), then fail
@@ -168,7 +168,7 @@ func TestServiceClientGoneExit128(t *testing.T) {
 		{"fatal: disk full", false},
 		{"fatal: sha1 file 'objects/pack/tmp_pack_x' write error. Out of diskspace", false},
 	} {
-		err := UploadPack(t.Context(), ServiceCommand{
+		err := UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdout: failingWriter{err: io.EOF},
 			Dir:    t.TempDir(),
 			CmdFunc: func(c *exec.Cmd) {
@@ -245,7 +245,7 @@ func TestBrokenPipeExit(t *testing.T) {
 // A CmdFunc that sets git's output is refused rather than silently
 // replaced: the handler owns git's output.
 func TestServiceCmdFuncOutputRefused(t *testing.T) {
-	err := UploadPack(t.Context(), ServiceCommand{
+	err := UploadPackService.Handler(t.Context(), ServiceCommand{
 		Stdout:  io.Discard,
 		Dir:     initBare(t),
 		CmdFunc: func(c *exec.Cmd) { c.Stdout = io.Discard },
@@ -259,7 +259,7 @@ func TestServiceCmdFuncOutputRefused(t *testing.T) {
 // StdinPipe, which runs after CmdFunc and the output pipes, and the output
 // pipes made by then are closed.
 func TestServiceCmdFuncStdinRefused(t *testing.T) {
-	err := UploadPack(t.Context(), ServiceCommand{
+	err := UploadPackService.Handler(t.Context(), ServiceCommand{
 		Stdin:   strings.NewReader(""),
 		Stdout:  io.Discard,
 		Dir:     initBare(t),
@@ -283,7 +283,7 @@ func TestServiceCopyPanicRecovered(t *testing.T) {
 	var cmd *exec.Cmd
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdout:  panicWriter{},
 			Dir:     bareWithRefs(t, 10_000),
 			Args:    []string{"--advertise-refs"},
@@ -353,7 +353,7 @@ func TestReceivePackInterruptedLeavesNoQuarantine(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		errc <- ReceivePack(ctx, ServiceCommand{
+		errc <- ReceivePackService.Handler(ctx, ServiceCommand{
 			Stdin:  stdin,
 			Stdout: stdoutW,
 			Stderr: io.Discard,

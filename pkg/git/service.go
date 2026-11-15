@@ -59,9 +59,6 @@ func (s Service) Handler(ctx context.Context, cmd ServiceCommand) error {
 	}
 }
 
-// ServiceHandler is a git service command handler.
-type ServiceHandler func(ctx context.Context, cmd ServiceCommand) error
-
 // gitServiceHandler is the default service handler using the git binary.
 // The SSH server, the HTTP smart protocol and the git daemon all run git
 // through it.
@@ -677,19 +674,4 @@ type ServiceCommand struct {
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
-}
-
-// UploadPack runs the git upload-pack protocol against the provided repo.
-func UploadPack(ctx context.Context, cmd ServiceCommand) error {
-	return gitServiceHandler(ctx, UploadPackService, cmd)
-}
-
-// UploadArchive runs the git upload-archive protocol against the provided repo.
-func UploadArchive(ctx context.Context, cmd ServiceCommand) error {
-	return gitServiceHandler(ctx, UploadArchiveService, cmd)
-}
-
-// ReceivePack runs the git receive-pack protocol against the provided repo.
-func ReceivePack(ctx context.Context, cmd ServiceCommand) error {
-	return gitServiceHandler(ctx, ReceivePackService, cmd)
 }

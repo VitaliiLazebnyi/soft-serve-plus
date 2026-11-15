@@ -62,7 +62,7 @@ func TestGitServiceJoinsStdinCopy(t *testing.T) {
 	dir := initBare(t)
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdin: deadlineStallingReader{r},
 			Dir:   dir,
 		})
@@ -89,7 +89,7 @@ func TestGitServiceLeavesUninterruptibleStdin(t *testing.T) {
 	dir := initBare(t)
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdin: r,
 			Dir:   dir,
 		})
@@ -122,7 +122,7 @@ func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
 	dir := initBare(t)
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdin:     r,
 			Stdout:    out,
 			Dir:       dir,
@@ -179,7 +179,7 @@ func TestGitServiceRearmsStdinDeadline(t *testing.T) {
 	dir := initBare(t)
 	errc := make(chan error, 1)
 	go func() {
-		errc <- UploadPack(t.Context(), ServiceCommand{
+		errc <- UploadPackService.Handler(t.Context(), ServiceCommand{
 			Stdin: r,
 			Dir:   dir,
 		})

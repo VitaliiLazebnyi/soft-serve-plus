@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"regexp"
 	"strings"
@@ -65,5 +66,21 @@ func TestIsBareVersionPanicOnlyMatchesProcessor(t *testing.T) {
 	}()
 	if matched {
 		t.Error("an index panic outside the processor was taken for a bare version")
+	}
+}
+
+// A panic that is not a runtime error is never taken for a bare version,
+// even with the text of one.
+func TestIsBareVersionPanicNeedsRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	for _, v := range []any{
+		nil,
+		"runtime error: index out of range [1] with length 1",
+		errors.New("runtime error: index out of range [1] with length 1"),
+	} {
+		if isBareVersionPanic(v) {
+			t.Errorf("isBareVersionPanic(%#v) = true, want false", v)
+		}
 	}
 }
