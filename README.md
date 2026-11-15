@@ -15,7 +15,7 @@ installation can switch to Soft Serve Plus in place.
 A tasty, self-hostable Git server for the command line. 🍦
 
 - Easy to navigate TUI available over SSH
-- Clone repos over SSH, HTTP, or Git protocol
+- Clone repos over SSH, HTTP (smart protocol), or Git protocol
 - Git LFS support with both HTTP and SSH backends
 - Manage repos with SSH
 - Create repos on demand with SSH or `git push`
@@ -868,6 +868,11 @@ SOFT_SERVE_ALLOW_KEYLESS=true \
 Soft Serve Plus doesn't allow duplicate SSH public keys for users. A public key can be associated with one user only. This makes SSH authentication simple and straight forward, add your public key to your Soft Serve Plus user to be able to access Soft Serve Plus.
 
 #### HTTP
+
+HTTP serves git's smart protocol, which every git since 1.6.6 uses. The old
+dumb protocol is not served: its requests (`info/refs` without a smart
+`?service=`, `HEAD`, `objects/...`), such as those of a client run with
+`GIT_SMART_HTTP=0`, are answered `403` with no caching.
 
 You can generate user access tokens through the SSH command line interface. Access tokens can have an optional expiration date. Use your access token as the basic auth user to access your Soft Serve Plus repos through HTTP.
 

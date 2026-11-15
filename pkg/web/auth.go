@@ -341,7 +341,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 			return nil, nil, err
 		}
 
-		expectedSubject := fmt.Sprintf("%s#%d", user.Username(), user.ID())
+		expectedSubject := jwk.Subject(user)
 		if expectedSubject != claims.Subject {
 			logger.Info("invalid jwt subject", "subject", claims.Subject, "expected", expectedSubject)
 			return nil, nil, ErrInvalidToken
@@ -365,45 +365,18 @@ var ErrInvalidToken = errors.New("invalid token")
 // parseJWT validates a bearer token whose audience must name one of repos,
 // so the answer does not depend on whether they exist. The token must expire.
 func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
-	cfg := config.FromContext(ctx)
-	logger := log.FromContext(ctx).WithPrefix("http.auth")
-	if len(repos) == 0 {
-		// jwt.WithAudience checks nothing without an audience.
-		return nil, ErrInvalidToken
-	}
-	kp, err := config.KeyPair(cfg)
+	claims, err := jwk.Verify(config.FromContext(ctx), bearer, repos)
 	if err != nil {
-		// The server cannot verify any token without its host key. That
-		// is a server fault, so log it as one; the caller still sent a
-		// token, so answer as for a bad one rather than as anonymous.
-		logger.Error("cannot verify jwt: no usable host key", "err", err)
-		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
-	}
-
-	pub := kp.CryptoPublicKey()
-	method, err := jwk.SigningMethodFor(pub)
-	if err != nil {
-		return nil, err
-	}
-
-	token, err := jwt.ParseWithClaims(bearer, &jwt.RegisteredClaims{}, func(*jwt.Token) (interface{}, error) {
-		return pub, nil
-	},
-		jwt.WithValidMethods([]string{method.Alg()}),
-		jwt.WithIssuer(cfg.HTTP.PublicURL),
-		jwt.WithIssuedAt(),
-		jwt.WithExpirationRequired(),
-		jwt.WithAudience(repos...),
-	)
-	if err != nil {
+		logger := log.FromContext(ctx).WithPrefix("http.auth")
+		if errors.Is(err, jwk.ErrHostKey) {
+			// The server cannot verify any token without its host key. That
+			// is a server fault, so log it as one; the caller still sent a
+			// token, so answer as for a bad one rather than as anonymous.
+			logger.Error("cannot verify jwt", "err", err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		}
 		logger.Info("failed to parse jwt", "err", err)
 		return nil, ErrInvalidToken
 	}
-
-	claims, ok := token.Claims.(*jwt.RegisteredClaims)
-	if !token.Valid || !ok {
-		return nil, ErrInvalidToken
-	}
-
 	return claims, nil
 }

@@ -48,7 +48,7 @@ func (f *oracleFixture) send(method, path string, hdr map[string]string, body st
 func TestCredentialsChallengeSyntax(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
-	w := f.do(http.MethodGet, "/secret.git/info/refs", "")
+	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "")
 	is.Equal(w.Code, http.StatusUnauthorized)
 	is.Equal(w.Header().Get("WWW-Authenticate"), `Basic realm="Git", charset="UTF-8", Token, Bearer`)
 	is.Equal(w.Header().Get("LFS-Authenticate"), `Basic realm="Git LFS", charset="UTF-8", Token, Bearer`)
@@ -78,7 +78,6 @@ func TestMethodNotAllowed(t *testing.T) {
 	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
 
 	is.Equal(f.do(http.MethodHead, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusOK)
-	is.Equal(f.do(http.MethodHead, "/secret.git/HEAD", auth).Code, http.StatusOK)
 
 	// HEAD on the push advertisement of a missing repository does not
 	// create it, though GET would for a caller who may push.
@@ -110,13 +109,7 @@ func TestServiceRPCContentType(t *testing.T) {
 // key type the way `soft jwt` does.
 func signJWT(ctx context.Context, t *testing.T, claims jwt.RegisteredClaims) string {
 	t.Helper()
-	kp, err := jwk.NewPair(config.FromContext(ctx))
-	if err != nil {
-		t.Fatal(err)
-	}
-	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
-	token.Header["kid"] = kp.JWK().KeyID
-	signed, err := token.SignedString(kp.PrivateKey())
+	signed, err := jwk.SignClaims(config.FromContext(ctx), claims)
 	if err != nil {
 		t.Fatal(err)
 	}

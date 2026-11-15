@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/cobra"
 )
 
@@ -27,32 +25,13 @@ func JWTCommand() *cobra.Command {
 				return errUnknownKey(ctx)
 			}
 
-			cfg := config.FromContext(ctx)
-			kp, err := jwk.NewPair(cfg)
-			if err != nil {
-				return err
-			}
-
 			// Mint the spelling the HTTP router checks against.
 			audience := make([]string, len(args))
 			for i, arg := range args {
 				audience[i] = utils.SanitizeRepo(arg)
 			}
 
-			now := time.Now()
-			expiresAt := now.Add(time.Hour)
-			claims := jwt.RegisteredClaims{
-				Subject:   fmt.Sprintf("%s#%d", user.Username(), user.ID()),
-				ExpiresAt: jwt.NewNumericDate(expiresAt), // expire in an hour
-				NotBefore: jwt.NewNumericDate(now),
-				IssuedAt:  jwt.NewNumericDate(now),
-				Issuer:    cfg.HTTP.PublicURL,
-				Audience:  audience,
-			}
-
-			token := jwt.NewWithClaims(kp.SigningMethod(), claims)
-			token.Header["kid"] = kp.JWK().KeyID
-			j, err := token.SignedString(kp.PrivateKey())
+			j, err := jwk.Sign(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
 			if err != nil {
 				return err
 			}

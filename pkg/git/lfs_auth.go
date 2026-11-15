@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // LFSAuthenticate implements the Git LFS SSH authentication command.
@@ -45,29 +44,9 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	cfg := config.FromContext(ctx)
-	kp, err := jwk.NewPair(cfg)
-	if err != nil {
-		logger.Error("failed to get JWK pair", "err", err)
-		return err
-	}
-
-	now := time.Now()
 	expiresIn := time.Minute * 5
-	expiresAt := now.Add(expiresIn)
-	claims := jwt.RegisteredClaims{
-		Subject:   fmt.Sprintf("%s#%d", user.Username(), user.ID()),
-		ExpiresAt: jwt.NewNumericDate(expiresAt), // expire in five minutes
-		NotBefore: jwt.NewNumericDate(now),
-		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    cfg.HTTP.PublicURL,
-		Audience: []string{
-			repo.Name(),
-		},
-	}
-
-	token := jwt.NewWithClaims(kp.SigningMethod(), claims)
-	token.Header["kid"] = kp.JWK().KeyID
-	j, err := token.SignedString(kp.PrivateKey())
+	expiresAt := time.Now().Add(expiresIn)
+	j, err := jwk.Sign(cfg, user, []string{repo.Name()}, expiresAt)
 	if err != nil {
 		logger.Error("failed to sign token", "err", err)
 		return err

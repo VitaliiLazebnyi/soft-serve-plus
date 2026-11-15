@@ -54,22 +54,24 @@ git -C repo2 tag v0.1.0
 git -C repo2 push origin HEAD
 git -C repo2 push origin HEAD --tags
 
-# dumb http git
-curl -XGET http://localhost:$HTTP_PORT/repo2.git/info/refs
-stdout '^[0-9a-f]{40}	refs/heads/master\n[0-9a-f]{40}	refs/tags/v0.1.0$'
+# dumb http is refused, uncached, and writes nothing
+curl -v -XGET http://localhost:$HTTP_PORT/repo2.git/info/refs
+stderr '^> 403 '
+stderr '^> Cache-Control: no-cache, max-age=0, must-revalidate'
+stdout '^dumb HTTP is not supported'
 ! exists $DATA_PATH/repos/repo2.git/info/refs
-curl -XGET http://localhost:$HTTP_PORT/repo2.git/objects/info/packs
+curl -v -XGET http://localhost:$HTTP_PORT/repo2.git/objects/info/packs
+stderr '^> 403 '
 ! exists $DATA_PATH/repos/repo2.git/objects/info/packs
+curl -v -XGET http://localhost:$HTTP_PORT/repo2.git/objects/00/00000000000000000000000000000000000000
+stderr '^> 403 '
+! stderr 'max-age=31536000'
 
-# dumb http clone, served without writing the info files
+# a dumb http clone fails
 env GIT_SMART_HTTP=0
-git clone --bare http://127.0.0.1:$HTTP_PORT/repo2 repo2-dumb.git
+! git clone --bare http://127.0.0.1:$HTTP_PORT/repo2 repo2-dumb.git
+stderr '403'
 env GIT_SMART_HTTP=1
-git -C repo2-dumb.git rev-parse refs/tags/v0.1.0
-git -C repo2 rev-parse HEAD
-cp stdout head.txt
-git -C repo2-dumb.git rev-parse refs/heads/master
-cmp stdout head.txt
 
 # http errors
 curl -v -XGET http://localhost:$HTTP_PORT/repo2111foobar.git/foo/bar
@@ -140,11 +142,11 @@ cp stdout private.txt
 curl http://localhost:$HTTP_PORT/nope.git/info/lfs/objects/batch
 cmp stdout private.txt
 
-# deny dumb http git
+# dumb http is refused the same way for a private repo, whoever asks
 curl -v -XGET http://localhost:$HTTP_PORT/repo2.git/info/refs
-stderr '^> 401 '
+stderr '^> 403 '
 curl -v -XGET http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/info/refs
-stderr '^> 404 '
+stderr '^> 403 '
 
 # private and missing repos get the same answer
 curl -v http://localhost:$HTTP_PORT/repo2.git/info/refs?service=git-upload-pack
@@ -190,12 +192,12 @@ cmp stdout private.txt
 curl -v http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/info/refs?service=git-receive-pack
 stderr '^> 404 '
 curl -v http://$UTOKEN@localhost:$HTTP_PORT/repo2.git/HEAD?service=git-receive-pack
-stderr '^> 404 '
+stderr '^> 403 '
 cp stdout private.txt
 curl http://$UTOKEN@localhost:$HTTP_PORT/nope.git/HEAD?service=git-receive-pack
 cmp stdout private.txt
 curl -v http://localhost:$HTTP_PORT/repo2.git/HEAD?service=git-receive-pack
-stderr '^> 401 '
+stderr '^> 403 '
 cp stdout private.txt
 curl http://localhost:$HTTP_PORT/nope.git/HEAD?service=git-receive-pack
 cmp stdout private.txt
@@ -264,7 +266,7 @@ stderr '^> 404 '
 curl http://localhost:$HTTP_PORT/nope.git/info/lfs/objects/basic/0000000000000000000000000000000000000000000000000000000000000000?go-get=1
 stdout '.*credentials needed.*'
 curl -v http://localhost:$HTTP_PORT/nope.git/objects/info/packs?go-get=1
-stderr '^> 401 '
+stderr '^> 403 '
 
 # stop the server
 [windows] stopserver

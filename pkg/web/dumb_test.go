@@ -2,111 +2,92 @@ package web
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
 
-// writeRepoFile writes a file inside a repository's git directory.
-func writeRepoFile(t *testing.T, f *oracleFixture, repo, name, content string) {
-	t.Helper()
-	is := is.New(t)
-	p := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", repo+".git", filepath.FromSlash(name))
-	is.NoErr(os.MkdirAll(filepath.Dir(p), 0o755))
-	is.NoErr(os.WriteFile(p, []byte(content), 0o644))
-}
-
-// TestDumbHTTPServesOnlyRegularFiles checks that a dumb HTTP path that does
-// not name a readable regular file is not found, rather than a directory
-// listing or a panic.
-func TestDumbHTTPServesOnlyRegularFiles(t *testing.T) {
+// TestDumbHTTPIsRefused checks every request of the dumb HTTP protocol gets
+// one uncacheable 403, whatever the repository and the caller. A missing
+// loose object used to be answered 404 with a one-year Cache-Control.
+func TestDumbHTTPIsRefused(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
+	pubDir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "pub.git")
+	looseObj := "objects/12/" + strings.Repeat("3", 38)
+	is.NoErr(os.MkdirAll(filepath.Join(pubDir, "objects", "12"), 0o755))
+	is.NoErr(os.WriteFile(filepath.Join(pubDir, filepath.FromSlash(looseObj)), []byte("data"), 0o644))
 
-	// objects/ab is a file, so stat of a loose object below it fails with
-	// ENOTDIR rather than not-exist.
-	writeRepoFile(t, f, "pub", "objects/ab", "x")
-	// A directory where a loose object would be.
-	is.NoErr(os.MkdirAll(filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "pub.git", "objects", "cd", strings.Repeat("0", 38)), 0o755))
-
-	for _, path := range []string{
-		"/pub.git/objects/ab/" + strings.Repeat("0", 38),
-		"/pub.git/objects/cd/" + strings.Repeat("0", 38),
-		"/pub.git/objects/info/",
-		"/pub.git/objects/info/" + strings.Repeat("a", 300),
-		"/pub.git/objects/info/a%00b",
-		"/pub.git/objects/info/commit-graph",
-	} {
-		w := f.do(http.MethodGet, path, "")
-		is.Equal(w.Code, http.StatusNotFound) // path
+	files := []string{
+		"info/refs",
+		"info/refs?service=git-upload-archive",
+		"info/refs?service=bogus",
+		"HEAD",
+		"HEAD?service=git-receive-pack",
+		"objects/info/packs",
+		"objects/info/alternates",
+		"objects/info/http-alternates",
+		looseObj,
+		"objects/ab/" + strings.Repeat("0", 38),
+		"objects/ab/" + strings.Repeat("0", 62),
+		"objects/pack/pack-" + strings.Repeat("5", 40) + ".pack",
+		"objects/pack/pack-" + strings.Repeat("5", 64) + ".idx",
 	}
-}
-
-// TestDumbHTTPInfoPacksIsNotCached checks that objects/info/packs reaches
-// its own handler, which lists the packs on disk rather than a stale
-// objects/info/packs file, and is served uncached, as git http-backend does.
-func TestDumbHTTPInfoPacksIsNotCached(t *testing.T) {
-	is := is.New(t)
-	f := newOracleFixture(t)
-	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
-	pack := "pack-" + strings.Repeat("a", 40)
-	writeRepoFile(t, f, "pub", "objects/pack/"+pack+".pack", "x")
-	writeRepoFile(t, f, "pub", "objects/pack/"+pack+".idx", "x")
-	writeRepoFile(t, f, "pub", "objects/info/packs", "P pack-x.pack\n")
-
-	w := f.do(http.MethodGet, "/pub.git/objects/info/packs", "")
-	is.Equal(w.Code, http.StatusOK)
-	is.Equal(w.Body.String(), "P "+pack+".pack\n\n")
-	is.Equal(w.Header().Get("Content-Type"), "text/plain; charset=utf-8")
-	is.True(strings.HasPrefix(w.Header().Get("Cache-Control"), "no-cache"))
-}
-
-// TestDumbHTTPObjectCacheHeaders checks the headers of immutable objects:
-// valid HTTP dates, and no shared caching of private or authenticated
-// responses.
-func TestDumbHTTPObjectCacheHeaders(t *testing.T) {
-	is := is.New(t)
-	f := newOracleFixture(t)
-	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
-	ownerToken, err := f.be.CreateAccessToken(f.ctx, f.owner, "o", time.Now().Add(time.Hour))
-	is.NoErr(err)
-
-	sha1Obj := "objects/12/" + strings.Repeat("3", 38)
-	sha256Obj := "objects/12/" + strings.Repeat("4", 62)
-	sha256Pack := "objects/pack/pack-" + strings.Repeat("5", 64) + ".pack"
-	for _, repo := range []string{"pub", "secret"} {
-		for _, name := range []string{sha1Obj, sha256Obj, sha256Pack} {
-			writeRepoFile(t, f, repo, name, "data")
+	auths := []string{"", "Token " + f.token, "Token garbage", "Bearer garbage"}
+	for _, repo := range []string{"pub", "secret", "ghost"} {
+		for _, file := range files {
+			for _, auth := range auths {
+				for _, method := range []string{http.MethodGet, http.MethodHead} {
+					w := f.do(method, "/"+repo+".git/"+file, auth)
+					is.Equal(w.Code, http.StatusForbidden) // dumb request
+					is.Equal(w.Header().Get("Cache-Control"), "no-cache, max-age=0, must-revalidate")
+					is.Equal(w.Header().Get("Expires"), "Fri, 01 Jan 1980 00:00:00 GMT")
+					is.Equal(w.Header().Get("WWW-Authenticate"), "") // no credentials help
+					if method == http.MethodGet {
+						is.Equal(w.Body.String(), errDumbHTTP.Error()+"\n")
+					}
+				}
+			}
 		}
 	}
 
-	for _, tc := range []struct {
-		repo, auth, scope string
-	}{
-		{"pub", "", "public"},
-		{"pub", "Token " + ownerToken, "private"},
-		{"secret", "Token " + ownerToken, "private"},
-	} {
-		for _, name := range []string{sha1Obj, sha256Obj, sha256Pack} {
-			w := f.do(http.MethodGet, "/"+tc.repo+".git/"+name, tc.auth)
-			is.Equal(w.Code, http.StatusOK) // repo and object
-			is.Equal(w.Body.String(), "data")
-			is.Equal(w.Header().Get("Cache-Control"), tc.scope+", max-age=31536000")
-			_, err := http.ParseTime(w.Header().Get("Expires"))
-			is.NoErr(err)                        // Expires is an HTTP-date
-			is.Equal(w.Header().Get("Date"), "") // left to net/http
-			_, err = http.ParseTime(w.Header().Get("Last-Modified"))
-			is.NoErr(err)
-		}
+	// Other methods are refused as before, and nothing was created.
+	w := f.do(http.MethodPost, "/pub.git/HEAD", "")
+	is.Equal(w.Code, http.StatusMethodNotAllowed)
+	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
+	_, err = f.be.Repository(f.ctx, "ghost")
+	is.True(err != nil)
+
+	// A smart client still gets the advertisement.
+	is.Equal(f.do(http.MethodGet, "/pub.git/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
+}
+
+// TestDumbCloneFails checks a client forced to the dumb protocol is told why
+// it cannot clone.
+func TestDumbCloneFails(t *testing.T) {
+	f := newInfoFixture(t)
+	f.populate(t)
+
+	srv := httptest.NewServer(f.handler)
+	t.Cleanup(srv.Close)
+
+	dst := filepath.Join(t.TempDir(), "clone.git")
+	cmd := exec.CommandContext(t.Context(), "git", "clone", "--bare", srv.URL+"/pub", dst)
+	cmd.Env = append(os.Environ(), "GIT_SMART_HTTP=0", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("dumb clone succeeded: %s", out)
+	}
+	if !strings.Contains(string(out), "403") {
+		t.Errorf("dumb clone output does not show the 403:\n%s", out)
 	}
 }
