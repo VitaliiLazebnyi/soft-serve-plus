@@ -100,7 +100,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize while loading a diff, view = %v; want loading", l.activeView)
 	}
-	l.Update(l.loadDiffCmd()())
+	updateRendered(l, l.loadDiffCmd()())
 	if l.activeView != logViewDiff {
 		t.Fatalf("after loading the diff, view = %v; want diff", l.activeView)
 	}

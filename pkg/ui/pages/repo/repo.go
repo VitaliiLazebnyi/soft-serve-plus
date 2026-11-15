@@ -339,7 +339,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	case RepoMsg, RefMsg, tabs.ActiveTabMsg, tea.KeyPressMsg,
 		tea.MouseClickMsg, tea.MouseWheelMsg, FileItemsMsg, FileContentMsg,
 		FileBlameMsg, selector.ActiveMsg, LogItemsMsg, GoBackMsg, LogDiffMsg,
-		EmptyRepoMsg, StashListMsg, StashPatchMsg:
+		EmptyRepoMsg, StashListMsg, StashPatchMsg, diffRenderedMsg:
 		r.setStatusBarInfo()
 	}
 

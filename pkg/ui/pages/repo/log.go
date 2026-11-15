@@ -7,8 +7,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	gansi "charm.land/glamour/v2/ansi"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -90,6 +88,13 @@ type Log struct {
 	currentDiff    *git.Diff
 	loadingTime    time.Time
 	gen            uint64
+	// render counts the renders of currentDiff; see diffRenderedMsg.
+	render int
+	// renders keeps one render in flight.
+	renders common.RenderGate
+	// winWidth is the window width of the last tea.WindowSizeMsg. The diff
+	// is rendered again only when it changes.
+	winWidth int
 }
 
 // NewLog creates a new Log model.
@@ -210,6 +215,7 @@ func (l *Log) Init() tea.Cmd {
 	l.count = 0
 	l.activeCommit = nil
 	l.selectedCommit = nil
+	l.clearDiff()
 	// start loading on init
 	l.startLoading()
 	return l.countCommitsCmd()
@@ -221,6 +227,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case RepoMsg:
 		l.repo = msg
+		l.clearDiff()
 	case RefMsg:
 		l.ref = msg.Ref
 		l.gen = msg.gen
@@ -297,6 +304,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		switch sel := msg.IdentifiableItem.(type) {
 		case LogItem:
 			l.selectedCommit = sel.Commit
+			l.clearDiff()
 			l.startLoading()
 			cmds = append(cmds, l.loadDiffCmd())
 		}
@@ -306,16 +314,25 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			// ref changed, while the diff was loading.
 			break
 		}
+		// The pane stays in its loading view until the diff is rendered.
 		l.currentDiff = msg.diff
-		l.vp.SetContent(
-			lipgloss.JoinVertical(lipgloss.Left,
-				l.renderCommit(l.selectedCommit),
-				renderSummary(msg.diff, l.common.Styles, l.common.Width),
-				renderDiff(msg.diff, l.common.Width),
-			),
-		)
-		l.vp.GotoTop()
-		l.activeView = logViewDiff
+		cmds = append(cmds, l.renderDiffCmd())
+	case diffRenderedMsg:
+		again := l.renders.Done(msg.epoch)
+		if msg.render == l.render && l.selectedCommit != nil && l.currentDiff != nil {
+			l.vp.SetContent(msg.content)
+			if l.activeView == logViewLoading {
+				// The first render of this diff; a later one follows a
+				// resize and keeps the scroll position.
+				l.vp.GotoTop()
+				l.activeView = logViewDiff
+			}
+		}
+		// Otherwise the diff or the width changed while it was rendered:
+		// render what is shown now, once for every change meanwhile.
+		if again && l.selectedCommit != nil && l.currentDiff != nil {
+			cmds = append(cmds, l.renderDiffCmd())
+		}
 	case LogDiffErrorMsg:
 		// Leave the loading view for the commit list, so the spinner does not
 		// stay on screen once the error is dismissed, then show the error.
@@ -331,14 +348,12 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, l.updateCommitsCmd())
 	case tea.WindowSizeMsg:
 		l.SetSize(msg.Width, msg.Height)
-		if l.selectedCommit != nil && l.currentDiff != nil {
-			l.vp.SetContent(
-				lipgloss.JoinVertical(lipgloss.Left,
-					l.renderCommit(l.selectedCommit),
-					renderSummary(l.currentDiff, l.common.Styles, l.common.Width),
-					renderDiff(l.currentDiff, l.common.Width),
-				),
-			)
+		// The diff is wrapped to the width, so only a width change needs
+		// it rendered again.
+		widthChanged := msg.Width != l.winWidth
+		l.winWidth = msg.Width
+		if widthChanged && l.selectedCommit != nil && l.currentDiff != nil {
+			cmds = append(cmds, l.renderDiffCmd())
 		}
 		if l.repo != nil && l.ref != nil {
 			// Reload on resize since the number of commits per page might
@@ -357,6 +372,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		l.count = 0
 		l.activeCommit = nil
 		l.selectedCommit = nil
+		l.clearDiff()
 		l.selector.Select(0)
 		cmds = append(cmds,
 			l.setItems([]selector.IdentifiableItem{}),
@@ -444,7 +460,33 @@ func (l *Log) goBack() {
 	if l.activeView == logViewDiff {
 		l.activeView = logViewCommits
 		l.selectedCommit = nil
+		l.clearDiff()
 	}
+}
+
+// clearDiff forgets the diff shown, and drops a render of it in flight. It
+// also forgets that render, whose result may never come back, for example
+// when the page was left while it ran.
+func (l *Log) clearDiff() {
+	l.currentDiff = nil
+	l.render++
+	l.renders.Reset()
+	l.vp.SetContent("")
+}
+
+// renderDiffCmd returns a command that renders the selected commit and its
+// diff for the viewport, or nil while a render is in flight: the next one
+// starts when it returns.
+func (l *Log) renderDiffCmd() tea.Cmd {
+	l.render++
+	epoch, ok := l.renders.Start()
+	if !ok {
+		return nil
+	}
+	commit, st, width := l.selectedCommit, l.common.Styles, l.common.Width
+	return renderDiffCmd(paneLog, l.render, epoch, st, width, l.currentDiff, func() string {
+		return renderCommit(commit, st, width)
+	})
 }
 
 // countCommitsCmd returns a command that counts the commits of the current
@@ -530,17 +572,22 @@ func (l *Log) loadDiffCmd() tea.Cmd {
 }
 
 func (l *Log) renderCommit(c *git.Commit) string {
+	return renderCommit(c, l.common.Styles, l.common.Width)
+}
+
+// renderCommit renders c's header and message width columns wide.
+func renderCommit(c *git.Commit, st *styles.Styles, width int) string {
 	s := strings.Builder{}
 	// Strip escape sequences and control characters, CR included since
 	// lipgloss prints empty lines when CRLF is used.
 	msg := utils.Sanitize(c.Message)
 	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
-		l.common.Styles.Log.CommitHash.Render("commit "+c.ID.String()),
-		l.common.Styles.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
-		l.common.Styles.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
-		l.common.Styles.Log.CommitBody.Render(msg),
+		st.Log.CommitHash.Render("commit "+c.ID.String()),
+		st.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", utils.Sanitize(c.Author.Name), utils.Sanitize(c.Author.Email))),
+		st.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
+		st.Log.CommitBody.Render(msg),
 	)
-	return wrapText(s.String(), l.common.Width-2)
+	return wrapText(s.String(), width-2)
 }
 
 // wrapText hard-wraps s at width columns. It measures with x/ansi grapheme
@@ -549,36 +596,6 @@ func (l *Log) renderCommit(c *git.Commit) string {
 // spaces first, as reflow/wrap did, because x/ansi gives a tab no width.
 func wrapText(s string, width int) string {
 	return ansi.Hardwrap(strings.ReplaceAll(s, "\t", "    "), width, false)
-}
-
-func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
-	stats := strings.Split(utils.Sanitize(diff.Stat), "\n")
-	for i, line := range stats {
-		ch := strings.Split(line, "|")
-		if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
-			adddel := ch[len(ch)-1]
-			adddel = strings.ReplaceAll(adddel, "+", styles.Log.CommitStatsAdd.Render("+"))
-			adddel = strings.ReplaceAll(adddel, "-", styles.Log.CommitStatsDel.Render("-"))
-			stats[i] = strings.Join(ch[:len(ch)-1], "|") + "|" + adddel
-		}
-	}
-	return wrapText(strings.Join(stats, "\n"), width-2)
-}
-
-func renderDiff(diff *git.Diff, width int) string {
-	var s strings.Builder
-	var pr strings.Builder
-	diffChroma := &gansi.CodeBlockElement{
-		Code:     utils.Sanitize(diff.Patch),
-		Language: "diff",
-	}
-	err := diffChroma.Render(&pr, common.StyleRenderer())
-	if err != nil {
-		s.WriteString("\n" + err.Error())
-	} else {
-		s.WriteString("\n" + pr.String())
-	}
-	return wrapText(s.String(), width)
 }
 
 func (l *Log) setItems(items []selector.IdentifiableItem) tea.Cmd {

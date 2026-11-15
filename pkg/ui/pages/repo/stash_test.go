@@ -74,7 +74,7 @@ func TestStashPatchWithoutSelection(t *testing.T) {
 	s := NewStash(common.NewCommon(ctx, 80, 40))
 	s.Init()
 	s.Update(StashListMsg{})
-	s.Update(StashPatchMsg{Diff: &git.Diff{}})
+	updateRendered(s, StashPatchMsg{Diff: &git.Diff{}})
 	if s.state != stashStatePatch {
 		t.Fatalf("state = %v, want the patch view", s.state)
 	}
