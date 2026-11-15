@@ -102,6 +102,17 @@ func TestWithServerConfig(t *testing.T) {
 			),
 		},
 		{
+			// strtoul also takes a leading plus sign, as does Atoi.
+			name: "count with a plus sign",
+			environ: []string{
+				"GIT_CONFIG_COUNT=+1",
+				"GIT_CONFIG_KEY_0=a.b", "GIT_CONFIG_VALUE_0=1",
+			},
+			want: append(append([]string{countEnv(n + 1)}, server...),
+				"GIT_CONFIG_KEY_"+strconv.Itoa(n)+"=a.b", "GIT_CONFIG_VALUE_"+strconv.Itoa(n)+"=1",
+			),
+		},
+		{
 			name:    "white space only count left to git",
 			environ: []string{"GIT_CONFIG_COUNT= "},
 			want:    []string{"GIT_CONFIG_COUNT= "},
