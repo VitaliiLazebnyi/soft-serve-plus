@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"charm.land/log/v2"
+	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -96,7 +97,10 @@ func tagDeleteCommand() *cobra.Command {
 				return git.ErrReferenceNotExist
 			}
 
-			tagCommit, err := r.TagCommit(tag)
+			// The event needs only the ID. Reading the commit would
+			// fail for one git cannot parse, and such a tag must still
+			// be deletable.
+			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
 				logger.Error("failed to get tag commit", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
@@ -112,7 +116,7 @@ func tagDeleteCommand() *cobra.Command {
 			// and sent even if the session ends now.
 			ctx, cancel := backend.AfterChangeContext(ctx)
 			defer cancel()
-			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagCommit.ID.String(), git.ZeroID)
+			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID)
 			if err != nil {
 				logger.Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil

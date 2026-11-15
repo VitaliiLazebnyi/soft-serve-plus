@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	gopath "path"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/aymanbagabas/git-module"
@@ -262,40 +261,15 @@ func (r *Repository) CountCommits(ref *Reference) (int64, error) {
 	return r.RevListCount([]string{ref.Name().String()}, git.RevListCountOptions{CommandOptions: r.cmdOpts()})
 }
 
-// CommitsByPage returns the commits for a given page and size.
-//
-// It lists the page itself rather than calling git-module's CommitsByPage,
-// which reads each commit without a context, so that a cancelled context
-// also stops the per-commit reads.
+// CommitsByPage returns the commits for a given page and size, newest
+// first. It lists the page through Log, so commits git-module cannot parse
+// are left out, and a cancelled context also stops the per-commit reads.
 func (r *Repository) CommitsByPage(ref *Reference, page, size int) (Commits, error) {
-	cmd := git.NewCommand("log", "--pretty="+git.LogFormatHashOnly).AddOptions(r.cmdOpts())
-	if size > 0 {
-		cmd.AddArgs("--max-count=" + strconv.Itoa(size))
-	}
+	opt := git.LogOptions{MaxCount: size}
 	if skip := (page - 1) * size; skip > 0 {
-		cmd.AddArgs("--skip=" + strconv.Itoa(skip))
+		opt.Skip = skip
 	}
-	out, err := cmd.AddArgs("--end-of-options", ref.Name().String(), "--").RunInDir(r.Path)
-	if err != nil {
-		return nil, err
-	}
-	out = bytes.TrimSpace(out)
-	if len(out) == 0 {
-		return Commits{}, nil
-	}
-	ids := bytes.Split(out, []byte{'\n'})
-	commits := make(Commits, 0, len(ids))
-	for _, id := range ids {
-		if err := r.Context().Err(); err != nil {
-			return nil, err
-		}
-		c, err := r.CatFileCommit(string(id))
-		if err != nil {
-			return nil, err
-		}
-		commits = append(commits, c)
-	}
-	return commits, nil
+	return r.Log(ref.Name().String(), opt)
 }
 
 // SymbolicRef returns or updates the symbolic reference for the given name.

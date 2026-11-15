@@ -13,6 +13,9 @@ var (
 	ErrReferenceNotExist = git.ErrReferenceNotExist
 	// ErrRevisionNotExist is returned when a revision is not found.
 	ErrRevisionNotExist = git.ErrRevisionNotExist
+	// ErrMalformedCommit is returned for a commit object that cannot be
+	// parsed, such as one whose author has no email or no date.
+	ErrMalformedCommit = errors.New("malformed commit")
 	// ErrNotAGitRepository is returned when the given path is not a Git repository.
 	ErrNotAGitRepository = errors.New("not a git repository")
 	// ErrFileTooLarge is returned when a file is larger than the size limit
