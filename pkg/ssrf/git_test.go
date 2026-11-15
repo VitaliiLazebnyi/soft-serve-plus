@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/charmbracelet/soft-serve/git"
 )
 
 // anySSH is the policy of a server admin with no allowlist configured; it
@@ -441,6 +443,39 @@ func hasGitConfig(env []string, key, value string) bool {
 		}
 	}
 	return false
+}
+
+// TestGitEnvCarriesServerConfig checks that the environment for mirror and
+// import fetches, which replaces the server's own GIT_CONFIG_*, still keeps
+// automatic maintenance in the foreground: the server's settings are merged
+// into the one GIT_CONFIG_COUNT, not set by a second one that would replace
+// the first.
+func TestGitEnvCarriesServerConfig(t *testing.T) {
+	t.Parallel()
+
+	v := ValidatedGitRemote{
+		Transport: GitTransportHTTP,
+		Config:    []GitConfigEntry{{Key: "http.curloptResolve", Value: "h:443:192.0.2.1"}},
+	}
+	for _, env := range [][]string{GitEnv(), GitEnv(v)} {
+		for _, e := range git.ServerConfig() {
+			if !hasGitConfig(env, e.Key, e.Value) {
+				t.Errorf("GitEnv() lacks %s=%s: %v", e.Key, e.Value, env)
+			}
+		}
+		if !hasGitConfig(env, "http.followRedirects", "false") {
+			t.Errorf("GitEnv() lost the redirect guard: %v", env)
+		}
+		counts := 0
+		for _, e := range env {
+			if strings.HasPrefix(e, "GIT_CONFIG_COUNT=") {
+				counts++
+			}
+		}
+		if counts != 1 {
+			t.Errorf("GitEnv() sets GIT_CONFIG_COUNT %d times, want once: %v", counts, env)
+		}
+	}
 }
 
 // TestValidateGitRemoteErrorsHideResolver verifies that the messages handed

@@ -148,9 +148,12 @@ docker build --platform linux/amd64 -t soft-serve-plus:latest .
 
 ## Reaping background git processes
 
-Git leaves orphaned processes behind: since git 2.47, one
-`git maintenance run --auto --detach` for each push that updates a ref, plus a
-helper for each transfer that is cut off part-way. The kernel re-parents each
+Git can leave orphaned processes behind: a helper for each transfer that is
+cut off part-way, and, unless maintenance runs in the foreground as the server
+arranges (see
+[Automatic maintenance runs in the foreground](#automatic-maintenance-runs-in-the-foreground)),
+one `git maintenance run --auto --detach` for each push that updates a ref
+(git 2.47 and later). The kernel re-parents each
 orphan to PID 1 of the container, which must reap it when it exits. If nothing
 does, it stays a zombie (`<defunct>`) process that counts against the
 container's PID limit (`--pids-limit`, `pids_limit:` in docker-compose) until
@@ -195,35 +198,65 @@ or set `shareProcessNamespace: true` on the pod, which makes the pod's pause
 container PID 1 and the reaper. Otherwise `soft` falls back to supervising
 itself as described above.
 
-### Running automatic maintenance in the foreground
+### Automatic maintenance runs in the foreground
 
-Optionally, tell git to run automatic maintenance in the foreground instead of
-detaching it, which removes the orphan each push leaves behind. Set it through
-git's `GIT_CONFIG_*` variables by adding these to the service's `environment:`
-(if you already set some, append to them and raise `GIT_CONFIG_COUNT`):
+The server runs git's automatic maintenance in the foreground, so a push or a
+mirror sync does not leave a detached maintenance process behind. It sets
+`gc.autoDetach=false` and `maintenance.autoDetach=false` for every git process
+it starts that can start automatic maintenance: the git processes that serve
+pushes and fetches over SSH, HTTP and `git://`, and the fetches of mirror syncs
+and imports. The trade-off is that a push then waits for maintenance to finish
+whenever it has real work to do.
+
+While maintenance runs, git sends the client nothing: the refs are already
+updated, and the push is only waiting for git to exit. On a large repository
+that can take long enough for the SSH idle timeout (`ssh.idle_timeout`,
+`SOFT_SERVE_SSH_IDLE_TIMEOUT`) or a reverse proxy's response timeout (about
+100 seconds behind Cloudflare, for example) to cut the connection, and the
+client then reports a failed push although the push went through. Where that
+is a risk, turn automatic maintenance off for pushes:
 
 ```yaml
 GIT_CONFIG_COUNT: "1"
-GIT_CONFIG_KEY_0: gc.autoDetach
+GIT_CONFIG_KEY_0: receive.autogc
 GIT_CONFIG_VALUE_0: "false"
 ```
 
-With `docker run`, pass the same variables:
+and run it instead from a job that waits for it, for example a cron job on the
+host that runs this through `docker exec` (as the image's `soft` user):
 
 ```sh
--e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=gc.autoDetach -e GIT_CONFIG_VALUE_0=false
+docker exec soft-serve-plus sh -c '
+  find /soft-serve/repos -name "*.git" -type d -prune |
+  while read -r r; do git -C "$r" maintenance run --auto; done'
 ```
 
-`maintenance.autoDetach` falls back to `gc.autoDetach` when it is not set, so
-this one key covers git 2.47 and later as well as older versions.
+The server passes the two keys through git's `GIT_CONFIG_*` variables, which
+override every configuration file, so a `gc.autoDetach` or
+`maintenance.autoDetach` in the system, global or repository configuration does
+not detach maintenance again. Any `GIT_CONFIG_*` variables in the server's own
+environment are kept for the git processes that serve pushes and fetches, and
+they come after the server's two keys, so they win where both set the same key.
+To let a push detach maintenance again, set both keys back to `true` there
+(`maintenance.autoDetach` for git 2.47 and later, `gc.autoDetach` for older
+git):
 
-The trade-off is that a push then waits for maintenance to finish whenever it
-has real work to do. The setting reaches the git processes that serve pushes;
-mirror syncs and imports set their own `GIT_CONFIG_*` variables and do not pick
-it up, so each mirror sync, whose fetch also triggers automatic maintenance,
-still leaves one detached maintenance process behind. It does not cover
-interrupted transfers either, so it does not replace an init. The server does
-not set these keys itself.
+```yaml
+GIT_CONFIG_COUNT: "2"
+GIT_CONFIG_KEY_0: maintenance.autoDetach
+GIT_CONFIG_VALUE_0: "true"
+GIT_CONFIG_KEY_1: gc.autoDetach
+GIT_CONFIG_VALUE_1: "true"
+```
+
+Mirror syncs and imports set their own `GIT_CONFIG_*` variables in place of the
+server's environment, as before, so they always run maintenance in the
+foreground. A malformed set of `GIT_CONFIG_*` variables in the server's
+environment (a count that is not a number, or a missing key or value below the
+count) is passed to git unchanged, and git refuses to run with it.
+
+Running maintenance in the foreground does not cover interrupted transfers, so
+it does not replace an init.
 
 ### Checking for zombies
 
