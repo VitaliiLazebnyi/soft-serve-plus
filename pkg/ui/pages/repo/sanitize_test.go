@@ -128,26 +128,15 @@ func TestStashPatchKeepsStyling(t *testing.T) {
 	ctx := config.WithContext(context.Background(), config.DefaultConfig())
 	c := common.NewCommon(ctx, 120, 40)
 
-	const raw = "diff --git a/a.txt b/a.txt\n" +
-		"index 0123456..789abcd 100644\n" +
-		"--- a/a.txt\n" +
-		"+++ b/a.txt\n" +
-		"@@ -1 +1 @@\n" +
-		"-old\n" +
-		"+new\n"
-	done := make(chan gitm.SteamParseDiffResult, 1)
-	gitm.StreamParseDiff(strings.NewReader(raw), done, 10, 100, 1000)
-	res := <-done
-	if res.Err != nil {
-		t.Fatal(res.Err)
-	}
-	diff := &git.Diff{Diff: res.Diff}
-	for _, df := range res.Diff.Files {
-		sections := make([]*git.DiffSection, 0, len(df.Sections))
-		for _, ds := range df.Sections {
-			sections = append(sections, &git.DiffSection{DiffSection: ds})
-		}
-		diff.Files = append(diff.Files, &git.DiffFile{DiffFile: df, Sections: sections})
+	diff := &git.Diff{
+		Stat: " a.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+		Patch: "diff --git a/a.txt b/a.txt\n" +
+			"index 0123456..789abcd 100644\n" +
+			"--- a/a.txt\n" +
+			"+++ b/a.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n",
 	}
 
 	s := NewStash(c)

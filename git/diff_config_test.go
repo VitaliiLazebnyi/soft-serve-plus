@@ -6,9 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
-
-	"github.com/aymanbagabas/git-module"
 )
 
 // TestDiffIgnoresOutputConfig checks that config which changes git's diff
@@ -75,22 +74,20 @@ func TestDiffIgnoresOutputConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(d.Files) != 1 {
-			t.Fatalf("got %d files, want 1; patch:\n%s", len(d.Files), d.Patch())
-		}
-		if name := d.Files[0].Name; name != "f.txt" {
-			t.Errorf("file name = %q, want f.txt", name)
+		if !strings.HasPrefix(d.Patch, "diff --git a/f.txt b/f.txt\n") || strings.Count(d.Patch, "diff --git ") != 1 {
+			t.Errorf("patch is not git's for f.txt alone:\n%s", d.Patch)
 		}
 		var added []string
-		for _, s := range d.Files[0].Sections {
-			for _, l := range s.Lines {
-				if l.Type == git.DiffLineAdd {
-					added = append(added, l.Content)
-				}
+		for _, l := range strings.Split(d.Patch, "\n") {
+			if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++") {
+				added = append(added, l)
 			}
 		}
 		if len(added) != 1 || added[0] != "+"+wantAdd {
 			t.Errorf("added lines = %q, want [%q]", added, "+"+wantAdd)
+		}
+		if strings.Contains(d.Patch+d.Stat, "GARBAGE") || strings.Contains(d.Patch+d.Stat, "\x1b") {
+			t.Errorf("diff config reached the output:\n%s%s", d.Stat, d.Patch)
 		}
 	}
 

@@ -43,11 +43,18 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 
-			diff, err := r.Diff(commit)
+			// A plain --patch is meant for git apply, so it is cut only by
+			// its total size; anything for reading is cut by file and by
+			// line as well.
+			limits := git.DefaultDiffLimits()
+			if patchOnly && !color {
+				limits = git.PatchLimits()
+			}
+			diff, err := r.DiffLimited(commit, limits)
 			if err != nil {
 				return err
 			}
-			patch := diff.Patch()
+			patch := diff.Patch
 
 			commonStyle := styles.DefaultStyles()
 			style := commonStyle.Log
@@ -67,6 +74,16 @@ func commitCommand() *cobra.Command {
 			statsLine := renderStats(diff, commonStyle, color)
 			diffLine := renderDiff(patch, color)
 
+			if patchOnly && !color {
+				// Byte for byte, without a line added at the end.
+				cmd.Print(patch)
+				if diff.Truncated {
+					// A pipeline into git apply must not take the cut
+					// patch for the whole.
+					return fmt.Errorf("patch truncated at %d bytes; it does not apply", limits.Bytes)
+				}
+				return nil
+			}
 			if patchOnly {
 				cmd.Println(
 					diffLine,
@@ -138,7 +155,7 @@ func renderDiff(patch string, color bool) string {
 func renderStats(diff *git.Diff, commonStyle *styles.Styles, color bool) string {
 	style := commonStyle.Log
 	// The stats name the changed files, which may hold control characters.
-	c := utils.Sanitize(diff.Stats().String())
+	c := utils.Sanitize(diff.Stat)
 
 	if color {
 		s := strings.Split(c, "\n")
