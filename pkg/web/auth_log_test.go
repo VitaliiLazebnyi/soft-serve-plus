@@ -77,8 +77,8 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 		{"basic jwt with placeholder", basic(badJWT, "x-oauth-basic"), false, "basic", []string{badJWT}, nil},
 		{"basic valid token with placeholder", basic(f.token, "x-oauth-basic"), true, "basic", []string{f.token}, nil},
 		{"basic token as password, empty username", basic("", f.token), true, "basic", []string{f.token}, nil},
-		// Another user's name with the token is refused and logged.
-		{"basic token of another user", basic("owner", f.token), false, "basic", []string{f.token}, []string{"username=owner"}},
+		// Another user's name with the token logs in as the token's owner.
+		{"basic token with another user's name", basic("owner", f.token), true, "basic", []string{f.token}, nil},
 		// A malformed header whose first word is the credential.
 		{"malformed", badToken + " x", false, "other", []string{badToken}, nil},
 	} {
@@ -209,5 +209,31 @@ func TestBearerWithoutHostKey(t *testing.T) {
 	is.Equal(w.Code, http.StatusForbidden) // anonymous would get 401
 	if out := logs.String(); !strings.Contains(out, "ERRO") || !strings.Contains(out, "host key") {
 		t.Errorf("missing host key not logged at error level:\n%s", out)
+	}
+}
+
+// The log of a Basic login with a token names the token's owner, who is the
+// user the request runs as, and not the username sent with the token.
+// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
+// and must not run in parallel.
+func TestBasicAuthLogsTokenOwner(t *testing.T) {
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	logger.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(logger)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	f := newOracleFixture(t)
+	r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+	r.SetBasicAuth("owner", f.token)
+
+	f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", r.Header.Get("Authorization"))
+	out := logs.String()
+	if !strings.Contains(out, "authenticated") || !strings.Contains(out, "username=stranger") {
+		t.Errorf("log does not name the token's owner:\n%s", out)
+	}
+	if strings.Contains(out, "username=owner") {
+		t.Errorf("log names the Basic username, not the token's owner:\n%s", out)
 	}
 }
