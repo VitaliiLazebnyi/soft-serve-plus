@@ -88,6 +88,9 @@ type GitDaemon struct {
 	// up; see refuse.
 	refuseLinger time.Duration
 
+	// refusing holds a token for each connection refuseAsync refuses.
+	refusing chan struct{}
+
 	testHooks testHooks
 }
 
@@ -114,6 +117,7 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 
 		accessTimeout: defaultAccessTimeout,
 		refuseLinger:  refuseLinger,
+		refusing:      make(chan struct{}, maxRefusing),
 	}
 	return d, nil
 }
@@ -182,7 +186,7 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			if errors.Is(err, git.ErrMaxConnections) {
 				// Close connection if there are too many open connections.
 				d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
-				d.fatal(c, err)
+				d.refuseAsync(c, err)
 			} else {
 				c.Close() //nolint: errcheck
 			}
@@ -214,8 +218,9 @@ func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *ser
 }
 
 // fatal sends err to the client and closes the connection at once. It is
-// for the accept loop and for shutdown, which must not wait on a client; the
-// answer to a client's request goes through refuse.
+// for shutdown, and for the accept loop when it has too many refusals in
+// progress, which must not wait on a client; the answer to a client's
+// request goes through refuse.
 func (d *GitDaemon) fatal(c net.Conn, err error) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	if err := c.Close(); err != nil {
@@ -225,13 +230,39 @@ func (d *GitDaemon) fatal(c net.Conn, err error) {
 
 // refuseLinger bounds how long refuse waits for a refused client to hang
 // up, and refuseDrain how much of what it sends refuse reads meanwhile.
+// maxRefusing bounds how many connections refused for the connection limit
+// do so at once.
 const (
 	refuseLinger = time.Second
 	refuseDrain  = 64 << 10
+	maxRefusing  = 16
 )
 
-// refuse sends err to the client of a request and closes the connection
-// without losing the error.
+// refuseAsync refuses c, a connection the accept loop turns away, on a
+// goroutine of its own, so that the accept loop does not wait on the client.
+// Such a connection is not counted against max_connections, so at most
+// maxRefusing of them are refused this way at once, which bounds the file
+// descriptors they hold; past that, c gets the error and is closed at once,
+// and the client may lose the error to a reset as it did before.
+func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
+	select {
+	case d.refusing <- struct{}{}:
+	default:
+		d.fatal(c, err)
+		return
+	}
+	// Serve, the only caller, is counted in d.wg, so Shutdown cannot be
+	// past its Wait.
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() { <-d.refusing }()
+		d.refuse(c, err, time.Time{})
+	}()
+}
+
+// refuse sends err to the client and closes the connection without losing
+// the error.
 //
 // A client may send more than the request line before it reads the answer:
 // git archive sends its arguments straight after the request. Closing a
@@ -246,8 +277,8 @@ const (
 // and at the connection's maximum deadline, whichever comes first, and reads
 // at most refuseDrain bytes. It also ends when the server's context does or
 // the daemon shuts down, so a graceful Shutdown does not wait on refused
-// clients. The connection stays counted against max_connections meanwhile,
-// as it is still open. A refusal of the request passes the request deadline
+// clients. A connection counted against max_connections stays counted
+// meanwhile, as it is still open. A refusal of the request passes the request deadline
 // as until, so a client holds its connection unanswered no longer than it
 // could already by sending the request line late, however long the access
 // checks took.

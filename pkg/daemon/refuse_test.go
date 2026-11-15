@@ -98,3 +98,69 @@ func TestServerContextCutsRefusalWait(t *testing.T) {
 	cancel()
 	waitConns(t, d, 0, 15*time.Second)
 }
+
+// holdSlot dials addr and waits until d counts the connection, which then
+// holds one of d's slots until it is closed or the test ends.
+func holdSlot(t *testing.T, d *GitDaemon, addr string) net.Conn {
+	t.Helper()
+	want := d.conns.Size() + 1
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	waitConns(t, d, want, 30*time.Second)
+	return c
+}
+
+// TestMaxConnectionsRefusalSurvivesLateInput checks that a client turned
+// away for the connection limit can keep writing, as git archive writes its
+// arguments, without the daemon resetting the connection under it. The
+// accept loop used to close such a connection at once, so the client's
+// next write drew a reset, and a client still writing could lose the error
+// to it.
+func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
+	t.Parallel()
+	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	holdSlot(t, d, addr)
+	c := dialHeld(t, addr, "", git.ErrMaxConnections)
+	for i := range 20 {
+		if _, err := io.WriteString(c, pkt("argument HEAD\n")); err != nil {
+			t.Fatalf("write %d after the refusal: %v", i+1, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The daemon shut its side after the error and its flush packet: the
+	// client reads a clean end of the stream, not a reset.
+	if out, err := io.ReadAll(c); err != nil || (len(out) != 0 && string(out) != "0000") {
+		t.Fatalf("after the refusal: read %q, %v; want a clean end", out, err)
+	}
+}
+
+// TestMaxConnectionsRefusalsDoNotBlockAccept checks that refusals that wait
+// on their clients do not hold up the accept loop, also past maxRefusing of
+// them, and that Shutdown does not wait on them.
+func TestMaxConnectionsRefusalsDoNotBlockAccept(t *testing.T) {
+	t.Parallel()
+	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	held := holdSlot(t, d, addr)
+	for range maxRefusing + 4 {
+		dialHeld(t, addr, "", git.ErrMaxConnections)
+	}
+	// The first maxRefusing refusals still wait on their clients; the
+	// rest were closed at once.
+	if n := len(d.refusing); n != maxRefusing {
+		t.Errorf("%d refusals in progress, want %d", n, maxRefusing)
+	}
+	if got := d.conns.Size(); got != 1 {
+		t.Errorf("%d connections counted, want 1", got)
+	}
+	// Shutdown would wait for the connection in the slot, which has not
+	// sent its request yet.
+	_ = held.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
+	}
+}
