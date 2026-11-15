@@ -265,8 +265,10 @@ stderr '^> 404 '
 # go-get does not bypass repository checks on other routes
 curl http://localhost:$HTTP_PORT/nope.git/info/lfs/objects/basic/0000000000000000000000000000000000000000000000000000000000000000?go-get=1
 stdout '.*credentials needed.*'
+# a go get request for a path ending in a dumb http file name is a go get
+# request, and finds no repository here
 curl -v http://localhost:$HTTP_PORT/nope.git/objects/info/packs?go-get=1
-stderr '^> 403 '
+stderr '^> 404 '
 
 # stop the server
 [windows] stopserver

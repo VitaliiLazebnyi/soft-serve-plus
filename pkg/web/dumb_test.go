@@ -91,3 +91,29 @@ func TestDumbCloneFails(t *testing.T) {
 		t.Errorf("dumb clone output does not show the 403:\n%s", out)
 	}
 }
+
+// TestGoGetPathEndingInDumbFile checks a go get request for a repository or
+// package whose path ends in a dumb HTTP file name, such as "group/HEAD",
+// gets its go-import page rather than the dumb HTTP refusal.
+func TestGoGetPathEndingInDumbFile(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	_, err := f.be.CreateRepository(f.ctx, "group/HEAD", f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	for _, path := range []string{
+		"/group/HEAD?go-get=1",
+		"/group/HEAD/objects/info/packs?go-get=1", // a package inside it
+	} {
+		w := f.do(http.MethodGet, path, "")
+		is.Equal(w.Code, http.StatusOK) // go get page
+		is.True(strings.Contains(w.Body.String(), `name="go-import"`))
+		is.True(strings.Contains(w.Body.String(), "/group/HEAD git "))
+	}
+
+	// Without go-get=1, and with another method, it is still refused.
+	is.Equal(f.do(http.MethodGet, "/group/HEAD", "").Code, http.StatusForbidden)
+	w := f.do(http.MethodPost, "/group/HEAD?go-get=1", "")
+	is.Equal(w.Code, http.StatusMethodNotAllowed)
+	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
+}

@@ -125,7 +125,11 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	r.Handle(basePrefix+"/info/refs", http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
 		return !isSmartService(getServiceType(r))
 	})
-	r.Handle(basePrefix+dumbPaths, http.HandlerFunc(refuseDumbHTTP))
+	// A go get request for a repository or package whose path ends in one
+	// of these names, such as "group/HEAD", goes on to the go get route.
+	r.Handle(basePrefix+dumbPaths, http.HandlerFunc(refuseDumbHTTP)).MatcherFunc(func(r *http.Request, _ *mux.RouteMatch) bool {
+		return !isGoGet(r)
+	})
 
 	for _, route := range gitRoutes {
 		route.pending = pending
@@ -160,6 +164,11 @@ func refuseDumbHTTP(w http.ResponseWriter, r *http.Request) {
 	hdrNocache(w)
 	// git shows a text/plain error body to the user.
 	http.Error(w, errDumbHTTP.Error(), http.StatusForbidden)
+}
+
+// isGoGet reports whether r is a request the go get route answers.
+func isGoGet(r *http.Request) bool {
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Query().Get("go-get") == "1"
 }
 
 // isSmartService reports whether service is one a smart HTTP ref

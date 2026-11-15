@@ -200,8 +200,8 @@ func TestVerifyRejects(t *testing.T) {
 		{"issued in the future", sign(cfg, func(c *jwt.RegisteredClaims) { c.IssuedAt = jwt.NewNumericDate(now.Add(time.Hour)) }), []string{"repo"}},
 		{"garbage", "a.b.c", []string{"repo"}},
 	} {
-		if _, err := Verify(cfg, tc.token, tc.audience); !errors.Is(err, ErrInvalid) || errors.Is(err, ErrHostKey) {
-			t.Errorf("%s: Verify => %v, want ErrInvalid", tc.name, err)
+		if _, err := Verify(cfg, tc.token, tc.audience); !errors.Is(err, errInvalid) || errors.Is(err, ErrHostKey) {
+			t.Errorf("%s: Verify => %v, want errInvalid", tc.name, err)
 		}
 	}
 }

@@ -872,7 +872,8 @@ Soft Serve Plus doesn't allow duplicate SSH public keys for users. A public key 
 HTTP serves git's smart protocol, which every git since 1.6.6 uses. The old
 dumb protocol is not served: its requests (`info/refs` without a smart
 `?service=`, `HEAD`, `objects/...`), such as those of a client run with
-`GIT_SMART_HTTP=0`, are answered `403` with no caching.
+`GIT_SMART_HTTP=0`, are refused: GET and HEAD requests are answered `403`
+with no caching.
 
 You can generate user access tokens through the SSH command line interface. Access tokens can have an optional expiration date. Use your access token as the basic auth user to access your Soft Serve Plus repos through HTTP.
 

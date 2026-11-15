@@ -22,8 +22,8 @@ import (
 // not a bad token.
 var ErrHostKey = errors.New("no usable host key")
 
-// ErrInvalid is returned for a token that does not verify.
-var ErrInvalid = errors.New("invalid token")
+// errInvalid is wrapped by the error of a token that does not verify.
+var errInvalid = errors.New("invalid token")
 
 // signingMethodFor returns the JSON Web Token signing method for a public
 // key: EdDSA for Ed25519, RS256 for RSA and ES256, ES384 or ES512 for ECDSA
@@ -100,15 +100,15 @@ func SignClaims(cfg *config.Config, claims jwt.RegisteredClaims) (string, error)
 // Verify checks a token signed with the host key, in the algorithm of its
 // key type, issued by the server at cfg.HTTP.PublicURL, with an expiry, and
 // with an audience that names one of audience. It returns the token's
-// claims. The error wraps ErrHostKey when the host key cannot be used, and
-// ErrInvalid otherwise.
+// claims. The error wraps ErrHostKey when the host key cannot be used;
+// otherwise the token does not verify.
 //
 // Any "kid" header is ignored: tokens issued before it was dropped carry
 // one, and there is only one key to verify with.
 func Verify(cfg *config.Config, token string, audience []string) (*jwt.RegisteredClaims, error) {
 	if len(audience) == 0 {
 		// jwt.WithAudience checks nothing without an audience.
-		return nil, ErrInvalid
+		return nil, errInvalid
 	}
 	kp, method, err := hostKey(cfg)
 	if err != nil {
@@ -126,12 +126,12 @@ func Verify(cfg *config.Config, token string, audience []string) (*jwt.Registere
 		jwt.WithAudience(audience...),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", errInvalid, err)
 	}
 
 	claims, ok := parsed.Claims.(*jwt.RegisteredClaims)
 	if !parsed.Valid || !ok {
-		return nil, ErrInvalid
+		return nil, errInvalid
 	}
 	return claims, nil
 }
