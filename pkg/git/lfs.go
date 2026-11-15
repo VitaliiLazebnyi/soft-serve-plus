@@ -164,6 +164,12 @@ func processCommandsOnce(p *transfer.Processor, handler *transfer.Pktline, op st
 
 // processCommandsFunc is the function whose own unguarded index panics on a
 // bare "version" command.
+//
+// isBareVersionPanic relies on msgs[1] being the only runtime error
+// ProcessCommands can raise in its own frame. Re-check that against
+// ProcessCommands on every bump of github.com/charmbracelet/git-lfs-transfer
+// in go.mod: a second unguarded index or dereference there would be answered
+// as a bare version.
 const processCommandsFunc = "github.com/charmbracelet/git-lfs-transfer/transfer.(*Processor).ProcessCommands"
 
 // isBareVersionPanic reports whether r is the processor indexing past the
