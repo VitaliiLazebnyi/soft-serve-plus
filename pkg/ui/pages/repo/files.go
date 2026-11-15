@@ -50,7 +50,9 @@ var (
 // FileItemsMsg is a message that contains a list of files.
 type FileItemsMsg struct {
 	items []selector.IdentifiableItem
-	gen   uint64
+	// load is the Files load the listing was requested in.
+	load int
+	gen  uint64
 	// truncated is set when the directory is too large to list in full
 	// and items holds only the first entries that fit.
 	truncated bool
@@ -276,6 +278,11 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		f.selector.Select(0)
 		cmds = append(cmds, f.Init())
 	case FileItemsMsg:
+		if msg.load != f.load {
+			// The user opened a file or another directory since; the
+			// listing would replace it while the path names it.
+			break
+		}
 		cmds = append(cmds,
 			f.selector.SetItems(msg.items),
 		)
@@ -373,7 +380,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 		// nothing. The content view re-renders through f.code.Update
 		// below.
 		f.SetSize(msg.Width, msg.Height)
-	case common.ErrorMsg:
+	case errorMsg:
 		// A listing or blame that failed to load never sends its result, so
 		// leave the loading view rather than spin until the next reload.
 		if f.activeView == filesViewLoading {
@@ -466,7 +473,7 @@ func (f *Files) StatusBarInfo() string {
 // directory. Commands run in their own goroutines, so it captures the model
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
-	repo, ref, path, gen := f.repo, f.ref, f.path, f.gen
+	repo, ref, path, load, gen := f.repo, f.ref, f.path, f.load, f.gen
 	// The pane is about to list a directory: a file it was opening is no
 	// longer wanted.
 	f.fileLoad.Stop()
@@ -481,18 +488,18 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 		t, err := r.TreePath(ref, path)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 		ents, err := t.Entries()
 		// A directory with too many entries is listed in part, and the
 		// status bar says so.
 		truncated := errors.Is(err, git.ErrTreeTruncated)
 		if err != nil && !truncated {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 		ents.Sort()
 		files := make([]selector.IdentifiableItem, 0)
@@ -504,7 +511,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), gen: gen, truncated: truncated}
+		return FileItemsMsg{items: append(dirs, files...), load: load, gen: gen, truncated: truncated}
 	}
 }
 
@@ -520,10 +527,10 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			return nil
 		}
 		if item.entry.IsTree() || item.Mode().IsDir() {
-			return common.LoadError(ctx, errInvalidFile)
+			return loadError(ctx, paneFiles, gen, errInvalidFile)
 		}
 		if repo == nil || ref == nil {
-			return common.LoadError(ctx, errNoFileSelected)
+			return loadError(ctx, paneFiles, gen, errNoFileSelected)
 		}
 		// The entry was listed under the listing's context, which this
 		// load cancelled when it started.
@@ -545,7 +552,7 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		}
 
 		if bin {
-			return common.LoadError(ctx, errBinaryFile)
+			return loadError(ctx, paneFiles, gen, errBinaryFile)
 		}
 
 		// Read the file once, capped by the size limit, and sniff the
@@ -553,14 +560,14 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		c, err := fi.ContentsLimit(limit)
 		if errors.Is(err, git.ErrFileTooLarge) {
 			// Tell the user, and keep the size details for the log.
-			return common.LoadError(ctx, fmt.Errorf("%w: %w", errFileTooLarge, err))
+			return loadError(ctx, paneFiles, gen, fmt.Errorf("%w: %w", errFileTooLarge, err))
 		}
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 
 		if bin, _ := git.IsBinary(bytes.NewReader(c)); bin {
-			return common.LoadError(ctx, errBinaryFile)
+			return loadError(ctx, paneFiles, gen, errBinaryFile)
 		}
 
 		content, name := string(c), item.entry.Name()
@@ -586,16 +593,16 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 			return nil
 		}
 		if repo == nil || ref == nil || item == nil || item.entry.IsTree() {
-			return common.LoadError(ctx, errNoFileSelected)
+			return loadError(ctx, paneFiles, gen, errNoFileSelected)
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 
 		b, err := r.BlameFile(ref.ID, item.entry.File().Path())
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneFiles, gen, err)
 		}
 
 		return FileBlameMsg{blame: b, load: load, gen: gen}
@@ -653,8 +660,8 @@ func (f *Files) deselectItemCmd() tea.Cmd {
 }
 
 func (f *Files) setItems(items []selector.IdentifiableItem) tea.Cmd {
-	gen := f.gen
+	load, gen := f.load, f.gen
 	return func() tea.Msg {
-		return FileItemsMsg{items: items, gen: gen}
+		return FileItemsMsg{items: items, load: load, gen: gen}
 	}
 }

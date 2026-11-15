@@ -2,6 +2,7 @@ package browse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -189,7 +190,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.SetShowAll(!m.footer.ShowAll())
 		m.showFooter = !m.showFooter
 	case common.ErrorMsg:
-		m.error = msg
+		m.error = msg.Err
+		if m.error == nil {
+			m.error = errors.New("unknown error")
+		}
 		m.state = errorState
 		m.showFooter = true
 	}

@@ -25,6 +25,10 @@ type state int
 const (
 	loadingState state = iota
 	readyState
+	// failedState is the state of a repository whose reference failed to
+	// load. Its tabs still hold what was loaded for the repository shown
+	// before, so none of them is shown or gets input.
+	failedState
 )
 
 // EmptyRepoMsg is a message to indicate that the repository is empty.
@@ -143,6 +147,9 @@ func (r *Repo) Repository() proto.Repository {
 
 // Path returns the current component path.
 func (r *Repo) Path() string {
+	if r.state == failedState {
+		return ""
+	}
 	return r.panes[r.activeTab].Path()
 }
 
@@ -196,8 +203,11 @@ func (r *Repo) Init() tea.Cmd {
 
 // busy reports whether the page or one of its tabs is loading.
 func (r *Repo) busy() bool {
-	if r.state == loadingState {
+	switch r.state {
+	case loadingState:
 		return true
+	case failedState:
+		return false
 	}
 	for _, p := range r.panes {
 		if _, ok := p.Loading(); ok {
@@ -290,6 +300,17 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, tea.SetClipboard(txt))
 		}
 		r.statusbar.SetMessage(msg.Message)
+	case errorMsg:
+		routed = true
+		if msg.to == paneRepo {
+			// No reference of this repository could be loaded.
+			r.state = failedState
+		} else {
+			// The tab that started the load leaves its loading view.
+			cmds = append(cmds, r.updatePane(msg.to, msg))
+		}
+		err := msg.err
+		cmds = append(cmds, func() tea.Msg { return common.ErrorMsg{Err: err} })
 	case paneMsg:
 		// A result goes to the tab that started the load, whichever tab is
 		// active now.
@@ -320,14 +341,6 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		r.state = readyState
 		cmds = append(cmds, r.updateModels(msg))
 		routed = true
-	case common.ErrorMsg:
-		r.state = readyState
-		// The file listing loads on every ref change, usually while another
-		// tab is shown, so the Files pane must see its error to leave its
-		// loading view. The active pane gets the message below.
-		if r.panes[r.activeTab].id() != paneFiles {
-			cmds = append(cmds, r.updatePane(paneFiles, msg))
-		}
 	case SwitchTabMsg:
 		for i, p := range r.panes {
 			if p.id() == paneID(msg) {
@@ -336,7 +349,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	}
-	if !routed {
+	if !routed && r.state != failedState {
 		active := r.panes[r.activeTab]
 		cmds = append(cmds, active.Update(msg))
 	}
@@ -378,6 +391,8 @@ func (r *Repo) View() string {
 	switch r.state {
 	case loadingState:
 		main = fmt.Sprintf("%s loading…", r.spinner.View())
+	case failedState:
+		// Nothing of the repository to show; the error screen said why.
 	case readyState:
 		p := r.panes[r.activeTab]
 		if text, ok := p.Loading(); ok && text != "" {

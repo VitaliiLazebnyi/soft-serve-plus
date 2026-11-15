@@ -1,6 +1,9 @@
 package repo
 
 import (
+	"context"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
@@ -59,4 +62,33 @@ type Pane interface {
 // delivers it to that tab, whichever tab is active.
 type paneMsg interface {
 	pane() paneID
+}
+
+// paneRepo stands for the repository page itself, which loads the
+// reference to show.
+const paneRepo paneID = -1
+
+// errorMsg reports that a load failed. Like the load's result, it carries
+// the generation and the pane the load was started for: the repository page
+// drops it when its generation is stale, hands it to that pane, which leaves
+// its loading view, and then reports the error to the error screen.
+type errorMsg struct {
+	err error
+	to  paneID
+	gen uint64
+}
+
+func (m errorMsg) generation() uint64 { return m.gen }
+
+func (m errorMsg) pane() paneID { return m.to }
+
+// loadError returns the message for a load of pane to, started in
+// generation gen, that failed with err: nothing when the load was
+// cancelled, because a newer one replaces it or the session has ended, or
+// else an errorMsg.
+func loadError(ctx context.Context, to paneID, gen uint64, err error) tea.Msg {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return errorMsg{err: err, to: to, gen: gen}
 }

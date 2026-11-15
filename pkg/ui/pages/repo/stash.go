@@ -205,6 +205,11 @@ func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 				}
 			}
 		}
+	case errorMsg:
+		// The list or a patch failed to load: leave the loading view.
+		if s.state == stashStateLoading {
+			s.state = stashStateList
+		}
 	case StashListMsg:
 		s.state = stashStateList
 		items := make([]selector.IdentifiableItem, len(msg.stashes))
@@ -323,12 +328,12 @@ func (s *Stash) fetchStashCmd() tea.Cmd {
 
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneStash, gen, err)
 		}
 
 		stash, err := r.StashList()
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneStash, gen, err)
 		}
 
 		return StashListMsg{stashes: stash, gen: gen}
@@ -351,12 +356,12 @@ func (s *Stash) fetchStashPatchCmd() tea.Cmd {
 
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneStash, gen, err)
 		}
 
 		diff, err := r.StashDiff(index)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneStash, gen, err)
 		}
 
 		return StashPatchMsg{Diff: diff, gen: gen}

@@ -41,5 +41,5 @@ func LoadError(ctx context.Context, err error) tea.Msg {
 	if ctx.Err() != nil {
 		return nil
 	}
-	return ErrorMsg(err)
+	return ErrorMsg{Err: err}
 }
