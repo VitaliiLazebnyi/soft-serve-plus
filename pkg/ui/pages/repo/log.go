@@ -38,18 +38,25 @@ func (m LogCountMsg) generation() uint64 { return m.gen }
 
 func (m LogCountMsg) pane() paneID { return paneLog }
 
-// LogItemsMsg is a message that contains a slice of LogItem.
+// LogItemsMsg is a message that contains one page of commits.
 type LogItemsMsg struct {
 	items []selector.IdentifiableItem
-	// limit is the page size the items were loaded for, or 0 when they
-	// were not loaded by page.
-	limit int
-	gen   uint64
+	// page is the page the items were loaded for, counted from 0, and
+	// limit the page size.
+	page, limit int
+	gen         uint64
 }
 
 func (m LogItemsMsg) generation() uint64 { return m.gen }
 
 func (m LogItemsMsg) pane() paneID { return paneLog }
+
+// logSizeMsg follows a footer toggle, which resizes the Commits tab only
+// after the tab has handled it: by the time this message comes, the tab has
+// its new size.
+type logSizeMsg struct{}
+
+func (logSizeMsg) pane() paneID { return paneLog }
 
 // LogDiffMsg is a message that contains the diff of a git commit.
 type LogDiffMsg struct {
@@ -75,14 +82,20 @@ func (m LogDiffErrorMsg) pane() paneID { return paneLog }
 
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
-	common         common.Common
-	selector       *selector.Selector
-	vp             *viewport.Viewport
-	activeView     logView
-	repo           proto.Repository
-	ref            *git.Reference
+	common     common.Common
+	selector   *selector.Selector
+	vp         *viewport.Viewport
+	activeView logView
+	repo       proto.Repository
+	ref        *git.Reference
+	// count is the number of commits of the ref. The list holds one page of
+	// them: page, counted from 0, of perPage commits, with the cursor on
+	// row. While a page loads, they are the page, size and row it is
+	// loaded for.
 	count          int64
-	nextPage       int
+	page           int
+	perPage        int
+	row            int
 	activeCommit   *git.Commit
 	selectedCommit *git.Commit
 	currentDiff    *git.Diff
@@ -178,8 +191,8 @@ func (l *Log) FullHelp() [][]key.Binding {
 				k.CursorDown,
 			},
 			{
-				k.NextPage,
-				k.PrevPage,
+				l.common.KeyMap.NextPage,
+				l.common.KeyMap.PrevPage,
 				k.GoToStart,
 				k.GoToEnd,
 			},
@@ -217,8 +230,8 @@ func (l *Log) startLoading() {
 // Init implements tea.Model.
 func (l *Log) Init() tea.Cmd {
 	l.activeView = logViewCommits
-	l.nextPage = 0
 	l.count = 0
+	l.page, l.row, l.perPage = 0, 0, l.selector.PerPage()
 	l.activeCommit = nil
 	l.selectedCommit = nil
 	l.clearDiff()
@@ -245,10 +258,14 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, l.Init())
 	case LogCountMsg:
 		l.count = msg.count
-		l.selector.SetTotalPages(int(msg.count))
-		l.selector.SetItems(make([]selector.IdentifiableItem, l.count))
-		cmds = append(cmds, l.updateCommitsCmd())
+		cmds = append(cmds, l.reloadPage())
 	case LogItemsMsg:
+		if msg.page != l.page || msg.limit != l.perPage {
+			// A load for a page the user has left, or by a size the list
+			// no longer has, that finished after a newer load started:
+			// the newer one shows its page.
+			break
+		}
 		// Stop loading after receiving items, unless a commit's diff is
 		// loading or shown: a reload on resize or footer toggle refreshes the
 		// list behind it without leaving the diff.
@@ -256,18 +273,16 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			l.activeView = logViewCommits
 		}
 		cmds = append(cmds, l.selector.SetItems(msg.items))
-		l.selector.SetPage(l.nextPage)
-		l.SetSize(l.common.Width, l.common.Height)
-		if msg.limit > 0 && msg.limit != l.selector.PerPage() {
-			// The list was resized after the load was built: on
-			// footer.ToggleFooterMsg the page is resized only after the
-			// Log pane builds its load. Load the page again by the size
-			// the list has now, or it shows rows that were never loaded.
-			cmds = append(cmds, l.updateCommitsCmd())
+		l.selector.Select(max(0, min(l.row, len(msg.items)-1)))
+		l.row = l.selector.Index()
+		if msg.limit != l.selector.PerPage() {
+			// The list was resized after the load was built, as on a
+			// footer toggle while the page loaded: load it again by the
+			// size the list has now, or it shows too few or too many rows.
+			cmds = append(cmds, l.reloadPage())
 		}
-		i := l.selector.SelectedItem()
-		if i != nil {
-			l.activeCommit = i.(LogItem).Commit
+		if i, ok := l.selector.SelectedItem().(LogItem); ok {
+			l.activeCommit = i.Commit
 		}
 	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
 		switch l.activeView {
@@ -279,17 +294,16 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 					cmds = append(cmds, l.selector.SelectItemCmd())
 				}
 			}
-			// XXX: This is a hack for loading commits on demand based on
-			// list.Pagination.
-			curPage := l.selector.Page()
-			cmd := l.selector.Update(msg)
-			if l.selector.Page() != curPage {
-				l.nextPage = l.selector.Page()
-				l.selector.SetPage(curPage)
+			// The list holds the page shown; a move off it loads the
+			// page it goes to.
+			if page, row, ok := l.pageMove(msg); ok {
+				l.page, l.row = page, row
 				l.startLoading()
 				cmds = append(cmds, l.updateCommitsCmd())
+				break
 			}
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, l.selector.Update(msg))
+			l.row = l.selector.Index()
 		case logViewDiff:
 			switch kmsg := msg.(type) {
 			case tea.KeyPressMsg:
@@ -350,6 +364,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		if l.activeView == logViewLoading && l.selectedCommit == nil {
 			l.activeView = logViewCommits
 			l.count = 0
+			l.page, l.row = 0, 0
 			cmds = append(cmds, l.selector.SetItems(nil))
 		}
 	case LogDiffErrorMsg:
@@ -364,7 +379,11 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, func() tea.Msg { return common.ErrorMsg{Err: err} })
 		}
 	case footer.ToggleFooterMsg:
-		cmds = append(cmds, l.updateCommitsCmd())
+		// The tab is resized only after it handles this message: look at
+		// its size once that is done.
+		cmds = append(cmds, func() tea.Msg { return logSizeMsg{} })
+	case logSizeMsg:
+		cmds = append(cmds, l.resized())
 	case tea.WindowSizeMsg:
 		// The diff is wrapped to the width, so only a width change needs
 		// it rendered again.
@@ -373,15 +392,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		if widthChanged && l.selectedCommit != nil && l.currentDiff != nil {
 			cmds = append(cmds, l.renderDiffCmd())
 		}
-		if l.repo != nil && l.ref != nil {
-			// Reload on resize since the number of commits per page might
-			// change and we'd need to load more commits. Only show the
-			// spinner in the commits view, so a diff stays on screen.
-			cmds = append(cmds, l.updateCommitsCmd())
-			if l.activeView == logViewCommits {
-				l.startLoading()
-			}
-		}
+		cmds = append(cmds, l.resized())
 	case EmptyRepoMsg:
 		l.countLoad.Stop()
 		l.pageLoad.Stop()
@@ -389,15 +400,13 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		l.ref = nil
 		l.gen = msg.gen
 		l.activeView = logViewCommits
-		l.nextPage = 0
 		l.count = 0
+		l.page, l.row = 0, 0
 		l.activeCommit = nil
 		l.selectedCommit = nil
 		l.clearDiff()
+		cmds = append(cmds, l.selector.SetItems(nil))
 		l.selector.Select(0)
-		cmds = append(cmds,
-			l.setItems([]selector.IdentifiableItem{}),
-		)
 	}
 	switch l.activeView {
 	case logViewDiff:
@@ -467,9 +476,8 @@ func (l *Log) StatusBarInfo() string {
 		}
 		fallthrough
 	case logViewCommits:
-		// We're using l.nextPage instead of l.selector.Paginator.Page because
-		// of the paginator hack above.
-		return fmt.Sprintf("p. %d/%d", l.nextPage+1, l.selector.TotalPages())
+		// The list holds one page; the Log knows which.
+		return fmt.Sprintf("p. %d/%d", l.page+1, l.lastPage()+1)
 	case logViewDiff:
 		return common.ScrollPercent(l.vp.ScrollPosition())
 	default:
@@ -537,11 +545,83 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 	}
 }
 
-// updateCommitsCmd returns a command that loads the commits of the next page.
+// lastPage returns the number of the last page of commits, counted from 0.
+func (l *Log) lastPage() int {
+	if l.count <= 0 || l.perPage <= 0 {
+		return 0
+	}
+	return int((l.count - 1) / int64(l.perPage))
+}
+
+// pageMove returns the page and row msg moves the cursor to when it moves
+// off the page shown: a page key, home or end, or a cursor key or the
+// wheel at the edge of the page. ok is false when the cursor stays on the
+// page, where the list moves it.
+func (l *Log) pageMove(msg tea.Msg) (page, row int, ok bool) {
+	k := l.selector.KeyMap
+	last, idx := l.lastPage(), l.selector.Index()
+	var up, down bool
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		up, down = msg.Button == tea.MouseWheelUp, msg.Button == tea.MouseWheelDown
+	case tea.KeyPressMsg:
+		switch {
+		case key.Matches(msg, k.CursorUp):
+			up = true
+		case key.Matches(msg, k.CursorDown):
+			down = true
+		case key.Matches(msg, l.common.KeyMap.PrevPage):
+			return l.page - 1, idx, l.page > 0
+		case key.Matches(msg, l.common.KeyMap.NextPage):
+			return l.page + 1, idx, l.page < last
+		case key.Matches(msg, k.GoToStart):
+			return 0, 0, l.page > 0
+		case key.Matches(msg, k.GoToEnd):
+			// The row is cut to the last commit when the page arrives.
+			return last, l.perPage - 1, l.page < last
+		}
+	}
+	switch {
+	case up && idx == 0 && l.page > 0:
+		return l.page - 1, l.perPage - 1, true
+	case down && idx >= len(l.selector.Items())-1 && l.page < last:
+		return l.page + 1, 0, true
+	}
+	return 0, 0, false
+}
+
+// resized returns a command that loads the page again when the list holds
+// another number of commits a page since the page was loaded, or nil.
+func (l *Log) resized() tea.Cmd {
+	if l.repo == nil || l.ref == nil || l.selector.PerPage() == l.perPage {
+		return nil
+	}
+	// Only show the spinner in the commits view, so a diff stays on screen.
+	if l.activeView == logViewCommits {
+		l.startLoading()
+	}
+	return l.reloadPage()
+}
+
+// reloadPage returns a command that loads, by the size the list has now, the
+// page that holds the commit under the cursor.
+func (l *Log) reloadPage() tea.Cmd {
+	if per := l.selector.PerPage(); per != l.perPage {
+		if l.perPage > 0 {
+			i := l.page*l.perPage + l.row
+			l.page, l.row = i/per, i%per
+		}
+		l.perPage = per
+	}
+	return l.updateCommitsCmd()
+}
+
+// updateCommitsCmd returns a command that loads the page of commits the list
+// is to show.
 func (l *Log) updateCommitsCmd() tea.Cmd {
 	repo, ref, logger, gen := l.repo, l.ref, l.common.Logger, l.gen
 	ctx := l.pageLoad.Start(l.common.Context())
-	count, page, limit := l.count, l.nextPage, l.selector.PerPage()
+	count, page, limit := l.count, l.page, l.perPage
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.
@@ -556,25 +636,20 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 		}
 
 		if count == 0 {
-			return LogItemsMsg{items: []selector.IdentifiableItem{}, gen: gen}
+			return LogItemsMsg{page: page, limit: limit, gen: gen}
 		}
 
-		skip := page * limit
-		items := make([]selector.IdentifiableItem, count)
 		// CommitsByPage pages start at 1
 		cc, err := r.CommitsByPage(ref, page+1, limit)
 		if err != nil {
 			logger.Debugf("error loading commits: %v", err)
 			return loadError(ctx, paneLog, gen, err)
 		}
-		for i, c := range cc {
-			idx := i + skip
-			if int64(idx) >= count {
-				break
-			}
-			items[idx] = LogItem{Commit: c}
+		items := make([]selector.IdentifiableItem, 0, min(len(cc), limit))
+		for _, c := range cc[:min(len(cc), limit)] {
+			items = append(items, LogItem{Commit: c})
 		}
-		return LogItemsMsg{items: items, limit: limit, gen: gen}
+		return LogItemsMsg{items: items, page: page, limit: limit, gen: gen}
 	}
 }
 
@@ -635,11 +710,4 @@ func renderCommit(c *git.Commit, st *styles.Styles, width int) string {
 // spaces first, as reflow/wrap did, because x/ansi gives a tab no width.
 func wrapText(s string, width int) string {
 	return ansi.Hardwrap(strings.ReplaceAll(s, "\t", "    "), width, false)
-}
-
-func (l *Log) setItems(items []selector.IdentifiableItem) tea.Cmd {
-	gen := l.gen
-	return func() tea.Msg {
-		return LogItemsMsg{items: items, gen: gen}
-	}
 }

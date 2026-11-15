@@ -44,6 +44,7 @@ func TestListErrorClearsPreviousItems(t *testing.T) {
 	}
 
 	// Log: a page reload fails.
+	p.log.SetSize(100, 30)
 	p.log.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	fail(paneLog)
 	if n := len(p.log.selector.VisibleItems()); n != 0 || p.log.activeView != logViewCommits {

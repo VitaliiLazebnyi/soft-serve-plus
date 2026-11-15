@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
 
@@ -35,11 +36,12 @@ func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
 	l.Update(refMsg)
 	l.Update(l.countCommitsCmd()())
 
-	// Go to the second page.
-	l.nextPage = 1
 	l.Update(l.updateCommitsCmd()())
 
-	// The footer is toggled: the load is built, then the list shrinks.
+	// Go to the second page.
+	deliverAll(l, l.Update(keyNextPage))
+
+	// A load is built, then the list shrinks before it arrives.
 	load := l.updateCommitsCmd()
 	before := l.selector.PerPage()
 	l.SetSize(80, 20)
@@ -47,14 +49,34 @@ func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
 	if after >= before {
 		t.Fatalf("per page %d after shrinking, %d before; want fewer", after, before)
 	}
-	cmd := l.Update(load())
-	l.Update(findMsg[LogItemsMsg](t, runCmd(cmd)))
+	deliverAll(l, l.Update(load()))
 
 	items := l.selector.Items()
-	for i := l.nextPage * after; i < (l.nextPage+1)*after && i < len(items); i++ {
-		if it, ok := items[i].(LogItem); !ok || it.Commit == nil {
-			t.Fatalf("row %d on page %d is not loaded after the resize", i, l.nextPage+1)
+	if len(items) != after {
+		t.Fatalf("%d rows after the resize; want the %d a page holds", len(items), after)
+	}
+	for i, it := range items {
+		if it, ok := it.(LogItem); !ok || it.Commit == nil {
+			t.Fatalf("row %d is not loaded after the resize", i)
 		}
+	}
+
+	// A footer toggle resizes the list after the Log handles it; the page
+	// is loaded once, by the new size.
+	cmd := l.Update(footer.ToggleFooterMsg{})
+	l.SetSize(80, 30)
+	loads := 0
+	for msgs := runCmd(cmd); len(msgs) > 0; msgs = msgs[1:] {
+		if _, ok := msgs[0].(LogItemsMsg); ok {
+			loads++
+		}
+		msgs = append(msgs, runCmd(l.Update(msgs[0]))...)
+	}
+	if loads != 1 {
+		t.Fatalf("a footer toggle loaded the page %d times; want once", loads)
+	}
+	if n := len(l.selector.Items()); n != l.selector.PerPage() {
+		t.Fatalf("%d rows after the footer toggle; want the %d a page holds", n, l.selector.PerPage())
 	}
 }
 
@@ -87,6 +109,13 @@ func newTestLog(t *testing.T, dir string) *Log {
 	return l
 }
 
+// resizeLog resizes l the way the repository page does: it sets the size,
+// then passes the window size on.
+func resizeLog(l *Log, width, height int) tea.Cmd {
+	l.SetSize(width, height)
+	return l.Update(tea.WindowSizeMsg{Width: width, Height: height})
+}
+
 // Resizing the terminal, or toggling the footer, while a commit's diff is
 // loading or shown reloads the commit list behind it but keeps the diff.
 func TestLogResizeKeepsDiff(t *testing.T) {
@@ -95,7 +124,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 
 	l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
 	// A resize while the diff loads must not show the commit list.
-	l.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	resizeLog(l, 100, 30)
 	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize while loading a diff, view = %v; want loading", l.activeView)
@@ -105,11 +134,11 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 		t.Fatalf("after loading the diff, view = %v; want diff", l.activeView)
 	}
 
-	for _, msg := range []tea.Msg{
-		tea.WindowSizeMsg{Width: 120, Height: 20},
-		tea.WindowSizeMsg{Width: 60, Height: 50},
+	for _, msg := range []tea.WindowSizeMsg{
+		{Width: 120, Height: 20},
+		{Width: 60, Height: 50},
 	} {
-		l.Update(msg)
+		resizeLog(l, msg.Width, msg.Height)
 		if l.activeView != logViewDiff {
 			t.Fatalf("after %T, view = %v; want diff", msg, l.activeView)
 		}
@@ -125,7 +154,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 	}
 	// In the commits view a resize still shows the spinner until the
 	// reloaded page arrives.
-	l.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	resizeLog(l, 80, 40)
 	if l.activeView != logViewLoading {
 		t.Fatalf("after a resize in the commits view, view = %v; want loading", l.activeView)
 	}
@@ -167,7 +196,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 
 	// A resize after the error is dismissed shows the commit list again.
 	l.Update(RepoMsg(openRepo{path: dir}))
-	l.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	resizeLog(l, 100, 30)
 	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {
 		t.Fatalf("after a resize following a diff error, view = %v; want commits", l.activeView)
