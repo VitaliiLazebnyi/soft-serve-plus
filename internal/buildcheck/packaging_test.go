@@ -337,3 +337,60 @@ func TestReleaseArtifactsAreReproducible(t *testing.T) {
 		}
 	}
 }
+
+// TestPostinstallAppliesOnlyItsOwnRules checks that the package's postinstall
+// script runs systemd-sysusers and systemd-tmpfiles on the rule files the
+// package installs. Without a file argument they apply the rules of every
+// package on the host, and with set -e another package's failing rule fails
+// this install.
+func TestPostinstallAppliesOnlyItsOwnRules(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	if len(c.NFPMs) == 0 {
+		t.Fatal("no nfpms in .goreleaser.yml; update this test")
+	}
+	for i, n := range c.NFPMs {
+		// The rule files the package installs, by the directory systemd
+		// searches for them.
+		installed := map[string]string{}
+		for _, f := range n.Contents {
+			for _, tool := range []string{"sysusers", "tmpfiles"} {
+				if filepath.Dir(f.Dst) == "/usr/lib/"+tool+".d" {
+					installed["systemd-"+tool] = filepath.Base(f.Dst)
+				}
+			}
+		}
+		if n.Scripts.PostInstall == "" {
+			t.Fatalf("nfpms[%d]: no postinstall script; update this test", i)
+		}
+		b, err := os.ReadFile(filepath.Join(repoRoot, n.Scripts.PostInstall))
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls := map[string]int{}
+		for line := range strings.SplitSeq(string(b), "\n") {
+			f := strings.Fields(line)
+			if len(f) == 0 || strings.HasPrefix(f[0], "#") {
+				continue
+			}
+			tool := f[0]
+			if tool != "systemd-sysusers" && tool != "systemd-tmpfiles" {
+				continue
+			}
+			calls[tool]++
+			conf, ok := installed[tool]
+			if !ok {
+				t.Errorf("nfpms[%d]: %s runs %s, but the package installs no rule file for it", i, n.Scripts.PostInstall, tool)
+				continue
+			}
+			if !slices.Contains(f[1:], conf) {
+				t.Errorf("nfpms[%d]: %s runs %q, which applies every package's rules; name %s", i, n.Scripts.PostInstall, strings.TrimSpace(line), conf)
+			}
+		}
+		for tool := range installed {
+			if calls[tool] == 0 {
+				t.Errorf("nfpms[%d]: the package installs a %s rule, but %s does not run %s", i, tool, n.Scripts.PostInstall, tool)
+			}
+		}
+	}
+}
