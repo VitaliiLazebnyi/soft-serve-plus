@@ -142,6 +142,11 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 		}
 	case tea.WindowSizeMsg:
 		r.SetSize(msg.Width, msg.Height)
+	case errorMsg:
+		// The list still holds the previous repository's references.
+		r.isLoading = false
+		r.activeRef = nil
+		cmds = append(cmds, r.selector.SetItems(nil))
 	case RefItemsMsg:
 		if r.refPrefix == msg.prefix {
 			cmds = append(cmds, r.selector.SetItems(msg.items))
@@ -220,16 +225,16 @@ func (r *Refs) updateItemsCmd() tea.Cmd {
 			return nil
 		}
 		if repo == nil {
-			return common.ErrorMsg(common.ErrMissingRepo)
+			return errorMsg{err: common.ErrMissingRepo, to: refsPane(prefix), gen: gen}
 		}
 		rr, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, refsPane(prefix), gen, err)
 		}
 		refs, err := rr.RefInfos(prefix)
 		if err != nil {
 			logger.Debugf("error getting references: %v", err)
-			return common.LoadError(ctx, err)
+			return loadError(ctx, refsPane(prefix), gen, err)
 		}
 		its := make(RefItems, len(refs))
 		for i, ref := range refs {
@@ -278,18 +283,18 @@ func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cm
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneRepo, gen, err)
 		}
 		refs, err := r.References()
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneRepo, gen, err)
 		}
 		if len(refs) == 0 {
 			return EmptyRepoMsg{gen: gen}
 		}
 		ref, err := defaultRef(r, refs)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneRepo, gen, err)
 		}
 		if ref == nil {
 			return EmptyRepoMsg{gen: gen}

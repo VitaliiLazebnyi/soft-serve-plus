@@ -20,6 +20,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/selection"
 )
 
+// errUnknown stands for an error reported without one.
+var errUnknown = errors.New("unknown error")
+
 type page int
 
 const (
@@ -186,7 +189,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The initial repository and a picked one report a failed open
 		// the same way.
 		if m.err != nil {
-			msg = common.ErrorMsg(m.err)
+			msg = common.ErrorMsg{Err: m.err}
 		} else {
 			msg = repo.RepoMsg(m.repo)
 		}
@@ -252,12 +255,16 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ui.showFooter = ui.footer.ShowAll()
 		// The repository page loads the ref to show itself.
 	case common.ErrorMsg:
-		if !common.IsUserError(msg) {
+		err := msg.Err
+		if err == nil {
+			err = errUnknown
+		}
+		if !common.IsUserError(err) {
 			// The error screen shows a generic message for this error, which
 			// may carry git's output or paths on disk, so log it in full.
-			ui.common.Logger.Error("ui error", "err", msg)
+			ui.common.Logger.Error("ui error", "err", err)
 		}
-		ui.error = msg
+		ui.error = err
 		ui.state = errorState
 		ui.showFooter = true
 	case selection.ReposMsg:

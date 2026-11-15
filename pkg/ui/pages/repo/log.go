@@ -340,6 +340,15 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 		if again && l.selectedCommit != nil && l.currentDiff != nil {
 			cmds = append(cmds, l.renderDiffCmd())
 		}
+	case errorMsg:
+		// The count or a page failed to load: leave the loading view for
+		// the commit list, unless a commit is opening.
+		// The list still holds the previous ref's commits: clear it.
+		if l.activeView == logViewLoading && l.selectedCommit == nil {
+			l.activeView = logViewCommits
+			l.count = 0
+			cmds = append(cmds, l.selector.SetItems(nil))
+		}
 	case LogDiffErrorMsg:
 		// Leave the loading view for the commit list, so the spinner does not
 		// stay on screen once the error is dismissed, then show the error.
@@ -349,7 +358,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 			l.selectedCommit = nil
 			l.activeView = logViewCommits
 			err := msg.err
-			cmds = append(cmds, func() tea.Msg { return common.ErrorMsg(err) })
+			cmds = append(cmds, func() tea.Msg { return common.ErrorMsg{Err: err} })
 		}
 	case footer.ToggleFooterMsg:
 		cmds = append(cmds, l.updateCommitsCmd())
@@ -515,12 +524,12 @@ func (l *Log) countCommitsCmd() tea.Cmd {
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneLog, gen, err)
 		}
 		count, err := r.CountCommits(ref)
 		if err != nil {
 			logger.Debugf("error counting commits: %v", err)
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneLog, gen, err)
 		}
 		return LogCountMsg{count: count, gen: gen}
 	}
@@ -541,7 +550,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 		}
 		r, err := openWithContext(ctx, repo)
 		if err != nil {
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneLog, gen, err)
 		}
 
 		if count == 0 {
@@ -554,7 +563,7 @@ func (l *Log) updateCommitsCmd() tea.Cmd {
 		cc, err := r.CommitsByPage(ref, page+1, limit)
 		if err != nil {
 			logger.Debugf("error loading commits: %v", err)
-			return common.LoadError(ctx, err)
+			return loadError(ctx, paneLog, gen, err)
 		}
 		for i, c := range cc {
 			idx := i + skip

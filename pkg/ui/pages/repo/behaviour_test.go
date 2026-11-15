@@ -135,7 +135,7 @@ func (p *pinPage) settle(msgs ...tea.Msg) {
 			tick = msg
 			continue
 		case common.ErrorMsg:
-			p.t.Fatalf("page reported an error: %v", msg)
+			p.t.Fatalf("page reported an error: %v", msg.Err)
 		}
 		msgs = append(msgs, p.update(msg)...)
 	}

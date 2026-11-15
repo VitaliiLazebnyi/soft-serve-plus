@@ -134,7 +134,9 @@ func (d *driver) send(msg tea.Msg) {
 			// Spinners tick forever; nothing a test checks depends on them.
 			continue
 		case common.ErrorMsg:
-			d.t.Fatalf("model reported an error: %v", msg)
+			d.t.Fatalf("model reported an error: %v", msg.Err)
+		case errorMsg:
+			d.t.Fatalf("model reported an error: %v", msg.err)
 		case tea.BatchMsg:
 			for _, cmd := range msg {
 				queue = append(queue, d.run(cmd))

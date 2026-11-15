@@ -121,12 +121,12 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	if msg, ok := sel("small.txt").(FileContentMsg); !ok || msg.content != "hello\n" {
 		t.Errorf("small.txt: got %#v, want its content", msg)
 	}
-	if msg, ok := sel("big.txt").(common.ErrorMsg); !ok || !errors.Is(msg, git.ErrFileTooLarge) {
+	if msg, ok := sel("big.txt").(errorMsg); !ok || !errors.Is(msg.err, git.ErrFileTooLarge) {
 		t.Errorf("big.txt: got %#v, want ErrFileTooLarge", msg)
-	} else if got := common.ErrorMessage(msg); got != "file too large" {
+	} else if got := common.ErrorMessage(msg.err); got != "file too large" {
 		t.Errorf("big.txt: error screen shows %q, want %q", got, "file too large")
 	}
-	if msg, ok := sel("bin.dat").(common.ErrorMsg); !ok || !errors.Is(msg, errBinaryFile) {
+	if msg, ok := sel("bin.dat").(errorMsg); !ok || !errors.Is(msg.err, errBinaryFile) {
 		t.Errorf("bin.dat: got %#v, want errBinaryFile", msg)
 	}
 }
@@ -166,8 +166,8 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 			}
 			f.path = tc.path
 			msg := f.updateFilesCmd()()
-			if _, ok := msg.(common.ErrorMsg); !ok {
-				t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
+			if _, ok := msg.(errorMsg); !ok {
+				t.Fatalf("updateFilesCmd() = %T %v; want errorMsg", msg, msg)
 			}
 			f.Update(msg)
 			if f.activeView == filesViewLoading {
@@ -185,7 +185,7 @@ func TestFilesBlameErrorStopsLoading(t *testing.T) {
 	f.activeView = filesViewLoading
 	f.blameView = true
 
-	f.Update(common.ErrorMsg(errors.New("blame failed")))
+	f.Update(errorMsg{err: errors.New("blame failed"), to: paneFiles})
 	if f.activeView != filesViewContent {
 		t.Errorf("activeView = %v; want filesViewContent", f.activeView)
 	}
@@ -203,7 +203,7 @@ func TestRepoErrorReachesInactiveFilesPane(t *testing.T) {
 	r := New(c, NewReadme(c), files)
 	files.activeView = filesViewLoading
 
-	r.Update(common.ErrorMsg(errors.New("listing failed")))
+	r.Update(errorMsg{err: errors.New("listing failed"), to: paneFiles, gen: r.gen})
 	if files.activeView == filesViewLoading {
 		t.Error("inactive Files pane still loading after the error")
 	}
@@ -241,8 +241,8 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	f.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
 	f.Update(RefMsg{Ref: ref})
 	msg := f.updateFilesCmd()()
-	if _, ok := msg.(common.ErrorMsg); !ok {
-		t.Fatalf("updateFilesCmd() = %T %v; want common.ErrorMsg", msg, msg)
+	if _, ok := msg.(errorMsg); !ok {
+		t.Fatalf("updateFilesCmd() = %T %v; want errorMsg", msg, msg)
 	}
 	f.Update(msg)
 	if f.activeView != filesViewFiles {

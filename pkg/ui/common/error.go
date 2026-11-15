@@ -42,12 +42,16 @@ func IsUserError(err error) bool {
 	return ok
 }
 
-// ErrorMsg is a Bubble Tea message that represents an error.
-type ErrorMsg error
+// ErrorMsg is a Bubble Tea message that reports an error for the error
+// screen. It is a struct, not an error type of its own, so that a type switch
+// matches it alone and not every message with an Error method.
+type ErrorMsg struct {
+	Err error
+}
 
-// ErrorCmd returns an ErrorMsg from error.
+// ErrorCmd returns a command that reports err.
 func ErrorCmd(err error) tea.Cmd {
 	return func() tea.Msg {
-		return ErrorMsg(err)
+		return ErrorMsg{Err: err}
 	}
 }

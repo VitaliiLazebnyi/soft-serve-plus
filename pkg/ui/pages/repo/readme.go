@@ -122,6 +122,8 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 			r.code.SetContent(defaultEmptyRepoMsg(r.common,
 				r.repo.Name()), ".md"),
 		)
+	case errorMsg:
+		r.isLoading = false
 	case ReadmeMsg:
 		r.isLoading = false
 		r.readmePath = msg.Path
@@ -174,7 +176,7 @@ func (r *Readme) updateReadmeCmd() tea.Cmd {
 		}
 		m := ReadmeMsg{gen: gen}
 		if repo == nil {
-			return common.ErrorMsg(common.ErrMissingRepo)
+			return errorMsg{err: common.ErrMissingRepo, to: paneReadme, gen: gen}
 		}
 		rm, rp, _ := backend.Readme(ctx, repo, ref, limit)
 		if ctx.Err() != nil {

@@ -78,7 +78,7 @@ func TestUIErrorScreenHidesInternalErrors(t *testing.T) {
 			t.Cleanup(ui.common.Zone.Close)
 			ui.Init()
 
-			ui.Update(common.ErrorMsg(c.err))
+			ui.Update(common.ErrorMsg{Err: c.err})
 			view := ui.View().Content
 			if !strings.Contains(view, c.want) {
 				t.Errorf("error screen does not show %q:\n%s", c.want, view)
@@ -231,7 +231,7 @@ var (
 func TestUIErrorStateKeepsInputFromPage(t *testing.T) {
 	t.Parallel()
 	ui, p := newTestUI(t, selectionPage)
-	ui.Update(common.ErrorMsg(errors.New("binary file")))
+	ui.Update(common.ErrorMsg{Err: errors.New("binary file")})
 
 	ui.Update(downKey)
 	ui.Update(tea.MouseClickMsg{Button: tea.MouseLeft})
@@ -259,7 +259,7 @@ func TestUIErrorStateKeepsInputFromPage(t *testing.T) {
 func TestUIErrorStateForwardsNonInput(t *testing.T) {
 	t.Parallel()
 	ui, p := newTestUI(t, selectionPage)
-	ui.Update(common.ErrorMsg(errors.New("boom")))
+	ui.Update(common.ErrorMsg{Err: errors.New("boom")})
 	before := len(p.msgs)
 	type otherMsg struct{}
 	ui.Update(otherMsg{})
@@ -274,7 +274,7 @@ func TestUIDismissErrorKeepsSelectionFooter(t *testing.T) {
 	if ui.footer.ShowAll() {
 		t.Fatal("footer unexpectedly starts with all help shown")
 	}
-	ui.Update(common.ErrorMsg(common.ErrMissingRepo))
+	ui.Update(common.ErrorMsg{Err: common.ErrMissingRepo})
 	ui.Update(escKey)
 	if !ui.showFooter {
 		t.Fatal("footer hidden on the selection page after dismissing an error")
@@ -284,7 +284,7 @@ func TestUIDismissErrorKeepsSelectionFooter(t *testing.T) {
 func TestUIDismissErrorOnRepoPageFollowsShowAll(t *testing.T) {
 	t.Parallel()
 	ui, _ := newTestUI(t, repoPage)
-	ui.Update(common.ErrorMsg(errors.New("binary file")))
+	ui.Update(common.ErrorMsg{Err: errors.New("binary file")})
 	ui.Update(escKey)
 	if ui.showFooter {
 		t.Fatal("footer shown on the repo page after dismissing an error without show-all help")
