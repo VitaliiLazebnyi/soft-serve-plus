@@ -25,7 +25,24 @@ type Common struct {
 	HideCloneCmd  bool
 }
 
-// NewCommon returns a new Common struct.
+// MaxWidth and MaxHeight are the largest terminal size, in cells, the UI
+// renders at. The size comes from the SSH client, and rendering costs memory
+// in proportion to width x height, so a larger terminal gets a UI of this
+// size.
+const (
+	MaxWidth  = 500
+	MaxHeight = 200
+)
+
+// ClampSize returns width and height limited to 0..MaxWidth and 0..MaxHeight.
+// A size from the client is a uint32, which is negative as an int on
+// 32-bit platforms when over MaxInt32.
+func ClampSize(width, height int) (int, int) {
+	return max(0, min(width, MaxWidth)), max(0, min(height, MaxHeight))
+}
+
+// NewCommon returns a new Common struct, with its size limited by
+// ClampSize.
 //
 // Its Zone manager runs a background worker. The caller must close it with
 // Zone.Close once the program using it has exited, and not before: a render
@@ -34,6 +51,7 @@ func NewCommon(ctx context.Context, width, height int) Common {
 	if ctx == nil {
 		ctx = context.TODO()
 	}
+	width, height = ClampSize(width, height)
 	return Common{
 		ctx:    ctx,
 		Width:  width,
@@ -45,10 +63,10 @@ func NewCommon(ctx context.Context, width, height int) Common {
 	}
 }
 
-// SetSize sets the width and height of the common struct.
+// SetSize sets the width and height of the common struct, limited by
+// ClampSize.
 func (c *Common) SetSize(width, height int) {
-	c.Width = width
-	c.Height = height
+	c.Width, c.Height = ClampSize(width, height)
 }
 
 // Context returns the context.

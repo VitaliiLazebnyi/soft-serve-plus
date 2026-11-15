@@ -1,6 +1,7 @@
 package common_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -26,5 +27,37 @@ func TestIsFileMarkdown(t *testing.T) {
 				t.Errorf("IsFileMarkdown(%q, %q) = %v, want %v", c.content, c.filename, got, c.isMkd)
 			}
 		})
+	}
+}
+
+// The UI's size comes from the SSH client; NewCommon and SetSize keep it to
+// at most 500x200 cells.
+func TestCommonSizeClamped(t *testing.T) {
+	for _, tc := range []struct {
+		width, height         int
+		wantWidth, wantHeight int
+	}{
+		{80, 24, 80, 24},
+		{500, 200, 500, 200},
+		{501, 201, 500, 200},
+		{30000, 30000, 500, 200},
+		{30000, 10, 500, 10},
+		{10, 30000, 10, 200},
+		{0, 0, 0, 0},
+		// A uint32 size over MaxInt32 is negative as an int on 32-bit
+		// platforms.
+		{-5, -7, 0, 0},
+		{-1 << 31, 80, 0, 80},
+	} {
+		c := common.NewCommon(context.Background(), tc.width, tc.height)
+		if c.Width != tc.wantWidth || c.Height != tc.wantHeight {
+			t.Errorf("NewCommon(%dx%d) size %dx%d, want %dx%d", tc.width, tc.height, c.Width, c.Height, tc.wantWidth, tc.wantHeight)
+		}
+		c.SetSize(1, 1)
+		c.SetSize(tc.width, tc.height)
+		if c.Width != tc.wantWidth || c.Height != tc.wantHeight {
+			t.Errorf("SetSize(%dx%d) size %dx%d, want %dx%d", tc.width, tc.height, c.Width, c.Height, tc.wantWidth, tc.wantHeight)
+		}
+		c.Zone.Close()
 	}
 }

@@ -106,17 +106,38 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 		return nil, nil
 	}
 
+	// The terminal size is the client's to choose, and Bubble Tea allocates
+	// width x height cells for the initial size without checking it. Later
+	// options win, so these replace the size and filter bm.MakeOptions sets.
+	width, height := common.ClampSize(pty.Window.Width, pty.Window.Height)
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
 		tea.WithContext(ctx),
 		tea.WithColorProfile(common.DefaultColorProfile),
+		tea.WithWindowSize(width, height),
+		tea.WithFilter(sessionFilter),
 	)
 
-	c := common.NewCommon(ctx, pty.Window.Width, pty.Window.Height)
+	c := common.NewCommon(ctx, width, height)
 	m := NewUI(c, initialRepo)
 	p := tea.NewProgram(m, opts...)
 
 	tuiSessionCounter.Inc()
 
 	return p, &c
+}
+
+// sessionFilter is the TUI program's message filter. It limits window sizes
+// from the client's resizes by common.ClampSize, and, like the filter
+// bm.MakeOptions sets, which it replaces, resumes instead of suspending: a
+// remote session cannot be suspended.
+func sessionFilter(_ tea.Model, msg tea.Msg) tea.Msg {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		msg.Width, msg.Height = common.ClampSize(msg.Width, msg.Height)
+		return msg
+	case tea.SuspendMsg:
+		return tea.ResumeMsg{}
+	}
+	return msg
 }
