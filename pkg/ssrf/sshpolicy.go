@@ -33,9 +33,10 @@ type GitRemotePolicy struct {
 	// everyone else gets ErrSSHRequiresAdmin.
 	AllowAnySSHHost bool
 
-	// lookup resolves hostnames during validation. Nil means
-	// net.DefaultResolver. Tests set it so they run without DNS; it is a
-	// field rather than package state so parallel tests cannot race on it.
+	// lookup resolves hostnames during validation. Nil means the package
+	// resolver (net.DefaultResolver outside tests). Tests set it so they
+	// run without DNS; it is a field rather than package state so parallel
+	// tests cannot race on it.
 	lookup lookupFunc
 }
 
@@ -93,6 +94,13 @@ func parseAllowedHost(raw string) (allowedHost, error) {
 	entry := strings.TrimSpace(raw)
 	if entry == "" {
 		return allowedHost{}, fmt.Errorf("allowed host %q: empty entry", raw)
+	}
+	if strings.HasPrefix(entry, "[") {
+		if end := strings.Index(entry, "]"); end >= 0 {
+			if rest := entry[end+1:]; rest != "" && !strings.HasPrefix(rest, ":") {
+				return allowedHost{}, fmt.Errorf(`allowed host %q: only ":port" may follow "]"`, raw)
+			}
+		}
 	}
 
 	host, rawPort, hasPort := splitHostPort(entry)
@@ -193,8 +201,8 @@ func (f lookupFunc) resolve(ctx context.Context, host string) ([]net.IPAddr, err
 // covered by the allowlist. Hostnames match entries by name; otherwise the
 // host must resolve, and every address it resolves to must fall inside an
 // allowed range. A hostname that cannot be resolved fails closed. ctx bounds
-// the lookup, which uses lookup for CIDR entries; nil means
-// net.DefaultResolver.
+// the lookup, which uses lookup for CIDR entries; nil means the package
+// resolver (net.DefaultResolver outside tests).
 //
 // ssh resolves the name again itself, so a CIDR match only says where the
 // name pointed at validation time. Hostname entries are the robust form.

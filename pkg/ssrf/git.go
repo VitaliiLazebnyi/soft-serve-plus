@@ -254,7 +254,8 @@ func checkAuthority(remote string, u *url.URL) error {
 
 // validateRemoteHost checks a remote host against private and internal ranges,
 // returning the validated address so callers can pin it. ctx bounds the
-// lookup; lookup resolves hostnames, nil meaning net.DefaultResolver.
+// lookup; lookup resolves hostnames, nil meaning the package resolver
+// (net.DefaultResolver outside tests).
 func validateRemoteHost(ctx context.Context, host string, lookup lookupFunc) (netip.Addr, error) {
 	if host == "" {
 		return netip.Addr{}, fmt.Errorf("%w: missing hostname", ErrInvalidURL)

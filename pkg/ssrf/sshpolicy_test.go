@@ -177,6 +177,14 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 			t.Errorf("ParseAllowedHosts(%q) = %v, want %q", entry, err, want)
 		}
 	}
+	// So does text after the brackets, which used to be dropped.
+	for _, entry := range []string{"[fd00::1]x", "[fd00::1]2222", "[fd00::/8]x:22"} {
+		_, err := ParseAllowedHosts([]string{entry})
+		want := fmt.Sprintf(`allowed host %q: only ":port" may follow "]"`, entry)
+		if err == nil || err.Error() != want {
+			t.Errorf("ParseAllowedHosts(%q) = %v, want %q", entry, err, want)
+		}
+	}
 }
 
 // TestValidateGitRemotePolicy covers the ssh policy as applied through
