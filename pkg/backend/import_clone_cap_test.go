@@ -5,6 +5,7 @@ package backend
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -44,5 +45,51 @@ func TestCloneImportCapsOutput(t *testing.T) {
 	}
 	if !strings.Contains(msg, "remote: ") {
 		t.Errorf("error %.200q... keeps none of git's output", msg)
+	}
+}
+
+// fakeURLGit prints $OFFSET bytes, then a URL with a token as its user
+// name, then more than the cap keeps, and fails, as a remote whose
+// "remote:" lines quote such a URL would make it.
+const fakeURLGit = `#!/bin/sh
+head -c "$OFFSET" /dev/zero | tr '\0' x
+printf ' https://ghp_SECRETTOKEN@github.com/o/r.git\n' >&2
+i=0
+while [ $i -lt 256 ]; do
+	printf 'remote: %060d\n' $i >&2
+	i=$((i+1))
+done
+exit 128
+`
+
+// A URL the cap cuts must not leave part of its token behind: cut just
+// before "@", the rest reads as a URL whose host is the token, which
+// redaction keeps.
+func TestCloneImportCutURLKeepsNoToken(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeURLGit), 0o755); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// The token starts at byte offset+9; put the cut a few bytes into it,
+	// around each size the output is cut at.
+	for _, limit := range []int{2 << 10, 4 << 10} {
+		for _, into := range []int{1, 4, 10, 15} {
+			offset := limit - 9 - into
+			t.Run(strconv.Itoa(offset), func(t *testing.T) {
+				t.Setenv("OFFSET", strconv.Itoa(offset))
+				err := cloneImport(t.Context(), importSpec{
+					remote: "https://example.invalid/x.git",
+					path:   filepath.Join(t.TempDir(), "x.git"),
+				})
+				if err == nil {
+					t.Fatal("cloneImport succeeded")
+				}
+				if strings.Contains(err.Error(), "ghp_") {
+					t.Errorf("error keeps part of the token: %q", err.Error())
+				}
+			})
+		}
 	}
 }

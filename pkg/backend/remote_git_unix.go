@@ -18,6 +18,11 @@ import (
 func terminateOnCancel(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
+		// Through os.Process first: once git has been waited for, its pid
+		// and so its group id can belong to another process.
+		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			return os.ErrProcessDone
+		}
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		if errors.Is(err, syscall.ESRCH) {
 			// The group is gone: git and its helpers have exited.
