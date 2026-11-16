@@ -26,13 +26,30 @@ func TestCronLogger(t *testing.T) {
 	}
 }
 
-func TestSchedularAddRemove(t *testing.T) {
+func TestSchedulerAddFunc(t *testing.T) {
 	s := NewScheduler(context.TODO())
-	id, err := s.AddFunc("test", "* * * * *", func() {})
-	if err != nil {
+	if err := s.AddFunc("test", "* * * * *", func() {}); err != nil {
 		t.Fatal(err)
 	}
-	s.Remove(id)
+	if err := s.AddFunc("descriptor", "@every 1h", func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(s.cron.Entries()); n != 2 {
+		t.Fatalf("%d entries, want 2", n)
+	}
+	if err := s.AddFunc("bad", "not a spec", func() {}); err == nil {
+		t.Fatal("AddFunc accepted a bad spec")
+	}
+}
+
+// onlyJob returns the wrapped job of the Scheduler's only entry.
+func onlyJob(t *testing.T, s *Scheduler) cron.Job {
+	t.Helper()
+	entries := s.cron.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("%d entries, want 1", len(entries))
+	}
+	return entries[0].WrappedJob
 }
 
 func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
@@ -42,7 +59,7 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var runs atomic.Int32
-	id, err := s.AddFunc("mirror-pull", "* * * * *", func() {
+	err := s.AddFunc("mirror-pull", "* * * * *", func() {
 		runs.Add(1)
 		started <- struct{}{}
 		<-release
@@ -50,9 +67,8 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Remove(id)
 
-	job := s.Cron.Entry(cron.EntryID(id)).WrappedJob
+	job := onlyJob(t, s)
 
 	first := make(chan struct{})
 	go func() {
@@ -93,7 +109,7 @@ func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
 	s := NewScheduler(context.TODO())
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	if _, err := s.AddFunc("slow", "@every 1s", func() {
+	if err := s.AddFunc("slow", "@every 1s", func() {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -127,7 +143,7 @@ func TestSchedulerRecoversPanic(t *testing.T) {
 	logger := log.New(&buf)
 	s := NewScheduler(log.WithContext(context.TODO(), logger))
 	var runs atomic.Int32
-	id, err := s.AddFunc("panics", "* * * * *", func() {
+	err := s.AddFunc("panics", "* * * * *", func() {
 		if runs.Add(1) == 1 {
 			panic("boom")
 		}
@@ -135,9 +151,8 @@ func TestSchedulerRecoversPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Remove(id)
 
-	job := s.Cron.Entry(cron.EntryID(id)).WrappedJob
+	job := onlyJob(t, s)
 	job.Run()
 
 	if !strings.Contains(buf.String(), "boom") {

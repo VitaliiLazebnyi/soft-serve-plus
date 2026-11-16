@@ -14,19 +14,15 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/safego"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/sync"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"golang.org/x/sync/errgroup"
 )
-
-func init() {
-	Register("mirror-pull", mirrorPull{})
-}
-
-type mirrorPull struct{}
 
 // mirrorRemotes are the remotes of a mirror that passed validation: their
 // names, which are what the sync fetches, and their validated urls, which
@@ -125,134 +121,131 @@ func syncMirror(ctx context.Context, path string, names []string, env []string) 
 	return errors.Join(errs...)
 }
 
-// Spec derives the spec used for pull mirrors and implements Runner. An
-// empty jobs.mirror_pull disables mirror syncing.
-func (m mirrorPull) Spec(ctx context.Context) string {
-	return config.FromContext(ctx).Jobs.MirrorPull
-}
-
-// Func runs the (pull) mirror job task and implements Runner.
-func (m mirrorPull) Func(ctx context.Context) func() {
+// SyncMirrors fetches every pull mirror from its remotes, and their LFS
+// objects when LFS is enabled. Up to GOMAXPROCS mirrors sync at once; it
+// returns when all of them are done. Once ctx is done no further mirror
+// starts; see syncMirror for what happens to one already running. A mirror
+// whose sync panics is logged and does not stop the others.
+func SyncMirrors(ctx context.Context) {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("jobs.mirror")
 	b := backend.FromContext(ctx)
-	return func() {
-		// The same guards that protect imports protect syncs, and the same
-		// too-old git ignores them.
-		if reason := b.ImportsDisabledReason(); reason != "" {
-			logger.Warn("skipping mirror sync", "reason", reason)
+
+	// The same guards that protect imports protect syncs, and the same
+	// too-old git ignores them.
+	if reason := b.ImportsDisabledReason(); reason != "" {
+		logger.Warn("skipping mirror sync", "reason", reason)
+		return
+	}
+
+	repos, err := b.Repositories(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
 			return
 		}
+		logger.Error("error getting repositories", "err", err)
+		return
+	}
 
-		repos, err := b.Repositories(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			logger.Error("error getting repositories", "err", err)
+	logger.Debug("updating mirror repos")
+	var g errgroup.Group
+	g.SetLimit(runtime.GOMAXPROCS(0))
+	for _, repo := range repos {
+		if !repo.IsMirror() {
+			continue
+		}
+		// Go waits for a free slot, so the server may have begun to stop
+		// in the meantime.
+		if ctx.Err() != nil {
+			break
+		}
+		g.Go(func() error {
+			safego.Run(logger, func() { syncMirrorRepo(ctx, cfg, logger, b, repo) }) //nolint:errcheck // Run logs a panic.
+			return nil
+		})
+	}
+	_ = g.Wait()
+}
+
+// syncMirrorRepo syncs one pull mirror: its remotes, then its LFS objects.
+func syncMirrorRepo(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
+	name := repo.Name()
+	r, err := repo.Open()
+	if err != nil {
+		logger.Error("error opening repository", "repo", name, "err", err)
+		return
+	}
+
+	// Re-validate every configured remote before syncing. The sync fetches
+	// all of them, and a remote may predate the import-time guard or have
+	// been written out of band. Validation failure skips the repo entirely.
+	// No user acts here, so the owner stands in for the importer. An owner
+	// that cannot be looked up gets the policy of nobody, which refuses ssh
+	// without an allowlist.
+	owner, err := b.UserByID(ctx, repo.UserID())
+	if err != nil {
+		logger.Warn("mirror owner not found, treating as unprivileged", "repo", name, "err", err)
+		owner = nil
+	}
+	policy := backend.RemotePolicy(cfg, owner)
+
+	remotes, err := validateMirrorRemotes(ctx, r, policy)
+	if err != nil {
+		logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
+		return
+	}
+
+	// When a fetch fails the LFS sync is skipped too; the next run tries
+	// both again.
+	syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
+	if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
+		return
+	}
+
+	if !cfg.LFS.Enabled {
+		return
+	}
+	lfsEndpoint, _, err := r.WithContext(ctx).ConfigGet("lfs.url")
+	if err != nil {
+		logger.Error("error getting git config", "repo", name, "err", err)
+		return
+	}
+	if lfsEndpoint == "" {
+		// If there is no LFS url defined, means the repo doesn't use LFS
+		// and we can skip it.
+		return
+	}
+
+	// The endpoint is stored in the repo config and may predate
+	// validation, so check it before dialing.
+	if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
+		logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
+		return
+	}
+
+	ep, err := lfs.NewEndpoint(lfsEndpoint)
+	if err != nil {
+		logger.Error("error creating LFS endpoint", "repo", name, "err", err)
+		return
+	}
+
+	client := lfs.NewClient(ep)
+	if client == nil {
+		logger.Errorf("failed to create lfs client: unsupported endpoint %s", utils.RedactURL(lfsEndpoint))
+		return
+	}
+
+	if err := b.SyncRepoLFSObjects(ctx, repo, client); err != nil {
+		if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
+			// The next sync tries them again.
+			logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
 			return
 		}
-
-		// Divide the work up among the number of CPUs.
-		wq := sync.NewWorkPool(ctx, runtime.GOMAXPROCS(0),
-			sync.WithWorkPoolLogger(func(format string, args ...any) {
-				// The pool only fails to start work once ctx is done, which
-				// is an ordinary shutdown, not an error.
-				if ctx.Err() == nil {
-					logger.Errorf(format, args...)
-				}
-			}),
-		)
-
-		logger.Debug("updating mirror repos")
-		for _, repo := range repos {
-			if repo.IsMirror() {
-				r, err := repo.Open()
-				if err != nil {
-					logger.Error("error opening repository", "repo", repo.Name(), "err", err)
-					continue
-				}
-
-				name := repo.Name()
-				wq.Add(name, func() {
-					// Re-validate every configured remote before syncing.
-					// The sync fetches all of them, and a remote may
-					// predate the import-time guard or have been written out
-					// of band. Validation failure skips the repo entirely.
-					// No user acts here, so the owner stands in for the
-					// importer. An owner that cannot be looked up gets the
-					// policy of nobody, which refuses ssh without an
-					// allowlist.
-					owner, err := b.UserByID(ctx, repo.UserID())
-					if err != nil {
-						logger.Warn("mirror owner not found, treating as unprivileged", "repo", name, "err", err)
-						owner = nil
-					}
-					policy := backend.RemotePolicy(cfg, owner)
-
-					remotes, err := validateMirrorRemotes(ctx, r, policy)
-					if err != nil {
-						logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
-						return
-					}
-
-					// When a fetch fails the LFS sync is skipped too; the
-					// next run tries both again.
-					syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
-					if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
-						return
-					}
-
-					if cfg.LFS.Enabled {
-						lfsEndpoint, _, err := r.WithContext(ctx).ConfigGet("lfs.url")
-						if err != nil {
-							logger.Error("error getting git config", "repo", name, "err", err)
-							return
-						}
-						if lfsEndpoint == "" {
-							// If there is no LFS url defined, means the repo
-							// doesn't use LFS and we can skip it.
-							return
-						}
-
-						// The endpoint is stored in the repo config and may
-						// predate validation, so check it before dialing.
-						if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
-							logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
-							return
-						}
-
-						ep, err := lfs.NewEndpoint(lfsEndpoint)
-						if err != nil {
-							logger.Error("error creating LFS endpoint", "repo", name, "err", err)
-							return
-						}
-
-						client := lfs.NewClient(ep)
-						if client == nil {
-							logger.Errorf("failed to create lfs client: unsupported endpoint %s", utils.RedactURL(lfsEndpoint))
-							return
-						}
-
-						if err := b.SyncRepoLFSObjects(ctx, repo, client); err != nil {
-							if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
-								// The next sync tries them again.
-								logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
-								return
-							}
-							if ctx.Err() != nil {
-								// The server is stopping.
-								return
-							}
-							logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
-							return
-						}
-					}
-				})
-			}
+		if ctx.Err() != nil {
+			// The server is stopping.
+			return
 		}
-
-		wq.Run()
+		logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
 	}
 }
 

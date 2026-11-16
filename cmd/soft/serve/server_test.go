@@ -25,7 +25,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -669,27 +668,10 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 	requireServerClosed(t, "Git daemon", gitDaemon.Serve, daemon.ErrServerClosed)
 }
 
-// blockingJob is a cron job that runs blockingJobHook, when it is set, with
-// the context the server gives the job.
-type blockingJob struct{}
-
-var blockingJobHook atomic.Pointer[func(context.Context)]
-
-func (blockingJob) Spec(context.Context) string { return "@every 1s" }
-
-func (blockingJob) Func(ctx context.Context) func() {
-	return func() {
-		if h := blockingJobHook.Load(); h != nil {
-			(*h)(ctx)
-		}
-	}
-}
-
 // Shutdown cancels a running cron job, such as a mirror sync, and waits for
 // it to end, so it does not run on against the database the caller closes
 // next.
 func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
-	jobs.Register("test-blocking", blockingJob{})
 	started := make(chan struct{}, 1)
 	var finished atomic.Bool
 	hook := func(ctx context.Context) {
@@ -707,10 +689,11 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		finished.Store(true)
 	}
-	blockingJobHook.Store(&hook)
-	t.Cleanup(func() { blockingJobHook.Store(nil) })
 
 	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	if err := s.Cron.AddFunc("test-blocking", "@every 1s", func() { hook(s.jobCtx) }); err != nil {
+		t.Fatal(err)
+	}
 	errc := startAsync(s)
 	select {
 	case <-started:
