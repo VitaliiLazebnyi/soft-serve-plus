@@ -144,7 +144,7 @@ func TestHTTPClientStalledTransferFails(t *testing.T) {
 			defer close(release)
 
 			a := newLoopbackAdapter(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			rc, err := a.Download(ctx, Pointer{}, &Link{Href: srv.URL})

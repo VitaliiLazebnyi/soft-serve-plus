@@ -238,10 +238,11 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	lt := newLFSTest(t, 1)
 
 	// probe is a second handle on the database that never waits for a
-	// lock: with busy_timeout 0, its BEGIN IMMEDIATE fails at once with
+	// lock: with busy_timeout 0, its write transaction fails at once with
 	// "database is locked" while any connection holds a write transaction,
-	// and succeeds otherwise. Unlike a write bounded by a deadline, it
-	// doesn't depend on how fast the machine is.
+	// or, in rollback-journal mode, an open read transaction (then at
+	// COMMIT), and succeeds otherwise. Unlike a write bounded by a
+	// deadline, it doesn't depend on how fast the machine is.
 	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)")
 	is.NoErr(err)
 	t.Cleanup(func() { probe.Close() }) //nolint:errcheck
@@ -257,7 +258,7 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 			return
 		}
 		// The deadline only keeps a regression from hanging the test; the
-		// probe already showed that no write transaction is open.
+		// probe already showed that no transaction holds the lock.
 		wctx, cancel := context.WithTimeout(lt.ctx, time.Minute)
 		defer cancel()
 		writeErr = lt.be.store.SetAllowKeylessAccess(wctx, lt.be.db, false)
@@ -265,7 +266,7 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 
 	is.NoErr(lt.store())
 	is.True(called)    // the content was read
-	is.NoErr(probeErr) // no write transaction is open while the object downloads
+	is.NoErr(probeErr) // no write transaction, nor in rollback-journal mode a read one, is open while the object downloads
 	is.NoErr(writeErr) // so another writer isn't blocked
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), lt.pointers[0].Oid)
 	is.NoErr(err)
