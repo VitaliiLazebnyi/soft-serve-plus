@@ -66,6 +66,13 @@ func newMemListener() *memListener {
 }
 
 func (l *memListener) Accept() (net.Conn, error) {
+	// A select with both cases ready picks one at random, so a closed
+	// listener is checked on its own first and never hands out a conn.
+	select {
+	case <-l.done:
+		return nil, net.ErrClosed
+	default:
+	}
 	select {
 	case c := <-l.conns:
 		return c, nil

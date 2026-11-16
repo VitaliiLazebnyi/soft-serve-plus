@@ -25,6 +25,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
@@ -1213,15 +1214,23 @@ func TestFormatHeaders(t *testing.T) {
 	is.Equal(storableText(got), got)
 }
 
-// A receiver that answers with a flood of headers must not get them all
-// stored: the stored response headers stay within maxStoredHeaders.
+// A receiver's headers must not be stored past maxStoredHeaders. The client
+// refuses a response whose headers pass ssrf.MaxResponseHeaderBytes, the same
+// size, but headers can still grow once stored: an invalid UTF-8 byte is
+// stored as U+FFFD, three bytes (a run of them becomes one U+FFFD, so each
+// is followed by a valid byte here). The receiver sends headers the client
+// accepts, about 40 KB, which come to about 80 KB as stored text, so the
+// stored copy must be cut off.
 func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
 	e := newTestEnv(t)
-	value := strings.Repeat("v", 1000)
+	value := strings.Repeat("\xffa", 500)
+	const headers = 40
+	is.True(headers*len("X-Pad-000: \r\n"+value) < ssrf.MaxResponseHeaderBytes-1024)
+	is.True(headers*len(storableText(value)) > maxStoredHeaders)
 	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		for i := range 200 {
+		for i := range headers {
 			w.Header().Set(fmt.Sprintf("X-Pad-%03d", i), value)
 		}
 		w.WriteHeader(http.StatusOK)

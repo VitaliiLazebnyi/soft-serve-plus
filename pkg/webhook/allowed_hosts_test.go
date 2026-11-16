@@ -68,6 +68,9 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 		if strings.Contains(last.RequestError.String, ssrf.ErrPrivateIP.Error()) || time.Now().After(deadline) {
 			t.Fatalf("listed send not delivered: status %d, error %q", last.ResponseStatus, last.RequestError.String)
 		}
+		// A failure that comes back at once would otherwise spin and
+		// record a delivery row per try.
+		time.Sleep(100 * time.Millisecond)
 	}
 	is.Equal(calls(), 1)
 
