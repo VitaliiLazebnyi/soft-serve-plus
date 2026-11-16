@@ -7,7 +7,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -174,12 +173,11 @@ func TestWebhookDeliveryNonUTF8ResponsePostgres(t *testing.T) {
 	e := newPostgresWebhookEnv(t)
 
 	body := "\x00" + strings.Repeat("€", 64<<10)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMemServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Name", "caf\xe9")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, body)
 	}))
-	defer srv.Close()
 
 	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
 	id := e.createHook(t, srv.URL+"/hook", webhook.EventRepositoryVisibilityChange)

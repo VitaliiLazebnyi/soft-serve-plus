@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
@@ -30,13 +29,12 @@ func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newMemServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-SoftServe-Event") == webhook.EventRepositoryVisibilityChange.String() {
 			hits.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
 	url := srv.URL + "/hook"
 
 	// Default: refused at create.
