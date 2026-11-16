@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 )
@@ -41,11 +41,14 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	}
 	admin, err := db.Open(ctx, "postgres", dsn)
 	is.NoErr(err)
-	t.Cleanup(func() { admin.Close() })                    //nolint:errcheck
-	name := fmt.Sprintf("softserve_test_%d", rand.Int64()) //nolint:gosec
-	_, err = admin.ExecContext(ctx, "CREATE DATABASE "+name)
+	t.Cleanup(func() { admin.Close() }) //nolint:errcheck
+	name, err := sstest.CreateDB(ctx, admin, "softserve_test")
 	is.NoErr(err)
-	t.Cleanup(func() { admin.ExecContext(context.Background(), "DROP DATABASE "+name) }) //nolint:errcheck
+	t.Cleanup(func() {
+		if _, err := admin.ExecContext(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
+			t.Error("failed to drop database", name, err)
+		}
+	})
 
 	// The data source is a URL or a key=value string, as in
 	// pkg/db/internal/test, which this package cannot import.

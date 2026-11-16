@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1039,8 +1038,6 @@ func connRefused(err error) bool {
 func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 	// Indicates postgres
 	// Create a disposable database
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-	dbName := fmt.Sprintf("softserve_test_%d", rnd.Int63())
 	dbDsn := cfg.DB.DataSource
 	if dbDsn == "" {
 		cfg.DB.DataSource = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
@@ -1082,6 +1079,19 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		port = fmt.Sprintf(":%s", port)
 	}
 
+	// Create the database. Scripts run in parallel, so its name comes from
+	// test.CreateDB, which never hands two of them the same one.
+	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	defer dbx.Close() //nolint:errcheck
+	dbName, err := test.CreateDB(context.TODO(), dbx, "softserve_test")
+	if err != nil {
+		return nil, err
+	}
+
 	cfg.DB.DataSource = fmt.Sprintf("%s://%s%s%s/%s?sslmode=disable",
 		scheme,
 		username,
@@ -1089,17 +1099,6 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		port,
 		dbName,
 	)
-
-	// Create the database
-	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	defer dbx.Close() //nolint:errcheck
-	if _, err := dbx.ExecContext(context.TODO(), "CREATE DATABASE "+dbName); err != nil {
-		return nil, err
-	}
 
 	return func() {
 		dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo)

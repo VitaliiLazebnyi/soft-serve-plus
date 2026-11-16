@@ -2,8 +2,6 @@ package test
 
 import (
 	"context"
-	"fmt"
-	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 )
 
 // OpenSqlite opens a new temp SQLite database for testing, with the
@@ -58,8 +57,8 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 	if err != nil {
 		return nil, err
 	}
-	name := fmt.Sprintf("softserve_test_%d", rand.Int64()) //nolint:gosec
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
+	name, err := sstest.CreateDB(ctx, admin, "softserve_test")
+	if err != nil {
 		admin.Close() //nolint:errcheck
 		return nil, err
 	}
