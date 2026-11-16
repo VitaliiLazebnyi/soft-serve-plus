@@ -75,9 +75,9 @@ func countingListener(t *testing.T) (addr string, count *atomic.Int32) {
 }
 
 // runGit runs git with env in dir (a new temporary directory if empty) and
-// ignores the outcome: the remotes here are not real repositories, so only
-// where git connected matters.
-func runGit(t *testing.T, env []string, dir string, args ...string) {
+// returns its output, ignoring the outcome: the remotes here are not real
+// repositories, so only where git connected matters.
+func runGit(t *testing.T, env []string, dir string, args ...string) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
@@ -89,6 +89,7 @@ func runGit(t *testing.T, env []string, dir string, args ...string) {
 	cmd.Env = env
 	out, _ := cmd.CombinedOutput()
 	t.Logf("git %s: %s", strings.Join(args, " "), out)
+	return out
 }
 
 // TestGitEnvBypassesProxy covers a proxy in the server's environment or git
@@ -171,20 +172,26 @@ func TestGitEnvBypassesProxy(t *testing.T) {
 				remote.User = url.UserPassword(user, pass)
 			}
 			v := validatedHTTPRemote(remote, netip.MustParseAddr("127.0.0.1"))
+			var run func() []byte
 			switch tc.run {
 			case "clone":
 				env = append(env, GitEnv(v.ForClone())...)
-				runGit(t, env, "", "clone", "--mirror", remote.String(), filepath.Join(t.TempDir(), "repo.git"))
+				run = func() []byte {
+					return runGit(t, env, "", "clone", "--mirror", remote.String(), filepath.Join(t.TempDir(), "repo.git"))
+				}
 			case "fetch":
 				env = append(env, GitEnv(v.Named("upstream"))...)
 				dir := t.TempDir()
 				runGit(t, env, dir, "init", "--bare")
 				runGit(t, env, dir, "remote", "add", "upstream", remote.String())
-				runGit(t, env, dir, "fetch", "upstream")
+				run = func() []byte { return runGit(t, env, dir, "fetch", "upstream") }
 			default:
 				env = append(env, GitEnv(v)...)
-				runGit(t, env, "", "ls-remote", remote.String())
+				run = func() []byte { return runGit(t, env, "", "ls-remote", remote.String()) }
 			}
+			// A run that went through the proxy counts as reached, so it
+			// is not repeated and fails below.
+			runUntilReached(t, func() bool { return originHits.Load() > 0 || proxyHits.Load() > 0 }, run)
 
 			if n := proxyHits.Load(); n != 0 {
 				t.Errorf("git connected to the proxy %d times, want none", n)
@@ -204,7 +211,9 @@ func TestGitEnvBypassesProxy(t *testing.T) {
 		env := serverEnv(t, "GIT_PROXY_COMMAND=soft-serve-no-such-proxy-command")
 		env = append(env, GitEnv(ValidatedGitRemote{Transport: GitTransportGit})...)
 
-		runGit(t, env, "", "ls-remote", "git://"+daemonAddr+"/repo.git")
+		runUntilReached(t, func() bool { return daemonHits.Load() > 0 }, func() []byte {
+			return runGit(t, env, "", "ls-remote", "git://"+daemonAddr+"/repo.git")
+		})
 
 		if daemonHits.Load() == 0 {
 			t.Error("git did not connect to the remote directly")

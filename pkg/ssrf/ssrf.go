@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/internal/testdial"
 )
 
 var (
@@ -51,9 +53,10 @@ const dialTimeout = 10 * time.Second
 
 // testResolver, when set, resolves every hostname this package looks up:
 // the secure client's dials and the lookups made during validation that are
-// not given a resolver of their own. Unset means net.DefaultResolver. Tests
-// point it at a stub DNS server. It is atomic because a dial's losing
-// attempt or a background lookup may still read it after a test is done.
+// not given a resolver of their own. Unset means the resolver set with
+// internal/testdial, or net.DefaultResolver. Tests point it at a stub DNS
+// server. It is atomic because a dial's losing attempt or a background
+// lookup may still read it after a test is done.
 var testResolver atomic.Pointer[net.Resolver]
 
 // dialHookFunc is the type of dialHook.
@@ -67,9 +70,12 @@ type dialHookFunc func(ctx context.Context, network, address string) error
 var dialHook atomic.Pointer[dialHookFunc]
 
 // resolver returns the resolver for hostname lookups: testResolver when set,
-// otherwise net.DefaultResolver.
+// then the one set with internal/testdial, otherwise net.DefaultResolver.
 func resolver() *net.Resolver {
 	if r := testResolver.Load(); r != nil {
+		return r
+	}
+	if r := testdial.LoadResolver(); r != nil {
 		return r
 	}
 	return net.DefaultResolver
@@ -128,6 +134,9 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 
+		// redirect is the first attempt the checks let through while
+		// internal/testdial has a Func set; see errRedirected.
+		var redirect atomic.Pointer[dialTarget]
 		d := &net.Dialer{
 			KeepAlive: 30 * time.Second,
 			Resolver:  resolver(),
@@ -140,17 +149,42 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 					return ErrPrivateIP
 				}
 				if hook := dialHook.Load(); hook != nil {
-					return (*hook)(ctx, network, address)
+					if err := (*hook)(ctx, network, address); err != nil {
+						return err
+					}
+				}
+				if testdial.Load() != nil {
+					redirect.CompareAndSwap(nil, &dialTarget{network: network, address: address})
+					return errRedirected
 				}
 				return nil
 			},
 		}
 		conn, err := d.DialContext(ctx, network, addr)
+		// Every attempt was stopped, so err is set, but it is the first
+		// attempt's error, which can be a refusal of another address of a
+		// name that also has a permitted one.
+		if t := redirect.Load(); t != nil {
+			if fn := testdial.Load(); fn != nil {
+				return fn(ctx, t.network, t.address)
+			}
+		}
 		if err != nil {
 			return nil, dialError(ctx, host, err)
 		}
 		return conn, nil
 	}
+}
+
+// errRedirected stops every connection attempt of a secure client while
+// internal/testdial has a Func set, which only tests do. The first attempt
+// the checks let through is then made by that Func instead, as the first
+// permitted address is the one a real dial would connect to.
+var errRedirected = errors.New("connection handed to the test dialer")
+
+// dialTarget is one connection attempt: its network and address.
+type dialTarget struct {
+	network, address string
 }
 
 // dialError turns a failed dial into the error the client returns. The

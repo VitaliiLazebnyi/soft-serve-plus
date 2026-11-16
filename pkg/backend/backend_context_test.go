@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,11 +60,10 @@ func TestRedeliverBareContext(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMemServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
 	url := srv.URL + "/hook"
 
 	e.setWebhookAllowedHosts(t, "127.0.0.0/8")

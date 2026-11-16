@@ -118,6 +118,13 @@ func (s *gitDaemonStub) serve(c net.Conn) {
 	s.mu.Unlock()
 }
 
+// reached reports whether the stub has recorded a request.
+func (s *gitDaemonStub) reached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.requests) > 0
+}
+
 func (s *gitDaemonStub) hosts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,14 +155,17 @@ func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
 		t.Skip("git not available")
 	}
 
-	run := func(t *testing.T, remote string, r ValidatedGitRemote) {
+	run := func(t *testing.T, remote string, r ValidatedGitRemote) func() []byte {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
-		cmd.Env = append(isolatedGitEnv(t), GitEnv(r)...)
-		out, _ := cmd.CombinedOutput()
-		t.Logf("git ls-remote %s: %s", remote, out)
+		env := append(isolatedGitEnv(t), GitEnv(r)...)
+		return func() []byte {
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
+			cmd.Env = env
+			out, _ := cmd.CombinedOutput()
+			return out
+		}
 	}
 	pinned := func(t *testing.T, remote string, addr netip.Addr) ValidatedGitRemote {
 		t.Helper()
@@ -190,7 +200,7 @@ func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
 			t.Parallel()
 			s := newGitDaemonStub(t, tt.ip, tt.v6)
 			remote := "git://" + tt.host + ":" + s.port + "/x.git"
-			run(t, remote, pinned(t, remote, netip.MustParseAddr(tt.ip)))
+			runUntilReached(t, s.reached, run(t, remote, pinned(t, remote, netip.MustParseAddr(tt.ip))))
 			if got, want := s.hosts(), []string{tt.want + ":" + s.port}; !slices.Equal(got, want) {
 				t.Fatalf("requests named %v, want %v", got, want)
 			}
