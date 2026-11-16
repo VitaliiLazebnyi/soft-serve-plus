@@ -113,6 +113,9 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 // a blob that only has the first line of one, and not commits, trees or
 // tags, however large.
 func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
+	// The scan's own git commands must not read the host's configuration.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	work := t.TempDir()
 	run := func(stdin string, args ...string) string {
 		t.Helper()
@@ -159,6 +162,9 @@ func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
 	// A commit and a tag larger than the cutoff.
 	run(strings.Repeat("long message\n", 200), "commit", "-q", "-F", "-")
 	run(strings.Repeat("long tag\n", 200), "tag", "-a", "v1", "-F", "-")
+	// A ref that names the large blob itself: rev-list lists the objects
+	// it is given whatever its filter, unless told not to.
+	run("", "tag", "large-blob", run("", "rev-parse", "HEAD:large"))
 
 	repo, err := git.Open(work)
 	if err != nil {

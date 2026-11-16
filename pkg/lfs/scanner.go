@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 )
@@ -68,66 +69,88 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 // enough to be pointers, into git cat-file --batch in dir, and calls found
 // with each pointer, until found returns false.
 func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin string, found func(PointerBlob) bool) error {
-	// Stop both commands on return: early, when found or the parser stops
-	// the scan, they would otherwise block on a full pipe.
+	// Stop both commands when the scan ends early, as when found or the
+	// parser stops it: they would otherwise block on a full pipe.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// rev-list filters out what can't be a pointer itself. Commits are
-	// listed whatever the filter; cat-file's output says what each object
-	// is, and the parser skips the ones that are not blobs.
+	// rev-list filters out what can't be a pointer itself, the objects
+	// named on its command line or stdin included. Commits are listed
+	// whatever the filter; cat-file's output says what each object is, and
+	// the parser skips the ones that are not blobs. The filters need git
+	// 2.32; imports and mirror syncs, the only scans, need 2.37.
 	revListArgs := append([]string{
-		"rev-list", "--objects", "--no-object-names",
+		"rev-list", "--objects", "--no-object-names", "--filter-provided-objects",
 		"--filter=object:type=blob", "--filter=blob:limit=" + strconv.Itoa(blobSizeCutoff+1),
 	}, revArgs...)
-	var revListStderr, catFileStderr bytes.Buffer
+	revListStderr := &cappedBuffer{limit: scanStderrLimit}
+	catFileStderr := &cappedBuffer{limit: scanStderrLimit}
 	revList := exec.CommandContext(ctx, "git", revListArgs...)
 	revList.Dir = dir
 	revList.Stdin = strings.NewReader(stdin)
-	revList.Stderr = &revListStderr
+	revList.Stderr = revListStderr
+	revList.WaitDelay = scanWaitDelay
 
 	catFile := exec.CommandContext(ctx, "git", "cat-file", "--batch")
 	catFile.Dir = dir
-	catFile.Stderr = &catFileStderr
+	catFile.Stderr = catFileStderr
+	catFile.WaitDelay = scanWaitDelay
 
 	// The ids go from one command to the other through a pipe of their
-	// own, not through this process.
+	// own, and cat-file's output through another this process holds both
+	// ends of, so every end is closed whatever fails to start.
 	ids, idsWriter, err := os.Pipe()
 	if err != nil {
 		return err //nolint:wrapcheck
 	}
-	revList.Stdout = idsWriter
-	catFile.Stdin = ids
-	out, err := catFile.StdoutPipe()
+	out, outWriter, err := os.Pipe()
 	if err != nil {
 		_ = ids.Close()
 		_ = idsWriter.Close()
 		return err //nolint:wrapcheck
 	}
-
-	revListErr := revList.Start()
-	_ = idsWriter.Close()
-	if revListErr != nil {
+	defer out.Close() //nolint:errcheck
+	revList.Stdout = idsWriter
+	catFile.Stdin = ids
+	catFile.Stdout = outWriter
+	// The commands hold their own copies once started.
+	closeChildEnds := func() {
 		_ = ids.Close()
-		return fmt.Errorf("git rev-list [%s]: %w", dir, revListErr)
+		_ = idsWriter.Close()
+		_ = outWriter.Close()
 	}
-	catFileErr := catFile.Start()
-	_ = ids.Close()
-	if catFileErr != nil {
-		cancel()
-		_ = revList.Wait()
-		return fmt.Errorf("git cat-file --batch [%s]: %w", dir, catFileErr)
+
+	if err := catFile.Start(); err != nil {
+		closeChildEnds()
+		return fmt.Errorf("git cat-file --batch [%s]: %w", dir, err)
 	}
+	if err := revList.Start(); err != nil {
+		// cat-file sees the end of its input and exits.
+		closeChildEnds()
+		_ = catFile.Wait()
+		return fmt.Errorf("git rev-list [%s]: %w", dir, err)
+	}
+	closeChildEnds()
+
+	// Whatever happens to the parser, a panic included, both commands are
+	// stopped and waited for, so neither is left running or unreaped.
+	waited := false
+	defer func() {
+		if !waited {
+			cancel()
+			_ = catFile.Wait()
+			_ = revList.Wait()
+		}
+	}()
 
 	parseErr := parseCatFileBatch(out, found)
 	if parseErr != nil {
+		// Stopped early: cat-file may be blocked writing the rest.
 		cancel()
 	}
-	// Read what is left, so cat-file is not stuck writing it when the
-	// parser stopped early, before waiting for it.
-	_, _ = io.Copy(io.Discard, out)
-	catFileErr = catFile.Wait()
-	revListErr = revList.Wait()
+	catFileErr := catFile.Wait()
+	revListErr := revList.Wait()
+	waited = true
 
 	switch {
 	case parseErr != nil && !errors.Is(parseErr, errStopScan):
@@ -140,6 +163,37 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 		return fmt.Errorf("git rev-list [%s]: %w - %s", dir, revListErr, revListStderr.String())
 	}
 	return nil
+}
+
+// scanWaitDelay is how long a scan stopped early waits for its git commands'
+// stderr once they are killed: a process they started (git.exe's launcher
+// on Windows) can hold it open past them.
+const scanWaitDelay = 5 * time.Second
+
+// scanStderrLimit caps how much of a scan command's stderr is kept for its
+// error.
+const scanStderrLimit = 4 << 10
+
+// cappedBuffer keeps the first limit bytes written to it and discards the
+// rest, reporting every write as complete. The buffer is a named field, not
+// embedded, so cappedBuffer has no ReadFrom for io.Copy to bypass the cap
+// with.
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+// Write implements io.Writer.
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// String returns the bytes kept so far.
+func (b *cappedBuffer) String() string {
+	return b.buf.String()
 }
 
 // errStopScan is what parseCatFileBatch returns when found stops it.

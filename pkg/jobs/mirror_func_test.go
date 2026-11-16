@@ -235,38 +235,42 @@ func (b *syncBuffer) String() string {
 // accepted, is synced without its LFS objects, and the job says why without
 // the endpoint's credentials.
 func TestMirrorPullReportsSSHLFSEndpoint(t *testing.T) {
-	isolateGitConfig(t)
-	ctx, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
-		t.Skipf("mirror syncs are disabled here: %s", reason)
-	}
-	config.FromContext(ctx).LFS.Enabled = true
-	admin, err := be.User(ctx, "admin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var logs syncBuffer
-	ctx = log.WithContext(ctx, log.New(&logs))
+	for _, endpoint := range []string{"ssh://TOKEN@upstream.example/m", "TOKEN@upstream.example:m"} {
+		t.Run(endpoint, func(t *testing.T) {
+			isolateGitConfig(t)
+			ctx, be := newMirrorJobContext(t)
+			if reason := be.ImportsDisabledReason(); reason != "" {
+				t.Skipf("mirror syncs are disabled here: %s", reason)
+			}
+			config.FromContext(ctx).LFS.Enabled = true
+			admin, err := be.User(ctx, "admin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs syncBuffer
+			ctx = log.WithContext(ctx, log.New(&logs))
 
-	if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
-		t.Fatal(err)
-	}
-	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
-	runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/m")
-	runGit(t, dir, "config", "lfs.url", "ssh://TOKEN@upstream.example/m")
+			if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
+			runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/m")
+			runGit(t, dir, "config", "lfs.url", endpoint)
 
-	orig := runMirrorGit
-	runMirrorGit = func(context.Context, string, []string, ...string) error { return nil }
-	t.Cleanup(func() { runMirrorGit = orig })
+			orig := runMirrorGit
+			runMirrorGit = func(context.Context, string, []string, ...string) error { return nil }
+			t.Cleanup(func() { runMirrorGit = orig })
 
-	runMirrorJob(ctx)
+			runMirrorJob(ctx)
 
-	out := logs.String()
-	if !strings.Contains(out, "skipping lfs sync") || !strings.Contains(out, lfs.ErrUnsupportedEndpoint.Error()) {
-		t.Errorf("the ssh endpoint was not reported: %q", out)
-	}
-	if strings.Contains(out, "TOKEN") {
-		t.Errorf("logs contain the endpoint's credentials: %q", out)
+			out := logs.String()
+			if !strings.Contains(out, "skipping lfs sync") || !strings.Contains(out, lfs.ErrUnsupportedEndpoint.Error()) {
+				t.Errorf("the ssh endpoint was not reported: %q", out)
+			}
+			if strings.Contains(out, "TOKEN") {
+				t.Errorf("logs contain the endpoint's credentials: %q", out)
+			}
+		})
 	}
 }
 

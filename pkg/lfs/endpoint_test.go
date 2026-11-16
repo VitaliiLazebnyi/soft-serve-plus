@@ -38,25 +38,29 @@ func TestNewEndpoint(t *testing.T) {
 	}
 }
 
-// Remotes objects can't be fetched from are refused, without quoting them.
+// Remotes objects can't be fetched from are refused, and strings that are
+// not URLs are reported as such, without quoting either.
 func TestNewEndpointUnsupported(t *testing.T) {
 	t.Parallel()
-	for _, in := range []string{
-		"ssh://git:TOKEN@host/r.git",
-		"git+ssh://host/r.git",
-		"git@host:r.git",
-		"[git@host:22]:r.git",
-		"host:r.git",
-		"file:///srv/r.git",
-		"/srv/r.git",
-		"%zz://TOKEN@host",
+	for _, tc := range []struct {
+		in   string
+		want error
+	}{
+		{"ssh://git:TOKEN@host/r.git", ErrUnsupportedEndpoint},
+		{"git+ssh://host/r.git", ErrUnsupportedEndpoint},
+		{"host:r.git", ErrUnsupportedEndpoint},
+		{"file:///srv/r.git", ErrUnsupportedEndpoint},
+		{"/srv/r.git", ErrUnsupportedEndpoint},
+		{"git@host:r.git", ErrInvalidEndpoint},
+		{"[git@host:22]:r.git", ErrInvalidEndpoint},
+		{"%zz://TOKEN@host", ErrInvalidEndpoint},
 	} {
-		ep, err := NewEndpoint(in)
-		if !errors.Is(err, ErrUnsupportedEndpoint) {
-			t.Errorf("NewEndpoint(%q) = %v, %v, want %v", in, ep, err, ErrUnsupportedEndpoint)
+		ep, err := NewEndpoint(tc.in)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("NewEndpoint(%q) = %v, %v, want %v", tc.in, ep, err, tc.want)
 		}
-		if err != nil && err.Error() != ErrUnsupportedEndpoint.Error() {
-			t.Errorf("NewEndpoint(%q) error %q says more than %q", in, err, ErrUnsupportedEndpoint)
+		if err != nil && err.Error() != tc.want.Error() {
+			t.Errorf("NewEndpoint(%q) error %q says more than %q", tc.in, err, tc.want)
 		}
 	}
 }
