@@ -124,7 +124,8 @@ const defaultSqliteBusyTimeout = 5000
 // errSqliteForeignKeysOff is returned by Open for a SQLite data source that
 // turns foreign keys off. The schema relies on them: deleting a user or a
 // repository removes their rows in other tables by ON DELETE CASCADE.
-var errSqliteForeignKeysOff = errors.New("the SQLite data source turns foreign keys off; Soft Serve needs them on")
+var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source, or SOFT_SERVE_DB_DATA_SOURCE) turns foreign keys off; " +
+	"Soft Serve Plus needs them on: remove the foreign_keys pragma or the _fk or _foreign_keys setting from it")
 
 // sqliteDSN returns dsn with what the server relies on, on every
 // connection the pool opens:

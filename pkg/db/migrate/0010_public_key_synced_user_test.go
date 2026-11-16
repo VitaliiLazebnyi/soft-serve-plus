@@ -91,6 +91,8 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		for _, r := range rows {
 			got[r.Key] = r.Value
 		}
+		// The orphan check's marker, on SQLite, is not under test.
+		delete(got, orphansCheckedKey)
 		return got
 	}
 	wantSynced := map[string]int64{"synced": 100, "moved": 100, "padded": 100}

@@ -760,6 +760,15 @@ The same settings apply to SQLite, whose defaults are unchanged: writers
 already take turns through `BEGIN IMMEDIATE` and `busy_timeout`, so SQLite
 needs no limit.
 
+Upgrading a SQLite database: foreign keys are now always enforced. A data
+source that turns them off (`_pragma=foreign_keys(0)`, `_fk=0` or
+`_foreign_keys=0`) is refused at start, so remove that setting. A database
+that was used with foreign keys off can hold rows that refer to deleted ones,
+such as the keys of a deleted user or the webhooks of a deleted repository.
+The first start of this version removes them before it migrates, and logs a
+count per table; a repository whose owner was deleted is given to the first
+admin instead.
+
 SQLite keeps its default rollback journal, in which a read waits (up to the
 busy timeout) while a write commits. Write-ahead logging lets reads go on
 during a write. It is not the default because it puts conditions on where the

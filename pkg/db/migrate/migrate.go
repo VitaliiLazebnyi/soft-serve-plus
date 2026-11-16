@@ -84,6 +84,10 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			return err
 		}
 
+		if err := removeSqliteOrphans(ctx, tx, logger); err != nil {
+			return err
+		}
+
 		for _, m := range migrations {
 			if m.Version <= current {
 				continue
