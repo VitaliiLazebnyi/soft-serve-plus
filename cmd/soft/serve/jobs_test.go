@@ -3,55 +3,126 @@ package serve
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/cron"
-	"github.com/charmbracelet/soft-serve/pkg/jobs"
 )
 
-// TestScheduleJobsMirrorPull checks that an empty jobs.mirror_pull leaves
-// the mirror job unscheduled, and that a spec schedules it. Other registered
-// jobs (such as lfs-sweep) are scheduled either way.
-func TestScheduleJobsMirrorPull(t *testing.T) {
-	j, ok := jobs.List()["mirror-pull"]
-	if !ok {
-		t.Fatal("mirror-pull job not registered")
-	}
-	t.Cleanup(func() { j.ID = 0 })
+// recordingScheduler records the jobs scheduleJobs adds, by name, with
+// their specs and functions. It refuses the names in fail.
+type recordingScheduler struct {
+	specs map[string]string
+	fns   map[string]func()
+	fail  map[string]bool
+}
 
+func (r *recordingScheduler) AddFunc(name, spec string, fn func()) error {
+	if r.fail[name] {
+		return errors.New("refused")
+	}
+	if r.specs == nil {
+		r.specs, r.fns = map[string]string{}, map[string]func(){}
+	}
+	r.specs[name], r.fns[name] = spec, fn
+	return nil
+}
+
+// An empty jobs.mirror_pull leaves the mirror job unscheduled, and a spec
+// schedules it. lfs-sweep is scheduled either way, hourly when its spec is
+// empty.
+func TestScheduleJobs(t *testing.T) {
 	for _, c := range []struct {
-		spec    string
-		entries int
+		mirror, sweep string
+		want          map[string]string
 	}{
-		{"", 0},
-		{"@every 1h", 1},
+		{"", "", map[string]string{"lfs-sweep": "@every 1h"}},
+		{"@every 1h", "@daily", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@daily"}},
+		{"*/5 * * * *", "", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
 	} {
 		cfg := config.DefaultConfig()
-		cfg.Jobs.MirrorPull = c.spec
-		ctx := config.WithContext(context.Background(), cfg)
+		cfg.Jobs.MirrorPull = c.mirror
+		cfg.Jobs.LFSSweep = c.sweep
 		var buf bytes.Buffer
-		logger := log.New(&buf)
-		ctx = log.WithContext(ctx, logger)
+		var sched recordingScheduler
+		scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
 
-		sched := cron.NewScheduler(ctx)
-		scheduleJobs(ctx, ctx, sched, logger)
+		if !maps.Equal(sched.specs, c.want) {
+			t.Errorf("mirror_pull %q, lfs_sweep %q: scheduled %v, want %v", c.mirror, c.sweep, sched.specs, c.want)
+		}
+		if disabled := strings.Contains(buf.String(), "cron job disabled"); disabled != (c.mirror == "") {
+			t.Errorf("mirror_pull %q: disabled message logged %v: %q", c.mirror, disabled, buf.String())
+		}
+	}
+}
 
-		want := len(jobs.List()) - 1 + c.entries
-		if got := len(sched.Entries()); got != want {
-			t.Errorf("mirror_pull %q: %d scheduled jobs, want %d", c.spec, got, want)
+// A job the scheduler refuses is logged, and the other is still scheduled.
+func TestScheduleJobsLogsRefusedJob(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var buf bytes.Buffer
+	sched := recordingScheduler{fail: map[string]bool{"mirror-pull": true}}
+	scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
+
+	if got := slices.Collect(maps.Keys(sched.specs)); !slices.Equal(got, []string{"lfs-sweep"}) {
+		t.Errorf("scheduled %v, want only lfs-sweep", got)
+	}
+	if out := buf.String(); !strings.Contains(out, "error adding cron job") || !strings.Contains(out, "mirror-pull") {
+		t.Errorf("refused job not logged: %q", out)
+	}
+}
+
+// *cron.Scheduler is what the server passes.
+var _ jobScheduler = (*cron.Scheduler)(nil)
+
+// The jobs run with the jobCtx scheduleJobs is given, not with whatever
+// context the scheduler has: the lfs-sweep it schedules sweeps the data path
+// of the config in jobCtx. Once jobCtx is done, a tick starts nothing.
+func TestScheduleJobsRunWithJobContext(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	stale := filepath.Join(cfg.DataPath, "lfs", "1", "incomplete", "stale")
+	writeStale := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+			t.Fatal(err)
 		}
-		if c.spec == "" {
-			if j.ID != 0 {
-				t.Errorf("disabled job has ID %d, want 0", j.ID)
-			}
-			if !strings.Contains(buf.String(), "cron job disabled") {
-				t.Errorf("no disabled message logged: %q", buf.String())
-			}
-		} else if j.ID == 0 {
-			t.Error("scheduled job has no ID")
+		if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
 		}
+		old := time.Now().Add(-2 * backend.IncompleteLFSMaxAge)
+		if err := os.Chtimes(stale, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobCtx, cancel := context.WithCancel(config.WithContext(t.Context(), cfg))
+	defer cancel()
+	jobCtx = log.WithContext(jobCtx, log.New(io.Discard))
+
+	// The config passed alongside has no data path: only jobCtx's does.
+	var sched recordingScheduler
+	scheduleJobs(jobCtx, config.DefaultConfig(), &sched, log.New(io.Discard))
+
+	writeStale()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stale temp file not swept with jobCtx's config: %v", err)
+	}
+
+	writeStale()
+	cancel()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("a tick after jobCtx was cancelled ran the sweep: %v", err)
 	}
 }

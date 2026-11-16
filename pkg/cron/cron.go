@@ -7,9 +7,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Scheduler is a cron-like job scheduler.
+// Scheduler runs functions on cron schedules. Every function it runs is
+// recovered and skipped while its previous run is still going; see AddFunc.
+//
+// The cron.Cron is a named field rather than embedded, so that its AddJob
+// and Schedule, which would bypass those wrappers, are not promoted.
 type Scheduler struct {
-	*cron.Cron
+	cron   *cron.Cron
 	logger cronLogger
 }
 
@@ -42,7 +46,7 @@ func (l skipLogger) Info(_ string, keysAndValues ...interface{}) {
 	l.logger.Info("skipping job run, the previous run is still in progress", keysAndValues...)
 }
 
-// NewScheduler returns a new Cron.
+// NewScheduler returns a new Scheduler.
 //
 // A job that panics is recovered and the panic logged, so it does not take
 // the server down, and the job still runs on its next tick. A job run is
@@ -52,7 +56,7 @@ func (l skipLogger) Info(_ string, keysAndValues ...interface{}) {
 func NewScheduler(ctx context.Context) *Scheduler {
 	logger := cronLogger{log.FromContext(ctx).WithPrefix("cron")}
 	return &Scheduler{
-		Cron:   cron.New(cron.WithLogger(logger)),
+		cron:   cron.New(cron.WithLogger(logger)),
 		logger: logger,
 	}
 }
@@ -62,7 +66,7 @@ func NewScheduler(ctx context.Context) *Scheduler {
 // Running jobs are not interrupted: give them a context to cancel first.
 func (s *Scheduler) Shutdown(ctx context.Context) error {
 	select {
-	case <-s.Cron.Stop().Done():
+	case <-s.cron.Stop().Done():
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -71,11 +75,13 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 
 // Start starts the Scheduler.
 func (s *Scheduler) Start() {
-	s.Cron.Start()
+	s.cron.Start()
 }
 
-// AddFunc adds a job to the Scheduler. name identifies the job in the log.
-func (s *Scheduler) AddFunc(name, spec string, fn func()) (int, error) {
+// AddFunc adds a job to the Scheduler, to run fn on spec, a standard cron
+// spec or a descriptor such as "@every 1h". name identifies the job in the
+// log.
+func (s *Scheduler) AddFunc(name, spec string, fn func()) error {
 	logger := cronLogger{s.logger.logger.With("job", name)}
 	// The first wrapper is the outermost. Recover must sit inside
 	// SkipIfStillRunning: if it wrapped it, a panic would unwind past the
@@ -85,11 +91,6 @@ func (s *Scheduler) AddFunc(name, spec string, fn func()) (int, error) {
 		cron.SkipIfStillRunning(skipLogger{logger}),
 		cron.Recover(logger),
 	).Then(cron.FuncJob(fn))
-	id, err := s.Cron.AddJob(spec, job)
-	return int(id), err
-}
-
-// Remove removes a job from the Scheduler.
-func (s *Scheduler) Remove(id int) {
-	s.Cron.Remove(cron.EntryID(id))
+	_, err := s.cron.AddJob(spec, job)
+	return err
 }

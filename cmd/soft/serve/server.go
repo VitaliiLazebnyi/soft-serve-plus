@@ -42,7 +42,8 @@ type Server struct {
 
 	logger *log.Logger
 	ctx    context.Context
-	// stopJobs cancels the context the cron jobs run with.
+	// jobCtx is the context the cron jobs run with, and stopJobs cancels it.
+	jobCtx   context.Context
 	stopJobs context.CancelFunc
 
 	// mu guards listeners and closed. Start keeps the listeners it bound
@@ -74,6 +75,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		DB:       db,
 		logger:   logger,
 		ctx:      ctx,
+		jobCtx:   jobCtx,
 		stopJobs: stopJobs,
 	}
 
@@ -87,7 +89,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 
 	// Add cron jobs.
 	sched := cron.NewScheduler(ctx)
-	scheduleJobs(ctx, jobCtx, sched, logger)
+	scheduleJobs(jobCtx, cfg, sched, logger)
 
 	srv.Cron = sched
 
@@ -364,11 +366,9 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 		return s.StatsServer.Shutdown(ctx)
 	})
 	errg.Go(func() error {
-		for _, j := range jobs.List() {
-			s.Cron.Remove(j.ID)
-		}
 		// Cancel the running jobs and wait for them to end, so none uses
-		// the database once the caller closes it.
+		// the database once the caller closes it. Shutdown also stops the
+		// scheduler from starting any more.
 		s.stopJobs()
 		if err := s.Cron.Shutdown(ctx); err != nil {
 			return fmt.Errorf("wait for cron jobs: %w", err)
@@ -500,23 +500,38 @@ func (l *serveListener) markServing() {
 	l.servingOnce.Do(func() { close(l.serving) })
 }
 
-// scheduleJobs adds every registered job to sched. A job whose spec is empty,
-// such as mirror-pull with an empty jobs.mirror_pull, is disabled and not
-// scheduled. The jobs run with jobCtx, which the server cancels when it stops.
-func scheduleJobs(ctx, jobCtx context.Context, sched *cron.Scheduler, logger *log.Logger) {
-	for n, j := range jobs.List() {
-		j.ID = 0
-		spec := j.Runner.Spec(ctx)
-		if spec == "" {
-			logger.Info("cron job disabled", "job", n)
-			continue
-		}
+// jobScheduler is the part of *cron.Scheduler scheduleJobs uses.
+type jobScheduler interface {
+	AddFunc(name, spec string, fn func()) error
+}
 
-		id, err := sched.AddFunc(n, spec, j.Runner.Func(jobCtx))
-		if err != nil {
-			logger.Warn("error adding cron job", "job", n, "err", err)
+// scheduleJobs adds the server's periodic jobs to sched: mirror-pull on
+// jobs.mirror_pull, which an empty value disables, and lfs-sweep on
+// jobs.lfs_sweep, hourly when it is empty. The jobs run with jobCtx, which
+// the server cancels when it stops. A tick that fires once jobCtx is done,
+// between the cancellation and the scheduler's stop, starts nothing.
+func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler, logger *log.Logger) {
+	add := func(name, spec string, fn func(context.Context)) {
+		run := func() {
+			if jobCtx.Err() != nil {
+				return
+			}
+			fn(jobCtx)
 		}
-
-		j.ID = id
+		if err := sched.AddFunc(name, spec, run); err != nil {
+			logger.Warn("error adding cron job", "job", name, "err", err)
+		}
 	}
+
+	if cfg.Jobs.MirrorPull == "" {
+		logger.Info("cron job disabled", "job", "mirror-pull")
+	} else {
+		add("mirror-pull", cfg.Jobs.MirrorPull, jobs.SyncMirrors)
+	}
+
+	sweep := cfg.Jobs.LFSSweep
+	if sweep == "" {
+		sweep = jobs.DefaultLFSSweepSpec
+	}
+	add("lfs-sweep", sweep, jobs.SweepLFS)
 }

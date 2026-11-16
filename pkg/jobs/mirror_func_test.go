@@ -1,14 +1,18 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -84,6 +88,7 @@ func TestMirrorPullFunc(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake ssh client is a shell script")
 	}
+	isolateGitConfig(t)
 
 	// git resolves the ssh client the job configures through PATH.
 	bin := t.TempDir()
@@ -129,7 +134,7 @@ func TestMirrorPullFunc(t *testing.T) {
 	refusedDir := addRepo("refused", true, "file://"+filepath.ToSlash(upstream))
 	plainDir := addRepo("plain", false, sshRemote)
 
-	job := mirrorPull{}.Func(ctx)
+	job := func() { SyncMirrors(ctx) }
 	job()
 
 	if got, want := refs(t, mirrorDir), refs(t, upstream); got != want {
@@ -155,3 +160,82 @@ func TestMirrorPullFunc(t *testing.T) {
 		t.Errorf("branch deleted upstream is still in the mirror:\n%s", got)
 	}
 }
+
+// A mirror whose sync panics is logged and does not stop the job or the
+// other mirrors.
+func TestMirrorPullRecoversWorkerPanic(t *testing.T) {
+	isolateGitConfig(t)
+	ctx, be := newMirrorJobContext(t)
+	if reason := be.ImportsDisabledReason(); reason != "" {
+		t.Skipf("mirror syncs are disabled here: %s", reason)
+	}
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs syncBuffer
+	ctx = log.WithContext(ctx, log.New(&logs))
+
+	dirs := map[string]string{}
+	for _, name := range []string{"panics", "fine"} {
+		if _, err := be.CreateRepository(ctx, name, admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", name+".git")
+		runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/"+name)
+		dirs[name] = dir
+	}
+
+	var mu sync.Mutex
+	var fetched []string
+	orig := runMirrorGit
+	runMirrorGit = func(_ context.Context, dir string, _ []string, _ ...string) error {
+		if dir == dirs["panics"] {
+			panic("mirror boom")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		fetched = append(fetched, dir)
+		return nil
+	}
+	t.Cleanup(func() { runMirrorGit = orig })
+
+	runMirrorJob(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(fetched, []string{dirs["fine"]}) {
+		t.Errorf("fetched %v, want only %s", fetched, dirs["fine"])
+	}
+	if !strings.Contains(logs.String(), "mirror boom") {
+		t.Errorf("panic not logged: %q", logs.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent use.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// isolateGitConfig keeps the git commands the code under test runs from
+// reading the host's system and global configuration.
+func isolateGitConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+func runMirrorJob(ctx context.Context) { SyncMirrors(ctx) }
