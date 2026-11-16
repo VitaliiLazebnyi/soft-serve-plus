@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +36,10 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 	)
 	switch driverName {
 	case "sqlite":
-		db, err = sqlx.ConnectContext(ctx, driverName, sqliteImmediateTx(dsn))
+		if dsn, err = sqliteDSN(dsn); err != nil {
+			return nil, err
+		}
+		db, err = sqlx.ConnectContext(ctx, driverName, dsn)
 	case "postgres":
 		db, err = connectPostgres(ctx, dsn)
 	default:
@@ -113,27 +117,128 @@ func postgresConnectTimeoutSet(dsn string) bool {
 	return strings.Contains(dsn, "connect_timeout")
 }
 
-// sqliteImmediateTx makes write transactions on SQLite start with BEGIN
-// IMMEDIATE unless the DSN already sets _txlock. A deferred transaction that
-// reads before it writes cannot upgrade to a write lock while another
-// connection holds one: SQLite returns SQLITE_BUSY at once instead of waiting
-// for busy_timeout. Taking the write lock at BEGIN makes it wait instead.
-// Transactions begun with TxOptions.ReadOnly, as ReadTransactionContext
-// does, are still started as deferred by the driver, so reads do not queue
-// behind writers.
-func sqliteImmediateTx(dsn string) string {
+// defaultSqliteBusyTimeout is the busy timeout, in milliseconds, a SQLite
+// data source gets when it sets none.
+const defaultSqliteBusyTimeout = 5000
+
+// errSqliteForeignKeysOff is returned by Open for a SQLite data source that
+// turns foreign keys off. The schema relies on them: deleting a user or a
+// repository removes their rows in other tables by ON DELETE CASCADE.
+var errSqliteForeignKeysOff = errors.New("the SQLite data source turns foreign keys off; Soft Serve needs them on")
+
+// sqliteDSN returns dsn with what the server relies on, on every
+// connection the pool opens:
+//
+//   - foreign keys enforced, which the schema's ON DELETE CASCADE needs. A
+//     data source that turns them off is refused rather than overridden:
+//     the driver applies its _fk shorthand after the _pragma list and takes
+//     the first of repeated keys, so no appended key could win;
+//   - a busy timeout of five seconds, unless the data source sets one, so a
+//     statement that meets another process's write, such as a git hook's,
+//     waits for it instead of failing with "database is locked";
+//   - write transactions that begin IMMEDIATE, unless it sets _txlock. A
+//     deferred transaction that reads before it writes cannot upgrade to a
+//     write lock while another connection holds one: SQLite returns
+//     SQLITE_BUSY at once instead of waiting for busy_timeout. Taking the
+//     write lock at BEGIN makes it wait instead. Transactions begun with
+//     TxOptions.ReadOnly, as ReadTransactionContext does, are still started
+//     as deferred by the driver, so reads do not queue behind writers.
+//
+// A data source that starts with "?" is a file name to the driver and is
+// left as it is.
+func sqliteDSN(dsn string) (string, error) {
 	i := strings.IndexByte(dsn, '?')
 	if i == 0 {
-		// The driver treats the whole string as a file name.
-		return dsn
+		return dsn, nil
 	}
+	var q url.Values
 	if i > 0 {
-		if q, err := url.ParseQuery(dsn[i+1:]); err != nil || q.Has("_txlock") {
-			return dsn
+		var err error
+		if q, err = url.ParseQuery(dsn[i+1:]); err != nil {
+			// The driver rejects it too, with its own error.
+			return dsn, nil //nolint:nilerr
 		}
-		return dsn + "&_txlock=immediate"
 	}
-	return dsn + "?_txlock=immediate"
+	var add []string
+	fk, busy := sqlitePragmas(q)
+	switch fk {
+	case pragmaOff:
+		return "", errSqliteForeignKeysOff
+	case pragmaUnset:
+		add = append(add, "_pragma=foreign_keys(1)")
+	}
+	if !busy {
+		add = append(add, "_pragma=busy_timeout("+strconv.Itoa(defaultSqliteBusyTimeout)+")")
+	}
+	if !q.Has("_txlock") {
+		add = append(add, "_txlock=immediate")
+	}
+	if len(add) == 0 {
+		return dsn, nil
+	}
+	sep := "?"
+	if i > 0 {
+		sep = "&"
+	}
+	return dsn + sep + strings.Join(add, "&"), nil
+}
+
+// pragmaState is what a data source sets a boolean pragma to.
+type pragmaState int
+
+const (
+	pragmaUnset pragmaState = iota
+	pragmaOn
+	pragmaOff
+)
+
+// sqlitePragmas returns what the query of a SQLite data source sets foreign
+// keys to, through the _fk and _foreign_keys keys or a _pragma, and whether
+// it sets a busy timeout. A foreign_keys setting that is not one of the
+// driver's true values counts as off.
+func sqlitePragmas(q url.Values) (fk pragmaState, busy bool) {
+	set := func(v string) {
+		switch strings.ToLower(strings.Trim(strings.TrimSpace(v), `'"`)) {
+		case "1", "true", "on", "yes":
+			if fk == pragmaUnset {
+				fk = pragmaOn
+			}
+		default:
+			fk = pragmaOff
+		}
+	}
+	for _, k := range []string{"_fk", "_foreign_keys"} {
+		for _, v := range q[k] {
+			set(v)
+		}
+	}
+	for _, p := range q["_pragma"] {
+		name, value, hasValue := splitPragma(p)
+		switch name {
+		case "foreign_keys":
+			if hasValue {
+				set(value)
+			}
+		case "busy_timeout":
+			busy = true
+		}
+	}
+	busy = busy || q.Has("_busy_timeout") || q.Has("_timeout")
+	return fk, busy
+}
+
+// splitPragma splits a _pragma value, such as "busy_timeout(5000)" or
+// "foreign_keys = on", into its name, in lower case, and its value.
+func splitPragma(p string) (name, value string, hasValue bool) {
+	i := strings.IndexAny(p, "(=")
+	if i < 0 {
+		return strings.ToLower(strings.TrimSpace(p)), "", false
+	}
+	value = strings.TrimSpace(p[i+1:])
+	if p[i] == '(' {
+		value = strings.TrimSpace(strings.TrimSuffix(value, ")"))
+	}
+	return strings.ToLower(strings.TrimSpace(p[:i])), value, true
 }
 
 // postgresUTCConfig parses dsn into a lib/pq configuration whose sessions
@@ -212,7 +317,7 @@ func (d *DB) ReadTransactionContext(ctx context.Context, fn func(tx *Tx) error) 
 
 func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *Tx) error) error {
 	// SQLite lets one transaction write at a time, and write transactions
-	// begin IMMEDIATE (see sqliteImmediateTx), so each one waits at BEGIN
+	// begin IMMEDIATE (see sqliteDSN), so each one waits at BEGIN
 	// for the write lock. SQLite waits by polling with growing sleeps, for
 	// busy_timeout in all, and then fails with "database is locked". The
 	// lock goes to whichever waiter polls when it is free, not to the one

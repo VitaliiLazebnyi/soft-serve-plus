@@ -877,13 +877,9 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 
 		repoID = repom.ID
 
-		// Remove the webhooks and their rows explicitly. The repository's
-		// other rows (collaborators, LFS objects and locks) go with it by
-		// ON DELETE CASCADE, which relies on foreign keys being enforced.
-		if err := d.deleteRepoWebhookRows(ctx, tx, repom.ID); err != nil {
-			return err
-		}
-
+		// The repository's webhooks, with their events and deliveries, its
+		// collaborators and its LFS objects and locks go with the row by
+		// ON DELETE CASCADE: db.Open enforces foreign keys.
 		if err := d.store.DeleteRepoByName(ctx, tx, name); err != nil {
 			return err
 		}

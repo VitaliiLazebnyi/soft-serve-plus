@@ -27,20 +27,6 @@ func TestOpenUnknownDriver(t *testing.T) {
 	}
 }
 
-func TestSqliteImmediateTx(t *testing.T) {
-	for dsn, want := range map[string]string{
-		"soft-serve.db": "soft-serve.db?_txlock=immediate",
-		"soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)": "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate",
-		"file:soft-serve.db?mode=rwc":                                      "file:soft-serve.db?mode=rwc&_txlock=immediate",
-		"soft-serve.db?_txlock=deferred":                                   "soft-serve.db?_txlock=deferred",
-		"soft-serve.db?_pragma=foreign_keys(1)&_txlock=exclusive":          "soft-serve.db?_pragma=foreign_keys(1)&_txlock=exclusive",
-	} {
-		if got := sqliteImmediateTx(dsn); got != want {
-			t.Errorf("sqliteImmediateTx(%q) = %q, want %q", dsn, got, want)
-		}
-	}
-}
-
 // TestSqliteReadThenWriteWaitsForWriter checks that a transaction that reads
 // before it writes waits (busy_timeout) for another connection's write
 // transaction to commit instead of failing at once with "database is locked".

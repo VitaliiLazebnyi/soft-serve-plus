@@ -305,7 +305,9 @@ db:
   driver: {{ q .DB.Driver }}
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
-  # Make sure foreign key support is enabled when using SQLite.
+  # With SQLite, foreign keys are always enforced (a data source that turns
+  # them off is refused), and a busy database is waited on for 5 seconds
+  # unless the data source sets its own busy_timeout.
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.

@@ -934,7 +934,13 @@ func TestDeliverSkipsRemovedOrUnsubscribedWebhook(t *testing.T) {
 	deleted := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	unsubscribed := e.newWebhook(t, srv.URL+"/?other", "", ContentTypeJSON, EventPush)
 	is.NoErr(e.ds.DeleteWebhookForRepoByID(e.ctx, e.dbx, e.repo.ID, deleted.ID))
-	is.NoErr(e.ds.DeleteWebhookEventsByWebhookID(e.ctx, e.dbx, unsubscribed.ID))
+	evs, err := e.ds.GetWebhookEventsByWebhookID(e.ctx, e.dbx, unsubscribed.ID)
+	is.NoErr(err)
+	ids := make([]int64, 0, len(evs))
+	for _, ev := range evs {
+		ids = append(ids, ev.ID)
+	}
+	is.NoErr(e.ds.DeleteWebhookEventsByID(e.ctx, e.dbx, unsubscribed.ID, ids))
 	is.NoErr(e.ds.CreateWebhookEvents(e.ctx, e.dbx, unsubscribed.ID, []int{int(EventBranchTagCreate)}))
 
 	is.NoErr(Deliver(e.ctx, []models.Webhook{deleted, unsubscribed}, samplePayloadFor(e)))

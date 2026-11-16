@@ -30,13 +30,6 @@ func newWebhookTestDB(t *testing.T) (context.Context, *db.DB) {
 	cfg.DataPath = t.TempDir()
 	cfg.DB.Driver = dbx.DriverName()
 	ctx = config.WithContext(ctx, cfg)
-	if isSqlite(dbx) {
-		// Enforce foreign keys, as the server's default data source does.
-		// One connection, so the pragma holds for every statement.
-		dbx.SetMaxOpenConns(1)
-		_, err = dbx.ExecContext(ctx, `PRAGMA foreign_keys = ON;`)
-		is.NoErr(err)
-	}
 	is.NoErr(migrate.Migrate(ctx, dbx))
 
 	// Foreign keys are enforced, so the webhook tables need real parents: one
@@ -194,8 +187,8 @@ func TestWebhookStoreEvents(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(evs), 1)
 
-	// Remove everything for a webhook; the other webhook's events stay.
-	is.NoErr(s.DeleteWebhookEventsByWebhookID(ctx, dbx, hook))
+	// Deleting a webhook deletes its events; the other webhook's stay.
+	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, hook))
 	evs, err = s.GetWebhookEventsByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(evs), 0)
@@ -270,7 +263,8 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(list), 2)
 
-	is.NoErr(s.DeleteWebhookDeliveriesByWebhookID(ctx, dbx, hook))
+	// Deleting a webhook deletes its deliveries; the other webhook's stay.
+	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, hook))
 	all, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(all), 0)
@@ -315,8 +309,6 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["CreateWebhook"] = s.CreateWebhook(ctx, dbx, 7, "u", "", 0, true)
 	checks["UpdateWebhookByID"] = s.UpdateWebhookByID(ctx, dbx, 7, id, "u", "", 0, true)
 	checks["DeleteWebhookForRepoByID"] = s.DeleteWebhookForRepoByID(ctx, dbx, 7, id)
-	checks["DeleteWebhookEventsByWebhookID"] = s.DeleteWebhookEventsByWebhookID(ctx, dbx, id)
-	checks["DeleteWebhookDeliveriesByWebhookID"] = s.DeleteWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["GetWebhookEventsByWebhookID"] = s.GetWebhookEventsByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookEvents"] = s.CreateWebhookEvents(ctx, dbx, id, []int{4})
 	checks["DeleteWebhookEventsByID"] = s.DeleteWebhookEventsByID(ctx, dbx, id, []int64{1})

@@ -26,24 +26,18 @@ func (*Store) CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url
 
 // CreateWebhookDelivery implements store.Store.
 //
-// The row is written only if the webhook still exists. A send that was in
-// flight when its webhook was deleted therefore leaves no orphan row, even on
-// a connection that does not enforce foreign keys. In that case nothing is
-// written and no error is returned. The same holds when the webhook is
-// deleted between the existence check and the insert, which a concurrent
-// transaction can do on Postgres and which shows up as a foreign key
-// violation.
+// A send that was in flight when its webhook was deleted fails the insert on
+// its foreign key. Nothing is written then, and no error is returned.
 //
 // On Postgres any error aborts the transaction it happens in, so inside a
 // transaction the insert runs under a savepoint and a foreign key violation
 // rolls back to it. The transaction can then go on, for example to prune.
 func (*Store) CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error {
 	query := h.Rebind(`INSERT INTO webhook_deliveries (id, webhook_id, event, request_url, request_method, request_error, request_headers, request_body, response_status, response_headers, response_body)
-			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-			WHERE EXISTS (SELECT 1 FROM webhooks WHERE id = ?);`)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`)
 	insert := func() error {
 		_, err := h.ExecContext(ctx, query, d.ID, d.WebhookID, d.Event, d.RequestURL, d.RequestMethod, d.RequestError,
-			d.RequestHeaders, d.RequestBody, d.ResponseStatus, d.ResponseHeaders, d.ResponseBody, d.WebhookID)
+			d.RequestHeaders, d.RequestBody, d.ResponseStatus, d.ResponseHeaders, d.ResponseBody)
 		return err
 	}
 
@@ -92,20 +86,6 @@ func (*Store) CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID i
 func (*Store) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = ?;`)
 	return affected(h.ExecContext(ctx, query, repoID, id))
-}
-
-// DeleteWebhookEventsByWebhookID implements store.Store.
-func (*Store) DeleteWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
-	query := h.Rebind(`DELETE FROM webhook_events WHERE webhook_id = ?;`)
-	_, err := h.ExecContext(ctx, query, webhookID)
-	return err
-}
-
-// DeleteWebhookDeliveriesByWebhookID implements store.Store.
-func (*Store) DeleteWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
-	query := h.Rebind(`DELETE FROM webhook_deliveries WHERE webhook_id = ?;`)
-	_, err := h.ExecContext(ctx, query, webhookID)
-	return err
 }
 
 // PruneWebhookDeliveries implements store.Store.

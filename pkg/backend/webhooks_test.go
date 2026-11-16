@@ -411,13 +411,10 @@ func TestDeleteWebhookScopedToRepo(t *testing.T) {
 	is.Equal(len(hooks), 1)
 }
 
-// Deleting a webhook removes its events and deliveries itself, rather than
-// relying on ON DELETE CASCADE, which applies only on a connection that
-// enforces foreign keys. The test runs on one that does not.
+// Deleting a webhook removes its events and deliveries.
 func TestDeleteWebhookRemovesEvents(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	foreignKeysOff(t, e)
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventRepository)
 	e.seedDelivery(t, id, whURL, `{}`)
 
