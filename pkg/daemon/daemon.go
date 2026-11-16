@@ -420,6 +420,9 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok
 		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
 		d.fatal(c, git.ErrTimeout)
 	})
+	// A panic in the read must not leave the AfterFunc registered on the
+	// server's context; stopping it again below is harmless.
+	defer stopRead()
 	line, err := git.ReadPkt(c)
 	if !stopRead() {
 		// The server's context ended and the client has been answered.
