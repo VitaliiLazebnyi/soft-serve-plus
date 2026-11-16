@@ -171,6 +171,13 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 
 	switch u.Scheme {
 	case "ssh", "git+ssh", "ssh+git", "git", "http", "https":
+		// url.Parse lowercases the scheme, but git matches it as written:
+		// "SSH://host/x" is no ssh remote to git, which looks for a
+		// git-remote-SSH helper instead. Only the form git and Go agree
+		// on is accepted.
+		if !strings.HasPrefix(remote, u.Scheme+"://") {
+			return ValidatedGitRemote{}, fmt.Errorf("%w: the scheme must be lower case and followed by \"://\"", ErrInvalidURL)
+		}
 		if err := checkAuthority(remote, u); err != nil {
 			return ValidatedGitRemote{}, err
 		}
