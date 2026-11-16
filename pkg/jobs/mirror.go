@@ -1,13 +1,9 @@
 package jobs
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -20,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -344,82 +339,12 @@ var syncRepoLFS = func(ctx context.Context, b *backend.Backend, repo proto.Repos
 // enough.
 var mirrorSyncTimeout = time.Hour
 
-// mirrorGitWaitDelay is how long git has to exit once it was asked to stop,
-// and then how long the sync waits for the helpers git started
-// (git-remote-http, ssh) to let go of its output. Past the first, git is
-// killed; past the second, the output is closed and the sync moves on.
-const mirrorGitWaitDelay = 5 * time.Second
-
-// mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
-// The remote can write to it (remote: lines), so it is not kept in full.
-const mirrorGitStderrLimit = 4 << 10
-
-// runMirrorGit runs one git command of a mirror sync in dir with env applied.
-// Tests replace it.
-//
-// Once ctx is done, at shutdown or when the sync runs out of time, git is
-// sent SIGTERM (see terminateOnCancel), which it handles by removing the ref
-// and packed-refs locks it holds and exiting. A killed git would leave them,
-// and every later sync of the mirror would fail on "File exists" until
-// someone deleted them by hand. git is killed only if it is still running
-// mirrorGitWaitDelay later.
-var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
-	var stderr limitedBuffer
-	stderr.limit = mirrorGitStderrLimit
-
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
-	cmd.Stderr = &stderr
-	terminateOnCancel(cmd)
-	cmd.WaitDelay = mirrorGitWaitDelay
-
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			err = fmt.Errorf("%w: %w", ctxErr, err)
-		}
-		if msg := redactURLs(strings.TrimSpace(stderr.String())); msg != "" {
-			err = fmt.Errorf("%w: %s", err, msg)
-		}
-		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return nil
-}
-
-// urlPattern matches a URL as git and remotes print it in messages: a scheme
-// and everything up to the next space or quote.
-var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
-
-// redactURLs strips the user info and query from every URL in msg. git leaves
-// out the user info of the remote URLs it prints but keeps their query, which
-// can hold a token, and the remote's own lines can hold any URL.
-func redactURLs(msg string) string {
-	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
-}
-
-// limitedBuffer keeps the first limit bytes written to it and discards the
-// rest, reporting every write as complete so the writer is not cut off.
-//
-// The buffer is a named field rather than embedded so that limitedBuffer has
-// no ReadFrom: os/exec copies a pipe into a non-file Stderr with io.Copy,
-// which would call an embedded bytes.Buffer.ReadFrom and bypass the cap.
-type limitedBuffer struct {
-	buf   bytes.Buffer
-	limit int
-}
-
-// Write implements io.Writer.
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if room := b.limit - b.buf.Len(); room > 0 {
-		b.buf.Write(p[:min(len(p), room)])
-	}
-	return len(p), nil
-}
-
-// String returns the bytes kept so far.
-func (b *limitedBuffer) String() string {
-	return b.buf.String()
-}
+// runMirrorGit runs one git command of a mirror sync in dir with env
+// applied, through backend.RunRemoteGit, which an import's clone runs
+// through too: it stops git with SIGTERM once ctx is done, at shutdown or
+// when the sync runs out of time, and caps the output it keeps. Tests
+// replace it.
+var runMirrorGit = backend.RunRemoteGit
 
 // fetchMirror fetches the named remotes of the mirror in dir. It returns nil
 // when the sync should go on to the lfs objects, and otherwise the error,
