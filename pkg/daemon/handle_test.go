@@ -10,10 +10,12 @@ import (
 )
 
 // TestRequestLineAnswers pins the answer to each kind of request line, as
-// the client sees it.
+// the client sees it. It has a daemon of its own with room for every case,
+// so that connections still closing cannot crowd out the next case or the
+// other tests' requests to the shared daemon.
 func TestRequestLineAnswers(t *testing.T) {
 	ensureRepo(t, "answers-public")
-	for _, tc := range []struct {
+	cases := []struct {
 		name string
 		line string
 		want error // nil: served
@@ -28,8 +30,10 @@ func TestRequestLineAnswers(t *testing.T) {
 		{"public repo without .git", "git-upload-pack /answers-public\x00host=localhost\x00", nil},
 		{"public repo, empty host", "git-upload-pack /answers-public.git\x00\x00", nil},
 		{"public repo, v2", "git-upload-pack /answers-public.git\x00host=localhost\x00\x00version=2\x00", nil},
-	} {
-		line, err := rawRequest(t, []byte(pkt(tc.line)))
+	}
+	_, addr := startLimitedDaemon(t, len(cases))
+	for _, tc := range cases {
+		line, err := rawRequestTo(t, addr, []byte(pkt(tc.line)))
 		switch {
 		case tc.want != nil:
 			wantErrLine(t, tc.name, err, tc.want)
@@ -46,6 +50,7 @@ func TestRequestLineAnswers(t *testing.T) {
 func TestUploadArchiveServed(t *testing.T) {
 	ensureRepo(t, "archive-public")
 	c := dialDaemon(t)
+	defer c.Close() //nolint:errcheck
 	for _, p := range []string{
 		pkt("git-upload-archive /archive-public.git\x00host=localhost\x00"),
 		pkt("argument --format=tar\n"), pkt("argument HEAD\n"), "0000",

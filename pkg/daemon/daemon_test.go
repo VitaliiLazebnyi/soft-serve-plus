@@ -318,11 +318,27 @@ func requestUploadPack(t *testing.T, repo string) (string, error) {
 	return rawRequest(t, []byte(pkt("git-upload-pack /"+repo+".git\x00")))
 }
 
-// rawRequest sends raw bytes to the daemon and returns the first line it
-// answers with, or the error it answers with.
+// rawRequest sends raw bytes to the test daemon and returns the first line
+// it answers with, or the error it answers with.
 func rawRequest(t *testing.T, raw []byte) (string, error) {
 	t.Helper()
-	c := dialDaemon(t)
+	return rawRequestTo(t, testDaemon.addr, raw)
+}
+
+// rawRequestTo sends raw bytes to the daemon at addr and returns the first
+// line it answers with, or the error it answers with. It closes the
+// connection once it has the answer, so that a test making many requests
+// does not hold one of the daemon's connections for each until it ends.
+func rawRequestTo(t *testing.T, addr string, raw []byte) (string, error) {
+	t.Helper()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
 	if _, err := c.Write(raw); err != nil {
 		t.Fatalf("failed to write request: %v", err)
 	}
