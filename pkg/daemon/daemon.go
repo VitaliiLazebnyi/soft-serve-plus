@@ -83,6 +83,22 @@ type GitDaemon struct {
 
 	// accessTimeout bounds the access checks of each request.
 	accessTimeout time.Duration
+
+	// refuseLinger bounds how long a refusal waits for the client to hang
+	// up; see refuse.
+	refuseLinger time.Duration
+
+	// refusing holds a token for each connection refuseAsync refuses.
+	refusing chan struct{}
+
+	testHooks testHooks
+}
+
+// testHooks are called by the daemon while it serves, for tests to inject
+// delays and faults. They are nil outside tests.
+type testHooks struct {
+	// beforeAuthorize runs before the access checks of a request.
+	beforeAuthorize func()
 }
 
 // NewGitDaemon returns a new Git daemon.
@@ -100,6 +116,8 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 		logger:         log.FromContext(ctx).WithPrefix("gitdaemon"),
 
 		accessTimeout: defaultAccessTimeout,
+		refuseLinger:  refuseLinger,
+		refusing:      make(chan struct{}, maxRefusing),
 	}
 	return d, nil
 }
@@ -168,7 +186,7 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			if errors.Is(err, git.ErrMaxConnections) {
 				// Close connection if there are too many open connections.
 				d.logger.Debugf("git: max connections reached, closing %s", conn.RemoteAddr())
-				d.fatal(c, err)
+				d.refuseAsync(c, err)
 			} else {
 				c.Close() //nolint: errcheck
 			}
@@ -200,8 +218,9 @@ func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *ser
 }
 
 // fatal sends err to the client and closes the connection at once. It is
-// for the accept loop and for shutdown, which must not wait on a client; the
-// answer to a client's request goes through refuse.
+// for shutdown, and for the accept loop when it has too many refusals in
+// progress, which must not wait on a client; the answer to a client's
+// request goes through refuse.
 func (d *GitDaemon) fatal(c net.Conn, err error) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	if err := c.Close(); err != nil {
@@ -211,13 +230,39 @@ func (d *GitDaemon) fatal(c net.Conn, err error) {
 
 // refuseLinger bounds how long refuse waits for a refused client to hang
 // up, and refuseDrain how much of what it sends refuse reads meanwhile.
+// maxRefusing bounds how many connections refused for the connection limit
+// do so at once.
 const (
 	refuseLinger = time.Second
 	refuseDrain  = 64 << 10
+	maxRefusing  = 16
 )
 
-// refuse sends err to the client of a request and closes the connection
-// without losing the error.
+// refuseAsync refuses c, a connection the accept loop turns away, on a
+// goroutine of its own, so that the accept loop does not wait on the client.
+// Such a connection is not counted against max_connections, so at most
+// maxRefusing of them are refused this way at once, which bounds the file
+// descriptors they hold; past that, c gets the error and is closed at once,
+// and the client may lose the error to a reset as it did before.
+func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
+	select {
+	case d.refusing <- struct{}{}:
+	default:
+		d.fatal(c, err)
+		return
+	}
+	// Serve, the only caller, is counted in d.wg, so Shutdown cannot be
+	// past its Wait.
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() { <-d.refusing }()
+		d.refuse(c, err, time.Time{})
+	}()
+}
+
+// refuse sends err to the client and closes the connection without losing
+// the error.
 //
 // A client may send more than the request line before it reads the answer:
 // git archive sends its arguments straight after the request. Closing a
@@ -228,29 +273,66 @@ const (
 // end-of-file, then reads and drops what the client still sends until it
 // hangs up, and only then closes.
 //
-// The wait lasts at most refuseLinger and budget, ends at the connection's
-// maximum deadline, and reads at most refuseDrain bytes. The connection
-// stays counted against max_connections meanwhile, as it is still open. A
-// refusal of the request passes what was left of the request timeout when
-// the request line arrived, so a client holds its connection unanswered no
-// longer than it could already by sending the request line late.
-func (d *GitDaemon) refuse(c *serverConn, err error, budget time.Duration) {
+// The wait ends refuseLinger after the answer, at until unless it is zero,
+// and at the connection's maximum deadline, whichever comes first, and reads
+// at most refuseDrain bytes. It also ends when the server's context does or
+// the daemon shuts down, so a graceful Shutdown does not wait on refused
+// clients. A connection counted against max_connections stays counted
+// meanwhile, as it is still open. A refusal of the request passes the request deadline
+// as until, so a client holds its connection unanswered no longer than it
+// could already by sending the request line late, however long the access
+// checks took.
+func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
-	if linger := min(refuseLinger, budget); linger > 0 {
+	deadline := earliest(time.Now().Add(d.refuseLinger), until, c.maxDeadline)
+	if time.Until(deadline) > 0 {
 		if cw := closeWriter(c.Conn); cw != nil && cw.CloseWrite() == nil {
-			deadline := time.Now().Add(linger)
-			if !c.maxDeadline.IsZero() && c.maxDeadline.Before(deadline) {
-				deadline = c.maxDeadline
-			}
 			// Read the wrapped connection: serverConn.Read would move
 			// the deadline.
 			_ = c.Conn.SetReadDeadline(deadline)
+			stop := d.onClosing(func() { _ = c.Conn.SetReadDeadline(aLongTimeAgo) })
 			_, _ = io.CopyN(io.Discard, c.Conn, refuseDrain)
+			stop()
 		}
 	}
 	if err := c.Close(); err != nil {
 		d.logger.Debugf("git: error closing connection: %v", err)
 	}
+}
+
+// aLongTimeAgo is a deadline that has passed, which ends a blocked read.
+var aLongTimeAgo = time.Unix(1, 0)
+
+// onClosing calls f once, on another goroutine, when the server's context
+// ends or the daemon shuts down or closes, unless stop is called first. stop
+// returns once f will not be called or has returned.
+func (d *GitDaemon) onClosing(f func()) (stop func()) {
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-d.ctx.Done():
+		case <-d.finished:
+		case <-quit:
+			return
+		}
+		f()
+	}()
+	return func() {
+		close(quit)
+		<-done
+	}
+}
+
+// earliest returns the earliest of t and the non-zero times in ts.
+func earliest(t time.Time, ts ...time.Time) time.Time {
+	for _, u := range ts {
+		if !u.IsZero() && u.Before(t) {
+			t = u
+		}
+	}
+	return t
 }
 
 // closeWriter returns the connection under c that can shut its write side
@@ -297,6 +379,33 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.conns.Close(c) //nolint: errcheck
 	}()
 
+	line, until, ok := d.readRequest(c)
+	if !ok {
+		return
+	}
+	req, err := parseRequest(line)
+	if err != nil {
+		d.refuse(c, err, until)
+		return
+	}
+	if req.version != "" {
+		d.logger.Debugf("git: protocol version %s", req.version)
+	}
+	if d.testHooks.beforeAuthorize != nil {
+		d.testHooks.beforeAuthorize()
+	}
+	if err := d.authorize(ctx, req); err != nil {
+		d.refuse(c, err, until)
+		return
+	}
+	d.serve(ctx, c, req)
+}
+
+// readRequest reads the request line from c. It answers the client itself
+// when the read fails, and then reports !ok. Otherwise it returns the line
+// and the request deadline, which bounds how long a refusal of the request
+// may wait on the client.
+func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok bool) {
 	// Read the request line on this goroutine. The connection's deadlines
 	// bound the read, and closing the connection on shutdown unblocks it, so
 	// there is nothing to wait on beside it. If the server's context ends
@@ -309,88 +418,120 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 	line, err := git.ReadPkt(c)
 	if !stopRead() {
 		// The server's context ended and the client has been answered.
-		return
+		return nil, time.Time{}, false
 	}
 	// The read is over: from here on reads and writes only have to keep
 	// the connection from going idle. A refusal of the request may still
-	// wait on the client for what was left of the request timeout.
-	left := time.Until(c.initDeadline)
+	// wait on the client until the request deadline.
+	until = c.initDeadline
 	c.initDeadline = time.Time{}
-	if err != nil {
-		var nerr net.Error
-		switch {
-		case errors.Is(err, io.EOF):
-			// The client hung up without sending a request.
-		case errors.As(err, &nerr) && nerr.Timeout():
-			d.refuse(c, git.ErrTimeout, left)
-		case errors.Is(err, git.ErrInvalidPktLen), isErrorLine(err):
-			d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
-			d.refuse(c, git.ErrInvalidRequest, left)
-		default:
-			// The connection was reset, cut short, or closed by the server:
-			// there is no one to answer.
-			d.logger.Debugf("git: error reading request from %s: %v", c.RemoteAddr(), err)
-		}
-		return
+	if err == nil {
+		return line, until, true
 	}
+	var nerr net.Error
+	switch {
+	case errors.Is(err, io.EOF):
+		// The client hung up without sending a request.
+	case errors.As(err, &nerr) && nerr.Timeout():
+		d.refuse(c, git.ErrTimeout, until)
+	case errors.Is(err, git.ErrInvalidPktLen), isErrorLine(err):
+		d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
+		d.refuse(c, git.ErrInvalidRequest, until)
+	default:
+		// The connection was reset, cut short, or closed by the server:
+		// there is no one to answer.
+		d.logger.Debugf("git: error reading request from %s: %v", c.RemoteAddr(), err)
+	}
+	return nil, time.Time{}, false
+}
 
+// gitRequest is a parsed git:// request line.
+type gitRequest struct {
+	service git.Service
+	// name is the repository, sanitized.
+	name string
+	// host is the host the client named, as it sent it.
+	host string
+	// version is the protocol version the client asked for, or "".
+	version string
+}
+
+// counter returns the metric that counts the served requests of the
+// request's service.
+func (r gitRequest) counter() *prometheus.CounterVec {
+	if r.service == git.UploadArchiveService {
+		return uploadArchiveGitCounter
+	}
+	return uploadPackGitCounter
+}
+
+// parseRequest parses a request line, "<service> <path>\x00host=<host>\x00"
+// optionally followed by "\x00<extra parameters>". For a request the daemon
+// does not serve, it returns the error to answer the client with.
+func parseRequest(line []byte) (gitRequest, error) {
 	split := bytes.SplitN(line, []byte{' '}, 2)
 	if len(split) != 2 {
-		d.refuse(c, git.ErrInvalidRequest, left)
-		return
+		return gitRequest{}, git.ErrInvalidRequest
 	}
 
-	var counter *prometheus.CounterVec
 	service := git.Service(split[0])
 	switch service {
-	case git.UploadPackService:
-		counter = uploadPackGitCounter
-	case git.UploadArchiveService:
-		counter = uploadArchiveGitCounter
+	case git.UploadPackService, git.UploadArchiveService:
 	case git.ReceivePackService:
-		d.refuse(c, ErrPushNotSupported, left)
-		return
+		return gitRequest{}, ErrPushNotSupported
 	default:
-		d.refuse(c, git.ErrInvalidRequest, left)
-		return
+		return gitRequest{}, git.ErrInvalidRequest
 	}
 
 	opts := bytes.SplitN(split[1], []byte{0}, 3)
 	if len(opts) < 2 {
-		d.refuse(c, git.ErrInvalidRequest, left)
-		return
+		return gitRequest{}, git.ErrInvalidRequest
 	}
 
-	host := strings.TrimPrefix(string(opts[1]), "host=")
-	var version string
+	req := gitRequest{
+		service: service,
+		name:    utils.SanitizeRepo(string(opts[0])),
+		host:    strings.TrimPrefix(string(opts[1]), "host="),
+	}
 	if len(opts) > 2 {
-		version = protocolVersion(opts[2])
-		if version != "" {
-			d.logger.Debugf("git: protocol version %s", version)
-		}
+		req.version = protocolVersion(opts[2])
 	}
+	return req, nil
+}
 
-	name := utils.SanitizeRepo(string(opts[0]))
+// reposDir returns the directory the repositories are in.
+func (d *GitDaemon) reposDir() string {
+	return filepath.Join(d.cfg.DataPath, "repos")
+}
 
-	// git bare repositories should end in ".git"
-	// https://git-scm.com/docs/gitrepository-layout
-	repo := name + ".git"
-	reposDir := filepath.Join(d.cfg.DataPath, "repos")
-	if err := git.EnsureWithin(reposDir, repo); err != nil {
+// repoDir returns the directory of the request's repository. Bare
+// repositories end in ".git"; see
+// https://git-scm.com/docs/gitrepository-layout.
+func (d *GitDaemon) repoDir(req gitRequest) string {
+	return filepath.Join(d.reposDir(), req.name+".git")
+}
+
+// authorize returns nil if the daemon may serve req, and otherwise the error
+// to answer the client with.
+func (d *GitDaemon) authorize(ctx context.Context, req gitRequest) error {
+	if err := git.EnsureWithin(d.reposDir(), req.name+".git"); err != nil {
 		d.logger.Debugf("git: error ensuring repo path: %v", err)
-		d.refuse(c, git.ErrNotAuthed, left)
-		return
+		return git.ErrNotAuthed
 	}
 
 	// The daemon is always anonymous, so a repository it cannot read
 	// gets the anonymous answer whether it is private or missing, and
 	// so does every repository when keyless access is off.
-	if !d.readable(ctx, name) {
-		d.refuse(c, git.ErrNotAuthed, left)
-		return
+	if !d.readable(ctx, req.name) {
+		return git.ErrNotAuthed
 	}
+	return nil
+}
 
-	counter.WithLabelValues(name).Inc()
+// serve runs git for an authorized request, with c as its input and output.
+func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
+	service, name := req.service, req.name
+	req.counter().WithLabelValues(name).Inc()
 
 	start := time.Now()
 	d.logger.Info("git: accepted request", "remote", c.RemoteAddr(), "service", service, "repo", name)
@@ -399,21 +540,6 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		requestSeconds.WithLabelValues(service.String()).Observe(elapsed.Seconds())
 		d.logger.Debug("git: finished request", "remote", c.RemoteAddr(), "service", service, "repo", name, "duration", elapsed)
 	}()
-
-	// Environment variables to pass down to git hooks.
-	envs := []string{
-		"SOFT_SERVE_REPO_NAME=" + name,
-		"SOFT_SERVE_REPO_PATH=" + filepath.Join(reposDir, repo),
-		"SOFT_SERVE_HOST=" + host,
-		"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
-	}
-
-	// Pass the requested protocol version down to git.
-	if version != "" {
-		envs = append(envs, "GIT_PROTOCOL=version="+version)
-	}
-
-	envs = append(envs, d.cfg.Environ()...)
 
 	// git's stderr goes to the log, as git-daemon does: the daemon has
 	// no side channel for it, and written to the connection it would
@@ -425,8 +551,8 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		Stdin:  c,
 		Stdout: c,
 		Stderr: stderr,
-		Env:    envs,
-		Dir:    filepath.Join(reposDir, repo),
+		Env:    d.environ(req),
+		Dir:    d.repoDir(req),
 	}
 	if ka := keepAlive(c.idleTimeout); ka > 0 {
 		// Neither side talks while pack-objects prepares the pack
@@ -440,19 +566,36 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.logger.Debugf("git: error handling request: %v", err)
 		if c.Wrote() {
 			// The response has started, so an ERR packet would
-			// corrupt it. Closing the connection, which the
-			// deferred close does, is all that is left.
+			// corrupt it. Closing the connection, which
+			// handleClient does, is all that is left.
 			return
 		}
 		// Before that, the client gets a fixed message rather than
 		// the error itself.
 		if errors.Is(err, git.ErrInvalidRepo) {
-			d.refuse(c, git.ErrInvalidRepo, refuseLinger)
+			d.refuse(c, git.ErrInvalidRepo, time.Time{})
 		} else {
-			d.refuse(c, git.ErrSystemMalfunction, refuseLinger)
+			d.refuse(c, git.ErrSystemMalfunction, time.Time{})
 		}
-		return
 	}
+}
+
+// environ returns the environment git runs with for req.
+func (d *GitDaemon) environ(req gitRequest) []string {
+	// Environment variables to pass down to git hooks.
+	envs := []string{
+		"SOFT_SERVE_REPO_NAME=" + req.name,
+		"SOFT_SERVE_REPO_PATH=" + d.repoDir(req),
+		"SOFT_SERVE_HOST=" + req.host,
+		"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
+	}
+
+	// Pass the requested protocol version down to git.
+	if req.version != "" {
+		envs = append(envs, "GIT_PROTOCOL=version="+req.version)
+	}
+
+	return append(envs, d.cfg.Environ()...)
 }
 
 // keepAlive returns the uploadpack.keepAlive interval, in seconds, for a

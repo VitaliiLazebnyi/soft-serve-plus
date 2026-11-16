@@ -318,11 +318,27 @@ func requestUploadPack(t *testing.T, repo string) (string, error) {
 	return rawRequest(t, []byte(pkt("git-upload-pack /"+repo+".git\x00")))
 }
 
-// rawRequest sends raw bytes to the daemon and returns the first line it
-// answers with, or the error it answers with.
+// rawRequest sends raw bytes to the test daemon and returns the first line
+// it answers with, or the error it answers with.
 func rawRequest(t *testing.T, raw []byte) (string, error) {
 	t.Helper()
-	c := dialDaemon(t)
+	return rawRequestTo(t, testDaemon.addr, raw)
+}
+
+// rawRequestTo sends raw bytes to the daemon at addr and returns the first
+// line it answers with, or the error it answers with. It closes the
+// connection once it has the answer, so that a test making many requests
+// does not hold one of the daemon's connections for each until it ends.
+func rawRequestTo(t *testing.T, addr string, raw []byte) (string, error) {
+	t.Helper()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
 	if _, err := c.Write(raw); err != nil {
 		t.Fatalf("failed to write request: %v", err)
 	}
@@ -339,11 +355,11 @@ var refAdvertisement = regexp.MustCompile(`^[0-9a-f]{40} \S+\x00`)
 // and serves a public one.
 func TestInvalidRepo(t *testing.T) {
 	ctx := context.Background()
-	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create private repo: %v", err)
 	}
 
-	if _, err := testBackend.CreateRepository(ctx, "public", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, "public", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create public repo: %v", err)
 	}
 
@@ -571,8 +587,9 @@ func TestUploadPackCounted(t *testing.T) {
 }
 
 // startLimitedDaemon serves a daemon allowing limit connections that never
-// time out, and returns it with its address.
-func startLimitedDaemon(t *testing.T, limit int) (*GitDaemon, string) {
+// time out, and returns it with its address. opts change the daemon before
+// it serves.
+func startLimitedDaemon(t *testing.T, limit int, opts ...func(*GitDaemon)) (*GitDaemon, string) {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = testDaemon.cfg.DataPath
@@ -590,6 +607,9 @@ func startLimitedDaemon(t *testing.T, limit int) (*GitDaemon, string) {
 	}
 	// Kept connections send no request line; do not drop them for that.
 	d.requestTimeout = time.Hour
+	for _, opt := range opts {
+		opt(d)
+	}
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
