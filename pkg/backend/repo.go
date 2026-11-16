@@ -56,6 +56,11 @@ var errMirrorOwnerNotAdmin = fmt.Errorf("%w: an ssh mirror is synced with its ow
 // where a plain import is a third way out.
 var errMirrorImportOwnerNotAdmin = fmt.Errorf("%w, or import without --mirror", errMirrorOwnerNotAdmin)
 
+// errLFSEndpointUnsupported is returned by ImportRepository when LFS objects
+// are asked for from an endpoint they can't be fetched from: one reached over
+// ssh, including the remote itself when it is an ssh or scp-style one.
+var errLFSEndpointUnsupported = errors.New("lfs objects are fetched over http or https only; give an http(s) --lfs-endpoint")
+
 // importRemotePolicy returns the policy for the remote and LFS endpoint that
 // user, acting live on ctx, supplies to ImportRepository.
 //
@@ -606,26 +611,35 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 	// LFS objects are fetched only when asked for (--lfs or --lfs-endpoint);
 	// a failure there then fails the import, since the user asked for it,
 	// except for objects the remote doesn't have (see fetchImportLFSObjects).
-	// The endpoint is resolved before anything is created, so a remote that
-	// has no usable one (scp syntax, IPv6 literals) imports without LFS
-	// instead of being cloned and then torn down.
+	// The endpoint is resolved before anything is created, so one objects
+	// can't be fetched from, an ssh or scp-style one, is refused with the
+	// reason rather than cloned without its LFS objects.
+	lfsEndpoint, lfsRemote := "", v
 	switch {
 	case opts.LFSEndpoint != "":
 		// A user-supplied endpoint is persisted to the repo config, where
 		// the mirror job later reads it, so it obeys the same validation
 		// and ssh policy as the remote itself.
-		if _, err := checkRemote(opts.LFSEndpoint); err != nil {
+		lfsRemote, err = checkRemote(opts.LFSEndpoint)
+		if err != nil {
 			return nil, err
 		}
-		imp.lfs, err = lfs.NewEndpoint(opts.LFSEndpoint)
+		lfsEndpoint = opts.LFSEndpoint
+	case opts.LFS:
+		lfsEndpoint = remote
+	}
+	if lfsEndpoint != "" {
+		// pkg/ssrf has told ssh and scp-style remotes from URLs on git's
+		// terms; anything else it let through is an http, https or git://
+		// URL.
+		if lfsRemote.Transport == ssrf.GitTransportSSH {
+			return nil, errLFSEndpointUnsupported
+		}
+		ep, err := lfs.NewEndpoint(lfsEndpoint)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", proto.ErrInvalidRemote, err)
 		}
-		imp.lfsEndpoint = opts.LFSEndpoint
-	case opts.LFS:
-		if ep, err := lfs.NewEndpoint(remote); err == nil {
-			imp.lfsEndpoint, imp.lfs = remote, ep
-		}
+		imp.lfsEndpoint, imp.lfs = lfsEndpoint, lfs.NewClient(ep)
 	}
 
 	// The directory has no row until importRepository records it, which
@@ -671,9 +685,10 @@ type importSpec struct {
 	remote, logRemote string
 	// env is the git environment the clone must run with; see RemoteGitEnv.
 	env []string
-	// lfsEndpoint and lfs are set only when LFS objects are to be fetched.
+	// lfsEndpoint and lfs, its client, are set only when LFS objects are to
+	// be fetched.
 	lfsEndpoint string
-	lfs         lfs.Endpoint
+	lfs         LFSClient
 	opts        proto.RepositoryOptions
 	// limited says whether max_repos_per_user applies (see repoLimited).
 	limited bool
@@ -739,13 +754,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 		return nil, err
 	}
 
-	client := lfs.NewClient(imp.lfs)
-	if client == nil {
-		d.logger.Warn("failed to create lfs client: unsupported endpoint", "endpoint", redactRemote(imp.lfsEndpoint))
-		return r, nil
-	}
-
-	if err := d.fetchImportLFSObjects(ctx, r, client); err != nil {
+	if err := d.fetchImportLFSObjects(ctx, r, imp.lfs); err != nil {
 		d.logger.Error("failed to store missing lfs objects", "err", err, "path", imp.path)
 		return nil, err
 	}
@@ -761,7 +770,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // other failure fails the import, including a transfer that fails for a
 // reason a retry may get past, such as a dropped connection or a 5xx, so
 // such objects are not dropped for good.
-func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client lfs.Client) error {
+func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository, client LFSClient) error {
 	err := d.StoreRepoMissingLFSObjects(ctx, r, client)
 	var unavailable *lfsObjectsUnavailableError
 	if errors.As(err, &unavailable) {

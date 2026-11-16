@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"slices"
@@ -13,7 +15,6 @@ import (
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
@@ -285,7 +286,9 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			_, err = be.ImportRepository(otherCtx, "otherkey-lfs", user, remote, lfsOpts)
 			is.True(errors.Is(err, proto.ErrUnauthorized))
 			_, err = be.ImportRepository(keyCtx, "adminkey-lfs", user, remote, lfsOpts)
-			is.True(errors.Is(err, proto.ErrImportFailed))
+			// It passes policy, and is then refused as lfs objects are
+			// not fetched over ssh.
+			is.True(errors.Is(err, errLFSEndpointUnsupported))
 
 			// A mirror is synced later by the mirror job with its owner's
 			// stored privileges. An anonymous caller's mirror is owned by
@@ -305,7 +308,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			if registered {
 				is.True(errors.Is(err, errMirrorOwnerNotAdmin))
 			} else {
-				is.True(errors.Is(err, proto.ErrImportFailed))
+				is.True(errors.Is(err, errLFSEndpointUnsupported))
 			}
 
 			// A configured allowlist binds the admin key too. A host it
@@ -545,45 +548,37 @@ func TestImportGateRetriesUnreadableVersion(t *testing.T) {
 	is.Equal(calls, 3)
 }
 
-// TestImportUnsupportedLFSEndpointRedacted verifies that an import whose LFS
-// endpoint has no client (ssh) logs that endpoint without its credentials.
-func TestImportUnsupportedLFSEndpointRedacted(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-
-	is := is.New(t)
-	var logs syncBuffer
-	be, _ := newTestBackendWithLog(t, &logs)
+// TestImportRefusesSSHLFSEndpoint verifies that an import asking for LFS
+// objects from an ssh endpoint, given or derived from an ssh or scp-style
+// remote, is refused with a reason before anything is cloned, rather than
+// imported without its LFS objects and without a word.
+func TestImportRefusesSSHLFSEndpoint(t *testing.T) {
+	be, _ := newTestBackendWithLog(t, io.Discard)
 	ctx := context.Background()
-
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
-
-	src := t.TempDir()
-	is.NoErr(exec.CommandContext(t.Context(), "git", "init", "--bare", "-q", src).Run())
-
-	const endpoint = "ssh://TOKEN@example.com/x.git"
-	ep, err := lfs.NewEndpoint(endpoint)
-	is.NoErr(err)
-	is.True(lfs.NewClient(ep) == nil) // the path under test
-
-	imp := importSpec{
-		name:        "lfs-ssh",
-		path:        be.repoPath("lfs-ssh"),
-		remote:      src,
-		logRemote:   src,
-		lfsEndpoint: endpoint,
-		lfs:         ep,
+	if err != nil {
+		t.Fatal(err)
 	}
-	is.NoErr(claimRepoPath(imp.path))
-	r, err := be.importRepository(ctx, admin, imp)
-	is.NoErr(err)
-	is.True(r != nil)
 
-	out := logs.String()
-	is.True(strings.Contains(out, "unsupported endpoint"))
-	if strings.Contains(out, "TOKEN") {
-		t.Errorf("logs contain the endpoint credentials:\n%s", out)
+	for _, tc := range []struct {
+		name, remote string
+		opts         proto.RepositoryOptions
+	}{
+		{"ssh-remote", "ssh://TOKEN@127.0.0.1:1/x.git", proto.RepositoryOptions{LFS: true}},
+		{"scp-remote", "git@127.0.0.1:x.git", proto.RepositoryOptions{LFS: true}},
+		{"ssh-endpoint", "ssh://127.0.0.1:1/x.git", proto.RepositoryOptions{LFSEndpoint: "ssh://TOKEN@127.0.0.1:1/x.git"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := be.ImportRepository(ctx, tc.name, admin, tc.remote, tc.opts)
+			if !errors.Is(err, errLFSEndpointUnsupported) {
+				t.Fatalf("ImportRepository = %v, want %v", err, errLFSEndpointUnsupported)
+			}
+			if strings.Contains(err.Error(), "TOKEN") {
+				t.Errorf("error names the credentials: %v", err)
+			}
+			if _, err := os.Stat(be.repoPath(tc.name)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the refused import left %s behind: %v", be.repoPath(tc.name), err)
+			}
+		})
 	}
 }

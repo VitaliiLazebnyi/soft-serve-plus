@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,6 +24,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
+
+// LFSClient downloads LFS objects from a remote: an *lfs.HTTPClient, or a
+// stand-in in tests.
+type LFSClient interface {
+	Download(ctx context.Context, objects []lfs.Pointer, callback lfs.DownloadCallback) error
+}
 
 // ErrLFSObjectsUnavailable is returned when the remote could not provide some
 // LFS objects. Every other object was still stored. The error that wraps it
@@ -86,7 +90,7 @@ func (e *lfsScanError) Unwrap() error { return e.err }
 // ErrLFSObjectsUnavailable once every other object is stored. Any other
 // error stops the sync, including a download that fails or breaks off for a
 // reason that may pass on a later try, such as a dropped connection or a 5xx.
-func (d *Backend) StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client) error {
+func (d *Backend) StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Repository, lfsClient LFSClient) error {
 	return d.storeRepoLFSObjects(ctx, repo, lfsClient, false)
 }
 
@@ -98,11 +102,11 @@ func (d *Backend) StoreRepoMissingLFSObjects(ctx context.Context, repo proto.Rep
 // was removed, or when the shorter scan fails. Objects that were unavailable
 // keep the history they are in scanned on later syncs, until a sync stores
 // them all.
-func (d *Backend) SyncRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client) error {
+func (d *Backend) SyncRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient LFSClient) error {
 	return d.storeRepoLFSObjects(ctx, repo, lfsClient, true)
 }
 
-func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient lfs.Client, incremental bool) error {
+func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient LFSClient, incremental bool) error {
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	lfsRoot := filepath.Join(d.cfg.DataPath, "lfs", repoID)
 	logger := log.FromContext(ctx).WithPrefix("lfs")
@@ -253,7 +257,7 @@ func isObjectID(s string) bool {
 // storeMissingLFSObjects stores the missing LFS objects of the pointers
 // reachable from include but not from exclude. Errors of the scan itself are
 // returned as an *lfsScanError.
-func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, dbx *db.DB, datastore store.Store, lfsClient lfs.Client, lfsRoot string, include, exclude []string) error {
+func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, dbx *db.DB, datastore store.Store, lfsClient LFSClient, lfsRoot string, include, exclude []string) error {
 	// TODO: support S3 storage
 	strg := storage.NewLocalStorage(lfsRoot)
 
@@ -275,25 +279,17 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 	verified := make(map[string]bool)
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 
-	// isObject reports whether the file on disk of oid holds the object. It
+	// isObject reports whether the file on disk of oid is a regular file of
+	// size bytes that holds the object; one that can't be read is not. It
 	// is only checked when its size or its record disagrees with a pointer,
 	// as hashing every object on every sync would read all of them.
-	isObject := func(oid, name string) (bool, error) {
+	isObject := func(oid string, size int64) bool {
 		if ok, checked := verified[oid]; checked {
-			return ok, nil
+			return ok
 		}
-		f, err := strg.Open(name)
-		if err != nil {
-			return false, err
-		}
-		defer f.Close() //nolint: errcheck
-		hash := sha256.New()
-		if _, err := io.Copy(hash, f); err != nil {
-			return false, err
-		}
-		ok := hex.EncodeToString(hash.Sum(nil)) == oid
+		ok := lfs.HasObject(strg, oid, size)
 		verified[oid] = ok
-		return ok, nil
+		return ok
 	}
 	var unavailable int
 	objectFailed := func(p lfs.Pointer, err error) {
@@ -326,46 +322,27 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 				return nil
 			}
 
-			// Stream the object to a temporary file outside of any database
-			// transaction, so a slow download doesn't hold the write lock.
-			randBytes := make([]byte, 12)
-			_, _ = rand.Read(randBytes) // crypto/rand.Read never fails.
-
-			tempName := path.Join("incomplete", fmt.Sprintf("%s%x", p.Oid, randBytes))
-			// Read one byte past the expected size, enough to tell that
-			// the content is too long without storing all of it.
-			hash := sha256.New()
-			written, err := strg.Put(tempName, io.TeeReader(io.LimitReader(content, p.Size+1), hash))
-			if err != nil {
-				_ = strg.Delete(tempName)
-				return err
-			}
-
-			if sum := hex.EncodeToString(hash.Sum(nil)); written != p.Size || sum != p.Oid {
-				_ = strg.Delete(tempName)
-				objectFailed(p, fmt.Errorf("content does not match: got %d bytes with sha256 %s", written, sum))
+			// StoreObject streams the object to a temporary file outside of
+			// any database transaction, so a slow download doesn't hold the
+			// write lock, verifies it, and records it. If recording fails,
+			// the object stays on disk and the next sync records it.
+			err := lfs.StoreObject(ctx, strg, dbx, datastore, repo.ID(), p.Oid, p.Size, content)
+			if errors.Is(err, lfs.ErrObjectSizeMismatch) || errors.Is(err, lfs.ErrObjectOidMismatch) {
+				objectFailed(p, fmt.Errorf("content does not match: %w", err))
 				return nil
 			}
-
-			if err := strg.Rename(tempName, path.Join("objects", p.RelativePath())); err != nil {
-				_ = strg.Delete(tempName)
+			if err != nil {
 				return err
 			}
 
 			verified[p.Oid] = true
 
-			if size, ok := recorded[p.Oid]; ok {
-				if size == p.Size {
-					return nil
-				}
+			if size, ok := recorded[p.Oid]; ok && size != p.Size {
 				// Older versions could record the size of a malformed
 				// pointer; the content now proves this one right.
 				return datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size)
 			}
-
-			// If recording fails, the object stays on disk and the next sync
-			// records it.
-			return recordLFSObject(ctx, dbx, datastore, repo.ID(), p)
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -401,11 +378,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			// The object is on disk, but recorded with another size, which
 			// older versions could take from a malformed pointer. If the
 			// file is the object, its size is the right one.
-			ok, err := isObject(pointer.Oid, name)
-			if err != nil {
-				return false, err
-			}
-			if ok {
+			if isObject(pointer.Oid, fi.Size()) {
 				logger.Info("correcting the recorded size of lfs object", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "recorded", obj.Size)
 				return false, datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size)
 			}
@@ -415,11 +388,7 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			// would only fail its verification on every sync. Older versions
 			// could store and record a file cut short, though, which this
 			// pointer may be the only right one for.
-			ok, err := isObject(pointer.Oid, name)
-			if err != nil {
-				return false, err
-			}
-			if ok {
+			if isObject(pointer.Oid, fi.Size()) {
 				logger.Debug("ignoring lfs pointer with the wrong size", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "stored", obj.Size)
 				return false, nil
 			}

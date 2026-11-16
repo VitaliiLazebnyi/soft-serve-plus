@@ -223,24 +223,25 @@ func syncMirrorRepo(ctx context.Context, cfg *config.Config, logger *log.Logger,
 
 	// The endpoint is stored in the repo config and may predate
 	// validation, so check it before dialing.
-	if _, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy); err != nil {
+	v, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy)
+	if err != nil {
 		logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
+		return
+	}
+	// An ssh or scp-style endpoint, which older imports stored, is
+	// refused: objects are fetched over http(s) only.
+	if v.Transport == ssrf.GitTransportSSH {
+		logger.Warn("skipping lfs sync", "repo", name, "err", lfs.ErrUnsupportedEndpoint)
 		return
 	}
 
 	ep, err := lfs.NewEndpoint(lfsEndpoint)
 	if err != nil {
-		logger.Error("error creating LFS endpoint", "repo", name, "err", err)
+		logger.Warn("skipping lfs sync", "repo", name, "err", err)
 		return
 	}
 
-	client := lfs.NewClient(ep)
-	if client == nil {
-		logger.Errorf("failed to create lfs client: unsupported endpoint %s", utils.RedactURL(lfsEndpoint))
-		return
-	}
-
-	if err := b.SyncRepoLFSObjects(ctx, repo, client); err != nil {
+	if err := b.SyncRepoLFSObjects(ctx, repo, lfs.NewClient(ep)); err != nil {
 		if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
 			// The next sync tries them again.
 			logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)

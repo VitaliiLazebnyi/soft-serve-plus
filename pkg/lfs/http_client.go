@@ -40,14 +40,12 @@ func redactURLError(err error) error {
 	return &url.Error{Op: uerr.Op, URL: utils.RedactURL(uerr.URL), Err: inner}
 }
 
-// httpClient is a Git LFS client to communicate with a LFS source API.
-type httpClient struct {
-	client    *http.Client
-	endpoint  Endpoint
-	transfers map[string]TransferAdapter
+// HTTPClient downloads objects from a Git LFS server over HTTP, with the
+// batch API and the basic transfer adapter.
+type HTTPClient struct {
+	client   *http.Client
+	endpoint Endpoint
 }
-
-var _ Client = (*httpClient)(nil)
 
 // stallTimeout is how long an LFS connection may go without sending or
 // receiving any data before it is closed. Tests lower it.
@@ -68,15 +66,8 @@ func newTransferClient(client *http.Client) *http.Client {
 }
 
 // newHTTPClient returns a new Git LFS client.
-func newHTTPClient(endpoint Endpoint) *httpClient {
-	client := secureHTTPClient
-	return &httpClient{
-		client:   client,
-		endpoint: endpoint,
-		transfers: map[string]TransferAdapter{
-			TransferBasic: &BasicTransferAdapter{client},
-		},
-	}
+func newHTTPClient(endpoint Endpoint) *HTTPClient {
+	return &HTTPClient{client: secureHTTPClient, endpoint: endpoint}
 }
 
 // setTransferTimeouts replaces the client's whole-request timeout, which also
@@ -126,30 +117,15 @@ func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b) //nolint:wrapcheck
 }
 
-// Download implements Client.
-func (c *httpClient) Download(ctx context.Context, objects []Pointer, callback DownloadCallback) error {
-	return c.performOperation(ctx, objects, callback)
-}
-
-func (c *httpClient) transferNames() []string {
-	names := make([]string, len(c.transfers))
-	i := 0
-	for name := range c.transfers {
-		names[i] = name
-		i++
-	}
-	return names
-}
-
 // batch performs a batch request to the LFS server.
-func (c *httpClient) batch(ctx context.Context, operation string, objects []Pointer) (*BatchResponse, error) {
+func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Pointer) (*BatchResponse, error) {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	url := c.endpoint.JoinPath("objects", "batch").String()
 
 	// TODO: support ref
 	request := &BatchRequest{
 		Operation: operation,
-		Transfers: c.transferNames(),
+		Transfers: []string{TransferBasic},
 		Objects:   objects,
 		HashAlgo:  HashAlgorithmSHA256,
 	}
@@ -236,7 +212,9 @@ func actionLink(object *ObjectResponse, action string) (link *Link, ok bool, err
 	return link, true, nil
 }
 
-func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
+// Download asks the server for objects in one batch
+// request and calls dc with each one it answers for.
+func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
 	logger := log.FromContext(ctx).WithPrefix("lfs")
 	if len(objects) == 0 {
 		return nil
@@ -247,9 +225,8 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		return err
 	}
 
-	transferAdapter, ok := c.transfers[result.Transfer]
-	if !ok {
-		return fmt.Errorf("TransferAdapter not found: %s", result.Transfer)
+	if result.Transfer != TransferBasic {
+		return fmt.Errorf("transfer adapter not supported: %s", result.Transfer)
 	}
 
 	// Only act on objects that were asked for, once each, so a response
@@ -286,7 +263,7 @@ func (c *httpClient) performOperation(ctx context.Context, objects []Pointer, dc
 		}
 		var content io.ReadCloser
 		if ok {
-			content, err = transferAdapter.Download(ctx, object.Pointer, link)
+			content, err = c.download(ctx, link)
 		} else {
 			logger.Debugf("%v has no usable action", object.Pointer)
 			err = errMissingDownload
@@ -341,4 +318,67 @@ func isObjectError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// download fetches an object from its download link, as the basic transfer
+// adapter does, and returns its content.
+func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, error) {
+	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger.Debugf("Calling: %s %s", http.MethodGet, utils.RedactURL(l.Href))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.Href, nil)
+	if err != nil {
+		err = redactURLError(err)
+		logger.Errorf("Error creating request: %v", err)
+		return nil, err
+	}
+	for key, value := range l.Header {
+		req.Header.Set(key, value)
+	}
+	req.Header.Set("Accept", MediaType)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		err = redactURLError(err)
+		logger.Errorf("Error while processing request: %v", err)
+		return nil, err
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return nil, &statusError{code: res.StatusCode, err: handleErrorResponse(logger, res)}
+	}
+
+	return res.Body, nil
+}
+
+// statusError is the error of a transfer request the server answered with a
+// status other than 200 OK. It reads as err, the error handleErrorResponse
+// built from the response.
+type statusError struct {
+	code int
+	err  error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+// handleErrorResponse closes resp's body and returns an error carrying its
+// status and, when the body is an LFS error object with a message, that
+// message.
+func handleErrorResponse(logger *log.Logger, resp *http.Response) error {
+	defer resp.Body.Close() //nolint: errcheck
+
+	var er ErrorResponse
+	if err := decodeJSONLimit(resp.Body, maxErrorResponseSize, &er); err != nil {
+		logger.Debug("error decoding error response", "status", resp.Status, "err", err)
+	}
+	if er.Message == "" {
+		return fmt.Errorf("request failed with status %s", resp.Status)
+	}
+	return fmt.Errorf("request failed with status %s: %s", resp.Status, er.Message)
 }
