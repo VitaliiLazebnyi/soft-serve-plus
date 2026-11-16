@@ -65,21 +65,21 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 
 	testDSN, err := withDatabase(dsn, name)
 	if err != nil {
-		admin.ExecContext(ctx, "DROP DATABASE "+name) //nolint:errcheck
-		admin.Close()                                 //nolint:errcheck
+		admin.ExecContext(ctx, "DROP DATABASE "+name+" WITH (FORCE)") //nolint:errcheck
+		admin.Close()                                                 //nolint:errcheck
 		return nil, err
 	}
 	dbx, err := db.Open(ctx, "postgres", testDSN)
 	if err != nil {
-		admin.ExecContext(ctx, "DROP DATABASE "+name) //nolint:errcheck
-		admin.Close()                                 //nolint:errcheck
+		admin.ExecContext(ctx, "DROP DATABASE "+name+" WITH (FORCE)") //nolint:errcheck
+		admin.Close()                                                 //nolint:errcheck
 		return nil, err
 	}
 	tb.Cleanup(func() {
 		if err := dbx.Close(); err != nil {
 			tb.Error(err)
 		}
-		if _, err := admin.ExecContext(context.TODO(), "DROP DATABASE "+name); err != nil {
+		if _, err := admin.ExecContext(context.TODO(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
 			tb.Error(err)
 		}
 		if err := admin.Close(); err != nil {

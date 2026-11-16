@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -60,9 +61,11 @@ func TestDBNameUniqueAcrossProcesses(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestDBNameUniqueAcrossProcesses$") //nolint:gosec,noctx
 	cmd.Env = append(os.Environ(), "SOFT_SERVE_TEST_DBNAME_CHILD=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("child process: %v\n%s%s", err, out, stderr.Bytes())
 	}
 	child := map[string]bool{}
 	for line := range strings.SplitSeq(string(out), "\n") {
@@ -71,7 +74,7 @@ func TestDBNameUniqueAcrossProcesses(t *testing.T) {
 		}
 	}
 	if len(child) != n {
-		t.Fatalf("child process printed %d distinct names, want %d", len(child), n)
+		t.Fatalf("child process printed %d distinct names, want %d\nstdout:\n%s\nstderr:\n%s", len(child), n, out, stderr.Bytes())
 	}
 	for range n {
 		if name := DBName("softserve_test"); child[name] {
