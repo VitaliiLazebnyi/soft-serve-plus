@@ -57,11 +57,12 @@ func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// newReceiver starts an in-memory receiver (see newTestServer) that answers
+// with status and resBody and records what it gets.
 func newReceiver(t *testing.T, status int, resBody string) (*httptest.Server, *recorder) {
 	t.Helper()
 	rec := &recorder{status: status, resBody: resBody}
-	srv := httptest.NewServer(rec)
-	t.Cleanup(srv.Close)
+	srv := newTestServer(t, rec)
 	return srv, rec
 }
 
@@ -341,13 +342,12 @@ func TestSendWebhookSignatureDependsOnSecret(t *testing.T) {
 // answering, so every request fails the same way.
 func closingServer(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		conn, _, err := w.(http.Hijacker).Hijack()
 		if err == nil {
 			conn.Close() //nolint:errcheck
 		}
 	}))
-	t.Cleanup(srv.Close)
 	return srv.URL
 }
 
@@ -428,9 +428,8 @@ func TestSendWebhookInvalidURLRecorded(t *testing.T) {
 // body it sends, then closes the connection. Reading the body fails.
 func truncatingServer(t *testing.T) string {
 	t.Helper()
-	is := is.New(t)
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	is.NoErr(err)
+	// In memory, like newTestServer.
+	ln := newMemListener()
 	t.Cleanup(func() { ln.Close() }) //nolint:errcheck
 	go func() {
 		for {
@@ -572,12 +571,11 @@ func TestSendWebhookRecordsEveryHeader(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
 	e := newTestEnv(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Receiver-A", "alpha")
 		w.Header().Set("X-Receiver-B", "beta")
 		w.WriteHeader(http.StatusAccepted)
 	}))
-	t.Cleanup(srv.Close)
 	w := e.newWebhook(t, srv.URL, "secret", ContentTypeJSON, EventBranchTagCreate)
 
 	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
@@ -635,23 +633,28 @@ func useSendTimeout(t *testing.T, d time.Duration) {
 func hangingServer(t *testing.T) string {
 	t.Helper()
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 		case <-release:
 		}
 	}))
-	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 	return srv.URL
 }
 
 // Each webhook gets its own send timeout: a receiver that never answers uses
 // up its own time only, and the webhooks after it are still sent and recorded.
+//
+// The send timeout is shortened so the slow receiver runs out of time
+// quickly. It is still 2 seconds because the fast webhook has to be delivered
+// within it too, which an in-memory request does with a wide margin even on a
+// loaded machine. A deadline shared between the webhooks would leave the
+// fast one no time at all, so the test still catches that.
 func TestDeliverSlowWebhookDoesNotStarveOthers(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
-	useSendTimeout(t, 200*time.Millisecond)
+	useSendTimeout(t, 2*time.Second)
 	e := newTestEnv(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	slow := e.newWebhook(t, hangingServer(t), "", ContentTypeJSON, EventPush)
@@ -698,7 +701,7 @@ func TestDeliverRecordsAttemptWhenContextCancelledDuringSend(t *testing.T) {
 	ctx, cancel := context.WithCancel(e.ctx)
 	defer cancel()
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		cancel()
 		select {
@@ -706,7 +709,6 @@ func TestDeliverRecordsAttemptWhenContextCancelledDuringSend(t *testing.T) {
 		case <-release:
 		}
 	}))
-	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
@@ -977,8 +979,11 @@ func TestDeliverRereadsEachWebhookAlone(t *testing.T) {
 	is.Equal(cs.hookCalls.Load(), int32(3))
 }
 
-// useRereadTiming shortens the re-read timeout and retry delay for the test.
-// It swaps package variables, so tests using it must not call t.Parallel.
+// useRereadTiming sets the re-read timeout and retry delay for the test. A
+// test whose re-read must succeed keeps the production timeout (pass
+// rereadTimeout): a real database read on a loaded machine can be slow, and
+// only a re-read that is meant to run out of time gets a short one. It swaps
+// package variables, so tests using it must not call t.Parallel.
 func useRereadTiming(t *testing.T, timeout, delay time.Duration) {
 	t.Helper()
 	origTimeout, origDelay := rereadTimeout, rereadRetryDelay
@@ -1011,7 +1016,7 @@ func (s failingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, 
 func TestDeliverRecordsUndeliveredWhenRereadFails(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
-	useRereadTiming(t, time.Second, time.Millisecond)
+	useRereadTiming(t, rereadTimeout, time.Millisecond)
 	e := newTestEnv(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
@@ -1043,7 +1048,7 @@ func TestDeliverRecordsUndeliveredWhenRereadFails(t *testing.T) {
 func TestDeliverRetriesFailedReread(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
-	useRereadTiming(t, time.Second, time.Millisecond)
+	useRereadTiming(t, rereadTimeout, time.Millisecond)
 	e := newTestEnv(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
@@ -1088,10 +1093,13 @@ func TestDeliverRereadIsBounded(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)) }()
+	// Deliver returns after both re-reads run out of time and the event is
+	// recorded, which may itself take up to recordTimeout; the bound only
+	// tells a re-read that is not bounded from a slow machine.
 	select {
 	case err := <-done:
 		is.NoErr(err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("Deliver did not return while the re-read hung")
 	}
 
@@ -1107,7 +1115,7 @@ func TestDeliverRereadIsBounded(t *testing.T) {
 func endlessServer(t *testing.T) string {
 	t.Helper()
 	chunk := []byte(strings.Repeat("x", 4096))
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		for r.Context().Err() == nil {
 			if _, err := w.Write(chunk); err != nil {
@@ -1115,7 +1123,6 @@ func endlessServer(t *testing.T) string {
 			}
 		}
 	}))
-	t.Cleanup(srv.Close)
 	return srv.URL
 }
 
@@ -1213,13 +1220,12 @@ func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
 	useHTTPClient(t)
 	e := newTestEnv(t)
 	value := strings.Repeat("v", 1000)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		for i := range 200 {
 			w.Header().Set(fmt.Sprintf("X-Pad-%03d", i), value)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(srv.Close)
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
 	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))

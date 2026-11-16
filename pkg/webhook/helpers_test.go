@@ -94,15 +94,30 @@ func (e *testEnv) deliveries(t *testing.T, webhookID int64) []models.WebhookDeli
 	return ds
 }
 
+// testClientTimeout caps each request made by the client useHTTPClient
+// installs. It is above sendTimeout's default (ssrf.ClientTimeout), so a send
+// is bounded by sendTimeout as in production, never by a tighter test value.
+const testClientTimeout = time.Minute
+
 // useHTTPClient replaces the SSRF-protected client for the duration of the
-// test. The SSRF client refuses loopback targets, which httptest servers use.
-// Only test code calls this; production always uses the protected client.
-// It swaps a package variable, so tests that use it must not call t.Parallel.
+// test with one that reaches the in-memory receivers newTestServer starts
+// (see memnet_test.go), and nothing else. Only test code calls this;
+// production always uses the protected client. Each test gets its own
+// transport, so no connection outlives it. It swaps a package variable, so
+// tests that use it must not call t.Parallel.
 func useHTTPClient(t *testing.T) {
 	t.Helper()
 	orig := secureHTTPClient
-	secureHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	t.Cleanup(func() { secureHTTPClient = orig })
+	tr := &http.Transport{
+		DialContext:     dialMem,
+		MaxIdleConns:    100,
+		IdleConnTimeout: 90 * time.Second,
+	}
+	secureHTTPClient = &http.Client{Timeout: testClientTimeout, Transport: tr}
+	t.Cleanup(func() {
+		secureHTTPClient = orig
+		tr.CloseIdleConnections()
+	})
 }
 
 // fakeUser implements proto.User.
