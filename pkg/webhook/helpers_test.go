@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
@@ -94,15 +95,40 @@ func (e *testEnv) deliveries(t *testing.T, webhookID int64) []models.WebhookDeli
 	return ds
 }
 
+// testClientTimeout caps each request made by the client useHTTPClient
+// installs. It is above sendTimeout's default (ssrf.ClientTimeout), so a send
+// is bounded by sendTimeout as in production, never by a tighter test value.
+const testClientTimeout = time.Minute
+
 // useHTTPClient replaces the SSRF-protected client for the duration of the
-// test. The SSRF client refuses loopback targets, which httptest servers use.
-// Only test code calls this; production always uses the protected client.
-// It swaps a package variable, so tests that use it must not call t.Parallel.
+// test with one that reaches the in-memory receivers newTestServer starts
+// (see memnet_test.go), and nothing else. Only test code calls this;
+// production always uses the protected client. Apart from the dialer and
+// the whole-request cap, it is configured like ssrf.NewSecureClient: the
+// same response header limits, and redirects are not followed. Each test
+// gets its own transport, so no connection outlives it. It swaps a package
+// variable, so tests that use it must not call t.Parallel.
 func useHTTPClient(t *testing.T) {
 	t.Helper()
 	orig := secureHTTPClient
-	secureHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	t.Cleanup(func() { secureHTTPClient = orig })
+	tr := &http.Transport{
+		DialContext:            dialMem,
+		MaxIdleConns:           100,
+		IdleConnTimeout:        90 * time.Second,
+		MaxResponseHeaderBytes: ssrf.MaxResponseHeaderBytes,
+		ResponseHeaderTimeout:  ssrf.ResponseHeaderTimeout,
+	}
+	secureHTTPClient = &http.Client{
+		Timeout:   testClientTimeout,
+		Transport: tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	t.Cleanup(func() {
+		secureHTTPClient = orig
+		tr.CloseIdleConnections()
+	})
 }
 
 // fakeUser implements proto.User.

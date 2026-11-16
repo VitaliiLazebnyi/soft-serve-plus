@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -50,12 +49,11 @@ func TestSendWebhookStoresInvalidUTF8ResponseAsText(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
 	e := newTestEnv(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Name", "caf\xe9")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("a\x00b\xffc"))
 	}))
-	t.Cleanup(srv.Close)
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
 	is.NoErr(SendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
