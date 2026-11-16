@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/safego"
 )
 
 // SearchPointerBlobs scans the whole repository for LFS pointer files. It
@@ -43,16 +45,23 @@ func SearchPointerBlobsBetween(ctx context.Context, repo *git.Repository, includ
 // revArgs and stdin, sends the pointers it finds on pointerChan, and closes
 // pointerChan and then errChan, after sending the error of the scan, if any.
 // A scan that stops because ctx is done reports ctx's error, even if git
-// happened to finish cleanly, so it does not pass for a complete one.
+// happened to finish cleanly, so it does not pass for a complete one. A scan
+// that panics, as it reads what git prints, is logged and reports the panic,
+// since it runs in a goroutine of its own that nothing else recovers.
 func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []string, stdin string, pointerChan chan<- PointerBlob, errChan chan<- error) {
-	err := scanPointerBlobs(ctx, repo.Path, revArgs, stdin, func(p PointerBlob) bool {
-		select {
-		case pointerChan <- p:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	})
+	var err error
+	if perr := safego.Run(log.FromContext(ctx).WithPrefix("lfs"), func() {
+		err = scanPointerBlobs(ctx, repo.Path, revArgs, stdin, func(p PointerBlob) bool {
+			select {
+			case pointerChan <- p:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		})
+	}); perr != nil {
+		err = perr
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// The git commands killed by the cancellation fail too, with
 		// errors that don't say why.
@@ -79,8 +88,13 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 	// whatever the filter; cat-file's output says what each object is, and
 	// the parser skips the ones that are not blobs. The filters need git
 	// 2.32; imports and mirror syncs, the only scans, need 2.37.
+	//
+	// Both commands read objects as stored, not through refs/replace/: a
+	// replace ref that appears between their lookups, which a user can push
+	// during their own import, would otherwise make cat-file report another
+	// object than rev-list filtered, of any size.
 	revListArgs := append([]string{
-		"rev-list", "--objects", "--no-object-names", "--filter-provided-objects",
+		"--no-replace-objects", "rev-list", "--objects", "--no-object-names", "--filter-provided-objects",
 		"--filter=object:type=blob", "--filter=blob:limit=" + strconv.Itoa(blobSizeCutoff+1),
 	}, revArgs...)
 	revListStderr := &cappedBuffer{limit: scanStderrLimit}
@@ -91,7 +105,7 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 	revList.Stderr = revListStderr
 	revList.WaitDelay = scanWaitDelay
 
-	catFile := exec.CommandContext(ctx, "git", "cat-file", "--batch")
+	catFile := exec.CommandContext(ctx, "git", "--no-replace-objects", "cat-file", "--batch")
 	catFile.Dir = dir
 	catFile.Stderr = catFileStderr
 	catFile.WaitDelay = scanWaitDelay
@@ -223,11 +237,14 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		}
 		sha, typ := fields[0], fields[1]
 		size, err := strconv.Atoi(fields[2])
-		if err != nil {
+		if err != nil || size < 0 {
 			return fmt.Errorf("unexpected object header %q", strings.TrimSpace(header))
 		}
 
-		if typ != "blob" {
+		// Only a blob small enough to be a pointer is read. rev-list
+		// filtered out larger ones, but the size that counts is the one
+		// cat-file reports, which buf has to hold.
+		if typ != "blob" || size > blobSizeCutoff {
 			// The content and its trailing newline.
 			if _, err := io.CopyN(io.Discard, br, int64(size)+1); err != nil {
 				return err //nolint:wrapcheck
@@ -239,7 +256,7 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		if _, err := io.ReadFull(br, content); err != nil {
 			return err //nolint:wrapcheck
 		}
-		pointer, _ := ReadPointerFromBuffer(content[:size])
+		pointer, _ := readPointer(content[:size])
 		if !pointer.IsValid() {
 			continue
 		}
@@ -248,3 +265,6 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		}
 	}
 }
+
+// readPointer parses a blob as a pointer. Tests replace it.
+var readPointer = ReadPointerFromBuffer
