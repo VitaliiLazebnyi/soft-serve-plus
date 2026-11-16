@@ -100,6 +100,9 @@ func parseAllowedHost(raw string) (allowedHost, error) {
 	// "host:" is a port left out by mistake, not "any port": an entry
 	// without a port is written without the colon.
 	if hasPort {
+		if rawPort == "" {
+			return allowedHost{}, fmt.Errorf(`allowed host %q: empty port; drop the ":" to allow any port`, raw)
+		}
 		var ok bool
 		if port, ok = parsePort(rawPort); !ok {
 			return allowedHost{}, fmt.Errorf("allowed host %q: invalid port", raw)

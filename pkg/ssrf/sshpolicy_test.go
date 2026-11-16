@@ -3,6 +3,7 @@ package ssrf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -166,6 +167,14 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 	for _, entry := range []string{"fd00::", "::", "[fd00::]"} {
 		if _, err := ParseAllowedHosts([]string{entry}); err != nil {
 			t.Errorf("ParseAllowedHosts(%q): %v", entry, err)
+		}
+	}
+	// An empty port says how to fix it, since it used to mean any port.
+	for _, entry := range []string{"host:", "[fd00::1]:"} {
+		_, err := ParseAllowedHosts([]string{entry})
+		want := fmt.Sprintf(`allowed host %q: empty port; drop the ":" to allow any port`, entry)
+		if err == nil || err.Error() != want {
+			t.Errorf("ParseAllowedHosts(%q) = %v, want %q", entry, err, want)
 		}
 	}
 }
