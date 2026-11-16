@@ -166,6 +166,12 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 
 	switch u.Scheme {
 	case "ssh", "git+ssh", "ssh+git":
+		// git hands "user:password@host" to ssh as the destination, so a
+		// password would reach ssh, and %r, along with the user. ssh has
+		// no use for one in the URL.
+		if _, ok := u.User.Password(); ok {
+			return ValidatedGitRemote{}, fmt.Errorf("%w: an ssh remote cannot carry a password", ErrInvalidURL)
+		}
 		if err := validateSSHHost(u.User.Username(), u.Hostname()); err != nil {
 			return ValidatedGitRemote{}, err
 		}

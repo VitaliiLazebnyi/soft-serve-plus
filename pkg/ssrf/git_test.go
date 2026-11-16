@@ -609,6 +609,13 @@ func TestValidateGitRemoteSSHUserAndZone(t *testing.T) {
 		{"a@b@git.example:x.git", ErrInvalidURL},
 		{"[a$b@git.example:22]:x.git", ErrInvalidURL},
 		{"-oProxyCommand=x@git.example:x.git", ErrInvalidURL},
+		// A password: git hands "user:password@host" to ssh, so it would
+		// reach %r with the user.
+		{"ssh://a:$(id)@git.example/x.git", ErrInvalidURL},
+		{"ssh://git:x;id@git.example/x.git", ErrInvalidURL},
+		{"ssh://git:%24%28touch%20%2Ftmp%2Fp%29@git.example/x.git", ErrInvalidURL},
+		{"git+ssh://git:secret@git.example/x.git", ErrInvalidURL},
+		{"ssh+git://git:@git.example/x.git", ErrInvalidURL},
 		// Zones.
 		{"ssh://git@[2606:4700::1]/x.git", nil},
 		{"git@[2606:4700::1]:x.git", nil},
