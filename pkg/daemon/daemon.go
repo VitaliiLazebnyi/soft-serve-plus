@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/safego"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
@@ -194,11 +195,12 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 			continue
 		}
 
-		d.wg.Add(1)
-		go func() {
-			d.handleClient(ctx, c)
-			d.wg.Done()
-		}()
+		// A panic while the connection is handled is logged and ends
+		// only this connection: handleClient's deferred close still
+		// gives its slot back, and the goroutine still leaves d.wg.
+		d.wg.Go(func() {
+			safego.Run(d.logger, func() { d.handleClient(ctx, c) }) //nolint: errcheck // Run logs a panic.
+		})
 	}
 }
 
@@ -254,12 +256,14 @@ func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
 	}
 	// Serve, the only caller, is counted in d.wg, so Shutdown cannot be
 	// past its Wait.
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		defer func() { <-d.refusing }()
-		d.refuse(c, err, time.Time{})
-	}()
+		safego.Run(d.logger, func() { //nolint: errcheck // Run logs a panic.
+			// refuse closes c; this closes it if refuse panics.
+			defer c.Close() //nolint: errcheck
+			d.refuse(c, err, time.Time{})
+		})
+	})
 }
 
 // refuse sends err to the client and closes the connection without losing
@@ -416,6 +420,9 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok
 		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
 		d.fatal(c, git.ErrTimeout)
 	})
+	// A panic in the read must not leave the AfterFunc registered on the
+	// server's context; stopping it again below is harmless.
+	defer stopRead()
 	line, err := git.ReadPkt(c)
 	if !stopRead() {
 		// The server's context ended and the client has been answered.
@@ -648,10 +655,10 @@ func (d *GitDaemon) Shutdown(ctx context.Context) error {
 
 	err := d.closeListener()
 	finished := make(chan struct{}, 1)
-	go func() {
+	safego.Go(d.logger, func() {
 		defer close(finished)
 		d.wg.Wait()
-	}()
+	})
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
