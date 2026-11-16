@@ -914,10 +914,17 @@ func (c *Config) Validate() error {
 	}
 
 	// The scheduler uses the standard parser; a spec it rejects would leave
-	// mirrors never syncing behind a startup warning.
-	if c.Jobs.MirrorPull != "" {
-		if _, err := cron.ParseStandard(c.Jobs.MirrorPull); err != nil {
-			return fmt.Errorf("jobs.mirror_pull: %q: %w", c.Jobs.MirrorPull, err)
+	// the job never running behind a startup warning. An empty spec
+	// disables mirror syncing, and runs the LFS sweep hourly.
+	for _, j := range []struct{ key, spec string }{
+		{"jobs.mirror_pull", c.Jobs.MirrorPull},
+		{"jobs.lfs_sweep", c.Jobs.LFSSweep},
+	} {
+		if j.spec == "" {
+			continue
+		}
+		if _, err := cron.ParseStandard(j.spec); err != nil {
+			return fmt.Errorf("%s: %q: %w", j.key, j.spec, err)
 		}
 	}
 

@@ -160,7 +160,12 @@ func SyncMirrors(ctx context.Context) {
 			break
 		}
 		g.Go(func() error {
-			safego.Run(logger, func() { syncMirrorRepo(ctx, cfg, logger, b, repo) }) //nolint:errcheck // Run logs a panic.
+			// The slot may have come free only after the server began
+			// to stop.
+			if ctx.Err() != nil {
+				return nil
+			}
+			safego.Run(logger.With("repo", repo.Name()), func() { syncMirrorRepo(ctx, cfg, logger, b, repo) }) //nolint:errcheck // Run logs a panic.
 			return nil
 		})
 	}

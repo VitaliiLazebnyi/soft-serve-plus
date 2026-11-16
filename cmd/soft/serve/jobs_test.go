@@ -2,32 +2,40 @@ package serve
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/cron"
 )
 
 // recordingScheduler records the jobs scheduleJobs adds, by name, with
-// their specs. It refuses the names in fail.
+// their specs and functions. It refuses the names in fail.
 type recordingScheduler struct {
 	specs map[string]string
+	fns   map[string]func()
 	fail  map[string]bool
 }
 
-func (r *recordingScheduler) AddFunc(name, spec string, _ func()) error {
+func (r *recordingScheduler) AddFunc(name, spec string, fn func()) error {
 	if r.fail[name] {
 		return errors.New("refused")
 	}
 	if r.specs == nil {
-		r.specs = map[string]string{}
+		r.specs, r.fns = map[string]string{}, map[string]func(){}
 	}
-	r.specs[name] = spec
+	r.specs[name], r.fns[name] = spec, fn
 	return nil
 }
 
@@ -76,3 +84,45 @@ func TestScheduleJobsLogsRefusedJob(t *testing.T) {
 
 // *cron.Scheduler is what the server passes.
 var _ jobScheduler = (*cron.Scheduler)(nil)
+
+// The jobs run with the jobCtx scheduleJobs is given, not with whatever
+// context the scheduler has: the lfs-sweep it schedules sweeps the data path
+// of the config in jobCtx. Once jobCtx is done, a tick starts nothing.
+func TestScheduleJobsRunWithJobContext(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	stale := filepath.Join(cfg.DataPath, "lfs", "1", "incomplete", "stale")
+	writeStale := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-2 * backend.IncompleteLFSMaxAge)
+		if err := os.Chtimes(stale, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobCtx, cancel := context.WithCancel(config.WithContext(t.Context(), cfg))
+	defer cancel()
+	jobCtx = log.WithContext(jobCtx, log.New(io.Discard))
+
+	// The config passed alongside has no data path: only jobCtx's does.
+	var sched recordingScheduler
+	scheduleJobs(jobCtx, config.DefaultConfig(), &sched, log.New(io.Discard))
+
+	writeStale()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stale temp file not swept with jobCtx's config: %v", err)
+	}
+
+	writeStale()
+	cancel()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("a tick after jobCtx was cancelled ran the sweep: %v", err)
+	}
+}

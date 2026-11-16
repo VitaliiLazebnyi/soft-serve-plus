@@ -508,10 +508,17 @@ type jobScheduler interface {
 // scheduleJobs adds the server's periodic jobs to sched: mirror-pull on
 // jobs.mirror_pull, which an empty value disables, and lfs-sweep on
 // jobs.lfs_sweep, hourly when it is empty. The jobs run with jobCtx, which
-// the server cancels when it stops.
+// the server cancels when it stops. A tick that fires once jobCtx is done,
+// between the cancellation and the scheduler's stop, starts nothing.
 func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler, logger *log.Logger) {
 	add := func(name, spec string, fn func(context.Context)) {
-		if err := sched.AddFunc(name, spec, func() { fn(jobCtx) }); err != nil {
+		run := func() {
+			if jobCtx.Err() != nil {
+				return
+			}
+			fn(jobCtx)
+		}
+		if err := sched.AddFunc(name, spec, run); err != nil {
 			logger.Warn("error adding cron job", "job", name, "err", err)
 		}
 	}
