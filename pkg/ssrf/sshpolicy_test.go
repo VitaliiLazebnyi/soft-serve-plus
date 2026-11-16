@@ -40,23 +40,6 @@ func fakeLookup(table map[string][]string) lookupFunc {
 	}
 }
 
-// fakeResolver points the secure dialer's resolver at a fixed table for the
-// rest of the test. It swaps package state, so tests using it must not run in
-// parallel.
-func fakeResolver(t *testing.T, table map[string][]string) {
-	t.Helper()
-	setDialLookup(t, fakeLookup(table))
-}
-
-// setDialLookup replaces the secure dialer's resolver for the rest of the
-// test. It swaps package state, so tests using it must not run in parallel.
-func setDialLookup(t *testing.T, f lookupFunc) {
-	t.Helper()
-	orig := dialLookup
-	dialLookup = f
-	t.Cleanup(func() { dialLookup = orig })
-}
-
 func TestAllowedHostsMatch(t *testing.T) {
 	t.Parallel()
 	lookup := fakeLookup(map[string][]string{
@@ -131,19 +114,23 @@ func TestAllowedHostsMatch(t *testing.T) {
 	}
 }
 
-// TestAllowedHostsMatchResolved covers the real resolver, which the table
-// above replaces so it runs offline.
+// TestAllowedHostsMatchResolved covers a match given no resolver of its own,
+// which uses the package resolver; the stub DNS server stands in for the
+// system's, so the test runs offline and whatever the host's DNS answers.
 func TestAllowedHostsMatchResolved(t *testing.T) {
-	if testing.Short() {
-		t.Skip("requires DNS")
-	}
+	fakeResolver(t, map[string][]string{"loopback.test": {"127.0.0.1", "::1"}})
 
-	// localhost resolves to loopback on every platform this runs on.
-	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").match(context.Background(), "localhost", "", nil); err != nil {
-		t.Errorf("localhost should resolve inside loopback: %v", err)
+	if err := mustAllowedHosts(t, "127.0.0.0/8", "::1/128").match(context.Background(), "loopback.test", "", nil); err != nil {
+		t.Errorf("loopback.test should resolve inside loopback: %v", err)
 	}
-	if err := mustAllowedHosts(t, "10.0.0.0/8").match(context.Background(), "localhost", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
-		t.Errorf("localhost resolved outside 10/8 but was allowed: %v", err)
+	if err := mustAllowedHosts(t, "127.0.0.0/8").match(context.Background(), "loopback.test", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
+		t.Errorf("loopback.test resolved to ::1 outside 127/8 but was allowed: %v", err)
+	}
+	if err := mustAllowedHosts(t, "10.0.0.0/8").match(context.Background(), "loopback.test", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
+		t.Errorf("loopback.test resolved outside 10/8 but was allowed: %v", err)
+	}
+	if err := mustAllowedHosts(t, "10.0.0.0/8").match(context.Background(), "missing.test", "", nil); !errors.Is(err, ErrSSHHostNotAllowed) {
+		t.Errorf("a name that does not resolve was allowed: %v", err)
 	}
 }
 

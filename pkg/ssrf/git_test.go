@@ -521,3 +521,18 @@ func TestValidateGitRemoteErrorsHideResolver(t *testing.T) {
 		t.Errorf("unparseable remote error = %q, want %q", got, want)
 	}
 }
+
+// TestValidateGitRemoteRefusesMixedAnswers covers a name answering with both
+// public and private addresses. Validation refuses it as a whole; the secure
+// client's dialer only skips the private answers (TestSecureClientMixedAnswers).
+func TestValidateGitRemoteRefusesMixedAnswers(t *testing.T) {
+	t.Parallel()
+	policy := GitRemotePolicy{AllowAnySSHHost: true, lookup: fakeLookup(map[string][]string{
+		"mixed.example": {"140.82.112.3", "10.0.0.1"},
+	})}
+	for _, remote := range []string{"https://mixed.example/x.git", "git://mixed.example/x.git"} {
+		if _, err := ValidateGitRemote(remote, policy); !errors.Is(err, ErrPrivateIP) {
+			t.Errorf("ValidateGitRemote(%q) error = %v, want ErrPrivateIP", remote, err)
+		}
+	}
+}
