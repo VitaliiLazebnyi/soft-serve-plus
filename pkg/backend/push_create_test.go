@@ -70,7 +70,8 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 		},
 		"lfs-lock": func(t *testing.T, r proto.Repository) {
 			inTx(func(tx *db.Tx) error {
-				return be.store.CreateLFSLockForUser(ctx, tx, r.ID(), owner.ID(), "foo.png", "refs/heads/main")
+				_, err := be.store.CreateLFSLockForUser(ctx, tx, r.ID(), owner.ID(), "foo.png", "refs/heads/main")
+				return err
 			})(t, r)
 		},
 	}

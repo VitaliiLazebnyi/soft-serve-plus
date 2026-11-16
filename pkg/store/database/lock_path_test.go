@@ -13,7 +13,7 @@ func TestLFSLockPathStoredAsGiven(t *testing.T) {
 	const repo, owner = 7, 100 // see newWebhookTestDB
 
 	for _, p := range []string{"a.bin ", "a.bin", " a.bin"} {
-		if err := s.CreateLFSLockForUser(ctx, dbx, repo, owner, p, ""); err != nil {
+		if _, err := s.CreateLFSLockForUser(ctx, dbx, repo, owner, p, ""); err != nil {
 			t.Fatalf("CreateLFSLockForUser(%q) => %v", p, err)
 		}
 		l, err := s.GetLFSLockForPath(ctx, dbx, repo, p)

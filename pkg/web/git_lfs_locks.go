@@ -8,7 +8,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -72,7 +71,8 @@ func (s *gitServer) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request
 
 	dbx := s.dbx
 	datastore := s.datastore
-	if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name); err != nil {
+	lock, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), user.ID(), req.Path, req.Ref.Name)
+	if err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
 		// key; report it as gone.
 		if errors.Is(store.RepoGoneError(ctx, datastore, dbx, repo.ID(), err), proto.ErrRepoNotFound) {
@@ -93,35 +93,12 @@ func (s *gitServer) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request
 					Path:     lock.Path,
 					LockedAt: lock.CreatedAt,
 				}
-				lockOwner := lfs.Owner{
-					Name: user.Username(),
-				}
-				if lock.UserID != user.ID() {
-					owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
-					if err != nil {
-						logger.Error("error getting lock owner", "err", err)
-						renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-							Message: "internal server error",
-						})
-						return
-					}
-					lockOwner.Name = owner.Username
-				}
-				errResp.Lock.Owner = lockOwner
+				errResp.Lock.Owner = lfs.Owner{Name: lock.OwnerName}
 			}
 			renderJSON(w, r, http.StatusConflict, errResp)
 			return
 		}
 		logger.Error("error creating lock", "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
-	lock, err := datastore.GetLFSLockForUserPath(ctx, dbx, repo.ID(), user.ID(), req.Path)
-	if err != nil {
-		logger.Error("error getting lock", "err", err)
 		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
@@ -215,15 +192,6 @@ func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, g
 			return
 		}
 
-		owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
-		if err != nil {
-			logger.Error("error getting lock owner", "err", err)
-			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-				Message: "internal server error",
-			})
-			return
-		}
-
 		renderJSON(w, r, http.StatusOK, lfs.LockListResponse{
 			Locks: []lfs.Lock{
 				{
@@ -231,7 +199,7 @@ func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, g
 					Path:     lock.Path,
 					LockedAt: lock.CreatedAt,
 					Owner: lfs.Owner{
-						Name: owner.Username,
+						Name: lock.OwnerName,
 					},
 				},
 			},
@@ -252,15 +220,6 @@ func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, g
 			return
 		}
 
-		owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
-		if err != nil {
-			logger.Error("error getting lock owner", "err", err)
-			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-				Message: "internal server error",
-			})
-			return
-		}
-
 		renderJSON(w, r, http.StatusOK, lfs.LockListResponse{
 			Locks: []lfs.Lock{
 				{
@@ -268,7 +227,7 @@ func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, g
 					Path:     lock.Path,
 					LockedAt: lock.CreatedAt,
 					Owner: lfs.Owner{
-						Name: owner.Username,
+						Name: lock.OwnerName,
 					},
 				},
 			},
@@ -286,27 +245,13 @@ func (s *gitServer) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, g
 	}
 
 	lockList := make([]lfs.Lock, len(locks))
-	users := map[int64]models.User{}
 	for i, lock := range locks {
-		owner, ok := users[lock.UserID]
-		if !ok {
-			owner, err = datastore.GetUserByID(ctx, dbx, lock.UserID)
-			if err != nil {
-				logger.Error("error getting lock owner", "err", err)
-				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-					Message: "internal server error",
-				})
-				return
-			}
-			users[lock.UserID] = owner
-		}
-
 		lockList[i] = lfs.Lock{
 			ID:       strconv.FormatInt(lock.ID, 10),
 			Path:     lock.Path,
 			LockedAt: lock.CreatedAt,
 			Owner: lfs.Owner{
-				Name: owner.Username,
+				Name: lock.OwnerName,
 			},
 		}
 	}
@@ -374,27 +319,13 @@ func (s *gitServer) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	users := map[int64]models.User{}
 	for _, lock := range locks {
-		owner, ok := users[lock.UserID]
-		if !ok {
-			owner, err = datastore.GetUserByID(ctx, dbx, lock.UserID)
-			if err != nil {
-				logger.Error("error getting lock owner", "err", err)
-				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-					Message: "internal server error",
-				})
-				return
-			}
-			users[lock.UserID] = owner
-		}
-
 		l := lfs.Lock{
 			ID:       strconv.FormatInt(lock.ID, 10),
 			Path:     lock.Path,
 			LockedAt: lock.CreatedAt,
 			Owner: lfs.Owner{
-				Name: owner.Username,
+				Name: lock.OwnerName,
 			},
 		}
 
@@ -484,21 +415,12 @@ func (s *gitServer) serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	owner, err := datastore.GetUserByID(ctx, dbx, lock.UserID)
-	if err != nil {
-		logger.Error("error getting lock owner", "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-			Message: "internal server error",
-		})
-		return
-	}
-
 	l := lfs.Lock{
 		ID:       strconv.FormatInt(lock.ID, 10),
 		Path:     lock.Path,
 		LockedAt: lock.CreatedAt,
 		Owner: lfs.Owner{
-			Name: owner.Username,
+			Name: lock.OwnerName,
 		},
 	}
 
@@ -525,7 +447,7 @@ func (s *gitServer) serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request
 	}
 
 	// Delete our own lock - verify ownership
-	if owner.ID != user.ID() {
+	if lock.UserID != user.ID() {
 		logger.Info("refusing to delete another user's lock", "user", user.Username(), "id", lockID)
 		renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{
 			Message: "lock belongs to another user",

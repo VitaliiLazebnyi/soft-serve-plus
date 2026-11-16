@@ -314,12 +314,8 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 	anon := d.AnonAccess(ctx)
 	var collabs map[int64]access.AccessLevel
 	if user != nil && user.ID() != 0 {
-		var ms []models.Collab
-		if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-			var err error
-			ms, err = d.store.ListCollabsByUserID(ctx, tx, user.ID())
-			return err
-		}); err != nil {
+		ms, err := d.store.ListCollabsByUserID(ctx, d.db, user.ID())
+		if err != nil {
 			return nil, err
 		}
 		collabs = make(map[int64]access.AccessLevel, len(ms))
@@ -532,22 +528,14 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 
 // Users returns all users.
 func (d *Backend) Users(ctx context.Context) ([]string, error) {
-	var users []string
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		ms, err := d.store.GetAllUsers(ctx, tx)
-		if err != nil {
-			return err
-		}
-
-		for _, m := range ms {
-			users = append(users, m.Username)
-		}
-
-		return nil
-	}); err != nil {
+	ms, err := d.store.GetAllUsers(ctx, d.db)
+	if err != nil {
 		return nil, err
 	}
-
+	var users []string
+	for _, m := range ms {
+		users = append(users, m.Username)
+	}
 	return users, nil
 }
 
@@ -691,12 +679,8 @@ func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.Pu
 		return nil, err
 	}
 
-	var keys []ssh.PublicKey
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		keys, err = d.store.ListPublicKeysByUsername(ctx, tx, username)
-		return err
-	}); err != nil {
+	keys, err := d.store.ListPublicKeysByUsername(ctx, d.db, username)
+	if err != nil {
 		return nil, err
 	}
 

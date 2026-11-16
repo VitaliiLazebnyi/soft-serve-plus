@@ -2,25 +2,25 @@ package database
 
 import (
 	"context"
+	"slices"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
 // CreateLFSLockForUser implements store.Store.
-func (*Store) CreateLFSLockForUser(ctx context.Context, tx db.Handler, repoID int64, userID int64, path string, refname string) error {
+func (*Store) CreateLFSLockForUser(ctx context.Context, tx db.Handler, repoID int64, userID int64, path string, refname string) (models.LFSLock, error) {
+	var lock models.LFSLock
 	query := tx.Rebind(`INSERT INTO lfs_locks (repo_id, user_id, path, refname, updated_at)
-		VALUES (
-			?,
-			?,
-			?,
-			?,
-			CURRENT_TIMESTAMP
-		);
-	`)
-	_, err := tx.ExecContext(ctx, query, repoID, userID, path, refname)
-	return err
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		RETURNING *;`)
+	err := tx.GetContext(ctx, &lock, query, repoID, userID, path, refname)
+	return lock, err
 }
+
+// lfsLocks selects locks with their owner's username, for the lock reads.
+const lfsLocks = `SELECT lfs_locks.*, users.username AS owner_name
+	FROM lfs_locks INNER JOIN users ON users.id = lfs_locks.user_id`
 
 // GetLFSLocks implements store.Store.
 //
@@ -36,11 +36,9 @@ func (*Store) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, afte
 	}
 
 	var locks []models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE repo_id = ? AND id > ?
-		ORDER BY id ASC
+	query := tx.Rebind(lfsLocks + `
+		WHERE lfs_locks.repo_id = ? AND lfs_locks.id > ?
+		ORDER BY lfs_locks.id ASC
 		LIMIT ?;
 	`)
 	err := tx.SelectContext(ctx, &locks, query, repoID, afterID, limit)
@@ -50,10 +48,8 @@ func (*Store) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, afte
 // GetLFSLockForPath implements store.Store.
 func (*Store) GetLFSLockForPath(ctx context.Context, tx db.Handler, repoID int64, path string) (models.LFSLock, error) {
 	var lock models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE repo_id = ? AND path = ?;
+	query := tx.Rebind(lfsLocks + `
+		WHERE lfs_locks.repo_id = ? AND lfs_locks.path = ?;
 	`)
 	err := tx.GetContext(ctx, &lock, query, repoID, path)
 	return lock, err
@@ -62,10 +58,8 @@ func (*Store) GetLFSLockForPath(ctx context.Context, tx db.Handler, repoID int64
 // GetLFSLockForUserPath implements store.Store.
 func (*Store) GetLFSLockForUserPath(ctx context.Context, tx db.Handler, repoID int64, userID int64, path string) (models.LFSLock, error) {
 	var lock models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE repo_id = ? AND user_id = ? AND path = ?;
+	query := tx.Rebind(lfsLocks + `
+		WHERE lfs_locks.repo_id = ? AND lfs_locks.user_id = ? AND lfs_locks.path = ?;
 	`)
 	err := tx.GetContext(ctx, &lock, query, repoID, userID, path)
 	return lock, err
@@ -74,10 +68,8 @@ func (*Store) GetLFSLockForUserPath(ctx context.Context, tx db.Handler, repoID i
 // GetLFSLockByID implements store.Store.
 func (*Store) GetLFSLockByID(ctx context.Context, tx db.Handler, repoID int64, id int64) (models.LFSLock, error) {
 	var lock models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE id = ? AND repo_id = ?;
+	query := tx.Rebind(lfsLocks + `
+		WHERE lfs_locks.id = ? AND lfs_locks.repo_id = ?;
 	`)
 	err := tx.GetContext(ctx, &lock, query, id, repoID)
 	return lock, err
@@ -86,10 +78,8 @@ func (*Store) GetLFSLockByID(ctx context.Context, tx db.Handler, repoID int64, i
 // GetLFSLockForUserByID implements store.Store.
 func (*Store) GetLFSLockForUserByID(ctx context.Context, tx db.Handler, repoID int64, userID int64, id int64) (models.LFSLock, error) {
 	var lock models.LFSLock
-	query := tx.Rebind(`
-		SELECT *
-		FROM lfs_locks
-		WHERE id = ? AND user_id = ? AND repo_id = ?;
+	query := tx.Rebind(lfsLocks + `
+		WHERE lfs_locks.id = ? AND lfs_locks.user_id = ? AND lfs_locks.repo_id = ?;
 	`)
 	err := tx.GetContext(ctx, &lock, query, id, userID, repoID)
 	return lock, err
@@ -135,6 +125,29 @@ func (*Store) GetLFSObjectByOid(ctx context.Context, tx db.Handler, repoID int64
 	query := tx.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? AND oid = ?;`)
 	err := tx.GetContext(ctx, &obj, query, repoID, oid)
 	return obj, err
+}
+
+// lfsObjectsByOidsChunk bounds the oids of one GetLFSObjectsByOids query,
+// well under the bound parameters SQLite (32766) and Postgres (65535) take.
+const lfsObjectsByOidsChunk = 500
+
+// GetLFSObjectsByOids implements store.Store.
+func (*Store) GetLFSObjectsByOids(ctx context.Context, h db.Handler, repoID int64, oids []string) ([]models.LFSObject, error) {
+	objs := []models.LFSObject{}
+	for chunk := range slices.Chunk(oids, lfsObjectsByOidsChunk) {
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, repoID)
+		for _, oid := range chunk {
+			args = append(args, oid)
+		}
+		var page []models.LFSObject
+		query := h.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? AND oid IN (` + placeholders(len(chunk)) + `) ORDER BY id;`)
+		if err := h.SelectContext(ctx, &page, query, args...); err != nil {
+			return nil, err
+		}
+		objs = append(objs, page...)
+	}
+	return objs, nil
 }
 
 // GetLFSObjects implements store.Store.

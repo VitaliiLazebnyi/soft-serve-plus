@@ -62,12 +62,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	owner, err := ds.FindUserByUsername(ctx, dbx, "alice")
 	is.NoErr(err)
 
-	is.NoErr(ds.CreateRepo(ctx, dbx, models.Repo{
+	if _, err := ds.CreateRepo(ctx, dbx, models.Repo{
 		Name:        "repo",
 		UserID:      owner.ID,
 		ProjectName: "Project",
 		Description: "a description",
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 	repo, err := ds.GetRepoByName(ctx, dbx, "repo")
 	is.NoErr(err)
 

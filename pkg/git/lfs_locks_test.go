@@ -169,15 +169,17 @@ func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
 	}
 }
 
-// lfsLockTestUser is a proto.User with an ID and an admin flag.
+// lfsLockTestUser is a proto.User with an ID, a name and an admin flag.
 type lfsLockTestUser struct {
 	proto.User
 	id    int64
+	name  string
 	admin bool
 }
 
-func (u lfsLockTestUser) ID() int64     { return u.id }
-func (u lfsLockTestUser) IsAdmin() bool { return u.admin }
+func (u lfsLockTestUser) ID() int64        { return u.id }
+func (u lfsLockTestUser) Username() string { return u.name }
+func (u lfsLockTestUser) IsAdmin() bool    { return u.admin }
 
 // TestLFSLockOwnership checks that SSH lock commands see every user's locks
 // and tell the caller's from other users', as the HTTP locks API does. Every
@@ -203,7 +205,7 @@ func TestLFSLockOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		users[u.name] = lfsLockTestUser{id: m.ID, admin: u.admin}
+		users[u.name] = lfsLockTestUser{id: m.ID, name: u.name, admin: u.admin}
 	}
 
 	// session runs one upload session of commands as user and returns the

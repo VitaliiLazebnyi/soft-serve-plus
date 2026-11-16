@@ -111,11 +111,13 @@ func TestAboutRepoOwnedByAdmin(t *testing.T) {
 
 	// Created anonymously before the name was reserved: the row names an
 	// admin as owner, but it is not shown.
-	is.NoErr(be.store.CreateRepo(ctx, be.db, models.Repo{
+	if _, err := be.store.CreateRepo(ctx, be.db, models.Repo{
 		Name:      AboutRepo,
 		UserID:    admin.ID(),
 		Anonymous: true,
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 	r := aboutRepo()
 	is.Equal(r.UserID(), admin.ID())
 	is.True(!be.AboutRepoOwnedByAdmin(ctx, r))

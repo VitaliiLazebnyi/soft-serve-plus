@@ -431,7 +431,8 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			userID = adminID
 		}
 
-		if err := d.store.CreateRepo(ctx, tx, models.Repo{
+		var err error
+		m, err = d.store.CreateRepo(ctx, tx, models.Repo{
 			Name:        name,
 			UserID:      userID,
 			ProjectName: opts.ProjectName,
@@ -440,7 +441,8 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			Hidden:      opts.Hidden,
 			Mirror:      opts.Mirror,
 			Anonymous:   anonymous,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
 
@@ -477,15 +479,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		if err := hooks.GenerateHooks(ctx, d.cfg, name); err != nil {
-			return err
-		}
-
-		// Read the row back here rather than after the commit, so nothing
-		// can fail once the repository is recorded and leave it behind.
-		var err error
-		m, err = d.store.GetRepoByName(ctx, tx, name)
-		return err
+		return hooks.GenerateHooks(ctx, d.cfg, name)
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
 		d.removeRepoDir(rp) //nolint:errcheck
@@ -1045,38 +1039,25 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 
 // Repositories returns every repository.
 func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) {
-	repos := make([]proto.Repository, 0)
-
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		ms, err := d.store.GetAllRepos(ctx, tx)
-		if err != nil {
-			return err
-		}
-
-		for _, m := range ms {
-			r := &repo{
-				name:   m.Name,
-				path:   d.repoPath(m.Name),
-				repo:   m,
-				logger: d.logger,
-			}
-
-			repos = append(repos, r)
-		}
-
-		return nil
-	}); err != nil {
+	ms, err := d.store.GetAllRepos(ctx, d.db)
+	if err != nil {
 		return nil, err
 	}
-
+	repos := make([]proto.Repository, 0, len(ms))
+	for _, m := range ms {
+		repos = append(repos, &repo{
+			name:   m.Name,
+			path:   d.repoPath(m.Name),
+			repo:   m,
+			logger: d.logger,
+		})
+	}
 	return repos, nil
 }
 
 // Repository returns a repository by name.
 func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository, error) {
-	var m models.Repo
 	name = utils.SanitizeRepo(name)
-
 	rp := d.repoPath(name)
 	if _, err := os.Stat(rp); err != nil {
 		switch {
@@ -1089,11 +1070,8 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 		return nil, proto.ErrRepoNotFound
 	}
 
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		m, err = d.store.GetRepoByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	m, err := d.store.GetRepoByName(ctx, d.db, name)
+	if err != nil {
 		return nil, wrapRepoError(err)
 	}
 
@@ -1124,12 +1102,8 @@ func wrapRepoError(err error) error {
 // Description returns the description of a repository.
 func (d *Backend) Description(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
-	var desc string
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		desc, err = d.store.GetRepoDescriptionByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	desc, err := d.store.GetRepoDescriptionByName(ctx, d.db, name)
+	if err != nil {
 		return "", wrapRepoError(err)
 	}
 
@@ -1139,12 +1113,8 @@ func (d *Backend) Description(ctx context.Context, name string) (string, error) 
 // IsMirror returns true if the repository is a mirror.
 func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
-	var mirror bool
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		mirror, err = d.store.GetRepoIsMirrorByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	mirror, err := d.store.GetRepoIsMirrorByName(ctx, d.db, name)
+	if err != nil {
 		return false, wrapRepoError(err)
 	}
 	return mirror, nil
@@ -1153,12 +1123,8 @@ func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
 // IsPrivate returns true if the repository is private.
 func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
-	var private bool
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		private, err = d.store.GetRepoIsPrivateByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	private, err := d.store.GetRepoIsPrivateByName(ctx, d.db, name)
+	if err != nil {
 		return false, wrapRepoError(err)
 	}
 
@@ -1168,12 +1134,8 @@ func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
 // IsHidden returns true if the repository is hidden.
 func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 	name = utils.SanitizeRepo(name)
-	var hidden bool
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		hidden, err = d.store.GetRepoIsHiddenByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	hidden, err := d.store.GetRepoIsHiddenByName(ctx, d.db, name)
+	if err != nil {
 		return false, wrapRepoError(err)
 	}
 
@@ -1183,12 +1145,8 @@ func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
 // ProjectName returns the project name of a repository.
 func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
 	name = utils.SanitizeRepo(name)
-	var pname string
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		pname, err = d.store.GetRepoProjectNameByName(ctx, tx, name)
-		return err
-	}); err != nil {
+	pname, err := d.store.GetRepoProjectNameByName(ctx, d.db, name)
+	if err != nil {
 		return "", wrapRepoError(err)
 	}
 

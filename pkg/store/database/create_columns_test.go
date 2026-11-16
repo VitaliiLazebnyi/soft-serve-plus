@@ -21,7 +21,7 @@ func TestCreateRepoColumns(t *testing.T) {
 		"m": {mirror: true},
 		"a": {anonymous: true},
 	} {
-		if err := s.CreateRepo(ctx, dbx, models.Repo{
+		if _, err := s.CreateRepo(ctx, dbx, models.Repo{
 			Name:        name,
 			UserID:      owner,
 			ProjectName: "P-" + name,
