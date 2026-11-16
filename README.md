@@ -766,8 +766,12 @@ source that turns them off (`_pragma=foreign_keys(0)`, `_fk=0` or
 that was used with foreign keys off can hold rows that refer to deleted ones,
 such as the keys of a deleted user or the webhooks of a deleted repository.
 The first start of this version removes them before it migrates, and logs a
-count per table; a repository whose owner was deleted is given to the first
-admin instead.
+count per table, with the ids of removed keys, access tokens and webhooks. A
+repository whose owner was deleted is given to the first admin instead, and
+each one is logged by name with its former owner's id. If there is no admin,
+the start stops with an error that names those repositories and changes
+nothing: make a user an admin (`soft user set-admin USERNAME true`, or set
+`admin` to true for the user in the database) and start again.
 
 SQLite keeps its default rollback journal, in which a read waits (up to the
 busy timeout) while a write commits. Write-ahead logging lets reads go on
