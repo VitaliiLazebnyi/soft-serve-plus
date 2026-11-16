@@ -595,6 +595,7 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
 - `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS`: Comma-separated ssh hosts, IP addresses or CIDR ranges (each with an optional port) that repositories may be imported from or mirrored (see `client_allowed_hosts` above). Defaults to empty: only server admins may import from or mirror ssh remotes.
+- Upgrading: an entry of `ssh.client_allowed_hosts` or `webhook.allowed_hosts` (and of `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS` or `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`) that ends in a colon with no port, such as `host:` or `[fd00::1]:`, or that has anything but a port after a bracketed address, such as `[fd00::1]x`, used to be read as the host alone. It is now an error and the server does not start. Drop the `:` to allow any port, or add the port.
 - `SOFT_SERVE_LOG_FORMAT`, `SOFT_SERVE_LOG_TIME_FORMAT`, `SOFT_SERVE_LOG_PATH`: Log format, timestamp format and log file (`log.format`, `log.time_format`, `log.path`). An empty path logs to stderr
 
 Every setting in `config.yaml` has one, named after its path: `ssh.listen_addr`

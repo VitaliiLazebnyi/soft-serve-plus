@@ -33,9 +33,10 @@ type GitRemotePolicy struct {
 	// everyone else gets ErrSSHRequiresAdmin.
 	AllowAnySSHHost bool
 
-	// lookup resolves hostnames during validation. Nil means
-	// net.DefaultResolver. Tests set it so they run without DNS; it is a
-	// field rather than package state so parallel tests cannot race on it.
+	// lookup resolves hostnames during validation. Nil means the package
+	// resolver (net.DefaultResolver outside tests). Tests set it so they
+	// run without DNS; it is a field rather than package state so parallel
+	// tests cannot race on it.
 	lookup lookupFunc
 }
 
@@ -94,10 +95,22 @@ func parseAllowedHost(raw string) (allowedHost, error) {
 	if entry == "" {
 		return allowedHost{}, fmt.Errorf("allowed host %q: empty entry", raw)
 	}
+	if strings.HasPrefix(entry, "[") {
+		if end := strings.Index(entry, "]"); end >= 0 {
+			if rest := entry[end+1:]; rest != "" && !strings.HasPrefix(rest, ":") {
+				return allowedHost{}, fmt.Errorf(`allowed host %q: only ":port" may follow "]"`, raw)
+			}
+		}
+	}
 
-	host, rawPort := splitHostPort(entry)
+	host, rawPort, hasPort := splitHostPort(entry)
 	var port uint16
-	if rawPort != "" {
+	// "host:" is a port left out by mistake, not "any port": an entry
+	// without a port is written without the colon.
+	if hasPort {
+		if rawPort == "" {
+			return allowedHost{}, fmt.Errorf(`allowed host %q: empty port; drop the ":" to allow any port`, raw)
+		}
 		var ok bool
 		if port, ok = parsePort(rawPort); !ok {
 			return allowedHost{}, fmt.Errorf("allowed host %q: invalid port", raw)
@@ -155,7 +168,7 @@ func (a AllowedHosts) String() string {
 // Addresses are unmapped before they are matched, so the mapped form would
 // otherwise never match anything. A shorter prefix that merely contains the
 // mapped range (::/0, ::/80) is an IPv6 range and is left alone: it matches
-// IPv6 addresses only, as before.
+// IPv6 addresses only.
 func unmapPrefix(p netip.Prefix) netip.Prefix {
 	if !p.Addr().Is4In6() || p.Bits() < 96 {
 		return p
@@ -188,8 +201,8 @@ func (f lookupFunc) resolve(ctx context.Context, host string) ([]net.IPAddr, err
 // covered by the allowlist. Hostnames match entries by name; otherwise the
 // host must resolve, and every address it resolves to must fall inside an
 // allowed range. A hostname that cannot be resolved fails closed. ctx bounds
-// the lookup, which uses lookup for CIDR entries; nil means
-// net.DefaultResolver.
+// the lookup, which uses lookup for CIDR entries; nil means the package
+// resolver (net.DefaultResolver outside tests).
 //
 // ssh resolves the name again itself, so a CIDR match only says where the
 // name pointed at validation time. Hostname entries are the robust form.
@@ -269,25 +282,31 @@ func parsePort(s string) (uint16, bool) {
 }
 
 // splitHostPort splits an optional trailing ":port" off a host, address,
-// network, or bracketed IPv6 form. Anything with more than one colon and no
-// brackets is an IPv6 literal and has no port.
-func splitHostPort(s string) (host, port string) {
+// network, or bracketed IPv6 form, and reports whether there was a ":" for a
+// port, which tells "host:" (an empty port) from "host". Anything with more
+// than one colon and no brackets is an IPv6 literal and has no port. A
+// bracketed form followed by anything but a port is returned whole, so it
+// fails as a host rather than losing what follows.
+func splitHostPort(s string) (host, port string, hasPort bool) {
 	if strings.HasPrefix(s, "[") {
 		end := strings.Index(s, "]")
 		if end < 0 {
-			return s, ""
+			return s, "", false
 		}
 		host = s[1:end]
-		rest := s[end+1:]
-		if strings.HasPrefix(rest, ":") {
-			return host, rest[1:]
+		switch rest := s[end+1:]; {
+		case rest == "":
+			return host, "", false
+		case strings.HasPrefix(rest, ":"):
+			return host, rest[1:], true
+		default:
+			return s, "", false
 		}
-		return host, ""
 	}
 
 	colon := strings.LastIndex(s, ":")
 	if colon < 0 || strings.Count(s, ":") > 1 {
-		return s, ""
+		return s, "", false
 	}
-	return s[:colon], s[colon+1:]
+	return s[:colon], s[colon+1:], true
 }

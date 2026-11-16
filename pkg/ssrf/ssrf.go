@@ -277,7 +277,8 @@ func ValidateURLAllowingContext(ctx context.Context, rawURL string, allowed Allo
 }
 
 // validateURL is ValidateURLAllowingContext with the resolver used for
-// hostnames; nil means net.DefaultResolver.
+// hostnames; nil means the package resolver (net.DefaultResolver outside
+// tests).
 func validateURL(ctx context.Context, rawURL string, allowed AllowedHosts, lookup lookupFunc) error {
 	if rawURL == "" {
 		return ErrInvalidURL

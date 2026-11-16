@@ -106,6 +106,10 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 	if v.Less(minPinGitVersion) {
 		t.Skipf("git %s predates http.curloptResolve", v)
 	}
+	// A git built without curl has no http transport helper.
+	if !hasGitHTTPHelper(t) {
+		t.Skip("git has no http helper (git-remote-http)")
+	}
 
 	var mu sync.Mutex
 	var hosts []string
@@ -145,10 +149,35 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 		mu.Lock()
 		got := append([]string(nil), hosts...)
 		mu.Unlock()
+		// Only a missing helper skips; one that runs and fails (such as
+		// "remote helper 'http' aborted session") fails the test.
+		if len(got) == 0 && strings.Contains(string(out), "Unable to find remote helper") {
+			t.Skipf("git cannot run its http helper: %s", out)
+		}
 		if len(got) == 0 || !strings.EqualFold(got[0], u.Host) {
 			t.Errorf("%s: server saw hosts %q, want %q; git output:\n%s", remote, got, u.Host, out)
 		}
 	}
+}
+
+// hasGitHTTPHelper reports whether git's exec path holds git-remote-http,
+// which git runs for http remotes and which a git built without curl lacks.
+func hasGitHTTPHelper(t *testing.T) bool {
+	t.Helper()
+	// The same environment the test runs git with, so the probe sees the
+	// same GIT_EXEC_PATH.
+	cmd := exec.CommandContext(t.Context(), "git", "--exec-path")
+	cmd.Env = isolatedGitEnv(t)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	helper := filepath.Join(strings.TrimSpace(string(out)), "git-remote-http")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	_, err = os.Stat(helper)
+	return err == nil
 }
 
 // TestValidateGitRemoteAuthorityAsGitReadsIt covers remotes whose host part
@@ -184,8 +213,18 @@ func TestValidateGitRemoteAuthorityAsGitReadsIt(t *testing.T) {
 		// first '/'.
 		{"https://git.example?@evil.example/x.git", anyHost, ErrInvalidURL},
 		{"http://git.example#@evil.example/x.git", anyHost, ErrInvalidURL},
+		// Defence in depth: these two git:// rows were already refused by
+		// gitProtocolPin, whose path check sees Go's empty path; the host
+		// part check now refuses them first.
 		{"git://140.82.112.3?@10.0.0.1/x.git", anyHost, ErrInvalidURL},
 		{"git://git.example#@10.0.0.1/x.git", anyHost, ErrInvalidURL},
+		// url.Parse lowercases the scheme; git does not, and would look for
+		// a git-remote-SSH helper rather than run ssh.
+		{"SSH://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"Git+SSH://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"ssh+GIT://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"HTTPS://git.example/x.git", anyHost, ErrInvalidURL},
+		{"Git://git.example/x.git", anyHost, ErrInvalidURL},
 		// An empty user reaches ssh as "@host".
 		{"ssh://@git.example/x.git", anyHost, ErrInvalidURL},
 		{"@git.example:x.git", anyHost, ErrInvalidURL},

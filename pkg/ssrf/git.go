@@ -149,9 +149,8 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 		// The bracketed form [user@host:port]:path carries a port. git
 		// hands an empty one ("[git@host:]:path") to ssh as part of the
 		// host, so it is refused.
-		hostPort := host
-		host, port := splitHostPort(hostPort)
-		if port == "" && host != hostPort {
+		host, port, hasPort := splitHostPort(host)
+		if hasPort && port == "" {
 			return ValidatedGitRemote{}, fmt.Errorf("%w: empty port", ErrInvalidURL)
 		}
 		if err := validateSSHHost(user, hasUser, host); err != nil {
@@ -172,6 +171,13 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 
 	switch u.Scheme {
 	case "ssh", "git+ssh", "ssh+git", "git", "http", "https":
+		// url.Parse lowercases the scheme, but git matches it as written:
+		// "SSH://host/x" is no ssh remote to git, which looks for a
+		// git-remote-SSH helper instead. Only the form git and Go agree
+		// on is accepted.
+		if !strings.HasPrefix(remote, u.Scheme+"://") {
+			return ValidatedGitRemote{}, fmt.Errorf("%w: the scheme must be lower case and followed by \"://\"", ErrInvalidURL)
+		}
 		if err := checkAuthority(remote, u); err != nil {
 			return ValidatedGitRemote{}, err
 		}
@@ -255,7 +261,8 @@ func checkAuthority(remote string, u *url.URL) error {
 
 // validateRemoteHost checks a remote host against private and internal ranges,
 // returning the validated address so callers can pin it. ctx bounds the
-// lookup; lookup resolves hostnames, nil meaning net.DefaultResolver.
+// lookup; lookup resolves hostnames, nil meaning the package resolver
+// (net.DefaultResolver outside tests).
 func validateRemoteHost(ctx context.Context, host string, lookup lookupFunc) (netip.Addr, error) {
 	if host == "" {
 		return netip.Addr{}, fmt.Errorf("%w: missing hostname", ErrInvalidURL)
