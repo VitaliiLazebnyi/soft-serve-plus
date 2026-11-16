@@ -60,6 +60,9 @@ func probeAnalysers(t *testing.T) *atomic.Int64 {
 	lexers.GlobalLexerRegistry.Register(probe)
 	t.Cleanup(func() {
 		waitSlots(t)
+		// Register also wrote the probe into the registry's name map,
+		// which is private and stays as it is. That is harmless: only
+		// Get("analyse probe") finds it there.
 		lexers.GlobalLexerRegistry.Lexers = saved
 	})
 	return probe.most
@@ -95,9 +98,21 @@ func TestHighlightByContent(t *testing.T) {
 	}
 
 	// Templ's analyser took 6 s over 10,000 lines of this: the analysers
-	// are given the start of the file only.
-	most := probeAnalysers(t)
+	// are given the start of the file only, and that start is short
+	// enough. The time grows with the square of the length: 13 ms at
+	// 4 KiB, 0.5 s at 32 KiB and 2 s at 64 KiB, and twenty times that
+	// under the race detector.
 	long := strings.Repeat("package a\n", 10000)
+	limit := time.Second
+	if raceEnabled {
+		limit = 5 * time.Second
+	}
+	start := time.Now()
+	lexers.Analyse(long[:analyseMax])
+	if took := time.Since(start); took > limit {
+		t.Fatalf("analysing the first %d bytes took %v; want at most %v", analyseMax, took, limit)
+	}
+	most := probeAnalysers(t)
 	Highlight(StyleConfig(), "noext", long, false)
 	if n := most.Load(); n == 0 || n > analyseMax {
 		t.Fatalf("the analysers were given %d bytes of a file of %d; want at most %d", n, len(long), analyseMax)
@@ -217,16 +232,20 @@ func (l pausingLexer) Tokenise(options *chroma.TokeniseOptions, text string) (ch
 	if err != nil {
 		return nil, err
 	}
+	// Only tokens that are not empty are counted to pauseAt: tokenise
+	// skips empty ones without looking at the budget.
 	n := 0
 	return func() chroma.Token {
 		t := it()
-		n++
 		switch {
 		case n == l.pauseAt:
-			close(l.budget)
-			<-l.resume
-		case n > l.pauseAt:
 			l.after.Add(1)
+		case t.Value != "":
+			n++
+			if n == l.pauseAt {
+				close(l.budget)
+				<-l.resume
+			}
 		}
 		return t
 	}, nil
