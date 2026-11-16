@@ -149,7 +149,9 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 		mu.Lock()
 		got := append([]string(nil), hosts...)
 		mu.Unlock()
-		if len(got) == 0 && strings.Contains(string(out), "remote helper") {
+		// Only a missing helper skips; one that runs and fails (such as
+		// "remote helper 'http' aborted session") fails the test.
+		if len(got) == 0 && strings.Contains(string(out), "Unable to find remote helper") {
 			t.Skipf("git cannot run its http helper: %s", out)
 		}
 		if len(got) == 0 || !strings.EqualFold(got[0], u.Host) {
@@ -162,7 +164,11 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 // which git runs for http remotes and which a git built without curl lacks.
 func hasGitHTTPHelper(t *testing.T) bool {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "git", "--exec-path").Output()
+	// The same environment the test runs git with, so the probe sees the
+	// same GIT_EXEC_PATH.
+	cmd := exec.CommandContext(t.Context(), "git", "--exec-path")
+	cmd.Env = isolatedGitEnv(t)
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}
