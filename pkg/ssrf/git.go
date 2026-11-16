@@ -145,10 +145,16 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 
 	// scp-like syntax is recognized on git's own terms, never as "whatever
 	// url.Parse rejects", since Go and libcurl disagree about what parses.
-	if user, host, ok := parseBareSSHRemote(remote); ok {
-		// The bracketed form [user@host:port]:path carries a port.
-		host, port := splitHostPort(host)
-		if err := validateSSHHost(user, host); err != nil {
+	if user, hasUser, host, ok := parseBareSSHRemote(remote); ok {
+		// The bracketed form [user@host:port]:path carries a port. git
+		// hands an empty one ("[git@host:]:path") to ssh as part of the
+		// host, so it is refused.
+		hostPort := host
+		host, port := splitHostPort(hostPort)
+		if port == "" && host != hostPort {
+			return ValidatedGitRemote{}, fmt.Errorf("%w: empty port", ErrInvalidURL)
+		}
+		if err := validateSSHHost(user, hasUser, host); err != nil {
 			return ValidatedGitRemote{}, err
 		}
 		if err := policy.checkSSH(ctx, host, port); err != nil {
@@ -165,8 +171,21 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 	}
 
 	switch u.Scheme {
+	case "ssh", "git+ssh", "ssh+git", "git", "http", "https":
+		if err := checkAuthority(remote, u); err != nil {
+			return ValidatedGitRemote{}, err
+		}
+	}
+
+	switch u.Scheme {
 	case "ssh", "git+ssh", "ssh+git":
-		if err := validateSSHHost(u.User.Username(), u.Hostname()); err != nil {
+		// git hands "user:password@host" to ssh as the destination, so a
+		// password would reach ssh, and %r, along with the user. ssh has
+		// no use for one in the URL.
+		if _, ok := u.User.Password(); ok {
+			return ValidatedGitRemote{}, fmt.Errorf("%w: an ssh remote cannot carry a password", ErrInvalidURL)
+		}
+		if err := validateSSHHost(u.User.Username(), u.User != nil, u.Hostname()); err != nil {
 			return ValidatedGitRemote{}, err
 		}
 		if err := policy.checkSSH(ctx, u.Hostname(), u.Port()); err != nil {
@@ -202,6 +221,38 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 	}
 }
 
+// checkAuthority refuses a URL remote whose user and host part git reads
+// differently from url.Parse. Go ends that part at the first '/', '?' or
+// '#'; git ends it at the first '/' only, percent-decodes it, and hands it to
+// ssh as the destination or dials it. So "ssh://git@ok.example?@evil.example/x"
+// was checked as ok.example but reaches ssh as "git@ok.example?@evil.example",
+// which ssh splits at the last '@'. Rather than list the characters where the
+// two parsers part, the part git uses must equal the one that was checked,
+// so any difference fails closed.
+func checkAuthority(remote string, u *url.URL) error {
+	_, rest, ok := strings.Cut(remote, "://")
+	if !ok {
+		return fmt.Errorf("%w: cannot parse remote", ErrInvalidURL)
+	}
+	authority, _, _ := strings.Cut(rest, "/")
+	decoded, err := url.PathUnescape(authority)
+	if err != nil {
+		return fmt.Errorf("%w: cannot parse remote", ErrInvalidURL)
+	}
+	checked := u.Host
+	if u.User != nil {
+		userinfo := u.User.Username()
+		if password, ok := u.User.Password(); ok {
+			userinfo += ":" + password
+		}
+		checked = userinfo + "@" + checked
+	}
+	if decoded != checked {
+		return fmt.Errorf("%w: the host part must end at the first '/' and hold no '?' or '#'", ErrInvalidURL)
+	}
+	return nil
+}
+
 // validateRemoteHost checks a remote host against private and internal ranges,
 // returning the validated address so callers can pin it. ctx bounds the
 // lookup; lookup resolves hostnames, nil meaning net.DefaultResolver.
@@ -220,6 +271,10 @@ func validateRemoteHost(ctx context.Context, host string, lookup lookupFunc) (ne
 	if addr, err := netip.ParseAddr(host); err == nil {
 		if isPrivateOrInternal(net.IP(addr.AsSlice())) {
 			return netip.Addr{}, ErrPrivateIP
+		}
+		// A zone is free text that git and libcurl hand on; see isIPLiteral.
+		if addr.Zone() != "" {
+			return netip.Addr{}, fmt.Errorf("%w: %q", ErrAmbiguousHost, host)
 		}
 		return addr, nil
 	}
@@ -418,40 +473,52 @@ func (v ValidatedGitRemote) ForClone() ValidatedGitRemote {
 	return v
 }
 
-// isIPLiteral reports whether a host is already a canonical IP address.
+// isIPLiteral reports whether a host is already a canonical IP address. An
+// IPv6 address with a zone is not: netip accepts any text after the '%'.
 func isIPLiteral(host string) bool {
-	_, err := netip.ParseAddr(host)
-	return err == nil
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.Zone() == ""
 }
 
 // parseBareSSHRemote recognizes git's scp-like remote syntax
 // (user@host:path, [user@host:port]:path, user@[v6:addr]:path) and returns
-// the user and host. The rules mirror git's connect.c: "://" is a URL, a
-// slash before the first colon is a local path, "::" selects a remote helper,
-// and brackets count only at the start or right after "user@". A DOS drive
-// prefix ("C:/repo", "C:repo") is a local path as git for Windows reads it
+// the user, whether there was an '@' for one (hasUser), and the host. The
+// rules mirror git's connect.c: "://" is a URL, a slash before the first
+// colon is a local path, "::" selects a remote helper, and brackets count
+// only at the start or right after "user@". A DOS drive prefix ("C:/repo",
+// "C:repo") is a local path as git for Windows reads it
 // (has_dos_drive_prefix); it is refused on every OS rather than allowed as
 // the ssh host "C" where git would open a local repository instead.
-func parseBareSSHRemote(remote string) (user, host string, ok bool) {
+func parseBareSSHRemote(remote string) (user string, hasUser bool, host string, ok bool) {
+	userHost, ok := bareSSHUserHost(remote)
+	if !ok {
+		return "", false, "", false
+	}
+	if at := strings.LastIndexByte(userHost, '@'); at >= 0 {
+		return userHost[:at], true, userHost[at+1:], true
+	}
+	return "", false, userHost, true
+}
+
+// bareSSHUserHost returns the "user@host" part of an scp-like remote, with
+// any brackets removed, or false if remote is not one.
+func bareSSHUserHost(remote string) (string, bool) {
 	colon, slash := strings.IndexByte(remote, ':'), strings.IndexByte(remote, '/')
 	if strings.Contains(remote, "://") || colon < 0 || (slash >= 0 && slash < colon) || hasDOSDrivePrefix(remote) {
-		return "", "", false
+		return "", false
 	}
 	userHost, rest := remote[:colon], remote[colon:]
 	if open := strings.IndexByte(remote, '['); open == 0 || (open > 0 && open < colon && remote[open-1] == '@') {
 		end := strings.IndexByte(remote, ']')
 		if end < 0 {
-			return "", "", false
+			return "", false
 		}
 		userHost, rest = remote[:open]+remote[open+1:end], remote[end+1:]
 	}
 	if !strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, "::") {
-		return "", "", false
+		return "", false
 	}
-	if at := strings.LastIndexByte(userHost, '@'); at >= 0 {
-		return userHost[:at], userHost[at+1:], true
-	}
-	return "", userHost, true
+	return userHost, true
 }
 
 // hasDOSDrivePrefix reports whether s starts with a drive letter and a
@@ -461,18 +528,42 @@ func hasDOSDrivePrefix(s string) bool {
 }
 
 // validateSSHHost rejects SSH remotes with no host, whose user or host would
-// reach ssh as a command-line option, or whose host is not a plain DNS name
-// or IP literal. The last part is what lets an allowlist match mean
-// anything: ssh connects to exactly the name that was matched.
-func validateSSHHost(user, host string) error {
+// reach ssh as a command-line option, whose user is not a plain name, or
+// whose host is not a plain DNS name or IP literal without a zone. The host
+// rule is what lets an allowlist match mean anything: ssh connects to exactly
+// the name that was matched.
+//
+// The user and host reach ssh as -l and the destination, and from there an
+// ssh config's ProxyCommand or Match exec may expand them (%r, %h) into a
+// shell command; OpenSSH before 9.6 does not check them (CVE-2023-51385). So
+// the user is limited to the characters of an account name, and the host to
+// a DNS name or an address; a zone ("fe80::1%anything") is free text.
+//
+// hasUser says whether the remote had an '@' for a user: git then hands
+// "user@host" to ssh, so an empty user would reach it as "@host".
+func validateSSHHost(user string, hasUser bool, host string) error {
 	if host == "" {
 		return fmt.Errorf("%w: missing hostname", ErrInvalidURL)
 	}
 	if strings.HasPrefix(host, "-") || strings.HasPrefix(user, "-") {
 		return fmt.Errorf("%w: ssh user or host looks like a command-line option", ErrInvalidURL)
 	}
+	if hasUser && user == "" {
+		return fmt.Errorf("%w: empty ssh user", ErrInvalidURL)
+	}
+	if user != "" && !isSSHUser(user) {
+		return fmt.Errorf("%w: ssh user may only hold letters, digits, '.', '_' and '-'", ErrInvalidURL)
+	}
 	if !isDNSName(host) && !isIPLiteral(host) {
 		return fmt.Errorf("%w: %q", ErrAmbiguousHost, host)
 	}
 	return nil
+}
+
+// sshUserChars are the characters an ssh user may hold.
+const sshUserChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+
+// isSSHUser reports whether user matches [A-Za-z0-9._-]+.
+func isSSHUser(user string) bool {
+	return user != "" && strings.Trim(user, sshUserChars) == ""
 }
