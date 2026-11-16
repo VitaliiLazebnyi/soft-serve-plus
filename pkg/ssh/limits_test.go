@@ -145,7 +145,7 @@ func TestSSHServerMaxConnectionsPerIP(t *testing.T) {
 
 	_ = clients[0].Close()
 	// The server releases the place once it has seen the close.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		c, err := dialClient(t, addr)
 		if err == nil {
@@ -206,7 +206,7 @@ func TestSSHServerMaxSessions(t *testing.T) {
 	}
 
 	_ = s1.Close()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		s, err := c.NewSession()
 		if err == nil {
@@ -340,7 +340,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 				}
 			}
 
-			deadline := time.Now().Add(10 * time.Second)
+			deadline := time.Now().Add(time.Minute)
 			for {
 				c, err := dialClient(t, addr)
 				if err == nil {

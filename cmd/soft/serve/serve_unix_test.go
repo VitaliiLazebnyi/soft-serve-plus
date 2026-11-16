@@ -116,6 +116,7 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 		select {
 		case <-exited:
 		case <-time.After(time.Minute):
+			t.Errorf("soft serve still running a minute after SIGTERM")
 		}
 	})
 
