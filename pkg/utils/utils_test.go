@@ -132,9 +132,16 @@ func TestRedactURL(t *testing.T) {
 		"https://u:TOKEN@/path":         "https:///path",
 		"https://TOKEN@/path?sig=TOKEN": "https:///path",
 		"file:///srv/x.git?token=TOKEN": "file:///srv/x.git",
-		// Not URLs at all: left alone.
-		"host:path":       "host:path",
-		"just some words": "just some words",
+		// Not URLs: no "://", so no authority and no user info to strip.
+		// url.Parse reads whatever comes before the first colon as a
+		// scheme, so these must still be left alone.
+		"host:path":            "host:path",
+		"just some words":      "just some words",
+		`C:\x`:                 `C:\x`,
+		`C:\x\y?z`:             `C:\x\y?z`,
+		"fatal: what? yes #3":  "fatal: what? yes #3",
+		"host:path?q#f":        "host:path?q#f",
+		"mailto:a@b?subject=x": "mailto:a@b?subject=x",
 	}
 	for in, want := range tests {
 		if got := RedactURL(in); got != want {

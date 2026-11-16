@@ -286,8 +286,8 @@ func ValidateExistingRepo(repo string) error {
 // can be logged or returned in an error. Remotes and LFS endpoints can carry
 // a token as the user name or password, and LFS hrefs are often presigned
 // URLs with a signature in the query. A URL that cannot be parsed is
-// replaced entirely; a string with no scheme to parse (such as an scp-style
-// remote) is returned unchanged.
+// replaced entirely; a string without "://" (such as an scp-style remote, a
+// Windows path or plain text) is returned unchanged.
 func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -296,10 +296,12 @@ func RedactURL(rawURL string) string {
 		}
 		return rawURL
 	}
-	// Without a scheme it is not a URL (an scp-style remote, a path,
-	// plain text). With one, the user info and query go even when the host
-	// is empty: "https://TOKEN@/x" parses with the token as user info.
-	if u.Scheme == "" {
+	// A string without "://" has no authority, so no user info to strip:
+	// an scp-style remote, a Windows path, plain text with a colon, which
+	// url.Parse reads as a scheme. With "://", the user info and query go
+	// even when the host is empty: "https://TOKEN@/x" parses with the token
+	// as user info.
+	if u.Scheme == "" || !strings.Contains(rawURL, "://") {
 		return rawURL
 	}
 	u.User = nil
