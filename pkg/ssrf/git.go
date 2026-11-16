@@ -42,8 +42,8 @@ const (
 	// GitTransportHTTP is an http/https remote. These are validated and
 	// pinned to the resolved IP.
 	GitTransportHTTP GitRemoteTransport = iota
-	// GitTransportGit is a git:// remote. These are validated but cannot be
-	// pinned, since the git protocol dials directly rather than via libcurl.
+	// GitTransportGit is a git:// remote. These are validated and pinned to
+	// the resolved IP by rewriting the remote URL (url.<addr>.insteadOf).
 	GitTransportGit
 	// GitTransportSSH is an ssh remote. Reachability is governed by the
 	// operator's SSH client key, so these are not IP-validated.
@@ -131,11 +131,6 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 // SSH remotes are not IP-validated: they authenticate with the operator's own
 // client key, so which hosts they may reach is a policy question, answered by
 // the GitRemotePolicy, not an address-range one.
-//
-// Limitation: git:// remotes are validated but cannot be pinned, since git
-// dials them directly rather than through libcurl. git resolves the hostname
-// again on every fetch, so a name that changes answers between validation
-// and connect (DNS rebinding) is not caught for that transport.
 func ValidateGitRemote(remote string, policy GitRemotePolicy) (ValidatedGitRemote, error) {
 	return ValidateGitRemoteContext(context.Background(), remote, policy)
 }
@@ -181,12 +176,17 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 
 	case "git":
 		// git:// is a plain TCP connect to an arbitrary host:port, so it is
-		// as much an SSRF primitive as http and gets the same validation.
-		// It cannot be pinned, since libcurl is not involved.
-		if _, err := validateRemoteHost(ctx, u.Hostname(), policy.lookup); err != nil {
+		// as much an SSRF primitive as http and gets the same validation,
+		// and the same pin.
+		addr, err := validateRemoteHost(ctx, u.Hostname(), policy.lookup)
+		if err != nil {
 			return ValidatedGitRemote{}, err
 		}
-		return ValidatedGitRemote{Transport: GitTransportGit}, nil
+		pin, err := gitProtocolPin(remote, u, addr)
+		if err != nil {
+			return ValidatedGitRemote{}, err
+		}
+		return ValidatedGitRemote{Transport: GitTransportGit, Config: pin}, nil
 
 	case "http", "https":
 		addr, err := validateRemoteHost(ctx, u.Hostname(), policy.lookup)
@@ -325,6 +325,47 @@ func curlResolvePin(u *url.URL, addr netip.Addr) []GitConfigEntry {
 		Key:   "http.curloptResolve",
 		Value: fmt.Sprintf("%s:%s:%s", u.Hostname(), port, addr.String()),
 	}}
+}
+
+// gitProtocolPin returns git configuration pinning a git:// remote's host to
+// the validated address, or nothing if the remote needs no pinning. git dials
+// git:// itself rather than through libcurl, so there is no resolve option;
+// instead url.<pinned>.insteadOf rewrites the remote, as written, to the
+// same remote with the address in place of the host, and git connects to
+// that literal without resolving anything. The request then carries
+// host=<address> instead of the name, which only matters to a server that
+// tells virtual hosts apart.
+//
+// remote is the text git is given, u its parse. The prefix replaced is taken
+// from remote, up to and including the slash that ends the host, so it
+// matches however git reads the host part. A remote with user info or no
+// path is refused rather than left unpinned: git:// has no use for either,
+// and either could make the prefix miss.
+func gitProtocolPin(remote string, u *url.URL, addr netip.Addr) ([]GitConfigEntry, error) {
+	const scheme = "git://"
+	errShape := fmt.Errorf("%w: a git:// remote must be git://host[:port]/path", ErrInvalidURL)
+	if u.User != nil || !strings.HasPrefix(u.Path, "/") || !strings.HasPrefix(remote, scheme) {
+		return nil, errShape
+	}
+	authority, _, ok := strings.Cut(remote[len(scheme):], "/")
+	if !ok {
+		return nil, errShape
+	}
+	// An IP literal is already pinned by construction.
+	if !addr.IsValid() || isIPLiteral(u.Hostname()) {
+		return nil, nil
+	}
+	host := addr.String()
+	if addr.Is6() {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" {
+		host += ":" + port
+	}
+	return []GitConfigEntry{{
+		Key:   "url." + scheme + host + "/.insteadOf",
+		Value: scheme + authority + "/",
+	}}, nil
 }
 
 // urlProxyOverride returns git configuration clearing any proxy configured
