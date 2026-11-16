@@ -88,7 +88,10 @@ func TestValidateGitRemote(t *testing.T) {
 		{"bare ssh no user", "github.com:charmbracelet/soft-serve.git", GitTransportSSH, nil},
 		{"bare ssh ipv6", "git@[::1]:x.git", GitTransportSSH, nil},
 		{"bare ssh bracketed host port", "[git@example.com:2222]:x.git", GitTransportSSH, nil},
-		{"bare ssh brace in user", "a{b@127.0.0.1:x", GitTransportSSH, nil},
+		{"bare ssh underscore in user", "a_b@127.0.0.1:x", GitTransportSSH, nil},
+		// Recognized as ssh rather than failing url.Parse, then refused for
+		// the user (see TestValidateGitRemoteSSHUserAndZone).
+		{"bare ssh brace in user", "a{b@127.0.0.1:x", 0, ErrInvalidURL},
 		{"bare ssh scheme-looking host", "http:foo", GitTransportSSH, nil},
 
 		// Things that look a bit like scp syntax but are not SSH remotes.
@@ -569,6 +572,64 @@ func TestValidateGitRemoteRefusesTrailingDot(t *testing.T) {
 	} {
 		if _, err := ValidateGitRemote(remote, policy); err != nil {
 			t.Errorf("ValidateGitRemote(%q): %v", remote, err)
+		}
+	}
+}
+
+// TestValidateGitRemoteSSHUserAndZone covers what reaches ssh as the user
+// and host, which an ssh config may expand into a shell command (%r, %h;
+// CVE-2023-51385). The user must be a plain account name and the host may
+// not carry an IPv6 zone, in both the URL and the scp-like syntax. Zones are
+// refused for the other transports too.
+func TestValidateGitRemoteSSHUserAndZone(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		remote string
+		err    error // nil: accepted
+	}{
+		// Users.
+		{"ssh://git@git.example/x.git", nil},
+		{"ssh://deploy.bot_1-a@git.example/x.git", nil},
+		{"ssh://git.example/x.git", nil},
+		{"git@git.example:x.git", nil},
+		{"Deploy.Bot_1-a@git.example:x.git", nil},
+		{"git.example:x.git", nil},
+		{"ssh://%24%28id%29@git.example/x.git", ErrInvalidURL},
+		{"ssh://a%3Bb@git.example/x.git", ErrInvalidURL},
+		{"ssh://a%20b@git.example/x.git", ErrInvalidURL},
+		{"ssh://a%25r@git.example/x.git", ErrInvalidURL},
+		{"git+ssh://a&b@git.example/x.git", ErrInvalidURL},
+		{"ssh+git://a$b@git.example/x.git", ErrInvalidURL},
+		{"$(id)@git.example:x.git", ErrInvalidURL},
+		{"a;touch x@git.example:x.git", ErrInvalidURL},
+		{"a b@git.example:x.git", ErrInvalidURL},
+		{"a`id`@git.example:x.git", ErrInvalidURL},
+		{"a|b@git.example:x.git", ErrInvalidURL},
+		{"a'b@git.example:x.git", ErrInvalidURL},
+		{"a@b@git.example:x.git", ErrInvalidURL},
+		{"[a$b@git.example:22]:x.git", ErrInvalidURL},
+		{"-oProxyCommand=x@git.example:x.git", ErrInvalidURL},
+		// Zones.
+		{"ssh://git@[2606:4700::1]/x.git", nil},
+		{"git@[2606:4700::1]:x.git", nil},
+		{"ssh://git@[fe80::1%25eth0]/x.git", ErrAmbiguousHost},
+		{"ssh://[2606:4700::1%25$(id)]:22/x.git", ErrAmbiguousHost},
+		{"git@[fe80::1%eth0]:x.git", ErrAmbiguousHost},
+		{"[2606:4700::1%$(id)]:x.git", ErrAmbiguousHost},
+		{"[git@2606:4700::1%x]:x.git", ErrAmbiguousHost},
+		{"https://[2606:4700::1%25x]/x.git", ErrAmbiguousHost},
+		{"git://[2606:4700::1%25x]/x.git", ErrAmbiguousHost},
+	}
+	for _, tt := range tests {
+		_, err := ValidateGitRemote(tt.remote, anySSH)
+		if tt.err == nil {
+			if err != nil {
+				t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)
+			}
+			continue
+		}
+		if !errors.Is(err, tt.err) {
+			t.Errorf("ValidateGitRemote(%q) error = %v, want %v", tt.remote, err, tt.err)
 		}
 	}
 }

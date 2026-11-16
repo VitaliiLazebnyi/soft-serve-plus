@@ -221,6 +221,10 @@ func validateRemoteHost(ctx context.Context, host string, lookup lookupFunc) (ne
 		if isPrivateOrInternal(net.IP(addr.AsSlice())) {
 			return netip.Addr{}, ErrPrivateIP
 		}
+		// A zone is free text that git and libcurl hand on; see isIPLiteral.
+		if addr.Zone() != "" {
+			return netip.Addr{}, fmt.Errorf("%w: %q", ErrAmbiguousHost, host)
+		}
 		return addr, nil
 	}
 
@@ -418,10 +422,11 @@ func (v ValidatedGitRemote) ForClone() ValidatedGitRemote {
 	return v
 }
 
-// isIPLiteral reports whether a host is already a canonical IP address.
+// isIPLiteral reports whether a host is already a canonical IP address. An
+// IPv6 address with a zone is not: netip accepts any text after the '%'.
 func isIPLiteral(host string) bool {
-	_, err := netip.ParseAddr(host)
-	return err == nil
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.Zone() == ""
 }
 
 // parseBareSSHRemote recognizes git's scp-like remote syntax
@@ -461,9 +466,16 @@ func hasDOSDrivePrefix(s string) bool {
 }
 
 // validateSSHHost rejects SSH remotes with no host, whose user or host would
-// reach ssh as a command-line option, or whose host is not a plain DNS name
-// or IP literal. The last part is what lets an allowlist match mean
-// anything: ssh connects to exactly the name that was matched.
+// reach ssh as a command-line option, whose user is not a plain name, or
+// whose host is not a plain DNS name or IP literal without a zone. The host
+// rule is what lets an allowlist match mean anything: ssh connects to exactly
+// the name that was matched.
+//
+// The user and host reach ssh as -l and the destination, and from there an
+// ssh config's ProxyCommand or Match exec may expand them (%r, %h) into a
+// shell command; OpenSSH before 9.6 does not check them (CVE-2023-51385). So
+// the user is limited to the characters of an account name, and the host to
+// a DNS name or an address; a zone ("fe80::1%anything") is free text.
 func validateSSHHost(user, host string) error {
 	if host == "" {
 		return fmt.Errorf("%w: missing hostname", ErrInvalidURL)
@@ -471,8 +483,19 @@ func validateSSHHost(user, host string) error {
 	if strings.HasPrefix(host, "-") || strings.HasPrefix(user, "-") {
 		return fmt.Errorf("%w: ssh user or host looks like a command-line option", ErrInvalidURL)
 	}
+	if user != "" && !isSSHUser(user) {
+		return fmt.Errorf("%w: ssh user may only hold letters, digits, '.', '_' and '-'", ErrInvalidURL)
+	}
 	if !isDNSName(host) && !isIPLiteral(host) {
 		return fmt.Errorf("%w: %q", ErrAmbiguousHost, host)
 	}
 	return nil
+}
+
+// sshUserChars are the characters an ssh user may hold.
+const sshUserChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+
+// isSSHUser reports whether user matches [A-Za-z0-9._-]+.
+func isSSHUser(user string) bool {
+	return user != "" && strings.Trim(user, sshUserChars) == ""
 }
