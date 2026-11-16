@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestBasicTransferErrorResponse checks that a failed transfer reports the
+// TestDownloadErrorResponse checks that a failed transfer reports the
 // HTTP status along with any message the server sent, and that a body which
 // is not an LFS error object is logged to the request's logger at debug level.
-func TestBasicTransferErrorResponse(t *testing.T) {
+func TestDownloadErrorResponse(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
 		status   int
@@ -49,10 +49,10 @@ func TestBasicTransferErrorResponse(t *testing.T) {
 				_, _ = io.WriteString(w, tt.body)
 			}))
 			t.Cleanup(srv.Close)
-			a := &BasicTransferAdapter{srv.Client()}
+			a := &HTTPClient{client: srv.Client()}
 			ctx, logs := debugContext(t)
 
-			rc, err := a.Download(ctx, testPointer, &Link{Href: srv.URL + "/obj"})
+			rc, err := a.download(ctx, &Link{Href: srv.URL + "/obj"})
 			if err == nil {
 				_ = rc.Close()
 				t.Fatal("expected the download to fail")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +105,79 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 	// must report why it stopped rather than their errors.
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+// The scan reports each pointer blob of at most blobSizeCutoff bytes, with
+// its blob id, and nothing else: not a larger blob that starts like one, not
+// a blob that only has the first line of one, and not commits, trees or
+// tags, however large.
+func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
+	work := t.TempDir()
+	run := func(stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = work
+		cmd.Stdin = strings.NewReader(stdin)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	small, err := GeneratePointer(strings.NewReader("small"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := GeneratePointer(strings.NewReader("other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run("", "init", "-q", "-b", "main")
+	write("small", small.String())
+	if err := os.Mkdir(filepath.Join(work, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write("dir/other", other.String())
+	write("not-a-pointer", "version https://git-lfs.github.com/spec/v1\n")
+	// A blob past the cutoff that starts like a pointer.
+	write("large", other.String()+strings.Repeat("x", 64<<10))
+	run("", "add", ".")
+	// A commit and a tag larger than the cutoff.
+	run(strings.Repeat("long message\n", 200), "commit", "-q", "-F", "-")
+	run(strings.Repeat("long tag\n", 200), "tag", "-a", "v1", "-F", "-")
+
+	repo, err := git.Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointers, err := searchPointers(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range pointers {
+		got[p.Oid] = p.Hash
+	}
+	want := map[string]string{
+		small.Oid: run("", "rev-parse", "HEAD:small"),
+		other.Oid: run("", "rev-parse", "HEAD:dir/other"),
+	}
+	if len(pointers) != len(want) || !maps.Equal(got, want) {
+		t.Errorf("found %+v, want %v", pointers, want)
 	}
 }
 

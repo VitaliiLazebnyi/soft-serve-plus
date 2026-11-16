@@ -1,6 +1,9 @@
 package lfs
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestNewEndpoint(t *testing.T) {
 	t.Parallel()
@@ -17,8 +20,6 @@ func TestNewEndpoint(t *testing.T) {
 		"git":                    {"git://host:9418/r.git", "https://host/r.git/info/lfs"},
 		"git ipv6":               {"git://[::1]:9418/r", "https://[::1]/r.git/info/lfs"},
 		"git ipv6 no port":       {"git://[::1]/r", "https://[::1]/r.git/info/lfs"},
-		"ssh":                    {"ssh://git@host/r.git", "ssh://git@host/r.git"},
-		"bare ssh":               {"git@host:r.git", "ssh://git@host/r.git"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -34,5 +35,28 @@ func TestNewEndpoint(t *testing.T) {
 				t.Errorf("NewEndpoint(%q) has no host: %q", tt.in, ep.Host)
 			}
 		})
+	}
+}
+
+// Remotes objects can't be fetched from are refused, without quoting them.
+func TestNewEndpointUnsupported(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{
+		"ssh://git:TOKEN@host/r.git",
+		"git+ssh://host/r.git",
+		"git@host:r.git",
+		"[git@host:22]:r.git",
+		"host:r.git",
+		"file:///srv/r.git",
+		"/srv/r.git",
+		"%zz://TOKEN@host",
+	} {
+		ep, err := NewEndpoint(in)
+		if !errors.Is(err, ErrUnsupportedEndpoint) {
+			t.Errorf("NewEndpoint(%q) = %v, %v, want %v", in, ep, err, ErrUnsupportedEndpoint)
+		}
+		if err != nil && err.Error() != ErrUnsupportedEndpoint.Error() {
+			t.Errorf("NewEndpoint(%q) error %q says more than %q", in, err, ErrUnsupportedEndpoint)
+		}
 	}
 }
