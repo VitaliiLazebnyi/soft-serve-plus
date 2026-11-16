@@ -31,11 +31,11 @@ const (
 	testChunks       = 30 // 1.5s in all, past testStallTimeout
 )
 
-// newLoopbackAdapter returns a basic transfer adapter whose client is set up
+// newLoopbackAdapter returns an HTTPClient whose client is set up
 // by newTransferClient like the shared secureHTTPClient, starting from the
 // same whole-request timeout as ssrf.NewSecureClient, but whose transport may
 // reach the loopback test server, which the SSRF-safe dialer would refuse.
-func newLoopbackAdapter(t *testing.T) *BasicTransferAdapter {
+func newLoopbackAdapter(t *testing.T) *HTTPClient {
 	t.Helper()
 	old := stallTimeout
 	stallTimeout = testStallTimeout
@@ -44,7 +44,7 @@ func newLoopbackAdapter(t *testing.T) *BasicTransferAdapter {
 	tr := &http.Transport{DialContext: (&net.Dialer{}).DialContext}
 	t.Cleanup(tr.CloseIdleConnections)
 	client := newTransferClient(&http.Client{Timeout: ssrf.ClientTimeout, Transport: tr})
-	return &BasicTransferAdapter{client}
+	return &HTTPClient{client: client}
 }
 
 func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
@@ -68,7 +68,7 @@ func TestHTTPClientSlowDownloadCompletes(t *testing.T) {
 	defer srv.Close()
 
 	a := newLoopbackAdapter(t)
-	rc, err := a.Download(context.Background(), Pointer{}, &Link{Href: srv.URL})
+	rc, err := a.download(context.Background(), &Link{Href: srv.URL})
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestHTTPClientStalledTransferFails(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			rc, err := a.Download(ctx, Pointer{}, &Link{Href: srv.URL})
+			rc, err := a.download(ctx, &Link{Href: srv.URL})
 			if err == nil {
 				_, err = io.ReadAll(rc)
 				rc.Close() //nolint:errcheck,gosec
@@ -185,11 +185,11 @@ func debugContext(t *testing.T) (context.Context, *bytes.Buffer) {
 	return log.WithContext(context.Background(), logger), &buf
 }
 
-// plainClient is an httpClient set up by newTransferClient like the shared
+// plainClient is an HTTPClient set up by newTransferClient like the shared
 // secureHTTPClient, so errors pass through the stall-wrapped dialer, but
 // whose transport may reach loopback test servers, which the client from
 // newHTTPClient refuses.
-func plainClient(t *testing.T, endpoint string) *httpClient {
+func plainClient(t *testing.T, endpoint string) *HTTPClient {
 	t.Helper()
 	ep, err := NewEndpoint(endpoint)
 	if err != nil {
@@ -198,11 +198,7 @@ func plainClient(t *testing.T, endpoint string) *httpClient {
 	tr := &http.Transport{DialContext: (&net.Dialer{}).DialContext}
 	t.Cleanup(tr.CloseIdleConnections)
 	c := newTransferClient(&http.Client{Transport: tr})
-	return &httpClient{
-		client:    c,
-		endpoint:  ep,
-		transfers: map[string]TransferAdapter{TransferBasic: &BasicTransferAdapter{c}},
-	}
+	return &HTTPClient{client: c, endpoint: ep}
 }
 
 func assertNoSecrets(t *testing.T, what, s string, secrets ...string) {
@@ -343,7 +339,7 @@ func TestTransferRedactsHref(t *testing.T) {
 // The clients are built from two goroutines, as concurrent mirror jobs do, so
 // that -race catches newHTTPClient changing the shared client.
 func TestNewHTTPClientSharesTransport(t *testing.T) {
-	var a, b *httpClient
+	var a, b *HTTPClient
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -361,13 +357,6 @@ func TestNewHTTPClientSharesTransport(t *testing.T) {
 	}
 	if a.client.Transport != b.client.Transport {
 		t.Fatal("LFS clients use separate transports; want one shared transport")
-	}
-	basic, ok := a.transfers[TransferBasic].(*BasicTransferAdapter)
-	if !ok {
-		t.Fatalf("basic transfer adapter is %T, want *BasicTransferAdapter", a.transfers[TransferBasic])
-	}
-	if basic.client != a.client {
-		t.Fatal("basic transfer adapter does not use the shared HTTP client")
 	}
 }
 

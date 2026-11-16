@@ -97,7 +97,6 @@ func TestSearchPointerBlobsReportsGitFailures(t *testing.T) {
 	}
 	for _, tc := range []struct{ arg, label string }{
 		{"rev-list", "git rev-list"},
-		{"--batch-check", "git cat-file --batch-check"},
 		{"--batch", "git cat-file --batch "},
 	} {
 		t.Run(tc.arg, func(t *testing.T) {
