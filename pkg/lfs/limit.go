@@ -3,7 +3,11 @@ package lfs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -67,15 +71,37 @@ func (l *maxBytesReader) Read(p []byte) (int, error) {
 	return n, l.err
 }
 
-// remoteText returns s, text a remote sent, cut to maxRemoteText bytes at a
-// character boundary, with a mark if it was cut.
+// remoteText returns s, text a remote sent, cut to maxRemoteText bytes, at a
+// character boundary if one is near, with a mark if it was cut, and with
+// every byte or character that is not printable escaped, so a remote cannot
+// write terminal control sequences into the log or a client's session.
 func remoteText(s string) string {
-	if len(s) <= maxRemoteText {
-		return s
+	suffix := ""
+	if len(s) > maxRemoteText {
+		cut := maxRemoteText
+		// Back off at most to the start of the character the cut is in;
+		// text that is not UTF-8 is cut where it is, and escaped below.
+		for back := 0; back < utf8.UTFMax-1 && cut > 0 && !utf8.RuneStart(s[cut]); back++ {
+			cut--
+		}
+		if !utf8.RuneStart(s[cut]) {
+			cut = maxRemoteText
+		}
+		s, suffix = s[:cut], "... (truncated)"
 	}
-	cut := maxRemoteText
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			fmt.Fprintf(&b, "\\x%02x", s[i])
+		case r == ' ' || unicode.IsGraphic(r):
+			b.WriteRune(r)
+		default:
+			q := strconv.QuoteRuneToASCII(r)
+			b.WriteString(q[1 : len(q)-1])
+		}
+		i += size
 	}
-	return s[:cut] + "... (truncated)"
+	return b.String() + suffix
 }

@@ -149,3 +149,49 @@ func TestBatchResponseLimitIsOneMiB(t *testing.T) {
 		t.Fatalf("err = %v, want %v", err, errResponseTooLarge)
 	}
 }
+
+// remoteText escapes what a terminal would act on: control characters, an
+// escape sequence and bytes that are not UTF-8.
+func TestRemoteTextEscapes(t *testing.T) {
+	for in, want := range map[string]string{
+		"clear \x1b[2J screen": `clear \x1b[2J screen`,
+		"bell\a and\r\n":       `bell\a and\r\n`,
+		"bad \xff byte":        `bad \xff byte`,
+		"c1 \u009b csi":        `c1 \u009b csi`,
+		"fine: é ✓ tab\tend":   `fine: é ✓ tab\tend`,
+	} {
+		if got := remoteText(in); got != want {
+			t.Errorf("remoteText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Text with no character boundary near the cut, such as continuation bytes
+// only, is still cut at maxRemoteText, not backed off to nothing.
+func TestRemoteTextNoBoundary(t *testing.T) {
+	got := remoteText(strings.Repeat("\x80", 4*maxRemoteText))
+	if want := strings.Repeat(`\x80`, maxRemoteText) + "... (truncated)"; got != want {
+		t.Errorf("remoteText = %.80q..., want %d escaped bytes and the mark", got, maxRemoteText)
+	}
+}
+
+// The transfer adapter and the hash algorithm a batch response names are
+// the remote's text too.
+func TestBatchCapsRemoteNames(t *testing.T) {
+	for _, field := range []string{"transfer", "hash_algo"} {
+		t.Run(field, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", MediaType)
+				body := map[string]any{"objects": []any{}, field: longRemoteText[:64<<10] + "\x1b[2J"}
+				json.NewEncoder(w).Encode(body) //nolint: errcheck,gosec
+			}))
+			t.Cleanup(srv.Close)
+			c := plainClient(t, srv.URL+"/x.git")
+			err := c.Download(t.Context(), []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error { return nil })
+			if err == nil {
+				t.Fatal("Download succeeded")
+			}
+			assertCapped(t, field+" error", err.Error())
+		})
+	}
+}

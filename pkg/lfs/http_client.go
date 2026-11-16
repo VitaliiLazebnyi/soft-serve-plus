@@ -192,7 +192,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 	// hash algorithm names different objects, whose content would never
 	// verify against the pointers. An empty hash_algo means sha256.
 	if response.HashAlgo != "" && response.HashAlgo != HashAlgorithmSHA256 {
-		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", response.HashAlgo, HashAlgorithmSHA256)
+		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", remoteText(response.HashAlgo), HashAlgorithmSHA256)
 	}
 
 	return &response, nil
@@ -226,7 +226,7 @@ func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc Downloa
 	}
 
 	if result.Transfer != TransferBasic {
-		return fmt.Errorf("transfer adapter not supported: %s", result.Transfer)
+		return fmt.Errorf("transfer adapter not supported: %s", remoteText(result.Transfer))
 	}
 
 	// Only act on objects that were asked for, once each, so a response
