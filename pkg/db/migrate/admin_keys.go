@@ -43,9 +43,10 @@ const defaultAdminUsername = "admin"
 //     it was removed before keys were synced, even if its user is no longer
 //     an admin. So is a key the first migration seeded, which it records
 //     the same way. Keys added or removed with the user commands are never
-//     removed; a key of the admin named "admin" that is neither configured
-//     nor recorded, such as one seeded before seeded keys were recorded, is
-//     logged with a warning at every start. Nothing is removed
+//     removed. On a database first started by an older version, which did
+//     not record seeded keys, a key of the admin named "admin" that is
+//     neither configured nor recorded is logged with a warning at every
+//     start (see warnUnrecordedKeys). Nothing is removed
 //     while an initial_admin_keys entry names a key file that cannot be read,
 //     since that file may hold a key that is still wanted; each key kept for
 //     that reason is logged as an error. Blank and "#" comment entries, and
@@ -148,14 +149,30 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx) error {
 	return warnUnrecordedKeys(ctx, tx, logger, configured)
 }
 
-// warnUnrecordedKeys logs a warning for each key of the admin named "admin"
-// that is not in the config and that the sync did not attach. A database
-// whose first migration ran before seeded keys were recorded has such a key
-// for every key initial_admin_keys held at the first start: nothing tells it
-// apart from a key added by hand, so it is kept when it leaves the config,
-// with full admin rights. The warning says how to remove it, or to list it
-// again to silence the warning.
+// adminKeysRecordedKey names the settings row the first migration writes
+// since it records the keys it seeds. A database without it was first
+// started by an older version.
+const adminKeysRecordedKey = "admin_keys_recorded"
+
+// warnUnrecordedKeys logs a warning, on a database first started by a
+// version that did not record seeded keys, for each key of the admin named
+// "admin" that is not in the config and that the sync did not attach. Such
+// a database has one for every key initial_admin_keys held at the first
+// start: nothing tells it apart from a key added by hand, so it is kept when
+// it leaves the config, with full admin rights. The warning says how to
+// remove the key, or to list it in initial_admin_keys to keep it and
+// silence the warning. A database the first migration of this version
+// created records its seeded keys, so a key without a record was added by
+// hand there, and nothing is logged.
 func warnUnrecordedKeys(ctx context.Context, tx *db.Tx, logger *log.Logger, configured map[string]struct{}) error {
+	var recorded int
+	if err := tx.GetContext(ctx, &recorded, tx.Rebind(`SELECT COUNT(*) FROM settings WHERE "key" = ?`), adminKeysRecordedKey); err != nil {
+		return fmt.Errorf("look up whether seeded admin keys were recorded: %w", err)
+	}
+	if recorded > 0 {
+		return nil
+	}
+
 	var keys []string
 	if err := tx.SelectContext(ctx, &keys, tx.Rebind(`SELECT public_keys.public_key
 		FROM public_keys INNER JOIN users ON users.id = public_keys.user_id
@@ -168,8 +185,8 @@ func warnUnrecordedKeys(ctx context.Context, tx *db.Tx, logger *log.Logger, conf
 		if _, ok := configured[ak]; ok {
 			continue
 		}
-		logger.Warn("admin key is neither in initial_admin_keys nor recorded as attached from it, so leaving the config does not remove it; "+
-			"if it is an initial admin key since rotated out, remove it with \"user remove-pubkey admin\"",
+		logger.Warn("admin key may have been seeded from initial_admin_keys by an older version, which did not record it, so leaving the config does not remove it; "+
+			"if it was rotated out, remove it with \"user remove-pubkey admin\"; to keep it and silence this warning, list it in initial_admin_keys",
 			"user", defaultAdminUsername, "key", fingerprint(ak))
 	}
 	return nil

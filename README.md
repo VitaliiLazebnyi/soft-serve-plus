@@ -132,10 +132,13 @@ database when you remove them from the config: remove those with
 config, run `user remove-pubkey` and then `user add-pubkey` for it first.
 
 A database first started by an older version did not record which keys its
-first start seeded, so such a key stays when it leaves the config. Each start
-logs a warning for every key of the `admin` user that is neither in
-`initial_admin_keys` nor recorded as attached from it; if it is an old initial
-admin key, remove it with `user remove-pubkey admin`.
+first start seeded, so such a key stays when it leaves the config. On such a
+database, each start logs a warning for every key of the `admin` user that is
+neither in `initial_admin_keys` nor recorded as attached from it. If it is an
+old initial admin key, remove it with `user remove-pubkey admin`; to keep it,
+list it in `initial_admin_keys`, which also silences the warning. A database
+created by this version does not warn: its seeded keys are recorded, so a key
+without a record was added by hand.
 
 Blank lines and lines starting with `#` are ignored. An entry that is not a
 valid key is read as a key file path if it has no spaces in it, and is ignored

@@ -39,7 +39,8 @@ func TestSeededAdminKeyRemovedWhenRotated(t *testing.T) {
 // A database whose first migration ran before seeded keys were recorded
 // keeps such a key when it leaves the config: nothing tells it apart from a
 // key added by hand. Each boot then warns about it, naming the account and
-// the key, so the operator can remove it or list it again.
+// the key, so the operator can remove it, or list it in initial_admin_keys
+// to keep it and silence the warning.
 func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
@@ -48,8 +49,10 @@ func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{seeded, kept}
 	boot(t, ctx, cfg, dbx)
-	// As an older first migration left it: no record.
+	// As an older first migration left it: no record, and no marker that
+	// seeded keys are recorded.
 	mustExec(t, dbx, `UPDATE public_keys SET synced_user_id = NULL`)
+	mustExec(t, dbx, `DELETE FROM settings WHERE "key" = ?`, adminKeysRecordedKey)
 	// A key on another admin is that admin's business.
 	mustExec(t, dbx, `INSERT INTO users (username, admin, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, "erin", true)
 	mustExec(t, dbx, `INSERT INTO public_keys (user_id, public_key, updated_at)
@@ -77,9 +80,38 @@ func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
 		}
 	}
 
+	// Listed again, it is not warned about.
+	cfg.InitialAdminKeys = []string{kept, seeded}
+	if logs := bootLogs(t, ctx, cfg, dbx); strings.Contains(logs, fp(seeded)) {
+		t.Errorf("logs with the key listed = %q; want no warning", logs)
+	}
+	cfg.InitialAdminKeys = []string{kept}
+
 	// Removed by hand, it is not warned about again.
 	mustExec(t, dbx, `DELETE FROM public_keys WHERE public_key = ?`, seeded)
 	if logs := bootLogs(t, ctx, cfg, dbx); strings.Contains(logs, fp(seeded)) {
 		t.Errorf("logs after removal = %q; want no warning", logs)
+	}
+}
+
+// A database this version created records the keys it seeds, so a key on
+// the admin user without a record was added by hand, and starting does not
+// warn about it.
+func TestHandAddedAdminKeyNoWarningOnNewInstall(t *testing.T) {
+	ctx := context.TODO()
+	dbx := openDB(t, ctx)
+
+	cfg := config.DefaultConfig()
+	cfg.InitialAdminKeys = []string{newAuthorizedKey(t)}
+	boot(t, ctx, cfg, dbx)
+	byHand := newAuthorizedKey(t)
+	mustExec(t, dbx, `INSERT INTO public_keys (user_id, public_key, updated_at)
+		VALUES ((SELECT id FROM users WHERE username = ?), ?, CURRENT_TIMESTAMP)`, "admin", byHand)
+
+	if logs := bootLogs(t, ctx, cfg, dbx); strings.Contains(logs, "WARN") {
+		t.Errorf("logs = %q; want no warning", logs)
+	}
+	if o, ok := ownerOf(t, dbx, byHand); !ok || o.Username != "admin" {
+		t.Errorf("hand-added key owner = %+v, %v; want admin", o, ok)
 	}
 }

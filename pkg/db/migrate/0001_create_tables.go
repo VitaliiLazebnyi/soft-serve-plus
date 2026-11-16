@@ -164,6 +164,9 @@ var createTables = Migration{
 			{"allow_keyless", "true"},
 			{"anon_access", access.ReadOnlyAccess.String()},
 			{"init", "true"},
+			// Seeded keys are recorded (see above), so the boot warning
+			// about unrecorded admin keys is for older databases only.
+			{adminKeysRecordedKey, "true"},
 		}
 
 		for _, s := range settings {
