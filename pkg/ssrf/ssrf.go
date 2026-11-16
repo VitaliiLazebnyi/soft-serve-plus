@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,30 +43,24 @@ const MaxResponseHeaderBytes = 64 << 10
 // dialTimeout bounds one dial made by the secure client, from DNS resolution
 // through the last connection attempt. It is a fixed budget: net/http dials
 // with a context detached from the request (context.WithoutCancel), so the
-// request deadline and ClientTimeout never reach secureDial. A shorter
-// deadline already on the dial context still applies.
+// request deadline and ClientTimeout never reach the dialer. A shorter
+// deadline already on the dial context still applies. net.Dialer splits the
+// budget between the addresses a name resolves to.
 const dialTimeout = 10 * time.Second
 
-// maxDialAddrs caps how many of a name's validated addresses one dial tries.
-// Every answer is still validated; the cap only stops a name with a long
-// answer list from turning one request into many outbound connection
-// attempts to addresses its owner picked. Four matches common client
-// practice and leaves each attempt a useful share of dialTimeout.
-const maxDialAddrs = 4
+// dialResolver resolves hostnames for the secure client. nil means
+// net.DefaultResolver; tests point it at a stub DNS server.
+var dialResolver *net.Resolver
 
-// minDialAttempt is the least time an attempt is given when the budget is
-// split between several addresses, so later attempts are not squeezed to
-// nothing. It mirrors the standard library's choice.
-const minDialAttempt = 2 * time.Second
-
-// dialContext dials a single, already validated address. Tests replace it so
-// failover can be exercised without a network.
-var dialContext = (&net.Dialer{KeepAlive: 30 * time.Second}).DialContext
+// dialHook, when set, runs for every address the checks let through, just
+// before the connection attempt, and an error stops that attempt. Tests use
+// it to keep connections on the machine.
+var dialHook func(ctx context.Context, network, address string) error
 
 // NewSecureClient returns an HTTP client with SSRF protection.
 // It validates resolved IPs at dial time to block connections to private
-// and internal networks; see secureDial. Redirects are disabled to match the
-// webhook client convention and prevent redirect-based SSRF.
+// and internal networks; see secureDialer. Redirects are disabled to match
+// the webhook client convention and prevent redirect-based SSRF.
 func NewSecureClient() *http.Client {
 	return NewSecureClientAllowing(nil)
 }
@@ -76,16 +71,10 @@ func NewSecureClient() *http.Client {
 // disabled, so every request reaches only the host it names and the
 // allowlist is checked against that host alone.
 func NewSecureClientAllowing(allowed AllowedHosts) *http.Client {
-	dial := secureDial
-	if len(allowed) > 0 {
-		dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return secureDialAllowing(ctx, network, addr, allowed)
-		}
-	}
 	return &http.Client{
 		Timeout: ClientTimeout,
 		Transport: &http.Transport{
-			DialContext:            dial,
+			DialContext:            secureDialer(allowed),
 			MaxIdleConns:           100,
 			IdleConnTimeout:        90 * time.Second,
 			TLSHandshakeTimeout:    10 * time.Second,
@@ -99,217 +88,70 @@ func NewSecureClientAllowing(allowed AllowedHosts) *http.Client {
 	}
 }
 
-// secureDial resolves addr's host once, validates every address it resolves
-// to, and dials up to maxDialAddrs of them until one connects, all within
-// dialTimeout. The addresses are tried in resolver order with the IPv4 and
-// IPv6 ones interleaved (see interleaveFamilies), so a broken route for one
-// family cannot use up every attempt.
+// secureDialer returns a dial function that checks every address it is
+// about to connect to, after resolution and before connect(2), and refuses
+// any that allowed does not permit for the host and port being dialed. The
+// check runs on the socket's own address (net.Dialer.ControlContext), so
+// the address checked is always the address connected to; resolution,
+// address-family selection and failover come from net.Dialer.
 //
-// A host is refused outright if any of its addresses is private or internal,
-// even when others are public. A name that answers with a mix is a DNS
-// rebinding setup, not a legitimate endpoint, and this matches ValidateURL
-// and ValidateGitRemote, which refuse such a name at configuration time.
+// A name that answers with both public and private addresses is not
+// refused as a whole here, but its private addresses are never dialed.
+// ValidateURL and ValidateGitRemote refuse such a name when it is saved.
 //
-// The name is never resolved again after validation: each attempt dials an
-// IP literal, so the address connected to is always one that was checked.
 // TLS still verifies against the original hostname, which net/http takes
 // from the request URL rather than from the dialed address.
-func secureDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	return secureDialAllowing(ctx, network, addr, nil)
+func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
+		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+
+		d := &net.Dialer{
+			KeepAlive: 30 * time.Second,
+			Resolver:  dialResolver,
+			ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error {
+				// address is the IP and port about to be connected to. One
+				// that does not parse, such as ":80" for an empty host,
+				// which net.Dialer sends to the local system, is refused.
+				ap, err := netip.ParseAddrPort(address)
+				if err != nil || !allowed.permitsHTTP(host, port, ap.Addr().AsSlice()) {
+					return ErrPrivateIP
+				}
+				if dialHook != nil {
+					return dialHook(ctx, network, address)
+				}
+				return nil
+			},
+		}
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, dialError(ctx, host, err)
+		}
+		return conn, nil
+	}
 }
 
-// secureDialAllowing is secureDial with the destinations allowed permits let
-// through; see AllowedHosts.permitsHTTP.
-func secureDialAllowing(ctx context.Context, network, addr string, allowed AllowedHosts) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err //nolint:wrapcheck
+// dialError turns a failed dial into the error the client returns. The
+// message is stored with every webhook delivery, where the repo admin reads
+// it, so a refusal is the bare ErrPrivateIP, without the address refused,
+// and a failed lookup names the host only, not the server's DNS resolver.
+func dialError(ctx context.Context, host string, err error) error {
+	if errors.Is(err, ErrPrivateIP) {
+		return ErrPrivateIP
 	}
-
-	// Bound the whole dial, resolution included, so neither a slow resolver
-	// nor a long answer list can stretch it past dialTimeout.
-	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
-	ips, err := resolveDialTargetsAllowing(ctx, network, host, port, allowed)
-	if err != nil {
-		return nil, err
-	}
-	total := len(ips)
-	ips = interleaveFamilies(ips)
-	if len(ips) > maxDialAddrs {
-		ips = ips[:maxDialAddrs]
-	}
-
-	var firstErr error
-	failed := 0
-	for i, ip := range ips {
-		if dialStopped(ctx) != nil {
-			break
-		}
-		deadline, ok := attemptDeadline(ctx, time.Now(), len(ips)-i)
-		if !ok {
-			// The budget ran out since dialStopped looked: leave this
-			// address untried rather than fail it on an expired deadline.
-			break
-		}
-		attemptCtx, cancel := context.WithDeadline(ctx, deadline)
-		conn, err := dialContext(attemptCtx, network, net.JoinHostPort(ip.String(), port))
-		cancel()
-		if err == nil {
-			return conn, nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-		failed++
-	}
-
-	// Only the first failure is kept: the message is stored with every
-	// webhook delivery, so it must not grow with the number of addresses.
-	// Untried addresses are those past the cap and those the loop never
-	// reached because the budget (or the caller's deadline) ran out.
-	if failed == 0 {
-		return nil, fmt.Errorf("connect to %s: %w", host, dialStopped(ctx))
-	}
-	untried := total - failed
-	if untried == 0 {
-		if failed == 1 {
-			return nil, firstErr
-		}
-		return nil, fmt.Errorf("connect to %s: %d addresses failed; first: %w", host, failed, firstErr)
-	}
-	if failed < len(ips) {
-		// The loop stopped early: say why.
-		return nil, fmt.Errorf("connect to %s: %s failed, %d more not tried: %w; first: %w",
-			host, plural(failed, "address", "addresses"), untried, dialStopped(ctx), firstErr)
-	}
-	return nil, fmt.Errorf("connect to %s: %s failed, %d more not tried; first: %w",
-		host, plural(failed, "address", "addresses"), untried, firstErr)
-}
-
-// dialStopped reports why no further address may be dialed: ctx is done, or
-// its deadline has passed. The deadline is checked directly because the last
-// attempt's context carries the same deadline on its own timer, which can
-// fire before ctx's does, and the next attempt would then be counted as a
-// failure rather than as untried.
-func dialStopped(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
-		return context.DeadlineExceeded
-	}
-	return nil
-}
-
-// plural formats n with the singular or plural noun.
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return fmt.Sprintf("%d %s", n, many)
-}
-
-// dialLookup resolves hostnames for secureDial. nil means
-// net.DefaultResolver; tests replace it to run without DNS.
-var dialLookup lookupFunc
-
-// resolveDialTargetsAllowing returns the addresses secureDial may dial for
-// host, in the order the resolver returned them. Every address the name
-// resolves to is checked, and any private or internal one that allowed does
-// not permit for host and port refuses the host as a whole.
-func resolveDialTargetsAllowing(ctx context.Context, network, host, port string, allowed AllowedHosts) ([]net.IPAddr, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		if !allowed.permitsHTTP(host, port, ip) {
-			return nil, ErrPrivateIP
-		}
-		return []net.IPAddr{{IP: ip}}, nil
-	}
-
-	ips, err := dialLookup.resolve(ctx, host)
-	if err != nil {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// Cancelled or out of time; say so rather than blame DNS.
-			return nil, fmt.Errorf("resolve %s: %w", host, ctxErr)
+			return fmt.Errorf("resolve %s: %w", host, ctxErr)
 		}
-		// Not wrapped: the resolver error names the server's DNS resolver,
-		// and this message is stored with the webhook delivery where the
-		// repo admin reads it.
-		return nil, fmt.Errorf("DNS resolution failed for host %s", host)
+		return fmt.Errorf("DNS resolution failed for host %s", host)
 	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("no IP addresses found for host: %s", host)
-	}
-	for _, ip := range ips {
-		if !allowed.permitsHTTP(host, port, ip.IP) {
-			return nil, ErrPrivateIP
-		}
-	}
-
-	// Every answer is validated above; only the dial is limited to the
-	// address family asked for. http.Transport always asks for "tcp", so
-	// this only matters to a caller that names a family, but dialing a
-	// literal of the wrong family would fail anyway.
-	var targets []net.IPAddr
-	for _, ip := range ips {
-		is4 := ip.IP.To4() != nil
-		if (network == "tcp4" && !is4) || (network == "tcp6" && is4) {
-			continue
-		}
-		targets = append(targets, ip)
-	}
-	if len(targets) == 0 {
-		return nil, fmt.Errorf("no %s addresses found for host: %s", network, host)
-	}
-	return targets, nil
-}
-
-// attemptDeadline gives the next of the remaining attempts an equal share of
-// the time left on ctx at now, at least minDialAttempt, but never past ctx's
-// own deadline. It reports false when no time is left, so the caller stops
-// instead of starting an attempt that is already out of time.
-func attemptDeadline(ctx context.Context, now time.Time, remaining int) (time.Time, bool) {
-	deadline, _ := ctx.Deadline() // secureDial always sets one
-	left := deadline.Sub(now)
-	if left <= 0 {
-		return time.Time{}, false
-	}
-	share := max(left/time.Duration(remaining), minDialAttempt)
-	if d := now.Add(share); d.Before(deadline) {
-		return d, true
-	}
-	return deadline, true
-}
-
-// interleaveFamilies reorders ips so IPv4 and IPv6 addresses alternate,
-// starting with the family of the first answer and keeping resolver order
-// within each family, as RFC 8305 section 4 suggests. With the maxDialAddrs
-// cap, this keeps a name with many records of one family from filling every
-// slot with addresses that share one broken route.
-func interleaveFamilies(ips []net.IPAddr) []net.IPAddr {
-	if len(ips) < 2 {
-		return ips
-	}
-	firstIs4 := ips[0].IP.To4() != nil
-	var first, second []net.IPAddr
-	for _, ip := range ips {
-		if (ip.IP.To4() != nil) == firstIs4 {
-			first = append(first, ip)
-		} else {
-			second = append(second, ip)
-		}
-	}
-	out := make([]net.IPAddr, 0, len(ips))
-	for i := 0; i < len(first) || i < len(second); i++ {
-		if i < len(first) {
-			out = append(out, first[i])
-		}
-		if i < len(second) {
-			out = append(out, second[i])
-		}
-	}
-	return out
+	return err
 }
 
 // blockedPrefixes lists every network an outbound request must not reach.

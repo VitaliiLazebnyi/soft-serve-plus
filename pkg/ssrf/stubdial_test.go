@@ -2,8 +2,12 @@ package ssrf
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
+	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,13 +61,128 @@ func stubConnect(t *testing.T, connect ...string) *dialRecorder {
 	for _, a := range connect {
 		r.connect[a] = true
 	}
-	orig := dialContext
-	dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if err := r.attempt(ctx, addr); err != nil {
-			return nil, &net.OpError{Op: "dial", Net: network, Err: err}
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	orig := dialHook
+	dialHook = func(ctx context.Context, _, address string) error {
+		return r.attempt(ctx, address)
 	}
-	t.Cleanup(func() { dialContext = orig })
+	t.Cleanup(func() { dialHook = orig })
 	return r
+}
+
+// fakeResolver points the secure client's resolver at a DNS server that
+// answers from table for the rest of the test, and reports every other name
+// as not found. It swaps package state, so tests using it must not run in
+// parallel.
+func fakeResolver(t *testing.T, table map[string][]string) {
+	t.Helper()
+	orig := dialResolver
+	dialResolver = stubResolver(table)
+	t.Cleanup(func() { dialResolver = orig })
+}
+
+// stubResolver returns a resolver that sends every query to an in-memory
+// DNS server answering from table. The server is reached over net.Pipe, so
+// nothing touches the host's DNS or the network; the Go resolver still reads
+// the hosts file first, which is why tests use names under .test and
+// .internal.
+func stubResolver(table map[string][]string) *net.Resolver {
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go serveStubDNS(server, table)
+			return client, nil
+		},
+	}
+}
+
+// serveStubDNS answers DNS queries on conn, which carries the TCP framing
+// (a two-byte length before each message) since a net.Pipe is not a
+// PacketConn. Only the question is read; A and AAAA records come from table.
+func serveStubDNS(conn net.Conn, table map[string][]string) {
+	defer conn.Close() //nolint:errcheck
+	for {
+		var n uint16
+		if err := binary.Read(conn, binary.BigEndian, &n); err != nil {
+			return
+		}
+		q := make([]byte, n)
+		if _, err := io.ReadFull(conn, q); err != nil {
+			return
+		}
+		resp := stubDNSAnswer(q, table)
+		if resp == nil {
+			return
+		}
+		out := binary.BigEndian.AppendUint16(nil, uint16(len(resp))) //nolint:gosec // a DNS message is short
+		if _, err := conn.Write(append(out, resp...)); err != nil {
+			return
+		}
+	}
+}
+
+// stubDNSAnswer builds the response to query q, or nil if q is malformed.
+func stubDNSAnswer(q []byte, table map[string][]string) []byte {
+	const headerLen = 12
+	if len(q) < headerLen {
+		return nil
+	}
+	// The question's name: length-prefixed labels up to a zero byte.
+	var labels []string
+	i := headerLen
+	for {
+		if i >= len(q) {
+			return nil
+		}
+		l := int(q[i])
+		i++
+		if l == 0 {
+			break
+		}
+		if i+l > len(q) {
+			return nil
+		}
+		labels = append(labels, string(q[i:i+l]))
+		i += l
+	}
+	if i+4 > len(q) {
+		return nil
+	}
+	qtype := binary.BigEndian.Uint16(q[i:])
+	question := q[headerLen : i+4]
+
+	const typeA, typeAAAA = 1, 28
+	answers, known := table[strings.ToLower(strings.Join(labels, "."))]
+	var rdata [][]byte
+	for _, a := range answers {
+		addr := netip.MustParseAddr(a)
+		switch {
+		case qtype == typeA && addr.Is4():
+			rdata = append(rdata, addr.AsSlice())
+		case qtype == typeAAAA && addr.Is6():
+			rdata = append(rdata, addr.AsSlice())
+		}
+	}
+
+	// QR, AA, RD and RA; NXDOMAIN for a name not in the table.
+	flags := uint16(0x8580)
+	if !known {
+		flags |= 3
+	}
+	resp := append([]byte(nil), q[0:2]...) // ID
+	resp = binary.BigEndian.AppendUint16(resp, flags)
+	resp = binary.BigEndian.AppendUint16(resp, 1)                  // QDCOUNT
+	resp = binary.BigEndian.AppendUint16(resp, uint16(len(rdata))) //nolint:gosec // a short table
+	resp = binary.BigEndian.AppendUint16(resp, 0)                  // NSCOUNT
+	resp = binary.BigEndian.AppendUint16(resp, 0)                  // ARCOUNT
+	resp = append(resp, question...)
+	for _, rd := range rdata {
+		resp = append(resp, 0xc0, headerLen) // the name, as a pointer to the question's
+		resp = binary.BigEndian.AppendUint16(resp, qtype)
+		resp = binary.BigEndian.AppendUint16(resp, 1)               // class IN
+		resp = binary.BigEndian.AppendUint32(resp, 60)              // TTL
+		resp = binary.BigEndian.AppendUint16(resp, uint16(len(rd))) //nolint:gosec // 4 or 16
+		resp = append(resp, rd...)
+	}
+	return resp
 }

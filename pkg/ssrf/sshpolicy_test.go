@@ -40,23 +40,6 @@ func fakeLookup(table map[string][]string) lookupFunc {
 	}
 }
 
-// fakeResolver points the secure dialer's resolver at a fixed table for the
-// rest of the test. It swaps package state, so tests using it must not run in
-// parallel.
-func fakeResolver(t *testing.T, table map[string][]string) {
-	t.Helper()
-	setDialLookup(t, fakeLookup(table))
-}
-
-// setDialLookup replaces the secure dialer's resolver for the rest of the
-// test. It swaps package state, so tests using it must not run in parallel.
-func setDialLookup(t *testing.T, f lookupFunc) {
-	t.Helper()
-	orig := dialLookup
-	dialLookup = f
-	t.Cleanup(func() { dialLookup = orig })
-}
-
 func TestAllowedHostsMatch(t *testing.T) {
 	t.Parallel()
 	lookup := fakeLookup(map[string][]string{

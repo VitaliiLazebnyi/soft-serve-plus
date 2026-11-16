@@ -62,12 +62,89 @@ func TestSecureClientRefusesBlockedLiterals(t *testing.T) {
 		if conn != nil {
 			_ = conn.Close()
 		}
-		if !errors.Is(err, ErrPrivateIP) {
-			t.Errorf("dial %s: err = %v, want ErrPrivateIP", addr, err)
+		// Bare, so the delivery record does not name the address refused.
+		if err != ErrPrivateIP { //nolint:errorlint // the bare sentinel is the point
+			t.Errorf("dial %s: err = %v, want exactly ErrPrivateIP", addr, err)
 		}
 	}
 	if got := rec.addrs(); len(got) != 0 {
 		t.Errorf("attempted %v, want nothing", got)
+	}
+}
+
+// TestSecureClientRefusesBlockedLiterals' rows, plus hosts net.Dialer reads
+// as the local system: an empty host and the unspecified addresses must be
+// refused, not dialed.
+func TestSecureClientRefusesLocalSystem(t *testing.T) {
+	fakeResolver(t, nil)
+	rec := stubConnect(t)
+	for _, addr := range []string{":80", "0.0.0.0:80", "[::]:80"} {
+		for _, network := range []string{"tcp", "tcp4", "tcp6"} {
+			_, err := secureDialFunc(t, NewSecureClient())(context.Background(), network, addr)
+			// A family that cannot hold the address fails before any
+			// attempt, with net.Dialer's own error.
+			if err == nil || (network == "tcp" && !errors.Is(err, ErrPrivateIP)) {
+				t.Errorf("dial %s %s: err = %v, want ErrPrivateIP", network, addr, err)
+			}
+		}
+	}
+	if got := rec.addrs(); len(got) != 0 {
+		t.Errorf("attempted %v, want nothing", got)
+	}
+}
+
+// TestSecureClientMixedAnswers covers a name that answers with public and
+// private addresses. The private ones are never dialed: with the public one
+// down the dial fails, and with an allowlisted one up it reaches that.
+func TestSecureClientMixedAnswers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+
+	fakeResolver(t, map[string][]string{
+		"mixed.test":   {"10.0.0.1", "140.82.112.3", "169.254.169.254", "fc00::1"},
+		"private.test": {"10.0.0.1", "127.0.0.1", "169.254.169.254"},
+	})
+
+	rec := stubConnect(t)
+	_, err := secureDialFunc(t, NewSecureClient())(context.Background(), "tcp", "mixed.test:443")
+	if err == nil {
+		t.Fatal("dial succeeded with the only public address refused")
+	}
+	if got := rec.addrs(); !slices.Equal(got, []string{"140.82.112.3:443"}) {
+		t.Errorf("attempted %v, want only the public address", got)
+	}
+
+	rec = stubConnect(t, srv.Listener.Addr().String())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://private.test:"+port+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewSecureClientAllowing(mustAllowedHosts(t, "127.0.0.1")).Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v, want the allowlisted address reached", err)
+	}
+	_ = res.Body.Close()
+	if got := rec.addrs(); !slices.Equal(got, []string{srv.Listener.Addr().String()}) {
+		t.Errorf("attempted %v, want only the allowlisted address", got)
+	}
+}
+
+// TestSecureClientAddressFamily checks that a tcp4 or tcp6 dial tries only
+// that family.
+func TestSecureClientAddressFamily(t *testing.T) {
+	fakeResolver(t, map[string][]string{"dual.test": {"2606:4700::1111", "140.82.112.3"}})
+	for network, want := range map[string]string{
+		"tcp4": "140.82.112.3:443",
+		"tcp6": "[2606:4700::1111]:443",
+	} {
+		rec := stubConnect(t)
+		_, _ = secureDialFunc(t, NewSecureClient())(context.Background(), network, "dual.test:443")
+		if got := rec.addrs(); !slices.Equal(got, []string{want}) {
+			t.Errorf("%s attempted %v, want [%s]", network, got, want)
+		}
 	}
 }
 
@@ -259,7 +336,7 @@ func TestSecureClientCancelled(t *testing.T) {
 // TestSecureClientDialBudget checks that every attempt runs under the dial
 // budget, not the request's longer deadline: net/http dials with a context
 // that does not carry the request deadline.
-func TestSecureClientDialUnderBudget(t *testing.T) {
+func TestSecureClientDialBudget(t *testing.T) {
 	fakeResolver(t, map[string][]string{"public.test": {"140.82.112.3", "140.82.112.4"}})
 	rec := stubConnect(t)
 	start := time.Now()
