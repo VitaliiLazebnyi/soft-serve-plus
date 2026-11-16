@@ -130,11 +130,27 @@ var createTables = Migration{
 		for _, k := range adminKeys {
 			query := tx.Rebind(insert + "INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict)
 			ak := sshutils.MarshalAuthorizedKey(k)
-			if _, err := tx.ExecContext(ctx, query, adminID, ak); err != nil {
-				if errors.Is(err, db.ErrDuplicateKey) {
-					continue
-				}
+			res, err := tx.ExecContext(ctx, query, adminID, ak)
+			if errors.Is(err, db.ErrDuplicateKey) {
+				continue
+			}
+			if err != nil {
 				return err
+			}
+			// Record the seeded key the way the admin key sync recorded
+			// the keys it attached at the time, so that it is removed
+			// again once it leaves the config, like any key the sync
+			// attached. Migration 10 moves the record to
+			// public_keys.synced_user_id. A key already there, such as a
+			// v0.6 user's, is not recorded.
+			if n, err := res.RowsAffected(); err != nil {
+				return err
+			} else if n == 0 {
+				continue
+			}
+			record := tx.Rebind(insert + `INTO settings ("key", value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)` + onConflict)
+			if _, err := tx.ExecContext(ctx, record, "initial_admin_key:"+ak, strconv.FormatInt(adminID, 10)); err != nil {
+				return fmt.Errorf("record initial admin key: %w", err)
 			}
 		}
 

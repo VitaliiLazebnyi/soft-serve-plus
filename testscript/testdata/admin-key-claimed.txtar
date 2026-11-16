@@ -28,7 +28,7 @@ stdout 'Username: user1'
 # the operator now lists admin2's key as an admin key
 stopserver
 ensureservernotrunning SSH_PORT
-env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN2_AUTHORIZED_KEY
+env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN1_AND_ADMIN2_KEYS
 exec soft serve &
 ensureserverrunning SSH_PORT
 

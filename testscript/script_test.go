@@ -208,6 +208,11 @@ func TestScript(t *testing.T) {
 			e.Setenv("ADMIN2_AUTHORIZED_KEY", admin2.AuthorizedKey())
 			e.Setenv("USER1_AUTHORIZED_KEY", user1.AuthorizedKey())
 			e.Setenv("ATTACKER_AUTHORIZED_KEY", attacker.AuthorizedKey())
+			// initial_admin_keys values that add a key to admin1's, which
+			// the first start seeds. A list without admin1's key rotates it
+			// out, and the seeded key is then removed from the admin user.
+			e.Setenv("ADMIN1_AND_ADMIN2_KEYS", admin1.AuthorizedKey()+"\n"+admin2.AuthorizedKey())
+			e.Setenv("ADMIN1_AND_USER1_KEYS", admin1.AuthorizedKey()+"\n"+user1.AuthorizedKey())
 			e.Setenv("SSH_KNOWN_HOSTS_FILE", filepath.Join(t.TempDir(), "known_hosts"))
 			e.Setenv("SSH_KNOWN_CONFIG_FILE", filepath.Join(t.TempDir(), "config"))
 

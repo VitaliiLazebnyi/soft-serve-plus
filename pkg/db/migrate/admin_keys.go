@@ -41,8 +41,11 @@ const defaultAdminUsername = "admin"
 //   - a key this function attached is removed again once it leaves the
 //     config, the same way a config-only key stopped being an admin key when
 //     it was removed before keys were synced, even if its user is no longer
-//     an admin. Keys the first migration seeded and keys added or removed
-//     with the user commands since are never removed. Nothing is removed
+//     an admin. So is a key the first migration seeded, which it records
+//     the same way. Keys added or removed with the user commands are never
+//     removed; a key of the admin named "admin" that is neither configured
+//     nor recorded, such as one seeded before seeded keys were recorded, is
+//     logged with a warning at every start. Nothing is removed
 //     while an initial_admin_keys entry names a key file that cannot be read,
 //     since that file may hold a key that is still wanted; each key kept for
 //     that reason is logged as an error. Blank and "#" comment entries, and
@@ -136,7 +139,40 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx) error {
 			"files", unreadable)
 	}
 
-	return removeUnconfiguredKeys(ctx, tx, logger, configured, len(unreadable) == 0)
+	if len(unreadable) > 0 {
+		return removeUnconfiguredKeys(ctx, tx, logger, configured, false)
+	}
+	if err := removeUnconfiguredKeys(ctx, tx, logger, configured, true); err != nil {
+		return err
+	}
+	return warnUnrecordedKeys(ctx, tx, logger, configured)
+}
+
+// warnUnrecordedKeys logs a warning for each key of the admin named "admin"
+// that is not in the config and that the sync did not attach. A database
+// whose first migration ran before seeded keys were recorded has such a key
+// for every key initial_admin_keys held at the first start: nothing tells it
+// apart from a key added by hand, so it is kept when it leaves the config,
+// with full admin rights. The warning says how to remove it, or to list it
+// again to silence the warning.
+func warnUnrecordedKeys(ctx context.Context, tx *db.Tx, logger *log.Logger, configured map[string]struct{}) error {
+	var keys []string
+	if err := tx.SelectContext(ctx, &keys, tx.Rebind(`SELECT public_keys.public_key
+		FROM public_keys INNER JOIN users ON users.id = public_keys.user_id
+		WHERE users.username = ? AND users.admin = ?
+		AND (public_keys.synced_user_id IS NULL OR public_keys.synced_user_id <> public_keys.user_id)
+		ORDER BY public_keys.id`), defaultAdminUsername, true); err != nil {
+		return fmt.Errorf("list admin keys: %w", err)
+	}
+	for _, ak := range keys {
+		if _, ok := configured[ak]; ok {
+			continue
+		}
+		logger.Warn("admin key is neither in initial_admin_keys nor recorded as attached from it, so leaving the config does not remove it; "+
+			"if it is an initial admin key since rotated out, remove it with \"user remove-pubkey admin\"",
+			"user", defaultAdminUsername, "key", fingerprint(ak))
+	}
+	return nil
 }
 
 // attachTarget returns the admin account new initial admin keys go to. See

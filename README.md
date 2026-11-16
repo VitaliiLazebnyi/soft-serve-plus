@@ -124,12 +124,18 @@ A key that already belongs to a non-admin user is left on that user, who is
 not promoted; a warning is logged.
 
 To rotate a key, replace it in `initial_admin_keys` and restart. A key that
-was attached on a later start is removed from the user it was attached to when
-it leaves the config, even if that user is no longer an admin. Keys seeded on
-the very first start, and keys added or removed with the `user` commands
-since, stay in the database when you remove them from the config: remove those
-with `user remove-pubkey`. To keep an attached key after dropping it from the
+was seeded on the first start or attached on a later one is removed from the
+user it was attached to when it leaves the config, even if that user is no
+longer an admin. Keys added or removed with the `user` commands stay in the
+database when you remove them from the config: remove those with
+`user remove-pubkey`. To keep an attached key after dropping it from the
 config, run `user remove-pubkey` and then `user add-pubkey` for it first.
+
+A database first started by an older version did not record which keys its
+first start seeded, so such a key stays when it leaves the config. Each start
+logs a warning for every key of the `admin` user that is neither in
+`initial_admin_keys` nor recorded as attached from it; if it is an old initial
+admin key, remove it with `user remove-pubkey admin`.
 
 Blank lines and lines starting with `#` are ignored. An entry that is not a
 valid key is read as a key file path if it has no spaces in it, and is ignored

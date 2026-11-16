@@ -28,7 +28,7 @@ envfile UTOKEN=utokenfile
 # the operator lists user1's own key as an admin key
 stopserver
 ensureservernotrunning SSH_PORT
-env SOFT_SERVE_INITIAL_ADMIN_KEYS=$USER1_AUTHORIZED_KEY
+env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN1_AND_USER1_KEYS
 exec soft serve &
 ensureserverrunning SSH_PORT
 
