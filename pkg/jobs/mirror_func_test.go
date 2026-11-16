@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -271,6 +272,103 @@ func TestMirrorPullReportsSSHLFSEndpoint(t *testing.T) {
 				t.Errorf("logs contain the endpoint's credentials: %q", out)
 			}
 		})
+	}
+}
+
+// deadlineMirror creates a mirror with an ssh remote and an https LFS
+// endpoint, enables LFS, and returns the context the job runs with, logging
+// to logs.
+func deadlineMirror(t *testing.T, logs *syncBuffer) context.Context {
+	t.Helper()
+	isolateGitConfig(t)
+	ctx, be := newMirrorJobContext(t)
+	if reason := be.ImportsDisabledReason(); reason != "" {
+		t.Skipf("mirror syncs are disabled here: %s", reason)
+	}
+	config.FromContext(ctx).LFS.Enabled = true
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
+	runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/m")
+	// A public address literal passes validation without a lookup; the
+	// LFS step is stubbed, so nothing dials it.
+	runGit(t, dir, "config", "lfs.url", "https://1.1.1.1/m.git/info/lfs")
+	return log.WithContext(ctx, log.New(logs))
+}
+
+// One deadline, mirrorSyncTimeout from the start, bounds the whole sync of a
+// mirror: its fetches and its LFS step, which has no limit of its own while
+// the remote keeps sending, so one slow LFS endpoint cannot hold the job,
+// and with it every later run, for ever.
+func TestMirrorPullOneDeadlinePerMirror(t *testing.T) {
+	var logs syncBuffer
+	ctx := deadlineMirror(t, &logs)
+
+	var fetchDeadline, lfsDeadline time.Time
+	var fetchHasDeadline, lfsHasDeadline bool
+	origGit := runMirrorGit
+	runMirrorGit = func(ctx context.Context, _ string, _ []string, _ ...string) error {
+		fetchDeadline, fetchHasDeadline = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { runMirrorGit = origGit })
+	origLFS := syncRepoLFS
+	syncRepoLFS = func(ctx context.Context, _ *backend.Backend, _ proto.Repository, _ backend.LFSClient) error {
+		lfsDeadline, lfsHasDeadline = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { syncRepoLFS = origLFS })
+
+	start := time.Now()
+	runMirrorJob(ctx)
+	end := time.Now()
+
+	if !fetchHasDeadline || !lfsHasDeadline {
+		t.Fatalf("deadlines: fetch %v, lfs %v; want both", fetchHasDeadline, lfsHasDeadline)
+	}
+	if !fetchDeadline.Equal(lfsDeadline) {
+		t.Errorf("fetch deadline %v, lfs deadline %v; want one for the whole sync", fetchDeadline, lfsDeadline)
+	}
+	// Taken while the job ran, so between its start and end, plus the
+	// timeout.
+	if fetchDeadline.Before(start.Add(mirrorSyncTimeout)) || fetchDeadline.After(end.Add(mirrorSyncTimeout)) {
+		t.Errorf("deadline %v is not mirrorSyncTimeout after the sync started (job ran %v to %v)", fetchDeadline, start, end)
+	}
+}
+
+// A sync that runs out of time stops, and says so; one stopped by a
+// shutdown does not.
+func TestMirrorPullLogsDeadline(t *testing.T) {
+	var logs syncBuffer
+	ctx := deadlineMirror(t, &logs)
+
+	origGit := runMirrorGit
+	runMirrorGit = func(context.Context, string, []string, ...string) error { return nil }
+	t.Cleanup(func() { runMirrorGit = origGit })
+	lfsCalled := false
+	origLFS := syncRepoLFS
+	syncRepoLFS = func(context.Context, *backend.Backend, proto.Repository, backend.LFSClient) error {
+		lfsCalled = true
+		return nil
+	}
+	t.Cleanup(func() { syncRepoLFS = origLFS })
+	// Out of time before the first step.
+	origTimeout := mirrorSyncTimeout
+	mirrorSyncTimeout = time.Nanosecond
+	t.Cleanup(func() { mirrorSyncTimeout = origTimeout })
+
+	runMirrorJob(ctx)
+
+	if lfsCalled {
+		t.Error("the lfs step ran after the deadline")
+	}
+	if !strings.Contains(logs.String(), "ran out of time") {
+		t.Errorf("the stopped sync was not logged: %q", logs.String())
 	}
 }
 
