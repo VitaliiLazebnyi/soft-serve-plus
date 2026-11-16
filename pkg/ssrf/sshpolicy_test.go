@@ -148,9 +148,24 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 		":22",
 		"0177.0.0.1",
 		"-oProxyCommand=id",
+		// An empty port is a typo, not "any port".
+		"host:",
+		"10.0.0.1:",
+		"10.0.0.0/8:",
+		"[fd00::1]:",
+		"[fd00::/8]:",
+		// Nothing but a port may follow the brackets.
+		"[fd00::1]2222",
+		"[fd00::1]x:22",
 	} {
 		if _, err := ParseAllowedHosts([]string{entry}); err == nil {
 			t.Errorf("ParseAllowedHosts(%q) accepted a bad entry", entry)
+		}
+	}
+	// An IPv6 address may end in a colon; that is not an empty port.
+	for _, entry := range []string{"fd00::", "::", "[fd00::]"} {
+		if _, err := ParseAllowedHosts([]string{entry}); err != nil {
+			t.Errorf("ParseAllowedHosts(%q): %v", entry, err)
 		}
 	}
 }
@@ -236,22 +251,27 @@ func TestValidateGitRemotePolicy(t *testing.T) {
 func TestSplitHostPort(t *testing.T) {
 	tests := []struct {
 		in, host, port string
+		hasPort        bool
 	}{
-		{"example.com", "example.com", ""},
-		{"example.com:2222", "example.com", "2222"},
-		{"10.0.0.0/8", "10.0.0.0/8", ""},
-		{"10.0.0.0/8:2222", "10.0.0.0/8", "2222"},
-		{"fd00::1", "fd00::1", ""},
-		{"fd00::/8", "fd00::/8", ""},
-		{"[fd00::1]", "fd00::1", ""},
-		{"[fd00::1]:2222", "fd00::1", "2222"},
-		{"[fd00::/8]:22", "fd00::/8", "22"},
-		{"fe80::1%eth0", "fe80::1%eth0", ""},
+		{"example.com", "example.com", "", false},
+		{"example.com:2222", "example.com", "2222", true},
+		{"example.com:", "example.com", "", true},
+		{"10.0.0.0/8", "10.0.0.0/8", "", false},
+		{"10.0.0.0/8:2222", "10.0.0.0/8", "2222", true},
+		{"fd00::1", "fd00::1", "", false},
+		{"fd00::", "fd00::", "", false},
+		{"fd00::/8", "fd00::/8", "", false},
+		{"[fd00::1]", "fd00::1", "", false},
+		{"[fd00::1]:2222", "fd00::1", "2222", true},
+		{"[fd00::1]:", "fd00::1", "", true},
+		{"[fd00::/8]:22", "fd00::/8", "22", true},
+		{"[fd00::1]x", "[fd00::1]x", "", false},
+		{"fe80::1%eth0", "fe80::1%eth0", "", false},
 	}
 	for _, tt := range tests {
-		host, port := splitHostPort(tt.in)
-		if host != tt.host || port != tt.port {
-			t.Errorf("splitHostPort(%q) = %q, %q; want %q, %q", tt.in, host, port, tt.host, tt.port)
+		host, port, hasPort := splitHostPort(tt.in)
+		if host != tt.host || port != tt.port || hasPort != tt.hasPort {
+			t.Errorf("splitHostPort(%q) = %q, %q, %v; want %q, %q, %v", tt.in, host, port, hasPort, tt.host, tt.port, tt.hasPort)
 		}
 	}
 }

@@ -149,9 +149,8 @@ func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemo
 		// The bracketed form [user@host:port]:path carries a port. git
 		// hands an empty one ("[git@host:]:path") to ssh as part of the
 		// host, so it is refused.
-		hostPort := host
-		host, port := splitHostPort(hostPort)
-		if port == "" && host != hostPort {
+		host, port, hasPort := splitHostPort(host)
+		if hasPort && port == "" {
 			return ValidatedGitRemote{}, fmt.Errorf("%w: empty port", ErrInvalidURL)
 		}
 		if err := validateSSHHost(user, hasUser, host); err != nil {

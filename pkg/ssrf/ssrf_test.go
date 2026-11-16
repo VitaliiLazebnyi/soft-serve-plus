@@ -12,93 +12,103 @@ import (
 	"time"
 )
 
+// TestNewSecureClientBlocksPrivateIPs dials through the client's transport.
+// A blocked row must fail with ErrPrivateIP and never reach a connection
+// attempt: a dial to such an address fails anyway on most machines, so an
+// error alone would pass without the protection. The public row's attempt
+// is stubbed, so nothing leaves the machine.
 func TestNewSecureClientBlocksPrivateIPs(t *testing.T) {
-	client := NewSecureClient()
-	transport := client.Transport.(*http.Transport)
+	fakeResolver(t, nil)
+	transport := NewSecureClient().Transport.(*http.Transport)
 
 	tests := []struct {
 		name    string
 		addr    string
-		wantErr bool
+		blocked bool
 	}{
 		{"block loopback", "127.0.0.1:80", true},
 		{"block private 10.x", "10.0.0.1:80", true},
 		{"block link-local", "169.254.169.254:80", true},
 		{"block CGNAT", "100.64.0.1:80", true},
-		{"allow public IP", "8.8.8.8:80", false},
+		{"allow public IP", "140.82.112.3:80", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-			defer cancel()
-
-			conn, err := transport.DialContext(ctx, "tcp", tt.addr)
+			rec := stubConnect(t)
+			conn, err := transport.DialContext(context.Background(), "tcp", tt.addr)
 			if conn != nil {
 				_ = conn.Close()
 			}
 
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error for %s, got none", tt.addr)
+			if tt.blocked {
+				if !errors.Is(err, ErrPrivateIP) {
+					t.Errorf("dial %s: err = %v, want ErrPrivateIP", tt.addr, err)
 				}
-			} else {
-				if err != nil && errors.Is(err, ErrPrivateIP) {
-					t.Errorf("should not block %s with SSRF error, got: %v", tt.addr, err)
+				if got := rec.addrs(); len(got) != 0 {
+					t.Errorf("dial %s attempted %v", tt.addr, got)
 				}
+				return
+			}
+			if !errors.Is(err, errStubRefused) {
+				t.Errorf("dial %s: err = %v, want the stubbed attempt's error", tt.addr, err)
+			}
+			if got := rec.addrs(); len(got) != 1 || got[0] != tt.addr {
+				t.Errorf("dial %s attempted %v, want [%s]", tt.addr, got, tt.addr)
 			}
 		})
 	}
 }
 
+// TestNewSecureClientBlocksPrivateHostnames exercises the hostname path: the
+// name resolves to loopback, which is refused before any attempt.
 func TestNewSecureClientBlocksPrivateHostnames(t *testing.T) {
 	fakeResolver(t, map[string][]string{"loopback.test": {"127.0.0.1", "::1"}})
-	stubConnect(t)
-	client := NewSecureClient()
-	transport := client.Transport.(*http.Transport)
+	rec := stubConnect(t)
+	transport := NewSecureClient().Transport.(*http.Transport)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// The name resolves to loopback, which must be blocked. This exercises
-	// the hostname resolution path in DialContext.
-	conn, err := transport.DialContext(ctx, "tcp", "loopback.test:80")
+	conn, err := transport.DialContext(context.Background(), "tcp", "loopback.test:80")
 	if conn != nil {
 		_ = conn.Close()
 	}
 	if !errors.Is(err, ErrPrivateIP) {
 		t.Errorf("expected ErrPrivateIP for hostname resolving to loopback, got: %v", err)
 	}
+	if got := rec.addrs(); len(got) != 0 {
+		t.Errorf("attempted %v", got)
+	}
 }
 
-func TestNewSecureClientNilIPNotErrPrivateIP(t *testing.T) {
+// A name that does not resolve fails as a lookup, not as ErrPrivateIP.
+func TestNewSecureClientUnresolvableNotErrPrivateIP(t *testing.T) {
 	fakeResolver(t, nil)
 	stubConnect(t)
-	client := NewSecureClient()
-	transport := client.Transport.(*http.Transport)
+	transport := NewSecureClient().Transport.(*http.Transport)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	conn, err := transport.DialContext(ctx, "tcp", "not-an-ip:80")
+	conn, err := transport.DialContext(context.Background(), "tcp", "not-an-ip.test:80")
 	if conn != nil {
 		_ = conn.Close()
 	}
 	if err == nil {
-		t.Fatal("expected error for non-IP address, got none")
+		t.Fatal("expected error for a name that does not resolve, got none")
 	}
 	if errors.Is(err, ErrPrivateIP) {
-		t.Errorf("nil-IP path should not wrap ErrPrivateIP, got: %v", err)
+		t.Errorf("lookup failure should not wrap ErrPrivateIP, got: %v", err)
 	}
 }
 
+// TestNewSecureClientBlocksRedirects checks that a redirect is returned, not
+// followed. The listener is allowlisted so the first request reaches it; the
+// redirect names a public address, which no connection is attempted to.
 func TestNewSecureClientBlocksRedirects(t *testing.T) {
 	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://8.8.8.8:8080/safe", http.StatusFound)
+		http.Redirect(w, r, "http://140.82.112.3:8080/safe", http.StatusFound)
 	}))
 	defer redirectServer.Close()
+	fakeResolver(t, nil)
+	rec := stubConnect(t, redirectServer.Listener.Addr().String())
 
-	client := NewSecureClient()
+	client := NewSecureClientAllowing(mustAllowedHosts(t, "127.0.0.1"))
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, redirectServer.URL, nil)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
@@ -106,16 +116,15 @@ func TestNewSecureClientBlocksRedirects(t *testing.T) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// httptest uses 127.0.0.1, blocked by SSRF protection
-		if !errors.Is(err, ErrPrivateIP) {
-			t.Fatalf("Request failed with non-SSRF error: %v", err)
-		}
-		return
+		t.Fatalf("request: %v", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("Expected redirect response (302), got %d", resp.StatusCode)
+	}
+	if got := rec.addrs(); len(got) != 1 || got[0] != redirectServer.Listener.Addr().String() {
+		t.Errorf("attempted %v, want only the listener", got)
 	}
 }
 
