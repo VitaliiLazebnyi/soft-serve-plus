@@ -237,6 +237,14 @@ func takeSlot() bool {
 // where the budget runs out sooner and slots stay taken longer, shows more
 // files as plain text.
 func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool) {
+	timer := time.NewTimer(HighlightBudget)
+	defer timer.Stop()
+	return tokeniseUntil(lexer, content, timer.C)
+}
+
+// tokeniseUntil is tokenise with the budget ending when budget receives,
+// or never when it is nil.
+func tokeniseUntil(lexer chroma.Lexer, content string, budget <-chan time.Time) ([]chroma.Token, bool) {
 	if !takeSlot() {
 		return nil, false
 	}
@@ -296,12 +304,10 @@ func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool) {
 		flush()
 		done <- result{tokens: tokens, ok: true}
 	}()
-	timer := time.NewTimer(HighlightBudget)
-	defer timer.Stop()
 	select {
 	case r := <-done:
 		return r.tokens, r.ok
-	case <-timer.C:
+	case <-budget:
 		// A lexer read token by token stops at its next token; one that
 		// tokenised up front runs on, holding its slot.
 		stop.Store(true)
