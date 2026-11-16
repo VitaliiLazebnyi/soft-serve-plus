@@ -213,6 +213,48 @@ func TestMirrorPullRecoversWorkerPanic(t *testing.T) {
 	if !strings.Contains(logs.String(), "mirror boom") {
 		t.Errorf("panic not logged: %q", logs.String())
 	}
+	// The panic's log line names the repository.
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, "mirror boom") && !strings.Contains(line, "repo=panics") {
+			t.Errorf("panic logged without its repository: %q", line)
+		}
+	}
+}
+
+// A worker whose slot comes free only once the server began to stop starts
+// nothing: no fetch, and nothing logged or recorded. SyncMirrors starts no
+// worker once ctx is done, but one already waiting for a slot gets it after.
+func TestSyncMirrorWorkerAfterStop(t *testing.T) {
+	isolateGitConfig(t)
+	ctx, be := newMirrorJobContext(t)
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
+	runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/m")
+	fetched := false
+	orig := runMirrorGit
+	runMirrorGit = func(context.Context, string, []string, ...string) error {
+		fetched = true
+		return nil
+	}
+	t.Cleanup(func() { runMirrorGit = orig })
+
+	var logs syncBuffer
+	stopped, stop := context.WithCancel(ctx)
+	stop()
+	syncMirrorWorker(stopped, config.FromContext(ctx), log.New(&logs), be, "m")
+
+	if fetched {
+		t.Error("a worker started after the stop fetched")
+	}
+	if logs.String() != "" {
+		t.Errorf("a worker started after the stop logged: %q", logs.String())
+	}
 }
 
 // syncBuffer is a bytes.Buffer safe for concurrent use.

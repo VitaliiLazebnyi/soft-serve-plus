@@ -49,7 +49,10 @@ func decodeJSONLimit(r io.Reader, limit int64, v any) error {
 // remoteText returns s, text a remote sent, cut to maxRemoteText bytes, at a
 // character boundary if one is near, with a mark if it was cut, and with
 // every byte or character that is not printable escaped, so a remote cannot
-// write terminal control sequences into the log or a client's session.
+// write terminal control sequences into the log or a client's session. The
+// cut comes first, so the result can be up to about four times
+// maxRemoteText bytes when most of the kept text is escaped (\x1b for one
+// byte), plus the mark.
 func remoteText(s string) string {
 	suffix := ""
 	if len(s) > maxRemoteText {

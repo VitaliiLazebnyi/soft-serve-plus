@@ -128,6 +128,13 @@ func TestRedactURL(t *testing.T) {
 		"ssh://git@10.0.0.1/x.git":                            "ssh://10.0.0.1/x.git",
 		"git@github.com:x/y.git":                              "git@github.com:x/y.git",
 		"https://TOKEN@example.com/%zz":                       "[redacted]",
+		// No host: the user info and query still go.
+		"https://u:TOKEN@/path":         "https:///path",
+		"https://TOKEN@/path?sig=TOKEN": "https:///path",
+		"file:///srv/x.git?token=TOKEN": "file:///srv/x.git",
+		// Not URLs at all: left alone.
+		"host:path":       "host:path",
+		"just some words": "just some words",
 	}
 	for in, want := range tests {
 		if got := RedactURL(in); got != want {
@@ -314,5 +321,21 @@ func TestRedactURLError(t *testing.T) {
 	}
 	if got := RedactURLError(nil, RedactURL); got != nil {
 		t.Errorf("nil error = %v", got)
+	}
+}
+
+// StorableText replaces bytes that are not UTF-8 and drops NULs, in that
+// order, as webhook deliveries and mirror sync errors both store it.
+func TestStorableText(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain \u00e9 \u2713": "plain \u00e9 \u2713",
+		"bad \xff\xfe":        "bad \uFFFD",
+		"nul\x00 here":        "nul here",
+		"\xff\x00\xfe":        "\uFFFD\uFFFD",
+		"\x00":                "",
+	} {
+		if got := StorableText(in); got != want {
+			t.Errorf("StorableText(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

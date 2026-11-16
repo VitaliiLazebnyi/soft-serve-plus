@@ -286,8 +286,8 @@ func ValidateExistingRepo(repo string) error {
 // can be logged or returned in an error. Remotes and LFS endpoints can carry
 // a token as the user name or password, and LFS hrefs are often presigned
 // URLs with a signature in the query. A URL that cannot be parsed is
-// replaced entirely; a string with no scheme or host to parse (such as an
-// scp-style remote) is returned unchanged.
+// replaced entirely; a string with no scheme to parse (such as an scp-style
+// remote) is returned unchanged.
 func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -296,7 +296,10 @@ func RedactURL(rawURL string) string {
 		}
 		return rawURL
 	}
-	if u.Host == "" {
+	// Without a scheme it is not a URL (an scp-style remote, a path,
+	// plain text). With one, the user info and query go even when the host
+	// is empty: "https://TOKEN@/x" parses with the token as user info.
+	if u.Scheme == "" {
 		return rawURL
 	}
 	u.User = nil
@@ -330,4 +333,12 @@ func RedactURLError(err error, redact func(string) string) error {
 		inner = ErrInvalidURL
 	}
 	return &url.Error{Op: uerr.Op, URL: redact(uerr.URL), Err: inner}
+}
+
+// StorableText returns s as text every database accepts: Postgres refuses
+// invalid UTF-8 and NUL bytes in TEXT columns, so invalid bytes are replaced
+// with U+FFFD and NULs are dropped. Use it for text a remote or a receiver
+// wrote, and for errors that may quote it.
+func StorableText(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
 }

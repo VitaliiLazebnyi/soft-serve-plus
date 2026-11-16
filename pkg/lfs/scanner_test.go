@@ -166,6 +166,14 @@ func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
 	// it is given whatever its filter, unless told not to.
 	run("", "tag", "large-blob", run("", "rev-parse", "HEAD:large"))
 
+	// The parser would skip the large blob too, so the filter is checked
+	// on rev-list's own output: a ref naming a blob lists it unless
+	// --filter-provided-objects is given.
+	largeBlob := run("", "rev-parse", "HEAD:large")
+	if listed := run("", scanRevListArgs([]string{"--all"})...); strings.Contains(listed, largeBlob) {
+		t.Errorf("the scan's rev-list lists the large blob %s a tag names", largeBlob)
+	}
+
 	repo, err := git.Open(work)
 	if err != nil {
 		t.Fatal(err)

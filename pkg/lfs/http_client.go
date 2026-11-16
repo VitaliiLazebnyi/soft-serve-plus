@@ -214,7 +214,8 @@ func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc Downloa
 
 	for _, object := range result.Objects {
 		if !requested[object.Oid] {
-			logger.Debugf("Ignoring %v, which was not requested or was already handled", object.Pointer)
+			// The oid is the remote's choice, unchecked here.
+			logger.Debug("ignoring an object that was not requested or was already handled", "oid", remoteText(object.Oid))
 			continue
 		}
 		delete(requested, object.Oid)

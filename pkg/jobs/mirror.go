@@ -176,27 +176,33 @@ func SyncMirrors(ctx context.Context) {
 		}
 		name := repo.Name()
 		g.Go(func() error {
-			// The slot may have come free only after the server began
-			// to stop.
-			if ctx.Err() != nil {
-				return nil
-			}
-			var err error
-			if perr := safego.Run(logger.With("repo", name), func() { err = syncMirrorRepo(ctx, cfg, logger, b, name) }); perr != nil {
-				err = perr
-			}
-			// A sync the server stopped did not fail, and one of a
-			// repository that is no longer a mirror did not happen.
-			if errors.Is(err, errNotMirror) || ctx.Err() != nil {
-				return nil
-			}
-			if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), name, err); rerr != nil {
-				logger.Warn("failed to record the mirror sync", "repo", name, "err", rerr)
-			}
+			syncMirrorWorker(ctx, cfg, logger, b, name)
 			return nil
 		})
 	}
 	_ = g.Wait()
+}
+
+// syncMirrorWorker syncs the mirror name in a worker of SyncMirrors and
+// records the outcome. A panic is logged with the repository's name.
+func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, name string) {
+	// The worker's slot may have come free only after the server began
+	// to stop.
+	if ctx.Err() != nil {
+		return
+	}
+	var err error
+	if perr := safego.Run(logger.With("repo", name), func() { err = syncMirrorRepo(ctx, cfg, logger, b, name) }); perr != nil {
+		err = perr
+	}
+	// A sync the server stopped did not fail, and one of a repository
+	// that is no longer a mirror did not happen.
+	if errors.Is(err, errNotMirror) || ctx.Err() != nil {
+		return
+	}
+	if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), name, err); rerr != nil {
+		logger.Warn("failed to record the mirror sync", "repo", name, "err", rerr)
+	}
 }
 
 // outOfTime reports whether a mirror sync that ended with err, under ctx,

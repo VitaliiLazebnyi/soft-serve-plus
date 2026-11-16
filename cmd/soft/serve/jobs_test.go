@@ -107,7 +107,11 @@ func TestScheduleJobsRunWithJobContext(t *testing.T) {
 	}
 	jobCtx, cancel := context.WithCancel(config.WithContext(t.Context(), cfg))
 	defer cancel()
-	jobCtx = log.WithContext(jobCtx, log.New(io.Discard))
+	// The jobs log through jobCtx's logger, so it shows whether one ran.
+	var jobLogs bytes.Buffer
+	jobLogger := log.New(&jobLogs)
+	jobLogger.SetLevel(log.DebugLevel)
+	jobCtx = log.WithContext(jobCtx, jobLogger)
 
 	// The config passed alongside has no data path: only jobCtx's does.
 	var sched recordingScheduler
@@ -119,10 +123,21 @@ func TestScheduleJobsRunWithJobContext(t *testing.T) {
 		t.Fatalf("stale temp file not swept with jobCtx's config: %v", err)
 	}
 
+	if !strings.Contains(jobLogs.String(), "removed stale lfs temp files") {
+		t.Errorf("the sweep did not log through jobCtx's logger: %q", jobLogs.String())
+	}
+
+	// A tick once jobCtx is done starts nothing: the sweep would stop on
+	// the done context by itself, but only after it started and logged
+	// the cancellation as a failed sweep.
 	writeStale()
+	jobLogs.Reset()
 	cancel()
 	sched.fns["lfs-sweep"]()
 	if _, err := os.Stat(stale); err != nil {
 		t.Errorf("a tick after jobCtx was cancelled ran the sweep: %v", err)
+	}
+	if jobLogs.Len() != 0 {
+		t.Errorf("a tick after jobCtx was cancelled started the sweep: %q", jobLogs.String())
 	}
 }

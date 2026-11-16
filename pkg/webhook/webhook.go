@@ -394,13 +394,11 @@ func formatHeaders(h http.Header) string {
 	return b.String()
 }
 
-// storableText returns s as text every database accepts. Postgres refuses
-// invalid UTF-8 and NUL in TEXT columns, which would lose the whole delivery
-// row, so invalid bytes are replaced with U+FFFD and NULs are dropped. Use it
-// for text that comes from the receiver: its headers and body, and errors
-// that may quote them.
+// storableText is utils.StorableText: Postgres refusing a receiver's text
+// would lose the whole delivery row. Use it for text that comes from the
+// receiver: its headers and body, and errors that may quote them.
 func storableText(s string) string {
-	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
+	return utils.StorableText(s)
 }
 
 // recordDelivery writes one delivery row. It uses a fresh, short context that
