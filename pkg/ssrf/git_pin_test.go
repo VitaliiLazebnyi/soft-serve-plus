@@ -78,14 +78,20 @@ func TestGitEnvPinHonouredByGit(t *testing.T) {
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
-			cmd.Env = append(isolatedGitEnv(t), GitEnv(r)...)
-			out, _ := cmd.CombinedOutput()
+			env := append(isolatedGitEnv(t), GitEnv(r)...)
+			run := func() []byte {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
+				cmd.Env = env
+				out, _ := cmd.CombinedOutput()
+				return out
+			}
 
-			if got := hits.Load() > 0; got != tt.reached {
-				t.Fatalf("server reached = %v, want %v; git output:\n%s", got, tt.reached, out)
+			if tt.reached {
+				runUntilReached(t, func() bool { return hits.Load() > 0 }, run)
+			} else if out := run(); hits.Load() > 0 {
+				t.Fatalf("server reached without the pin; git output:\n%s", out)
 			}
 			if tt.reached {
 				if got, want := host.Load(), "pinned.invalid:"+port; got != want {
@@ -93,6 +99,45 @@ func TestGitEnvPinHonouredByGit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// gitReachDeadline bounds how long runUntilReached runs git again.
+const gitReachDeadline = time.Minute
+
+// gitRetryPause is the pause between two runs of runUntilReached.
+const gitRetryPause = 250 * time.Millisecond
+
+// runUntilReached calls run, which runs git against a listener of the test,
+// until reached reports that the listener got git's request, and fails the
+// test if that has not happened within gitReachDeadline.
+//
+// The listeners are on loopback TCP. While many test processes open and close
+// loopback connections, macOS can stall a loopback connect for seconds, fail
+// it with ETIMEDOUT after about 7.8 seconds, or leave git with a socket whose
+// first write fails ("Socket is not connected"). git has to run as a
+// subprocess, so these tests cannot use an in-memory network. A run that
+// never got its request to the listener says nothing about the pin, so it is
+// run again after a short pause.
+//
+// A run that did reach the listener is never repeated: the caller then checks
+// what the listener got, so a request naming the wrong host still fails. A
+// pin that git ignores never reaches the listener either (the remote's name
+// does not resolve), so it fails here once the deadline passes, with git's
+// last output.
+func runUntilReached(t *testing.T, reached func() bool, run func() []byte) {
+	t.Helper()
+	deadline := time.Now().Add(gitReachDeadline)
+	for try := 1; ; try++ {
+		out := run()
+		if reached() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("git did not reach the listener in %d tries over %v; last git output:\n%s", try, gitReachDeadline, out)
+		}
+		t.Logf("try %d: git did not reach the listener, trying again; git output:\n%s", try, out)
+		time.Sleep(gitRetryPause)
 	}
 }
 
