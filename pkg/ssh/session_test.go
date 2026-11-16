@@ -40,18 +40,37 @@ func TestSession(t *testing.T) {
 		t.Log("requesting pty")
 		err := s.RequestPty("xterm", 80, 40, nil)
 		is.NoErr(err)
-		go func() {
-			time.Sleep(1 * time.Second)
-			// s.Signal(gossh.SIGTERM)
-			s.Close() //nolint: errcheck
-		}()
+		// Close the session once the TUI has drawn, so the command is
+		// known to run: a close before the exec request fails the request
+		// instead of ending the command.
+		out := &firstWrite{written: make(chan struct{})}
+		s.Stdout = out
+		is.NoErr(s.Start("test"))
+		select {
+		case <-out.written:
+		case <-time.After(time.Minute):
+			t.Fatal("the TUI wrote nothing within a minute")
+		}
+		s.Close() //nolint: errcheck
 		t.Log("waiting for session to exit")
-		_, err = s.Output("test")
+		err = s.Wait()
 		var ee *gossh.ExitMissingError
 		is.True(errors.As(err, &ee))
 		t.Log("session exited")
 		is.NoErr(close())
 	})
+}
+
+// firstWrite discards what is written to it and closes written on the
+// first write.
+type firstWrite struct {
+	once    sync.Once
+	written chan struct{}
+}
+
+func (w *firstWrite) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.written) })
+	return len(p), nil
 }
 
 func setup(tb testing.TB) (*gossh.Session, func() error) {
