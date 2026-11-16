@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -26,7 +27,9 @@ type MirrorSync struct {
 func (d *Backend) RecordMirrorSync(ctx context.Context, name string, syncErr error) error {
 	msg := ""
 	if syncErr != nil {
-		msg = syncErr.Error()
+		// Valid UTF-8 first, so the cut below lands between characters;
+		// the store makes it so too, and drops NUL bytes.
+		msg = strings.ToValidUTF8(strings.ReplaceAll(syncErr.Error(), "\x00", ""), "\uFFFD")
 		if msg == "" {
 			msg = "sync failed"
 		}

@@ -52,7 +52,8 @@ type mirrorRemotes struct {
 // `remotes.default` group, either of which can lead to a url or a legacy
 // `branches/` or `remotes/` file remote that `git remote` does not list. A
 // remote group named like a remote also takes the place of that remote when
-// it is fetched by name, so a repository with any remote group is refused.
+// it is fetched by name, so a repository with any remote group is refused,
+// and so is one with more than one remote (see errMultipleRemotes).
 func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) (mirrorRemotes, error) {
 	keys, err := git.NewCommand("config", "--list", "--name-only").WithContext(ctx).RunInDir(r.Path)
 	if err != nil {
@@ -69,8 +70,13 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 		return mirrorRemotes{}, fmt.Errorf("listing remotes: %w", err)
 	}
 
+	names := strings.Fields(string(out))
+	if len(names) > 1 {
+		return mirrorRemotes{}, fmt.Errorf("remotes %s: %w", strings.Join(names, ", "), errMultipleRemotes)
+	}
+
 	var remotes mirrorRemotes
-	for _, name := range strings.Fields(string(out)) {
+	for _, name := range names {
 		// A remote without a url is printed as its own name, which git
 		// would fetch from as a local path. That fails validation, as it
 		// should.
@@ -102,6 +108,11 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 // remote is fetched in its place, and its members need not be remotes that
 // `git remote` lists.
 var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
+
+// errMultipleRemotes refuses a mirror with more than one remote: each is
+// fetched with --prune and mirrorRefspec, so each would delete the refs the
+// others fetched and overwrite those they share.
+var errMultipleRemotes = errors.New("a mirror can have only one remote")
 
 // mirrorRefspec is the refspec every mirror fetch uses, the one git clone
 // --mirror writes: every ref of the remote, forced, under its own name. The
@@ -193,6 +204,14 @@ func SyncMirrors(ctx context.Context) {
 	_ = g.Wait()
 }
 
+// outOfTime reports whether a mirror sync that ended with err, under ctx,
+// its deadline, inside jobCtx, the job's, was stopped by its deadline: it
+// failed, ctx's deadline passed, and the server is not stopping. A sync that
+// succeeded just as the deadline passed did not run out of time.
+func outOfTime(ctx, jobCtx context.Context, err error) bool {
+	return err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil
+}
+
 // errNotMirror is returned by syncMirrorRepo for a repository that is no
 // longer a mirror.
 var errNotMirror = errors.New("not a mirror")
@@ -209,7 +228,7 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	ctx, cancel := context.WithTimeout(jobCtx, mirrorSyncTimeout)
 	defer cancel()
 	defer func() {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil {
+		if outOfTime(ctx, jobCtx, err) {
 			logger.Warn("mirror sync stopped, it ran out of time", "repo", name, "timeout", mirrorSyncTimeout)
 			err = fmt.Errorf("the sync ran out of time after %v", mirrorSyncTimeout)
 		}

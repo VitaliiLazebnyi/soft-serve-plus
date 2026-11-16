@@ -1248,6 +1248,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	if mirror && len(urls) == 0 {
 		return errors.New("cannot enable mirror mode: repository has no remote URL configured")
 	}
+	if mirror && len(rcfg.remotes) > 1 {
+		// The mirror job fetches every ref of the remote with --prune, so
+		// a second remote would delete and overwrite the first one's refs.
+		return errors.New("cannot enable mirror mode: repository has more than one remote")
+	}
 	if mirror {
 		cctx, cancel := context.WithTimeout(ctx, mirrorCheckTimeout)
 		err := d.checkMirrorRemotes(cctx, m, rcfg)
