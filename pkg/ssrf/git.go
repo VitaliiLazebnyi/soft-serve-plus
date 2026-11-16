@@ -224,7 +224,12 @@ func validateRemoteHost(ctx context.Context, host string, lookup lookupFunc) (ne
 		return addr, nil
 	}
 
-	if !isDNSName(host) {
+	// A trailing dot names the same host, but the pin is written with the
+	// host as given ("name.:443:addr"), and libcurl before 7.82 is believed
+	// to drop the dot from the request's host before looking the pin up, so
+	// the entry would never match and git would resolve the name itself. No
+	// real remote is written that way, so it is refused.
+	if !isDNSName(host) || strings.HasSuffix(host, ".") {
 		return netip.Addr{}, fmt.Errorf("%w: %q", ErrAmbiguousHost, host)
 	}
 
