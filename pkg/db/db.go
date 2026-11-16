@@ -43,7 +43,7 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 	case "postgres":
 		db, err = connectPostgres(ctx, dsn)
 	default:
-		db, err = sqlx.ConnectContext(ctx, driverName, dsn)
+		return nil, fmt.Errorf("unknown driver %q: the database driver is sqlite or postgres", driverName)
 	}
 	if err != nil {
 		return nil, err
@@ -336,7 +336,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		select {
 		case d.writeSlot <- struct{}{}:
 		case <-ctx.Done():
-			return fmt.Errorf("failed to begin transaction: %w", ctx.Err())
+			return fmt.Errorf("begin transaction: %w", ctx.Err())
 		}
 		defer func() { <-d.writeSlot }()
 	}
@@ -359,7 +359,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 
 	txx, err := d.DB.BeginTxx(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 
 	tx := &Tx{txx, d.logger, d.errLog}
@@ -384,10 +384,10 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		// context's error along with it so callers can tell why.
 		if errors.Is(err, sql.ErrTxDone) {
 			if cerr := ctx.Err(); cerr != nil {
-				return fmt.Errorf("failed to commit transaction: %w: %w", err, cerr)
+				return fmt.Errorf("commit transaction: %w: %w", err, cerr)
 			}
 		}
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return nil
@@ -399,7 +399,7 @@ func rollback(tx *Tx, err error) error {
 			return err
 		}
 		// Keep both errors reachable with errors.Is and errors.As.
-		return fmt.Errorf("%w (failed to rollback: %w)", err, rerr)
+		return fmt.Errorf("%w (rollback: %w)", err, rerr)
 	}
 
 	return err

@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 
 	"charm.land/log/v2"
@@ -15,42 +14,42 @@ import (
 )
 
 // AddPublicKeyByUsername implements store.Store.
-func (*Store) AddPublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
+func (*Store) AddPublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
 	var userID int64
-	if err := tx.GetContext(ctx, &userID, tx.Rebind(`SELECT id FROM users WHERE username = ?`), username); err != nil {
+	if err := h.GetContext(ctx, &userID, h.Rebind(`SELECT id FROM users WHERE username = ?`), username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
+	query := h.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-	_, err := tx.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk))
+	_, err := h.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk))
 	return err
 }
 
 // CreateUser implements store.Store.
-func (*Store) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
+func (*Store) CreateUser(ctx context.Context, h db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateNewUsername(username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`INSERT INTO users (username, admin, updated_at)
+	query := h.Rebind(`INSERT INTO users (username, admin, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP) RETURNING id;`)
 
 	var userID int64
-	if err := tx.GetContext(ctx, &userID, query, username, isAdmin); err != nil {
+	if err := h.GetContext(ctx, &userID, query, username, isAdmin); err != nil {
 		return err
 	}
 
 	for _, pk := range pks {
-		query := tx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
+		query := h.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-		if _, err := tx.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk)); err != nil {
+		if _, err := h.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk)); err != nil {
 			return err
 		}
 	}
@@ -59,45 +58,45 @@ func (*Store) CreateUser(ctx context.Context, tx db.Handler, username string, is
 }
 
 // DeleteUserByUsername implements store.Store.
-func (*Store) DeleteUserByUsername(ctx context.Context, tx db.Handler, username string) error {
+func (*Store) DeleteUserByUsername(ctx context.Context, h db.Handler, username string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`DELETE FROM users WHERE username = ?;`)
-	return affected(tx.ExecContext(ctx, query, username))
+	query := h.Rebind(`DELETE FROM users WHERE username = ?;`)
+	return affected(h.ExecContext(ctx, query, username))
 }
 
 // GetUserByID implements store.Store.
-func (*Store) GetUserByID(ctx context.Context, tx db.Handler, id int64) (models.User, error) {
+func (*Store) GetUserByID(ctx context.Context, h db.Handler, id int64) (models.User, error) {
 	var m models.User
-	query := tx.Rebind(`SELECT * FROM users WHERE id = ?;`)
-	err := tx.GetContext(ctx, &m, query, id)
+	query := h.Rebind(`SELECT * FROM users WHERE id = ?;`)
+	err := h.GetContext(ctx, &m, query, id)
 	return m, err
 }
 
 // FindUserByPublicKey implements store.Store.
-func (*Store) FindUserByPublicKey(ctx context.Context, tx db.Handler, pk ssh.PublicKey) (models.User, error) {
+func (*Store) FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error) {
 	var m models.User
-	query := tx.Rebind(`SELECT users.*
+	query := h.Rebind(`SELECT users.*
 			FROM users
 			INNER JOIN public_keys ON users.id = public_keys.user_id
 			WHERE public_keys.public_key = ?;`)
-	err := tx.GetContext(ctx, &m, query, sshutils.MarshalAuthorizedKey(pk))
+	err := h.GetContext(ctx, &m, query, sshutils.MarshalAuthorizedKey(pk))
 	return m, err
 }
 
 // FindUserByUsername implements store.Store.
-func (*Store) FindUserByUsername(ctx context.Context, tx db.Handler, username string) (models.User, error) {
+func (*Store) FindUserByUsername(ctx context.Context, h db.Handler, username string) (models.User, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return models.User{}, err
 	}
 
 	var m models.User
-	query := tx.Rebind(`SELECT * FROM users WHERE username = ?;`)
-	err := tx.GetContext(ctx, &m, query, username)
+	query := h.Rebind(`SELECT * FROM users WHERE username = ?;`)
+	err := h.GetContext(ctx, &m, query, username)
 	return m, err
 }
 
@@ -109,14 +108,9 @@ func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, use
 		return models.User{}, err
 	}
 
-	var query string
-	switch driver := h.DriverName(); driver {
-	case "postgres":
+	query := `SELECT * FROM users WHERE username = ?;`
+	if h.DriverName() == "postgres" {
 		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
-	case "sqlite":
-		query = `SELECT * FROM users WHERE username = ?;`
-	default:
-		return models.User{}, fmt.Errorf("find user for update: unsupported database driver %q", driver)
 	}
 	var m models.User
 	err := h.GetContext(ctx, &m, query, username)
@@ -124,10 +118,10 @@ func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, use
 }
 
 // GetAllUsers implements store.Store.
-func (*Store) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
+func (*Store) GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error) {
 	var ms []models.User
-	query := tx.Rebind(`SELECT * FROM users ORDER BY username;`)
-	err := tx.SelectContext(ctx, &ms, query)
+	query := h.Rebind(`SELECT * FROM users ORDER BY username;`)
+	err := h.SelectContext(ctx, &ms, query)
 	return ms, err
 }
 
@@ -135,20 +129,20 @@ func (*Store) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, er
 //
 // It reads a single row instead of every user, so registering an anonymous
 // repository does not scan the users table inside its write transaction.
-func (*Store) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
+func (*Store) FindDefaultAdminUserID(ctx context.Context, h db.Handler) (int64, error) {
 	var id int64
-	query := tx.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
-	err := tx.GetContext(ctx, &id, query, true)
+	query := h.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
+	err := h.GetContext(ctx, &id, query, true)
 	return id, err
 }
 
 // ListPublicKeysByUserID implements store.Store.
-func (*Store) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
+func (*Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
-	query := tx.Rebind(`SELECT public_key FROM public_keys
+	query := h.Rebind(`SELECT public_key FROM public_keys
 			WHERE user_id = ?
 			ORDER BY public_keys.id ASC;`)
-	err := tx.SelectContext(ctx, &aks, query, id)
+	err := h.SelectContext(ctx, &aks, query, id)
 	if err != nil {
 		return nil, err
 	}
@@ -157,18 +151,18 @@ func (*Store) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int6
 }
 
 // ListPublicKeysByUsername implements store.Store.
-func (*Store) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, username string) ([]ssh.PublicKey, error) {
+func (*Store) ListPublicKeysByUsername(ctx context.Context, h db.Handler, username string) ([]ssh.PublicKey, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return nil, err
 	}
 
 	var aks []string
-	query := tx.Rebind(`SELECT public_key FROM public_keys
+	query := h.Rebind(`SELECT public_key FROM public_keys
 			INNER JOIN users ON users.id = public_keys.user_id
 			WHERE users.username = ?
 			ORDER BY public_keys.id ASC;`)
-	err := tx.SelectContext(ctx, &aks, query, username)
+	err := h.SelectContext(ctx, &aks, query, username)
 	if err != nil {
 		return nil, err
 	}
@@ -177,32 +171,32 @@ func (*Store) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, usern
 }
 
 // RemovePublicKeyByUsername implements store.Store.
-func (*Store) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
+func (*Store) RemovePublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`DELETE FROM public_keys
+	query := h.Rebind(`DELETE FROM public_keys
 			WHERE user_id = (SELECT id FROM users WHERE username = ?)
 			AND public_key = ?;`)
 	// Nothing removed means the user does not have the key.
-	return affected(tx.ExecContext(ctx, query, username, sshutils.MarshalAuthorizedKey(pk)))
+	return affected(h.ExecContext(ctx, query, username, sshutils.MarshalAuthorizedKey(pk)))
 }
 
 // SetAdminByUsername implements store.Store.
-func (*Store) SetAdminByUsername(ctx context.Context, tx db.Handler, username string, isAdmin bool) error {
+func (*Store) SetAdminByUsername(ctx context.Context, h db.Handler, username string, isAdmin bool) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET admin = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
-	return affected(tx.ExecContext(ctx, query, isAdmin, username))
+	query := h.Rebind(`UPDATE users SET admin = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
+	return affected(h.ExecContext(ctx, query, isAdmin, username))
 }
 
 // SetUsernameByUsername implements store.Store.
-func (*Store) SetUsernameByUsername(ctx context.Context, tx db.Handler, username string, newUsername string) error {
+func (*Store) SetUsernameByUsername(ctx context.Context, h db.Handler, username string, newUsername string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -213,19 +207,19 @@ func (*Store) SetUsernameByUsername(ctx context.Context, tx db.Handler, username
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
-	return affected(tx.ExecContext(ctx, query, newUsername, username))
+	query := h.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
+	return affected(h.ExecContext(ctx, query, newUsername, username))
 }
 
 // SetUserPasswordByUsername implements store.Store.
-func (*Store) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, username string, password string) error {
+func (*Store) SetUserPasswordByUsername(ctx context.Context, h db.Handler, username string, password string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	query := tx.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
-	return affected(tx.ExecContext(ctx, query, password, username))
+	query := h.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
+	return affected(h.ExecContext(ctx, query, password, username))
 }
 
 // affected returns the error of an UPDATE or DELETE, or db.ErrRecordNotFound

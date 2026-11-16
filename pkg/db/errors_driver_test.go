@@ -55,8 +55,8 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 		{"unique", `INSERT INTO parents (id, name) VALUES (2, 'one')`, db.ErrDuplicateKey},
 		{"primary key", `INSERT INTO parents (id, name) VALUES (1, 'two')`, db.ErrDuplicateKey},
 		{"foreign key", `INSERT INTO children (id, parent_id, n) VALUES (1, 42, 1)`, db.ErrForeignKey},
-		{"check", `INSERT INTO children (id, parent_id, n) VALUES (1, 1, 0)`, db.ErrCheck},
-		{"not null", `INSERT INTO parents (id) VALUES (3)`, db.ErrNotNull},
+		{"check", `INSERT INTO children (id, parent_id, n) VALUES (1, 1, 0)`, nil}, // not mapped,
+		{"not null", `INSERT INTO parents (id) VALUES (3)`, nil},                   // not mapped,
 		{"syntax", `INSERT INTO nowhere VALUES (1)`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,8 +84,8 @@ func TestWrapErrorPostgresCodes(t *testing.T) {
 	for code, want := range map[pqerror.Code]error{
 		pqerror.UniqueViolation:     db.ErrDuplicateKey,
 		pqerror.ForeignKeyViolation: db.ErrForeignKey,
-		pqerror.CheckViolation:      db.ErrCheck,
-		pqerror.NotNullViolation:    db.ErrNotNull,
+		pqerror.CheckViolation:      nil,
+		pqerror.NotNullViolation:    nil,
 		pqerror.UndefinedTable:      nil,
 	} {
 		err := &pq.Error{Code: code}

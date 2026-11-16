@@ -2,7 +2,6 @@ package migrate
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
@@ -29,27 +28,23 @@ type Migrations struct {
 	Version int64  `db:"version"`
 }
 
-// schema returns the statement that creates the migrations table. Only the
-// drivers db.Open links in are supported.
-func (Migrations) schema(driverName string) (string, error) {
-	switch driverName {
-	case "sqlite":
-		return `CREATE TABLE IF NOT EXISTS migrations (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT NOT NULL,
-				version INTEGER NOT NULL UNIQUE
-			);
-		`, nil
-	case "postgres":
+// schema returns the statement that creates the migrations table, for
+// sqlite or postgres, the drivers db.Open accepts.
+func (Migrations) schema(driverName string) string {
+	if driverName == "postgres" {
 		return `CREATE TABLE IF NOT EXISTS migrations (
 			id SERIAL PRIMARY KEY,
 			name TEXT NOT NULL,
 			version INTEGER NOT NULL UNIQUE
 		);
-	`, nil
-	default:
-		return "", fmt.Errorf("migrate: unsupported database driver %q", driverName)
+	`
 	}
+	return `CREATE TABLE IF NOT EXISTS migrations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			version INTEGER NOT NULL UNIQUE
+		);
+	`
 }
 
 // errNoConfig is returned by migrations that need the server configuration
@@ -70,11 +65,7 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			return fmt.Errorf("look up migrations table: %w", err)
 		}
 		if !ok {
-			schema, err := Migrations{}.schema(tx.DriverName())
-			if err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, schema); err != nil {
+			if _, err := tx.ExecContext(ctx, Migrations{}.schema(tx.DriverName())); err != nil {
 				return err
 			}
 		}
@@ -247,22 +238,17 @@ func lockMigrations(ctx context.Context, tx *db.Tx) error {
 // tableExists reports whether the table exists, returning any error from the
 // lookup other than the table not being found.
 func tableExists(ctx context.Context, tx *db.Tx, tableName string) (bool, error) {
-	var query string
-	switch driver := tx.DriverName(); driver {
-	case "sqlite":
-		query = "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
-	case "postgres":
+	query := "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
+	if tx.DriverName() == "postgres" {
 		// Look in the schema unqualified CREATE TABLE statements write to,
 		// which follows search_path and is not necessarily "public".
 		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?"
-	default:
-		return false, fmt.Errorf("migrate: unsupported database driver %q", driver)
 	}
 
 	query = tx.Rebind(query)
 	var name string
 	if err := tx.GetContext(ctx, &name, query, tableName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, db.ErrRecordNotFound) {
 			return false, nil
 		}
 		return false, err

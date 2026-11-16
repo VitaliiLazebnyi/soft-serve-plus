@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -38,18 +37,7 @@ func (*Store) DeleteAccessToken(ctx context.Context, h db.Handler, id int64) err
 // DeleteAccessTokenForUser implements store.Store.
 func (*Store) DeleteAccessTokenForUser(ctx context.Context, h db.Handler, userID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM access_tokens WHERE user_id = ? AND id = ?`)
-	res, err := h.ExecContext(ctx, query, userID, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return affected(h.ExecContext(ctx, query, userID, id))
 }
 
 // GetAccessToken implements store.Store.

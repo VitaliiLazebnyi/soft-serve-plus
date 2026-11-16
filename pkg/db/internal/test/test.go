@@ -17,11 +17,7 @@ import (
 // path, so foreign keys and the busy timeout are what db.Open adds to any
 // data source, as for the server's.
 // It removes the database file when the test is done using tb.Cleanup.
-// If ctx is nil, context.TODO() is used.
 func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
-	if ctx == nil {
-		ctx = context.TODO()
-	}
 	dbpath := filepath.Join(tb.TempDir(), "test.db")
 	dbx, err := db.Open(ctx, "sqlite", dbpath)
 	if err != nil {
@@ -41,9 +37,6 @@ func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
 // connection string), and SQLite otherwise. The
 // database is removed when the test is done.
 func Open(ctx context.Context, tb testing.TB) (*db.DB, error) {
-	if ctx == nil {
-		ctx = context.TODO()
-	}
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		return OpenSqlite(ctx, tb)
 	}

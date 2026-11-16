@@ -65,27 +65,6 @@ func TestHasTable(t *testing.T) {
 	}
 }
 
-// Only the drivers db.Open links in are supported. Any other driver name is
-// an error, sent before any query, rather than an empty query.
-func TestHasTableUnsupportedDriver(t *testing.T) {
-	conn := &recordingConn{}
-	dbx := sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "mysql")
-	t.Cleanup(func() { _ = dbx.Close() })
-
-	txx, err := dbx.Beginx()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer txx.Rollback() //nolint:errcheck
-
-	if ok, err := tableExists(context.TODO(), &db.Tx{Tx: txx}, "widgets"); err == nil || ok {
-		t.Errorf("tableExists(widgets) on mysql = %v, %v, want false and an error", ok, err)
-	}
-	if len(conn.queries) != 0 {
-		t.Errorf("queries = %q, want none", conn.queries)
-	}
-}
-
 // Rollback must return a failure of its migrations table lookup, such as a
 // lost connection, instead of reading it as "no migrations table".
 func TestRollbackReportsTableLookupError(t *testing.T) {
