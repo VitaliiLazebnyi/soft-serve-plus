@@ -536,3 +536,39 @@ func TestValidateGitRemoteRefusesMixedAnswers(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateGitRemoteRefusesTrailingDot covers hosts written in the fully
+// qualified form. The pin would carry the dot, which older libcurl may not
+// match against the request, so http, https and git remotes are refused even
+// though the name resolves to a public address. ssh has no pin and keeps
+// accepting the form.
+func TestValidateGitRemoteRefusesTrailingDot(t *testing.T) {
+	t.Parallel()
+	policy := GitRemotePolicy{AllowAnySSHHost: true, lookup: fakeLookup(map[string][]string{
+		"git.example":  {"140.82.112.3"},
+		"git.example.": {"140.82.112.3"},
+		"GIT.example.": {"140.82.112.3"},
+	})}
+	for _, remote := range []string{
+		"https://git.example./x.git",
+		"http://git.example.:8080/x.git",
+		"https://GIT.example./x.git",
+		"https://user@git.example./x.git",
+		"git://git.example./x.git",
+		"git://git.example.:9418/x.git",
+	} {
+		if _, err := ValidateGitRemote(remote, policy); !errors.Is(err, ErrAmbiguousHost) {
+			t.Errorf("ValidateGitRemote(%q) error = %v, want ErrAmbiguousHost", remote, err)
+		}
+	}
+	for _, remote := range []string{
+		"https://git.example/x.git",
+		"git://git.example/x.git",
+		"ssh://git@git.example./x.git",
+		"git@git.example.:x.git",
+	} {
+		if _, err := ValidateGitRemote(remote, policy); err != nil {
+			t.Errorf("ValidateGitRemote(%q): %v", remote, err)
+		}
+	}
+}
