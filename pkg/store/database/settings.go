@@ -33,13 +33,11 @@ func (*Store) SetAllowKeylessAccess(ctx context.Context, tx db.Handler, allow bo
 	query := tx.Rebind(`UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE "key" = 'allow_keyless'`)
 	// Stored as text, the way migration 1 seeds it, so the value reads the
 	// same on SQLite and Postgres.
-	_, err := tx.ExecContext(ctx, query, strconv.FormatBool(allow))
-	return err
+	return affected(tx.ExecContext(ctx, query, strconv.FormatBool(allow)))
 }
 
 // SetAnonAccess implements store.Store.
 func (*Store) SetAnonAccess(ctx context.Context, tx db.Handler, level access.AccessLevel) error {
 	query := tx.Rebind(`UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE "key" = 'anon_access'`)
-	_, err := tx.ExecContext(ctx, query, level.String())
-	return err
+	return affected(tx.ExecContext(ctx, query, level.String()))
 }

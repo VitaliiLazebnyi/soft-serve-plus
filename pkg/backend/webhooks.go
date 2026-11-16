@@ -157,13 +157,9 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 	updatedEvents = dedupeEvents(updatedEvents)
 
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		// The webhook must belong to this repository. Checking first keeps the
-		// event rewrite below from touching another repository's webhook, and
-		// makes an unknown ID an error instead of a silent no-op.
-		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return err
-		}
-
+		// The webhook must belong to this repository: the update matches no
+		// row otherwise and fails with db.ErrRecordNotFound, before the event
+		// rewrite below can touch another repository's webhook.
 		if err := datastore.UpdateWebhookByID(ctx, tx, repo.ID(), id, url, secret, int(contentType), active); err != nil {
 			return err
 		}

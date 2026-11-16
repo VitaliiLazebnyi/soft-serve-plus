@@ -31,6 +31,14 @@ func (s *failingLookupStore) GetRepoByName(ctx context.Context, h db.Handler, na
 	return s.Store.GetRepoByName(ctx, h, name)
 }
 
+// GetRepoByNameForUpdate counts and fails as GetRepoByName does.
+func (s *failingLookupStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	if s.calls.Add(1) == s.failAt {
+		return models.Repo{}, errLookup
+	}
+	return s.Store.GetRepoByNameForUpdate(ctx, h, name)
+}
+
 // A lookup that fails for any reason other than a missing row says nothing
 // about whether the repository exists, so its directory must stay. It used
 // to be removed as an orphan, with the row kept. Only the delete's own
@@ -101,12 +109,25 @@ type rowAppearsStore struct {
 }
 
 func (s *rowAppearsStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
-	if s.calls.Add(1) == s.insertAt && name == s.name {
-		if err := s.Store.CreateRepo(ctx, h, models.Repo{Name: name, UserID: s.userID}); err != nil {
-			return models.Repo{}, err
-		}
+	if err := s.maybeInsert(ctx, h, name); err != nil {
+		return models.Repo{}, err
 	}
 	return s.Store.GetRepoByName(ctx, h, name)
+}
+
+// GetRepoByNameForUpdate counts and inserts as GetRepoByName does.
+func (s *rowAppearsStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	if err := s.maybeInsert(ctx, h, name); err != nil {
+		return models.Repo{}, err
+	}
+	return s.Store.GetRepoByNameForUpdate(ctx, h, name)
+}
+
+func (s *rowAppearsStore) maybeInsert(ctx context.Context, h db.Handler, name string) error {
+	if s.calls.Add(1) == s.insertAt && name == s.name {
+		return s.Store.CreateRepo(ctx, h, models.Repo{Name: name, UserID: s.userID})
+	}
+	return nil
 }
 
 // A create can record its row and let go of its hold after a delete found
