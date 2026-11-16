@@ -59,9 +59,13 @@ func TestGlamourBounded(t *testing.T) {
 		"ordered markers, parens":    strings.Repeat("1) ", 200) + "x\n",
 		"many nested markers":        strings.Repeat("- - - - x\n", 1000),
 	}
+	// Each case takes at most 0.45 s on a loaded machine under the race
+	// detector. Rendered as markdown, most lack their first line, as
+	// written; many short paragraphs took 9.5 s and the deep block quote
+	// minutes.
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			out := renderWithin(t, content, 3*time.Second)
+			out := renderWithin(t, content, 5*time.Second)
 			first := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
 			if len(first) > 60 {
 				first = first[:60]

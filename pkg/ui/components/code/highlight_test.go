@@ -3,30 +3,56 @@ package code
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
-// renderLimit is how long one render of the inputs below may take. Shown
-// as source, a render is bound by HighlightBudget and then shows plain text;
-// rendered with glamour it is bound by glamour's own work, which takes at
-// most about 0.15 s for these inputs. The limits leave a loaded CI runner
-// room: they catch a render that does the work the limits are there to
-// prevent, which takes seconds. The race detector makes glamour some twenty
-// times slower.
-func renderLimit(glamour bool) time.Duration {
-	switch {
-	case glamour && raceEnabled:
-		return 20 * time.Second
-	case glamour:
-		return 2 * time.Second
-	case raceEnabled:
+// sourceLimit is how long rendering one of the inputs below as source may
+// take. The render is bound by HighlightBudget and then shows plain text: it
+// takes about 0.2 s, and 0.35 s on a loaded machine, race detector or not.
+// Without the budget, the embedded languages take about 6 s, and 12 s under
+// the race detector.
+func sourceLimit() time.Duration {
+	if raceEnabled {
 		return 6 * time.Second
-	default:
-		return time.Second
 	}
+	return 3 * time.Second
+}
+
+// lookups counts the times chroma's registry is searched for a lexer by
+// file name or content, as it is for the language of a code block.
+var lookups atomic.Int64
+
+// lookupProbe is a lexer that counts the searches of the registry that
+// reach it and matches nothing.
+type lookupProbe struct{}
+
+func (lookupProbe) Config() *chroma.Config {
+	lookups.Add(1)
+	return &chroma.Config{Name: "lookup probe"}
+}
+
+func (lookupProbe) Tokenise(*chroma.TokeniseOptions, string) (chroma.Iterator, error) {
+	return chroma.Literator(), nil
+}
+
+func (l lookupProbe) SetRegistry(*chroma.LexerRegistry) chroma.Lexer { return l }
+func (l lookupProbe) SetAnalyser(func(string) float32) chroma.Lexer  { return l }
+
+func (lookupProbe) AnalyseText(string) float32 {
+	lookups.Add(1)
+	return 0
+}
+
+// The probe is registered before any test runs, so that no render reads
+// the registry as it changes.
+func init() {
+	lexers.GlobalLexerRegistry.Register(lookupProbe{})
 }
 
 // renderTimed renders content as the file name, as markdown when glamour is
@@ -49,9 +75,11 @@ func renderTimed(t *testing.T, content, name string, glamour bool) (string, time
 
 // Code blocks cost chroma a language lookup each, about 2.4 ms for a
 // language it does not know. A README renders its code blocks as plain
-// text, and markdown shown as source is highlighted within a time budget,
-// so neither takes long however many blocks it has or how they are
-// written.
+// text, without a lookup, and markdown shown as source is highlighted
+// within a time budget, so neither takes long however many blocks it has or
+// how they are written. Highlighting the blocks of these READMEs made five
+// lookups a block. TestEmbeddedLanguagesRenderQuickly has inputs that take
+// seconds without the budget; these take at most 0.8 s.
 func TestCodeBlocksRenderQuickly(t *testing.T) {
 	cases := map[string]string{
 		"indented code before markers": strings.Repeat("    code\n>\n", 500),
@@ -66,8 +94,19 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 	for name, content := range cases {
 		for _, glamour := range []bool{true, false} {
 			t.Run(name, func(t *testing.T) {
-				if _, took := renderTimed(t, content, "README.md", glamour); took > renderLimit(glamour) {
-					t.Fatalf("glamour %v: rendering took %v; want at most %v", glamour, took, renderLimit(glamour))
+				if !glamour {
+					if _, took := renderTimed(t, content, "README.md", false); took > sourceLimit() {
+						t.Fatalf("rendering as source took %v; want at most %v", took, sourceLimit())
+					}
+					return
+				}
+				// A render as source before may still be finishing
+				// its last token, and the README's own name is looked
+				// up.
+				lookups.Store(0)
+				renderTimed(t, content, "README.md", true)
+				if n := lookups.Load(); n > 10 {
+					t.Fatalf("rendering as markdown searched the registry %d times; want no search per code block", n)
 				}
 			})
 		}
@@ -89,8 +128,8 @@ func TestEmbeddedLanguagesRenderQuickly(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			out, took := renderTimed(t, content, name, false)
-			if took > renderLimit(false) {
-				t.Fatalf("rendering took %v; want at most %v", took, renderLimit(false))
+			if took > sourceLimit() {
+				t.Fatalf("rendering took %v; want at most %v", took, sourceLimit())
 			}
 			if !strings.Contains(out, "zzz") {
 				t.Fatal("the content is missing")
