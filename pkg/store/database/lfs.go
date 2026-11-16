@@ -2,21 +2,13 @@ package database
 
 import (
 	"context"
-	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
-func sanitizePath(path string) string {
-	path = strings.TrimSpace(path)
-	path = strings.TrimPrefix(path, "/")
-	return path
-}
-
 // CreateLFSLockForUser implements store.Store.
 func (*Store) CreateLFSLockForUser(ctx context.Context, tx db.Handler, repoID int64, userID int64, path string, refname string) error {
-	path = sanitizePath(path)
 	query := tx.Rebind(`INSERT INTO lfs_locks (repo_id, user_id, path, refname, updated_at)
 		VALUES (
 			?,
@@ -57,7 +49,6 @@ func (*Store) GetLFSLocks(ctx context.Context, tx db.Handler, repoID int64, afte
 
 // GetLFSLockForPath implements store.Store.
 func (*Store) GetLFSLockForPath(ctx context.Context, tx db.Handler, repoID int64, path string) (models.LFSLock, error) {
-	path = sanitizePath(path)
 	var lock models.LFSLock
 	query := tx.Rebind(`
 		SELECT *
@@ -70,7 +61,6 @@ func (*Store) GetLFSLockForPath(ctx context.Context, tx db.Handler, repoID int64
 
 // GetLFSLockForUserPath implements store.Store.
 func (*Store) GetLFSLockForUserPath(ctx context.Context, tx db.Handler, repoID int64, userID int64, path string) (models.LFSLock, error) {
-	path = sanitizePath(path)
 	var lock models.LFSLock
 	query := tx.Rebind(`
 		SELECT *

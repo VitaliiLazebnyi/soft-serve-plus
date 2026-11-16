@@ -14,6 +14,8 @@ type LFSStore interface {
 	GetLFSObjects(ctx context.Context, h db.Handler, repoID int64) ([]models.LFSObject, error)
 	UpdateLFSObjectSize(ctx context.Context, h db.Handler, repoID int64, oid string, size int64) error
 
+	// CreateLFSLockForUser locks path, stored and looked up as given: the
+	// caller validates it with lfs.ValidateLockPath.
 	CreateLFSLockForUser(ctx context.Context, h db.Handler, repoID int64, userID int64, path string, refname string) error
 	// GetLFSLocks returns up to limit locks of the repository with an ID
 	// above afterID, in ID order; afterID 0 starts at the first lock.
