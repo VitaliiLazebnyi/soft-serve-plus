@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -48,14 +49,31 @@ const MaxResponseHeaderBytes = 64 << 10
 // budget between the addresses a name resolves to.
 const dialTimeout = 10 * time.Second
 
-// dialResolver resolves hostnames for the secure client. nil means
-// net.DefaultResolver; tests point it at a stub DNS server.
-var dialResolver *net.Resolver
+// testResolver, when set, resolves every hostname this package looks up:
+// the secure client's dials and the lookups made during validation that are
+// not given a resolver of their own. Unset means net.DefaultResolver. Tests
+// point it at a stub DNS server. It is atomic because a dial's losing
+// attempt or a background lookup may still read it after a test is done.
+var testResolver atomic.Pointer[net.Resolver]
+
+// dialHookFunc is the type of dialHook.
+type dialHookFunc func(ctx context.Context, network, address string) error
 
 // dialHook, when set, runs for every address the checks let through, just
 // before the connection attempt, and an error stops that attempt. Tests use
-// it to keep connections on the machine.
-var dialHook func(ctx context.Context, network, address string) error
+// it to keep connections on the machine. It is atomic because the losing
+// attempt of net.Dialer's IPv4/IPv6 race can run after DialContext returns,
+// and so after a test has restored it.
+var dialHook atomic.Pointer[dialHookFunc]
+
+// resolver returns the resolver for hostname lookups: testResolver when set,
+// otherwise net.DefaultResolver.
+func resolver() *net.Resolver {
+	if r := testResolver.Load(); r != nil {
+		return r
+	}
+	return net.DefaultResolver
+}
 
 // NewSecureClient returns an HTTP client with SSRF protection.
 // It validates resolved IPs at dial time to block connections to private
@@ -112,7 +130,7 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 
 		d := &net.Dialer{
 			KeepAlive: 30 * time.Second,
-			Resolver:  dialResolver,
+			Resolver:  resolver(),
 			ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error {
 				// address is the IP and port about to be connected to. One
 				// that does not parse, such as ":80" for an empty host,
@@ -121,8 +139,8 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 				if err != nil || !allowed.permitsHTTP(host, port, ap.Addr().AsSlice()) {
 					return ErrPrivateIP
 				}
-				if dialHook != nil {
-					return dialHook(ctx, network, address)
+				if hook := dialHook.Load(); hook != nil {
+					return (*hook)(ctx, network, address)
 				}
 				return nil
 			},

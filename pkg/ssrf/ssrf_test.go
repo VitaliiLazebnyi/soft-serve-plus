@@ -52,16 +52,17 @@ func TestNewSecureClientBlocksPrivateIPs(t *testing.T) {
 }
 
 func TestNewSecureClientBlocksPrivateHostnames(t *testing.T) {
+	fakeResolver(t, map[string][]string{"loopback.test": {"127.0.0.1", "::1"}})
+	stubConnect(t)
 	client := NewSecureClient()
 	transport := client.Transport.(*http.Transport)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// "localhost" resolves to 127.0.0.1 (loopback) -- must be blocked.
-	// This exercises the hostname resolution path in DialContext:
-	// net.LookupIP("localhost") -> 127.0.0.1 -> isPrivateOrInternal -> blocked.
-	conn, err := transport.DialContext(ctx, "tcp", "localhost:80")
+	// The name resolves to loopback, which must be blocked. This exercises
+	// the hostname resolution path in DialContext.
+	conn, err := transport.DialContext(ctx, "tcp", "loopback.test:80")
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -71,6 +72,8 @@ func TestNewSecureClientBlocksPrivateHostnames(t *testing.T) {
 }
 
 func TestNewSecureClientNilIPNotErrPrivateIP(t *testing.T) {
+	fakeResolver(t, nil)
+	stubConnect(t)
 	client := NewSecureClient()
 	transport := client.Transport.(*http.Transport)
 
@@ -335,15 +338,12 @@ func TestValidateURLErrorsHideResolver(t *testing.T) {
 	}
 }
 
-// TestValidateURLErrorsHideSystemResolver is the test above against the
-// system resolver, through the exported ValidateURL. The .invalid TLD never
-// resolves (RFC 6761), but the lookup still needs a working resolver
-// configuration, so it is skipped in -short runs.
+// TestValidateURLErrorsHideSystemResolver is the test above through the
+// exported ValidateURL, which uses the package resolver; the stub DNS server
+// stands in for the system's, so the Go resolver's own error text is what
+// must not leak.
 func TestValidateURLErrorsHideSystemResolver(t *testing.T) {
-	if testing.Short() {
-		t.Skip("requires DNS")
-	}
-	t.Parallel()
+	fakeResolver(t, nil)
 
 	err := ValidateURL("https://does-not-exist.invalid/hook")
 	if !errors.Is(err, ErrInvalidURL) {
@@ -441,7 +441,9 @@ func TestValidateURLContextCancelled(t *testing.T) {
 // ValidateURLContext and ValidateURLAllowingContext check a context that is
 // already done before resolving anything.
 func TestValidateURLContextAlreadyCancelled(t *testing.T) {
-	t.Parallel()
+	// The name is unknown to the stub, which would answer "not found"
+	// (ErrInvalidURL) if the cancellation were missed.
+	fakeResolver(t, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

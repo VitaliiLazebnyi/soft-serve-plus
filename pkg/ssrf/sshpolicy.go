@@ -172,13 +172,14 @@ type lookupFunc func(ctx context.Context, host string) ([]net.IPAddr, error)
 // sync, or a webhook save indefinitely.
 const lookupTimeout = 10 * time.Second
 
-// resolve looks host up with f, or with net.DefaultResolver when f is nil.
+// resolve looks host up with f, or when f is nil with the package resolver
+// (net.DefaultResolver unless a test has set testResolver).
 // The lookup is bounded by ctx and by lookupTimeout.
 func (f lookupFunc) resolve(ctx context.Context, host string) ([]net.IPAddr, error) {
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	if f == nil {
-		return net.DefaultResolver.LookupIPAddr(ctx, host)
+		return resolver().LookupIPAddr(ctx, host)
 	}
 	return f(ctx, host)
 }

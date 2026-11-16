@@ -61,23 +61,23 @@ func stubConnect(t *testing.T, connect ...string) *dialRecorder {
 	for _, a := range connect {
 		r.connect[a] = true
 	}
-	orig := dialHook
-	dialHook = func(ctx context.Context, _, address string) error {
+	hook := dialHookFunc(func(ctx context.Context, _, address string) error {
 		return r.attempt(ctx, address)
-	}
-	t.Cleanup(func() { dialHook = orig })
+	})
+	orig := dialHook.Swap(&hook)
+	t.Cleanup(func() { dialHook.Store(orig) })
 	return r
 }
 
-// fakeResolver points the secure client's resolver at a DNS server that
-// answers from table for the rest of the test, and reports every other name
-// as not found. It swaps package state, so tests using it must not run in
-// parallel.
+// fakeResolver points the package's resolver (the secure client's dials and
+// every validation lookup not given a resolver of its own) at a DNS server
+// that answers from table for the rest of the test, and reports every other
+// name as not found. It swaps package state, so tests using it must not run
+// in parallel.
 func fakeResolver(t *testing.T, table map[string][]string) {
 	t.Helper()
-	orig := dialResolver
-	dialResolver = stubResolver(table)
-	t.Cleanup(func() { dialResolver = orig })
+	orig := testResolver.Swap(stubResolver(table))
+	t.Cleanup(func() { testResolver.Store(orig) })
 }
 
 // stubResolver returns a resolver that sends every query to an in-memory

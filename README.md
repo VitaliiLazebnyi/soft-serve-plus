@@ -1404,8 +1404,10 @@ The entries are trusted differently:
   included: `64:ff9b::/96` reaches 169.254.169.254 as `64:ff9b::a9fe:a9fe`.
   List such ranges only if you mean every IPv4 address behind them.
 
-Every address a name resolves to must be public or allowed, otherwise the
-webhook is refused. Existing webhooks follow the list in effect when they are
+When a webhook is created or updated, every address its name resolves to must
+be public or allowed, otherwise the webhook is refused. At delivery, addresses
+that are neither are skipped and only the others are connected to; if none is
+left, the delivery fails. Existing webhooks follow the list in effect when they are
 delivered: removing an entry stops deliveries to it, which are then recorded as
 failed. The list applies to webhooks only. Git LFS transfers and HTTP repository
 imports and mirrors are not affected by it.
