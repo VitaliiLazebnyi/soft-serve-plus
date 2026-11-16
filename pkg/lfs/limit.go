@@ -4,14 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"unicode/utf8"
 )
 
 const (
 	// maxBatchResponseSize bounds the batch response a remote may send. Each
 	// object takes a few hundred bytes, or a few KiB with long presigned
-	// hrefs and headers, so this leaves ample room for the 100 objects Git
-	// LFS sends per batch by default.
-	maxBatchResponseSize = 10 << 20 // 10 MiB
+	// hrefs and headers, and the client asks for at most 20 objects at a
+	// time, so this leaves ample room.
+	maxBatchResponseSize = 1 << 20 // 1 MiB
+
+	// maxRemoteText is how much of any text a remote sends, such as an
+	// error message or a status line's reason, the client keeps: the rest
+	// would only be logged, once per object and per sync.
+	maxRemoteText = 256
 
 	// maxErrorResponseSize bounds the JSON error body of a failed transfer
 	// request, which only carries a message.
@@ -59,4 +65,17 @@ func (l *maxBytesReader) Read(p []byte) (int, error) {
 	l.n = 0
 	l.err = errResponseTooLarge
 	return n, l.err
+}
+
+// remoteText returns s, text a remote sent, cut to maxRemoteText bytes at a
+// character boundary, with a mark if it was cut.
+func remoteText(s string) string {
+	if len(s) <= maxRemoteText {
+		return s
+	}
+	cut := maxRemoteText
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "... (truncated)"
 }
