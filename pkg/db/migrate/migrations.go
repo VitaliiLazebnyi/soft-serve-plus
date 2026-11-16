@@ -39,6 +39,7 @@ var migrations = []Migration{
 	repoAnonymous,
 	lfsObjectSizeBigint,
 	foreignKeyIndexes,
+	mirrorSyncStatus,
 }
 
 func execMigration(ctx context.Context, tx *db.Tx, version int, name string, down bool) error {

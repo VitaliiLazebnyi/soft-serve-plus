@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -51,7 +52,7 @@ func RepoCommand() *cobra.Command {
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				ctx := cmd.Context()
 				be := backend.FromContext(ctx)
-				rr, _, err := repoFromContext(ctx)
+				rr, level, err := repoFromContext(ctx)
 				if err != nil {
 					return err
 				}
@@ -87,6 +88,20 @@ func RepoCommand() *cobra.Command {
 				cmd.Println("Private:", rr.IsPrivate())
 				cmd.Println("Hidden:", rr.IsHidden())
 				cmd.Println("Mirror:", rr.IsMirror())
+				if rr.IsMirror() {
+					// The error can carry what the remote wrote, so
+					// only read-write collaborators and admins see it.
+					st, err := be.MirrorSyncStatus(ctx, rr.Name())
+					if err != nil {
+						return err
+					}
+					if !st.SyncedAt.IsZero() {
+						cmd.Println("Last Sync:", st.SyncedAt.UTC().Format(time.RFC3339))
+					}
+					if st.Error != "" && level >= access.ReadWriteAccess {
+						cmd.Println("Last Sync Error:", strings.ReplaceAll(utils.Sanitize(st.Error), "\n", " "))
+					}
+				}
 				if owner != nil {
 					cmd.Println(strings.TrimSpace(fmt.Sprint("Owner: ", owner.Username())))
 				}

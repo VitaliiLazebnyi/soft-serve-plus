@@ -20,4 +20,8 @@ type Repo struct {
 	// Anonymous is set when the repository was created without an
 	// account; UserID is then the default admin's.
 	Anonymous bool `db:"anonymous"`
+	// MirrorSyncedAt is when a sync of the mirror last succeeded, and
+	// MirrorError the error of the last sync if it failed, empty otherwise.
+	MirrorSyncedAt sql.NullTime `db:"mirror_synced_at"`
+	MirrorError    string       `db:"mirror_error"`
 }

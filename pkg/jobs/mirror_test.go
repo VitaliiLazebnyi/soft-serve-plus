@@ -558,12 +558,12 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 	calls := stubMirrorGit(t, func([]string) error { return nil })
 	var logs bytes.Buffer
 
-	if !fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-		t.Fatal("fetchMirror stopped without being cancelled")
+	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err != nil {
+		t.Fatalf("fetchMirror stopped without being cancelled: %v", err)
 	}
 	want := [][]string{
-		{"fetch", "--prune", "--", "origin"},
-		{"fetch", "--prune", "--", "backup"},
+		{"fetch", "--prune", "--", "origin", "+refs/*:refs/*"},
+		{"fetch", "--prune", "--", "backup", "+refs/*:refs/*"},
 	}
 	if !slices.EqualFunc(*calls, want, slices.Equal[[]string]) {
 		t.Fatalf("ran %v, want %v", *calls, want)
@@ -577,14 +577,14 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 // but the lfs sync is skipped until the next run.
 func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
 	calls := stubMirrorGit(t, func(args []string) error {
-		if args[len(args)-1] == "origin" {
+		if slices.Contains(args, "origin") {
 			return errors.New("exit status 128")
 		}
 		return nil
 	})
 	var logs bytes.Buffer
 
-	if fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err == nil {
 		t.Fatal("fetchMirror went on to the lfs sync after a failed fetch")
 	}
 	if len(*calls) != len(mirrorTestRemotes) {
@@ -614,8 +614,8 @@ func TestFetchMirrorStopsAfterCancel(t *testing.T) {
 			})
 			var logs bytes.Buffer
 
-			if fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-				t.Fatal("fetchMirror went on after it was cancelled")
+			if err := fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+				t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 			}
 			if len(*calls) != 1 {
 				t.Fatalf("ran %v, want only the first fetch", *calls)
@@ -632,8 +632,8 @@ func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
 	cancel()
 	calls := stubMirrorGit(t, func([]string) error { return nil })
 
-	if fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-		t.Fatal("fetchMirror went on after it was cancelled")
+	if err := fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("ran %v after cancellation", *calls)

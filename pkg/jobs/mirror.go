@@ -103,18 +103,26 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 // `git remote` lists.
 var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
 
-// syncMirror fetches each named remote of the mirror at path, pruning refs
-// the remote no longer has. Naming every remote keeps git from choosing one
-// that was not validated. A remote that fails to fetch does not stop the
-// others; their errors are joined. Once ctx is done no further fetch starts,
-// and one already running is stopped; see runMirrorGit.
+// mirrorRefspec is the refspec every mirror fetch uses, the one git clone
+// --mirror writes: every ref of the remote, forced, under its own name. The
+// job passes it rather than rely on the repository's config, as a repository
+// imported without --mirror and turned into a mirror later has no fetch
+// refspec, and fetching it would move no branch at all.
+const mirrorRefspec = "+refs/*:refs/*"
+
+// syncMirror fetches each named remote of the mirror at path with
+// mirrorRefspec, pruning refs the remote no longer has. Naming every remote
+// keeps git from choosing one that was not validated. A remote that fails to
+// fetch does not stop the others; their errors are joined. Once ctx is done
+// no further fetch starts, and one already running is stopped; see
+// runMirrorGit.
 func syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name); err != nil {
+		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name, mirrorRefspec); err != nil {
 			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
 		}
 	}
@@ -122,7 +130,8 @@ func syncMirror(ctx context.Context, path string, names []string, env []string) 
 }
 
 // SyncMirrors fetches every pull mirror from its remotes, and their LFS
-// objects when LFS is enabled. Up to GOMAXPROCS mirrors sync at once; it
+// objects when LFS is enabled, and records the outcome of each sync (see
+// Backend.RecordMirrorSync). Up to GOMAXPROCS mirrors sync at once; it
 // returns when all of them are done. Once ctx is done no further mirror
 // starts; see syncMirror for what happens to one already running. A mirror
 // whose sync panics is logged and does not stop the others.
@@ -159,23 +168,39 @@ func SyncMirrors(ctx context.Context) {
 		if ctx.Err() != nil {
 			break
 		}
+		name := repo.Name()
 		g.Go(func() error {
 			// The slot may have come free only after the server began
 			// to stop.
 			if ctx.Err() != nil {
 				return nil
 			}
-			safego.Run(logger.With("repo", repo.Name()), func() { syncMirrorRepo(ctx, cfg, logger, b, repo) }) //nolint:errcheck // Run logs a panic.
+			var err error
+			if perr := safego.Run(logger.With("repo", name), func() { err = syncMirrorRepo(ctx, cfg, logger, b, name) }); perr != nil {
+				err = perr
+			}
+			// A sync the server stopped did not fail, and one of a
+			// repository that is no longer a mirror did not happen.
+			if errors.Is(err, errNotMirror) || ctx.Err() != nil {
+				return nil
+			}
+			if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), name, err); rerr != nil {
+				logger.Warn("failed to record the mirror sync", "repo", name, "err", rerr)
+			}
 			return nil
 		})
 	}
 	_ = g.Wait()
 }
 
-// syncMirrorRepo syncs one pull mirror: its remotes, then its LFS objects.
-func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
-	name := repo.Name()
+// errNotMirror is returned by syncMirrorRepo for a repository that is no
+// longer a mirror.
+var errNotMirror = errors.New("not a mirror")
 
+// syncMirrorRepo syncs one pull mirror: its remotes, then its LFS objects.
+// It logs what went wrong, and returns it so the job can record it: nil
+// once every step succeeded or had nothing to do.
+func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, name string) (err error) {
 	// One deadline for the whole sync: the job waits for every mirror, and
 	// cron skips its runs while one is still going, so a mirror whose
 	// remote or LFS endpoint keeps a transfer going for ever would stop
@@ -186,13 +211,27 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	defer func() {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil {
 			logger.Warn("mirror sync stopped, it ran out of time", "repo", name, "timeout", mirrorSyncTimeout)
+			err = fmt.Errorf("the sync ran out of time after %v", mirrorSyncTimeout)
 		}
 	}()
 
+	// The job lists the repositories once and works through them for as
+	// long as the slowest takes, so the mirror flag is read again here.
+	// Fetching with --prune a repository switched off since would delete
+	// every branch pushed to it after the switch.
+	repo, err := b.Repository(ctx, name)
+	if err != nil {
+		logger.Error("error reading repository", "repo", name, "err", err)
+		return err
+	}
+	if !repo.IsMirror() {
+		logger.Debug("skipping repository that is no longer a mirror", "repo", name)
+		return errNotMirror
+	}
 	r, err := repo.Open()
 	if err != nil {
 		logger.Error("error opening repository", "repo", name, "err", err)
-		return
+		return err
 	}
 
 	// Re-validate every configured remote before syncing. The sync fetches
@@ -211,28 +250,28 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	remotes, err := validateMirrorRemotes(ctx, r, policy)
 	if err != nil {
 		logger.Warn("skipping mirror sync, remote failed validation", "repo", name, "err", err)
-		return
+		return err
 	}
 
 	// When a fetch fails the LFS sync is skipped too; the next run tries
 	// both again.
 	syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
-	if !fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv) {
-		return
+	if err := fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv); err != nil {
+		return err
 	}
 
 	if !cfg.LFS.Enabled {
-		return
+		return nil
 	}
 	lfsEndpoint, _, err := r.WithContext(ctx).ConfigGet("lfs.url")
 	if err != nil {
 		logger.Error("error getting git config", "repo", name, "err", err)
-		return
+		return err
 	}
 	if lfsEndpoint == "" {
 		// If there is no LFS url defined, means the repo doesn't use LFS
 		// and we can skip it.
-		return
+		return nil
 	}
 
 	// The endpoint is stored in the repo config and may predate
@@ -240,7 +279,7 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	v, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy)
 	if err != nil {
 		logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
-		return
+		return fmt.Errorf("lfs endpoint: %w", err)
 	}
 	// An ssh or scp-style endpoint, which older imports stored, is
 	// refused: objects are fetched over http(s) only.
@@ -252,21 +291,22 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	ep, err := lfs.NewEndpoint(lfsEndpoint)
 	if err != nil {
 		logger.Warn("skipping lfs sync", "repo", name, "err", err)
-		return
+		return err
 	}
 
 	if err := syncRepoLFS(ctx, b, repo, lfs.NewClient(ep)); err != nil {
-		if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
+		switch {
+		case errors.Is(err, backend.ErrLFSObjectsUnavailable):
 			// The next sync tries them again.
 			logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
-			return
+		case ctx.Err() != nil:
+			// The server is stopping, or the sync ran out of time.
+		default:
+			logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
 		}
-		if ctx.Err() != nil {
-			// The server is stopping.
-			return
-		}
-		logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
+		return err
 	}
+	return nil
 }
 
 // syncRepoLFS stores the LFS objects a mirror sync fetched pointers to.
@@ -362,17 +402,18 @@ func (b *limitedBuffer) String() string {
 	return b.buf.String()
 }
 
-// fetchMirror fetches the named remotes of the mirror in dir and reports
-// whether the sync should go on to the lfs objects. It returns false when
-// a fetch failed, after logging the error, so the lfs sync is skipped
-// until the next run. Once ctx is done it starts no further fetch and
-// returns false without logging: the server is stopping.
-func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) bool {
-	if err := syncMirror(ctx, dir, remotes, env); err != nil {
-		if ctx.Err() == nil {
-			logger.Error("error syncing mirror", "repo", name, "err", err)
-		}
-		return false
+// fetchMirror fetches the named remotes of the mirror in dir. It returns nil
+// when the sync should go on to the lfs objects, and otherwise the error,
+// after logging a failed fetch, so the lfs sync is skipped until the next
+// run. Once ctx is done it starts no further fetch and returns ctx's error
+// without logging: the server is stopping, or the sync ran out of time.
+func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) error {
+	err := syncMirror(ctx, dir, remotes, env)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-	return ctx.Err() == nil
+	if err != nil {
+		logger.Error("error syncing mirror", "repo", name, "err", err)
+	}
+	return err
 }

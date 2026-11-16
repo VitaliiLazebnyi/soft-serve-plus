@@ -151,6 +151,18 @@ func (*repoStore) SetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name
 	return err
 }
 
+// SetRepoMirrorSyncByName implements store.RepositoryStore. It leaves
+// updated_at alone: a sync is not a change made to the repository's settings.
+func (*repoStore) SetRepoMirrorSyncByName(ctx context.Context, tx db.Handler, name string, syncErr string) error {
+	name = utils.SanitizeRepo(name)
+	query := "UPDATE repos SET mirror_error = ? WHERE name = ?;"
+	if syncErr == "" {
+		query = "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE name = ?;"
+	}
+	_, err := tx.ExecContext(ctx, tx.Rebind(query), syncErr, name)
+	return err
+}
+
 // GetRepoIsPrivateByName implements store.RepositoryStore.
 func (*repoStore) GetRepoIsPrivateByName(ctx context.Context, tx db.Handler, name string) (bool, error) {
 	var isPrivate bool

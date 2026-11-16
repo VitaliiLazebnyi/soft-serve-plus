@@ -1,0 +1,2 @@
+ALTER TABLE repos ADD COLUMN mirror_synced_at DATETIME;
+ALTER TABLE repos ADD COLUMN mirror_error TEXT NOT NULL DEFAULT '';
