@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,9 +53,11 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	c2 := dialHeld(t, addr, request, git.ErrNotAuthed)
 	_ = c2.Close()
 
-	if out := logs.String(); !strings.Contains(out, "recovered panic") || !strings.Contains(out, "injected handler panic") {
-		t.Errorf("panic not logged; logs:\n%s", out)
-	}
+	// The panic is logged by safego.Run's recover, which runs after
+	// handleClient's deferred close: the client can see the connection
+	// closed, and the next client be served, before the line is written.
+	waitLog(t, logs, "recovered panic", 30*time.Second)
+	waitLog(t, logs, "injected handler panic", 30*time.Second)
 	// The handler's goroutine is no longer counted: Shutdown does not
 	// wait for it.
 	waitConns(t, d, 0, 30*time.Second)
