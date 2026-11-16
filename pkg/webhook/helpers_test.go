@@ -54,7 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx))
-	ds := database.New(ctx, dbx)
+	ds := database.New()
 	ctx = db.WithContext(ctx, dbx)
 	ctx = store.WithContext(ctx, ds)
 
@@ -62,7 +62,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	owner, err := ds.FindUserByUsername(ctx, dbx, "alice")
 	is.NoErr(err)
 
-	is.NoErr(ds.CreateRepo(ctx, dbx, "repo", owner.ID, "Project", "a description", false, false, false, false))
+	is.NoErr(ds.CreateRepo(ctx, dbx, models.Repo{
+		Name:        "repo",
+		UserID:      owner.ID,
+		ProjectName: "Project",
+		Description: "a description",
+	}))
 	repo, err := ds.GetRepoByName(ctx, dbx, "repo")
 	is.NoErr(err)
 

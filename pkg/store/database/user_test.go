@@ -14,7 +14,7 @@ import (
 func TestFindDefaultAdminUserID(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &userStore{}
+	s := &Store{}
 
 	// The migration seeds the initial "admin" user; demote it so the test
 	// controls every admin row.

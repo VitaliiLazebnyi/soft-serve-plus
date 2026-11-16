@@ -73,7 +73,7 @@ func runTests(m *testing.M) int {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		log.Fatal(err)
 	}
-	datastore := database.New(ctx, dbx)
+	datastore := database.New()
 	ctx = store.WithContext(ctx, datastore)
 	be := backend.New(ctx, cfg, dbx, datastore)
 	testBackend = be

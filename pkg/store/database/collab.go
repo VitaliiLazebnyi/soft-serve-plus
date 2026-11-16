@@ -7,16 +7,11 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
-type collabStore struct{}
-
-var _ store.CollaboratorStore = (*collabStore)(nil)
-
-// AddCollabByUsernameAndRepo implements store.CollaboratorStore.
-func (*collabStore) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string, level access.AccessLevel) error {
+// AddCollabByUsernameAndRepo implements store.Store.
+func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -39,8 +34,8 @@ func (*collabStore) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handle
 	return err
 }
 
-// GetCollabByUsernameAndRepo implements store.CollaboratorStore.
-func (*collabStore) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) (models.Collab, error) {
+// GetCollabByUsernameAndRepo implements store.Store.
+func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) (models.Collab, error) {
 	var m models.Collab
 
 	username = strings.ToLower(username)
@@ -64,8 +59,8 @@ func (*collabStore) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handle
 	return m, err
 }
 
-// ListCollabsByRepo implements store.CollaboratorStore.
-func (*collabStore) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo string) ([]models.Collab, error) {
+// ListCollabsByRepo implements store.Store.
+func (*Store) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo string) ([]models.Collab, error) {
 	var m []models.Collab
 
 	repo = utils.SanitizeRepo(repo)
@@ -85,8 +80,8 @@ func (*collabStore) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo s
 	return m, err
 }
 
-// ListCollabsByRepoAsUsers implements store.CollaboratorStore.
-func (*collabStore) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler, repo string) ([]models.User, error) {
+// ListCollabsByRepoAsUsers implements store.Store.
+func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler, repo string) ([]models.User, error) {
 	var m []models.User
 
 	repo = utils.SanitizeRepo(repo)
@@ -107,15 +102,15 @@ func (*collabStore) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler,
 	return m, err
 }
 
-// ListCollabsByUserID implements store.CollaboratorStore.
-func (*collabStore) ListCollabsByUserID(ctx context.Context, tx db.Handler, userID int64) ([]models.Collab, error) {
+// ListCollabsByUserID implements store.Store.
+func (*Store) ListCollabsByUserID(ctx context.Context, tx db.Handler, userID int64) ([]models.Collab, error) {
 	var m []models.Collab
 	err := tx.SelectContext(ctx, &m, tx.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
 	return m, err
 }
 
-// RemoveCollabByUsernameAndRepo implements store.CollaboratorStore.
-func (*collabStore) RemoveCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) error {
+// RemoveCollabByUsernameAndRepo implements store.Store.
+func (*Store) RemoveCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err

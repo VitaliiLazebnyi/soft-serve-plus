@@ -151,7 +151,7 @@ func (d *Backend) pushCreatedRepositoryUsed(ctx context.Context, tx *db.Tx, m mo
 		m.Private != created.IsPrivate() ||
 		m.Hidden != created.IsHidden() ||
 		m.Mirror != created.IsMirror() ||
-		m.UserID.Int64 != created.UserID() {
+		m.UserID != created.UserID() {
 		return true, nil
 	}
 

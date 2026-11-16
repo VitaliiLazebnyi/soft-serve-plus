@@ -16,10 +16,10 @@ import (
 func TestUserVisibleListsAreOrdered(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	rs, us, cs, ts, ls := &repoStore{}, &userStore{}, &collabStore{}, &accessTokenStore{}, &lfsStore{}
+	rs, us, cs, ts, ls := &Store{}, &Store{}, &Store{}, &Store{}, &Store{}
 
 	for _, name := range []string{"c", "a", "b"} {
-		is.NoErr(rs.CreateRepo(ctx, dbx, name, 100, name, "", false, false, false, false))
+		is.NoErr(rs.CreateRepo(ctx, dbx, models.Repo{Name: name, UserID: 100, ProjectName: name}))
 	}
 	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "repo7", "moved"))
 	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "a", "moved"))

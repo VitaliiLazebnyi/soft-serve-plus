@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -48,11 +49,18 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 		secretSignature = "X-SoftServe-Signature: sha256=leaked-signature\n"
 	)
 	deliveryID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(
-		ctx, db.FromContext(ctx), deliveryID, victimHookID, int(webhook.EventPush),
-		"http://93.184.216.34/hook", "POST", nil,
-		secretSignature, secretBody, 200, "Content-Type: text/plain\n", "victim response body",
-	))
+	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+		ID:              deliveryID,
+		WebhookID:       victimHookID,
+		Event:           int(webhook.EventPush),
+		RequestURL:      "http://93.184.216.34/hook",
+		RequestMethod:   "POST",
+		RequestHeaders:  secretSignature,
+		RequestBody:     secretBody,
+		ResponseStatus:  200,
+		ResponseHeaders: "Content-Type: text/plain\n",
+		ResponseBody:    "victim response body",
+	}))
 
 	// The attacker owns their own repository, so they hold admin access to
 	// it, but they have no access at all to the victim's repository.

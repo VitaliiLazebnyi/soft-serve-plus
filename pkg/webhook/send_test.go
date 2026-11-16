@@ -868,9 +868,9 @@ type hangingPruneStore struct {
 	creates *atomic.Int32
 }
 
-func (s hangingPruneStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error {
+func (s hangingPruneStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error {
 	s.creates.Add(1)
-	return s.Store.CreateWebhookDelivery(ctx, h, id, webhookID, event, url, method, requestError, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody)
+	return s.Store.CreateWebhookDelivery(ctx, h, d)
 }
 
 func (hangingPruneStore) PruneWebhookDeliveries(ctx context.Context, _ db.Handler, _ int64, _ int) error {

@@ -57,9 +57,10 @@ type WebhookStore interface {
 	// deliveries for a webhook, at most 100, oldest first. This only returns the delivery ID, response
 	// status, event, creation time, and sequence number.
 	ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error)
-	// CreateWebhookDelivery creates a webhook delivery. It writes nothing if the
+	// CreateWebhookDelivery creates a webhook delivery from d; d's CreatedAt
+	// and Seq are ignored and set by the database. It writes nothing if the
 	// webhook no longer exists.
-	CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error
+	CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error
 	// PruneWebhookDeliveries deletes all but the keep most recent deliveries
 	// of a webhook, in the order they were recorded (by seq).
 	PruneWebhookDeliveries(ctx context.Context, h db.Handler, webhookID int64, keep int) error

@@ -569,7 +569,7 @@ func TestAdminKeyRemovedDespiteCommentsAndBadEntries(t *testing.T) {
 func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
-	st := database.New(ctx, dbx)
+	st := database.New()
 
 	cfg := config.DefaultConfig()
 	boot(t, ctx, cfg, dbx)
@@ -638,7 +638,7 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 	}
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
-	st := database.New(ctx, dbx)
+	st := database.New()
 
 	cfg := config.DefaultConfig()
 	boot(t, ctx, cfg, dbx)

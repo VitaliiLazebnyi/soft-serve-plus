@@ -416,18 +416,27 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	// without NULs, and is stored as sent: a redelivery signs and sends the
 	// same bytes. resHeaders normally comes from formatHeaders too; cleaning
 	// it again is a no-op then and covers a caller that builds it otherwise.
-	resHeaders = storableText(resHeaders)
-	resBody = storableText(resBody)
+	d := models.WebhookDelivery{
+		ID:              req.id,
+		WebhookID:       w.ID,
+		Event:           int(event),
+		RequestURL:      w.URL,
+		RequestMethod:   http.MethodPost,
+		RequestHeaders:  reqHeaders,
+		RequestBody:     req.body,
+		ResponseStatus:  resStatus,
+		ResponseHeaders: storableText(resHeaders),
+		ResponseBody:    storableText(resBody),
+	}
+	// A successful delivery stores NULL, not an empty string.
 	if reqErr != nil {
-		if msg := storableText(reqErr.Error()); msg != reqErr.Error() {
-			reqErr = errors.New(msg)
-		}
+		d.RequestError = sql.NullString{String: storableText(reqErr.Error()), Valid: true}
 	}
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 	create := func(h db.Handler) error {
-		return datastore.CreateWebhookDelivery(rctx, h, req.id, w.ID, int(event), w.URL, http.MethodPost, reqErr, reqHeaders, req.body, resStatus, resHeaders, resBody)
+		return datastore.CreateWebhookDelivery(rctx, h, d)
 	}
 
 	// The delivery is recorded and the older ones pruned in one transaction,

@@ -34,7 +34,7 @@ func InitBackendContext(cmd *cobra.Command, _ []string) error {
 	dbx.SetPoolLimits(cfg.DB)
 
 	ctx = db.WithContext(ctx, dbx)
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	ctx = backend.WithContext(ctx, be)

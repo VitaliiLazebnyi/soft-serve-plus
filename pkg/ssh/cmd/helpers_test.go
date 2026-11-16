@@ -51,7 +51,7 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 
 	is.NoErr(migrate.Migrate(ctx, dbx))
 	ctx = db.WithContext(ctx, dbx)
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	ctx = backend.WithContext(ctx, be)

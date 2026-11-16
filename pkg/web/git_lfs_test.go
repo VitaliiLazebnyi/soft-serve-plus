@@ -47,7 +47,7 @@ func newLFSTestContext(t *testing.T) (context.Context, *backend.Backend, store.S
 
 	is.NoErr(migrate.Migrate(ctx, dbx))
 	ctx = db.WithContext(ctx, dbx)
-	datastore := database.New(ctx, dbx)
+	datastore := database.New()
 	ctx = store.WithContext(ctx, datastore)
 	be := backend.New(ctx, cfg, dbx, datastore)
 	ctx = backend.WithContext(ctx, be)

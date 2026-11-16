@@ -59,7 +59,7 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	is.NoErr(err)
 	t.Cleanup(func() { _ = dbx.Close() })
 	is.NoErr(migrate.Migrate(ctx, dbx))
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = db.WithContext(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
@@ -67,12 +68,18 @@ func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
 	delID := uuid.MustParse("00000000-0000-0000-0000-0000000000d2")
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(
-		ctx, db.FromContext(ctx), delID, id, int(webhook.EventPush),
-		whURL, "POST", nil,
-		"X-Req: a"+escapes+"\r\n", `{"msg":"`+escapes+`"}`,
-		200, "X-Reply: b"+escapes+"\r\n", "reply"+escapes,
-	))
+	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+		ID:              delID,
+		WebhookID:       id,
+		Event:           int(webhook.EventPush),
+		RequestURL:      whURL,
+		RequestMethod:   "POST",
+		RequestHeaders:  "X-Req: a" + escapes + "\r\n",
+		RequestBody:     `{"msg":"` + escapes + `"}`,
+		ResponseStatus:  200,
+		ResponseHeaders: "X-Reply: b" + escapes + "\r\n",
+		ResponseBody:    "reply" + escapes,
+	}))
 
 	stdout, stderr, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "get", "hooks", strconv.FormatInt(id, 10), delID.String())
 	is.NoErr(err)

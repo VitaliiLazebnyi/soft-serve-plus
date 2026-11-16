@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -30,7 +31,10 @@ func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 		if err := tx.GetContext(e.ctx, &holder, `SELECT pg_backend_pid();`); err != nil {
 			return err
 		}
-		if err := e.be.store.CreateRepo(e.ctx, tx, "owned", owner.ID(), "", "", false, false, false, false); err != nil {
+		if err := e.be.store.CreateRepo(e.ctx, tx, models.Repo{
+			Name:   "owned",
+			UserID: owner.ID(),
+		}); err != nil {
 			return err
 		}
 		go func() {
@@ -51,5 +55,5 @@ func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 	is.NoErr(err)
 	m, err := e.be.store.GetRepoByName(e.ctx, e.be.db, "owned")
 	is.NoErr(err)
-	is.Equal(m.UserID.Int64, owner.ID())
+	is.Equal(m.UserID, owner.ID())
 }

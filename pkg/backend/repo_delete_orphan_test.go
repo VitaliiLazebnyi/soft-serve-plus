@@ -102,7 +102,7 @@ type rowAppearsStore struct {
 
 func (s *rowAppearsStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
 	if s.calls.Add(1) == s.insertAt && name == s.name {
-		if err := s.Store.CreateRepo(ctx, h, name, s.userID, "", "", false, false, false, false); err != nil {
+		if err := s.Store.CreateRepo(ctx, h, models.Repo{Name: name, UserID: s.userID}); err != nil {
 			return models.Repo{}, err
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // last. It returns how many times each path was listed.
 func listLFSLocks(t *testing.T, ctx context.Context, dbx *db.DB, limit int, between func(page int)) map[string]int {
 	t.Helper()
-	s := &lfsStore{}
+	s := &Store{}
 	seen := map[string]int{}
 	var after int64
 	for page := 1; ; page++ {
@@ -42,7 +42,7 @@ func listLFSLocks(t *testing.T, ctx context.Context, dbx *db.DB, limit int, betw
 func TestLFSLocksPagingSameSecond(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &lfsStore{}
+	s := &Store{}
 
 	const n = 60
 	for i := range n {
@@ -68,7 +68,7 @@ func TestLFSLocksPagingSameSecond(t *testing.T) {
 func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &lfsStore{}
+	s := &Store{}
 
 	const n = 20
 	for i := range n {

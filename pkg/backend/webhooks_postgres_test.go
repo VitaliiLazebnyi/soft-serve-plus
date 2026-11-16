@@ -70,7 +70,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx))
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := New(ctx, cfg, dbx, dbstore)
 	ctx = db.WithContext(ctx, dbx)

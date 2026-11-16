@@ -147,7 +147,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 		t.Fatal(err)
 	}
 	ctx = db.WithContext(ctx, dbx)
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	return backend.WithContext(ctx, be)

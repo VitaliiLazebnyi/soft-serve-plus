@@ -2,23 +2,17 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/google/uuid"
 )
 
-type webhookStore struct{}
-
-var _ store.WebhookStore = (*webhookStore)(nil)
-
-// CreateWebhook implements store.WebhookStore.
-func (*webhookStore) CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url string, secret string, contentType int, active bool) (int64, error) {
+// CreateWebhook implements store.Store.
+func (*Store) CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url string, secret string, contentType int, active bool) (int64, error) {
 	var id int64
 	query := h.Rebind(`INSERT INTO webhooks (repo_id, url, secret, content_type, active, updated_at)
 			VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id;`)
@@ -30,7 +24,7 @@ func (*webhookStore) CreateWebhook(ctx context.Context, h db.Handler, repoID int
 	return id, nil
 }
 
-// CreateWebhookDelivery implements store.WebhookStore.
+// CreateWebhookDelivery implements store.Store.
 //
 // The row is written only if the webhook still exists. A send that was in
 // flight when its webhook was deleted therefore leaves no orphan row, even on
@@ -43,17 +37,13 @@ func (*webhookStore) CreateWebhook(ctx context.Context, h db.Handler, repoID int
 // On Postgres any error aborts the transaction it happens in, so inside a
 // transaction the insert runs under a savepoint and a foreign key violation
 // rolls back to it. The transaction can then go on, for example to prune.
-func (*webhookStore) CreateWebhookDelivery(ctx context.Context, h db.Handler, id uuid.UUID, webhookID int64, event int, url string, method string, requestError error, requestHeaders string, requestBody string, responseStatus int, responseHeaders string, responseBody string) error {
+func (*Store) CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error {
 	query := h.Rebind(`INSERT INTO webhook_deliveries (id, webhook_id, event, request_url, request_method, request_error, request_headers, request_body, response_status, response_headers, response_body)
 			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 			WHERE EXISTS (SELECT 1 FROM webhooks WHERE id = ?);`)
-	// A successful delivery stores NULL, not an empty string.
-	var reqErr sql.NullString
-	if requestError != nil {
-		reqErr = sql.NullString{String: requestError.Error(), Valid: true}
-	}
 	insert := func() error {
-		_, err := h.ExecContext(ctx, query, id, webhookID, event, url, method, reqErr, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody, webhookID)
+		_, err := h.ExecContext(ctx, query, d.ID, d.WebhookID, d.Event, d.RequestURL, d.RequestMethod, d.RequestError,
+			d.RequestHeaders, d.RequestBody, d.ResponseStatus, d.ResponseHeaders, d.ResponseBody, d.WebhookID)
 		return err
 	}
 
@@ -85,8 +75,8 @@ func isForeignKeyViolation(err error) bool {
 	return errors.Is(db.WrapError(err), db.ErrForeignKey)
 }
 
-// CreateWebhookEvents implements store.WebhookStore.
-func (*webhookStore) CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID int64, events []int) error {
+// CreateWebhookEvents implements store.Store.
+func (*Store) CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID int64, events []int) error {
 	query := h.Rebind(`INSERT INTO webhook_events (webhook_id, event)
 			VALUES (?, ?);`)
 	for _, event := range events {
@@ -98,28 +88,28 @@ func (*webhookStore) CreateWebhookEvents(ctx context.Context, h db.Handler, webh
 	return nil
 }
 
-// DeleteWebhookForRepoByID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
+// DeleteWebhookForRepoByID implements store.Store.
+func (*Store) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = ?;`)
 	_, err := h.ExecContext(ctx, query, repoID, id)
 	return err
 }
 
-// DeleteWebhookEventsByWebhookID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
+// DeleteWebhookEventsByWebhookID implements store.Store.
+func (*Store) DeleteWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
 	query := h.Rebind(`DELETE FROM webhook_events WHERE webhook_id = ?;`)
 	_, err := h.ExecContext(ctx, query, webhookID)
 	return err
 }
 
-// DeleteWebhookDeliveriesByWebhookID implements store.WebhookStore.
-func (*webhookStore) DeleteWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
+// DeleteWebhookDeliveriesByWebhookID implements store.Store.
+func (*Store) DeleteWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) error {
 	query := h.Rebind(`DELETE FROM webhook_deliveries WHERE webhook_id = ?;`)
 	_, err := h.ExecContext(ctx, query, webhookID)
 	return err
 }
 
-// PruneWebhookDeliveries implements store.WebhookStore.
+// PruneWebhookDeliveries implements store.Store.
 //
 // Deliveries are ordered by seq, which increases with every delivery
 // recorded. The subquery finds the seq of the newest delivery past the keep
@@ -128,7 +118,7 @@ func (*webhookStore) DeleteWebhookDeliveriesByWebhookID(ctx context.Context, h d
 // deleted, not on the size of the table. With keep or fewer deliveries the
 // subquery is NULL and nothing is deleted. The same statement works on SQLite
 // and Postgres.
-func (*webhookStore) PruneWebhookDeliveries(ctx context.Context, h db.Handler, webhookID int64, keep int) error {
+func (*Store) PruneWebhookDeliveries(ctx context.Context, h db.Handler, webhookID int64, keep int) error {
 	if keep < 0 {
 		keep = 0
 	}
@@ -146,10 +136,10 @@ const pruneWebhookDeliveriesQuery = `DELETE FROM webhook_deliveries
 		LIMIT 1 OFFSET ?
 	);`
 
-// DeleteWebhookEventsByID implements store.WebhookStore.
+// DeleteWebhookEventsByID implements store.Store.
 // Only events of webhookID are deleted, so a stray ID can never remove another
 // webhook's subscription.
-func (*webhookStore) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhookID int64, ids []int64) error {
+func (*Store) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhookID int64, ids []int64) error {
 	// sqlx rejects an empty IN clause, and there is nothing to delete.
 	// Updating a webhook without changing its events reaches here with no IDs.
 	if len(ids) == 0 {
@@ -166,8 +156,8 @@ func (*webhookStore) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, 
 	return err
 }
 
-// GetWebhookByID implements store.WebhookStore.
-func (*webhookStore) GetWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.Webhook, error) {
+// GetWebhookByID implements store.Store.
+func (*Store) GetWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.Webhook, error) {
 	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? AND id = ?;`)
 	var wh models.Webhook
 	err := h.GetContext(ctx, &wh, query, repoID, id)
@@ -180,10 +170,10 @@ func (*webhookStore) GetWebhookByID(ctx context.Context, h db.Handler, repoID in
 // out; the limit bounds a listing when pruning has fallen behind.
 const maxListedWebhookDeliveries = 100
 
-// GetWebhookDeliveriesByWebhookID implements store.WebhookStore.
+// GetWebhookDeliveriesByWebhookID implements store.Store.
 // Deliveries are returned oldest first, in the order they were recorded,
 // limited to the most recent maxListedWebhookDeliveries.
-func (*webhookStore) GetWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
+func (*Store) GetWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
 	query := h.Rebind(`SELECT * FROM (
 		SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq DESC LIMIT ?
 	) AS d ORDER BY seq;`)
@@ -192,31 +182,31 @@ func (*webhookStore) GetWebhookDeliveriesByWebhookID(ctx context.Context, h db.H
 	return whds, err
 }
 
-// GetWebhookDeliveryByID implements store.WebhookStore.
-func (*webhookStore) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) (models.WebhookDelivery, error) {
+// GetWebhookDeliveryByID implements store.Store.
+func (*Store) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) (models.WebhookDelivery, error) {
 	query := h.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = ? AND id = ?;`)
 	var whd models.WebhookDelivery
 	err := h.GetContext(ctx, &whd, query, webhookID, id)
 	return whd, err
 }
 
-// GetWebhookEventsByWebhookID implements store.WebhookStore.
-func (*webhookStore) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error) {
+// GetWebhookEventsByWebhookID implements store.Store.
+func (*Store) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error) {
 	query := h.Rebind(`SELECT * FROM webhook_events WHERE webhook_id = ? ORDER BY id;`)
 	var whes []models.WebhookEvent
 	err := h.SelectContext(ctx, &whes, query, webhookID)
 	return whes, err
 }
 
-// GetWebhooksByRepoID implements store.WebhookStore.
-func (*webhookStore) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repoID int64) ([]models.Webhook, error) {
+// GetWebhooksByRepoID implements store.Store.
+func (*Store) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repoID int64) ([]models.Webhook, error) {
 	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? ORDER BY id;`)
 	var whs []models.Webhook
 	err := h.SelectContext(ctx, &whs, query, repoID)
 	return whs, err
 }
 
-// LockAndCountWebhooks implements store.WebhookStore.
+// LockAndCountWebhooks implements store.Store.
 //
 // Postgres runs transactions in READ COMMITTED, where two transactions can
 // each insert a webhook and count without seeing the other's. Locking the
@@ -230,7 +220,7 @@ func (*webhookStore) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repo
 // SQLite has no row locks and needs none here: a write transaction holds the
 // database's write lock until it ends, from BEGIN IMMEDIATE (see db.Open) or
 // from its first write, so callers that insert before they count take turns.
-func (*webhookStore) LockAndCountWebhooks(ctx context.Context, h db.Handler, repoID int64) (int, error) {
+func (*Store) LockAndCountWebhooks(ctx context.Context, h db.Handler, repoID int64) (int, error) {
 	switch driver := h.DriverName(); driver {
 	case "postgres":
 		if _, err := h.ExecContext(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR NO KEY UPDATE;`, repoID); err != nil {
@@ -245,10 +235,10 @@ func (*webhookStore) LockAndCountWebhooks(ctx context.Context, h db.Handler, rep
 	return n, err
 }
 
-// GetWebhooksByRepoIDWhereEvent implements store.WebhookStore. Only active
+// GetWebhooksByRepoIDWhereEvent implements store.Store. Only active
 // webhooks are returned, since this is what events are sent to; use
 // GetWebhooksByRepoID to list every webhook.
-func (*webhookStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
+func (*Store) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -272,8 +262,8 @@ func (*webhookStore) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Han
 	return whs, err
 }
 
-// GetActiveWebhookByIDWhereEvent implements store.WebhookStore.
-func (*webhookStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error) {
+// GetActiveWebhookByIDWhereEvent implements store.Store.
+func (*Store) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error) {
 	query := h.Rebind(`SELECT webhooks.*
 			FROM webhooks
 			INNER JOIN webhook_events ON webhooks.id = webhook_events.webhook_id
@@ -283,10 +273,10 @@ func (*webhookStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Ha
 	return wh, err
 }
 
-// ListWebhookDeliveriesByWebhookID implements store.WebhookStore.
+// ListWebhookDeliveriesByWebhookID implements store.Store.
 // Deliveries are returned oldest first, in the order they were recorded,
 // limited to the most recent maxListedWebhookDeliveries.
-func (*webhookStore) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
+func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
 	query := h.Rebind(`SELECT * FROM (
 		SELECT id, response_status, event, created_at, seq FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq DESC LIMIT ?
 	) AS d ORDER BY seq;`)
@@ -295,8 +285,8 @@ func (*webhookStore) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.
 	return whds, err
 }
 
-// UpdateWebhookByID implements store.WebhookStore.
-func (*webhookStore) UpdateWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64, url string, secret string, contentType int, active bool) error {
+// UpdateWebhookByID implements store.Store.
+func (*Store) UpdateWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64, url string, secret string, contentType int, active bool) error {
 	query := h.Rebind(`UPDATE webhooks SET url = ?, secret = ?, content_type = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND id = ?;`)
 	_, err := h.ExecContext(ctx, query, url, secret, contentType, active, repoID, id)
 	return err

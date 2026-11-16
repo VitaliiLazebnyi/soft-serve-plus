@@ -10,17 +10,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"golang.org/x/crypto/ssh"
 )
 
-type userStore struct{}
-
-var _ store.UserStore = (*userStore)(nil)
-
-// AddPublicKeyByUsername implements store.UserStore.
-func (*userStore) AddPublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
+// AddPublicKeyByUsername implements store.Store.
+func (*Store) AddPublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -49,8 +44,8 @@ func forgetSyncedAdminKey(ctx context.Context, tx db.Handler, ak string) error {
 	return err
 }
 
-// CreateUser implements store.UserStore.
-func (*userStore) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
+// CreateUser implements store.Store.
+func (*Store) CreateUser(ctx context.Context, tx db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateNewUsername(username); err != nil {
 		return err
@@ -79,8 +74,8 @@ func (*userStore) CreateUser(ctx context.Context, tx db.Handler, username string
 	return nil
 }
 
-// DeleteUserByUsername implements store.UserStore.
-func (*userStore) DeleteUserByUsername(ctx context.Context, tx db.Handler, username string) error {
+// DeleteUserByUsername implements store.Store.
+func (*Store) DeleteUserByUsername(ctx context.Context, tx db.Handler, username string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -90,16 +85,16 @@ func (*userStore) DeleteUserByUsername(ctx context.Context, tx db.Handler, usern
 	return affected(tx.ExecContext(ctx, query, username))
 }
 
-// GetUserByID implements store.UserStore.
-func (*userStore) GetUserByID(ctx context.Context, tx db.Handler, id int64) (models.User, error) {
+// GetUserByID implements store.Store.
+func (*Store) GetUserByID(ctx context.Context, tx db.Handler, id int64) (models.User, error) {
 	var m models.User
 	query := tx.Rebind(`SELECT * FROM users WHERE id = ?;`)
 	err := tx.GetContext(ctx, &m, query, id)
 	return m, err
 }
 
-// FindUserByPublicKey implements store.UserStore.
-func (*userStore) FindUserByPublicKey(ctx context.Context, tx db.Handler, pk ssh.PublicKey) (models.User, error) {
+// FindUserByPublicKey implements store.Store.
+func (*Store) FindUserByPublicKey(ctx context.Context, tx db.Handler, pk ssh.PublicKey) (models.User, error) {
 	var m models.User
 	query := tx.Rebind(`SELECT users.*
 			FROM users
@@ -109,8 +104,8 @@ func (*userStore) FindUserByPublicKey(ctx context.Context, tx db.Handler, pk ssh
 	return m, err
 }
 
-// FindUserByUsername implements store.UserStore.
-func (*userStore) FindUserByUsername(ctx context.Context, tx db.Handler, username string) (models.User, error) {
+// FindUserByUsername implements store.Store.
+func (*Store) FindUserByUsername(ctx context.Context, tx db.Handler, username string) (models.User, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return models.User{}, err
@@ -122,9 +117,9 @@ func (*userStore) FindUserByUsername(ctx context.Context, tx db.Handler, usernam
 	return m, err
 }
 
-// FindUserByUsernameForUpdate implements store.UserStore. See
+// FindUserByUsernameForUpdate implements store.Store. See
 // GetRepoByNameForUpdate.
-func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
+func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return models.User{}, err
@@ -144,27 +139,27 @@ func (*userStore) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler,
 	return m, err
 }
 
-// GetAllUsers implements store.UserStore.
-func (*userStore) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
+// GetAllUsers implements store.Store.
+func (*Store) GetAllUsers(ctx context.Context, tx db.Handler) ([]models.User, error) {
 	var ms []models.User
 	query := tx.Rebind(`SELECT * FROM users ORDER BY username;`)
 	err := tx.SelectContext(ctx, &ms, query)
 	return ms, err
 }
 
-// FindDefaultAdminUserID implements store.UserStore.
+// FindDefaultAdminUserID implements store.Store.
 //
 // It reads a single row instead of every user, so registering an anonymous
 // repository does not scan the users table inside its write transaction.
-func (*userStore) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
+func (*Store) FindDefaultAdminUserID(ctx context.Context, tx db.Handler) (int64, error) {
 	var id int64
 	query := tx.Rebind(`SELECT id FROM users WHERE admin = ? ORDER BY id ASC LIMIT 1;`)
 	err := tx.GetContext(ctx, &id, query, true)
 	return id, err
 }
 
-// ListPublicKeysByUserID implements store.UserStore.
-func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
+// ListPublicKeysByUserID implements store.Store.
+func (*Store) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
 	query := tx.Rebind(`SELECT public_key FROM public_keys
 			WHERE user_id = ?
@@ -177,8 +172,8 @@ func (*userStore) ListPublicKeysByUserID(ctx context.Context, tx db.Handler, id 
 	return parseStoredKeys(ctx, aks, "user_id", id), nil
 }
 
-// ListPublicKeysByUsername implements store.UserStore.
-func (*userStore) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, username string) ([]ssh.PublicKey, error) {
+// ListPublicKeysByUsername implements store.Store.
+func (*Store) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, username string) ([]ssh.PublicKey, error) {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return nil, err
@@ -197,8 +192,8 @@ func (*userStore) ListPublicKeysByUsername(ctx context.Context, tx db.Handler, u
 	return parseStoredKeys(ctx, aks, "username", username), nil
 }
 
-// RemovePublicKeyByUsername implements store.UserStore.
-func (*userStore) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
+// RemovePublicKeyByUsername implements store.Store.
+func (*Store) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -216,8 +211,8 @@ func (*userStore) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, 
 	return forgetSyncedAdminKey(ctx, tx, ak)
 }
 
-// SetAdminByUsername implements store.UserStore.
-func (*userStore) SetAdminByUsername(ctx context.Context, tx db.Handler, username string, isAdmin bool) error {
+// SetAdminByUsername implements store.Store.
+func (*Store) SetAdminByUsername(ctx context.Context, tx db.Handler, username string, isAdmin bool) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -227,8 +222,8 @@ func (*userStore) SetAdminByUsername(ctx context.Context, tx db.Handler, usernam
 	return affected(tx.ExecContext(ctx, query, isAdmin, username))
 }
 
-// SetUsernameByUsername implements store.UserStore.
-func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, username string, newUsername string) error {
+// SetUsernameByUsername implements store.Store.
+func (*Store) SetUsernameByUsername(ctx context.Context, tx db.Handler, username string, newUsername string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -243,8 +238,8 @@ func (*userStore) SetUsernameByUsername(ctx context.Context, tx db.Handler, user
 	return affected(tx.ExecContext(ctx, query, newUsername, username))
 }
 
-// SetUserPasswordByUsername implements store.UserStore.
-func (*userStore) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, username string, password string) error {
+// SetUserPasswordByUsername implements store.Store.
+func (*Store) SetUserPasswordByUsername(ctx context.Context, tx db.Handler, username string, password string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err

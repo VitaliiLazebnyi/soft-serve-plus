@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
@@ -45,7 +46,7 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, context.Context) {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatal(err)
 	}
-	datastore := database.New(ctx, dbx)
+	datastore := database.New()
 	if err := datastore.CreateUser(ctx, dbx, "owner", false, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := datastore.CreateRepo(ctx, dbx, "repo1", user.ID, "", "", false, false, false, false); err != nil {
+	if err := datastore.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: user.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if r, err := datastore.GetRepoByName(ctx, dbx, "repo1"); err != nil || r.ID != (lfsTestRepo{}).ID() {
