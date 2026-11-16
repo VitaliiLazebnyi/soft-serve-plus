@@ -222,3 +222,54 @@ func TestFirstMigrationFailsClearlyWithoutAnAdminForLegacyRepos(t *testing.T) {
 		t.Fatalf("Migrate() => %v; want an error about the missing admin", err)
 	}
 }
+
+// A database migrated from Soft Serve v0.6 tables may hold admin keys the
+// import brought in without a record, so the first migration does not mark
+// seeded keys as recorded there, and the boot warning about unrecorded admin
+// keys still covers it. A database created from nothing is marked.
+func TestFirstMigrationMarksRecordedKeysOnlyWithoutLegacyTables(t *testing.T) {
+	ctx := context.TODO()
+	marked := func(dbx *db.DB) bool {
+		t.Helper()
+		var n int
+		if err := dbx.Get(&n, dbx.Rebind(`SELECT COUNT(*) FROM settings WHERE "key" = ?`), adminKeysRecordedKey); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+
+	legacy := openLegacySqlite(t, ctx, ownerRow{Username: "admin", Admin: true})
+	mustExec(t, legacy, `CREATE TABLE public_key (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		public_key TEXT NOT NULL UNIQUE,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL
+	)`)
+	old := newAuthorizedKey(t)
+	mustExec(t, legacy, `INSERT INTO public_key (user_id, public_key, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)`, old)
+	cfg := config.DefaultConfig()
+	if err := Migrate(config.WithContext(ctx, cfg), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if marked(legacy) {
+		t.Error("a database imported from v0.6 is marked as recording its seeded keys")
+	}
+	if o, ok := ownerOf(t, legacy, old); !ok || o.Username != "admin" {
+		t.Fatalf("imported key owner = %+v, %v; want admin", o, ok)
+	}
+	if logs := bootLogs(t, ctx, cfg, legacy); !strings.Contains(logs, "WARN") {
+		t.Errorf("logs = %q; want a warning about the imported admin key", logs)
+	}
+
+	fresh, err := test.OpenSqlite(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(config.WithContext(ctx, cfg), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if !marked(fresh) {
+		t.Error("a database created by this version is not marked as recording its seeded keys")
+	}
+}

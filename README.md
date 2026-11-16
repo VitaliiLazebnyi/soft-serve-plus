@@ -138,7 +138,8 @@ neither in `initial_admin_keys` nor recorded as attached from it. If it is an
 old initial admin key, remove it with `user remove-pubkey admin`; to keep it,
 list it in `initial_admin_keys`, which also silences the warning. A database
 created by this version does not warn: its seeded keys are recorded, so a key
-without a record was added by hand.
+without a record was added by hand. One imported from Soft Serve v0.6 tables
+does, since the keys it imported have no record.
 
 Blank lines and lines starting with `#` are ignored. An entry that is not a
 valid key is read as a key file path if it has no spaces in it, and is ignored

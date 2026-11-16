@@ -80,6 +80,19 @@ var createTables = Migration{
 			return err
 		}
 
+		// legacy is set when there are Soft Serve v0.6 tables to import,
+		// whose keys come in without a record of how they got there.
+		var legacy bool
+		if tx.DriverName() == "sqlite" {
+			for _, t := range []string{"user_old", "public_key_old", "collab_old", "repo_old"} {
+				ok, err := tableExists(ctx, tx, t)
+				if err != nil {
+					return err
+				}
+				legacy = legacy || ok
+			}
+		}
+
 		// Import the v0.6 users first, keeping their ids, so the default
 		// admin below does not take an id a legacy user has.
 		sqlite := tx.DriverName() == "sqlite"
@@ -164,9 +177,15 @@ var createTables = Migration{
 			{"allow_keyless", "true"},
 			{"anon_access", access.ReadOnlyAccess.String()},
 			{"init", "true"},
-			// Seeded keys are recorded (see above), so the boot warning
-			// about unrecorded admin keys is for older databases only.
-			{adminKeysRecordedKey, "true"},
+		}
+		// Seeded keys are recorded (see above), so the boot warning about
+		// unrecorded admin keys is for older databases only, and for one
+		// imported from v0.6, whose admin keys come in unrecorded.
+		if !legacy {
+			settings = append(settings, struct {
+				Key   string
+				Value string
+			}{adminKeysRecordedKey, "true"})
 		}
 
 		for _, s := range settings {
