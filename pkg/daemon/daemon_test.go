@@ -591,6 +591,13 @@ func TestUploadPackCounted(t *testing.T) {
 // it serves.
 func startLimitedDaemon(t *testing.T, limit int, opts ...func(*GitDaemon)) (*GitDaemon, string) {
 	t.Helper()
+	return startDaemonOn(t, limit, nil, opts...)
+}
+
+// startDaemonOn is startLimitedDaemon serving on the listener wrap returns
+// for a loopback one, or on the loopback one if wrap is nil.
+func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener, opts ...func(*GitDaemon)) (*GitDaemon, string) {
+	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = testDaemon.cfg.DataPath
 	cfg.Git.MaxConnections = limit
@@ -613,6 +620,9 @@ func startLimitedDaemon(t *testing.T, limit int, opts ...func(*GitDaemon)) (*Git
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if wrap != nil {
+		l = wrap(l)
 	}
 	served := make(chan error, 1)
 	go func() { served <- d.Serve(l) }()
@@ -725,14 +735,14 @@ func TestMaxConnectionsBurst(t *testing.T) {
 // TestConnectionsAddAfterCloseAll checks that a connection accepted while the
 // daemon closes is not added after CloseAll and so escapes the forced close.
 func TestConnectionsAddAfterCloseAll(t *testing.T) {
-	m := connections{m: make(map[net.Conn]struct{})}
+	m := newConnections()
 	a, b := net.Pipe()
 	defer a.Close() //nolint:errcheck
 	defer b.Close() //nolint:errcheck
 	if err := m.CloseAll(); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Add(a, 10); !errors.Is(err, ErrServerClosed) {
+	if err := m.Add(a, 10, 0); !errors.Is(err, ErrServerClosed) {
 		t.Fatalf("Add after CloseAll = %v, want ErrServerClosed", err)
 	}
 	if got := m.Size(); got != 0 {

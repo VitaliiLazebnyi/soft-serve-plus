@@ -197,9 +197,19 @@ git:
   # seconds (at least 1) so that the connection does not go idle.
   idle_timeout: {{ .Git.IdleTimeout }}
 
-  # The maximum number of concurrent connections; at least 1. Connections
-  # beyond it are refused with "too many connections".
+  # The maximum number of concurrent connections, in total (at least 1)
+  # and from one client address (one IPv4 address or one IPv6 /64; 0 means
+  # no limit). Connections beyond either are refused with "too many
+  # connections". Loopback clients (127.0.0.0/8, ::1) have no per-address
+  # limit. Behind a TCP proxy that connects from a non-loopback address,
+  # such as another host or another container, every client has the
+  # proxy's address and shares one address's limit: set
+  # max_connections_per_ip to 0 there and limit clients at the proxy. Raise
+  # it when many clients share one NAT or CI egress address. The
+  # per-address limit keeps one address from taking every connection, not
+  # a few addresses together.
   max_connections: {{ .Git.MaxConnections }}
+  max_connections_per_ip: {{ .Git.MaxConnectionsPerIP }}
 
 # The HTTP server configuration.
 http:

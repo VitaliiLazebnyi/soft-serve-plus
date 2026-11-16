@@ -3,26 +3,66 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/clientaddr"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 )
 
-// connections is a net.Conn pool that is safe for concurrent use.
+// errMaxConnectionsPerIP is returned by connections.Add for a connection
+// over its address's share. It wraps git.ErrMaxConnections, which is what the
+// client is told.
+var errMaxConnectionsPerIP = fmt.Errorf("%w from one address", git.ErrMaxConnections)
+
+// connections is a net.Conn pool that is safe for concurrent use. It counts
+// the connections in all and from each client address.
 type connections struct {
-	m      map[net.Conn]struct{}
-	mu     sync.Mutex
-	closed bool // set by CloseAll; no connection is added after it
+	// m maps each connection to the key it is counted under in perAddr,
+	// or to the zero Prefix if it is not.
+	m       map[net.Conn]netip.Prefix
+	perAddr map[netip.Prefix]int
+	mu      sync.Mutex
+	closed  bool // set by CloseAll; no connection is added after it
+}
+
+// newConnections returns an empty pool.
+func newConnections() connections {
+	return connections{
+		m:       make(map[net.Conn]netip.Prefix),
+		perAddr: make(map[netip.Prefix]int),
+	}
+}
+
+// clientPrefix returns the key a connection from addr is counted under
+// against the per-address limit; see clientaddr.Prefix. ok is false when
+// addr holds no IP address, or a loopback one: such a connection only counts
+// towards the total. A TCP proxy on the same host connects from loopback,
+// and every client it forwards would otherwise share one address's share.
+func clientPrefix(addr net.Addr) (netip.Prefix, bool) {
+	if addr == nil {
+		return netip.Prefix{}, false
+	}
+	ap, err := netip.ParseAddrPort(addr.String())
+	if err != nil || ap.Addr().Unmap().IsLoopback() {
+		return netip.Prefix{}, false
+	}
+	return clientaddr.Prefix(ap.Addr())
 }
 
 // Add adds c to the pool unless the pool already holds limit connections,
-// which returns git.ErrMaxConnections, or CloseAll has run, which returns
-// ErrServerClosed. Checking and adding under one lock keeps a burst of
-// connections from all passing the check before any of them is counted.
-func (m *connections) Add(c net.Conn, limit int) error {
+// which returns git.ErrMaxConnections, or perAddr connections from c's
+// address, which returns errMaxConnectionsPerIP, or CloseAll has run, which
+// returns ErrServerClosed. A perAddr of 0 sets no per-address limit.
+// Checking and adding under one lock keeps a burst of connections from all
+// passing the check before any of them is counted.
+func (m *connections) Add(c net.Conn, limit, perAddr int) error {
+	key, keyed := clientPrefix(c.RemoteAddr())
+	keyed = keyed && perAddr > 0
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -31,7 +71,15 @@ func (m *connections) Add(c net.Conn, limit int) error {
 	if len(m.m) >= limit {
 		return git.ErrMaxConnections
 	}
-	m.m[c] = struct{}{}
+	if keyed && m.perAddr[key] >= perAddr {
+		return errMaxConnectionsPerIP
+	}
+	if keyed {
+		m.perAddr[key]++
+	} else {
+		key = netip.Prefix{}
+	}
+	m.m[c] = key
 	return nil
 }
 
@@ -39,8 +87,29 @@ func (m *connections) Close(c net.Conn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	err := c.Close()
-	delete(m.m, c)
+	m.remove(c)
 	return err
+}
+
+// remove takes c out of the pool and its address's count. m.mu must be held.
+func (m *connections) remove(c net.Conn) {
+	key, ok := m.m[c]
+	if !ok {
+		return
+	}
+	delete(m.m, c)
+	if key.IsValid() {
+		if m.perAddr[key]--; m.perAddr[key] <= 0 {
+			delete(m.perAddr, key)
+		}
+	}
+}
+
+// SizeOf returns how many connections are counted under key.
+func (m *connections) SizeOf(key netip.Prefix) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.perAddr[key]
 }
 
 func (m *connections) Size() int {
@@ -56,7 +125,7 @@ func (m *connections) CloseAll() error {
 	var err error
 	for c := range m.m {
 		err = errors.Join(err, c.Close())
-		delete(m.m, c)
+		m.remove(c)
 	}
 
 	return err
