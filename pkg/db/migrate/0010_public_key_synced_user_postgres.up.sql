@@ -1,6 +1,7 @@
 -- The record's value is the decimal id the sync wrote. A value that is not
--- one, or is too large for a user id, keeps no record. Leading zeros are
--- allowed, as SQLite reads them.
+-- one keeps no record. So does one of ten digits or more, which may still be
+-- a valid id (up to 2147483647): its key is then never removed, the safe
+-- side. Leading zeros are allowed, as SQLite reads them.
 ALTER TABLE public_keys ADD COLUMN synced_user_id INTEGER;
 UPDATE public_keys SET synced_user_id = (
   SELECT CAST(value AS INTEGER) FROM settings
