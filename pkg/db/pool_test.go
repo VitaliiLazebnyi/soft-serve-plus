@@ -78,10 +78,13 @@ func TestSetPoolLimitsLifetimes(t *testing.T) {
 			d := openPoolTestDB(t)
 			d.SetPoolLimits(tc.cfg)
 			holdConns(t, d, 1)
-			deadline := time.Now().Add(5 * time.Second)
+			// database/sql closes the connection on its cleaner's next
+			// pass, about a second away. The bound is far past that, so a
+			// slow machine doesn't reach it.
+			deadline := time.Now().Add(time.Minute)
 			for tc.closed(d.Stats()) == 0 {
 				if time.Now().After(deadline) {
-					t.Fatalf("no connection closed by %s after 5s: %+v", tc.name, d.Stats())
+					t.Fatalf("no connection closed by %s after a minute: %+v", tc.name, d.Stats())
 				}
 				time.Sleep(100 * time.Millisecond)
 			}

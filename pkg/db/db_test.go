@@ -361,9 +361,12 @@ func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
 		t.Fatalf("writer: %v", err)
 	}
 
-	// Well under busy_timeout, so a read that waits for the writer fails
-	// instead of slowing the test down.
-	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// The writer holds the write lock until the read is done, so a read
+	// that waits for it fails: at the SQLite lock with "database is locked"
+	// after busy_timeout, or at the write turn when rctx ends. The deadline
+	// is far longer than the read takes on a slow machine; it only bounds
+	// how long a read that waits holds the test up.
+	rctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	var n int
 	readErr := d.ReadTransactionContext(rctx, func(tx *Tx) error {
@@ -482,7 +485,10 @@ func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
 		t.Error("waiting writer ran fn without its turn")
 	}
 
-	rctx, rcancel := context.WithTimeout(ctx, 2*time.Second)
+	// The writer still holds the write lock and its turn, so a read that
+	// waits for either fails, after busy_timeout or when rctx ends. The
+	// deadline only bounds how long that takes.
+	rctx, rcancel := context.WithTimeout(ctx, time.Minute)
 	defer rcancel()
 	var n int
 	if err := d.ReadTransactionContext(rctx, func(tx *Tx) error {

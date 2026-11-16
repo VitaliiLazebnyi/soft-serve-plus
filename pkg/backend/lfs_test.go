@@ -16,6 +16,7 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
@@ -236,19 +237,38 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 
+	// probe is a second handle on the database that never waits for a
+	// lock: with busy_timeout 0, its write transaction fails at once with
+	// "database is locked" while any connection holds a write transaction,
+	// or, in rollback-journal mode, an open read transaction (then at
+	// COMMIT), and succeeds otherwise. Unlike a write bounded by a
+	// deadline, it doesn't depend on how fast the machine is.
+	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)")
+	is.NoErr(err)
+	t.Cleanup(func() { probe.Close() }) //nolint:errcheck
+
 	var called bool
-	var writeErr error
+	var probeErr, writeErr error
 	lt.client.onRead = func() {
 		called = true
-		wctx, cancel := context.WithTimeout(lt.ctx, time.Second)
+		probeErr = probe.TransactionContext(lt.ctx, func(*db.Tx) error { return nil })
+		if probeErr != nil {
+			// A write through the backend would wait for the open
+			// transaction, which this goroutine holds, until it gives up.
+			return
+		}
+		// The deadline only keeps a regression from hanging the test; the
+		// probe already showed that no transaction holds the lock.
+		wctx, cancel := context.WithTimeout(lt.ctx, time.Minute)
 		defer cancel()
 		writeErr = lt.be.store.SetAllowKeylessAccess(wctx, lt.be.db, false)
 	}
 
 	is.NoErr(lt.store())
 	is.True(called)    // the content was read
-	is.NoErr(writeErr) // another writer isn't blocked while the object downloads
-	_, err := lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), lt.pointers[0].Oid)
+	is.NoErr(probeErr) // no write transaction, nor in rollback-journal mode a read one, is open while the object downloads
+	is.NoErr(writeErr) // so another writer isn't blocked
+	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), lt.pointers[0].Oid)
 	is.NoErr(err)
 }
 

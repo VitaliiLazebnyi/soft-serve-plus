@@ -76,9 +76,14 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 
 	func() {
 		defer close(release)
-		// Each lookup gets its own deadline, well under busy_timeout, so a
-		// lookup that waits for the writer fails instead of slowing the test
-		// down, and does not use up the time of the lookups after it.
+		// The writer holds the write lock until every lookup is done, so a
+		// lookup that waits for it never gets it: one that waits for the
+		// SQLite lock fails with "database is locked" after busy_timeout,
+		// and one that waits for this process's write turn fails when its
+		// context ends. Each lookup gets its own deadline, so one that waits
+		// does not use up the time of the lookups after it. The deadline is
+		// far longer than a lookup takes on a slow machine; it only bounds
+		// how long a broken lookup holds the test up.
 		var cancels []context.CancelFunc
 		defer func() {
 			for _, cancel := range cancels {
@@ -86,7 +91,7 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 			}
 		}()
 		rctx := func() context.Context {
-			c, cancel := context.WithTimeout(ctx, 2*time.Second)
+			c, cancel := context.WithTimeout(ctx, time.Minute)
 			cancels = append(cancels, cancel)
 			return c
 		}
