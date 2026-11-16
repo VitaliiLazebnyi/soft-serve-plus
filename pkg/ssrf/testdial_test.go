@@ -69,3 +69,44 @@ func TestSecureClientTestDial(t *testing.T) {
 		t.Errorf("public: err = %v, want the in-memory network's refusal", err)
 	}
 }
+
+// Under internal/testdial a name is dialed at its first permitted address,
+// as a real dial would connect there, even when an earlier address is
+// refused. localhost answers ::1 first, which 127.0.0.0/8 does not cover,
+// and then 127.0.0.1.
+func TestSecureClientTestDialSkipsRefusedAddresses(t *testing.T) {
+	fakeResolver(t, nil) // localhost comes from the hosts file
+	n := useTestNet(t)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "in memory")
+	}))
+	_ = srv.Listener.Close()
+	srv.Listener = n.Listen()
+	srv.Start()
+	t.Cleanup(srv.Close)
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrs, err := resolver().LookupIPAddr(context.Background(), "localhost")
+	if err != nil || len(addrs) < 2 || addrs[0].IP.To4() != nil {
+		t.Skipf("localhost resolves to %v (%v), want ::1 before 127.0.0.1", addrs, err)
+	}
+	allowed, err := ParseAllowedHosts([]string{"127.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost:"+port+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewSecureClientAllowing(allowed).Do(req)
+	if err != nil {
+		t.Fatalf("localhost with 127.0.0.0/8 allowed: %v", err)
+	}
+	defer res.Body.Close() //nolint:errcheck
+	if body, _ := io.ReadAll(res.Body); string(body) != "in memory" {
+		t.Errorf("body %q, want the in-memory server's", body)
+	}
+}

@@ -51,6 +51,10 @@ func TestHooksSetOnlyByTests(t *testing.T) {
 				if imp.Name != nil {
 					name = imp.Name.Name
 				}
+				if name == "." {
+					t.Errorf("%s: non-test code dot-imports testdial", fset.Position(imp.Pos()))
+					return nil
+				}
 			}
 		}
 		if name == "" {

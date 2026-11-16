@@ -134,6 +134,9 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 
+		// redirect is the first attempt the checks let through while
+		// internal/testdial has a Func set; see errRedirected.
+		var redirect atomic.Pointer[dialTarget]
 		d := &net.Dialer{
 			KeepAlive: 30 * time.Second,
 			Resolver:  resolver(),
@@ -151,15 +154,19 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 					}
 				}
 				if testdial.Load() != nil {
-					return &redirectError{address: address}
+					redirect.CompareAndSwap(nil, &dialTarget{network: network, address: address})
+					return errRedirected
 				}
 				return nil
 			},
 		}
 		conn, err := d.DialContext(ctx, network, addr)
-		if redirect := (*redirectError)(nil); errors.As(err, &redirect) {
+		// Every attempt was stopped, so err is set, but it is the first
+		// attempt's error, which can be a refusal of another address of a
+		// name that also has a permitted one.
+		if t := redirect.Load(); t != nil {
 			if fn := testdial.Load(); fn != nil {
-				return fn(ctx, network, redirect.address)
+				return fn(ctx, t.network, t.address)
 			}
 		}
 		if err != nil {
@@ -169,15 +176,15 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 	}
 }
 
-// redirectError stops a secure client's connection attempt to address, which
-// its checks have let through, so that the connection is made by the Func set
-// with internal/testdial instead. Only tests set one.
-type redirectError struct {
-	address string
-}
+// errRedirected stops every connection attempt of a secure client while
+// internal/testdial has a Func set, which only tests do. The first attempt
+// the checks let through is then made by that Func instead, as the first
+// permitted address is the one a real dial would connect to.
+var errRedirected = errors.New("connection handed to the test dialer")
 
-func (e *redirectError) Error() string {
-	return "connection to " + e.address + " handed to the test dialer"
+// dialTarget is one connection attempt: its network and address.
+type dialTarget struct {
+	network, address string
 }
 
 // dialError turns a failed dial into the error the client returns. The
