@@ -1,17 +1,14 @@
-//go:build unix
-
 package serve
 
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -52,52 +49,61 @@ func generateTestCert(t *testing.T, certPath, keyPath, cn string) {
 	}
 }
 
+// certCN returns the common name of the leaf certificate in cert.
+func certCN(t *testing.T, cert *tls.Certificate) string {
+	t.Helper()
+	if cert == nil || len(cert.Certificate) == 0 {
+		t.Fatal("no certificate")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaf.Subject.CommonName
+}
+
+// Reload replaces the certificate GetCertificate returns with the one on
+// disk. "soft serve" calls it on SIGHUP; TestServeReloadsCertificateOnSIGHUP
+// covers that wiring.
 func TestCertReloader(t *testing.T) {
 	dir := t.TempDir()
-	certPath := filepath.Join(dir, "/cert.pem")
-	keyPath := filepath.Join(dir, "/key.pem")
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
 
-	// Initial cert
 	generateTestCert(t, certPath, keyPath, "cert-v1")
 
 	certReloader, err := NewCertReloader(certPath, keyPath)
 	if err != nil {
 		t.Fatalf("failed to create reloader: %v", err)
 	}
-
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGHUP)
-		for range sigCh {
-			// The test checks below that the certificate changed.
-			_ = certReloader.Reload()
-		}
-	}()
-
 	getCert := certReloader.GetCertificateFunc()
 
 	cert1, err := getCert(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Replace cert on disk
-	generateTestCert(t, certPath, keyPath, "cert-v2")
-
-	// Trigger reload
-	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
-		t.Fatalf("failed to send SIGHUP: %v", err)
+	if cn := certCN(t, cert1); cn != "cert-v1" {
+		t.Fatalf("initial certificate is %q, want cert-v1", cn)
 	}
 
-	// Allow async goroutine to reload
-	time.Sleep(100 * time.Millisecond)
+	// Replace the certificate on disk: nothing changes until Reload.
+	generateTestCert(t, certPath, keyPath, "cert-v2")
+	cert, err := getCert(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cn := certCN(t, cert); cn != "cert-v1" {
+		t.Fatalf("certificate before Reload is %q, want cert-v1", cn)
+	}
 
+	if err := certReloader.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
 	cert2, err := getCert(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if cert1 == cert2 {
-		t.Fatal("certificate was not reloaded after SIGHUP")
+	if cn := certCN(t, cert2); cn != "cert-v2" {
+		t.Fatalf("certificate after Reload is %q, want cert-v2", cn)
 	}
 }
