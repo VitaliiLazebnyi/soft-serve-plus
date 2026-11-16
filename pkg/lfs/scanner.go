@@ -212,8 +212,9 @@ func (b *cappedBuffer) String() string {
 
 // maxObjectSize bounds the size the parser accepts in an object header, far
 // above any object git stores, so skipping an object's content cannot
-// overflow.
-const maxObjectSize = 1 << 50
+// overflow. It is an int64, like the size it bounds, as it does not fit the
+// int of 32-bit targets.
+const maxObjectSize int64 = 1 << 50
 
 // errStopScan is what parseCatFileBatch returns when found stops it.
 var errStopScan = errors.New("scan stopped")
@@ -241,7 +242,9 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 			return fmt.Errorf("unexpected object header %q", strings.TrimSpace(header))
 		}
 		sha, typ := fields[0], fields[1]
-		size, err := strconv.Atoi(fields[2])
+		// Parsed as an int64 on every target: a 32-bit int would refuse
+		// an object over 2 GiB.
+		size, err := strconv.ParseInt(fields[2], 10, 64)
 		if err != nil || size < 0 || size > maxObjectSize {
 			return fmt.Errorf("unexpected object header %q", strings.TrimSpace(header))
 		}
@@ -251,7 +254,7 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		// cat-file reports, which buf has to hold.
 		if typ != "blob" || size > blobSizeCutoff {
 			// The content and its trailing newline.
-			if _, err := io.CopyN(io.Discard, br, int64(size)+1); err != nil {
+			if _, err := io.CopyN(io.Discard, br, size+1); err != nil {
 				return err //nolint:wrapcheck
 			}
 			continue
