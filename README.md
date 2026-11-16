@@ -1179,6 +1179,17 @@ refuses. Webhooks and Git LFS transfers never use a proxy either.
 
 Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
 
+A `git://` remote is pinned the same way: git is told to connect to the
+address the server checked instead of looking the name up again, so the
+request it sends names that address (`host=<IP>`) rather than the host name.
+
+Upgrading: a `git://` remote must now have the form `git://host[:port]/path`.
+Mirrors stored with a user name (`git://user@host/...`) or without a path
+fail this check, and their syncs are skipped with a warning in the log until
+the remote is corrected. A git daemon that serves different repositories by
+virtual host (`--interpolated-path` with `%H`) now sees the remote's address
+rather than its name, and may serve a different repository or none.
+
 When a mirror uses Git LFS, each sync only scans the history it fetched since the last sync that stored every LFS object, and once a day it scans the whole history to fetch object files that went missing. Deleting `<data_path>/lfs/<repo id>/scanned-refs` makes the next sync scan the whole history.
 
 ### Deleting Repositories

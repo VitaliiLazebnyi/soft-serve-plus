@@ -61,20 +61,26 @@ func TestValidateGitRemotePinsGitProtocol(t *testing.T) {
 	}
 }
 
-// gitDaemonStub accepts git:// connections on loopback and records the
-// first pkt-line of each, the request naming the repository and the host
-// git dialed by name (host=...). It answers nothing, so git fails after
-// sending it, which is all these tests need.
+// gitDaemonStub accepts git:// connections on one loopback address and
+// records the first pkt-line of each: the request naming the repository and
+// the host git put in its URL (host=...). It answers nothing, so git fails
+// after sending it, which is all these tests need.
 type gitDaemonStub struct {
 	port     string
 	mu       sync.Mutex
 	requests []string
 }
 
-func newGitDaemonStub(t *testing.T) *gitDaemonStub {
+// newGitDaemonStub listens on ip (a loopback literal) at a free port. When
+// skipUnavailable is set, a failure to listen skips the test rather than
+// failing it, for an address family the machine may not have.
+func newGitDaemonStub(t *testing.T, ip string, skipUnavailable bool) *gitDaemonStub {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(ip, "0"))
 	if err != nil {
+		if skipUnavailable {
+			t.Skipf("cannot listen on %s: %v", ip, err)
+		}
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
@@ -127,19 +133,20 @@ func (s *gitDaemonStub) hosts() []string {
 }
 
 // TestGitEnvPinHonouredForGitProtocol runs the installed git against git://
-// remotes with the configuration ValidateGitRemote gives them, and checks
-// where git connected. With the pin, git connects to the pinned address
-// without resolving the name: a name under .invalid (RFC 6761), which has no
-// address, still reaches the listener, and the request names the address,
-// so git used the rewritten URL. Without it, git dials the name it resolves
-// itself, which is the rebinding hole; "localhost" stands in for that second
-// answer, resolved from the hosts file rather than DNS.
+// remotes with the configuration gitProtocolPin gives them, and checks where
+// git connected. The pin rewrites the remote to an IP literal before git
+// connects, so git resolves nothing: the listener must be reached, and the
+// request must name the pinned address rather than the remote's name.
+//
+// The tests are hermetic when the pin works: no name is ever looked up, so
+// neither DNS nor the hosts file is involved. If the pin were ignored, git
+// would look the name up itself and either fail (.invalid, RFC 6761) or send
+// host=<name>, and the test fails either way.
 func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	loopback := netip.MustParseAddr("127.0.0.1")
 
 	run := func(t *testing.T, remote string, r ValidatedGitRemote) {
 		t.Helper()
@@ -150,48 +157,43 @@ func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
 		out, _ := cmd.CombinedOutput()
 		t.Logf("git ls-remote %s: %s", remote, out)
 	}
-	pinned := func(t *testing.T, remote string) ValidatedGitRemote {
+	pinned := func(t *testing.T, remote string, addr netip.Addr) ValidatedGitRemote {
 		t.Helper()
 		u, err := url.Parse(remote)
 		if err != nil {
 			t.Fatal(err)
 		}
-		pin, err := gitProtocolPin(remote, u, loopback)
+		pin, err := gitProtocolPin(remote, u, addr)
 		if err != nil || len(pin) != 1 {
 			t.Fatalf("gitProtocolPin(%q) = %v, %v; want one entry", remote, pin, err)
 		}
 		return ValidatedGitRemote{Transport: GitTransportGit, Config: pin}
 	}
 
-	t.Run("pinned name that does not resolve", func(t *testing.T) {
-		t.Parallel()
-		s := newGitDaemonStub(t)
-		remote := "git://pinned.invalid:" + s.port + "/x.git"
-		run(t, remote, pinned(t, remote))
-		if got, want := s.hosts(), []string{"127.0.0.1:" + s.port}; !slices.Equal(got, want) {
-			t.Fatalf("requests named %v, want %v", got, want)
-		}
-	})
-
-	t.Run("pinned name that resolves", func(t *testing.T) {
-		t.Parallel()
-		s := newGitDaemonStub(t)
-		remote := "git://localhost:" + s.port + "/x.git"
-		run(t, remote, pinned(t, remote))
-		if got, want := s.hosts(), []string{"127.0.0.1:" + s.port}; !slices.Equal(got, want) {
-			t.Fatalf("requests named %v, want %v: git dialed the name, not the pin", got, want)
-		}
-	})
-
-	// The control: without the pin git resolves the name itself, so the
-	// checks above tell the two apart.
-	t.Run("unpinned", func(t *testing.T) {
-		t.Parallel()
-		s := newGitDaemonStub(t)
-		remote := "git://localhost:" + s.port + "/x.git"
-		run(t, remote, ValidatedGitRemote{Transport: GitTransportGit})
-		if got, want := s.hosts(), []string{"localhost:" + s.port}; !slices.Equal(got, want) {
-			t.Fatalf("unpinned requests named %v, want %v", got, want)
-		}
-	})
+	tests := []struct {
+		name string
+		ip   string // the listener's and the pin's address
+		host string // the remote's host, before the port
+		want string // host= expected, before the port
+		v6   bool
+	}{
+		// A name with no address at all.
+		{"name that does not resolve", "127.0.0.1", "pinned.invalid", "127.0.0.1", false},
+		// A name that would resolve to something of its own: the pin
+		// outranks whatever that answer is.
+		{"name that resolves", "127.0.0.1", "localhost", "127.0.0.1", false},
+		// An IPv6 pin is bracketed in the rewritten URL.
+		{"IPv6 address", "::1", "pinned.invalid", "[::1]", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newGitDaemonStub(t, tt.ip, tt.v6)
+			remote := "git://" + tt.host + ":" + s.port + "/x.git"
+			run(t, remote, pinned(t, remote, netip.MustParseAddr(tt.ip)))
+			if got, want := s.hosts(), []string{tt.want + ":" + s.port}; !slices.Equal(got, want) {
+				t.Fatalf("requests named %v, want %v", got, want)
+			}
+		})
+	}
 }
