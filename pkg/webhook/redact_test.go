@@ -62,6 +62,7 @@ func TestRedactURLErrorKeepsChain(t *testing.T) {
 	rerr := utils.RedactURLError(perr, redactURL)
 	is.True(!strings.Contains(rerr.Error(), "SECRETPORT"))
 	is.True(errors.Is(rerr, utils.ErrInvalidURL))
+	is.True(errors.Is(rerr, ErrInvalidURL))              // the same error, through ssrf
 	_, perr = url.Parse("https://example.com/%zzSECRET") //nolint:staticcheck // invalid on purpose
 	is.True(perr != nil)
 	is.True(!strings.Contains(utils.RedactURLError(perr, redactURL).Error(), "zz"))

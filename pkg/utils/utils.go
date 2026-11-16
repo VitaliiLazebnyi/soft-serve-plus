@@ -308,7 +308,8 @@ func RedactURL(rawURL string) string {
 }
 
 // ErrInvalidURL replaces the parser's message in the errors RedactURLError
-// returns for a URL that cannot be parsed.
+// returns for a URL that cannot be parsed. ssrf.ErrInvalidURL, and so
+// webhook.ErrInvalidURL, are the same error.
 var ErrInvalidURL = errors.New("invalid URL")
 
 // RedactURLError redacts the URL of a *url.Error, which the HTTP client
