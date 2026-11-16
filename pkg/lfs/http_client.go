@@ -9,36 +9,12 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
-
-// errInvalidURL replaces the parser's message when a request URL cannot be
-// parsed.
-var errInvalidURL = errors.New("invalid URL")
-
-// redactURLError redacts the URL of a *url.Error, which the HTTP client
-// returns for every failed request and which prints the whole URL except for
-// a password: endpoints can carry a token as the user name, and hrefs are
-// often presigned URLs with a signature in the query. The operation and the
-// underlying error are kept (except for a parse error, whose message can
-// quote part of the URL), so errors.Is and errors.As still work. Any other
-// error is returned unchanged.
-func redactURLError(err error) error {
-	uerr, ok := err.(*url.Error) //nolint:errorlint // only the top-level error is replaced
-	if !ok {
-		return err
-	}
-	inner := uerr.Err
-	if uerr.Op == "parse" {
-		inner = errInvalidURL
-	}
-	return &url.Error{Op: uerr.Op, URL: utils.RedactURL(uerr.URL), Err: inner}
-}
 
 // HTTPClient downloads objects from a Git LFS server over HTTP, with the
 // batch API and the basic transfer adapter.
@@ -141,7 +117,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, payload)
 	if err != nil {
-		err = redactURLError(err)
+		err = utils.RedactURLError(err, utils.RedactURL)
 		logger.Errorf("Error creating request: %v", err)
 		return nil, err
 	}
@@ -155,7 +131,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 			return nil, ctx.Err()
 		default:
 		}
-		err = redactURLError(err)
+		err = utils.RedactURLError(err, utils.RedactURL)
 		logger.Errorf("Error while processing request: %v", err)
 		return nil, err
 	}
@@ -304,7 +280,7 @@ var errMissingDownload = errors.New("missing action 'download'")
 // stops the download: a plain import that is told an object is unavailable
 // never fetches it again.
 func isObjectError(err error) bool {
-	if errors.Is(err, errMissingDownload) || errors.Is(err, errInvalidURL) {
+	if errors.Is(err, errMissingDownload) || errors.Is(err, utils.ErrInvalidURL) {
 		return true
 	}
 	var serr *statusError
@@ -328,7 +304,7 @@ func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, erro
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.Href, nil)
 	if err != nil {
-		err = redactURLError(err)
+		err = utils.RedactURLError(err, utils.RedactURL)
 		logger.Errorf("Error creating request: %v", err)
 		return nil, err
 	}
@@ -344,7 +320,7 @@ func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, erro
 			return nil, ctx.Err()
 		default:
 		}
-		err = redactURLError(err)
+		err = utils.RedactURLError(err, utils.RedactURL)
 		logger.Errorf("Error while processing request: %v", err)
 		return nil, err
 	}

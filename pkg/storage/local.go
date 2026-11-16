@@ -124,7 +124,7 @@ func (l *LocalStorage) Rename(oldName, newName string) error {
 
 // fixPath resolves the given path relative to the storage root and ensures
 // it does not escape outside the root directory.
-func (l LocalStorage) fixPath(name string) (string, error) {
+func (l *LocalStorage) fixPath(name string) (string, error) {
 	name = strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	if filepath.IsAbs(name) {
 		return "", ErrPathTraversal

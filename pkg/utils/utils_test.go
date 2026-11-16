@@ -1,6 +1,9 @@
 package utils
 
 import (
+	"context"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -276,5 +279,40 @@ func TestValidateRepoSegmentCount(t *testing.T) {
 	}
 	if err := ValidateExistingRepo(tooDeep); err != nil {
 		t.Fatalf("ValidateExistingRepo(%d segments) = %v, want nil", MaxRepoSegments+1, err)
+	}
+}
+
+// RedactURLError applies the rule it is given to the URL of a *url.Error,
+// keeps the error chain, replaces a parse error's message, and leaves other
+// errors alone.
+func TestRedactURLError(t *testing.T) {
+	in := &url.Error{Op: "Get", URL: "https://USER:PASS@host/a/b?sig=SECRET", Err: context.DeadlineExceeded}
+	err := RedactURLError(in, RedactURL)
+	if got, want := err.Error(), "Get \"https://host/a/b\": context deadline exceeded"; got != want {
+		t.Errorf("error = %q, want %q", got, want)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error %v lost its chain", err)
+	}
+	if in.URL != "https://USER:PASS@host/a/b?sig=SECRET" {
+		t.Errorf("the original error was changed: %q", in.URL)
+	}
+	strict := func(string) string { return "[redacted]" }
+	if got := RedactURLError(in, strict).Error(); strings.Contains(got, "host") {
+		t.Errorf("the rule given was not applied: %q", got)
+	}
+
+	_, perr := url.Parse("https://host:SECRETPORT/x") //nolint:staticcheck // invalid on purpose
+	rerr := RedactURLError(perr, RedactURL)
+	if !errors.Is(rerr, ErrInvalidURL) || strings.Contains(rerr.Error(), "SECRETPORT") {
+		t.Errorf("parse error = %q, want ErrInvalidURL without the port", rerr)
+	}
+
+	other := errors.New("other")
+	if got := RedactURLError(other, RedactURL); got != other { //nolint:errorlint
+		t.Errorf("other error = %v, want it unchanged", got)
+	}
+	if got := RedactURLError(nil, RedactURL); got != nil {
+		t.Errorf("nil error = %v", got)
 	}
 }

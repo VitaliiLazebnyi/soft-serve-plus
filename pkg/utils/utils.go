@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -304,4 +305,28 @@ func RedactURL(rawURL string) string {
 	u.Fragment = ""
 	u.RawFragment = ""
 	return u.String()
+}
+
+// ErrInvalidURL replaces the parser's message in the errors RedactURLError
+// returns for a URL that cannot be parsed.
+var ErrInvalidURL = errors.New("invalid URL")
+
+// RedactURLError redacts the URL of a *url.Error, which the HTTP client
+// returns for every failed request and which prints the whole URL except for
+// a password, with redact: RedactURL, or a stricter rule where the path can
+// hold a secret too, as in many webhook URLs. The returned error keeps the
+// operation and the underlying error (except for a parse error, whose
+// message can quote part of the URL and is replaced with ErrInvalidURL), so
+// errors.Is and errors.As (context.DeadlineExceeded, net.Error timeouts and
+// so on) still work. Any other error is returned unchanged.
+func RedactURLError(err error, redact func(string) string) error {
+	uerr, ok := err.(*url.Error) //nolint:errorlint // only the top-level error is replaced
+	if !ok {
+		return err
+	}
+	inner := uerr.Err
+	if uerr.Op == "parse" {
+		inner = ErrInvalidURL
+	}
+	return &url.Error{Op: uerr.Op, URL: redact(uerr.URL), Err: inner}
 }
