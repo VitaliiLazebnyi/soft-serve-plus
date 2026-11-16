@@ -47,12 +47,17 @@ func TestParseCatFileBatchSkipsLargeBlob(t *testing.T) {
 	}
 }
 
-// A negative size is malformed output, an error rather than a panic.
-func TestParseCatFileBatchNegativeSize(t *testing.T) {
-	out := strings.Repeat("1", 40) + " blob -1\n\n"
-	err := parseCatFileBatch(strings.NewReader(out), func(PointerBlob) bool { return true })
-	if err == nil {
-		t.Fatal("parse accepted a negative size")
+// A negative size, or one past any object git stores, is malformed output,
+// an error rather than a panic or a skip that overflows.
+func TestParseCatFileBatchBadSize(t *testing.T) {
+	for _, size := range []string{"-1", "9223372036854775807", "1125899906842625"} {
+		for _, typ := range []string{"blob", "commit"} {
+			out := strings.Repeat("1", 40) + " " + typ + " " + size + "\n\n"
+			err := parseCatFileBatch(strings.NewReader(out), func(PointerBlob) bool { return true })
+			if err == nil {
+				t.Errorf("parse accepted a %s of size %s", typ, size)
+			}
+		}
 	}
 }
 

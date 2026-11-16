@@ -210,6 +210,11 @@ func (b *cappedBuffer) String() string {
 	return b.buf.String()
 }
 
+// maxObjectSize bounds the size the parser accepts in an object header, far
+// above any object git stores, so skipping an object's content cannot
+// overflow.
+const maxObjectSize = 1 << 50
+
 // errStopScan is what parseCatFileBatch returns when found stops it.
 var errStopScan = errors.New("scan stopped")
 
@@ -237,7 +242,7 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		}
 		sha, typ := fields[0], fields[1]
 		size, err := strconv.Atoi(fields[2])
-		if err != nil || size < 0 {
+		if err != nil || size < 0 || size > maxObjectSize {
 			return fmt.Errorf("unexpected object header %q", strings.TrimSpace(header))
 		}
 
