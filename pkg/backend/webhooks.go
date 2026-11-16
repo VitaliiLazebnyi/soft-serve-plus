@@ -217,8 +217,15 @@ func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id i
 	datastore := d.store
 
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		_, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
-		if err != nil {
+		// Lock the repository's row first, as creating a webhook does, so
+		// that this and a delete of the repository take turns: on Postgres a
+		// webhook deleted here while the repository's delete holds it in
+		// its list made that delete find nothing to delete and report the
+		// repository not found.
+		if _, err := datastore.LockAndCountWebhooks(ctx, tx, repo.ID()); err != nil {
+			return err
+		}
+		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
 			return err
 		}
 		return d.deleteWebhookRows(ctx, tx, repo.ID(), id)
@@ -246,7 +253,8 @@ func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID i
 		return err
 	}
 	for _, w := range whs {
-		if err := d.deleteWebhookRows(ctx, tx, repoID, w.ID); err != nil {
+		// A webhook deleted since it was listed is already gone.
+		if err := d.deleteWebhookRows(ctx, tx, repoID, w.ID); err != nil && !errors.Is(err, db.ErrRecordNotFound) {
 			return err
 		}
 	}
