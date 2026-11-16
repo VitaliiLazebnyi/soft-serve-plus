@@ -169,10 +169,10 @@ func TestValidateMirrorRemotesNoRemote(t *testing.T) {
 }
 
 // TestRunMirrorGitStalledRemote covers a remote that answers and then stalls.
-// git sets no read timeout of its own, so before the per-command timeout the
+// git sets no read timeout of its own, so without the sync's deadline the
 // sync never returned, and the scheduler skipped every later mirror run. The
-// http helper git starts outlives the killed git and holds its stderr, so
-// this also covers not waiting on it.
+// http helper git starts outlives git and holds its stderr, so this also
+// covers not waiting on it.
 func TestRunMirrorGitStalledRemote(t *testing.T) {
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -235,13 +235,13 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 		}
 	})
 
-	old := mirrorGitTimeout
-	mirrorGitTimeout = time.Second
-	t.Cleanup(func() { mirrorGitTimeout = old })
-
+	// The sync's deadline stops the command, as it would a mirror whose
+	// sync runs out of time.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- runMirrorGit(t.Context(), r.Path, nil, "fetch", "--prune")
+		done <- runMirrorGit(ctx, r.Path, nil, "fetch", "--prune")
 	}()
 
 	select {
@@ -249,7 +249,7 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("runMirrorGit = %v, want a deadline error", err)
 		}
-	case <-time.After(mirrorGitTimeout + mirrorGitWaitDelay + 30*time.Second):
+	case <-time.After(mirrorGitWaitDelay + time.Minute):
 		t.Fatal("runMirrorGit did not return for a stalled remote")
 	}
 }
@@ -637,16 +637,5 @@ func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("ran %v after cancellation", *calls)
-	}
-}
-
-// The git command does not take the cancellation: killing git would leave
-// its ref locks behind.
-func TestRunMirrorGitIgnoresCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	if err := runMirrorGit(ctx, t.TempDir(), nil, "version"); err != nil {
-		t.Fatalf("git did not run under a cancelled context: %v", err)
 	}
 }
