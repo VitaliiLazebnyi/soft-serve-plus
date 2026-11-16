@@ -1051,9 +1051,19 @@ func TestWaitForDeliveriesLogsPendingAndStopsOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
-	start := time.Now()
-	e.be.WaitForDeliveries(ctx)
-	is.True(time.Since(start) < time.Second)
+	// The deliveries stay blocked until the test ends, so WaitForDeliveries
+	// returns only if it stops waiting when its context ends. The bound only
+	// keeps a regression from hanging the test; a slow machine can't reach it.
+	returned := make(chan struct{})
+	go func() {
+		e.be.WaitForDeliveries(ctx)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Minute):
+		t.Fatal("WaitForDeliveries waited for blocked deliveries after its context ended")
+	}
 
 	logs := e.logs.String()
 	is.True(strings.Contains(logs, "waiting for webhook deliveries"))

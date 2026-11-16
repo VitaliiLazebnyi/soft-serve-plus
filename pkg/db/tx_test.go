@@ -31,8 +31,9 @@ func TestTransactionContextCancelledBeforeCommit(t *testing.T) {
 		}
 		cancel()
 		// Wait for database/sql to roll the transaction back, so Commit
-		// finds it already done.
-		deadline := time.Now().Add(5 * time.Second)
+		// finds it already done. The bound only keeps a regression from
+		// hanging the test; a slow machine can't reach it.
+		deadline := time.Now().Add(time.Minute)
 		for {
 			_, err := tx.ExecContext(context.Background(), "SELECT 1")
 			if errors.Is(err, sql.ErrTxDone) {

@@ -23,9 +23,12 @@ import (
 )
 
 const (
-	testStallTimeout = 200 * time.Millisecond
-	testChunkDelay   = 100 * time.Millisecond
-	testChunks       = 8 // 800ms in all, well past testStallTimeout
+	// A slow transfer must not stall out while its chunks still flow, so
+	// the gap between them stays far under testStallTimeout even when a
+	// loaded machine runs the sender late.
+	testStallTimeout = time.Second
+	testChunkDelay   = 50 * time.Millisecond
+	testChunks       = 30 // 1.5s in all, past testStallTimeout
 )
 
 // newLoopbackAdapter returns a basic transfer adapter whose client is set up
