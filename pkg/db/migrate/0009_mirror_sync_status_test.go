@@ -32,15 +32,15 @@ func TestMirrorSyncStatus(t *testing.T) {
 	}
 
 	// A repository from before the migration.
-	migrations = all[:mirrorSyncStatusVersion-1]
+	migrations = all[:mirrorSyncStatus.Version-1]
 	if err := Migrate(ctx, dbx); err != nil {
-		t.Fatalf("Migrate() to %d => %v", mirrorSyncStatusVersion-1, err)
+		t.Fatalf("Migrate() to %d => %v", mirrorSyncStatus.Version-1, err)
 	}
 	mustExec(`INSERT INTO users (id, username, admin, updated_at) VALUES (100, 'u', false, CURRENT_TIMESTAMP)`)
 	mustExec(`INSERT INTO repos (id, name, project_name, description, private, mirror, hidden, user_id, updated_at)
 		VALUES (1, 'r', 'r', '', false, true, false, 100, CURRENT_TIMESTAMP)`)
 
-	migrations = all[:mirrorSyncStatusVersion]
+	migrations = all[:mirrorSyncStatus.Version]
 	if err := Migrate(ctx, dbx); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}

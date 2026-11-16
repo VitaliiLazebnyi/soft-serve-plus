@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"charm.land/log/v2"
@@ -19,10 +18,6 @@ import (
 
 // defaultAdminUsername is the admin account the first migration creates.
 const defaultAdminUsername = "admin"
-
-// syncedKeyPrefix prefixes the settings rows that record which keys
-// syncAdminKeys attached. See db.SyncedAdminKeyPrefix.
-const syncedKeyPrefix = db.SyncedAdminKeyPrefix
 
 // SyncAdminKeys makes sure every key in initial_admin_keys is in the
 // database, in its own transaction. The first migration seeds the keys once;
@@ -119,16 +114,13 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx) error {
 				break
 			}
 			ak := sshutils.MarshalAuthorizedKey(k)
-			added, err := insertPublicKey(ctx, tx, targetID, ak)
+			added, err := insertSyncedKey(ctx, tx, targetID, ak)
 			if err != nil {
 				return fmt.Errorf("add initial admin key: %w", err)
 			}
 			if !added {
-				// A concurrent boot attached it first and recorded it.
+				// A concurrent boot attached it first.
 				continue
-			}
-			if err := recordSyncedKey(ctx, tx, ak, targetID); err != nil {
-				return err
 			}
 			logger.Info("initial admin key attached to admin user",
 				"user_id", targetID, "key", gossh.FingerprintSHA256(k))
@@ -230,13 +222,15 @@ func adminUserID(ctx context.Context, tx *db.Tx, logger *log.Logger) (id int64, 
 	return id, true, nil
 }
 
-// insertPublicKey attaches ak to userID. added is false when the key was
-// already there, for example because a concurrent boot inserted it. Any other
-// conflict, such as a primary key clash, is returned: on postgres it has
-// aborted the transaction.
-func insertPublicKey(ctx context.Context, tx *db.Tx, userID int64, ak string) (added bool, err error) {
-	query := insertIgnore(tx, `INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, "public_key")
-	res, err := tx.ExecContext(ctx, query, userID, ak)
+// insertSyncedKey attaches ak to userID and records that the sync did, in
+// public_keys.synced_user_id. added is false when the key was already there,
+// for example because a concurrent boot inserted it. Any other conflict, such
+// as a primary key clash, is returned: on postgres it has aborted the
+// transaction.
+func insertSyncedKey(ctx context.Context, tx *db.Tx, userID int64, ak string) (added bool, err error) {
+	query := insertIgnore(tx, `INTO public_keys (user_id, public_key, synced_user_id, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, "public_key")
+	res, err := tx.ExecContext(ctx, query, userID, ak, userID)
 	if err != nil {
 		return false, err
 	}
@@ -247,24 +241,28 @@ func insertPublicKey(ctx context.Context, tx *db.Tx, userID int64, ak string) (a
 	return n > 0, nil
 }
 
-// recordSyncedKey records that syncAdminKeys attached ak to userID,
-// replacing a stale record left by a key that was deleted and attached again.
-func recordSyncedKey(ctx context.Context, tx *db.Tx, ak string, userID int64) error {
-	name := syncedKeyPrefix + ak
-	if _, err := tx.ExecContext(ctx, tx.Rebind(`DELETE FROM settings WHERE "key" = ?`), name); err != nil {
-		return fmt.Errorf("record initial admin key: %w", err)
-	}
-	insert := insertIgnore(tx, `INTO settings ("key", value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, `"key"`)
-	if _, err := tx.ExecContext(ctx, insert, name, strconv.FormatInt(userID, 10)); err != nil {
-		return fmt.Errorf("record initial admin key: %w", err)
-	}
-	return nil
+// syncedKey is a key syncAdminKeys attached, still on the user it was
+// attached to.
+type syncedKey struct {
+	UserID int64  `db:"user_id"`
+	Key    string `db:"public_key"`
 }
 
-// syncedKeyRow is a settings row recording a key syncAdminKeys attached.
-type syncedKeyRow struct {
-	Key   string `db:"key"`
-	Value string `db:"value"`
+// syncedKeys returns the keys syncAdminKeys attached that are still on the
+// user they were attached to, sorted by key. A key moved to another account
+// since is left out: it is that account's now.
+func syncedKeys(ctx context.Context, tx *db.Tx) ([]syncedKey, error) {
+	var keys []syncedKey
+	if err := tx.SelectContext(ctx, &keys, `SELECT user_id, public_key FROM public_keys
+		WHERE synced_user_id = user_id`); err != nil {
+		return nil, fmt.Errorf("list synced initial admin keys: %w", err)
+	}
+	// Remove in a fixed order, independent of the database's collation, so
+	// concurrent boots lock rows in the same order.
+	slices.SortFunc(keys, func(a, b syncedKey) int {
+		return strings.Compare(a.Key, b.Key)
+	})
+	return keys, nil
 }
 
 // removeUnconfiguredKeys removes the keys syncAdminKeys attached that are no
@@ -273,75 +271,41 @@ type syncedKeyRow struct {
 // remove is false, nothing is removed and each key that would have been is
 // logged as an error.
 func removeUnconfiguredKeys(ctx context.Context, tx *db.Tx, logger *log.Logger, configured map[string]struct{}, remove bool) error {
-	var rows []syncedKeyRow
-	// "_" is a LIKE wildcard; the prefix is checked again below.
-	if err := tx.SelectContext(ctx, &rows, tx.Rebind(`SELECT "key", value FROM settings WHERE "key" LIKE ?`),
-		syncedKeyPrefix+"%"); err != nil {
-		return fmt.Errorf("list synced initial admin keys: %w", err)
+	keys, err := syncedKeys(ctx, tx)
+	if err != nil {
+		return err
 	}
-	// Remove in a fixed order, independent of the database's collation, so
-	// concurrent boots lock rows in the same order.
-	slices.SortFunc(rows, func(a, b syncedKeyRow) int {
-		return strings.Compare(a.Key, b.Key)
-	})
-
-	for _, r := range rows {
-		ak, ok := strings.CutPrefix(r.Key, syncedKeyPrefix)
-		if !ok {
+	for _, k := range keys {
+		if _, ok := configured[k.Key]; ok {
 			continue
 		}
-		if _, ok := configured[ak]; ok {
-			continue
-		}
-		if err := removeSyncedKey(ctx, tx, logger, r, ak, remove); err != nil {
+		if err := removeSyncedKey(ctx, tx, logger, k, remove); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// removeSyncedKey removes the key ak recorded by r from the user it was
-// attached to. See removeUnconfiguredKeys.
-func removeSyncedKey(ctx context.Context, tx *db.Tx, logger *log.Logger, r syncedKeyRow, ak string, remove bool) error {
-	userID, idErr := strconv.ParseInt(r.Value, 10, 64)
-
+// removeSyncedKey removes k from the user it was attached to. See
+// removeUnconfiguredKeys.
+//
+// The statement checks again that the row is the one the sync attached, so
+// a key removed and added back by hand meanwhile, on another connection, is
+// a new row without the record and is left alone.
+func removeSyncedKey(ctx context.Context, tx *db.Tx, logger *log.Logger, k syncedKey, remove bool) error {
 	if !remove {
-		if idErr != nil {
-			return nil
-		}
-		var n int
-		if err := tx.GetContext(ctx, &n, tx.Rebind(`SELECT COUNT(*) FROM public_keys WHERE public_key = ? AND user_id = ?`),
-			ak, userID); err != nil {
-			return fmt.Errorf("look up initial admin key: %w", err)
-		}
-		if n > 0 {
-			logger.Error("initial admin key removed from the config is still an admin key because a key file could not be read",
-				"user_id", userID, "key", fingerprint(ak))
-		}
+		logger.Error("initial admin key removed from the config is still an admin key because a key file could not be read",
+			"user_id", k.UserID, "key", fingerprint(k.Key))
 		return nil
 	}
-
-	// Forget the record first, and remove the key only if this run is the
-	// one that forgot it. The row lock orders this with a user command that
-	// adds or removes the key by hand (and so forgets the record) at the
-	// same time: the key is then left alone.
-	res, err := tx.ExecContext(ctx, tx.Rebind(`DELETE FROM settings WHERE "key" = ? AND value = ?`), r.Key, r.Value)
-	if err != nil {
-		return fmt.Errorf("forget initial admin key: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("forget initial admin key: %w", err)
-	} else if n != 1 || idErr != nil {
-		return nil
-	}
-
-	res, err = tx.ExecContext(ctx, tx.Rebind(`DELETE FROM public_keys WHERE public_key = ? AND user_id = ?`), ak, userID)
+	res, err := tx.ExecContext(ctx, tx.Rebind(`DELETE FROM public_keys
+		WHERE public_key = ? AND user_id = ? AND synced_user_id = user_id`), k.Key, k.UserID)
 	if err != nil {
 		return fmt.Errorf("remove initial admin key: %w", err)
 	}
 	if n, err := res.RowsAffected(); err == nil && n > 0 {
 		logger.Warn("initial admin key removed from the config; removed it from the user it was attached to",
-			"user_id", userID, "key", fingerprint(ak))
+			"user_id", k.UserID, "key", fingerprint(k.Key))
 	}
 	return nil
 }

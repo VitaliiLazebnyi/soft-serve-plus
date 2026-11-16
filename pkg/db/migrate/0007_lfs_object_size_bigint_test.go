@@ -22,7 +22,7 @@ func TestLFSObjectSizeBigint(t *testing.T) {
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
 	t.Cleanup(func() { migrations = all })
-	migrations = all[:lfsObjectSizeBigintVersion]
+	migrations = all[:lfsObjectSizeBigint.Version]
 	if err := Migrate(ctx, dbx); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}

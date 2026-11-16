@@ -21,14 +21,14 @@ var webhookDeliverySeq = Migration{
 	Name:    webhookDeliverySeqName,
 	Version: webhookDeliverySeqVersion,
 	Migrate: func(ctx context.Context, tx *db.Tx) error {
-		if err := migrateUp(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName); err != nil {
+		if err := execMigration(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName, false); err != nil {
 			return err
 		}
 		suggestSqliteVacuum(ctx, tx)
 		return nil
 	},
 	Rollback: func(ctx context.Context, tx *db.Tx) error {
-		return migrateDown(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName)
+		return execMigration(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName, true)
 	},
 }
 
