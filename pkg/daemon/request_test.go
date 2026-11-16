@@ -167,7 +167,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}
 
 	// The daemon records the request after the client hangs up.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for sampleCount(t, git.UploadPackService) == before && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

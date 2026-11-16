@@ -3,6 +3,7 @@ package daemon
 import (
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,21 @@ func waitConns(t *testing.T, d *GitDaemon, n int, within time.Duration) {
 	for d.conns.Size() != n {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d connections open after %v, want %d", d.conns.Size(), within, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitLog waits up to within until logs holds substr. A line the daemon
+// writes after the client has seen the effect it goes with, such as a
+// panic logged once its connection is closed, may not be there yet when
+// the client sees that effect, so a test cannot read the logs just once.
+func waitLog(t *testing.T, logs *syncBuffer, substr string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !strings.Contains(logs.String(), substr) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q not logged after %v; logs:\n%s", substr, within, logs.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
