@@ -3,15 +3,25 @@ package lfs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	// maxBatchResponseSize bounds the batch response a remote may send. Each
 	// object takes a few hundred bytes, or a few KiB with long presigned
-	// hrefs and headers, so this leaves ample room for the 100 objects Git
-	// LFS sends per batch by default.
-	maxBatchResponseSize = 10 << 20 // 10 MiB
+	// hrefs and headers, and the client asks for at most 20 objects at a
+	// time, so this leaves ample room.
+	maxBatchResponseSize = 1 << 20 // 1 MiB
+
+	// maxRemoteText is how much of any text a remote sends, such as an
+	// error message or a status line's reason, the client keeps: the rest
+	// would only be logged, once per object and per sync.
+	maxRemoteText = 256
 
 	// maxErrorResponseSize bounds the JSON error body of a failed transfer
 	// request, which only carries a message.
@@ -59,4 +69,39 @@ func (l *maxBytesReader) Read(p []byte) (int, error) {
 	l.n = 0
 	l.err = errResponseTooLarge
 	return n, l.err
+}
+
+// remoteText returns s, text a remote sent, cut to maxRemoteText bytes, at a
+// character boundary if one is near, with a mark if it was cut, and with
+// every byte or character that is not printable escaped, so a remote cannot
+// write terminal control sequences into the log or a client's session.
+func remoteText(s string) string {
+	suffix := ""
+	if len(s) > maxRemoteText {
+		cut := maxRemoteText
+		// Back off at most to the start of the character the cut is in;
+		// text that is not UTF-8 is cut where it is, and escaped below.
+		for back := 0; back < utf8.UTFMax-1 && cut > 0 && !utf8.RuneStart(s[cut]); back++ {
+			cut--
+		}
+		if !utf8.RuneStart(s[cut]) {
+			cut = maxRemoteText
+		}
+		s, suffix = s[:cut], "... (truncated)"
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			fmt.Fprintf(&b, "\\x%02x", s[i])
+		case r == ' ' || unicode.IsGraphic(r):
+			b.WriteRune(r)
+		default:
+			q := strconv.QuoteRuneToASCII(r)
+			b.WriteString(q[1 : len(q)-1])
+		}
+		i += size
+	}
+	return b.String() + suffix
 }
