@@ -89,7 +89,9 @@ var (
 	// "<user id>", which are carried over and deleted. A key deleted by hand
 	// or with its user takes its record with it, which the settings rows
 	// needed three store methods and a stale-record check for. Rolling back
-	// writes the settings rows again.
+	// writes the settings rows again. The column is not a foreign key: a
+	// change of users.id cascades to user_id but not here, so the key then
+	// looks moved to another account and is kept, which is the safe side.
 	publicKeySyncedUser = sqlMigration(10, "public_key_synced_user")
 )
 

@@ -47,6 +47,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		{"moved", 101},  // attached by the sync to 100, since moved by hand
 		{"hand", 100},   // added by hand
 		{"garbled", 100},
+		{"padded", 100},
 	} {
 		mustExec(`INSERT INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, k.user, k.key)
 	}
@@ -54,6 +55,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		"synced":  "100",
 		"moved":   "100",
 		"garbled": "1x",
+		"padded":  "0100",
 		"stale":   "100", // its key was deleted
 	} {
 		mustExec(`INSERT INTO settings ("key", value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, "initial_admin_key:"+key, value)
@@ -91,7 +93,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		}
 		return got
 	}
-	wantSynced := map[string]int64{"synced": 100, "moved": 100}
+	wantSynced := map[string]int64{"synced": 100, "moved": 100, "padded": 100}
 	// The other settings, such as anon_access, stay as they are.
 	wantSettings := settings()
 	for k := range wantSettings {
@@ -120,6 +122,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 	wantRolledBack := maps.Clone(wantSettings)
 	wantRolledBack["initial_admin_key:synced"] = "100"
 	wantRolledBack["initial_admin_key:moved"] = "100"
+	wantRolledBack["initial_admin_key:padded"] = "100"
 	if got := settings(); !maps.Equal(got, wantRolledBack) {
 		t.Errorf("settings after rollback = %v, want %v", got, wantRolledBack)
 	}
