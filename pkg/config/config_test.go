@@ -37,6 +37,7 @@ func TestMergeInitAdminKeys(t *testing.T) {
 	is.NoErr(os.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "testdata/k1.pub"))
 	t.Cleanup(func() { is.NoErr(os.Unsetenv("SOFT_SERVE_INITIAL_ADMIN_KEYS")) })
 	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8 a@b"},
 	}
@@ -51,6 +52,7 @@ func TestMergeInitAdminKeys(t *testing.T) {
 func TestValidateInitAdminKeys(t *testing.T) {
 	is := is.New(t)
 	cfg := &Config{
+		DB:       DBConfig{Driver: "sqlite"},
 		DataPath: t.TempDir(),
 		InitialAdminKeys: []string{
 			"testdata/k1.pub",
@@ -75,6 +77,7 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	notAKey := filepath.Join(t.TempDir(), "id_ed25519")
 	is.NoErr(os.WriteFile(notAKey, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n"), 0o600))
 	cfg := &Config{
+		DB:       DBConfig{Driver: "sqlite"},
 		DataPath: t.TempDir(),
 		InitialAdminKeys: []string{
 			"testdata/k1.pub",
@@ -117,6 +120,7 @@ func TestUnreadableAdminKeyFilesNotDuplicated(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-mounted-yet.pub")
 	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", missing+"\nnot a key")
 	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{missing, "not a key"},
 	}
@@ -202,7 +206,7 @@ func TestParseDefaultRepo(t *testing.T) {
 
 func TestParseDefaultRepoFromFile(t *testing.T) {
 	is := is.New(t)
-	cfg := &Config{DataPath: t.TempDir()}
+	cfg := &Config{DataPath: t.TempDir(), DB: DBConfig{Driver: "sqlite"}}
 	is.NoErr(parseFile(cfg, "testdata/config_default_repo.yaml"))
 	is.Equal(cfg.DefaultRepo, "gitops")
 }
@@ -546,6 +550,7 @@ func TestParseEnvAdminKeysTwice(t *testing.T) {
 	is := is.New(t)
 	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "testdata/k1.pub")
 	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8 a@b"},
 	}
@@ -568,6 +573,7 @@ func TestAdminKeyFileWithSeveralKeys(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "authorized_keys")
 	is.NoErr(os.WriteFile(file, []byte("# ops\n"+k1+" a@b\r\n\nssh-ed25519 AAAAtypo\n"+k2+" c@d\n"), 0o600))
 	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{file},
 	}
@@ -589,6 +595,7 @@ func TestAdminKeyFileRepeatsKey(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "authorized_keys")
 	is.NoErr(os.WriteFile(file, []byte(k1+" a@b\n"+k1+"  c@d\n"), 0o600))
 	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{k1 + " x@y", file},
 	}
@@ -945,6 +952,27 @@ func TestWriteConfigIsPrivate(t *testing.T) {
 		}
 		if got := fi.Mode().Perm(); got != want {
 			t.Errorf("%s mode = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// A database driver other than the two db.Open takes fails validation,
+// naming the setting.
+func TestValidateRejectsUnknownDBDriver(t *testing.T) {
+	for _, driver := range []string{"", "sqlite3", "mysql", "Postgres"} {
+		cfg := DefaultConfig()
+		cfg.DataPath = t.TempDir()
+		cfg.DB.Driver = driver
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "db.driver") {
+			t.Errorf("Validate() with driver %q => %v, want a db.driver error", driver, err)
+		}
+	}
+	for _, driver := range []string{"sqlite", "postgres"} {
+		cfg := DefaultConfig()
+		cfg.DataPath = t.TempDir()
+		cfg.DB.Driver = driver
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() with driver %q => %v", driver, err)
 		}
 	}
 }

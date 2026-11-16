@@ -11,8 +11,8 @@ import (
 //
 // Errors returned by SelectContext, GetContext, QueryxContext and
 // ExecContext are already mapped with [WrapError], so callers can test them
-// with errors.Is against [ErrRecordNotFound], [ErrDuplicateKey],
-// [ErrForeignKey], [ErrNotNull] and [ErrCheck] without wrapping them again.
+// with errors.Is against [ErrRecordNotFound], [ErrDuplicateKey] and
+// [ErrForeignKey] without wrapping them again.
 // Errors that surface later, from scanning the *sqlx.Row of QueryRowxContext
 // or iterating the *sqlx.Rows of QueryxContext, are not mapped.
 type Handler interface {
