@@ -59,8 +59,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 		wantErr error
 	}{
 		{
-			// With an allowlist, every ssh remote must be on it. A second
-			// remote added out of band is fetched by `remote update` too.
+			// With an allowlist, an ssh remote must be on it.
 			name: "ssh remote on allowlist",
 			remotes: map[string]string{
 				"origin": "ssh://git@git.internal.example/x.git",
@@ -70,8 +69,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 		{
 			name: "ssh remote off allowlist",
 			remotes: map[string]string{
-				"origin": "ssh://git@git.internal.example/x.git",
-				"backup": "git@10.0.0.1:x.git",
+				"origin": "git@10.0.0.1:x.git",
 			},
 			policy:  allow,
 			wantErr: ssrf.ErrSSHHostNotAllowed,
@@ -102,14 +100,23 @@ func TestValidateMirrorRemotes(t *testing.T) {
 			wantErr: ssrf.ErrPrivateIP,
 		},
 		{
-			// `git remote update` fetches from every remote, not just
-			// origin. A guard that only reads origin misses this entirely.
+			// The remote is validated whatever its name, not only when
+			// it is origin.
 			name: "private non-origin remote",
 			remotes: map[string]string{
-				"origin": "https://1.1.1.1/x.git",
 				"backup": "http://192.168.1.1/x.git",
 			},
 			wantErr: ssrf.ErrPrivateIP,
+		},
+		{
+			// Each remote is fetched with --prune and +refs/*:refs/*, so
+			// two would delete and overwrite each other's refs.
+			name: "two remotes",
+			remotes: map[string]string{
+				"origin": "https://1.1.1.1/x.git",
+				"backup": "https://1.0.0.1/x.git",
+			},
+			wantErr: errMultipleRemotes,
 		},
 		{
 			// git:// is a raw TCP connect and is just as usable for SSRF.
@@ -383,9 +390,7 @@ func TestValidateMirrorRemotesReadsLikeGit(t *testing.T) {
 			// The legacy section syntax is a remote to git, but not a
 			// subsection to a config parser.
 			name: "legacy section syntax",
-			config: `[remote "origin"]
-	url = https://1.1.1.1/x.git
-[remote.backup]
+			config: `[remote.backup]
 	url = http://127.0.0.1/x.git
 `,
 		},
@@ -427,6 +432,9 @@ func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
 		name    string
 		config  string
 		wantErr error
+		// noOrigin leaves out the origin remote the repository otherwise
+		// has.
+		noOrigin bool
 	}{
 		{
 			// `git remote update` fetches the remotes.default group, which
@@ -454,13 +462,18 @@ func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
 			config: `[remote "x"]
 	fetch = +refs/heads/*:refs/remotes/x/*
 `,
-			wantErr: ssrf.ErrUnsupportedRemoteScheme,
+			wantErr:  ssrf.ErrUnsupportedRemoteScheme,
+			noOrigin: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newRepoWithRemotes(t, map[string]string{"origin": "https://1.1.1.1/x.git"})
+			remotes := map[string]string{"origin": "https://1.1.1.1/x.git"}
+			if tt.noOrigin {
+				remotes = nil
+			}
+			r := newRepoWithRemotes(t, remotes)
 			appendConfig(t, r, tt.config)
 
 			if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); !errors.Is(err, tt.wantErr) {
@@ -558,12 +571,12 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 	calls := stubMirrorGit(t, func([]string) error { return nil })
 	var logs bytes.Buffer
 
-	if !fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-		t.Fatal("fetchMirror stopped without being cancelled")
+	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err != nil {
+		t.Fatalf("fetchMirror stopped without being cancelled: %v", err)
 	}
 	want := [][]string{
-		{"fetch", "--prune", "--", "origin"},
-		{"fetch", "--prune", "--", "backup"},
+		{"fetch", "--prune", "--", "origin", "+refs/*:refs/*"},
+		{"fetch", "--prune", "--", "backup", "+refs/*:refs/*"},
 	}
 	if !slices.EqualFunc(*calls, want, slices.Equal[[]string]) {
 		t.Fatalf("ran %v, want %v", *calls, want)
@@ -577,14 +590,14 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 // but the lfs sync is skipped until the next run.
 func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
 	calls := stubMirrorGit(t, func(args []string) error {
-		if args[len(args)-1] == "origin" {
+		if slices.Contains(args, "origin") {
 			return errors.New("exit status 128")
 		}
 		return nil
 	})
 	var logs bytes.Buffer
 
-	if fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
+	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err == nil {
 		t.Fatal("fetchMirror went on to the lfs sync after a failed fetch")
 	}
 	if len(*calls) != len(mirrorTestRemotes) {
@@ -614,8 +627,8 @@ func TestFetchMirrorStopsAfterCancel(t *testing.T) {
 			})
 			var logs bytes.Buffer
 
-			if fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-				t.Fatal("fetchMirror went on after it was cancelled")
+			if err := fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+				t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 			}
 			if len(*calls) != 1 {
 				t.Fatalf("ran %v, want only the first fetch", *calls)
@@ -632,10 +645,38 @@ func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
 	cancel()
 	calls := stubMirrorGit(t, func([]string) error { return nil })
 
-	if fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil) {
-		t.Fatal("fetchMirror went on after it was cancelled")
+	if err := fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("ran %v after cancellation", *calls)
+	}
+}
+
+// Only a sync that failed once its deadline passed, while the server keeps
+// running, ran out of time; one that succeeded just as it passed did not.
+func TestOutOfTime(t *testing.T) {
+	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	stopping, stop := context.WithCancel(t.Context())
+	stop()
+	stoppedExpired, cancel2 := context.WithDeadline(stopping, time.Now().Add(-time.Second))
+	defer cancel2()
+	failed := errors.New("signal: terminated")
+
+	for _, tc := range []struct {
+		name        string
+		ctx, jobCtx context.Context
+		err         error
+		want        bool
+	}{
+		{"failed after the deadline", expired, t.Context(), failed, true},
+		{"succeeded at the deadline", expired, t.Context(), nil, false},
+		{"failed before the deadline", t.Context(), t.Context(), failed, false},
+		{"server stopping", stoppedExpired, stopping, failed, false},
+	} {
+		if got := outOfTime(tc.ctx, tc.jobCtx, tc.err); got != tc.want {
+			t.Errorf("%s: outOfTime = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,6 +370,157 @@ func TestMirrorPullLogsDeadline(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "ran out of time") {
 		t.Errorf("the stopped sync was not logged: %q", logs.String())
+	}
+}
+
+// A repository imported without --mirror has a remote url and no fetch
+// refspec, and turning mirroring on later adds none. Its syncs must still
+// follow the remote, as a git clone --mirror does, rather than fetch only
+// the remote's HEAD into FETCH_HEAD and leave every branch where it was.
+func TestMirrorPullWithoutFetchRefspec(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake ssh client is a shell script")
+	}
+	isolateGitConfig(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(fakeSSH), 0o755); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, be := newMirrorJobContext(t)
+	if reason := be.ImportsDisabledReason(); reason != "" {
+		t.Skipf("mirror syncs are disabled here: %s", reason)
+	}
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	work := t.TempDir()
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	runGit(t, work, "init", "-q", "-b", "main", ".")
+	runGit(t, work, "commit", "-q", "--allow-empty", "-m", "first")
+	runGit(t, work, "clone", "-q", "--bare", work, upstream)
+	runGit(t, work, "remote", "add", "origin", upstream)
+
+	// What git clone --bare leaves, plus the flag repo mirror NAME true
+	// sets: a url, no fetch refspec.
+	if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
+	runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example"+filepath.ToSlash(upstream))
+	runGit(t, dir, "config", "remote.origin.mirror", "true")
+
+	runMirrorJob(ctx)
+	if got, want := refs(t, dir), refs(t, upstream); got != want {
+		t.Errorf("mirror refs after the first sync:\n%s\nwant:\n%s", got, want)
+	}
+
+	runGit(t, work, "commit", "-q", "--allow-empty", "-m", "second")
+	runGit(t, work, "push", "-q", "origin", "main")
+	runMirrorJob(ctx)
+	if got, want := refs(t, dir), refs(t, upstream); got != want {
+		t.Errorf("mirror refs after the remote moved:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The job lists the repositories once, then works through them. A repository
+// switched off while it waits its turn is not fetched: its fetch would
+// prune every branch pushed to it since.
+func TestMirrorPullRereadsMirrorFlag(t *testing.T) {
+	isolateGitConfig(t)
+	ctx, be := newMirrorJobContext(t)
+	if reason := be.ImportsDisabledReason(); reason != "" {
+		t.Skipf("mirror syncs are disabled here: %s", reason)
+	}
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := map[string]string{}
+	for _, name := range []string{"a", "b"} {
+		if _, err := be.CreateRepository(ctx, name, admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+			t.Fatal(err)
+		}
+		dirs[name] = filepath.Join(config.FromContext(ctx).DataPath, "repos", name+".git")
+		runGit(t, dirs[name], "config", "remote.origin.url", "ssh://upstream.example/"+name)
+	}
+
+	// One worker, so the mirrors sync in list order, "a" first; "b" is
+	// switched off while "a" syncs.
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+	var mu sync.Mutex
+	var fetched []string
+	orig := runMirrorGit
+	runMirrorGit = func(_ context.Context, dir string, _ []string, _ ...string) error {
+		mu.Lock()
+		fetched = append(fetched, dir)
+		mu.Unlock()
+		if dir == dirs["a"] {
+			if err := be.SetMirror(ctx, "b", false); err != nil {
+				t.Errorf("SetMirror(b, false): %v", err)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { runMirrorGit = orig })
+
+	runMirrorJob(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(fetched, []string{dirs["a"]}) {
+		t.Errorf("fetched %v, want only %s", fetched, dirs["a"])
+	}
+}
+
+// Each sync's outcome is recorded: the error of one that failed, and the
+// time of one that succeeded, which also clears the error.
+func TestMirrorPullRecordsOutcome(t *testing.T) {
+	isolateGitConfig(t)
+	ctx, be := newMirrorJobContext(t)
+	if reason := be.ImportsDisabledReason(); reason != "" {
+		t.Skipf("mirror syncs are disabled here: %s", reason)
+	}
+	admin, err := be.User(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := be.CreateRepository(ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git")
+	runGit(t, dir, "config", "remote.origin.url", "ssh://upstream.example/m")
+
+	fail := true
+	orig := runMirrorGit
+	runMirrorGit = func(context.Context, string, []string, ...string) error {
+		if fail {
+			return errors.New("exit status 128: fatal: remote went away")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runMirrorGit = orig })
+
+	runMirrorJob(ctx)
+	st, err := be.MirrorSyncStatus(ctx, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.SyncedAt.IsZero() || !strings.Contains(st.Error, "remote went away") {
+		t.Errorf("after a failed sync: %+v, want no sync time and the error", st)
+	}
+
+	fail = false
+	runMirrorJob(ctx)
+	if st, err = be.MirrorSyncStatus(ctx, "m"); err != nil {
+		t.Fatal(err)
+	}
+	if st.SyncedAt.IsZero() || st.Error != "" {
+		t.Errorf("after a sync that succeeded: %+v, want a sync time and no error", st)
 	}
 }
 

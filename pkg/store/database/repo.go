@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
@@ -148,6 +149,27 @@ func (*repoStore) SetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET mirror = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	_, err := tx.ExecContext(ctx, query, isMirror, name)
+	return err
+}
+
+// SetRepoMirrorSyncByName implements store.RepositoryStore. It leaves
+// updated_at alone: a sync is not a change made to the repository's settings.
+//
+// The error is text git and the remote wrote, so it is stored as valid UTF-8
+// without NUL bytes, which Postgres refuses in a TEXT column: bytes that are
+// not UTF-8 become U+FFFD and NULs are dropped.
+func (*repoStore) SetRepoMirrorSyncByName(ctx context.Context, tx db.Handler, name string, syncErr string) error {
+	name = utils.SanitizeRepo(name)
+	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE name = ?;"
+	if syncErr != "" {
+		query = "UPDATE repos SET mirror_error = ? WHERE name = ?;"
+		syncErr = strings.ToValidUTF8(strings.ReplaceAll(syncErr, "\x00", ""), "\uFFFD")
+		if syncErr == "" {
+			// Still a failure, though nothing of its text was kept.
+			syncErr = "\uFFFD"
+		}
+	}
+	_, err := tx.ExecContext(ctx, tx.Rebind(query), syncErr, name)
 	return err
 }
 

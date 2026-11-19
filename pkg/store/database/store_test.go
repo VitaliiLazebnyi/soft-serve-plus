@@ -147,6 +147,83 @@ func TestUserStore(t *testing.T) {
 	}
 }
 
+// A failed sync records its error and keeps the time of the last one that
+// succeeded; a sync that succeeds records its time and clears the error.
+// Neither counts as an update of the repository.
+func TestSetRepoMirrorSyncByName(t *testing.T) {
+	ctx, dbx, s := newStoreTestDB(t)
+	const owner = 100 // see newWebhookTestDB
+	if err := s.CreateRepo(ctx, dbx, "m", owner, "", "", false, false, true, false); err != nil {
+		t.Fatal(err)
+	}
+	get := func() (time.Time, bool, string, time.Time) {
+		t.Helper()
+		r, err := s.GetRepoByName(ctx, dbx, "m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.MirrorSyncedAt.Time, r.MirrorSyncedAt.Valid, r.MirrorError, r.UpdatedAt
+	}
+	_, synced, msg, updated := get()
+	if synced || msg != "" {
+		t.Fatalf("new repository: synced %v, error %q; want neither", synced, msg)
+	}
+
+	if err := s.SetRepoMirrorSyncByName(ctx, dbx, "m", "first failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, synced, msg, _ := get(); synced || msg != "first failure" {
+		t.Errorf("after a failure: synced %v, error %q", synced, msg)
+	}
+
+	if err := s.SetRepoMirrorSyncByName(ctx, dbx, "/m.git", ""); err != nil {
+		t.Fatal(err)
+	}
+	at, synced, msg, _ := get()
+	if !synced || msg != "" {
+		t.Errorf("after a success: synced %v, error %q", synced, msg)
+	}
+
+	if err := s.SetRepoMirrorSyncByName(ctx, dbx, "m", "second failure"); err != nil {
+		t.Fatal(err)
+	}
+	again, synced, msg, updatedAfter := get()
+	if !synced || !again.Equal(at) || msg != "second failure" {
+		t.Errorf("after another failure: synced %v at %v (was %v), error %q", synced, again, at, msg)
+	}
+	if !updatedAfter.Equal(updated) {
+		t.Errorf("updated_at moved from %v to %v", updated, updatedAfter)
+	}
+}
+
+// The error of a sync is what git and the remote wrote, which need not be
+// UTF-8 and can hold NUL bytes. Postgres refuses both in a TEXT column, so
+// they are cleaned rather than leave the last outcome unrecorded. Runs on
+// Postgres when SOFT_SERVE_DB_DRIVER is "postgres".
+func TestSetRepoMirrorSyncByNameHostileText(t *testing.T) {
+	ctx, dbx, s := newStoreTestDB(t)
+	const owner = 100 // see newWebhookTestDB
+	if err := s.CreateRepo(ctx, dbx, "m", owner, "", "", false, false, true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ in, want string }{
+		{"fatal: \xff\xfe bad bytes", "fatal: \uFFFD bad bytes"},
+		{"nul\x00 inside", "nul inside"},
+		{"\x00", "\uFFFD"},
+	} {
+		if err := s.SetRepoMirrorSyncByName(ctx, dbx, "m", tc.in); err != nil {
+			t.Fatalf("SetRepoMirrorSyncByName(%q): %v", tc.in, err)
+		}
+		r, err := s.GetRepoByName(ctx, dbx, "m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.MirrorError != tc.want {
+			t.Errorf("stored %q as %q, want %q", tc.in, r.MirrorError, tc.want)
+		}
+	}
+}
+
 func TestRepoStore(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const owner = 100 // see newWebhookTestDB
