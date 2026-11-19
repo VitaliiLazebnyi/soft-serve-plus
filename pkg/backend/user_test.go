@@ -41,7 +41,7 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 
 			is.NoErr(be.SetAnonAccess(ctx, tt.anon))
 
-			_, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{Private: tt.private})
+			_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{Private: tt.private})
 			is.NoErr(err)
 
 			user, err := be.CreateUser(ctx, "collab", proto.UserOptions{})
@@ -62,7 +62,7 @@ func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
-	_, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{Private: true})
+	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
 
 	user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
@@ -97,7 +97,7 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 
 			is.NoErr(be.SetAnonAccess(ctx, tt.anon))
 
-			_, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{})
+			_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 			is.NoErr(err)
 
 			user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
@@ -156,7 +156,7 @@ func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
 	ctx = db.WithContext(ctx, be.db)
 	ctx = store.WithContext(ctx, be.store)
 
-	_, err := be.CreateRepository(ctx, "orphan", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "orphan", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 	is.NoErr(os.RemoveAll(be.repoPath("orphan")))
 
@@ -179,7 +179,7 @@ func TestMutationsOnMissingUserOrKey(t *testing.T) {
 	is.NoErr(err)
 	ctx = proto.WithUserContext(ctx, admin)
 
-	_, err = be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{})
+	_, err = be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)

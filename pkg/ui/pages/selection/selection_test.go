@@ -54,7 +54,7 @@ func newTestBackend(t *testing.T) (context.Context, *backend.Backend) {
 func newTestContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, be := newTestBackend(t)
-	if _, err := be.CreateRepository(ctx, "a", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "a", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	return ctx
@@ -152,7 +152,7 @@ func press(s *Selection, k rune) tea.Cmd {
 func TestSelectionRefreshKey(t *testing.T) {
 	ctx, be := newTestBackend(t)
 	for _, name := range []string{"bravo", "delta"} {
-		if _, err := be.CreateRepository(ctx, name, nil, proto.RepositoryOptions{}); err != nil {
+		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -171,7 +171,7 @@ func TestSelectionRefreshKey(t *testing.T) {
 		t.Fatalf("highlighted %q, want delta", got)
 	}
 
-	if _, err := be.CreateRepository(ctx, "alpha", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "alpha", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := listedNames(s); len(got) != 2 {
@@ -194,7 +194,7 @@ func TestSelectionRefreshKey(t *testing.T) {
 // reload the list.
 func TestSelectionRefreshKeyIgnoredWhileFiltering(t *testing.T) {
 	ctx, be := newTestBackend(t)
-	if _, err := be.CreateRepository(ctx, "bravo", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "bravo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	c := common.NewCommon(ctx, 80, 40)
@@ -209,7 +209,7 @@ func TestSelectionRefreshKeyIgnoredWhileFiltering(t *testing.T) {
 	if !s.IsFiltering() {
 		t.Fatal("/ did not start filtering")
 	}
-	if _, err := be.CreateRepository(ctx, "alpha", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "alpha", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if runLoad(t, s, press(s, 'r')) {
@@ -277,4 +277,16 @@ func TestSelectionShortHelpRefreshKey(t *testing.T) {
 	if hasBinding(s.ShortHelp(), refreshKey) {
 		t.Error("short help lists the refresh key while filtering")
 	}
+}
+
+// fixtureAdmin returns the admin account the first migration creates, the
+// owner of fixture repositories: the backend refuses a create by a caller
+// who may not create, as an anonymous caller may not by default.
+func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

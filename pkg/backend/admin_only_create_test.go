@@ -107,6 +107,26 @@ func backendTestContext(be *Backend, cfg *config.Config) context.Context {
 	return store.WithContext(ctx, be.store)
 }
 
+// defaultAdmin returns the admin account the first migration creates. Tests
+// pass it as the creator of fixture repositories, or put it on the context
+// of a rename: an anonymous caller may not create under the default
+// anon-access, and the backend refuses a create that the caller may not
+// make (see checkCanCreate).
+func defaultAdmin(t testing.TB, be *Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// asAdmin returns ctx acting as defaultAdmin.
+func asAdmin(t testing.TB, be *Backend, ctx context.Context) context.Context {
+	t.Helper()
+	return proto.WithUserContext(ctx, defaultAdmin(t, be))
+}
+
 // seedCreate creates a fixture repository while admin-only creation is off,
 // so tests can set up owners without the create policy in the way. Tests that
 // exercise the policy call be.CreateRepository directly.
@@ -122,6 +142,37 @@ func seedCreate(be *Backend, ctx context.Context, name string, user proto.User, 
 // is then refused by the remote check without a DNS lookup or a dial, so
 // they run without network access.
 const offlineRemote = "https://127.0.0.1/x.git"
+
+// The backend's own creation guard is the whole rule, not only its
+// admin_only_create half: with that setting off, an anonymous caller may not
+// create, import or rename onto a new name unless anon-access is read-write
+// or above, as the SSH and HTTP handlers already require. An entry point that
+// skips the handlers' checks cannot let anonymous users create.
+func TestBackendRefusesAnonymousCreatesUnderReadOnlyAnonAccess(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	is.True(!cfg.AdminOnlyCreate)
+	is.Equal(be.AnonAccess(ctx), access.ReadOnlyAccess)
+
+	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	_, err = be.CreateRepository(ctx, "anon", nil, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
+	_, err = be.ImportRepository(ctx, "anon", nil, offlineRemote, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
+	is.True(errors.Is(be.RenameRepository(ctx, "a", "anon"), proto.ErrUnauthorized))
+	_, err = be.Repository(ctx, "anon")
+	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	_, err = be.Repository(ctx, "a")
+	is.NoErr(err)
+
+	// With anon-access read-write, anonymous callers may create.
+	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
+	_, err = be.CreateRepository(ctx, "anon", nil, proto.RepositoryOptions{})
+	is.NoErr(err)
+}
 
 // With AdminOnlyCreate on, the backend itself refuses a non-admin, and an
 // anonymous caller, creating, importing or renaming to a new name, whichever
@@ -228,8 +279,8 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 // A key listed in initial_admin_keys is a server admin even when it was added
 // after the first migration, so it never reached the database: the caller is
 // anonymous or a non-admin account. With AdminOnlyCreate on, the backend must
-// still let it create, import and rename to a new name, as the SSH layer's
-// isServerAdmin does.
+// still let it create, import and rename to a new name: IsServerAdmin honours
+// the key.
 func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 	for _, registered := range []bool{false, true} {
 		name := "anonymous"
@@ -243,7 +294,7 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			cfg.AdminOnlyCreate = true
 
 			pub := newTestPublicKey(t)
-			cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub))
+			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
 
 			var user proto.User
 			if registered {
@@ -259,7 +310,11 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			_, err := be.CreateRepository(ctx, "nokey", user, proto.RepositoryOptions{})
 			is.True(errors.Is(err, proto.ErrUnauthorized))
 
-			is.Equal(be.AccessLevelForUser(keyCtx, "fresh", user), access.AdminAccess)
+			// ReadableForUser honours the key; Readable, for the account
+			// alone, does not, on a missing name as on an existing one.
+			_, level := be.ReadableForUser(keyCtx, "fresh", user)
+			is.Equal(level, access.AdminAccess)
+			is.True(be.AccessLevelForUser(keyCtx, "fresh", user) < access.ReadWriteAccess)
 
 			_, err = be.CreateRepository(keyCtx, "made", user, proto.RepositoryOptions{})
 			is.NoErr(err)
@@ -295,7 +350,7 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 	is.NoErr(err)
 
 	// The operator lists the key after mallory attached it.
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(claimed))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(claimed)))
 
 	// Load the users the way the HTTP layer does: by name (password, JWT)
 	// and by access token.
@@ -326,7 +381,7 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 // resolve to that account: the owner may have claimed it with `pubkey add`
 // before it was listed. The lookup returns ErrAdminKeyNonAdminOwner naming
 // the account (the SSH server refuses the session with it), and the warning
-// is logged once per key. A listed key owned by an admin account resolves
+// is logged on every such lookup. A listed key owned by an admin account resolves
 // as before, and so does the owner once promoted or once the key is
 // unlisted.
 func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
@@ -347,8 +402,8 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	is.Equal(u.Username(), "mallory")
 
 	orig := cfg.InitialAdminKeys
-	cfg.InitialAdminKeys = append(append([]string{}, orig...),
-		sshutils.MarshalAuthorizedKey(claimed), sshutils.MarshalAuthorizedKey(bossKey))
+	setAdminKeys(t, cfg, append(append([]string{}, orig...),
+		sshutils.MarshalAuthorizedKey(claimed), sshutils.MarshalAuthorizedKey(bossKey)))
 
 	for range 3 {
 		_, err = be.UserByPublicKey(ctx, claimed)
@@ -359,12 +414,12 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 		is.True(strings.Contains(err.Error(), "user set-admin mallory true"))
 		is.True(strings.Contains(err.Error(), "user remove-pubkey mallory KEY"))
 	}
-	is.Equal(strings.Count(logs.String(), "admin key is owned by a non-admin account"), 1)
+	is.Equal(strings.Count(logs.String(), "admin key is owned by a non-admin account"), 3)
 	is.Equal(be.BaseAccessLevelByPublicKey(ctx, claimed), access.AdminAccess)
 
 	// A private repository made with the key goes to the default admin,
 	// and mallory gets nothing on it.
-	r, err := be.CreateRepository(ctx, "secret", nil, proto.RepositoryOptions{Private: true})
+	r, err := be.CreateRepository(context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), "secret", nil, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
 	mallory, err := be.User(ctx, "mallory")
 	is.NoErr(err)
@@ -375,14 +430,14 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(u.Username(), "boss")
 
-	cfg.InitialAdminKeys = orig
+	setAdminKeys(t, cfg, orig)
 	u, err = be.UserByPublicKey(ctx, claimed)
 	is.NoErr(err)
 	is.Equal(u.Username(), "mallory")
 
 	// Promoting the owner (the fix when the key is theirs) resolves the
 	// listed key to them again, keeping their account.
-	cfg.InitialAdminKeys = append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(claimed))
+	setAdminKeys(t, cfg, append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(claimed)))
 	is.NoErr(be.SetAdmin(ctx, "mallory", true))
 	u, err = be.UserByPublicKey(ctx, claimed)
 	is.NoErr(err)
@@ -390,22 +445,22 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	is.True(u.IsAdmin())
 }
 
-// The owned-admin-key warning is not remembered forever: once the conflict
-// is resolved (the owner is promoted or the key leaves the account) or the
-// admin key list changes, a conflict that comes back is logged again, and
-// the record of warned keys holds only currently listed keys.
-func TestOwnedAdminKeyWarningIsForgottenOnceResolved(t *testing.T) {
+// The owned-admin-key warning is logged on every refused lookup, naming the
+// current owner, and not once the conflict is resolved: the owner promoted,
+// the key gone from the account, or the key no longer listed.
+func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 	is := is.New(t)
 	var logs bytes.Buffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	ctx := backendTestContext(be, cfg)
-	warnings := func() int {
-		return strings.Count(logs.String(), "admin key is owned by a non-admin account")
-	}
-	warned := func() int {
-		be.warnedOwnedAdminKeysMu.Lock()
-		defer be.warnedOwnedAdminKeysMu.Unlock()
-		return len(be.warnedOwnedAdminKeys)
+	warnings := func(owner string) int {
+		n := 0
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, "admin key is owned by a non-admin account") && strings.Contains(line, owner) {
+				n++
+			}
+		}
+		return n
 	}
 
 	key := newTestPublicKey(t)
@@ -416,7 +471,7 @@ func TestOwnedAdminKeyWarningIsForgottenOnceResolved(t *testing.T) {
 
 	orig := cfg.InitialAdminKeys
 	listed := append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(key))
-	cfg.InitialAdminKeys = listed
+	setAdminKeys(t, cfg, listed)
 
 	lookup := func(owner string) {
 		t.Helper()
@@ -429,37 +484,32 @@ func TestOwnedAdminKeyWarningIsForgottenOnceResolved(t *testing.T) {
 	}
 
 	lookup("mallory")
-	is.Equal(warnings(), 1)
-	is.Equal(warned(), 1)
+	is.Equal(warnings("mallory"), 2)
 
-	// Promoting the owner resolves it; demoting them again is logged again.
+	// Promoting the owner resolves it; demoting them again brings it back.
 	is.NoErr(be.SetAdmin(ctx, "mallory", true))
 	u, err := be.UserByPublicKey(ctx, key)
 	is.NoErr(err)
 	is.Equal(u.Username(), "mallory")
-	is.Equal(warned(), 0)
+	is.Equal(warnings("mallory"), 2)
 	is.NoErr(be.SetAdmin(ctx, "mallory", false))
 	lookup("mallory")
-	is.Equal(warnings(), 2)
+	is.Equal(warnings("mallory"), 4)
 
 	// The key leaving the account resolves it; another non-admin claiming
-	// it is logged again, naming the new owner.
+	// it is logged, naming the new owner.
 	is.NoErr(be.RemovePublicKey(ctx, "mallory", key))
 	_, err = be.UserByPublicKey(ctx, key)
 	is.True(errors.Is(err, proto.ErrUserNotFound))
-	is.Equal(warned(), 0)
 	is.NoErr(be.AddPublicKey(ctx, "eve", key))
 	lookup("eve")
-	is.Equal(warnings(), 3)
+	is.Equal(warnings("eve"), 2)
 
-	// Unlisting the key drops the record; listing it again logs again.
-	cfg.InitialAdminKeys = orig
+	// Unlisting the key resolves it too.
+	setAdminKeys(t, cfg, orig)
 	u, err = be.UserByPublicKey(ctx, key)
 	is.NoErr(err)
 	is.Equal(u.Username(), "eve")
-	is.Equal(warned(), 0)
-	cfg.InitialAdminKeys = listed
-	lookup("eve")
-	is.Equal(warnings(), 4)
-	is.Equal(warned(), 1)
+	is.Equal(warnings("eve"), 2)
+	is.Equal(warnings("mallory"), 4)
 }

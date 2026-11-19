@@ -76,7 +76,7 @@ func PubkeyCommand() *cobra.Command {
 			// knows to ask an admin rather than retry. That tells the
 			// caller the key is listed, which is harmless: it is a public
 			// key, and listing grants nothing without the private half.
-			if !isServerAdmin(ctx) && IsPublicKeyAdmin(ctx, apk) {
+			if !isServerAdmin(ctx) && be.IsAdminKey(apk) {
 				return errListedAdminKey
 			}
 

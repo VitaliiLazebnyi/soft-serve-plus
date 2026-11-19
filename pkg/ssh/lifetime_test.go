@@ -53,7 +53,7 @@ func startLifetimeServer(t *testing.T, lifetime time.Duration) lifetimeServer {
 	if err := be.RemovePublicKey(ctx, owner.Username(), ls.admin.PublicKey()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := be.CreateRepository(ctx, "repo1", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "repo1", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 

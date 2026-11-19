@@ -43,6 +43,7 @@ func TestFirstMigrationSeedsAdminKeysToAdminNotUserOne(t *testing.T) {
 	ak := newAuthorizedKey(t)
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
+	validate(t, cfg)
 	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +60,7 @@ func TestFirstMigrationCreatesAdminForKeysWhenLegacyUsersHaveNone(t *testing.T) 
 	ak := newAuthorizedKey(t)
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
+	validate(t, cfg)
 	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +81,7 @@ func TestFirstMigrationDoesNotSeedAdminKeysToNonAdminNamedAdmin(t *testing.T) {
 	ak := newAuthorizedKey(t)
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
+	validate(t, cfg)
 	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
 		t.Fatal(err)
 	}

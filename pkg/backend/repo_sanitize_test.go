@@ -18,7 +18,7 @@ func TestCreateRepositorySanitisesDescriptionAndProjectName(t *testing.T) {
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
-	r, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{
+	r, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{
 		Description: "a\x1bP1|x\x1b\\b\x07\nc",
 		ProjectName: "p\x1b]52;c;Zm9v\x07q",
 	})

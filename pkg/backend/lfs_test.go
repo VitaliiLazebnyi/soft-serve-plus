@@ -127,7 +127,7 @@ func newLFSTestWith(t *testing.T, objects int, extra func(work string, pointers 
 
 	be, cfg := newTestBackend(t)
 	ctx := config.WithContext(context.Background(), cfg)
-	repo, err := be.CreateRepository(ctx, "lfs-repo", nil, proto.RepositoryOptions{})
+	repo, err := be.CreateRepository(ctx, "lfs-repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

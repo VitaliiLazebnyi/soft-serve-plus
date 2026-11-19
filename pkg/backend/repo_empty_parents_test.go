@@ -16,7 +16,7 @@ import (
 func nestedReposFixture(t *testing.T) (*Backend, func(string), string) {
 	t.Helper()
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true})
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func assertDir(t *testing.T, p string) {
 // repositories.
 func TestDeleteRepositoryRemovesEmptyParents(t *testing.T) {
 	be, create, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b/c")
 	create("a/d")
 
@@ -77,7 +77,7 @@ func TestDeleteRepositoryRemovesEmptyParents(t *testing.T) {
 // A group directory holding something other than repositories is kept.
 func TestDeleteRepositoryKeepsNonEmptyParent(t *testing.T) {
 	be, create, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b")
 	note := filepath.Join(root, "a", "README")
 	if err := os.WriteFile(note, []byte("x"), 0o600); err != nil {
@@ -99,7 +99,7 @@ func TestDeleteRepositoryKeepsSymlinkedParent(t *testing.T) {
 		t.Skip("symlinks need extra privileges on Windows")
 	}
 	be, create, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	target := t.TempDir()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestDeleteRepositoryKeepsSymlinkedParent(t *testing.T) {
 // directories it leaves empty.
 func TestDeleteOrphanRepositoryRemovesEmptyParents(t *testing.T) {
 	be, _, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	if err := os.MkdirAll(be.repoPath("x/y/orphan"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestDeleteOrphanRepositoryRemovesEmptyParents(t *testing.T) {
 // name leaves empty, and renaming within a group keeps the group.
 func TestRenameRepositoryRemovesEmptyParents(t *testing.T) {
 	be, create, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b/c")
 
 	if err := be.RenameRepository(ctx, "a/b/c", "a/b/d"); err != nil {
@@ -171,8 +171,8 @@ func TestFailedCreateRemovesEmptyParents(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(root, "g")); err != nil {
 		t.Fatal(err)
 	}
-	ctx := backendTestContext(be, be.cfg)
-	if _, err := be.CreateRepository(ctx, "g/h/r", nil, proto.RepositoryOptions{}); !errors.Is(err, proto.ErrRepoExist) {
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
+	if _, err := be.CreateRepository(ctx, "g/h/r", defaultAdmin(t, be), proto.RepositoryOptions{}); !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("create error = %v, want ErrRepoExist", err)
 	}
 	assertGone(t, filepath.Join(root, "g"))
@@ -210,7 +210,7 @@ func TestFailedRenameRemovesEmptyParents(t *testing.T) {
 		t.Skip("root ignores directory permissions")
 	}
 	be, create, root := nestedReposFixture(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("p/a")
 
 	group := filepath.Join(root, "p")

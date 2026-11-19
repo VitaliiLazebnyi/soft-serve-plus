@@ -126,8 +126,18 @@ func mustExec(t *testing.T, dbx *db.DB, query string, args ...any) {
 // on every start, with cfg in the context.
 func boot(t *testing.T, ctx context.Context, cfg *config.Config, dbx *db.DB) {
 	t.Helper()
+	validate(t, cfg)
 	if err := serveStart(config.WithContext(ctx, cfg), dbx); err != nil {
 		t.Fatalf("start => %v", err)
+	}
+}
+
+// validate validates cfg, which parses initial_admin_keys, as a start does
+// once the config is read.
+func validate(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate config => %v", err)
 	}
 }
 
@@ -386,6 +396,7 @@ func TestAdminKeyConcurrentBoots(t *testing.T) {
 
 	keys := []string{newAuthorizedKey(t), newAuthorizedKey(t)}
 	cfg.InitialAdminKeys = keys
+	validate(t, cfg)
 	cctx := config.WithContext(ctx, cfg)
 
 	var wg sync.WaitGroup
@@ -500,10 +511,12 @@ func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
 		t.Fatalf("key owner = %+v, %v; want admin", o, ok)
 	}
 
-	// The file is not there on the next start.
+	// The file is not there on the next start, which reads the config again.
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
+	cfg = config.DefaultConfig()
+	cfg.InitialAdminKeys = []string{path}
 	logs := bootLogs(t, ctx, cfg, dbx)
 	if o, ok := ownerOf(t, dbx, ak); !ok || o.Username != "admin" {
 		t.Errorf("key owner with the file missing = %+v, %v; want it kept on admin", o, ok)
@@ -535,7 +548,7 @@ func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
 
 	// Once every key file can be read again, the key that left the config
 	// goes.
-	cfg.InitialAdminKeys = nil
+	cfg = config.DefaultConfig()
 	boot(t, ctx, cfg, dbx)
 	if o, ok := ownerOf(t, dbx, ak); ok {
 		t.Errorf("key owner = %+v; want it removed", o)
@@ -760,6 +773,7 @@ func TestAdminKeyConcurrentBootsDifferentOrder(t *testing.T) {
 		if i%2 == 1 {
 			cfg.InitialAdminKeys = reversed
 		}
+		validate(t, cfg)
 		cctx := config.WithContext(ctx, cfg)
 		wg.Add(1)
 		go func() {

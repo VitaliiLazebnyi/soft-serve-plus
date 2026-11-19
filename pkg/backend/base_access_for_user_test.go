@@ -23,7 +23,7 @@ func TestBaseAccessLevelForUserMatchesByPublicKey(t *testing.T) {
 	userKey := newTestPublicKey(t)
 	adminKey := newTestPublicKey(t)
 	listedKey := newTestPublicKey(t)
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey)))
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{userKey}})
 	is.NoErr(err)

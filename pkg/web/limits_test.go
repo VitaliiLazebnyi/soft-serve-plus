@@ -25,7 +25,7 @@ import (
 func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 	t.Helper()
 	ctx, be, _ := newLFSTestContext(t)
-	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	configure(&config.FromContext(ctx).HTTP)
@@ -661,7 +661,7 @@ func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
 // and it is served again once one of its requests ends.
 func TestHTTPMaxConnectionsPerIP(t *testing.T) {
 	ctx, be, _ := newLFSTestContext(t)
-	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.FromContext(ctx).HTTP

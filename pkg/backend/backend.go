@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"golang.org/x/crypto/ssh"
 )
 
 // Backend is the Soft Serve backend that handles users, repositories, and
@@ -38,23 +37,6 @@ type Backend struct {
 	// afterRegister, when a test sets it, runs once registerRepository has
 	// committed a new repository.
 	afterRegister func()
-
-	// adminKeys caches the parsed initial_admin_keys; see adminKeyList.
-	adminKeysMu  sync.Mutex
-	adminKeysSrc []string
-	adminKeys    []ssh.PublicKey
-	adminKeysOK  bool
-
-	// warnedOwnedAdminKeys maps the authorized-key string of a listed admin
-	// key already logged as owned by a non-admin account to that account's
-	// name, so the warning is logged once per key and owner rather than on
-	// every lookup. An entry is dropped once the conflict is resolved (the
-	// owner is promoted or the key leaves the account) and the whole map is
-	// cleared when initial_admin_keys changes, so a conflict that comes back
-	// is logged again and the map holds only currently listed keys. See
-	// warnOwnedAdminKey and forgetOwnedAdminKey.
-	warnedOwnedAdminKeysMu sync.Mutex
-	warnedOwnedAdminKeys   map[string]string
 
 	// pushGates orders pushes against the removal of repositories created
 	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.

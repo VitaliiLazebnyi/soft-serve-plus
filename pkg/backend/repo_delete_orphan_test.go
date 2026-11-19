@@ -47,7 +47,7 @@ func (s *failingLookupStore) GetRepoByNameForUpdate(ctx context.Context, h db.Ha
 func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 
 	// Repository, which builds the webhook event, looks the row up first;
 	// the second lookup is the delete's own.
@@ -76,7 +76,7 @@ func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
 func TestDeleteRepositoryConcurrentDeleteNotFound(t *testing.T) {
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 
 	ran := onRepoDirUnrecorded(t, "delrepo", func() {
 		if err := be.DeleteRepository(ctx, "delrepo"); !errors.Is(err, proto.ErrRepoNotFound) {
@@ -137,7 +137,7 @@ func (s *rowAppearsStore) maybeInsert(ctx context.Context, h db.Handler, name st
 // report the repository as not found.
 func TestDeleteRepositoryKeepsDirectoryRecordedAfterLookup(t *testing.T) {
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	admin, err := be.User(ctx, "admin")
 	if err != nil {
 		t.Fatal(err)
@@ -205,12 +205,12 @@ func deleteKeepsDir(t *testing.T, be *Backend, ctx context.Context, name string)
 // window must not remove the directory being filled.
 func TestDeleteRepositoryKeepsDirectoryOfCreateInProgress(t *testing.T) {
 	be, _ := newTestBackend(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 
 	ran := onRepoDirUnrecorded(t, "pending", func() {
 		deleteKeepsDir(t, be, ctx, "pending")
 	})
-	if _, err := be.CreateRepository(ctx, "pending", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "pending", defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatalf("CreateRepository => %v", err)
 	}
 	if !ran() {
@@ -226,7 +226,7 @@ func TestDeleteRepositoryKeepsDirectoryOfCreateInProgress(t *testing.T) {
 // directory being cloned into.
 func TestDeleteRepositoryKeepsDirectoryOfImportInProgress(t *testing.T) {
 	be, _ := newTestBackend(t)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	admin, err := be.User(ctx, "admin")
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestDeleteRepositoryKeepsDirectoryOfImportInProgress(t *testing.T) {
 func TestDeleteRepositoryKeepsDirectoryOfRenameInProgress(t *testing.T) {
 	be, _ := newTestBackend(t)
 	createDeleteFixture(t, be)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 
 	ran := onRepoDirUnrecorded(t, "renamed", func() {
 		if !repoDirHeld(be, "renamed") {
@@ -287,7 +287,7 @@ func TestDeleteRepositoryKeepsDirectoryOfRenameInProgress(t *testing.T) {
 func TestDeleteRepositoryCaseVariantKeepsDirectory(t *testing.T) {
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 
 	if err := be.DeleteRepository(ctx, "DelRepo"); !errors.Is(err, proto.ErrRepoNotFound) {
 		t.Fatalf("DeleteRepository of a case variant => %v, want ErrRepoNotFound", err)
@@ -304,7 +304,7 @@ func TestDeleteRepositoryCaseVariantKeepsDirectory(t *testing.T) {
 // component matches.
 func TestDeleteRepositoryRemovesNestedOrphan(t *testing.T) {
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	rp := be.repoPath("org/orphan")
 	if err := os.MkdirAll(rp, 0o755); err != nil {

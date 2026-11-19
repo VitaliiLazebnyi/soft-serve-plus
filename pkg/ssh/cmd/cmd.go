@@ -10,7 +10,6 @@ import (
 	"text/template"
 	"unicode"
 
-	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -139,7 +138,7 @@ func requireRepo(need access.AccessLevel) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := repoArg(args)
-		repo, level := readableRepo(ctx, name)
+		repo, level := backend.FromContext(ctx).ReadableForUser(ctx, name, proto.UserFromContext(ctx))
 		if repo == nil && !isServerAdmin(ctx) {
 			return denyRead(ctx)
 		}
@@ -158,16 +157,6 @@ func requireLevel(ctx context.Context, need access.AccessLevel) error {
 	return nil
 }
 
-// readableRepo is backend.Readable with the server admin override.
-func readableRepo(ctx context.Context, name string) (proto.Repository, access.AccessLevel) {
-	be := backend.FromContext(ctx)
-	if isServerAdmin(ctx) {
-		repo, _ := be.Repository(ctx, name)
-		return repo, access.AdminAccess
-	}
-	return be.Readable(ctx, name, proto.UserFromContext(ctx))
-}
-
 // repoFromContext returns the repository and access level stored by
 // requireRepo. The error is denyRead's answer when no repository exists.
 func repoFromContext(ctx context.Context) (proto.Repository, access.AccessLevel, error) {
@@ -178,29 +167,12 @@ func repoFromContext(ctx context.Context) (proto.Repository, access.AccessLevel,
 	return stash.repo, stash.level, nil
 }
 
-// IsPublicKeyAdmin returns true if the given public key is an admin key from
-// the initial_admin_keys config or environment field. It asks the backend,
-// which caches the parsed keys, rather than config.AdminKeys, which parses
-// every entry on every call.
-func IsPublicKeyAdmin(ctx context.Context, pk ssh.PublicKey) bool {
-	be := backend.FromContext(ctx)
-	return be != nil && be.IsAdminKey(pk)
-}
-
-// isServerAdmin reports whether the caller is a server administrator: either
-// their public key is one of the configured admin keys, or their account has
-// the admin flag set.
-//
-// This is the single source of truth for "is this caller a server admin".
-// Every authorization gate defers to it so the definition cannot drift.
+// isServerAdmin reports whether the session's caller is a server admin,
+// by the backend's rule (Backend.IsServerAdmin): the session user has the
+// admin flag, or the session's key is a configured admin key.
 func isServerAdmin(ctx context.Context) bool {
-	pk := sshutils.PublicKeyFromContext(ctx)
-	if IsPublicKeyAdmin(ctx, pk) {
-		return true
-	}
-
-	user := proto.UserFromContext(ctx)
-	return user != nil && user.IsAdmin()
+	be := backend.FromContext(ctx)
+	return be != nil && be.IsServerAdmin(ctx, proto.UserFromContext(ctx))
 }
 
 // parseBool parses a boolean command argument. It accepts the values
@@ -226,7 +198,7 @@ func repoArg(args []string) string {
 
 // repoAccessLevel returns the caller's access level for the sanitized name.
 func repoAccessLevel(ctx context.Context, repo string) access.AccessLevel {
-	_, level := readableRepo(ctx, repo)
+	_, level := backend.FromContext(ctx).ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
 	return level
 }
 

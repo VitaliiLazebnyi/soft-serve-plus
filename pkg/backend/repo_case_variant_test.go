@@ -14,7 +14,7 @@ import (
 // the filesystem finds its directory under the case variant "SECRET" too.
 func createCaseVariantFixture(t *testing.T, be *Backend) bool {
 	t.Helper()
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func createCaseVariantFixture(t *testing.T, be *Backend) bool {
 // its directory.
 func assertSecretIntact(t *testing.T, be *Backend) {
 	t.Helper()
-	ctx := backendTestContext(be, be.cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	r, err := be.Repository(ctx, "secret")
 	if err != nil {
 		t.Fatalf("repository row gone: %v", err)
@@ -51,7 +51,7 @@ func TestDeleteRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: SECRET is a different repository")
 	}
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	if err := be.DeleteRepository(ctx, "SECRET"); !errors.Is(err, proto.ErrRepoNotFound) {
 		t.Errorf("DeleteRepository(SECRET) => %v, want ErrRepoNotFound", err)
@@ -66,7 +66,7 @@ func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: SECRET is a different repository")
 	}
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	if err := be.RenameRepository(ctx, "SECRET", "other"); !errors.Is(err, proto.ErrRepoNotFound) {
 		t.Errorf("RenameRepository(SECRET) => %v, want ErrRepoNotFound", err)
@@ -86,7 +86,7 @@ func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
 func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	orphan := be.repoPath("orphan")
 	is.NoErr(os.MkdirAll(orphan, 0o755))
@@ -102,7 +102,7 @@ func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 func TestDeleteRepositoryRemovesOrphanDirectory(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	orphan := be.repoPath("orphan")
 	is.NoErr(os.MkdirAll(orphan, 0o755))
@@ -119,7 +119,7 @@ func TestDeleteRepositoryRemovesOrphanDirectory(t *testing.T) {
 // the directory against every repository, not only names that fold alike.
 func TestDeleteRepositoryNormalizationVariantKeepsRepository(t *testing.T) {
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	const (
 		precomposed = "\uD55C"             // 한
 		decomposed  = "\u1112\u1161\u11AB" // 한 as jamo
@@ -155,7 +155,7 @@ func TestDeleteRepositoryExactSpellingOfAnotherRepositoryKeepsIt(t *testing.T) {
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: Secret has its own directory")
 	}
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	if err := be.store.SetRepoNameByName(ctx, be.db, "secret", "Secret"); err != nil {
 		t.Fatal(err)

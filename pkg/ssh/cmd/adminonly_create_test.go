@@ -119,6 +119,7 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	// Added after the first migration, so no account owns it yet.
 	cfg := config.FromContext(ctx)
 	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(adminPub))
+	is.NoErr(cfg.Validate())
 
 	session := func(name string, admin bool) context.Context {
 		pk := newKey()

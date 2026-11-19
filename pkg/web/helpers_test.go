@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
@@ -52,4 +53,16 @@ func testRouter(t *testing.T, ctx context.Context) http.Handler {
 	pending := newPushCreates()
 	t.Cleanup(func() { _ = pending.close(context.Background()) })
 	return newRouter(ctx, pending)
+}
+
+// fixtureAdmin returns the admin account the first migration creates, the
+// owner of fixture repositories: the backend refuses a create by a caller
+// who may not create, as an anonymous caller may not by default.
+func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
