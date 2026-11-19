@@ -25,9 +25,8 @@ const (
 // ssh and git transports, which have no such limit. Tests shorten it.
 var importTimeout = time.Hour
 
-// importTracker counts the imports in flight, so they can be capped and
-// counted against max_repos_per_user until they register their repository,
-// and stops them at shutdown.
+// importTracker counts the imports in flight, so they can be capped, and
+// stops them at shutdown.
 type importTracker struct {
 	// ctx is the parent of every import's context. Stop cancels it.
 	ctx    context.Context
@@ -39,18 +38,12 @@ type importTracker struct {
 	// perUser counts the imports in flight by user ID, 0 being callers
 	// without an account. It holds the per-user cap.
 	perUser map[int64]int
-	// pending counts, by the same key, the imports in flight that have not
-	// registered their repository yet. It is what counts against
-	// max_repos_per_user: once registered, the repository row counts
-	// instead, while the import still holds its slots in total and perUser
-	// until it returns (after the LFS fetch, say).
-	pending map[int64]int
 	wg      sync.WaitGroup
 }
 
 func newImportTracker(ctx context.Context) *importTracker {
 	ctx, cancel := context.WithCancel(ctx)
-	return &importTracker{ctx: ctx, cancel: cancel, perUser: map[int64]int{}, pending: map[int64]int{}}
+	return &importTracker{ctx: ctx, cancel: cancel, perUser: map[int64]int{}}
 }
 
 // importUserKey is the key user's imports are counted under: callers
@@ -67,30 +60,8 @@ func importUserKey(user proto.User) int64 {
 type importSlot struct {
 	t   *importTracker
 	key int64
-	// registered and released are guarded by t.mu.
-	registered, released bool
-}
-
-// decr lowers m[key] by one, dropping the key at zero. Call with the
-// tracker's lock held.
-func decr(m map[int64]int, key int64) {
-	if m[key]--; m[key] <= 0 {
-		delete(m, key)
-	}
-}
-
-// markRegistered records that the import has committed its repository, so
-// it stops counting against max_repos_per_user: the repository row counts
-// from now on. The slot keeps counting against the concurrency caps until
-// release. Calling it more than once, or after release, does nothing.
-func (s *importSlot) markRegistered() {
-	s.t.mu.Lock()
-	defer s.t.mu.Unlock()
-	if s.registered || s.released {
-		return
-	}
-	s.registered = true
-	decr(s.t.pending, s.key)
+	// released is guarded by t.mu.
+	released bool
 }
 
 // release frees the slot. Call it once the import has finished, cleanup
@@ -103,29 +74,32 @@ func (s *importSlot) release() {
 	}
 	s.released = true
 	s.t.total--
-	decr(s.t.perUser, s.key)
-	if !s.registered {
-		decr(s.t.pending, s.key)
+	if s.t.perUser[s.key]--; s.t.perUser[s.key] <= 0 {
+		delete(s.t.perUser, s.key)
 	}
 	s.t.mu.Unlock()
 	s.t.wg.Done()
 }
 
 // reserveImport takes a slot for an import by user, or refuses it: with
-// proto.ErrImportsDisabled once imports have been stopped, with
-// proto.ErrTooManyImports when the server or the user already runs as many
-// as allowed, and with the max_repos_per_user error when limited and the
-// user's repositories and unregistered imports in flight together reach the
-// limit. Call the slot's markRegistered once the repository is committed,
-// and its release once the import has finished, cleanup included.
+// the max_repos_per_user error when limited and the user's repositories
+// already reach the limit, with proto.ErrImportsDisabled once imports have
+// been stopped, and with proto.ErrTooManyImports when the server or the
+// user already runs as many as allowed. Call the slot's release once the
+// import has finished, cleanup included.
 //
-// The repository count is read under the tracker's lock, so imports racing
-// each other at the limit take turns. A plain create racing an import can
-// still take the last slot while the clone runs; registerRepository checks
-// the limit again when it records the repository. Between that commit and
-// markRegistered the import is briefly counted twice, which can only refuse
-// a concurrent import, never let one past the limit.
+// The repository count is an early answer only, as for a create (see
+// checkRepoLimit): imports in flight do not count, so a user one below the
+// limit can start two. registerRepository checks the limit again when it
+// records the repository, after the clone, and the import that is over it
+// then fails and removes what it cloned.
 func (d *Backend) reserveImport(ctx context.Context, user proto.User, admin, limited bool) (*importSlot, error) {
+	if limited {
+		if err := d.checkRepoLimit(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+
 	t := d.imports
 	key := importUserKey(user)
 
@@ -138,19 +112,9 @@ func (d *Backend) reserveImport(ctx context.Context, user proto.User, admin, lim
 	if t.total >= maxConcurrentImports || (!admin && t.perUser[key] >= maxUserConcurrentImports) {
 		return nil, proto.ErrTooManyImports
 	}
-	if limited {
-		n, err := d.countRepos(ctx, d.db, user)
-		if err != nil {
-			return nil, err
-		}
-		if n+int64(t.pending[key]) >= int64(d.cfg.MaxReposPerUser) {
-			return nil, d.errRepoLimit(user)
-		}
-	}
 
 	t.total++
 	t.perUser[key]++
-	t.pending[key]++
 	t.wg.Add(1)
 
 	return &importSlot{t: t, key: key}, nil

@@ -520,37 +520,25 @@ func TestImportRepositoryDisabled(t *testing.T) {
 	}
 }
 
-// TestImportGateRetriesUnreadableVersion verifies that a failure to read
-// git's version closes the gate only until the next check, while a version
-// that was read is cached.
-func TestImportGateRetriesUnreadableVersion(t *testing.T) {
+// TestImportGateChecksOnce verifies that git's version is read once per
+// backend, whatever the outcome: a version that could not be read keeps
+// imports off until restart.
+func TestImportGateChecksOnce(t *testing.T) {
 	is := is.New(t)
 	var calls int
-	var err error
-	version := git.Version{Major: 2, Minor: 45}
+	err := errors.New("fork/exec git: resource temporarily unavailable")
 	orig := binVersion
 	binVersion = func() (git.Version, error) {
 		calls++
-		return version, err
+		return git.Version{Major: 2, Minor: 45}, err
 	}
 	t.Cleanup(func() { binVersion = orig })
 
 	be, _ := newTestBackend(t)
-
-	err = errors.New("fork/exec git: resource temporarily unavailable")
 	is.True(be.ImportsDisabledReason() != "")
-	is.True(be.ImportsDisabledReason() != "")
-	is.Equal(calls, 2) // a failed read is not cached
-
 	err = nil
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(calls, 3) // a successful read is
-
-	// Once read, a later failure to run git does not matter.
-	err = errors.New("exec: git: not found")
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(calls, 3)
+	is.True(be.ImportsDisabledReason() != "")
+	is.Equal(calls, 1)
 }
 
 // TestImportRefusesSSHLFSEndpoint verifies that an import asking for LFS

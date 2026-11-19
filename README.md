@@ -1244,7 +1244,7 @@ directly. They ignore any proxy set for the server, whether through
 remote's host name itself and could reach internal addresses the import check
 refuses. Webhooks and Git LFS transfers never use a proxy either.
 
-Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged.
+Imports and mirror syncs need git 2.37 or newer on the server. Older git cannot pin an http(s) remote to the address the server checked, so a remote could be pointed at an internal address after the check; with such a git, imports and mirror syncs are refused and the reason is logged. The version is checked once, when the server starts, so restart it after upgrading git.
 
 A `git://` remote is pinned the same way: git is told to connect to the
 address the server checked instead of looking the name up again, so the

@@ -157,35 +157,47 @@ func TestStopImports(t *testing.T) {
 	assertNothingLeft(t, be, "late")
 }
 
-// An import in flight counts against max_repos_per_user before it has
-// registered its repository, so parallel imports cannot each pass the
-// limit and clone.
-func TestImportInFlightCountsAgainstRepoLimit(t *testing.T) {
+// max_repos_per_user is checked before an import clones anything, against
+// the user's repositories. Imports in flight do not count, so one that
+// passed that check can still find the limit reached when it records its
+// repository, after the clone: it then fails and leaves nothing behind.
+func TestImportRepoLimit(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
-	remote, hostPort, accepted := stallingRemote(t)
-	cfg.SSH.ClientAllowedHosts = []string{hostPort}
-	is.NoErr(cfg.Validate())
+	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 1
-	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
-	defer cancel()
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)
 
-	errc := importAsync(ctx, be, "first", alice, remote)
-	waitAccepted(t, accepted)
+	src := t.TempDir()
+	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
 
-	_, err = be.ImportRepository(ctx, "second", alice, remote, proto.RepositoryOptions{})
+	// Below the limit, the import gets a slot.
+	slot, err := be.reserveImport(ctx, alice, false, true)
+	is.NoErr(err)
+	defer slot.release()
+
+	// A create takes the last repository while the import clones.
+	_, err = be.CreateRepository(ctx, "created", alice, proto.RepositoryOptions{})
+	is.NoErr(err)
+
+	imp := importSpec{
+		name:      "imported",
+		path:      be.repoPath("imported"),
+		remote:    src,
+		logRemote: src,
+		limited:   true,
+	}
+	is.NoErr(claimRepoPath(imp.path))
+	_, err = be.importRepository(ctx, alice, imp)
 	is.True(errors.Is(err, proto.ErrRepoLimitReached))
-	assertNothingLeft(t, be, "second")
+	assertNothingLeft(t, be, "imported")
 
-	cancel()
-	is.True(errors.Is(waitImport(t, errc), proto.ErrImportFailed))
-
-	// The slot is free again once the first import has stopped: the next
-	// import is refused only for its remote.
-	_, err = be.ImportRepository(backendTestContext(be, cfg), "third", alice, offlineRemote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrInvalidRemote))
+	// At the limit, the next import is refused before it clones.
+	_, err = be.reserveImport(ctx, alice, false, true)
+	is.True(errors.Is(err, proto.ErrRepoLimitReached))
 }
 
 // reserveImport caps the imports in flight per user, except for server
@@ -238,126 +250,6 @@ func TestReserveImportCaps(t *testing.T) {
 	be.imports.mu.Lock()
 	is.Equal(be.imports.total, 0)
 	is.Equal(len(be.imports.perUser), 0)
-	is.Equal(len(be.imports.pending), 0)
-	be.imports.mu.Unlock()
-}
-
-// Imports racing each other at max_repos_per_user take turns: no more of
-// them get a slot than the user has repositories left.
-func TestReserveImportRepoLimitConcurrent(t *testing.T) {
-	is := is.New(t)
-	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
-	cfg.MaxReposPerUser = 2
-	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
-	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
-
-	const n = 8
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i := range n {
-		wg.Go(func() {
-			// admin, so only the repository limit applies.
-			_, errs[i] = be.reserveImport(ctx, alice, true, true)
-		})
-	}
-	wg.Wait()
-
-	var ok int
-	for _, err := range errs {
-		switch {
-		case err == nil:
-			ok++
-		case !errors.Is(err, proto.ErrRepoLimitReached):
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	is.Equal(ok, 1)
-	is.Equal(be.imports.perUser[alice.ID()], 1)
-}
-
-// An import that has registered its repository counts against
-// max_repos_per_user through that repository only, not also as an import
-// in flight, while it still runs (an LFS fetch, say). It keeps holding its
-// concurrency slot until it returns.
-func TestRegisteredImportCountsOnce(t *testing.T) {
-	is := is.New(t)
-	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
-	cfg.MaxReposPerUser = 2
-	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
-
-	src := t.TempDir()
-	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
-	}
-
-	// Hold the first import right after it has registered its repository,
-	// as a long LFS fetch would.
-	registered := make(chan struct{})
-	resume := make(chan struct{})
-	var once sync.Once
-	be.afterRegister = func() {
-		once.Do(func() {
-			close(registered)
-			<-resume
-		})
-	}
-	defer func() { be.afterRegister = nil }()
-
-	slot, err := be.reserveImport(ctx, alice, false, true)
-	is.NoErr(err)
-	name := "a"
-	imp := importSpec{
-		name:      name,
-		path:      be.repoPath(name),
-		remote:    src,
-		logRemote: src,
-		limited:   true,
-		committed: slot.markRegistered,
-	}
-	is.NoErr(claimRepoPath(imp.path))
-	errc := make(chan error, 1)
-	go func() {
-		_, err := be.importRepository(ctx, alice, imp)
-		// Release before reporting, as ImportRepository does, so the
-		// counts are settled once the error has been received.
-		slot.release()
-		errc <- err
-	}()
-	select {
-	case <-registered:
-	case <-time.After(time.Minute):
-		close(resume)
-		t.Fatal("the import never registered its repository")
-	}
-
-	// alice owns one repository, so a second import is within the limit,
-	// and it takes her second concurrency slot.
-	second, err := be.reserveImport(ctx, alice, false, true)
-	is.NoErr(err)
-	// The limit is reached now, and so is the per-user cap.
-	_, err = be.reserveImport(ctx, alice, true, true)
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
-	_, err = be.reserveImport(ctx, alice, false, false)
-	is.True(errors.Is(err, proto.ErrTooManyImports))
-	second.release()
-
-	close(resume)
-	select {
-	case err := <-errc:
-		is.NoErr(err)
-	case <-time.After(time.Minute):
-		t.Fatal("the import did not finish")
-	}
-	// Releasing after registering leaves no count behind.
-	be.imports.mu.Lock()
-	is.Equal(be.imports.total, 0)
-	is.Equal(len(be.imports.perUser), 0)
-	is.Equal(len(be.imports.pending), 0)
 	be.imports.mu.Unlock()
 }
 
