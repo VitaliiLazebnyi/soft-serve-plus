@@ -787,18 +787,19 @@ func TestConnectionsAddAfterCloseAll(t *testing.T) {
 	}
 }
 
-// TestRequestTimeout checks that a client trickling its request line in a
-// byte at a time, each well within the idle timeout, is still dropped once
-// the request timeout passes, and is told why. Every read used to push the
-// deadline forward, so such clients could hold a connection slot
-// indefinitely.
+// TestRequestTimeout checks that a client which sends part of its request
+// line, well within the idle timeout, is still dropped once the request
+// timeout passes, and is told why. Every read used to push the deadline
+// forward, so a client trickling its request a byte at a time could hold a
+// connection slot indefinitely.
+//
+// The idle timeout is ten minutes, far past the test's wait, so an answer
+// within the wait can only come from the request timeout and the test need
+// not time it.
 func TestRequestTimeout(t *testing.T) {
-	const (
-		requestTimeout = 2 * time.Second
-		idleTimeout    = 5 * time.Second
-	)
+	const requestTimeout = 2 * time.Second
 	cfg := *testDaemon.cfg
-	cfg.Git.IdleTimeout = int(idleTimeout / time.Second)
+	cfg.Git.IdleTimeout = 600
 	ctx := config.WithContext(context.Background(), &cfg)
 	ctx = backend.WithContext(ctx, testBackend)
 	d, err := NewGitDaemon(ctx)
@@ -813,43 +814,47 @@ func TestRequestTimeout(t *testing.T) {
 	go d.Serve(l) //nolint:errcheck
 	t.Cleanup(func() { _ = d.Close() })
 
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close() //nolint:errcheck
-
 	// Start a request line whose declared length is more than is ever
-	// sent, a byte every 200ms for the first half of the request timeout.
-	// The client then stops writing well before the request deadline, so
-	// its writes cannot race the daemon closing the connection and turn
-	// the daemon's answer into a reset.
-	start := time.Now()
-	for _, b := range []byte("0fffgit") {
-		if time.Since(start) > requestTimeout/2 {
-			break
+	// sent. The daemon reads it, which used to push the deadline past the
+	// idle timeout. A client slowed past the request timeout before it
+	// writes can have its write reset the connection the daemon has just
+	// closed, losing the answer; it tries again on a new connection.
+	waitForDaemon(t, "the daemon to answer a partial request line", func() bool {
+		c := dialDaemonAt(t, l.Addr().String())
+		defer c.Close() //nolint:errcheck
+		if _, err := io.WriteString(c, "0fffgit"); err != nil {
+			t.Logf("write: %v; trying again", err)
+			return false
 		}
-		if _, err := c.Write([]byte{b}); err != nil {
-			t.Fatalf("write: %v", err)
+		// The scanner reports an ERR packet as an error carrying its message.
+		line, err := readPktline(c)
+		if err == nil {
+			t.Fatalf("expected a timeout error, got %q", line)
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	if err := c.SetReadDeadline(time.Now().Add(2 * idleTimeout)); err != nil {
-		t.Fatal(err)
-	}
-	// The scanner reports an ERR packet as an error carrying its message.
-	line, err := readPktline(c)
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatalf("expected a timeout error, got %q", line)
-	}
-	if !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
-		t.Fatalf("expected the daemon to report %q, got %v", git.ErrTimeout, err)
-	}
-	// The idle deadline after the last byte would only pass at about
-	// requestTimeout/2 + idleTimeout.
-	if elapsed > requestTimeout+idleTimeout/2 {
-		t.Fatalf("connection was dropped only after %v, want about %v", elapsed, requestTimeout)
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatalf("the daemon kept a partial request line open for %s", idleWait)
+		}
+		if !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+			if isReset(err) {
+				t.Logf("read: %v; trying again", err)
+				return false
+			}
+			t.Fatalf("expected the daemon to report %q, got %v", git.ErrTimeout, err)
+		}
+		return true
+	})
+}
+
+// waitForDaemon calls cond until it holds, failing the test after idleWait.
+func waitForDaemon(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(idleWait)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
