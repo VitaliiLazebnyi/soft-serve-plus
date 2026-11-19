@@ -34,7 +34,8 @@ func (d *Backend) IsAdminKey(pk ssh.PublicKey) bool {
 // IsServerAdmin reports whether the caller is a server admin: user has the
 // admin flag, or the public key the SSH session authenticated with, read
 // from ctx, is one of the configured admin keys. It is the one statement of
-// that rule; every check that honours an admin key asks it.
+// that rule; every check that honours an admin key on the session context
+// asks it. A check on a key given explicitly uses IsAdminKey.
 //
 // Admin keys are attached to an admin user on every start, but a key that a
 // non-admin account already owns stays on that account (and such sessions

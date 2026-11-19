@@ -171,7 +171,8 @@ func repoFromContext(ctx context.Context) (proto.Repository, access.AccessLevel,
 // by the backend's rule (Backend.IsServerAdmin): the session user has the
 // admin flag, or the session's key is a configured admin key.
 func isServerAdmin(ctx context.Context) bool {
-	return backend.FromContext(ctx).IsServerAdmin(ctx, proto.UserFromContext(ctx))
+	be := backend.FromContext(ctx)
+	return be != nil && be.IsServerAdmin(ctx, proto.UserFromContext(ctx))
 }
 
 // parseBool parses a boolean command argument. It accepts the values
