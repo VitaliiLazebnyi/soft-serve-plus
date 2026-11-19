@@ -686,6 +686,9 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 		}
 		switch {
+		case errors.Is(cerr, proto.ErrLookupFailed):
+			lookupUnavailable(w, r, logger, repoName, cerr, lfsJSON)
+			return
 		case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
 			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
 			// As above: git sends credentials only after a 401, so ask

@@ -31,7 +31,7 @@ func renameCommand() *cobra.Command {
 				return proto.ErrUnauthorized
 			}
 
-			return be.RenameRepository(ctx, oldName, newName)
+			return createFailed(ctx, "rename repository", be.RenameRepository(ctx, oldName, newName))
 		},
 	}
 

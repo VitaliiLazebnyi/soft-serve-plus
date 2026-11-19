@@ -33,6 +33,13 @@ import (
 // The lookup tests break its tables.
 func newLookupTestContext(t *testing.T) (context.Context, *backend.Backend, *syncLog) {
 	t.Helper()
+	return newLookupTestContextWith(t, nil)
+}
+
+// newLookupTestContextWith is newLookupTestContext with the backend's store
+// wrapped by wrap, when it is not nil.
+func newLookupTestContextWith(t *testing.T, wrap func(store.Store) store.Store) (context.Context, *backend.Backend, *syncLog) {
+	t.Helper()
 	ctx := context.Background()
 	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
@@ -53,7 +60,10 @@ func newLookupTestContext(t *testing.T) (context.Context, *backend.Backend, *syn
 	logger.SetLevel(log.DebugLevel)
 	ctx = log.WithContext(ctx, logger)
 	ctx = db.WithContext(ctx, dbx)
-	st := database.New()
+	var st store.Store = database.New()
+	if wrap != nil {
+		st = wrap(st)
+	}
 	ctx = store.WithContext(ctx, st)
 	be := backend.New(ctx, cfg, dbx, st)
 	return backend.WithContext(ctx, be), be, logs

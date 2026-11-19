@@ -122,12 +122,20 @@ func redactRemote(remote string) string {
 func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
 	level, err := d.BaseAccessLevelForUser(ctx, user)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: may %s create: %w", proto.ErrLookupFailed, callerName(user), err)
 	}
 	if level < access.ReadWriteAccess {
 		return proto.ErrUnauthorized
 	}
 	return nil
+}
+
+// callerName names user in an error: the username, or "anonymous".
+func callerName(user proto.User) string {
+	if user == nil {
+		return "anonymous"
+	}
+	return user.Username()
 }
 
 // AboutRepo is the repository whose README the TUI shows on its About tab

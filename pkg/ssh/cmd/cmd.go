@@ -210,6 +210,17 @@ func repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, erro
 	return level, nil
 }
 
+// createFailed returns err, from creating, importing or renaming onto a
+// repository, for the client: a failed lookup (proto.ErrLookupFailed) is
+// logged and answered with errLookupFailed, as by lookupFailed; anything
+// else is returned as it is.
+func createFailed(ctx context.Context, what string, err error) error {
+	if errors.Is(err, proto.ErrLookupFailed) {
+		return lookupFailed(ctx, log.FromContext(ctx), what, err)
+	}
+	return err
+}
+
 // errLookupFailed is returned to the client when a lookup the command needs
 // failed, as when the database is down. The cause stays in the server log:
 // it can name server paths, and the request was not refused.

@@ -35,6 +35,11 @@ var (
 	ErrMirrorReadOnly = errors.New("repository is a mirror; its branches and tags follow the remote and the next sync would undo this change, so turn mirroring off first")
 	// ErrFileNotFound is returned when the file is not found.
 	ErrFileNotFound = errors.New("file not found")
+	// ErrLookupFailed wraps a lookup that failed, as when the database is
+	// down, where the caller needed its answer to decide. It is a server
+	// fault, not a refusal: transports answer it with a fixed message and
+	// keep the wrapped cause in the server log.
+	ErrLookupFailed = errors.New("lookup failed")
 	// ErrRepoNotFound is returned when a repository is not found.
 	ErrRepoNotFound = errors.New("repository not found")
 	// ErrRepoExist is returned when a repository already exists.

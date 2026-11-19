@@ -538,6 +538,9 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			if _, err := be.CreateRepository(ctx, name, user, proto.RepositoryOptions{Private: private}); err != nil {
+				if errors.Is(err, proto.ErrLookupFailed) {
+					return gitLookupFailed(ctx, logger, name, err)
+				}
 				// Mostly a bad name or a limit, which the client is told;
 				// the backend logs its own failures.
 				logger.Debug("failed to create repo", "err", err, "repo", name)

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -142,4 +143,31 @@ func TestAboutRepoOwnerLookupFailureLogged(t *testing.T) {
 	breakTable(t, be, "users")
 	is.True(!be.AboutRepoOwnedByAdmin(ctx, r))
 	is.True(strings.Contains(logs.String(), "about repository's owner"))
+}
+
+// When the creation rule cannot be worked out because the anon-access
+// setting cannot be read, create, import and rename onto a new name fail
+// with the lookup error, marked as proto.ErrLookupFailed, not with a
+// refusal, and nothing is created.
+func TestCheckCanCreateReturnsLookupError(t *testing.T) {
+	is := is.New(t)
+	be := newLookupBackend(t, nil)
+	ctx := context.Background()
+	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
+	is.NoErr(err)
+	strangerCtx := proto.WithUserContext(ctx, stranger)
+
+	breakTable(t, be, "settings")
+	_, cerr := be.CreateRepository(strangerCtx, "new", stranger, proto.RepositoryOptions{})
+	_, ierr := be.ImportRepository(strangerCtx, "new", stranger, offlineRemote, proto.RepositoryOptions{})
+	rerr := be.RenameRepository(strangerCtx, "a", "new")
+	for _, err := range []error{cerr, ierr, rerr} {
+		is.True(err != nil)
+		is.True(!errors.Is(err, proto.ErrUnauthorized))
+		is.True(errors.Is(err, proto.ErrLookupFailed))
+		is.True(strings.Contains(err.Error(), "anon-access")) // the cause is kept
+	}
+	is.True(!be.repoPathExists("new"))
 }
