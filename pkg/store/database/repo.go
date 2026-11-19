@@ -2,8 +2,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -80,6 +82,22 @@ func (*Store) GetRepoByName(ctx context.Context, h db.Handler, name string) (mod
 	query := h.Rebind("SELECT * FROM repos WHERE name = ?;")
 	err := h.GetContext(ctx, &repo, query, name)
 	return repo, err
+}
+
+// GetRepoWithCollabByName implements store.Store.
+func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.AccessLevel, bool, error) {
+	var row struct {
+		models.Repo
+		CollabLevel sql.NullInt64 `db:"collab_access_level"`
+	}
+	name = utils.SanitizeRepo(name)
+	query := h.Rebind(`SELECT repos.*, collabs.access_level AS collab_access_level
+		FROM repos LEFT JOIN collabs ON collabs.repo_id = repos.id AND collabs.user_id = ?
+		WHERE repos.name = ?;`)
+	if err := h.GetContext(ctx, &row, query, userID, name); err != nil {
+		return models.Repo{}, 0, false, err
+	}
+	return row.Repo, access.AccessLevel(row.CollabLevel.Int64), row.CollabLevel.Valid, nil
 }
 
 // GetRepoByID implements store.Store.

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
@@ -10,6 +11,10 @@ import (
 // RepositoryStore is an interface for managing repositories.
 type RepositoryStore interface {
 	GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error)
+	// GetRepoWithCollabByName is GetRepoByName that also returns, in the
+	// same query, the access level of userID's collaborator row on the
+	// repository, with ok false when userID has none.
+	GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (_ models.Repo, level access.AccessLevel, ok bool, _ error)
 	GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
 	// GetRepoByIDForUpdate is GetRepoByID that also locks the row until the
 	// transaction ends, on Postgres, as GetRepoByNameForUpdate does. It
