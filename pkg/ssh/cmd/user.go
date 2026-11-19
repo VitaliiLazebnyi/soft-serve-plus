@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -203,8 +204,11 @@ func UserCommand() *cobra.Command {
 			username := args[0]
 
 			user, err := be.User(ctx, username)
-			if err != nil {
+			if errors.Is(err, proto.ErrUserNotFound) {
 				return err
+			}
+			if err != nil {
+				return lookupFailed(ctx, log.FromContext(ctx), "look up user", err)
 			}
 
 			isAdmin := user.IsAdmin()

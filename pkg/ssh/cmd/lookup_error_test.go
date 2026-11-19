@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -65,9 +67,13 @@ func TestRepoCommandLookupFailure(t *testing.T) {
 	// Without the collaborators table, the stranger's level cannot be
 	// worked out.
 	breakTable(t, ctx, "collabs")
-	err = runRepo(t, strangerCtx, "info", "repo")
+	var logs bytes.Buffer
+	err = runRepo(t, log.WithContext(strangerCtx, log.New(&logs)), "info", "repo")
 	is.True(errors.Is(err, errLookupFailed))
 	is.True(!strings.Contains(err.Error(), "collabs"))
+	// The cause stays in the server log.
+	is.True(strings.Contains(logs.String(), "lookup failed"))
+	is.True(strings.Contains(logs.String(), "collabs"))
 
 	// With the repository table gone, the lookup fails for everyone, and
 	// so does the list.

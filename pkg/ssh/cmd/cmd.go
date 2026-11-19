@@ -319,5 +319,8 @@ func userByPublicKey(ctx context.Context) (proto.User, error) {
 	if errors.Is(err, proto.ErrUserNotFound) && !errors.As(err, &nonAdminOwner) {
 		return nil, errUnknownKey(ctx)
 	}
+	if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+		return nil, lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
+	}
 	return user, err
 }
