@@ -110,16 +110,21 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 	return list, nil
 }
 
-// IsCollaborator returns the access level and true if the user is a collaborator of the repository.
-// A user who is not a collaborator gives (-1, false, nil); the error is only
-// set when the lookup itself fails.
-func (d *Backend) IsCollaborator(ctx context.Context, repo string, username string) (access.AccessLevel, bool, error) {
-	if username == "" {
+// IsCollaborator returns user's access level on r and true if user is a
+// collaborator of r. A user who is not a collaborator, and a nil user or
+// repository, give (-1, false, nil); the error is only set when the lookup
+// itself fails.
+//
+// The row is looked up by user and repository ID, not by name: an SSH
+// session resolves its user once, and if that account is renamed and
+// another takes the old name, the session must keep its own account's
+// rows, not get the other account's.
+func (d *Backend) IsCollaborator(ctx context.Context, r proto.Repository, user proto.User) (access.AccessLevel, bool, error) {
+	if r == nil || user == nil || user.ID() == 0 {
 		return -1, false, nil
 	}
 
-	repo = utils.SanitizeRepo(repo)
-	m, err := d.store.GetCollabByUsernameAndRepo(ctx, d.db, username, repo)
+	m, err := d.store.GetCollabByUserIDAndRepoID(ctx, d.db, user.ID(), r.ID())
 	if err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return -1, false, nil

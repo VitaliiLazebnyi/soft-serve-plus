@@ -32,18 +32,18 @@ func TestIsCollaboratorNotCollaborator(t *testing.T) {
 		return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "repo", access.ReadWriteAccess)
 	}))
 
-	level, isCollab, err := be.IsCollaborator(ctx, "repo", "stranger")
+	level, isCollab, err := collabOf(t, be, ctx, "repo", "stranger")
 	is.NoErr(err)
 	is.True(!isCollab)
 	is.Equal(level, access.AccessLevel(-1))
 
 	// A repository that does not exist has no collaborators either.
-	level, isCollab, err = be.IsCollaborator(ctx, "missing", "collab")
+	level, isCollab, err = collabOf(t, be, ctx, "missing", "collab")
 	is.NoErr(err)
 	is.True(!isCollab)
 	is.Equal(level, access.AccessLevel(-1))
 
-	level, isCollab, err = be.IsCollaborator(ctx, "repo", "collab")
+	level, isCollab, err = collabOf(t, be, ctx, "repo", "collab")
 	is.NoErr(err)
 	is.True(isCollab)
 	is.Equal(level, access.ReadWriteAccess)
@@ -93,4 +93,39 @@ func TestSettingsLookupFailureIsLogged(t *testing.T) {
 	out := logs.String()
 	is.True(strings.Contains(out, "error getting anon-access setting"))
 	is.True(strings.Contains(out, "error getting allow-keyless setting"))
+}
+
+// An SSH session resolves its user once. If that account is renamed and
+// another account takes the old name, the session keeps its own account's
+// collaborator rows and gets nothing from the other account's: Readable
+// looks collaborators up by user ID, as ReadableRepositories does.
+func TestCollaboratorLookedUpByUserID(t *testing.T) {
+	is := is.New(t)
+	be, _ := newTestBackend(t)
+	ctx := context.Background()
+
+	_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	session, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	is.NoErr(be.SetUsername(ctx, "alice", "carol"))
+	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		return be.store.AddCollabByUsernameAndRepo(ctx, tx, "alice", "private", access.ReadWriteAccess)
+	}))
+
+	r, level := be.Readable(ctx, "private", session)
+	is.True(r == nil)
+	is.Equal(level, access.NoAccess)
+	repos, err := be.ReadableRepositories(ctx, session)
+	is.NoErr(err)
+	is.Equal(len(repos), 0)
+
+	// The account that holds the name now has the row.
+	alice, err := be.User(ctx, "alice")
+	is.NoErr(err)
+	r, level = be.Readable(ctx, "private", alice)
+	is.True(r != nil)
+	is.Equal(level, access.ReadWriteAccess)
 }

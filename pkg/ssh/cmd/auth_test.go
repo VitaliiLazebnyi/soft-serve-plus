@@ -145,10 +145,10 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 	}
 
 	// Nothing changed: the victim can still read and the peer keeps write.
-	_, isCollab, _ := be.IsCollaborator(ctx, "repo", "victim")
+	_, isCollab, _ := collabOf(t, be, ctx, "repo", "victim")
 	is.Equal(isCollab, false)
 	is.Equal(levelOf(be, victimCtx, "repo", victim), access.ReadOnlyAccess)
-	level, isCollab, err := be.IsCollaborator(ctx, "repo", "peer")
+	level, isCollab, err := collabOf(t, be, ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
 	is.Equal(level, access.ReadWriteAccess)
@@ -173,14 +173,14 @@ func TestCollabManagementByRepoAdmin(t *testing.T) {
 	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "maintainer", access.AdminAccess))
 
 	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "admin-access"))
-	level, isCollab, err := be.IsCollaborator(ctx, "repo", "peer")
+	level, isCollab, err := collabOf(t, be, ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
 	is.Equal(level, access.AdminAccess)
 
 	is.NoErr(runRepo(t, adminCtx, "collab", "remove", "repo", "peer"))
 	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "no-access"))
-	level, isCollab, err = be.IsCollaborator(ctx, "repo", "peer")
+	level, isCollab, err = collabOf(t, be, ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
 	is.Equal(level, access.NoAccess)

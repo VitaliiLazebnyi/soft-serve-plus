@@ -156,15 +156,11 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return d.baseAccessLevel(user, false, anon)
 	}
 
-	var username string
-	if user != nil {
-		username = user.Username()
-	}
-	collabAccess, isCollab, err := d.IsCollaborator(ctx, name, username)
+	collabAccess, isCollab, err := d.IsCollaborator(ctx, r, user)
 	if err != nil {
 		// Fall through to the non-collaborator rules, which deny access to
 		// a private repository, but leave a trace of the failed lookup.
-		d.logger.Error("error checking collaborator", "repo", name, "user", username, "err", err)
+		d.logger.Error("error checking collaborator", "repo", name, "user_id", user.ID(), "err", err)
 	}
 	return repoAccessLevel(r, user, anon, collabAccess, isCollab)
 }

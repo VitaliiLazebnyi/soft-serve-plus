@@ -344,6 +344,12 @@ func TestCollabStore(t *testing.T) {
 	if c.RepoID != 7 || c.AccessLevel != access.ReadWriteAccess {
 		t.Errorf("GetCollabByUsernameAndRepo() = %+v, want read-write on repo 7", c)
 	}
+	if byID, err := s.GetCollabByUserIDAndRepoID(ctx, dbx, c.UserID, 7); err != nil || byID.ID != c.ID || byID.AccessLevel != c.AccessLevel {
+		t.Errorf("GetCollabByUserIDAndRepoID() = %+v, %v, want %+v", byID, err, c)
+	}
+	if _, err := s.GetCollabByUserIDAndRepoID(ctx, dbx, c.UserID, 8); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("GetCollabByUserIDAndRepoID(repo 8) error = %v, want ErrRecordNotFound", err)
+	}
 	if err := s.AddCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7", access.ReadOnlyAccess); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("AddCollabByUsernameAndRepo(again) error = %v, want ErrDuplicateKey", err)
 	}
