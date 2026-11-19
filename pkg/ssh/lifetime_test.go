@@ -281,45 +281,44 @@ func TestNoAccountLifetime(t *testing.T) {
 
 // TestConnLifetimeResumes checks that the lifetime clock stops while a
 // command runs and, once it has ended, goes on with the time it had left
-// rather than starting again. The clock is wound back instead of waited on,
-// so the test does not depend on the machine's speed.
+// rather than starting again. The clock of an hour-long lifetime is wound
+// back to a millisecond before its end instead of waited on, so the
+// lifetime is over within the test's wait only if the clock goes on: one
+// that started again would run for another hour.
 func TestConnLifetimeResumes(t *testing.T) {
-	const (
-		lifetime = time.Hour
-		spent    = 40 * time.Minute
-	)
+	const lifetime = time.Hour
 	var l connLifetime
-	l.start(lifetime, func() { t.Error("lifetime over") })
+	expired := make(chan struct{})
+	l.start(lifetime, func() { close(expired) })
 	defer l.stop()
-	state := func() (left time.Duration, since time.Time) {
+	left := func() time.Duration {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		return l.left, l.since
+		return l.left
 	}
 
-	// Spend 40 minutes of the lifetime.
+	// Spend all but a millisecond of the lifetime.
 	l.mu.Lock()
-	l.since = l.since.Add(-spent)
+	l.since = l.since.Add(-(lifetime - time.Millisecond))
 	l.mu.Unlock()
 
 	l.commandStarted()
-	left, _ := state()
-	if left > lifetime-spent || left <= 0 {
-		t.Fatalf("time left once a command started = %v, want at most %v", left, lifetime-spent)
+	stopped := left()
+	if stopped > time.Millisecond {
+		t.Fatalf("time left once a command started = %v, want at most 1ms", stopped)
 	}
+	// While a second command still runs, the first one ending does not
+	// start the clock.
 	l.commandStarted()
 	l.commandEnded()
-	if got, _ := state(); got != left {
-		t.Fatalf("time left while a second command runs = %v, want %v", got, left)
+	if got := left(); got != stopped {
+		t.Fatalf("time left while a second command runs = %v, want %v", got, stopped)
 	}
 
-	before := time.Now()
 	l.commandEnded()
-	got, since := state()
-	if got != left {
-		t.Fatalf("time left once the commands ended = %v, want %v, not the whole lifetime again", got, left)
-	}
-	if since.Before(before) {
-		t.Fatal("the clock did not start again once the commands ended")
+	select {
+	case <-expired:
+	case <-time.After(time.Minute):
+		t.Fatalf("lifetime not over a minute after the commands ended with %v of it left; the clock started again", stopped)
 	}
 }
