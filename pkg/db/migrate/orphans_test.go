@@ -218,8 +218,8 @@ func TestMigrateDownAndUpKeepsRows(t *testing.T) {
 
 // openSqliteFile opens an empty SQLite database at a file, and a raw
 // connection to it with foreign keys off, as an old data source left them,
-// to write orphans with.
-func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB) {
+// to write orphans with, and the file's path.
+func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "soft.db")
 	dbx, err := db.Open(ctx, "sqlite", path)
@@ -236,7 +236,7 @@ func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB) {
 	if _, err := raw.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatal(err)
 	}
-	return dbx, raw
+	return dbx, raw, path
 }
 
 func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
@@ -249,13 +249,14 @@ func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
 }
 
 // With no admin to give a repository of a deleted owner to, the upgrade
-// stops with an error that names the repository and says to make a user an
-// admin, and changes nothing. The repository's row used to be deleted, with
+// stops with an error that names the repository and says how to make a user
+// an admin, with commands that work while it cannot start, and changes
+// nothing. The repository's row used to be deleted, with
 // its collaborators, webhooks and LFS rows, leaving its directory behind and
 // its name unusable. Once a user is an admin, the upgrade goes through.
 func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	dbx, raw := openSqliteFile(t, ctx)
+	dbx, raw, path := openSqliteFile(t, ctx)
 	all := migrations
 	t.Cleanup(func() { migrations = all })
 	migrations = all[:3]
@@ -274,8 +275,30 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 
 	migrations = all
 	err := Migrate(ctx, dbx)
-	if err == nil || !strings.Contains(err.Error(), "kept (owner id 100)") || !strings.Contains(err.Error(), "set-admin") {
-		t.Fatalf("Migrate() without an admin => %v, want an error naming kept and saying to make a user an admin", err)
+	if err == nil {
+		t.Fatal("Migrate() without an admin => nil, want an error")
+	}
+	msg := err.Error()
+	// SQLite names the file with symbolic links resolved, as macOS's
+	// temporary directory under /var, a link to /private/var, needs.
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p
+	}
+	for _, want := range []string{
+		"kept (owner id 100)",
+		"nothing was changed",
+		"With the previous version running, before upgrading: ssh -p PORT HOST user set-admin USERNAME true.",
+		"With the server stopped: sqlite3 " + path + ` "UPDATE users SET admin = 1 WHERE username = 'USERNAME'".`,
+		"With no users at all, stop the server and add an admin: sqlite3 " + path +
+			` "INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)"`,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("Migrate() without an admin => %q, want it to contain %q", msg, want)
+		}
+	}
+	// soft has no user command; user set-admin is an SSH command.
+	if strings.Contains(msg, "soft user") {
+		t.Errorf("Migrate() without an admin => %q, names a soft user command, which does not exist", msg)
 	}
 	for q, want := range map[string]int{
 		`SELECT COUNT(*) FROM repos WHERE name = 'kept' AND user_id = 100`: 1,
@@ -306,7 +329,7 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 // again when it migrates up: the marker of the first check does not skip it.
 func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	dbx, raw := openSqliteFile(t, ctx)
+	dbx, raw, _ := openSqliteFile(t, ctx)
 	for range 2 {
 		if err := Migrate(ctx, dbx); err != nil {
 			t.Fatal(err)

@@ -170,9 +170,16 @@ func reassignOwnerlessRepos(ctx context.Context, tx *db.Tx, logger *log.Logger) 
 		for _, r := range repos {
 			names = append(names, fmt.Sprintf("%s (owner id %d)", r.Name, r.UserID))
 		}
-		return fmt.Errorf("the owners of these repositories no longer exist and there is no admin to give them to: %s; "+
-			"make a user an admin (soft user set-admin USERNAME true, or set admin to true in the users table) and start again",
-			strings.Join(names, ", "))
+		file, err := sqliteFile(ctx, tx)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("the owners of these repositories no longer exist and there is no admin to give them to: %s; nothing was changed. "+
+			"Make a user an admin, then start again. "+
+			"With the previous version running, before upgrading: ssh -p PORT HOST user set-admin USERNAME true. "+
+			"With the server stopped: sqlite3 %s \"UPDATE users SET admin = 1 WHERE username = 'USERNAME'\". "+
+			"With no users at all, stop the server and add an admin: sqlite3 %[2]s \"INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)\"",
+			strings.Join(names, ", "), file)
 	}
 	if err != nil {
 		return fmt.Errorf("look up an admin for repositories whose owner no longer exists: %w", err)
@@ -185,6 +192,25 @@ func reassignOwnerlessRepos(ctx context.Context, tx *db.Tx, logger *log.Logger) 
 			"repo", r.Name, "former_user_id", r.UserID, "user_id", admin)
 	}
 	return nil
+}
+
+// sqliteFile returns the path of the main database file, quoted for a shell
+// when it needs to be, for a message that tells the operator what to run.
+// An in-memory database, which has no path, gives a description instead.
+func sqliteFile(ctx context.Context, tx *db.Tx) (string, error) {
+	var file string
+	if err := tx.GetContext(ctx, &file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
+		return "", fmt.Errorf("look up the database file: %w", err)
+	}
+	if file == "" {
+		return "DATABASE_FILE (the file db.data_source names)", nil
+	}
+	if strings.IndexFunc(file, func(r rune) bool {
+		return !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+:@,%=\\", r)
+	}) < 0 {
+		return file, nil
+	}
+	return "'" + strings.ReplaceAll(file, "'", `'\''`) + "'", nil
 }
 
 // tableCounts returns the number of rows of every table of the database.
