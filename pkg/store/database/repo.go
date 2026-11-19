@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
@@ -163,7 +162,7 @@ func (*repoStore) SetRepoMirrorSyncByName(ctx context.Context, tx db.Handler, na
 	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE name = ?;"
 	if syncErr != "" {
 		query = "UPDATE repos SET mirror_error = ? WHERE name = ?;"
-		syncErr = strings.ToValidUTF8(strings.ReplaceAll(syncErr, "\x00", ""), "\uFFFD")
+		syncErr = utils.StorableText(syncErr)
 		if syncErr == "" {
 			// Still a failure, though nothing of its text was kept.
 			syncErr = "\uFFFD"

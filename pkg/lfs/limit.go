@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"unicode"
@@ -33,48 +34,25 @@ const (
 var errResponseTooLarge = errors.New("lfs: response body too large")
 
 // decodeJSONLimit decodes the first JSON value in r into v, reading at most
-// limit bytes of it. The limit applies to what the transport hands over,
-// which is already decompressed, so it also stops a gzip bomb.
+// limit bytes of it, and fails with errResponseTooLarge once r has more,
+// unlike io.LimitReader, which ends with io.EOF and would let a truncated
+// value look merely malformed. The limit applies to what the transport hands
+// over, which is already decompressed, so it also stops a gzip bomb.
 func decodeJSONLimit(r io.Reader, limit int64, v any) error {
-	return json.NewDecoder(&maxBytesReader{r: r, n: limit}).Decode(v) //nolint:wrapcheck
-}
-
-// maxBytesReader reads up to n bytes from r and fails with
-// errResponseTooLarge once r has more, unlike io.LimitReader, which ends
-// with io.EOF and would let a truncated value look merely malformed.
-type maxBytesReader struct {
-	r   io.Reader
-	n   int64
-	err error
-}
-
-func (l *maxBytesReader) Read(p []byte) (int, error) {
-	if l.err != nil {
-		return 0, l.err
+	err := json.NewDecoder(http.MaxBytesReader(nil, io.NopCloser(r), limit)).Decode(v)
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		return errResponseTooLarge
 	}
-	if len(p) == 0 {
-		return 0, nil
-	}
-	// Read one byte past the limit to tell whether there is more.
-	if int64(len(p)) > l.n+1 {
-		p = p[:l.n+1]
-	}
-	n, err := l.r.Read(p)
-	if int64(n) <= l.n {
-		l.n -= int64(n)
-		l.err = err
-		return n, err //nolint:wrapcheck
-	}
-	n = int(l.n)
-	l.n = 0
-	l.err = errResponseTooLarge
-	return n, l.err
+	return err //nolint:wrapcheck
 }
 
 // remoteText returns s, text a remote sent, cut to maxRemoteText bytes, at a
 // character boundary if one is near, with a mark if it was cut, and with
 // every byte or character that is not printable escaped, so a remote cannot
-// write terminal control sequences into the log or a client's session.
+// write terminal control sequences into the log or a client's session. The
+// cut comes first, so the result can be up to about four times
+// maxRemoteText bytes when most of the kept text is escaped (\x1b for one
+// byte), plus the mark.
 func remoteText(s string) string {
 	suffix := ""
 	if len(s) > maxRemoteText {

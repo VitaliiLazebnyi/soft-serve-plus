@@ -102,17 +102,17 @@ func httpClient(ctx context.Context) *http.Client {
 // do sends a webhook.
 // Caller must close the returned body.
 // A returned error never contains the webhook URL's path, query, fragment or
-// user info, which can hold secrets (see redactURLError).
+// user info, which can hold secrets (see redactURL).
 func do(ctx context.Context, url string, method string, headers http.Header, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return nil, redactURLError(err)
+		return nil, utils.RedactURLError(err, redactURL)
 	}
 
 	req.Header = headers
 	res, err := httpClient(ctx).Do(req)
 	if err != nil {
-		return nil, redactURLError(err)
+		return nil, utils.RedactURLError(err, redactURL)
 	}
 
 	return res, nil
@@ -140,30 +140,6 @@ func redactURL(rawURL string) string {
 		redacted += "/" + redactedURLPart
 	}
 	return redacted
-}
-
-// errInvalidURL replaces the parser's message when a webhook URL cannot be
-// parsed.
-var errInvalidURL = errors.New("invalid URL")
-
-// redactURLError redacts the URL of a *url.Error, which the HTTP client
-// returns for every failed request and which prints the whole URL except for
-// a password. The returned error keeps the operation and the underlying
-// error (except for a parse error, whose message is replaced), so errors.Is
-// and errors.As (context.DeadlineExceeded, net.Error timeouts and so on)
-// still work. Any other error is returned unchanged.
-func redactURLError(err error) error {
-	uerr, ok := err.(*neturl.Error) //nolint:errorlint // only the top-level error is replaced
-	if !ok {
-		return err
-	}
-	inner := uerr.Err
-	if uerr.Op == "parse" {
-		// A parse error's message can quote part of the URL, such as an
-		// invalid escape or port.
-		inner = errInvalidURL
-	}
-	return &neturl.Error{Op: uerr.Op, URL: redactURL(uerr.URL), Err: inner}
 }
 
 // SendWebhook sends a webhook event and records the attempt.
@@ -418,13 +394,11 @@ func formatHeaders(h http.Header) string {
 	return b.String()
 }
 
-// storableText returns s as text every database accepts. Postgres refuses
-// invalid UTF-8 and NUL in TEXT columns, which would lose the whole delivery
-// row, so invalid bytes are replaced with U+FFFD and NULs are dropped. Use it
-// for text that comes from the receiver: its headers and body, and errors
-// that may quote them.
+// storableText is utils.StorableText: Postgres refusing a receiver's text
+// would lose the whole delivery row. Use it for text that comes from the
+// receiver: its headers and body, and errors that may quote them.
 func storableText(s string) string {
-	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
+	return utils.StorableText(s)
 }
 
 // recordDelivery writes one delivery row. It uses a fresh, short context that

@@ -195,3 +195,35 @@ func TestBatchCapsRemoteNames(t *testing.T) {
 		})
 	}
 }
+
+// An object the remote answers for without being asked is logged with its
+// oid, which the remote chose: capped and escaped like its other text. (The
+// logger drops ANSI escape sequences itself, but not other control
+// characters, nor the length.)
+func TestDownloadLogsUnrequestedOidEscaped(t *testing.T) {
+	oid := "\x07" + strings.Repeat("A", 64<<10) + "\x01"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		res := BatchResponse{Transfer: TransferBasic, Objects: []*ObjectResponse{{
+			Pointer: Pointer{Oid: oid, Size: 1},
+		}}}
+		w.Header().Set("Content-Type", MediaType)
+		json.NewEncoder(w).Encode(res) //nolint: errcheck,gosec
+	}))
+	t.Cleanup(srv.Close)
+	ctx, logs := debugContext(t)
+	c := plainClient(t, srv.URL+"/x.git")
+
+	if err := c.Download(ctx, []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error { return nil }); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "AAAA") {
+		t.Fatalf("the ignored object was not logged: %.200q", out)
+	}
+	if strings.ContainsAny(out, "\x07\x01") {
+		t.Errorf("log holds the remote's control characters: %.200q", out)
+	}
+	if n := strings.Count(out, "A"); n > maxRemoteText {
+		t.Errorf("log keeps %d bytes of the remote's oid, want at most %d", n, maxRemoteText)
+	}
+}

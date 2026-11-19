@@ -93,10 +93,7 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 	// replace ref that appears between their lookups, which a user can push
 	// during their own import, would otherwise make cat-file report another
 	// object than rev-list filtered, of any size.
-	revListArgs := append([]string{
-		"--no-replace-objects", "rev-list", "--objects", "--no-object-names", "--filter-provided-objects",
-		"--filter=object:type=blob", "--filter=blob:limit=" + strconv.Itoa(blobSizeCutoff+1),
-	}, revArgs...)
+	revListArgs := scanRevListArgs(revArgs)
 	revListStderr := &cappedBuffer{limit: scanStderrLimit}
 	catFileStderr := &cappedBuffer{limit: scanStderrLimit}
 	revList := exec.CommandContext(ctx, "git", revListArgs...)
@@ -177,6 +174,15 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 		return fmt.Errorf("git rev-list [%s]: %w - %s", dir, revListErr, revListStderr.String())
 	}
 	return nil
+}
+
+// scanRevListArgs returns the arguments of the scan's git rev-list for
+// revArgs.
+func scanRevListArgs(revArgs []string) []string {
+	return append([]string{
+		"--no-replace-objects", "rev-list", "--objects", "--no-object-names", "--filter-provided-objects",
+		"--filter=object:type=blob", "--filter=blob:limit=" + strconv.Itoa(blobSizeCutoff+1),
+	}, revArgs...)
 }
 
 // scanWaitDelay is how long a scan stopped early waits for its git commands'

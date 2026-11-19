@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -285,8 +286,8 @@ func ValidateExistingRepo(repo string) error {
 // can be logged or returned in an error. Remotes and LFS endpoints can carry
 // a token as the user name or password, and LFS hrefs are often presigned
 // URLs with a signature in the query. A URL that cannot be parsed is
-// replaced entirely; a string with no scheme or host to parse (such as an
-// scp-style remote) is returned unchanged.
+// replaced entirely; a string without "://" (such as an scp-style remote, a
+// Windows path or plain text) is returned unchanged.
 func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -295,7 +296,12 @@ func RedactURL(rawURL string) string {
 		}
 		return rawURL
 	}
-	if u.Host == "" {
+	// A string without "://" has no authority, so no user info to strip:
+	// an scp-style remote, a Windows path, plain text with a colon, which
+	// url.Parse reads as a scheme. With "://", the user info and query go
+	// even when the host is empty: "https://TOKEN@/x" parses with the token
+	// as user info.
+	if u.Scheme == "" || !strings.Contains(rawURL, "://") {
 		return rawURL
 	}
 	u.User = nil
@@ -304,4 +310,37 @@ func RedactURL(rawURL string) string {
 	u.Fragment = ""
 	u.RawFragment = ""
 	return u.String()
+}
+
+// ErrInvalidURL replaces the parser's message in the errors RedactURLError
+// returns for a URL that cannot be parsed. ssrf.ErrInvalidURL, and so
+// webhook.ErrInvalidURL, are the same error.
+var ErrInvalidURL = errors.New("invalid URL")
+
+// RedactURLError redacts the URL of a *url.Error, which the HTTP client
+// returns for every failed request and which prints the whole URL except for
+// a password, with redact: RedactURL, or a stricter rule where the path can
+// hold a secret too, as in many webhook URLs. The returned error keeps the
+// operation and the underlying error (except for a parse error, whose
+// message can quote part of the URL and is replaced with ErrInvalidURL), so
+// errors.Is and errors.As (context.DeadlineExceeded, net.Error timeouts and
+// so on) still work. Any other error is returned unchanged.
+func RedactURLError(err error, redact func(string) string) error {
+	uerr, ok := err.(*url.Error) //nolint:errorlint // only the top-level error is replaced
+	if !ok {
+		return err
+	}
+	inner := uerr.Err
+	if uerr.Op == "parse" {
+		inner = ErrInvalidURL
+	}
+	return &url.Error{Op: uerr.Op, URL: redact(uerr.URL), Err: inner}
+}
+
+// StorableText returns s as text every database accepts: Postgres refuses
+// invalid UTF-8 and NUL bytes in TEXT columns, so invalid bytes are replaced
+// with U+FFFD and NULs are dropped. Use it for text a remote or a receiver
+// wrote, and for errors that may quote it.
+func StorableText(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
 }
