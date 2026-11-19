@@ -122,7 +122,7 @@ func waitHandled(t *testing.T, results <-chan handled) handled {
 	select {
 	case h := <-results:
 		return h
-	case <-time.After(30 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("timed out waiting for the handler to return")
 		return handled{}
 	}
@@ -174,14 +174,14 @@ func TestServiceRpcJoinsBodyRead(t *testing.T) {
 	var fw *flushSignal
 	select {
 	case fw = <-flushes:
-	case <-time.After(30 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("timed out waiting for the request")
 	}
 	select {
 	case <-fw.flushed:
 	case h := <-results:
 		t.Fatalf("the handler returned while the client was still sending: %+v", h)
-	case <-time.After(30 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("timed out waiting for git to exit")
 	}
 	select {

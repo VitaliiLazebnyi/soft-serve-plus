@@ -163,7 +163,7 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 		}
 		is.NoErr(err)
 		defer conn.Close() //nolint:errcheck
-		is.NoErr(conn.SetDeadline(time.Now().Add(30 * time.Second)))
+		is.NoErr(conn.SetDeadline(time.Now().Add(closeWait)))
 		go func() {
 			_, _ = io.WriteString(conn, "GET "+path+" HTTP/1.1\r\nHost: localhost\r\n\r\n")
 		}()

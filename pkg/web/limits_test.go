@@ -512,7 +512,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	close(release)
 	select {
 	case <-readDone:
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("the read did not return")
 	}
 	// A panic in the reading goroutine would kill the test binary before

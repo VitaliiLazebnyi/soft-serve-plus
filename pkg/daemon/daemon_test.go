@@ -243,7 +243,7 @@ func TestRefusalReleasesConnection(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
 	if _, err := io.WriteString(c, pkt("git-receive-pack /repo.git\x00host=localhost\x00")); err != nil {
 		t.Fatalf("failed to write request: %v", err)
 	}
@@ -373,7 +373,7 @@ func rawRequestTo(t *testing.T, addr string, raw []byte) (string, error) {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := c.SetReadDeadline(time.Now().Add(idleWait)); err != nil {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 	if _, err := c.Write(raw); err != nil {
@@ -443,7 +443,7 @@ func readAll(t *testing.T, request ...string) []byte {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	defer c.Close() //nolint:errcheck
-	if err := c.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := c.SetDeadline(time.Now().Add(idleWait)); err != nil {
 		t.Fatalf("failed to set deadline: %v", err)
 	}
 	for _, r := range request {
@@ -546,7 +546,7 @@ func TestServeRacingShutdown(t *testing.T) {
 		served := make(chan error, 1)
 		go func() { served <- d.Serve(l) }()
 
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), idleWait)
 		err = d.Shutdown(sctx)
 		cancel()
 		if err != nil {
@@ -558,7 +558,7 @@ func TestServeRacingShutdown(t *testing.T) {
 			if !errors.Is(err, ErrServerClosed) {
 				t.Fatalf("run %d: Serve returned %v, want ErrServerClosed", i, err)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(idleWait):
 			t.Fatalf("run %d: Serve did not return after Shutdown", i)
 		}
 	}

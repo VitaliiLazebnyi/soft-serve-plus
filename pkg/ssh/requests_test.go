@@ -110,7 +110,7 @@ func sendRequest(t *testing.T, s *gossh.Session, name string, payload []byte) bo
 			t.Fatalf("%s: %v", name, r.err)
 		}
 		return r.ok
-	case <-time.After(5 * time.Second):
+	case <-time.After(sessionLoopsWait):
 		t.Fatalf("%s: no reply: the session's request loop is blocked", name)
 		return false
 	}
@@ -555,7 +555,7 @@ func TestFilterWindowChanges(t *testing.T) {
 	_ = s.Close()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(sessionLoopsWait):
 		t.Fatal("handler still running after the session closed")
 	}
 
@@ -711,7 +711,7 @@ func TestForwardWindowChangesLatest(t *testing.T) {
 		if r.w.Width != 163 || r.w.Height != 113 {
 			t.Errorf("handler saw %dx%d, want the newest 163x113", r.w.Width, r.w.Height)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(sessionLoopsWait):
 		t.Fatal("handler did not report the window")
 	}
 }

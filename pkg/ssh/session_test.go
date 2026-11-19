@@ -176,7 +176,7 @@ func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
 // bubblezone worker goroutine IDs.
 func waitZoneWorkers(t *testing.T, what string, ok func(map[string]bool) bool) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(sessionLoopsWait)
 	for {
 		running := zoneWorkers()
 		if ok(running) {
@@ -249,7 +249,7 @@ func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
 	go func() { done <- sess.Wait() }()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(sessionLoopsWait)
 wait:
 	for {
 		select {

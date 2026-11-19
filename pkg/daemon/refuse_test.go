@@ -33,7 +33,7 @@ func TestRefusalEndsAtRequestDeadline(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
 	// The daemon has accepted the connection once it counts it, so its
 	// request deadline is before now plus the request timeout.
-	waitConns(t, d, 1, 30*time.Second)
+	waitConns(t, d, 1, idleWait)
 	release <- time.Now().Add(requestTimeout)
 	if _, err := io.WriteString(c, pkt("git-upload-pack /deadline-missing.git\x00host=localhost\x00")); err != nil {
 		t.Fatalf("write request: %v", err)
@@ -74,13 +74,13 @@ func TestShutdownCutsRefusalWait(t *testing.T) {
 	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
 	dialHeld(t, addr, pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported)
 	// The refusal waits on the client, which neither sends nor hangs up.
-	waitConns(t, d, 1, 30*time.Second)
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	waitConns(t, d, 1, idleWait)
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
 	defer cancel()
 	if err := d.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown = %v, want nil", err)
 	}
-	waitConns(t, d, 0, 30*time.Second)
+	waitConns(t, d, 0, idleWait)
 }
 
 // TestServerContextCutsRefusalWait checks that a refusal stops waiting on
@@ -94,9 +94,9 @@ func TestServerContextCutsRefusalWait(t *testing.T) {
 		d.ctx = ctx
 	})
 	dialHeld(t, addr, pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported)
-	waitConns(t, d, 1, 30*time.Second)
+	waitConns(t, d, 1, idleWait)
 	cancel()
-	waitConns(t, d, 0, 15*time.Second)
+	waitConns(t, d, 0, idleWait)
 }
 
 // holdSlot dials addr and waits until d counts the connection, which then
@@ -158,7 +158,7 @@ func TestMaxConnectionsRefusalsDoNotBlockAccept(t *testing.T) {
 	// Shutdown would wait for the connection in the slot, which has not
 	// sent its request yet.
 	_ = held.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
 	defer cancel()
 	if err := d.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown = %v, want nil", err)

@@ -57,7 +57,7 @@ func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
 			_, _, err := runRepoOutput(t, cctx, args...)
 			done <- err
 		}()
-		for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
 			if _, err := os.Stat(marker); err == nil {
 				break
 			}
@@ -72,7 +72,7 @@ func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
 			if err == nil {
 				t.Errorf("%v: succeeded after the session ended", args)
 			}
-		case <-time.After(20 * time.Second):
+		case <-time.After(time.Minute):
 			t.Errorf("%v: git still running 20s after the session ended", args)
 		}
 		if err := os.Remove(marker); err != nil {

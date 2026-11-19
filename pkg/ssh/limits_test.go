@@ -286,7 +286,7 @@ func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 			if err == nil || !strings.Contains(stderr.String(), msgTooManySessions) {
 				t.Fatalf("command ran while the TUI runs: %v: %q", err, stderr.String())
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(sessionLoopsWait):
 			t.Fatal("command neither refused nor finished")
 		}
 		_ = s.Close()
@@ -572,7 +572,7 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 					}
 				case <-started:
 					t.Fatal("a second command started while a closed session's command still runs")
-				case <-time.After(10 * time.Second):
+				case <-time.After(sessionLoopsWait):
 					t.Fatal("the second session was neither refused nor started")
 				}
 				_ = s2.Close()

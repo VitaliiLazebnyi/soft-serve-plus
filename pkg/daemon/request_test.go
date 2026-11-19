@@ -118,7 +118,7 @@ func TestRequestContextDerivesFromServer(t *testing.T) {
 	cancel()
 	select {
 	case <-ctx.Done():
-	case <-time.After(time.Second):
+	case <-time.After(idleWait):
 		t.Fatal("request context outlived the server's")
 	}
 }
@@ -167,7 +167,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}
 
 	// The daemon records the request after the client hangs up.
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(idleWait)
 	for sampleCount(t, git.UploadPackService) == before && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
