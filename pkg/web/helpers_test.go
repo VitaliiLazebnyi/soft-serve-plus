@@ -7,10 +7,31 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// storePasswordHash writes a bcrypt hash of password into username's row,
+// salted as older versions salted it, as a database from such a version may
+// hold one. Nothing sets a password any more, and no login reads it.
+func storePasswordHash(t *testing.T, ctx context.Context, username, password string) {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password+"salty-soft-serve"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbx := db.FromContext(ctx)
+	res, err := dbx.ExecContext(ctx, dbx.Rebind("UPDATE users SET password = ? WHERE username = ?"), string(hash), username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("set password of %s: %d rows, %v", username, n, err)
+	}
+}
 
 // serveRoute calls a git route handler as withAccess does once it lets a
 // request through, for tests that drive a handler directly. The caller,

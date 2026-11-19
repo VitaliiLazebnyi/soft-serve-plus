@@ -46,7 +46,6 @@ func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
 		is.True(sshutils.KeysEqual(pks[1], good2))
 	}
 	check(s.ListPublicKeysByUserID(ctx, dbx, 100))
-	check(s.ListPublicKeysByUsername(ctx, dbx, "owner"))
 }
 
 // A non-positive limit returns no locks on every driver. SQLite would

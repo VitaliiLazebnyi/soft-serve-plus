@@ -148,7 +148,6 @@ func (u fakeUser) ID() int64                   { return u.id }
 func (u fakeUser) Username() string            { return u.name }
 func (u fakeUser) IsAdmin() bool               { return false }
 func (u fakeUser) PublicKeys() []ssh.PublicKey { return nil }
-func (u fakeUser) Password() string            { return "" }
 
 // fakeRepo implements proto.Repository. Open returns a real git repository at
 // path, or openErr when set, so error paths can be driven.

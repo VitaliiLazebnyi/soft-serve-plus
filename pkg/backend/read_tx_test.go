@@ -120,8 +120,8 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 		if u, err := be.UserByAccessToken(rctx(), token); err != nil || u.Username() != "collab" {
 			t.Errorf("UserByAccessToken = %v, %v; want collab", u, err)
 		}
-		if _, err := be.ListPublicKeys(rctx(), "admin"); err != nil {
-			t.Errorf("ListPublicKeys: %v", err)
+		if _, err := publicKeysOf(be, rctx(), "admin"); err != nil {
+			t.Errorf("public keys of admin: %v", err)
 		}
 		if got := be.AnonAccess(rctx()); got != access.ReadWriteAccess {
 			t.Errorf("AnonAccess = %v, want %v", got, access.ReadWriteAccess)

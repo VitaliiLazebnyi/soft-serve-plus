@@ -34,7 +34,7 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 
 	f := newOracleFixture(t)
 	ctx := log.WithContext(f.ctx, logger)
-	is.NoErr(f.be.SetPassword(ctx, "stranger", "hunter2-password"))
+	storePasswordHash(t, ctx, "stranger", "hunter2-password")
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
 	jwt := mintJWT(ctx, t, stranger, "secret")

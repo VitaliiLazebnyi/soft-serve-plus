@@ -50,7 +50,7 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 				return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "repo", tt.collab)
 			}))
 
-			is.Equal(be.AccessLevelForUser(ctx, "repo", user), tt.want)
+			is.Equal(levelOf(be, ctx, "repo", user), tt.want)
 		})
 	}
 }
@@ -68,8 +68,8 @@ func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 	user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
 	is.NoErr(err)
 
-	is.Equal(be.AccessLevelForUser(ctx, "repo", user), access.NoAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "repo", nil), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "repo", user), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "repo", nil), access.NoAccess)
 }
 
 // TestAccessLevelPublicRepoNonCollaborator verifies that the anonymous
@@ -103,8 +103,8 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 			user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
 			is.NoErr(err)
 
-			is.Equal(be.AccessLevelForUser(ctx, "repo", user), tt.want)
-			is.Equal(be.AccessLevelForUser(ctx, "repo", nil), tt.anon)
+			is.Equal(levelOf(be, ctx, "repo", user), tt.want)
+			is.Equal(levelOf(be, ctx, "repo", nil), tt.anon)
 		})
 	}
 }
@@ -199,7 +199,6 @@ func TestMutationsOnMissingUserOrKey(t *testing.T) {
 	isErr(be.RemovePublicKey(ctx, "alice", pk), proto.ErrPublicKeyNotFound)
 	isErr(be.SetAdmin(ctx, "ghost", true), proto.ErrUserNotFound)
 	isErr(be.SetUsername(ctx, "ghost", "phantom"), proto.ErrUserNotFound)
-	isErr(be.SetPassword(ctx, "ghost", "hunter2-password"), proto.ErrUserNotFound)
 
 	// Nothing was created along the way.
 	_, err = be.User(ctx, "phantom")
@@ -212,6 +211,5 @@ func TestMutationsOnMissingUserOrKey(t *testing.T) {
 	is.NoErr(be.AddPublicKey(ctx, "alice", pk))
 	is.NoErr(be.RemovePublicKey(ctx, "alice", pk))
 	is.NoErr(be.SetAdmin(ctx, "alice", false))
-	is.NoErr(be.SetPassword(ctx, "alice", "hunter2-password"))
 	is.NoErr(be.SetUsername(ctx, "alice", "alicia"))
 }

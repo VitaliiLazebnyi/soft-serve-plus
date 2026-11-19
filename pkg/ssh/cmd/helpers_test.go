@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -59,6 +60,12 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	ctx = backend.WithContext(ctx, be)
 
 	return ctx, be
+}
+
+// levelOf is the access level Backend.Readable gives user's account on repo.
+func levelOf(be *backend.Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+	_, level := be.Readable(ctx, repo, user)
+	return level
 }
 
 // withUser creates a user and returns a context authenticated as them.

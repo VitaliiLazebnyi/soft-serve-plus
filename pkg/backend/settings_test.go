@@ -10,9 +10,11 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
+	"golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite"
 )
 
@@ -54,6 +56,21 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 	be := New(ctx, cfg, dbx, dbstore)
 
 	return be, cfg
+}
+
+// levelOf is the access level Readable gives user's account on repo.
+func levelOf(be *Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+	_, level := be.Readable(ctx, repo, user)
+	return level
+}
+
+// publicKeysOf returns the public keys of the user named username.
+func publicKeysOf(be *Backend, ctx context.Context, username string) ([]ssh.PublicKey, error) {
+	u, err := be.User(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	return u.PublicKeys(), nil
 }
 
 // setAdminKeys lists keys as initial_admin_keys and validates cfg, which is
