@@ -112,7 +112,7 @@ func TestConnLimiterUnlimited(t *testing.T) {
 func dialClient(t *testing.T, addr string) (*gossh.Client, error) {
 	t.Helper()
 	cfg := clientConfig(t)
-	cfg.Timeout = 10 * time.Second
+	cfg.Timeout = sessionLoopsWait
 	return gossh.Dial("tcp", addr, cfg)
 }
 
@@ -592,7 +592,7 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 				select {
 				case <-started:
 					return true
-				case <-time.After(time.Second):
+				case <-time.After(time.Second): // one attempt; waitFor retries for a minute
 					return false
 				}
 			})

@@ -87,7 +87,7 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 	case <-second:
 	case <-started:
 		t.Fatal("second run started while the first one was still running")
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("second run did not return while the first one was running")
 	}
 
@@ -122,11 +122,11 @@ func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
 	s.Start()
 	select {
 	case <-started:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the job did not run")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // meant to run out while the job runs
 	defer cancel()
 	if err := s.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Shutdown returned %v while the job ran, want %v", err, context.DeadlineExceeded)

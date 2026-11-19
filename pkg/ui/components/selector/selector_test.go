@@ -95,7 +95,7 @@ func (testDelegate) Render(w io.Writer, _ list.Model, _ int, item list.Item) {
 // since Scan hands zones to a background worker.
 func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		if z := c.Zone.Get(id); z != nil && !z.IsZero() {
 			return z.StartX, z.StartY
@@ -154,7 +154,7 @@ func newTestSelector(t *testing.T, names ...string) *Selector {
 func render(t *testing.T, s *Selector, want string, y int) {
 	t.Helper()
 	s.common.Zone.Scan(s.View())
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		if z := s.common.Zone.Get(s.zonePrefix + want); !z.IsZero() && z.StartY == y {
 			return

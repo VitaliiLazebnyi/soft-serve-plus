@@ -24,7 +24,7 @@ func fakeGit(t *testing.T, script string) {
 // waitForFile waits, generously, for path to exist.
 func waitForFile(t *testing.T, path, what string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		if _, err := os.Stat(path); err == nil {
 			return

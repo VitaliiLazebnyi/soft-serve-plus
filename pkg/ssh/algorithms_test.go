@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -167,7 +166,7 @@ func dialWith(t *testing.T, addr string, kex, ciphers, macs []string) error {
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {
 		_ = c.Close()
@@ -236,7 +235,7 @@ func dialWithSigner(addr string, signer gossh.Signer) error {
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {
 		_ = c.Close()

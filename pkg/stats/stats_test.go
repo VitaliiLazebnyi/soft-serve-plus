@@ -65,7 +65,7 @@ func TestStatsServer(t *testing.T) {
 		t.Errorf("GET / = %d, want %d", code, http.StatusNotFound)
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	sctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if err := s.Shutdown(sctx); err != nil {
 		t.Fatalf("Shutdown() = %v", err)

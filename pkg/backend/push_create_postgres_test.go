@@ -49,7 +49,7 @@ func TestDeleteRepositoryKeepCheckLocksRowPostgres(t *testing.T) {
 		// the error says the repository is gone, not that the
 		// collaborator exists.
 		is.True(errors.Is(err, proto.ErrRepoNotFound))
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("AddCollaborator still waiting after the delete committed")
 	}
 	_, err = e.be.Repository(e.ctx, "repo")

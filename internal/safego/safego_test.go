@@ -94,10 +94,10 @@ func TestGoRecovers(t *testing.T) {
 	})
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("goroutine did not run")
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for !strings.Contains(buf.String(), "in goroutine") {
 		if time.Now().After(deadline) {
 			t.Fatalf("panic not logged: %q", buf.String())

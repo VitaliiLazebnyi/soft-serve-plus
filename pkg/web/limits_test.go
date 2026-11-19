@@ -186,7 +186,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 // must otherwise stay open with nothing to read.
 func answered(t *testing.T, conn net.Conn) bool {
 	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil { // a poll; waitFor retries for a minute
 		t.Fatal(err)
 	}
 	_, err := conn.Read(make([]byte, 1))

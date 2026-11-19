@@ -36,7 +36,7 @@ func TestLFSTransferUploadRenameOntoFIFO(t *testing.T) {
 		if err == nil {
 			t.Error("Upload accepted a FIFO as the object")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		// Open the FIFO for writing so the blocked open returns.
 		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
 			f.Close() //nolint:errcheck

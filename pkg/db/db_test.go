@@ -456,7 +456,7 @@ func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
 		t.Fatalf("writer: %v", err)
 	}
 
-	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond) // meant to run out while the writer holds its turn
 	defer cancel()
 	called := false
 	err = d.TransactionContext(wctx, func(*Tx) error {

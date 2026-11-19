@@ -56,8 +56,8 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	// The panic is logged by safego.Run's recover, which runs after
 	// handleClient's deferred close: the client can see the connection
 	// closed, and the next client be served, before the line is written.
-	waitLog(t, logs, "recovered panic", 30*time.Second)
-	waitLog(t, logs, "injected handler panic", 30*time.Second)
+	waitLog(t, logs, "recovered panic", idleWait)
+	waitLog(t, logs, "injected handler panic", idleWait)
 	// The handler's goroutine is no longer counted: Shutdown does not
 	// wait for it.
 	waitConns(t, d, 0, idleWait)

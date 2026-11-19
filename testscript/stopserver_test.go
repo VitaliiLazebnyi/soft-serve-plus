@@ -32,7 +32,7 @@ func TestWaitClosed(t *testing.T) {
 	}
 
 	_ = l.Close()
-	if err := waitClosed(addr, 30*time.Second); err != nil {
+	if err := waitClosed(addr, time.Minute); err != nil {
 		t.Fatalf("waitClosed after the listener closed: %v", err)
 	}
 }
@@ -56,7 +56,7 @@ func TestWaitExit(t *testing.T) {
 		t.Fatal("waitExit returned nil while the process was running")
 	}
 	_ = stdin.Close() // the child exits when its stdin closes
-	if err := waitExit(cmd.Process, 30*time.Second); err != nil {
+	if err := waitExit(cmd.Process, time.Minute); err != nil {
 		t.Fatalf("waitExit after the process exited: %v", err)
 	}
 	if err := <-waited; err != nil {

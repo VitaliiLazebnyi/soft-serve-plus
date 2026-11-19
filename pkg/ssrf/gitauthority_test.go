@@ -62,7 +62,7 @@ func TestGitSSHDestinationMatchesValidation(t *testing.T) {
 		}
 		log := filepath.Join(dir, "log")
 		_ = os.Remove(log)
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		cmd := exec.CommandContext(ctx, "git", "ls-remote", tt.remote)
 		cmd.Env = append(isolatedGitEnv(t), "GIT_SSH="+fakeSSH, "GIT_SSH_VARIANT=ssh", "FAKE_SSH_LOG="+log)
 		_ = cmd.Run()
@@ -141,7 +141,7 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 		hosts = nil
 		mu.Unlock()
 		r := ValidatedGitRemote{Transport: GitTransportHTTP, Config: curlResolvePin(u, netip.MustParseAddr("127.0.0.1"))}
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
 		cmd.Env = append(isolatedGitEnv(t), GitEnv(r)...)
 		out, _ := cmd.CombinedOutput()

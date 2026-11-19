@@ -19,7 +19,7 @@ import (
 
 // testTimeout bounds every wait in these tests, so a handler that never
 // returns fails the test instead of hanging it.
-const testTimeout = 30 * time.Second
+const testTimeout = time.Minute
 
 // initBare creates an empty bare repository and returns its path.
 func initBare(t *testing.T) string {

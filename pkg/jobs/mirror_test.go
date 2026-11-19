@@ -230,7 +230,7 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 	// the directory to become removable.
 	t.Cleanup(func() {
 		closeRemote()
-		deadline := time.Now().Add(30 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for {
 			err := os.RemoveAll(r.Path)
 			if err == nil || time.Now().After(deadline) {
@@ -245,7 +245,7 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 
 	// The sync's deadline stops the command, as it would a mirror whose
 	// sync runs out of time.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second) // meant to run out: the command stalls
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {

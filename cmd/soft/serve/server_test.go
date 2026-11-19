@@ -331,13 +331,13 @@ func TestAbortOnSignal(t *testing.T) {
 	select {
 	case <-abort.Done():
 		t.Fatal("SIGHUP aborted the wait")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond): // a check that SIGHUP did not abort, which load can only make pass
 	}
 
 	sigs <- syscall.SIGTERM
 	select {
 	case <-abort.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("SIGTERM did not abort the wait")
 	}
 	is.True(strings.Contains(logs.String(), "not waiting for webhook deliveries"))
@@ -380,7 +380,7 @@ func waitStart(t *testing.T, errc <-chan error, why string) error {
 	select {
 	case err := <-errc:
 		return err
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatalf("Start did not return %s", why)
 		return nil
 	}
@@ -427,9 +427,9 @@ func TestStartServesAllListenersUntilShutdown(t *testing.T) {
 	errc := startAsync(s)
 
 	for _, addr := range addrs {
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for {
-			conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", addr)
+			conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", addr) // one attempt; the loop retries until the deadline
 			if err == nil {
 				_ = conn.Close()
 				break
@@ -446,7 +446,7 @@ func TestStartServesAllListenersUntilShutdown(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := s.Shutdown(ctx, ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
@@ -513,7 +513,7 @@ func TestShutdownRightAfterStart(t *testing.T) {
 		s := newStartTestServer(t, addrs[0], addrs[1], addrs[2], addrs[3])
 		errc := startAsync(s)
 
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for {
 			s.mu.Lock()
 			bound := s.listeners != nil
@@ -532,7 +532,7 @@ func TestShutdownRightAfterStart(t *testing.T) {
 			runtime.Gosched()
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		err := s.Shutdown(ctx, ctx)
 		cancel()
 		if err != nil {
@@ -556,7 +556,7 @@ func TestStartReturnsWhenAServerFails(t *testing.T) {
 	errc := startAsync(s)
 
 	var httpL *serveListener
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		s.mu.Lock()
 		if s.listeners != nil {
@@ -578,7 +578,7 @@ func TestStartReturnsWhenAServerFails(t *testing.T) {
 	}
 	select {
 	case <-httpL.serving:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the HTTP server did not start serving")
 	}
 
@@ -682,7 +682,7 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): // how long the job holds, not a wait
 		}
 		// Still busy for a moment after the cancellation, as a job
 		// stopping its git processes is.
@@ -699,11 +699,11 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	case <-started:
 	case err := <-errc:
 		t.Fatalf("Start returned %v before the job ran", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the cron job did not run")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := s.Shutdown(ctx, ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)

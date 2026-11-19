@@ -112,7 +112,7 @@ func (l *loop) settle(waiting *atomic.Int32) {
 		case msg := <-l.results:
 			l.running.Add(-1)
 			l.deliver(msg)
-		case <-time.After(5 * time.Millisecond):
+		case <-time.After(5 * time.Millisecond): // a poll; the loop waits for HangGuard
 		}
 	}
 }

@@ -187,7 +187,7 @@ func TestServiceRpcJoinsBodyRead(t *testing.T) {
 	select {
 	case h := <-results:
 		t.Fatalf("the handler returned while the client was still sending: %+v", h)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // a check that the handler did not return, which load can only make pass
 	}
 
 	// The client is done sending.

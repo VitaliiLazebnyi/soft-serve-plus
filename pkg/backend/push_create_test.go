@@ -133,7 +133,7 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 		select {
 		case err := <-pushErr:
 			t.Errorf("push started during the removal: %v", err)
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(200 * time.Millisecond): // a check that no push started, which load can only make pass
 		}
 	}
 	t.Cleanup(func() { testHookBeforePushCreatedDelete = nil })

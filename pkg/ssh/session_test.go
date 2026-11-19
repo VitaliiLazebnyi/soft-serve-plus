@@ -393,7 +393,7 @@ func TestTUIWindowSizeClamped(t *testing.T) {
 			// The reply comes from the request loop, before the TUI has
 			// handled the resize, so quiet output proves nothing here: watch
 			// the heap for a while and fail as soon as it is over the limit.
-			deadline := time.Now().Add(time.Second)
+			deadline := time.Now().Add(time.Second) // a check that the heap stays under the limit, which load can only make pass
 			for time.Now().Before(deadline) {
 				check()
 				time.Sleep(50 * time.Millisecond)

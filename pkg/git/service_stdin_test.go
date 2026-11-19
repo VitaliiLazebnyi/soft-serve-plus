@@ -140,7 +140,7 @@ func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
 	select {
 	case err := <-errc:
 		t.Fatalf("the handler returned (%v) while the client's input was still being read", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // a check that the handler did not return, which load can only make pass
 	}
 
 	// The client is done sending.

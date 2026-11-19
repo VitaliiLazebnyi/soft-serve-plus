@@ -156,7 +156,7 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 		var conn net.Conn
 		var err error
 		for range 3 {
-			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String())
+			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String()) // one attempt of three
 			if err == nil {
 				break
 			}

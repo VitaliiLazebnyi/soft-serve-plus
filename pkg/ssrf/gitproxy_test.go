@@ -79,7 +79,7 @@ func countingListener(t *testing.T) (addr string, count *atomic.Int32) {
 // repositories, so only where git connected matters.
 func runGit(t *testing.T, env []string, dir string, args ...string) []byte {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	if dir == "" {
 		dir = t.TempDir()

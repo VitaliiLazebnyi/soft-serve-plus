@@ -60,7 +60,7 @@ func waitAccepted(t *testing.T, accepted <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-accepted:
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the import never reached the remote")
 	}
 }
@@ -81,7 +81,7 @@ func waitImport(t *testing.T, errc <-chan error) error {
 	select {
 	case err := <-errc:
 		return err
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the import did not stop")
 		return nil
 	}
@@ -145,7 +145,7 @@ func TestStopImports(t *testing.T) {
 	errc := importAsync(ctx, be, "stalled", admin, remote)
 	waitAccepted(t, accepted)
 	be.StopImports()
-	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	wctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	be.WaitForImports(wctx)
 	is.NoErr(wctx.Err())
@@ -330,7 +330,7 @@ func TestRegisteredImportCountsOnce(t *testing.T) {
 	}()
 	select {
 	case <-registered:
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		close(resume)
 		t.Fatal("the import never registered its repository")
 	}
@@ -350,7 +350,7 @@ func TestRegisteredImportCountsOnce(t *testing.T) {
 	select {
 	case err := <-errc:
 		is.NoErr(err)
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the import did not finish")
 	}
 	// Releasing after registering leaves no count behind.

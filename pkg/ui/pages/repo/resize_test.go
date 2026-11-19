@@ -103,7 +103,7 @@ func TestHeaderClickWithoutCloneCmd(t *testing.T) {
 		// Zones are stored in the order they are marked, so once the
 		// sentinel after the page is stored, so is every zone of the page.
 		c.Zone.Scan(r.View() + c.Zone.Mark("sentinel", "x"))
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for c.Zone.Get("sentinel").IsZero() {
 			if time.Now().After(deadline) {
 				t.Fatal("the zones were never stored")

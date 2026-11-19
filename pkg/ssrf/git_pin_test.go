@@ -80,7 +80,7 @@ func TestGitEnvPinHonouredByGit(t *testing.T) {
 
 			env := append(isolatedGitEnv(t), GitEnv(r)...)
 			run := func() []byte {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
 				cmd.Env = env

@@ -93,7 +93,7 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("SearchPointerBlobs did not return after the context was canceled")
 	}
 

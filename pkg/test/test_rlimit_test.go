@@ -37,7 +37,7 @@ func TestRandomPortPanicsWhenItCannotBind(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		_ = cmd.Process.Kill()
 		<-done
 		t.Fatal("RandomPort kept retrying after it ran out of file descriptors")

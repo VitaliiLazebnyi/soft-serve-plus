@@ -251,10 +251,10 @@ func TestRefusalReleasesConnection(t *testing.T) {
 	wantErrLine(t, "push", err, ErrPushNotSupported)
 	// The connection stays open on this side; the daemon must still let
 	// it go once the linger is over.
-	deadline := time.Now().Add(refuseLinger + 5*time.Second)
+	deadline := time.Now().Add(refuseLinger + idleWait)
 	for d.conns.Size() != 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("refused connection still open after %v", refuseLinger+5*time.Second)
+			t.Fatalf("refused connection still open after %v", refuseLinger+idleWait)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

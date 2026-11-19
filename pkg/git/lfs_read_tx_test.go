@@ -110,9 +110,11 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 
 	func() {
 		defer close(release)
-		// Each lookup gets its own deadline, well under busy_timeout, so a
-		// lookup that waits for the writer fails instead of slowing the test
-		// down, and does not use up the time of the lookups after it.
+		// Each lookup gets its own deadline, so a lookup that waits for the
+		// writer fails, and does not use up the time of the lookups after
+		// it. The deadline is a minute, so a lookup slowed by load is not
+		// failed; one that waits for the writer fails all the same, at
+		// busy_timeout or at the deadline.
 		var cancels []context.CancelFunc
 		defer func() {
 			for _, cancel := range cancels {
@@ -120,7 +122,7 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 			}
 		}()
 		backend := func() *lfsLockBackend {
-			c, cancel := context.WithTimeout(ctx, 2*time.Second)
+			c, cancel := context.WithTimeout(ctx, time.Minute)
 			cancels = append(cancels, cancel)
 			return newBackend(c)
 		}

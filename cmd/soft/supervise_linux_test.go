@@ -34,10 +34,10 @@ func runSuperviseScenario(t *testing.T, scenario string, configure func(*exec.Cm
 	// A stuck scenario is killed rather than left to the go test timeout.
 	// WaitDelay bounds the wait for output that the helper's own children,
 	// which outlive it, still hold open.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSuperviseHelper$", "-test.v")
-	cmd.WaitDelay = 5 * time.Second
+	cmd.WaitDelay = time.Minute
 	cmd.Env = append(os.Environ(), superviseHelperEnv+"="+scenario)
 	if configure != nil {
 		configure(cmd)

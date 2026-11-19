@@ -66,7 +66,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	c, err := gossh.Dial("tcp", l.Addr().String(), &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
 		t.Fatal(err)

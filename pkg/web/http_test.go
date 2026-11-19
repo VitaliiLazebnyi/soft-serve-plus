@@ -31,7 +31,7 @@ func TestHTTPServerServe(t *testing.T) {
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = io.WriteString(w, "ok")
 				}),
-				ReadHeaderTimeout: 10 * time.Second,
+				ReadHeaderTimeout: closeWait,
 			}}
 			if useTLS {
 				s.SetTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
@@ -47,7 +47,7 @@ func TestHTTPServerServe(t *testing.T) {
 			pool := x509.NewCertPool()
 			pool.AddCert(cert.Leaf)
 			client := &http.Client{
-				Timeout:   10 * time.Second,
+				Timeout:   closeWait,
 				Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
 			}
 			scheme := "http"

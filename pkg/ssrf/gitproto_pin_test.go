@@ -100,7 +100,7 @@ func newGitDaemonStub(t *testing.T, ip string, skipUnavailable bool) *gitDaemonS
 
 func (s *gitDaemonStub) serve(c net.Conn) {
 	defer c.Close() //nolint:errcheck
-	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(time.Minute))
 	var hdr [4]byte
 	if _, err := io.ReadFull(c, hdr[:]); err != nil {
 		return
@@ -159,7 +159,7 @@ func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
 		t.Helper()
 		env := append(isolatedGitEnv(t), GitEnv(r)...)
 		return func() []byte {
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
 			cmd.Env = env

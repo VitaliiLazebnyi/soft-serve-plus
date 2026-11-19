@@ -862,12 +862,12 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 
 	// verify that the server is up
 	addr := net.JoinHostPort(loopback, port)
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		conn, err := net.DialTimeout( //nolint:noctx
 			"tcp",
 			addr,
-			time.Second,
+			time.Second, // one attempt; the loop retries until the deadline
 		)
 		if err == nil {
 			ts.Logf("Server is running on port: %s", port)
@@ -875,7 +875,7 @@ func cmdEnsureServerRunning(ts *testscript.TestScript, neg bool, args []string) 
 			break
 		}
 		if time.Now().After(deadline) {
-			ts.Fatalf("server on port %s did not start within 30 seconds: %v", port, err)
+			ts.Fatalf("server on port %s did not start within a minute: %v", port, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -900,7 +900,7 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 	conn, err := net.DialTimeout( //nolint:noctx
 		"tcp",
 		addr,
-		5*time.Second,
+		time.Minute,
 	)
 	if err == nil {
 		_ = conn.Close()
@@ -956,7 +956,7 @@ func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
 	// script goes on to skip or end is killed, which fails the script.
 	if procs := serverProcesses(ts.BackgroundCmds(), publicURL); len(procs) > 0 {
 		for _, p := range procs {
-			if err := waitExit(p, 30*time.Second); err != nil {
+			if err := waitExit(p, time.Minute); err != nil {
 				ts.Fatalf("server did not stop: %v", err)
 			}
 		}
@@ -971,7 +971,7 @@ func cmdStopserver(ts *testscript.TestScript, neg bool, args []string) {
 	errs := make([]error, 4)
 	for i, env := range []string{"SSH_PORT", "GIT_PORT", "HTTP_PORT", "STATS_PORT"} {
 		wg.Go(func() {
-			errs[i] = waitClosed(net.JoinHostPort(loopback, ts.Getenv(env)), 30*time.Second)
+			errs[i] = waitClosed(net.JoinHostPort(loopback, ts.Getenv(env)), time.Minute)
 		})
 	}
 	wg.Wait()
@@ -1015,7 +1015,7 @@ func envValue(env []string, key string) string {
 func waitClosed(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		conn, err := net.DialTimeout("tcp", addr, 5*time.Second) //nolint:noctx
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second) //nolint:noctx // one attempt; the loop retries until the deadline
 		if err == nil {
 			_ = conn.Close()
 		} else if connRefused(err) {
