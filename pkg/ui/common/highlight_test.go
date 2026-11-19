@@ -101,10 +101,10 @@ func TestHighlightByContent(t *testing.T) {
 	// are given the start of the file only, and that start is short
 	// enough. The time grows with the square of the length: 13 ms at
 	// 4 KiB, 0.5 s at 32 KiB and 2 s at 64 KiB, and twenty times that
-	// under the race detector. Those times were measured once; the test
+	// under the race detector; BenchmarkAnalyse measures them. The test
 	// holds the start to the size measured short enough rather than time
-	// it, which a loaded machine would fail. A larger start needs the cost
-	// measured again.
+	// it, which a loaded machine would fail. A larger start needs the
+	// benchmark run again.
 	long := strings.Repeat("package a\n", 10000)
 	if analyseMax > 4<<10 {
 		t.Fatalf("analyseMax = %d; analysing more than 4 KiB was not measured to be quick", analyseMax)
@@ -113,6 +113,22 @@ func TestHighlightByContent(t *testing.T) {
 	Highlight(StyleConfig(), "noext", long, false)
 	if n := most.Load(); n == 0 || n > analyseMax {
 		t.Fatalf("the analysers were given %d bytes of a file of %d; want at most %d", n, len(long), analyseMax)
+	}
+}
+
+// BenchmarkAnalyse measures what telling a file's language from its content
+// costs for starts of the lines TestHighlightByContent uses, which grows
+// with the square of the length: analyseMax is the size it shows quick.
+//
+//	go test ./pkg/ui/common -run '^$' -bench Analyse
+func BenchmarkAnalyse(b *testing.B) {
+	long := strings.Repeat("package a\n", 10000)
+	for _, size := range []int{analyseMax, 16 << 10, 32 << 10, 64 << 10} {
+		b.Run(fmt.Sprintf("%dKiB", size>>10), func(b *testing.B) {
+			for b.Loop() {
+				lexers.Analyse(long[:size])
+			}
+		})
 	}
 }
 
