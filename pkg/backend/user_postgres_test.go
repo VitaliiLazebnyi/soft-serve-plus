@@ -48,7 +48,7 @@ func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 	select {
 	case err := <-result:
 		is.True(errors.Is(err, proto.ErrUserOwnsRepos))
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("DeleteUser still waiting after the create committed")
 	}
 	_, err = e.be.User(e.ctx, "owner")

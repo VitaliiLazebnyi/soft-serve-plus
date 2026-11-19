@@ -156,7 +156,7 @@ func (garbageReader) Read(p []byte) (int, error) {
 // for, to log its failure, and returns the entry's message and level.
 func waitForLog(t *testing.T, levels func() map[string]string, prefix string) (string, string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		for msg, level := range levels() {
 			if strings.HasPrefix(msg, prefix) {

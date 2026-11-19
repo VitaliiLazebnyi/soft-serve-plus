@@ -137,7 +137,7 @@ func TestQuitKeepsZoneManagerRunning(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(uitest.HangGuard):
 		t.Fatal("render after quit blocked: the zone manager was closed on quit")
 	}
 }

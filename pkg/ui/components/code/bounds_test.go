@@ -38,6 +38,18 @@ func renderWithin(t *testing.T, content string, limit time.Duration) string {
 	return ansi.Strip(c.GetContent())
 }
 
+// glamourPadded reports whether a line of out that has text is padded with
+// spaces to the width, as each line glamour writes is and no line of plain
+// text is.
+func glamourPadded(out string) bool {
+	for l := range strings.SplitSeq(out, "\n") {
+		if strings.TrimSpace(l) != "" && strings.HasSuffix(l, "  ") {
+			return true
+		}
+	}
+	return false
+}
+
 // glamour's time grows fast with the length of a code token, the number of
 // blocks and the nesting depth. A README past its limits is shown as plain
 // text, quickly.
@@ -60,24 +72,27 @@ func TestGlamourBounded(t *testing.T) {
 		"many nested markers":        strings.Repeat("- - - - x\n", 1000),
 	}
 	// Each case takes at most 0.45 s on a loaded machine under the race
-	// detector. Rendered as markdown, most lack their first line, as
-	// written; many short paragraphs took 9.5 s and the deep block quote
-	// minutes.
+	// detector; rendered as markdown, many short paragraphs took 9.5 s and
+	// the deep block quote minutes. The render is not timed: the view
+	// itself tells whether the limits applied. Shown as plain text, it has
+	// the content's first line and no line padded out to the width, as
+	// glamour pads every line it writes. renderWithin's minute only stops a
+	// render that hangs.
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			out := renderWithin(t, content, 5*time.Second)
+			out := renderWithin(t, content, time.Minute)
 			first := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
 			if len(first) > 60 {
 				first = first[:60]
 			}
-			if !strings.Contains(out, first) {
-				t.Fatalf("not shown as plain text: lacks %q", first)
+			if !strings.Contains(out, first) || glamourPadded(out) {
+				t.Fatalf("not shown as plain text: lacks %q, or has glamour's padding", first)
 			}
 		})
 	}
 
 	// A README within the limits is still rendered as markdown.
-	if out := renderWithin(t, "# Title\n\nSome *text*.\n", 10*time.Second); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") {
+	if out := renderWithin(t, "# Title\n\nSome *text*.\n", time.Minute); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") || !glamourPadded(out) {
 		t.Fatalf("a small README was not rendered as markdown:\n%s", out)
 	}
 }

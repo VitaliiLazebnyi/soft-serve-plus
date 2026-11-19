@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
@@ -70,7 +69,7 @@ func runCommand(t *testing.T, addr string, command string, auth ...gossh.AuthMet
 		User:            "test",
 		Auth:            auth,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
 		return "", nil, err

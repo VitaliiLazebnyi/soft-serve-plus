@@ -36,7 +36,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
 	if _, err := io.WriteString(c, request); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
@@ -49,19 +49,19 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	}
 	// The slot is free again: with a limit of 1, the next client is
 	// served rather than refused.
-	waitConns(t, d, 0, 30*time.Second)
+	waitConns(t, d, 0, idleWait)
 	c2 := dialHeld(t, addr, request, git.ErrNotAuthed)
 	_ = c2.Close()
 
 	// The panic is logged by safego.Run's recover, which runs after
 	// handleClient's deferred close: the client can see the connection
 	// closed, and the next client be served, before the line is written.
-	waitLog(t, logs, "recovered panic", 30*time.Second)
-	waitLog(t, logs, "injected handler panic", 30*time.Second)
+	waitLog(t, logs, "recovered panic", idleWait)
+	waitLog(t, logs, "injected handler panic", idleWait)
 	// The handler's goroutine is no longer counted: Shutdown does not
 	// wait for it.
-	waitConns(t, d, 0, 30*time.Second)
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	waitConns(t, d, 0, idleWait)
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
 	defer cancel()
 	if err := d.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown = %v, want nil", err)

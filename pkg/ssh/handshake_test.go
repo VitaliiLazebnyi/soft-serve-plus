@@ -1,11 +1,6 @@
 package ssh
 
 import (
-	"context"
-	"errors"
-	"io"
-	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -25,27 +20,13 @@ func TestSSHServerClosesStalledHandshake(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.HandshakeTimeout = 1
-	addr, _ := startTestServer(t, cfg)
-
-	c, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr)
-	if err != nil {
-		t.Fatal(err)
+	// A close within waitClosed's wait can only come from the handshake
+	// timeout while the idle timeout is longer.
+	if idle := time.Duration(cfg.SSH.IdleTimeout) * time.Second; idle <= sessionLoopsWait {
+		t.Fatalf("idle timeout %s is within the %s wait", idle, sessionLoopsWait)
 	}
-	defer c.Close() //nolint: errcheck
+	addr, _ := startUnixServer(t, cfg)
 
 	// Send a version banner and then stall in the key exchange.
-	if _, err := io.WriteString(c, "SSH-2.0-stall\r\n"); err != nil {
-		t.Fatal(err)
-	}
-
-	// The idle timeout is ten minutes, so a close within a few seconds can
-	// only come from the handshake timeout.
-	if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	_, err = io.Copy(io.Discard, c)
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("server kept a stalled handshake open for %v", time.Since(start))
-	}
+	waitClosed(t, dialUnix(t, addr, "SSH-2.0-stall\r\n"), "a stalled handshake")
 }

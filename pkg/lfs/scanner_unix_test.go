@@ -65,7 +65,7 @@ func TestSearchPointerBlobsPanicReapsGit(t *testing.T) {
 		}
 		// A process that exited but was not waited for is a zombie,
 		// which signal 0 still finds.
-		deadline := time.Now().Add(30 * time.Second)
+		deadline := time.Now().Add(time.Minute)
 		for {
 			err := syscall.Kill(pid, 0)
 			if errors.Is(err, syscall.ESRCH) {

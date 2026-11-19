@@ -157,7 +157,7 @@ func TestImportRepositoryCloneFailure(t *testing.T) {
 		is.True(errors.Is(res.err, proto.ErrImportFailed))
 		// The clone's own message must not reach the caller.
 		is.Equal(res.err.Error(), proto.ErrImportFailed.Error())
-	case <-time.After(30 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("ImportRepository did not return after a failed clone")
 	}
 

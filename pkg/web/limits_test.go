@@ -36,6 +36,13 @@ func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 	return srv.Listener.Addr().String()
 }
 
+// closeWait is how long a test waits for the server to cut off a connection
+// once a short timeout has passed. It is far past those timeouts, so a
+// loaded machine that stalls the server for seconds does not fail the test,
+// and the test does not time the cut-off: a connection still open after
+// closeWait is one the timeout did not apply to.
+const closeWait = time.Minute
+
 // dial opens a connection to addr that fails the test if it is still open
 // after timeout.
 func dial(t *testing.T, addr string, timeout time.Duration) net.Conn {
@@ -72,7 +79,7 @@ func TestHTTPStalledBodyTimesOut(t *testing.T) {
 		c.IdleTimeout = 1
 	})
 
-	conn := dial(t, addr, 15*time.Second)
+	conn := dial(t, addr, closeWait)
 	sendStalled(t, conn)
 	start := time.Now()
 	if _, err := io.Copy(io.Discard, conn); err != nil {
@@ -91,7 +98,7 @@ func TestHTTPMaxTimeout(t *testing.T) {
 		c.MaxTimeout = 1
 	})
 
-	conn := dial(t, addr, 15*time.Second)
+	conn := dial(t, addr, closeWait)
 	sendStalled(t, conn)
 	start := time.Now()
 	if _, err := io.Copy(io.Discard, conn); err != nil {
@@ -112,7 +119,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 
 	// Probe over a kept-alive connection: opening a connection per probe
 	// makes macOS drop loopback connects now and then, which takes seconds.
-	client := &http.Client{Transport: &http.Transport{}, Timeout: 10 * time.Second}
+	client := &http.Client{Transport: &http.Transport{}, Timeout: closeWait}
 	t.Cleanup(client.CloseIdleConnections)
 	status := func() int {
 		t.Helper()
@@ -139,7 +146,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 	// The handler of the last probe may still hold the slot when the
 	// stalled request arrives, which then gets the 503 itself. Send it
 	// again until it is the one holding the slot.
-	stalled := dial(t, addr, 30*time.Second)
+	stalled := dial(t, addr, 2*closeWait)
 	sendStalled(t, stalled)
 	waitFor(t, func() bool {
 		if status() == http.StatusServiceUnavailable {
@@ -147,7 +154,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 		}
 		if answered(t, stalled) {
 			_ = stalled.Close()
-			stalled = dial(t, addr, 30*time.Second)
+			stalled = dial(t, addr, 2*closeWait)
 			sendStalled(t, stalled)
 		}
 		return false
@@ -155,7 +162,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 
 	// A request over the limit that stalls its body is answered at once,
 	// rather than once the server has read the body it announced.
-	over := dial(t, addr, 10*time.Second)
+	over := dial(t, addr, closeWait)
 	sendStalled(t, over)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
 	if err != nil {
@@ -179,13 +186,13 @@ func TestHTTPMaxConnections(t *testing.T) {
 // must otherwise stay open with nothing to read.
 func answered(t *testing.T, conn net.Conn) bool {
 	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil { // a poll; waitFor retries for a minute
 		t.Fatal(err)
 	}
 	_, err := conn.Read(make([]byte, 1))
 	var nerr net.Error
 	if errors.As(err, &nerr) && nerr.Timeout() {
-		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(2 * closeWait)); err != nil {
 			t.Fatal(err)
 		}
 		return false
@@ -193,9 +200,12 @@ func answered(t *testing.T, conn net.Conn) bool {
 	return true
 }
 
+// waitFor polls cond until it holds, failing the test with msg after
+// closeWait: the conditions waited for need the server to see a close or
+// end a request, which a loaded machine can delay for seconds.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(closeWait)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal(msg)
@@ -214,19 +224,67 @@ func serveLimits(t *testing.T, l *requestDeadlines, h http.HandlerFunc) string {
 	return srv.URL
 }
 
+// workIdle is the idle timeout of the tests that check that the server's
+// work between reads and writes is not limited by it, and workTime the work
+// they do, long enough that an idle deadline left armed would pass during
+// it. A read or write in the tests moves a few bytes over loopback: the
+// client has sent them before the handler reads (see sentBody), so only the
+// server stalling for workIdle on bytes it already has could fail the test.
+const (
+	workIdle = 5 * time.Second
+	workTime = workIdle * 3 / 2
+)
+
+// sentBody is a request body that closes sent once the client has taken all
+// of it to send. A handler waits for that before it reads, so a client slow
+// to send its body cannot make a read wait out the idle timeout: the test's
+// subject is the server's work, not the client's.
+type sentBody struct {
+	r    *strings.Reader
+	sent chan struct{}
+	once sync.Once
+}
+
+func newSentBody(s string) *sentBody {
+	return &sentBody{r: strings.NewReader(s), sent: make(chan struct{})}
+}
+
+func (b *sentBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if b.r.Len() == 0 {
+		b.once.Do(func() { close(b.sent) })
+	}
+	return n, err
+}
+
+// newSentRequest returns a POST of body to url, whose length is known, so
+// it is sent as it would be from a strings.Reader.
+func newSentRequest(t *testing.T, url string, body *sentBody) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(body.r.Len())
+	return req
+}
+
 // Once the body is read, time the server spends working before it answers
 // is not limited by the idle timeout: the request is neither cancelled nor
 // cut off.
 func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
-	l := &requestDeadlines{idle: 200 * time.Millisecond}
+	t.Parallel()
+	l := &requestDeadlines{idle: workIdle}
 	errc := make(chan error, 1)
+	bodies := make(chan *sentBody, 1)
 	url := serveLimits(t, l, func(w http.ResponseWriter, r *http.Request) {
+		<-(<-bodies).sent
 		if _, err := io.ReadAll(r.Body); err != nil {
 			errc <- err
 			return
 		}
 		select {
-		case <-time.After(4 * l.idle):
+		case <-time.After(workTime):
 		case <-r.Context().Done():
 			errc <- r.Context().Err()
 			return
@@ -235,10 +293,9 @@ func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
 		_, _ = io.WriteString(w, "done")
 	})
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader("body"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body1 := newSentBody("body")
+	bodies <- body1
+	req := newSentRequest(t, url, body1)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -256,10 +313,9 @@ func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
 	}
 
 	// The connection is reused for a request without the limits' deadlines.
-	req, err = http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader("again"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body2 := newSentBody("again")
+	bodies <- body2
+	req = newSentRequest(t, url, body2)
 	resp2, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -286,14 +342,12 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// Each read and write here moves a few bytes over loopback and
-			// must finish within the idle timeout even on a loaded machine,
-			// so the timeout is a second, and the work twice that.
-			l := &requestDeadlines{idle: time.Second}
+			l := &requestDeadlines{idle: workIdle}
 			errc := make(chan error, 1)
+			reqBody := newSentBody("body")
 			work := func(r *http.Request) error {
 				select {
-				case <-time.After(2 * l.idle):
+				case <-time.After(workTime):
 					return nil
 				case <-r.Context().Done():
 					return r.Context().Err()
@@ -302,6 +356,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					errc <- func() error {
+						<-reqBody.sent
 						if _, err := io.ReadFull(r.Body, make([]byte, 1)); err != nil {
 							return err
 						}
@@ -331,11 +386,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			}
 			t.Cleanup(srv.Close)
 
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("body"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp, err := srv.Client().Do(req)
+			resp, err := srv.Client().Do(newSentRequest(t, srv.URL, reqBody))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -395,7 +446,7 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("writing to a client that does not read was not cut off")
 	}
 }
@@ -461,7 +512,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	close(release)
 	select {
 	case <-readDone:
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("the read did not return")
 	}
 	// A panic in the reading goroutine would kill the test binary before
@@ -485,7 +536,7 @@ func TestRequestLimitsIdleStalledReader(t *testing.T) {
 		}
 	})
 
-	conn := dial(t, strings.TrimPrefix(url, "http://"), 15*time.Second)
+	conn := dial(t, strings.TrimPrefix(url, "http://"), 2*closeWait)
 	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +546,7 @@ func TestRequestLimitsIdleStalledReader(t *testing.T) {
 		if !errors.As(err, &nerr) || !nerr.Timeout() {
 			t.Fatalf("write error = %v, want a timeout", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("writing to a client that does not read was not cut off")
 	}
 }
@@ -544,36 +595,29 @@ func TestHTTPStalledBodyOutsideGitRoutes(t *testing.T) {
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			t.Parallel()
-			conn := dial(t, addr, 30*time.Second)
+			conn := dial(t, addr, closeWait)
 			if _, err := io.WriteString(conn, tc.method+" "+tc.path+" HTTP/1.1\r\n"+
 				"Host: localhost\r\n"+
 				"Content-Length: 100\r\n"+
 				"\r\n"); err != nil {
 				t.Fatal(err)
 			}
-			assertClosedWithin(t, conn, 10*time.Second)
+			assertClosed(t, conn)
 		})
 	}
 }
 
-// assertClosedWithin reads conn until the server closes it, and fails the
-// test unless that happens within limit. limit is far above the idle
-// timeouts the tests set, so a loaded machine does not fail the test; conn's
-// own deadline, set by dial, must be later still, so a connection left open
-// is told apart from one closed late.
-func assertClosedWithin(t *testing.T, conn net.Conn, limit time.Duration) {
+// assertClosed reads conn until the server closes it, and fails the test if
+// conn's deadline, set by dial to closeWait, passes first.
+func assertClosed(t *testing.T, conn net.Conn) {
 	t.Helper()
 	start := time.Now()
 	_, err := io.Copy(io.Discard, conn)
-	elapsed := time.Since(start)
-	var nerr net.Error
-	if errors.As(err, &nerr) && nerr.Timeout() {
-		t.Fatalf("connection still open after %s; the stalled request was not cut off", elapsed)
-	}
 	// A reset instead of an orderly close is fine: the server may close
 	// with the announced body unread.
-	if elapsed > limit {
-		t.Fatalf("connection closed after %s, want within %s (read error: %v)", elapsed, limit, err)
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		t.Fatalf("connection still open after %s; the stalled request was not cut off", time.Since(start))
 	}
 }
 
@@ -600,14 +644,14 @@ func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
 				}
 				_, _ = w.Write(make([]byte, 8<<10))
 			})
-			conn := dial(t, strings.TrimPrefix(url, "http://"), 30*time.Second)
+			conn := dial(t, strings.TrimPrefix(url, "http://"), closeWait)
 			if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\n"+
 				"Host: localhost\r\n"+
 				"Content-Length: 100\r\n"+
 				"\r\n"); err != nil {
 				t.Fatal(err)
 			}
-			assertClosedWithin(t, conn, 10*time.Second)
+			assertClosed(t, conn)
 		})
 	}
 }

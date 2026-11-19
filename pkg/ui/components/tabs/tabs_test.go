@@ -47,7 +47,7 @@ func TestTabsUseSectionKeys(t *testing.T) {
 // since Scan hands zones to a background worker.
 func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		if z := c.Zone.Get(id); z != nil && !z.IsZero() {
 			return z.StartX, z.StartY

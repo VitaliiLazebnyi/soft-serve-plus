@@ -118,7 +118,7 @@ func TestRequestContextDerivesFromServer(t *testing.T) {
 	cancel()
 	select {
 	case <-ctx.Done():
-	case <-time.After(time.Second):
+	case <-time.After(idleWait):
 		t.Fatal("request context outlived the server's")
 	}
 }
@@ -167,7 +167,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}
 
 	// The daemon records the request after the client hangs up.
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(idleWait)
 	for sampleCount(t, git.UploadPackService) == before && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -189,43 +189,39 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 // A client still sending its request when the server's context ends gets
 // the timeout answer, and its handler returns without waiting for the idle
 // timeout.
+//
+// The daemon's request and idle timeouts are ten minutes, far past the
+// test's one-minute wait, so an answer within the wait can only come from
+// the server's context, and the test need not time it.
 func TestServerContextEndsRequestRead(t *testing.T) {
-	// Give the daemon an idle timeout well past the test's bound, so only
-	// the server's context can end the read in time.
 	cfg := *testDaemon.cfg
-	cfg.Git.IdleTimeout = 60
+	cfg.Git.IdleTimeout = 600
 	sctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d, err := NewGitDaemon(backend.WithContext(config.WithContext(sctx, &cfg), testBackend))
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.requestTimeout = 10 * time.Minute
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go d.Serve(l) //nolint:errcheck
 	t.Cleanup(func() { _ = d.Close() })
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
-	if err != nil {
-		t.Fatalf("failed to connect to daemon: %v", err)
-	}
-	defer c.Close() //nolint:errcheck
-	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	c := dialDaemonAt(t, l.Addr().String())
 	// Wait until the daemon is reading the request before ending its context.
-	acceptDeadline := time.Now().Add(5 * time.Second)
-	for d.conns.Size() == 0 {
-		if time.Now().After(acceptDeadline) {
-			t.Fatal("daemon did not accept the connection")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	start := time.Now()
+	waitConns(t, d, 1, idleWait)
 	cancel()
-	if _, err := readPktline(c); err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+	_, err = readPktline(c)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("no answer %s after the server's context ended", idleWait)
+	}
+	if err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
 		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("answer took %v", elapsed)
-	}
+	// The handler has returned and given back its connection's slot,
+	// rather than waiting out the ten-minute idle timeout.
+	waitConns(t, d, 0, idleWait)
 }

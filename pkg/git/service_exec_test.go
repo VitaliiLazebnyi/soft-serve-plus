@@ -104,7 +104,7 @@ func TestServiceOutputCopyFailureStopsGit(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want it to wrap context.Canceled", err)
 		}
-	case <-time.After(waitDelay + 5*time.Second):
+	case <-time.After(waitDelay + time.Minute):
 		t.Fatal("handler still waiting for git after the copy of its output failed")
 	}
 	if cmd.ProcessState == nil {

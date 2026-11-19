@@ -13,23 +13,29 @@ import (
 )
 
 // A Basic login whose password is not an access token is refused without a
-// bcrypt comparison: many of them take less time than a few comparisons.
-// There is no password login, so there is nothing to compare against.
+// bcrypt comparison. There is no password login, so there is nothing to
+// compare against.
+//
+// As in TestBasicNonTokenLoginHoldsSlotBriefly, the fastest of many samples
+// is compared, not a total over a stretch of time a busy machine can slow
+// down in part: noise only makes samples slower, and a pair of logins that
+// runs a bcrypt can never be faster than one bcrypt.
 func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 	f := newOracleFixture(t)
 
-	// The cost of the comparisons a password check used to run.
-	const bcrypts = 8
-	start := time.Now()
-	for range bcrypts {
+	// One bcrypt comparison, as a password check used to run. The first
+	// call also makes the dummy hash, so take the fastest of a few.
+	bcrypt := time.Duration(math.MaxInt64)
+	for range 4 {
+		start := time.Now()
 		backend.VerifyPassword("guess", "")
+		bcrypt = min(bcrypt, time.Since(start))
 	}
-	budget := time.Since(start)
 
-	const attempts = 64
-	start = time.Now()
-	for range attempts {
+	login := time.Duration(math.MaxInt64)
+	for range 64 {
 		req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+		start := time.Now()
 		// "stranger" is a registered user, "nobody" is not; neither has a
 		// way to log in with a password.
 		req.SetBasicAuth("stranger", "guess")
@@ -40,9 +46,10 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 		if user, _, err := authenticate(req); user != nil || !badCredentials(err) {
 			t.Fatalf("authenticate => %v, %v, want bad credentials", user, err)
 		}
+		login = min(login, time.Since(start))
 	}
-	if took := time.Since(start); took > budget {
-		t.Errorf("%d failed Basic logins took %s, more than %d bcrypt comparisons (%s)", 2*attempts, took, bcrypts, budget)
+	if login >= bcrypt {
+		t.Errorf("the fastest pair of failed Basic logins took %s, no faster than the fastest bcrypt comparison (%s)", login, bcrypt)
 	}
 }
 

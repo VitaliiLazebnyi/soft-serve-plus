@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -152,18 +153,22 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 	// reply; a request only a little over the limit leaves little unread.
 	get := func(path string) int {
 		// A loaded macOS drops a loopback connect now and then, which
-		// then times out; try again rather than fail.
+		// then times out; try again, for up to closeWait, rather than fail.
+		// Only a timeout is retried: any other error, such as a refused
+		// connect to the test's own live listener, is a real failure and
+		// fails at once, rather than being retried without a pause.
 		var conn net.Conn
 		var err error
-		for range 3 {
-			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String())
-			if err == nil {
+		for deadline := time.Now().Add(closeWait); ; {
+			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String()) // one attempt; the loop retries a timeout until the deadline
+			var ne net.Error
+			if err == nil || !errors.As(err, &ne) || !ne.Timeout() || time.Now().After(deadline) {
 				break
 			}
 		}
 		is.NoErr(err)
 		defer conn.Close() //nolint:errcheck
-		is.NoErr(conn.SetDeadline(time.Now().Add(30 * time.Second)))
+		is.NoErr(conn.SetDeadline(time.Now().Add(closeWait)))
 		go func() {
 			_, _ = io.WriteString(conn, "GET "+path+" HTTP/1.1\r\nHost: localhost\r\n\r\n")
 		}()

@@ -442,7 +442,7 @@ func TestValidateURLContextCancelled(t *testing.T) {
 		if errors.Is(err, ErrInvalidURL) {
 			t.Fatalf("validateURL() = %v, should not report an invalid URL", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("validateURL did not return after its context was cancelled")
 	}
 }

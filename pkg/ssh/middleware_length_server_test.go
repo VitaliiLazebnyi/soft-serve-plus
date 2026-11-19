@@ -7,7 +7,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -45,7 +44,7 @@ func TestSSHServerRefusesOverlongCommand(t *testing.T) {
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)

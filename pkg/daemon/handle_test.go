@@ -78,7 +78,7 @@ func TestHangUpWithoutRequest(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
 	if err := c.(*net.TCPConn).CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestHangUpWithoutRequest(t *testing.T) {
 	if len(out) != 0 {
 		t.Errorf("answer to a client that sent nothing: %q", out)
 	}
-	waitConns(t, d, 0, 30*time.Second)
+	waitConns(t, d, 0, idleWait)
 }
 
 // waitConns waits up to within until d holds n connections.

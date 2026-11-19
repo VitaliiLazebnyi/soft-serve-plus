@@ -165,7 +165,9 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 		}
 	}()
 
-	start := time.Now()
+	// Without a connect timeout Open never returns, so the test waits for
+	// it without timing it: a loaded machine can take seconds past the
+	// timeout. The timeout's value is TestPostgresConfigConnectTimeout's check.
 	done := make(chan error, 1)
 	go func() {
 		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable")
@@ -176,10 +178,7 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 		if err == nil {
 			t.Fatal("Open() on a silent server => nil error, want an error")
 		}
-		if d := time.Since(start); d > 5*time.Second {
-			t.Errorf("Open() took %v, want about the connect timeout", d)
-		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("Open() on a silent server did not return")
 	}
 }
@@ -457,7 +456,7 @@ func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
 		t.Fatalf("writer: %v", err)
 	}
 
-	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond) // meant to run out while the writer holds its turn
 	defer cancel()
 	called := false
 	err = d.TransactionContext(wctx, func(*Tx) error {

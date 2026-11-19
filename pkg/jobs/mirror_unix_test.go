@@ -41,7 +41,7 @@ func TestRunMirrorGitTerminatesOnCancel(t *testing.T) {
 	go func() { done <- runMirrorGit(ctx, dir, env, "fetch", "--prune") }()
 
 	// Cancel only once the command is running.
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		if _, err := os.Stat(started); err == nil {
 			break

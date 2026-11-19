@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +111,15 @@ func TestConnLimiterUnlimited(t *testing.T) {
 
 func dialClient(t *testing.T, addr string) (*gossh.Client, error) {
 	t.Helper()
+	cfg := clientConfig(t)
+	cfg.Timeout = sessionLoopsWait
+	return gossh.Dial("tcp", addr, cfg)
+}
+
+// clientConfig returns the configuration of a test client, which signs in
+// as test with a new key and accepts any host key.
+func clientConfig(t *testing.T) *gossh.ClientConfig {
+	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -116,12 +128,11 @@ func dialClient(t *testing.T, addr string) (*gossh.Client, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	return &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
-	})
+	}
 }
 
 func TestSSHServerMaxConnectionsPerIP(t *testing.T) {
@@ -275,7 +286,7 @@ func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 			if err == nil || !strings.Contains(stderr.String(), msgTooManySessions) {
 				t.Fatalf("command ran while the TUI runs: %v: %q", err, stderr.String())
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(sessionLoopsWait):
 			t.Fatal("command neither refused nor finished")
 		}
 		_ = s.Close()
@@ -283,9 +294,17 @@ func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 }
 
 // TestSSHServerHandshakeTimeoutFreesPlace checks that a client which opens a
-// TCP connection and never finishes the handshake loses its place under the
+// connection and never finishes the handshake loses its place under the
 // connection limits once handshake_timeout passes, so it cannot lock others
 // out by holding idle sockets.
+//
+// The test sees the timeout fire in the server's state: the connection is
+// closed and its place released. It does not check that a second client is
+// refused while the first holds the place: with a one-second timeout that
+// check races the timeout, and on a loaded machine the second client can
+// reach the server after the first connection is closed and be let in.
+// TestSSHServerMaxConnections checks the refusal. The server listens on a
+// Unix socket, so no loopback TCP connect can stall either.
 func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -302,56 +321,31 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 			cfg.SSH.MaxConnectionsPerIP = 0
 			cfg.SSH.IdleTimeout = 0 // the handshake timeout alone must free the place
 			cfg.SSH.HandshakeTimeout = 1
-			addr, _, srv := startServer(t, cfg)
-
-			raw, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer raw.Close() //nolint: errcheck
-			if tc.send != "" {
-				if _, err := raw.Write([]byte(tc.send)); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			// Wait for the server to accept the raw connection, so it holds
-			// the only place before the client below dials.
-			waitFor(t, "the raw connection to hold the only place", func() bool {
+			addr, srv := startUnixServer(t, cfg)
+			places := func() int {
 				srv.limiter.mu.Lock()
 				defer srv.limiter.mu.Unlock()
-				return srv.limiter.total == 1
-			})
-			if c, err := dialClient(t, addr); err == nil {
-				_ = c.Close()
-				t.Fatal("connection accepted while an unauthenticated one holds the only place")
+				return srv.limiter.total
 			}
+
+			raw := dialUnix(t, addr, tc.send)
+			waitFor(t, "the raw connection to take the only place", func() bool { return places() == 1 })
 
 			// The server closes the raw connection once the handshake
-			// timeout passes.
-			_ = raw.SetReadDeadline(time.Now().Add(10 * time.Second))
-			buf := make([]byte, 512)
-			for {
-				if _, err := raw.Read(buf); err != nil {
-					if ne, ok := err.(net.Error); ok && ne.Timeout() {
-						t.Fatal("server kept the unauthenticated connection open past the handshake timeout")
-					}
-					break
-				}
-			}
+			// timeout passes, and gives its place back.
+			waitClosed(t, raw, "the unauthenticated connection")
+			waitFor(t, "the unauthenticated connection's place to be released", func() bool { return places() == 0 })
 
-			deadline := time.Now().Add(time.Minute)
-			for {
-				c, err := dialClient(t, addr)
-				if err == nil {
-					_ = c.Close()
-					break
+			// A client that finishes its handshake in time gets the place.
+			// One slowed past the timeout is closed and tries again.
+			waitFor(t, "a client to get the released place", func() bool {
+				c, err := dialUnixClient(t, addr)
+				if err != nil {
+					return false
 				}
-				if time.Now().After(deadline) {
-					t.Fatalf("connection still refused after the handshake timeout: %v", err)
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
+				_ = c.Close()
+				return true
+			})
 		})
 	}
 }
@@ -363,14 +357,23 @@ func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.IdleTimeout = 0
 	cfg.SSH.HandshakeTimeout = 1
-	addr, _ := startTestServer(t, cfg)
+	addr, _ := startUnixServer(t, cfg)
 
-	c, err := dialClient(t, addr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A client slowed past the timeout in its handshake is closed and
+	// tries again.
+	var c *gossh.Client
+	waitFor(t, "a client to authenticate within the handshake timeout", func() bool {
+		var err error
+		c, err = dialUnixClient(t, addr)
+		return err == nil
+	})
 	defer c.Close() //nolint: errcheck
-	time.Sleep(2 * time.Second)
+
+	// A connection accepted after c's that never starts its handshake is
+	// closed once its own handshake timeout passes. c's timeout, which
+	// started earlier, has then passed too, whatever the machine's load.
+	waitClosed(t, dialUnix(t, addr, ""), "a connection opened after the authenticated one")
+
 	s, err := c.NewSession()
 	if err != nil {
 		t.Fatalf("authenticated connection closed by the handshake timeout: %v", err)
@@ -389,6 +392,79 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// startUnixServer starts an SSH server built by NewSSHServer with cfg on a
+// Unix socket, and returns the socket's path and the server. A connection to
+// it has no TCP connect for a loaded machine to stall, which matters to a
+// test whose clients must finish a step within a short server timeout. (An
+// in-memory pipe would not do: both ends of an SSH connection send their
+// version before reading, which an unbuffered pipe deadlocks.) Its
+// connections carry no IP address, so they count only towards
+// max_connections.
+func startUnixServer(t *testing.T, cfg *config.Config) (string, *SSHServer) {
+	t.Helper()
+	ctx := serverContext(t, cfg, log.Default())
+	s, err := NewSSHServer(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Not t.TempDir: a socket path must stay within about 100 bytes.
+	dir, err := os.MkdirTemp("", "ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", filepath.Join(dir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve(l) //nolint: errcheck
+	t.Cleanup(func() { _ = s.Close() })
+	return l.Addr().String(), s
+}
+
+// dialUnix opens a connection to the socket at path that sends send and
+// then nothing.
+func dialUnix(t *testing.T, path, send string) net.Conn {
+	t.Helper()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if _, err := io.WriteString(c, send); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// dialUnixClient is dialClient to the socket at path. Its handshake gives up
+// after sessionLoopsWait, which only a server that never answers reaches.
+func dialUnixClient(t *testing.T, path string) (*gossh.Client, error) {
+	t.Helper()
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(sessionLoopsWait))
+	cc, chans, reqs, err := gossh.NewClientConn(conn, path, clientConfig(t))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return gossh.NewClient(cc, chans, reqs), nil
+}
+
+// waitClosed reads conn until the server closes it, and fails the test if it
+// is still open after sessionLoopsWait.
+func waitClosed(t *testing.T, conn net.Conn, what string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(sessionLoopsWait))
+	if _, err := io.Copy(io.Discard, conn); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the server kept %s open for %s", what, sessionLoopsWait)
 	}
 }
 
@@ -496,7 +572,7 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 					}
 				case <-started:
 					t.Fatal("a second command started while a closed session's command still runs")
-				case <-time.After(10 * time.Second):
+				case <-time.After(sessionLoopsWait):
 					t.Fatal("the second session was neither refused nor started")
 				}
 				_ = s2.Close()
@@ -516,7 +592,7 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 				select {
 				case <-started:
 					return true
-				case <-time.After(time.Second):
+				case <-time.After(time.Second): // one attempt; waitFor retries for a minute
 					return false
 				}
 			})

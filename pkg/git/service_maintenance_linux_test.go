@@ -109,9 +109,16 @@ func TestReceivePackMaintenanceDoesNotDetach(t *testing.T) {
 			}
 
 			// A detached process is re-parented before receive-pack
-			// exits; give a slow one a moment all the same.
+			// exits; give a slow one time all the same. Where one is
+			// wanted, wait for it up to a minute. Where none is, a second
+			// is a check that none appeared, which load can only make
+			// pass.
+			wait := time.Second
+			if tc.wantOrphan {
+				wait = time.Minute
+			}
 			var found []string
-			for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			for deadline := time.Now().Add(wait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
 				if found = orphans(t); len(found) > 0 {
 					break
 				}

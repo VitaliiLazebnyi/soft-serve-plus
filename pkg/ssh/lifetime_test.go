@@ -70,17 +70,46 @@ func startLifetimeServer(t *testing.T, lifetime time.Duration) lifetimeServer {
 // dialAuth connects to addr with auth.
 func dialAuth(t *testing.T, addr string, auth gossh.AuthMethod) *gossh.Client {
 	t.Helper()
+	c, err := tryDialAuth(t, addr, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// tryDialAuth is dialAuth returning the error, for a client that may be
+// closed by a short lifetime before it is done.
+func tryDialAuth(t *testing.T, addr string, auth gossh.AuthMethod) (*gossh.Client, error) {
+	t.Helper()
 	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{auth},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	return c
+	return c, nil
+}
+
+// alive reports whether the server still answers on c.
+func alive(c *gossh.Client) bool {
+	_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
+}
+
+// lifetimePassed waits until a connection without an account, opened now,
+// has been closed by its lifetime. A connection whose lifetime clock started
+// earlier and ran all along has then been closed too, whatever the
+// machine's load; one still open had its clock stopped.
+func lifetimePassed(t *testing.T, ls lifetimeServer) {
+	t.Helper()
+	later := dialAuth(t, ls.addr, gossh.PublicKeys(newSigner(t)))
+	if !closedWithin(later, watchClose(later), sessionLoopsWait) {
+		t.Fatalf("connection without an account still open %s after it opened", sessionLoopsWait)
+	}
 }
 
 // watchClose returns a channel closed once the server has closed c.
@@ -124,6 +153,11 @@ func runSession(c *gossh.Client, command string) ([]byte, error) {
 // The lifetime of a connection without an account is spent only while no
 // command runs, and closes the connection however busy it keeps it. A
 // connection with an account, or with an admin key, has no lifetime.
+//
+// The test sees the lifetime pass through connections closed, not through
+// the time taken: a client slowed past the short lifetime before it is done
+// tries again, and that a stopped clock goes on with the time it had left is
+// TestConnLifetimeResumes' check.
 func TestNoAccountLifetime(t *testing.T) {
 	const lifetime = 2 * time.Second
 	ls := startLifetimeServer(t, lifetime)
@@ -143,7 +177,7 @@ func TestNoAccountLifetime(t *testing.T) {
 			if _, err := runSession(c, "info"); err != nil {
 				t.Logf("info: %v", err)
 			}
-			if !closedWithin(c, closed, 10*time.Second) {
+			if !closedWithin(c, closed, sessionLoopsWait) {
 				t.Fatal("connection without an account still open after its lifetime")
 			}
 			if took := time.Since(start); took < lifetime {
@@ -153,50 +187,58 @@ func TestNoAccountLifetime(t *testing.T) {
 	}
 
 	t.Run("unknown key running a command", func(t *testing.T) {
-		c := dialAuth(t, ls.addr, gossh.PublicKeys(newSigner(t)))
+		// git-upload-pack lists the refs, then waits for the client. The
+		// command must start within the lifetime: a client slowed past it
+		// is closed first, and tries again.
+		var (
+			c     *gossh.Client
+			s     *gossh.Session
+			stdin io.WriteCloser
+		)
+		waitFor(t, "a command to start within the lifetime", func() bool {
+			var err error
+			if c, err = tryDialAuth(t, ls.addr, gossh.PublicKeys(newSigner(t))); err != nil {
+				t.Logf("dial: %v", err)
+				return false
+			}
+			if s, err = c.NewSession(); err != nil {
+				t.Logf("session: %v", err)
+				return false
+			}
+			stdout, err := s.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stdin, err = s.StdinPipe(); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Start("git-upload-pack repo1"); err != nil {
+				t.Logf("start: %v", err)
+				return false
+			}
+			if _, err := io.ReadFull(stdout, make([]byte, 4)); err != nil {
+				t.Logf("read: %v", err)
+				return false
+			}
+			go io.Copy(io.Discard, stdout) //nolint: errcheck
+			return true
+		})
 		closed := watchClose(c)
-		// Spend half the lifetime idle, leaving a wide margin before the
-		// command starts.
-		if closedWithin(c, closed, lifetime/2) {
-			t.Fatal("connection closed before its lifetime")
-		}
 
-		// git-upload-pack lists the refs, then waits for the client.
-		s, err := c.NewSession()
-		if err != nil {
-			t.Fatal(err)
-		}
-		stdin, err := s.StdinPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		stdout, err := s.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.Start("git-upload-pack repo1"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := io.ReadFull(stdout, make([]byte, 4)); err != nil {
-			t.Fatal(err)
-		}
-		go io.Copy(io.Discard, stdout) //nolint: errcheck
-		if closedWithin(c, closed, 2*lifetime) {
+		lifetimePassed(t, ls)
+		if !alive(c) {
 			t.Fatal("connection closed while its command ran")
 		}
 
-		// A flush packet ends upload-pack.
+		// A flush packet ends upload-pack, and the clock goes on.
 		if _, err := io.WriteString(stdin, "0000"); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Wait(); err != nil {
 			t.Fatalf("git-upload-pack: %v", err)
 		}
-		// The clock goes on from where it stopped, with about half the
-		// lifetime left, rather than starting again.
-		ended := time.Now()
-		if !closedWithin(c, closed, lifetime*3/4) {
-			t.Fatalf("connection still open %v after its command ended, want the rest of its lifetime", time.Since(ended))
+		if !closedWithin(c, closed, sessionLoopsWait) {
+			t.Fatal("connection still open after its command ended and its lifetime passed")
 		}
 	})
 
@@ -208,17 +250,75 @@ func TestNoAccountLifetime(t *testing.T) {
 		{"admin key without an account", ls.admin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := dialAuth(t, ls.addr, gossh.PublicKeys(tc.key))
-			closed := watchClose(c)
-			if out, err := runSession(c, "info"); err != nil && tc.key == ls.alice {
-				t.Fatalf("info: %v: %s", err, out)
-			}
-			if closedWithin(c, closed, lifetime*3/2) {
-				t.Fatal("connection closed")
-			}
+			// The connection's first session, which finds the account,
+			// must run within the lifetime: a client slowed past it is
+			// closed first, and tries again.
+			var c *gossh.Client
+			waitFor(t, "a session within the lifetime", func() bool {
+				var err error
+				if c, err = tryDialAuth(t, ls.addr, gossh.PublicKeys(tc.key)); err != nil {
+					t.Logf("dial: %v", err)
+					return false
+				}
+				out, err := runSession(c, "info")
+				if !alive(c) {
+					t.Logf("closed before its first session ran: %v", err)
+					return false
+				}
+				if err != nil && tc.key == ls.alice {
+					t.Fatalf("info: %v: %s", err, out)
+				}
+				return true
+			})
+
+			lifetimePassed(t, ls)
 			if _, err := c.NewSession(); err != nil {
 				t.Fatalf("new session after the lifetime: %v", err)
 			}
 		})
+	}
+}
+
+// TestConnLifetimeResumes checks that the lifetime clock stops while a
+// command runs and, once it has ended, goes on with the time it had left
+// rather than starting again. The clock of an hour-long lifetime is wound
+// back to a millisecond before its end instead of waited on, so the
+// lifetime is over within the test's wait only if the clock goes on: one
+// that started again would run for another hour.
+func TestConnLifetimeResumes(t *testing.T) {
+	const lifetime = time.Hour
+	var l connLifetime
+	expired := make(chan struct{})
+	l.start(lifetime, func() { close(expired) })
+	defer l.stop()
+	left := func() time.Duration {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return l.left
+	}
+
+	// Spend all but a millisecond of the lifetime.
+	l.mu.Lock()
+	l.since = l.since.Add(-(lifetime - time.Millisecond))
+	l.mu.Unlock()
+
+	l.commandStarted()
+	stopped := left()
+	if stopped > time.Millisecond {
+		t.Fatalf("time left once a command started = %v, want at most 1ms", stopped)
+	}
+	// While a second command still runs, the first one ending does not
+	// start the clock.
+	l.commandStarted()
+	l.commandEnded()
+	if got := left(); got != stopped {
+		t.Fatalf("time left while a second command runs = %v, want %v", got, stopped)
+	}
+
+	l.commandEnded()
+	select {
+	case <-expired:
+	case <-time.After(time.Minute):
+		t.Fatalf("lifetime not over a minute after the commands ended with %v of it left; the clock started again", stopped)
 	}
 }

@@ -124,7 +124,7 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 	select {
 	case err := <-result:
 		is.True(errors.Is(err, webhook.ErrTooManyWebhooks))
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("CreateWebhook still waiting after the lock was released")
 	}
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
@@ -135,12 +135,12 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 // waitBlockedBy waits until some backend is waiting for a lock held by the
 // backend holder. It returns an error naming op, the operation it watches,
 // if result delivers first, meaning op finished without waiting, or if
-// nothing blocks within 10 seconds. It returns an error rather than failing
+// nothing blocks within a minute. It returns an error rather than failing
 // the test so a caller inside the holder's transaction can return it, which
 // rolls the transaction back and lets the waiting operation finish before
 // the test database is dropped.
 func waitBlockedBy(e whEnv, holder int, result <-chan error, op string) error {
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
 		select {
 		case err := <-result:

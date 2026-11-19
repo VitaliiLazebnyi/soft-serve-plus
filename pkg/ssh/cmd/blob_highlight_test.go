@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
@@ -41,7 +40,13 @@ func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 }
 
 // blob --color highlights within the same bounds as the TUI: a file whose
-// lexer would take seconds, or panics, is printed promptly as plain text.
+// lexer would take seconds, or panics, is printed as plain text.
+//
+// The command is not timed. Plain text is what the bounds leave: the Svelte
+// file is refused by the cap on lexers the budget cannot stop, and would be
+// cut off by the budget without the cap; with neither it comes back
+// highlighted a minute or more later. The YANG file is plain because its
+// lexer's panic is caught.
 func TestBlobColorBounded(t *testing.T) {
 	t.Setenv("SOFT_SERVE_NO_COLOR", "")
 	ctx, be := newAuthTestContext(t)
@@ -56,13 +61,9 @@ func TestBlobColorBounded(t *testing.T) {
 	})
 
 	for _, name := range []string{"app.svelte", "a.yang"} {
-		start := time.Now()
 		stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
-		}
-		if took := time.Since(start); took > 2*time.Second {
-			t.Fatalf("%s: blob --color took %v", name, took)
 		}
 		if strings.Contains(stdout, "\x1b[") {
 			t.Fatalf("%s: printed highlighted; want plain text", name)

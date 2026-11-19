@@ -94,7 +94,7 @@ func TestSSHFetchChannelClosedFreesSession(t *testing.T) {
 	// The channel's place is freed when it closes, but the command's only
 	// when its handler returned, which it does only once git is gone. Until
 	// then another command on the connection is refused.
-	ctxWait, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	ctxWait, cancel := context.WithTimeout(t.Context(), sessionLoopsWait)
 	defer cancel()
 	var last string
 	for ctxWait.Err() == nil {

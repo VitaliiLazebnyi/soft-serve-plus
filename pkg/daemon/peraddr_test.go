@@ -63,7 +63,7 @@ func perAddrDaemon(t *testing.T, limit, perAddr int) (*GitDaemon, func(addr neti
 			t.Fatalf("dial: %v", err)
 		}
 		t.Cleanup(func() { _ = c.Close() })
-		_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = c.SetReadDeadline(time.Now().Add(idleWait))
 		return c
 	}
 	return d, from
@@ -88,9 +88,9 @@ func TestMaxConnectionsPerIP(t *testing.T) {
 	a, b := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")
 
 	first := from(a)
-	waitConns(t, d, 1, 30*time.Second)
+	waitConns(t, d, 1, idleWait)
 	from(a)
-	waitConns(t, d, 2, 30*time.Second)
+	waitConns(t, d, 2, idleWait)
 	wantRefused(t, "third connection from one address", from(a))
 	if got := d.conns.Size(); got != perAddr {
 		t.Fatalf("%d connections counted, want %d", got, perAddr)
@@ -98,25 +98,25 @@ func TestMaxConnectionsPerIP(t *testing.T) {
 
 	// Another address is served while the first is at its share.
 	from(b)
-	waitConns(t, d, 3, 30*time.Second)
+	waitConns(t, d, 3, idleWait)
 
 	// An IPv6 /64 is one address.
 	from(netip.MustParseAddr("2001:db8::1"))
 	from(netip.MustParseAddr("2001:db8::2"))
-	waitConns(t, d, 5, 30*time.Second)
+	waitConns(t, d, 5, idleWait)
 	wantRefused(t, "third connection from one /64", from(netip.MustParseAddr("2001:db8::3")))
 	from(netip.MustParseAddr("2001:db8:0:1::1"))
-	waitConns(t, d, 6, 30*time.Second)
+	waitConns(t, d, 6, idleWait)
 
 	// Closing a connection gives its address's slot back.
 	_ = first.Close()
-	waitConns(t, d, 5, 30*time.Second)
+	waitConns(t, d, 5, idleWait)
 	key, _ := clientPrefix(net.TCPAddrFromAddrPort(netip.AddrPortFrom(a, 1)))
 	if got := d.conns.SizeOf(key); got != 1 {
 		t.Fatalf("%d connections counted for %s, want 1", got, a)
 	}
 	from(a)
-	waitConns(t, d, 6, 30*time.Second)
+	waitConns(t, d, 6, idleWait)
 }
 
 // TestMaxConnectionsPerIPLoopbackExempt checks that loopback clients are
@@ -133,7 +133,7 @@ func TestMaxConnectionsPerIPLoopbackExempt(t *testing.T) {
 		netip.MustParseAddr("::ffff:127.0.0.2"),
 	} {
 		from(a)
-		waitConns(t, d, i+1, 30*time.Second)
+		waitConns(t, d, i+1, idleWait)
 	}
 	wantRefused(t, "connection over the total", from(netip.Addr{}))
 }
@@ -145,7 +145,7 @@ func TestMaxConnectionsPerIPZero(t *testing.T) {
 	a := netip.MustParseAddr("192.0.2.1")
 	for i := range 3 {
 		from(a)
-		waitConns(t, d, i+1, 30*time.Second)
+		waitConns(t, d, i+1, idleWait)
 	}
 	wantRefused(t, "connection over the total", from(a))
 }

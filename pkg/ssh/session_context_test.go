@@ -37,7 +37,7 @@ func TestSessionContextPerSession(t *testing.T) {
 		arrived.Done()
 		select {
 		case <-allArrived:
-		case <-time.After(10 * time.Second):
+		case <-time.After(sessionLoopsWait):
 			_, _ = io.WriteString(s.Stderr(), "timed out waiting for the other session")
 			_ = s.Exit(1)
 			return
@@ -66,7 +66,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	c, err := gossh.Dial("tcp", l.Addr().String(), &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
 		t.Fatal(err)

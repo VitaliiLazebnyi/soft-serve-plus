@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -104,13 +103,6 @@ func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) (strin
 	return addr, ctx
 }
 
-// startServer starts an SSH server with cfg on a local port and returns its
-// address, the context it runs with and the server.
-func startServer(t *testing.T, cfg *config.Config) (string, context.Context, *SSHServer) {
-	t.Helper()
-	return startServerWithLogger(t, cfg, log.Default())
-}
-
 // startServerWithLogger starts an SSH server with cfg and logger on a local
 // port and returns its address, the context it runs with and the server.
 func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context, *SSHServer) {
@@ -174,7 +166,7 @@ func dialWith(t *testing.T, addr string, kex, ciphers, macs []string) error {
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {
 		_ = c.Close()
@@ -243,7 +235,7 @@ func dialWithSigner(addr string, signer gossh.Signer) error {
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         10 * time.Second,
+		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {
 		_ = c.Close()
