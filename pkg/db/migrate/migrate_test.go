@@ -328,7 +328,7 @@ func TestMigrateOverLeftoverTables(t *testing.T) {
 	if err := dbx.Get(&settings, dbx.Rebind("SELECT COUNT(*) FROM settings WHERE \"key\" <> ?"), orphansCheckedKey); err != nil {
 		t.Fatal(err)
 	}
-	if settings != 3 {
-		t.Errorf("settings after migrating over leftover tables = %d, want 3", settings)
+	if settings != 4 {
+		t.Errorf("settings after migrating over leftover tables = %d, want 4", settings)
 	}
 }

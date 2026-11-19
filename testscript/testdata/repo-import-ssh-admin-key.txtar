@@ -19,7 +19,7 @@ stopserver
 ensureservernotrunning SSH_PORT
 
 # user1's key becomes an admin key; startup leaves it on user1's account
-env SOFT_SERVE_INITIAL_ADMIN_KEYS=$USER1_AUTHORIZED_KEY
+env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN1_AND_USER1_KEYS
 exec soft serve &
 ensureserverrunning SSH_PORT
 soft user info user1

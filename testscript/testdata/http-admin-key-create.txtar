@@ -36,7 +36,7 @@ stderr '^> 404 '
 # the operator now lists the claimed key as an admin key
 stopserver
 ensureservernotrunning SSH_PORT
-env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN2_AUTHORIZED_KEY
+env SOFT_SERVE_INITIAL_ADMIN_KEYS=$ADMIN1_AND_ADMIN2_KEYS
 exec soft serve &
 ensureserverrunning SSH_PORT
 

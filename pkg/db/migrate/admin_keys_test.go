@@ -188,23 +188,26 @@ func TestAdminKeyAddedAfterFirstBootBecomesAdminKey(t *testing.T) {
 	if o, ok := ownerOf(t, dbx, later); ok {
 		t.Errorf("removed key owner = %+v; want it removed", o)
 	}
-	if n := count(t, dbx, `SELECT COUNT(*) FROM public_keys WHERE synced_user_id IS NOT NULL`); n != 0 {
-		t.Errorf("synced key records = %d, want 0", n)
+	// Only the seeded key is still recorded.
+	if n := count(t, dbx, `SELECT COUNT(*) FROM public_keys WHERE synced_user_id IS NOT NULL`); n != 1 {
+		t.Errorf("synced key records = %d, want 1", n)
 	}
 
-	// A key the first migration seeded is kept when it leaves the config,
-	// as before.
+	// A key the first migration seeded is removed when it leaves the config,
+	// like one the sync attached; see TestSeededAdminKeyRemovedWhenRotated.
 	cfg.InitialAdminKeys = nil
 	boot(t, ctx, cfg, dbx)
-	if o, ok := ownerOf(t, dbx, first); !ok || o.Username != "admin" {
-		t.Errorf("seeded key owner = %+v, %v; want it kept on admin", o, ok)
+	if o, ok := ownerOf(t, dbx, first); ok {
+		t.Errorf("seeded key owner = %+v; want it removed", o)
 	}
 
-	// Adding the key back attaches it again.
+	// Adding the keys back attaches them again.
 	cfg.InitialAdminKeys = []string{first, later}
 	boot(t, ctx, cfg, dbx)
-	if o, ok := ownerOf(t, dbx, later); !ok || o.Username != "admin" {
-		t.Errorf("re-added key owner = %+v, %v; want admin", o, ok)
+	for _, ak := range []string{first, later} {
+		if o, ok := ownerOf(t, dbx, ak); !ok || o.Username != "admin" {
+			t.Errorf("re-added key owner = %+v, %v; want admin", o, ok)
+		}
 	}
 }
 

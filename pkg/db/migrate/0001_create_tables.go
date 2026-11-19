@@ -80,9 +80,23 @@ var createTables = Migration{
 			return err
 		}
 
+		sqlite := tx.DriverName() == "sqlite"
+
+		// legacy is set when there are Soft Serve v0.6 tables to import,
+		// whose keys come in without a record of how they got there.
+		var legacy bool
+		if sqlite {
+			for _, t := range []string{"user_old", "public_key_old", "collab_old", "repo_old"} {
+				ok, err := tableExists(ctx, tx, t)
+				if err != nil {
+					return err
+				}
+				legacy = legacy || ok
+			}
+		}
+
 		// Import the v0.6 users first, keeping their ids, so the default
 		// admin below does not take an id a legacy user has.
-		sqlite := tx.DriverName() == "sqlite"
 		if sqlite {
 			if ok, err := tableExists(ctx, tx, "user_old"); err != nil {
 				return err
@@ -130,11 +144,27 @@ var createTables = Migration{
 		for _, k := range adminKeys {
 			query := tx.Rebind(insert + "INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict)
 			ak := sshutils.MarshalAuthorizedKey(k)
-			if _, err := tx.ExecContext(ctx, query, adminID, ak); err != nil {
-				if errors.Is(err, db.ErrDuplicateKey) {
-					continue
-				}
+			res, err := tx.ExecContext(ctx, query, adminID, ak)
+			if errors.Is(err, db.ErrDuplicateKey) {
+				continue
+			}
+			if err != nil {
 				return err
+			}
+			// Record the seeded key the way the admin key sync recorded
+			// the keys it attached at the time, so that it is removed
+			// again once it leaves the config, like any key the sync
+			// attached. Migration 10 moves the record to
+			// public_keys.synced_user_id. A key already there, such as a
+			// v0.6 user's, is not recorded.
+			if n, err := res.RowsAffected(); err != nil {
+				return err
+			} else if n == 0 {
+				continue
+			}
+			record := tx.Rebind(insert + `INTO settings ("key", value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)` + onConflict)
+			if _, err := tx.ExecContext(ctx, record, "initial_admin_key:"+ak, strconv.FormatInt(adminID, 10)); err != nil {
+				return fmt.Errorf("record initial admin key: %w", err)
 			}
 		}
 
@@ -148,6 +178,15 @@ var createTables = Migration{
 			{"allow_keyless", "true"},
 			{"anon_access", access.ReadOnlyAccess.String()},
 			{"init", "true"},
+		}
+		// Seeded keys are recorded (see above), so the boot warning about
+		// unrecorded admin keys is for older databases only, and for one
+		// imported from v0.6, whose admin keys come in unrecorded.
+		if !legacy {
+			settings = append(settings, struct {
+				Key   string
+				Value string
+			}{adminKeysRecordedKey, "true"})
 		}
 
 		for _, s := range settings {
