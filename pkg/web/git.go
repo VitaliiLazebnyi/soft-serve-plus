@@ -537,9 +537,19 @@ func authorize(need routeAccess, readable bool, level access.AccessLevel, anonym
 }
 
 // requireCaller rejects anonymous requests when keyless access is disabled.
-func requireCaller(w http.ResponseWriter, r *http.Request) bool {
+// When the setting cannot be read, the request is answered as unavailable
+// (see lookupUnavailable) rather than asked for credentials.
+func requireCaller(w http.ResponseWriter, r *http.Request, lfsJSON bool) bool {
 	ctx := r.Context()
-	if proto.UserFromContext(ctx) == nil && !backend.FromContext(ctx).AllowKeyless(ctx) {
+	if proto.UserFromContext(ctx) != nil {
+		return true
+	}
+	allow, err := backend.FromContext(ctx).AllowKeylessSetting(ctx)
+	if err != nil {
+		lookupUnavailable(w, r, log.FromContext(ctx), "", err, lfsJSON)
+		return false
+	}
+	if !allow {
 		askCredentials(w, r)
 		renderUnauthorized(w, r)
 		return false
@@ -562,7 +572,7 @@ func withCaller(next http.Handler) http.HandlerFunc {
 			repos = pathAncestors(mux.Vars(r)["repo"])
 		}
 		r, err := identify(r, repos...)
-		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r) {
+		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r, false) {
 			return
 		}
 
@@ -623,7 +633,7 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 	r, err := identify(orig, gr.name)
 	need := route.access(r.Method, gr.service)
 	lfsJSON := need.lfs
-	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r) {
+	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r, lfsJSON) {
 		return
 	}
 

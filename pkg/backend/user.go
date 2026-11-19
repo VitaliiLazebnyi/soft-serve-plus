@@ -152,14 +152,26 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		return access.AdminAccess, nil
 	}
 
-	anon := d.AnonAccess(ctx)
+	// A failed lookup is returned on every path, missing names included, so
+	// an outage answers a missing and an existing name alike.
+	anon, err := d.anonAccess(ctx)
+	if err != nil {
+		return access.NoAccess, err
+	}
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
 		// So is a row with no directory (removed by hand, a partial restore
 		// or an unmounted volume): its settings are unknown to the caller,
 		// so it must not fall back to the level for a free name, which would
 		// show a private repository in listings that walk the rows.
-		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
+		if d.repoPathExists(name) {
+			return access.NoAccess, nil
+		}
+		row, err := d.repoRowExists(ctx, name)
+		if err != nil {
+			return access.NoAccess, err
+		}
+		if row {
 			return access.NoAccess, nil
 		}
 		return d.baseAccessLevel(user, false, anon), nil
@@ -225,7 +237,10 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 		return repos, nil
 	}
 
-	anon := d.AnonAccess(ctx)
+	anon, err := d.anonAccess(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var collabs map[int64]access.AccessLevel
 	if user != nil && user.ID() != 0 {
 		ms, err := d.store.ListCollabsByUserID(ctx, d.db, user.ID())

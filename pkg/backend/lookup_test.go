@@ -145,7 +145,7 @@ func breakTable(t *testing.T, be *Backend, table string) {
 func TestReadableReturnsLookupErrors(t *testing.T) {
 	is := is.New(t)
 	var logs syncBuffer
-	be, _ := newTestBackendWithLog(t, &logs)
+	be := newLookupBackend(t, &logs)
 	ctx := context.Background()
 
 	admin := defaultAdmin(t, be)
@@ -184,7 +184,7 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 func TestUserLookupErrorsNotLogged(t *testing.T) {
 	is := is.New(t)
 	var logs syncBuffer
-	be, _ := newTestBackendWithLog(t, &logs)
+	be := newLookupBackend(t, &logs)
 	ctx := context.Background()
 	u, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)

@@ -73,12 +73,7 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			// repositories owned by nobody. The cause is logged here, at
 			// Debug when the client went away and canceled the lookup.
 			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
-				logger := log.FromContext(ctx)
-				if ctx.Err() != nil {
-					logger.Debug("user lookup canceled", "err", err)
-				} else {
-					logger.Error("failed to look up the session's user", "err", err)
-				}
+				logUserLookupFailure(ctx, log.FromContext(ctx), err)
 				wish.Fatalln(s, ErrUserLookupFailed)
 				return
 			}
@@ -92,6 +87,16 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		sh(s)
 	}
+}
+
+// logUserLookupFailure logs a failed lookup of the session's user, at Debug
+// when the client went away and canceled it.
+func logUserLookupFailure(ctx context.Context, logger *log.Logger, err error) {
+	if ctx.Err() != nil {
+		logger.Debug("user lookup canceled", "err", err)
+		return
+	}
+	logger.Error("failed to look up the session's user", "err", err)
 }
 
 // MaxCommandLength is the longest exec command, in bytes, the SSH server
@@ -213,7 +218,10 @@ func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
 	// it rather than looking the key up again (as the TUI does in openRepo).
 	// A lookup that fails runs the word as a command, which then reports
 	// its own error: this only chooses between the two.
-	r, _, _ := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	r, _, err := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	if err != nil {
+		log.FromContext(ctx).Debug("repository lookup failed, running the word as a command", "word", word, "err", err)
+	}
 	return r == nil
 }
 

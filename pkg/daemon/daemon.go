@@ -365,14 +365,15 @@ func (d *GitDaemon) requestContext() (context.Context, context.CancelFunc) {
 }
 
 // readable reports whether the anonymous daemon may serve the repository
-// name. Its database lookups get at most accessTimeout, and a lookup that
-// runs out of time refuses the request. The error is set when the
-// repository lookup failed.
+// name. Its database lookups get at most accessTimeout. The error is set
+// when a lookup failed, one that ran out of time included; the request is
+// then refused as a server fault.
 func (d *GitDaemon) readable(ctx context.Context, name string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.accessTimeout)
 	defer cancel()
-	if !d.be.AllowKeyless(ctx) {
-		return false, nil
+	allow, err := d.be.AllowKeylessSetting(ctx)
+	if err != nil || !allow {
+		return false, err
 	}
 	r, _, err := d.be.Readable(ctx, name, nil)
 	return r != nil, err

@@ -228,3 +228,44 @@ func TestRepositoryLookupErrorIsUnavailable(t *testing.T) {
 	is.Equal(f.do(http.MethodGet, "/secret/pkg?go-get=1", auth).Code, http.StatusServiceUnavailable)
 	is.True(hasLogLine(logs.String(), "ERRO", "failed to look up repository"))
 }
+
+// During an outage a missing name and an existing private one get the same
+// answer, 503, for anonymous and signed-in callers: otherwise anyone could
+// tell which private names exist. With the settings unreadable an anonymous
+// request is 503 too, not asked for credentials.
+func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
+	for _, table := range []string{"repos", "settings"} {
+		t.Run(table, func(t *testing.T) {
+			is := is.New(t)
+			f := newOracleFixture(t)
+			dbx := db.FromContext(f.ctx)
+			_, err := dbx.ExecContext(f.ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone")
+			is.NoErr(err)
+			for _, auth := range []string{"", "Token " + f.token} {
+				for _, name := range []string{"secret", "ghost"} {
+					w := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", auth)
+					is.Equal(w.Code, http.StatusServiceUnavailable)
+					is.Equal(w.Header().Get("WWW-Authenticate"), "")
+				}
+			}
+		})
+	}
+}
+
+// A lookup the client canceled is logged at Debug, not as a server error,
+// and still answered as unavailable.
+func TestLookupUnavailableCanceled(t *testing.T) {
+	is := is.New(t)
+	var logs bytes.Buffer
+	logger := log.New(&logs)
+	logger.SetLevel(log.DebugLevel)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/refs", nil)
+	w := httptest.NewRecorder()
+	lookupUnavailable(w, r, logger, "repo", context.Canceled, false)
+	is.Equal(w.Code, http.StatusServiceUnavailable)
+	is.True(hasLogLine(logs.String(), "DEBU", "repository lookup canceled"))
+	is.True(!strings.Contains(logs.String(), "ERRO"))
+}

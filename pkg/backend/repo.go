@@ -145,7 +145,13 @@ func (d *Backend) AboutRepoOwnedByAdmin(ctx context.Context, r proto.Repository)
 		return false
 	}
 	owner, err := d.UserByID(ctx, r.UserID())
-	return err == nil && owner.IsAdmin()
+	if err != nil {
+		if !errors.Is(err, proto.ErrUserNotFound) {
+			d.logLookupError(ctx, "failed to look up the about repository's owner, not showing its readme", err)
+		}
+		return false
+	}
+	return owner.IsAdmin()
 }
 
 // errAboutRepoReserved refuses a non-admin's claim on AboutRepo.
@@ -1530,18 +1536,18 @@ func (d *Backend) repoPathExists(name string) bool {
 }
 
 // repoRowExists reports whether the database holds a row for the
-// repository. It fails closed: an error other than not-found counts as a
-// row, so a lookup failure never makes a taken name look free.
-func (d *Backend) repoRowExists(ctx context.Context, name string) bool {
+// repository. The error is set when the lookup failed: the caller must not
+// take the name for free, nor for taken, since either answer for a missing
+// name would differ from the error an existing one gets.
+func (d *Backend) repoRowExists(ctx context.Context, name string) (bool, error) {
 	_, err := d.store.GetRepoByName(ctx, d.db, name)
 	if err == nil {
-		return true
+		return true, nil
 	}
 	if errors.Is(err, db.ErrRecordNotFound) {
-		return false
+		return false, nil
 	}
-	d.logger.Error("failed to look up repository row", "repo", name, "err", err)
-	return true
+	return false, fmt.Errorf("look up repository row %q: %w", name, err)
 }
 
 var _ proto.Repository = (*repo)(nil)
