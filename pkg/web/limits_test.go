@@ -119,7 +119,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 
 	// Probe over a kept-alive connection: opening a connection per probe
 	// makes macOS drop loopback connects now and then, which takes seconds.
-	client := &http.Client{Transport: &http.Transport{}, Timeout: 10 * time.Second}
+	client := &http.Client{Transport: &http.Transport{}, Timeout: closeWait}
 	t.Cleanup(client.CloseIdleConnections)
 	status := func() int {
 		t.Helper()
@@ -146,7 +146,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 	// The handler of the last probe may still hold the slot when the
 	// stalled request arrives, which then gets the 503 itself. Send it
 	// again until it is the one holding the slot.
-	stalled := dial(t, addr, 30*time.Second)
+	stalled := dial(t, addr, 2*closeWait)
 	sendStalled(t, stalled)
 	waitFor(t, func() bool {
 		if status() == http.StatusServiceUnavailable {
@@ -154,7 +154,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 		}
 		if answered(t, stalled) {
 			_ = stalled.Close()
-			stalled = dial(t, addr, 30*time.Second)
+			stalled = dial(t, addr, 2*closeWait)
 			sendStalled(t, stalled)
 		}
 		return false
@@ -162,7 +162,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 
 	// A request over the limit that stalls its body is answered at once,
 	// rather than once the server has read the body it announced.
-	over := dial(t, addr, 10*time.Second)
+	over := dial(t, addr, closeWait)
 	sendStalled(t, over)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
 	if err != nil {
@@ -192,7 +192,7 @@ func answered(t *testing.T, conn net.Conn) bool {
 	_, err := conn.Read(make([]byte, 1))
 	var nerr net.Error
 	if errors.As(err, &nerr) && nerr.Timeout() {
-		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(2 * closeWait)); err != nil {
 			t.Fatal(err)
 		}
 		return false
@@ -200,9 +200,12 @@ func answered(t *testing.T, conn net.Conn) bool {
 	return true
 }
 
+// waitFor polls cond until it holds, failing the test with msg after
+// closeWait: the conditions waited for need the server to see a close or
+// end a request, which a loaded machine can delay for seconds.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(closeWait)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal(msg)
