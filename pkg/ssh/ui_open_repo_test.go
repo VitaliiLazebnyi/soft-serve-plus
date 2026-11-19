@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"charm.land/ssh"
@@ -76,8 +77,8 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	// to the account, so only the session user grants access.
 	sessCtx := proto.WithUserContext(context.WithValue(ctx, ssh.ContextKeyPublicKey, pk), owner)
 	is.NoErr(be.RemovePublicKey(ctx, "owner", pk))
-	if r, _ := be.ReadableByPublicKey(sessCtx, "private", pk); r != nil {
-		t.Fatal("a by-key lookup still finds the owner; the test proves nothing")
+	if _, err := be.UserByPublicKey(ctx, pk); !errors.Is(err, proto.ErrUserNotFound) {
+		t.Fatalf("the key still resolves (%v); the test proves nothing", err)
 	}
 
 	ui := NewUI(common.NewCommon(sessCtx, 80, 40), "")

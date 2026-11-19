@@ -150,26 +150,6 @@ func (*Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64
 	return parseStoredKeys(ctx, aks, "user_id", id), nil
 }
 
-// ListPublicKeysByUsername implements store.Store.
-func (*Store) ListPublicKeysByUsername(ctx context.Context, h db.Handler, username string) ([]ssh.PublicKey, error) {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return nil, err
-	}
-
-	var aks []string
-	query := h.Rebind(`SELECT public_key FROM public_keys
-			INNER JOIN users ON users.id = public_keys.user_id
-			WHERE users.username = ?
-			ORDER BY public_keys.id ASC;`)
-	err := h.SelectContext(ctx, &aks, query, username)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseStoredKeys(ctx, aks, "username", username), nil
-}
-
 // RemovePublicKeyByUsername implements store.Store.
 func (*Store) RemovePublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
@@ -209,17 +189,6 @@ func (*Store) SetUsernameByUsername(ctx context.Context, h db.Handler, username 
 
 	query := h.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	return affected(h.ExecContext(ctx, query, newUsername, username))
-}
-
-// SetUserPasswordByUsername implements store.Store.
-func (*Store) SetUserPasswordByUsername(ctx context.Context, h db.Handler, username string, password string) error {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return err
-	}
-
-	query := h.Rebind(`UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
-	return affected(h.ExecContext(ctx, query, password, username))
 }
 
 // affected returns the error of an UPDATE or DELETE, or db.ErrRecordNotFound

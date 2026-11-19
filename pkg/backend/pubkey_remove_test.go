@@ -24,7 +24,7 @@ func TestRemoveOwnPublicKey(t *testing.T) {
 
 	is.NoErr(be.RemoveOwnPublicKey(ctx, "Alice", k2))
 	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "alice", k1), ErrLastPublicKey))
-	keys, err := be.ListPublicKeys(ctx, "alice")
+	keys, err := publicKeysOf(be, ctx, "alice")
 	is.NoErr(err)
 	is.Equal(len(keys), 1)
 
@@ -34,7 +34,7 @@ func TestRemoveOwnPublicKey(t *testing.T) {
 	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "nobody", k1), proto.ErrUserNotFound))
 
 	is.NoErr(be.RemovePublicKey(ctx, "alice", k1))
-	keys, err = be.ListPublicKeys(ctx, "alice")
+	keys, err = publicKeysOf(be, ctx, "alice")
 	is.NoErr(err)
 	is.Equal(len(keys), 0)
 }
@@ -90,7 +90,7 @@ func testRemoveOwnPublicKeyConcurrent(t *testing.T, be *Backend, ctx context.Con
 			}
 		}
 		is.Equal(refused, 1)
-		keys, err := be.ListPublicKeys(ctx, name)
+		keys, err := publicKeysOf(be, ctx, name)
 		is.NoErr(err)
 		is.Equal(len(keys), 1)
 	}

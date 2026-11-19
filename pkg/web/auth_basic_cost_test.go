@@ -7,10 +7,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// bcryptCompare runs one bcrypt comparison at the default cost against a
+// hash no password matches: what a password check used to run for each
+// Basic login whose password was not a token.
+func bcryptCompare(t *testing.T) func() {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("not-guess"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() { _ = bcrypt.CompareHashAndPassword(hash, []byte("guess")) }
+}
 
 // A Basic login whose password is not an access token is refused without a
 // bcrypt comparison. There is no password login, so there is nothing to
@@ -23,13 +35,14 @@ import (
 func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 	f := newOracleFixture(t)
 
-	// One bcrypt comparison, as a password check used to run. The first
-	// call also makes the dummy hash, so take the fastest of a few.
-	bcrypt := time.Duration(math.MaxInt64)
+	// One bcrypt comparison, as a password check used to run; the fastest
+	// of a few.
+	compare := bcryptCompare(t)
+	oneBcrypt := time.Duration(math.MaxInt64)
 	for range 4 {
 		start := time.Now()
-		backend.VerifyPassword("guess", "")
-		bcrypt = min(bcrypt, time.Since(start))
+		compare()
+		oneBcrypt = min(oneBcrypt, time.Since(start))
 	}
 
 	login := time.Duration(math.MaxInt64)
@@ -48,8 +61,8 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 		}
 		login = min(login, time.Since(start))
 	}
-	if login >= bcrypt {
-		t.Errorf("the fastest pair of failed Basic logins took %s, no faster than the fastest bcrypt comparison (%s)", login, bcrypt)
+	if login >= oneBcrypt {
+		t.Errorf("the fastest pair of failed Basic logins took %s, no faster than the fastest bcrypt comparison (%s)", login, oneBcrypt)
 	}
 }
 
@@ -80,13 +93,13 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 	config.FromContext(ctx).HTTP.MaxConnections = 8
 	router := testRouter(t, ctx)
 
-	// One bcrypt comparison, as each login used to run. The first call also
-	// makes the dummy hash, so take the faster of two.
-	bcrypt := time.Duration(math.MaxInt64)
+	// One bcrypt comparison, as each login used to run; the faster of two.
+	compare := bcryptCompare(t)
+	oneBcrypt := time.Duration(math.MaxInt64)
 	for range 2 {
 		start := time.Now()
-		backend.VerifyPassword("guess", "")
-		bcrypt = min(bcrypt, time.Since(start))
+		compare()
+		oneBcrypt = min(oneBcrypt, time.Since(start))
 	}
 
 	login := time.Duration(math.MaxInt64)
@@ -104,8 +117,8 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 
 	// An order of magnitude, so a slow machine cannot close the gap: the
 	// login path costs a few database lookups and no bcrypt.
-	t.Logf("fastest failed login %s, fastest bcrypt %s", login, bcrypt)
-	if login*10 > bcrypt {
-		t.Errorf("a failed Basic login held its request slot for %s, more than a tenth of a bcrypt comparison (%s)", login, bcrypt)
+	t.Logf("fastest failed login %s, fastest bcrypt %s", login, oneBcrypt)
+	if login*10 > oneBcrypt {
+		t.Errorf("a failed Basic login held its request slot for %s, more than a tenth of a bcrypt comparison (%s)", login, oneBcrypt)
 	}
 }

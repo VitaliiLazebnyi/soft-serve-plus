@@ -53,31 +53,31 @@ func TestReadable(t *testing.T) {
 	is.Equal(level, access.AdminAccess)
 
 	// AccessLevelForUser is the same computation.
-	is.Equal(be.AccessLevelForUser(ctx, "secret", stranger), access.NoAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "ghost", stranger), access.ReadWriteAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "public", nil), access.ReadOnlyAccess)
+	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "ghost", stranger), access.ReadWriteAccess)
+	is.Equal(levelOf(be, ctx, "public", nil), access.ReadOnlyAccess)
 
 	// With admin-only creation on, a missing name is no longer creatable.
 	cfg.AdminOnlyCreate = true
 	r, level = be.Readable(ctx, "ghost", stranger)
 	is.Equal(r, nil)
 	is.Equal(level, access.ReadOnlyAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "secret", stranger), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
 }
 
-// TestBaseAccessLevelByPublicKey verifies the baseline level does not
+// TestBaseAccessLevelForUser verifies the baseline level does not
 // depend on any repository and matches the level for a missing name.
-func TestBaseAccessLevelByPublicKey(t *testing.T) {
+func TestBaseAccessLevelForUserAnonymous(t *testing.T) {
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	// No key and no account: the anonymous level.
-	is.Equal(be.BaseAccessLevelByPublicKey(ctx, nil), access.ReadOnlyAccess)
-	is.Equal(be.BaseAccessLevelByPublicKey(ctx, nil), be.AccessLevelByPublicKey(ctx, "ghost", nil))
+	is.Equal(be.BaseAccessLevelForUser(ctx, nil), access.ReadOnlyAccess)
+	is.Equal(be.BaseAccessLevelForUser(ctx, nil), levelOf(be, ctx, "ghost", nil))
 
 	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
-	is.Equal(be.BaseAccessLevelByPublicKey(ctx, nil), access.NoAccess)
+	is.Equal(be.BaseAccessLevelForUser(ctx, nil), access.NoAccess)
 }
 
 // TestAccessLevelRowWithoutDirectory verifies a repository row whose
@@ -102,16 +102,16 @@ func TestAccessLevelRowWithoutDirectory(t *testing.T) {
 	is.NoErr(err)
 	is.NoErr(os.RemoveAll(be.repoPath("secret")))
 
-	is.Equal(be.AccessLevelForUser(ctx, "secret", nil), access.NoAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "secret", stranger), access.NoAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "secret", owner), access.NoAccess)
-	is.Equal(be.AccessLevelForUser(ctx, "secret", admin), access.AdminAccess)
-	is.Equal(be.AccessLevelByPublicKey(ctx, "secret", nil), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "secret", nil), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "secret", owner), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "secret", admin), access.AdminAccess)
+	is.Equal(levelOf(be, ctx, "secret", nil), access.NoAccess)
 
 	r, level := be.Readable(ctx, "secret", stranger)
 	is.Equal(r, nil)
 	is.Equal(level, access.NoAccess)
 
 	// A truly free name is unaffected.
-	is.Equal(be.AccessLevelForUser(ctx, "ghost", stranger), access.ReadWriteAccess)
+	is.Equal(levelOf(be, ctx, "ghost", stranger), access.ReadWriteAccess)
 }

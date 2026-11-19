@@ -19,8 +19,8 @@ func TestBasicAuthTokenForms(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	ctx := f.ctx
-	is.NoErr(f.be.SetPassword(ctx, "stranger", "stranger-password"))
-	is.NoErr(f.be.SetPassword(ctx, "owner", "owner-password"))
+	storePasswordHash(t, ctx, "stranger", "stranger-password")
+	storePasswordHash(t, ctx, "owner", "owner-password")
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))

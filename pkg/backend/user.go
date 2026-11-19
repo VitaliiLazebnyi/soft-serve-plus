@@ -55,41 +55,13 @@ func isAccountAdmin(user proto.User) bool {
 	return user != nil && user.IsAdmin()
 }
 
-// AccessLevelByPublicKey returns the access level of a user's public key for a repository.
-func (d *Backend) AccessLevelByPublicKey(ctx context.Context, repo string, pk ssh.PublicKey) access.AccessLevel {
-	if d.IsAdminKey(pk) {
-		return access.AdminAccess
-	}
-
-	user, _ := d.UserByPublicKey(ctx, pk)
-	return d.AccessLevelForUser(ctx, repo, user)
-}
-
-// BaseAccessLevelByPublicKey returns the access level a key holds before
+// BaseAccessLevelForUser returns the access level the caller holds before
 // any repository is considered: the level it would get for a repository
-// that does not exist.
-func (d *Backend) BaseAccessLevelByPublicKey(ctx context.Context, pk ssh.PublicKey) access.AccessLevel {
-	if d.IsAdminKey(pk) {
-		return access.AdminAccess
-	}
-
-	user, _ := d.UserByPublicKey(ctx, pk)
-	return d.baseAccessLevel(user, isAccountAdmin(user), d.AnonAccess(ctx))
-}
-
-// BaseAccessLevelForUser is BaseAccessLevelByPublicKey for a caller whose
-// user is already resolved, such as the user an SSH session stored in its
-// context, so the key is not looked up again. A server admin (see
-// IsServerAdmin), including the holder of an admin key on ctx, gets admin
-// access.
+// that does not exist. user is the caller's resolved user, such as the user
+// an SSH session stored in its context. A server admin (see IsServerAdmin),
+// including the holder of an admin key on ctx, gets admin access.
 func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
 	return d.baseAccessLevel(user, d.IsServerAdmin(ctx, user), d.AnonAccess(ctx))
-}
-
-// AccessLevelForUser returns the access level of a user for a repository.
-func (d *Backend) AccessLevelForUser(ctx context.Context, repo string, user proto.User) access.AccessLevel {
-	_, level := d.Readable(ctx, repo, user)
-	return level
 }
 
 // Readable looks a repository up once and returns it together with the
@@ -102,17 +74,6 @@ func (d *Backend) AccessLevelForUser(ctx context.Context, repo string, user prot
 // SSH session use ReadableForUser.
 func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
 	return d.readable(ctx, name, user, isAccountAdmin(user))
-}
-
-// ReadableByPublicKey is Readable for the holder of a public key.
-func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.PublicKey) (proto.Repository, access.AccessLevel) {
-	if d.IsAdminKey(pk) {
-		r, _ := d.Repository(ctx, name)
-		return r, access.AdminAccess
-	}
-
-	user, _ := d.UserByPublicKey(ctx, pk)
-	return d.Readable(ctx, name, user)
 }
 
 // ReadableForUser is Readable for the caller of an SSH session: user is the
@@ -611,21 +572,6 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ss
 	})
 }
 
-// ListPublicKeys lists the public keys of a user.
-func (d *Backend) ListPublicKeys(ctx context.Context, username string) ([]ssh.PublicKey, error) {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return nil, err
-	}
-
-	keys, err := d.store.ListPublicKeysByUsername(ctx, d.db, username)
-	if err != nil {
-		return nil, err
-	}
-
-	return keys, nil
-}
-
 // SetUsername sets the username of a user.
 func (d *Backend) SetUsername(ctx context.Context, username string, newUsername string) error {
 	username = strings.ToLower(username)
@@ -650,25 +596,6 @@ func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) err
 	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.SetAdminByUsername(ctx, tx, username, admin)
-		}),
-	)
-}
-
-// SetPassword sets the password of a user.
-func (d *Backend) SetPassword(ctx context.Context, username string, rawPassword string) error {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return err
-	}
-
-	password, err := HashPassword(rawPassword)
-	if err != nil {
-		return err
-	}
-
-	return userNotFound(
-		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			return d.store.SetUserPasswordByUsername(ctx, tx, username, password)
 		}),
 	)
 }
@@ -698,15 +625,6 @@ func (u *user) Username() string {
 // ID implements proto.User.
 func (u *user) ID() int64 {
 	return u.user.ID
-}
-
-// Password implements proto.User.
-func (u *user) Password() string {
-	if u.user.Password.Valid {
-		return u.user.Password.String
-	}
-
-	return ""
 }
 
 // userNotFound reports a missing row as proto.ErrUserNotFound.

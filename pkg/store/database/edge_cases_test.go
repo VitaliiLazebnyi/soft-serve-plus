@@ -73,10 +73,6 @@ func TestUpdatesSetUpdatedAt(t *testing.T) {
 	is.True(user("owner").UpdatedAt.After(cutoff))
 	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE users SET updated_at = ?;`), old)
 	is.NoErr(err)
-	is.NoErr(us.SetUserPasswordByUsername(ctx, dbx, "owner", "x"))
-	is.True(user("owner").UpdatedAt.After(cutoff))
-	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE users SET updated_at = ?;`), old)
-	is.NoErr(err)
 	is.NoErr(us.SetUsernameByUsername(ctx, dbx, "owner", "owner2"))
 	is.True(user("owner2").UpdatedAt.After(cutoff))
 }

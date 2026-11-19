@@ -78,12 +78,12 @@ func TestUserStore(t *testing.T) {
 	if err := s.AddPublicKeyByUsername(ctx, dbx, "alice", k3); err != nil {
 		t.Fatal(err)
 	}
-	pks, err := s.ListPublicKeysByUsername(ctx, dbx, "alice")
+	pks, err := s.ListPublicKeysByUserID(ctx, dbx, u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sameKeys(pks, []ssh.PublicKey{k1, k2, k3}) {
-		t.Errorf("ListPublicKeysByUsername() = %d keys, want k1, k2, k3 in order", len(pks))
+		t.Errorf("ListPublicKeysByUserID() = %d keys, want k1, k2, k3 in order", len(pks))
 	}
 	if err := s.RemovePublicKeyByUsername(ctx, dbx, "alice", k2); err != nil {
 		t.Fatal(err)
@@ -116,15 +116,12 @@ func TestUserStore(t *testing.T) {
 	if err := s.SetUsernameByUsername(ctx, dbx, "alice", "Carol"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetUserPasswordByUsername(ctx, dbx, "carol", "hash"); err != nil {
-		t.Fatal(err)
-	}
 	u, err = s.FindUserByUsername(ctx, dbx, "carol")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !u.Admin || !u.Password.Valid || u.Password.String != "hash" {
-		t.Errorf("carol = %+v, want an admin with password %q", u, "hash")
+	if !u.Admin {
+		t.Errorf("carol = %+v, want an admin", u)
 	}
 	if _, err := s.FindUserByUsername(ctx, dbx, "alice"); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("FindUserByUsername(alice) after rename: error = %v, want ErrRecordNotFound", err)

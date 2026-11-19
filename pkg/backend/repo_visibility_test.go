@@ -20,7 +20,7 @@ func TestRepositoryReflectsDatabase(t *testing.T) {
 
 	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
-	is.Equal(be.AccessLevelForUser(ctx, "repo", nil), access.ReadOnlyAccess)
+	is.Equal(levelOf(be, ctx, "repo", nil), access.ReadOnlyAccess)
 
 	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return be.store.SetRepoIsPrivateByName(ctx, tx, "repo", true)
@@ -29,5 +29,5 @@ func TestRepositoryReflectsDatabase(t *testing.T) {
 	r, err := be.Repository(ctx, "repo")
 	is.NoErr(err)
 	is.True(r.IsPrivate())
-	is.Equal(be.AccessLevelForUser(ctx, "repo", nil), access.NoAccess)
+	is.Equal(levelOf(be, ctx, "repo", nil), access.NoAccess)
 }

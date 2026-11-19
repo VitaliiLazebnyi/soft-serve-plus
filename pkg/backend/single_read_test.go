@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"golang.org/x/crypto/ssh"
 )
 
 // txCheckStore fails the test when one of the reads below runs inside a
@@ -51,11 +50,6 @@ func (s txCheckStore) GetAllUsers(ctx context.Context, h db.Handler) ([]models.U
 	return s.Store.GetAllUsers(ctx, h)
 }
 
-func (s txCheckStore) ListPublicKeysByUsername(ctx context.Context, h db.Handler, username string) ([]ssh.PublicKey, error) {
-	s.check("ListPublicKeysByUsername", h)
-	return s.Store.ListPublicKeysByUsername(ctx, h, username)
-}
-
 func (s txCheckStore) GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, error) {
 	s.check("GetAllRepos", h)
 	return s.Store.GetAllRepos(ctx, h)
@@ -88,9 +82,6 @@ func TestSingleReadsRunWithoutTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := be.Users(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := be.ListPublicKeys(ctx, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := be.Repositories(ctx); err != nil {

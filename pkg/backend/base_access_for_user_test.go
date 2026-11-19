@@ -12,10 +12,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// BaseAccessLevelForUser takes the user an SSH session already resolved
-// and must give the same level BaseAccessLevelByPublicKey gives for that
-// user's key, including for an unowned admin key on the context.
-func TestBaseAccessLevelForUserMatchesByPublicKey(t *testing.T) {
+// BaseAccessLevelForUser takes the user an SSH session already resolved and
+// gives the level for a name that does not exist: admin for an admin or an
+// admin key on the context, even one no account owns; read-write for a
+// registered user, read-only under admin_only_create; the anonymous level
+// otherwise.
+func TestBaseAccessLevelForUser(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -34,22 +36,27 @@ func TestBaseAccessLevelForUserMatchesByPublicKey(t *testing.T) {
 		is.NoErr(be.SetAnonAccess(ctx, anon))
 		for _, adminOnly := range []bool{false, true} {
 			cfg.AdminOnlyCreate = adminOnly
+			registered := access.ReadWriteAccess
+			if adminOnly {
+				registered = access.ReadOnlyAccess
+			}
 			for _, tc := range []struct {
 				name string
 				pk   ssh.PublicKey
 				user proto.User
+				want access.AccessLevel
 			}{
-				{"anonymous", nil, nil},
-				{"unknown key", newTestPublicKey(t), nil},
-				{"user", userKey, user},
-				{"admin", adminKey, admin},
-				{"unowned admin key", listedKey, nil},
+				{"anonymous", nil, nil, anon},
+				{"unknown key", newTestPublicKey(t), nil, anon},
+				{"user", userKey, user, registered},
+				{"admin", adminKey, admin, access.AdminAccess},
+				{"unowned admin key", listedKey, nil, access.AdminAccess},
 			} {
 				keyCtx := ctx
 				if tc.pk != nil {
 					keyCtx = context.WithValue(ctx, charmssh.ContextKeyPublicKey, tc.pk)
 				}
-				want := be.BaseAccessLevelByPublicKey(keyCtx, tc.pk)
+				want := tc.want
 				got := be.BaseAccessLevelForUser(keyCtx, tc.user)
 				if got != want {
 					t.Errorf("anon=%s adminOnly=%t %s: got %s, want %s", anon, adminOnly, tc.name, got, want)

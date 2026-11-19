@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	charmssh "charm.land/ssh"
@@ -13,10 +14,14 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// ReadableForUser takes the user an SSH session already resolved and must
-// give the same repository and level ReadableByPublicKey gives for that
-// user's key, including for an unowned admin key on the context.
-func TestReadableForUserMatchesByPublicKey(t *testing.T) {
+// ReadableForUser takes the user an SSH session already resolved and gives
+// each caller its level: admin for an admin or an admin key on the context,
+// even one no account owns, and for the owner; the collaborator's level on
+// the private repository; read-only for other registered users on the public
+// one; the anonymous level for callers without an account; nothing on the
+// private repository for anyone else. A missing name gives the level for a
+// new name. The repository is returned when it exists and the level reads.
+func TestReadableForUser(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -67,11 +72,12 @@ func TestReadableForUserMatchesByPublicKey(t *testing.T) {
 				if tc.pk != nil {
 					keyCtx = context.WithValue(ctx, charmssh.ContextKeyPublicKey, tc.pk)
 				}
-				wantRepo, wantLevel := be.ReadableByPublicKey(keyCtx, name, tc.pk)
+				wantLevel := expectReadable(name, tc.name, anon)
+				wantRepo := name != "missing" && wantLevel >= access.ReadOnlyAccess
 				gotRepo, gotLevel := be.ReadableForUser(keyCtx, name, tc.user)
-				if gotLevel != wantLevel || (gotRepo == nil) != (wantRepo == nil) {
+				if gotLevel != wantLevel || (gotRepo != nil) != wantRepo {
 					t.Errorf("anon=%s repo=%s %s: got (%v, %s), want (%v, %s)",
-						anon, name, tc.name, gotRepo != nil, gotLevel, wantRepo != nil, wantLevel)
+						anon, name, tc.name, gotRepo != nil, gotLevel, wantRepo, wantLevel)
 				}
 			}
 		}
@@ -82,6 +88,29 @@ func TestReadableForUserMatchesByPublicKey(t *testing.T) {
 	r, level := be.ReadableForUser(keyCtx, "private", nil)
 	is.True(r != nil)
 	is.Equal(level, access.AdminAccess)
+}
+
+// expectReadable is the level TestReadableForUser expects caller to hold on
+// repo, with anon at most read-only and admin_only_create off.
+func expectReadable(repo, caller string, anon access.AccessLevel) access.AccessLevel {
+	switch {
+	case caller == "admin" || caller == "unowned admin key":
+		return access.AdminAccess
+	case caller == "anonymous" || caller == "unknown key":
+		if repo == "private" {
+			return access.NoAccess
+		}
+		return anon
+	case repo == "missing":
+		return access.ReadWriteAccess
+	case caller == "owner":
+		return access.AdminAccess
+	case repo == "private" && caller == "collaborator":
+		return access.ReadWriteAccess
+	case repo == "private":
+		return access.NoAccess
+	}
+	return access.ReadOnlyAccess
 }
 
 // ReadableForUser uses the user it is given and does not resolve the key
@@ -101,8 +130,8 @@ func TestReadableForUserDoesNotLookUpKey(t *testing.T) {
 	sessCtx := proto.WithUserContext(context.WithValue(ctx, charmssh.ContextKeyPublicKey, pk), owner)
 	is.NoErr(be.RemovePublicKey(ctx, "owner", pk))
 
-	r, _ := be.ReadableByPublicKey(sessCtx, "private", pk)
-	is.True(r == nil) // the key no longer resolves to the owner
+	_, err = be.UserByPublicKey(ctx, pk)
+	is.True(errors.Is(err, proto.ErrUserNotFound)) // the key no longer resolves to the owner
 
 	r, level := be.ReadableForUser(sessCtx, "private", proto.UserFromContext(sessCtx))
 	is.True(r != nil)

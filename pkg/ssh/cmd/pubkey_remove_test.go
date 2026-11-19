@@ -43,11 +43,11 @@ func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
 
 	keyCount := func() int {
 		t.Helper()
-		keys, err := be.ListPublicKeys(ctx, "alice")
+		u, err := be.User(ctx, "alice")
 		if err != nil {
 			t.Fatal(err)
 		}
-		return len(keys)
+		return len(u.PublicKeys())
 	}
 
 	// Only key: refused as the last key.
