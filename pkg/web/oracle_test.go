@@ -26,6 +26,8 @@ type oracleFixture struct {
 	be      *backend.Backend
 	handler http.Handler
 	token   string
+	// pending is the list of push-created repositories handler keeps.
+	pending *pushCreates
 }
 
 func newOracleFixture(t *testing.T) *oracleFixture {
@@ -50,7 +52,9 @@ func newOracleFixture(t *testing.T) *oracleFixture {
 	token, err := be.CreateAccessToken(ctx, stranger, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)
 
-	return &oracleFixture{ctx: ctx, owner: owner, be: be, handler: testRouter(t, ctx), token: token}
+	pending := newPushCreates()
+	t.Cleanup(func() { _ = pending.close(context.Background()) })
+	return &oracleFixture{ctx: ctx, owner: owner, be: be, handler: newRouter(ctx, pending), token: token, pending: pending}
 }
 
 // do performs a request and returns the recorded response. An empty auth

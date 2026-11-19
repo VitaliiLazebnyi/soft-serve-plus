@@ -47,13 +47,53 @@ func gitRun(t *testing.T, args ...string) {
 	}
 }
 
-// eventually waits until the repository name is gone, or a deadline.
-func (f *oracleFixture) eventuallyGone(name string) bool {
-	deadline := time.Now().Add(10 * time.Second)
-	for f.exists(name) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+// armedRemoval is a removal timer armed for a push-created repository: name
+// is the repository, and remove runs what the timer runs when it fires.
+type armedRemoval struct {
+	name   string
+	remove func()
+}
+
+// removalTimers returns the removal timers f's requests arm, as they arm
+// them. pushCreateTimeout stays at its default, far longer than any test,
+// so no timer fires on its own: a test runs a removal when it chooses, and
+// nothing it checks can race a timer.
+func (f *oracleFixture) removalTimers() <-chan armedRemoval {
+	armed := make(chan armedRemoval, 16)
+	f.pending.mu.Lock()
+	f.pending.armed = func(name string, remove func()) {
+		armed <- armedRemoval{name: name, remove: remove}
 	}
-	return !f.exists(name)
+	f.pending.mu.Unlock()
+	return armed
+}
+
+// nextRemoval returns the removal of the next timer armed, which must be
+// for the repository name. A request arms its timer before it returns, so
+// the wait only bounds a test that went wrong.
+func nextRemoval(t *testing.T, armed <-chan armedRemoval, name string) func() {
+	t.Helper()
+	select {
+	case a := <-armed:
+		if a.name != name {
+			t.Fatalf("removal timer armed for %q, want %q", a.name, name)
+		}
+		return a.remove
+	case <-time.After(time.Minute):
+		t.Fatalf("no removal timer armed for %q", name)
+		return nil
+	}
+}
+
+// noRemovalArmed fails the test if a removal timer has been armed. A
+// request arms its timer before it returns, so this holds once it has.
+func noRemovalArmed(t *testing.T, armed <-chan armedRemoval) {
+	t.Helper()
+	select {
+	case a := <-armed:
+		t.Fatalf("removal timer armed for %q", a.name)
+	default:
+	}
 }
 
 // A repository created by an HTTP push advertisement is removed when the
@@ -64,49 +104,61 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
-	advertise := func(name string) {
+	armed := f.removalTimers()
+	// advertise sends the ref advertisement that creates name, and returns
+	// the removal of the timer it arms.
+	advertise := func(name string) func() {
 		t.Helper()
 		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
 		is.True(f.exists(name))
+		return nextRemoval(t, armed, name)
 	}
-	old := pushCreateTimeout
-	pushCreateTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { pushCreateTimeout = old })
 
 	// The push fails: the repository is removed at once.
 	advertise("failed")
 	is.Equal(f.push(t, "failed", auth, "garbage"), http.StatusOK)
 	is.True(!f.exists("failed"))
+	noRemovalArmed(t, armed)
 
 	// A push that updates no ref and does not fail, like git's probe
 	// before a pack larger than http.postBuffer, keeps the repository for
-	// the real push. With no push after it, it goes after the timeout.
-	advertise("probed")
+	// the real push. With no push after it, it goes once the timeout the
+	// probe armed passes; the advertisement's timer, which the probe
+	// stopped, removes nothing.
+	advertised := advertise("probed")
 	is.Equal(f.push(t, "probed", auth, "0000"), http.StatusOK)
+	probed := nextRemoval(t, armed, "probed")
 	is.True(f.exists("probed"))
-	is.True(f.eventuallyGone("probed"))
+	advertised()
+	is.True(f.exists("probed"))
+	probed()
+	is.True(!f.exists("probed"))
 
 	// The push never arrives.
-	advertise("abandoned")
-	is.True(f.eventuallyGone("abandoned"))
+	advertise("abandoned")()
+	is.True(!f.exists("abandoned"))
 
 	// A repository that got refs is kept, even after a failed push and
-	// the timeout. The refs are written here outside any request, which
-	// the timeout armed by the advertisement does not wait for, and the
-	// git processes that write them can take longer than a short timeout
-	// to start (on Windows they did), so the timeout is long until the
-	// refs are in.
-	pushCreateTimeout = time.Hour
-	advertise("kept")
+	// the timeout. The refs are written here outside any request.
+	advertised = advertise("kept")
 	work := filepath.Join(t.TempDir(), "work")
 	gitRun(t, "init", "-q", "-b", "master", work)
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
 	dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "kept.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
-	pushCreateTimeout = 200 * time.Millisecond
 	is.Equal(f.push(t, "kept", auth, "garbage"), http.StatusOK)
-	time.Sleep(3 * pushCreateTimeout)
+	noRemovalArmed(t, armed)
+	advertised()
 	is.True(f.exists("kept"))
+
+	// The timer finds the refs too: a repository whose refs were written
+	// with no request to it after the advertisement is kept when the
+	// advertisement's timer fires.
+	advertised = advertise("refs-only")
+	dir = filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "refs-only.git")
+	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
+	advertised()
+	is.True(f.exists("refs-only"))
 }
 
 // A repository created by an HTTP push and renamed before its push fails
@@ -263,22 +315,25 @@ func TestHasRefsFailsSafe(t *testing.T) {
 func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
-	pending := newPushCreates()
-	f.handler = newRouter(f.ctx, pending)
 	auth := "Token " + f.token
+	armed := f.removalTimers()
 	advertise := func(name string) {
 		t.Helper()
 		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
 		is.True(f.exists(name))
 	}
-	old := pushCreateTimeout
-	pushCreateTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { pushCreateTimeout = old })
 
 	advertise("armed")
-	is.NoErr(pending.close(t.Context()))
+	remove := nextRemoval(t, armed, "armed")
+	is.NoErr(f.pending.close(t.Context()))
+	f.pending.mu.Lock()
+	stopped := f.pending.repos["armed"].timer == nil
+	f.pending.mu.Unlock()
+	is.True(stopped)
 	advertise("late")
-	time.Sleep(3 * pushCreateTimeout)
+	noRemovalArmed(t, armed)
+	// A timer that fired as close stopped it removes nothing.
+	remove()
 	is.True(f.exists("armed"))
 	is.True(f.exists("late"))
 }
@@ -307,12 +362,8 @@ func TestHTTPPushCreateRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := pushCreateTimeout
-	pushCreateTimeout = 100 * time.Millisecond
-	t.Cleanup(func() {
-		pushCreateTimeout = old
-		testHookBeforePushCreate = nil
-	})
+	armed := f.removalTimers()
+	t.Cleanup(func() { testHookBeforePushCreate = nil })
 	advertise := func(name string) int {
 		t.Helper()
 		return f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code
@@ -331,8 +382,13 @@ func TestHTTPPushCreateRace(t *testing.T) {
 		is := is.New(t)
 		createFirst("mine", stranger, false)
 		is.Equal(advertise("mine"), http.StatusOK)
-		// This request did not create it, so it does not remove it.
-		time.Sleep(3 * pushCreateTimeout)
+		// This request did not create it, so it does not list it for
+		// removal, and arms no timer.
+		f.pending.mu.Lock()
+		_, listed := f.pending.repos["mine"]
+		f.pending.mu.Unlock()
+		is.True(!listed)
+		noRemovalArmed(t, armed)
 		is.True(f.exists("mine"))
 	})
 

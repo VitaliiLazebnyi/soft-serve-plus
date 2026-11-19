@@ -48,6 +48,12 @@ type pushCreates struct {
 	// waiting, if set, is called when a request starts waiting for a
 	// removal. Tests use it to end the removal only once a request waits.
 	waiting func(name string)
+	// armed, if set, is called with p.mu held whenever a removal timer is
+	// armed for the repository name, with the removal the timer runs when
+	// it fires. Tests use it to see that a timer was armed and to run the
+	// removal at once instead of waiting for pushCreateTimeout. It must not
+	// block or call into p.
+	armed func(name string, remove func())
 }
 
 // pushCreate is a repository created by an HTTP push that has no refs yet.
@@ -175,7 +181,11 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 	if p.closed {
 		return
 	}
-	pc.timer = time.AfterFunc(pushCreateTimeout, func() { p.remove(name, pc, gen) })
+	remove := func() { p.remove(name, pc, gen) }
+	pc.timer = time.AfterFunc(pushCreateTimeout, remove)
+	if p.armed != nil {
+		p.armed(name, remove)
+	}
 }
 
 // remove takes the repository off the list and deletes it if it is still
