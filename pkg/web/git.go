@@ -728,7 +728,7 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 		default:
 			ctx = proto.WithRepositoryContext(ctx, repo)
 			r = r.WithContext(ctx)
-			s.pending.add(ctx, repoName, repo, gr.dir)
+			s.pending.add(ctx, repoName, repo)
 		}
 	}
 

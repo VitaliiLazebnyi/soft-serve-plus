@@ -3,18 +3,22 @@ package backend
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	gitsvc "github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // pushGates orders pushes to a repository against the removal of a
-// repository created by an HTTP push that never sent refs. A push holds its
+// repository created by a push that never sent refs. A push holds its
 // repository's gate shared while it runs (BeginPush), and the removal holds
 // it exclusively from its last check for refs until the repository is gone
 // (RemovePushCreatedRepository). Without it, a push over SSH could write
@@ -93,20 +97,28 @@ func (d *Backend) BeginPush(ctx context.Context, repo proto.Repository) (func(),
 	return done, nil
 }
 
-// RemovePushCreatedRepository deletes created, a repository an HTTP push
-// created, if it was never used, and reports whether it did. It is kept if:
+// RemovePushCreatedRepository deletes created, a repository a push to a
+// missing name created, if it was never used, and reports whether it did.
+// It is the one cleanup of push-to-create for both transports: HTTP calls it
+// when the push failed, or never arrived, without any ref (see pkg/web), and
+// SSH when the push that created the repository failed. It is kept if:
 //
 //   - a push to it is running (see BeginPush);
-//   - it has a ref;
+//   - it has a ref, in which case its HEAD is pointed at a pushed branch, as
+//     after a push that succeeded: receive-pack writes the refs before the
+//     hooks run, so a push can fail after its refs landed;
 //   - its name now belongs to another repository;
 //   - its project name, description, visibility, hidden or mirror flag or
 //     owner differ from when it was created;
 //   - it has a collaborator, a webhook, an LFS object or an LFS lock;
 //   - any of this cannot be checked.
 //
-// The repository's settings are compared with created, rather than through
-// repos.updated_at, because the setters do not update that column and its
-// one-second resolution could not tell a change from the creation anyway.
+// The repository's settings are compared with created field by field: the
+// one-second resolution of repos.updated_at could not tell a change from
+// the creation.
+//
+// Once the row is gone, a directory the delete could not remove is tried
+// again for a few seconds (see removePushCreatedDir).
 func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto.Repository) (bool, error) {
 	name := utils.SanitizeRepo(created.Name())
 	g := d.pushGates.acquire(name)
@@ -118,7 +130,11 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 
 	// Checked with the gate held: no push can start until the repository
 	// is gone, so none can write a ref after this check.
-	if hasRefs(d.repoPath(name)) {
+	rp := d.repoPath(name)
+	if hasRefs(rp) {
+		if err := gitsvc.EnsureDefaultBranch(ctx, rp); err != nil {
+			d.logger.Warn("failed to set the default branch of a repository created by a push", "repo", name, "err", err)
+		}
 		return false, nil
 	}
 
@@ -138,7 +154,52 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	case err != nil:
 		return false, err
 	}
+	d.removePushCreatedDir(name, rp)
 	return true, nil
+}
+
+// retryPolicy waits first, doubles the wait after each attempt, and gives up
+// once the sum of the waits would go past total. Only the waits count, not
+// the time the attempts take, so the number of attempts is the same however
+// slow the host is.
+type retryPolicy struct {
+	first, total time.Duration
+}
+
+// pushCreatedDirRetry is how removePushCreatedDir retries by default: waits
+// of 100ms to 1.6s, 3.1s in all.
+var pushCreatedDirRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * time.Second}
+
+// removePushCreatedDir removes rp, the directory of the push-created
+// repository name whose row is gone, if the delete could not. On Windows the
+// git process of the failed push can hold the directory open for a moment
+// after the push ended. Nothing else uses the directory meanwhile: while it
+// is there, its name can be neither created, imported nor renamed onto, and
+// a delete needs a row.
+func (d *Backend) removePushCreatedDir(name, rp string) {
+	policy := d.pushCreatedRetry
+	var waited time.Duration
+	for wait := policy.first; ; wait *= 2 {
+		if _, err := os.Lstat(rp); errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		if waited+wait > policy.total {
+			d.logger.Error("failed to remove the directory of a repository created by a failed push; it is reported at start-up", "repo", name, "path", rp)
+			return
+		}
+		time.Sleep(wait)
+		waited += wait
+		if err := d.removeRepoDir(rp); err != nil {
+			d.logger.Debug("failed to remove the directory of a repository created by a failed push, retrying", "repo", name, "err", err)
+		}
+	}
+}
+
+// RepositoryHasRefs reports whether the repository r has any ref. A
+// repository that cannot be read counts as having refs, so a push-created
+// repository is never removed by mistake.
+func (d *Backend) RepositoryHasRefs(r proto.Repository) bool {
+	return hasRefs(d.repoPath(r.Name()))
 }
 
 // pushCreatedRepositoryUsed reports whether m, the row now under created's

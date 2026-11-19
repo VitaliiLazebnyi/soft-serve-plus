@@ -334,17 +334,6 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 	is.Equal(reached.ID(), kept.ID())
 }
 
-// A repository whose refs cannot be listed counts as having refs, so the
-// cleanup never removes one it could not check.
-func TestHasRefsFailsSafe(t *testing.T) {
-	is := is.New(t)
-	is.True(hasRefs(filepath.Join(t.TempDir(), "missing.git")))
-
-	dir := filepath.Join(t.TempDir(), "empty.git")
-	gitRun(t, "init", "-q", "--bare", dir)
-	is.True(!hasRefs(dir))
-}
-
 // Once the list is closed, as the HTTP server does when it stops, no
 // repository created by a push is removed: the timers already armed are
 // stopped and none is armed, so no removal runs against a backend that is

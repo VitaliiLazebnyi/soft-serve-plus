@@ -3,12 +3,10 @@ package web
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
 	"charm.land/log/v2"
-	gitb "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
@@ -21,9 +19,10 @@ import (
 var pushCreateTimeout = 10 * time.Minute
 
 // pushCreates tracks repositories created by HTTP push-to-create that have
-// no refs yet. The SSH push creates and pushes in one session and deletes
+// no refs yet. The SSH push creates and pushes in one session and removes
 // the repository when the push fails; over HTTP the push may fail in a later
-// request or never arrive. A listed repository is removed when a
+// request or never arrive, so this list decides when to call the same
+// removal, backend.RemovePushCreatedRepository. A listed repository is removed when a
 // receive-pack request to it fails and leaves no ref, or when nothing has
 // reached it for pushCreateTimeout and it still has no ref. It is kept
 // instead if it was used meanwhile or a push over SSH to it is running; see
@@ -59,7 +58,6 @@ type pushCreate struct {
 	// if the name still belongs to it, not to one renamed or created in its
 	// place since, and nothing about it changed.
 	repo     proto.Repository
-	dir      string
 	inflight int
 	// gen changes whenever a request starts or a decision is taken, so a
 	// decision made outside the lock, or a timer, that is out of date does
@@ -92,14 +90,14 @@ func markPushFailed(ctx context.Context) {
 	}
 }
 
-// add records that the request in ctx created repo, under name, at dir.
-func (p *pushCreates) add(ctx context.Context, name string, repo proto.Repository, dir string) {
+// add records that the request in ctx created repo, under name.
+func (p *pushCreates) add(ctx context.Context, name string, repo proto.Repository) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.repos[name] = &pushCreate{ctx: context.WithoutCancel(ctx), repo: repo, dir: dir}
+	p.repos[name] = &pushCreate{ctx: context.WithoutCancel(ctx), repo: repo}
 }
 
 // begin marks a request to the repository name as in flight, so it is not
@@ -157,7 +155,7 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 	gen := pc.gen
 	p.mu.Unlock()
 
-	refs := hasRefs(pc.dir)
+	refs := backend.FromContext(pc.ctx).RepositoryHasRefs(pc.repo)
 	if failed && !refs {
 		p.remove(name, pc, gen)
 		return
@@ -200,9 +198,6 @@ func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 		p.mu.Unlock()
 	}()
 
-	if hasRefs(pc.dir) {
-		return
-	}
 	logger := log.FromContext(pc.ctx)
 	be := backend.FromContext(pc.ctx)
 	removed, err := be.RemovePushCreatedRepository(pc.ctx, pc.repo)
@@ -246,15 +241,4 @@ func (p *pushCreates) close(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// hasRefs reports whether the repository at dir has any ref. A repository
-// that cannot be read counts as having refs, so it is never removed by
-// mistake.
-func hasRefs(dir string) bool {
-	out, err := gitb.NewCommand("for-each-ref", "--count=1", "--format=%(refname)").RunInDir(dir)
-	if err != nil {
-		return true
-	}
-	return strings.TrimSpace(string(out)) != ""
 }
