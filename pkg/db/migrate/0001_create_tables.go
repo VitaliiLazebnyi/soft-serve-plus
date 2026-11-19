@@ -80,10 +80,12 @@ var createTables = Migration{
 			return err
 		}
 
+		sqlite := tx.DriverName() == "sqlite"
+
 		// legacy is set when there are Soft Serve v0.6 tables to import,
 		// whose keys come in without a record of how they got there.
 		var legacy bool
-		if tx.DriverName() == "sqlite" {
+		if sqlite {
 			for _, t := range []string{"user_old", "public_key_old", "collab_old", "repo_old"} {
 				ok, err := tableExists(ctx, tx, t)
 				if err != nil {
@@ -95,7 +97,6 @@ var createTables = Migration{
 
 		// Import the v0.6 users first, keeping their ids, so the default
 		// admin below does not take an id a legacy user has.
-		sqlite := tx.DriverName() == "sqlite"
 		if sqlite {
 			if ok, err := tableExists(ctx, tx, "user_old"); err != nil {
 				return err
