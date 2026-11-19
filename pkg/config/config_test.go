@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
 	"go.yaml.in/yaml/v4"
@@ -95,9 +96,10 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	}
 	want := []string{"admin_key", "keys/admin", missing, notAKey}
 	slices.Sort(want)
-	// Before Validate the entries are checked as they are.
-	is.Equal(cfg.UnreadableAdminKeyFiles(), want)
-	is.Equal(cfg.IgnoredAdminKeys(), 2)
+	// Before Validate nothing is parsed, so nothing is known.
+	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
+	is.Equal(cfg.IgnoredAdminKeys(), 0)
+	is.Equal(len(cfg.AdminKeys()), 0)
 
 	// Validate drops them from the list but remembers them.
 	is.NoErr(cfg.Validate())
@@ -107,7 +109,9 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	is.Equal(len(cfg.AdminKeys()), 1)
 
 	// A config whose entries all parse has none.
-	ok := &Config{InitialAdminKeys: []string{"testdata/k1.pub", "", "# comment"}}
+	ok := &Config{DB: DBConfig{Driver: "sqlite"}, InitialAdminKeys: []string{"testdata/k1.pub", "", "# comment"}}
+	is.NoErr(ok.Validate())
+	is.Equal(len(ok.AdminKeys()), 1)
 	is.Equal(ok.UnreadableAdminKeyFiles(), []string(nil))
 	is.Equal(ok.IgnoredAdminKeys(), 0)
 }
@@ -577,14 +581,39 @@ func TestAdminKeyFileWithSeveralKeys(t *testing.T) {
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{file},
 	}
-	is.Equal(len(cfg.AdminKeys()), 2)
-	is.Equal(cfg.IgnoredAdminKeys(), 1)
-	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
-
 	is.NoErr(cfg.Validate())
+	is.Equal(len(cfg.AdminKeys()), 2)
 	is.Equal(cfg.InitialAdminKeys, []string{k1, k2})
 	is.Equal(cfg.IgnoredAdminKeys(), 1)
 	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
+}
+
+// The admin keys are parsed once, by Validate. A file that appears in the
+// data directory afterwards, named like a listed key, does not replace that
+// key with the keys it holds, and the answers do not change.
+func TestAdminKeysParsedOnlyByValidate(t *testing.T) {
+	is := is.New(t)
+	k1 := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH"
+	k2 := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8"
+	dp := t.TempDir()
+	cfg := &Config{
+		DB:               DBConfig{Driver: "sqlite"},
+		DataPath:         dp,
+		InitialAdminKeys: []string{k1},
+	}
+	is.NoErr(cfg.Validate())
+	keys := cfg.AdminKeys()
+	is.Equal(len(keys), 1)
+	is.Equal(strings.TrimSpace(sshutils.MarshalAuthorizedKey(keys[0])), k1)
+
+	// k1 has no "/", so its text is a file name in the data directory.
+	is.NoErr(os.WriteFile(filepath.Join(dp, k1), []byte(k2+"\n"), 0o600))
+
+	keys = cfg.AdminKeys()
+	is.Equal(len(keys), 1)
+	is.Equal(strings.TrimSpace(sshutils.MarshalAuthorizedKey(keys[0])), k1)
+	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
+	is.Equal(cfg.IgnoredAdminKeys(), 0)
 }
 
 // A key listed inline and again in a key file, there twice with different
@@ -599,6 +628,7 @@ func TestAdminKeyFileRepeatsKey(t *testing.T) {
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{k1 + " x@y", file},
 	}
+	is.NoErr(cfg.Validate())
 	is.Equal(len(cfg.AdminKeys()), 1)
 	is.Equal(cfg.IgnoredAdminKeys(), 0)
 	is.Equal(len(cfg.UnreadableAdminKeyFiles()), 0)
@@ -716,7 +746,8 @@ func TestQuotedInitAdminKeys(t *testing.T) {
 
 	// Unmatched or inner quotes are not stripped.
 	is := is.New(t)
-	cfg := &Config{InitialAdminKeys: []string{"'" + k2 + `"`, `"` + k2}}
+	cfg := &Config{DB: DBConfig{Driver: "sqlite"}, InitialAdminKeys: []string{"'" + k2 + `"`, `"` + k2}}
+	is.NoErr(cfg.Validate())
 	is.Equal(len(cfg.AdminKeys()), 0)
 	is.Equal(cfg.IgnoredAdminKeys(), 2)
 }

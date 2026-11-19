@@ -14,6 +14,7 @@ import (
 
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -32,6 +33,11 @@ func TestCreateRepositoryAnonymousOwner(t *testing.T) {
 
 	admin, err := be.User(ctx, "admin")
 	is.NoErr(err)
+
+	// Anonymous callers may create only where anon-access allows it.
+	_, err = be.CreateRepository(ctx, "refused", nil, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrUnauthorized))
+	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
 
 	repo, err := be.CreateRepository(ctx, "anon-repo", nil, proto.RepositoryOptions{})
 	is.NoErr(err)
@@ -234,8 +240,7 @@ func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
 
 // TestImportRepositorySSHAdminKey verifies that a caller whose session key is
 // listed in initial_admin_keys may import over ssh with no allowlist, whether
-// it has no account or a non-admin one, as the SSH layer's isServerAdmin
-// treats it. The same caller without the key on the context, or with any
+// it has no account or a non-admin one, as IsServerAdmin treats it. The same caller without the key on the context, or with any
 // other key, is still refused.
 func TestImportRepositorySSHAdminKey(t *testing.T) {
 	if _, err := exec.LookPath("ssh"); err != nil {
@@ -254,7 +259,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			is.Equal(len(cfg.SSH.AllowedHosts()), 0)
 
 			pub := newTestPublicKey(t)
-			cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub))
+			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
 
 			var user proto.User
 			if registered {

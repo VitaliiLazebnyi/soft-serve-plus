@@ -392,11 +392,11 @@ var refAdvertisement = regexp.MustCompile(`^[0-9a-f]{40} \S+\x00`)
 // and serves a public one.
 func TestInvalidRepo(t *testing.T) {
 	ctx := context.Background()
-	if _, err := testBackend.CreateRepository(ctx, "private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(ctx, "private", fixtureAdmin(t, testBackend), proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create private repo: %v", err)
 	}
 
-	if _, err := testBackend.CreateRepository(ctx, "public", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(ctx, "public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create public repo: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func pkt(s string) string {
 // command makes git print "fatal: invalid command" and exit with an error
 // after it has advertised its capabilities.
 func TestGitStderrNotSentToClient(t *testing.T) {
-	if _, err := testBackend.CreateRepository(t.Context(), "stderr", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(t.Context(), "stderr", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 	out := readAll(t,
@@ -504,7 +504,7 @@ func TestGitStderrNotSentToClient(t *testing.T) {
 // TestGitFailureFixedMessage verifies that when git fails before answering,
 // the client gets a fixed error message instead of git's output and error.
 func TestGitFailureFixedMessage(t *testing.T) {
-	if _, err := testBackend.CreateRepository(t.Context(), "broken", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(t.Context(), "broken", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 	// Leave an empty directory in place of the repository, which git
@@ -585,10 +585,10 @@ func TestUploadPackCounted(t *testing.T) {
 	// The daemon and its backend are shared by every run of the test, so
 	// the repositories may exist already, and counters are compared with
 	// their values before the requests.
-	if _, err := testBackend.CreateRepository(ctx, "counted", nil, proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(ctx, "counted", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	if _, err := testBackend.CreateRepository(ctx, "counted-private", nil, proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+	if _, err := testBackend.CreateRepository(ctx, "counted-private", fixtureAdmin(t, testBackend), proto.RepositoryOptions{Private: true}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create private repo: %v", err)
 	}
 
@@ -926,7 +926,7 @@ func ensureRepo(t *testing.T, name string) {
 	if _, err := testBackend.Repository(ctx, name); err == nil {
 		return
 	}
-	if _, err := testBackend.CreateRepository(ctx, name, nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := testBackend.CreateRepository(ctx, name, fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 }
@@ -1027,4 +1027,16 @@ func TestNoErrAfterOutput(t *testing.T) {
 	if strings.Contains(string(out), "ERR ") {
 		t.Errorf("response has an ERR packet after output started:\n%q", out)
 	}
+}
+
+// fixtureAdmin returns the admin account the first migration creates, the
+// owner of fixture repositories: the backend refuses a create by a caller
+// who may not create, as an anonymous caller may not by default.
+func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

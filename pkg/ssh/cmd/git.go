@@ -426,11 +426,11 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Set repo in context. readableRepo applies the same server admin rule
-	// as every other SSH command, so a key in initial_admin_keys that no
+	// Set repo in context. ReadableForUser applies the same server admin
+	// rule as every other SSH command, so a key in initial_admin_keys that no
 	// account holds is admin here too. (A listed key held by a non-admin
 	// account never gets this far: the SSH middleware refuses its session.)
-	repo, accessLevel := readableRepo(ctx, name)
+	repo, accessLevel := be.ReadableForUser(ctx, name, user)
 	ctx = proto.WithRepositoryContext(ctx, repo)
 	// As in denyRead, a server admin is never anonymous: nothing is hidden
 	// from them.
@@ -494,7 +494,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				// It was removed while this push waited. Look the name
 				// up again, so the push creates it as a push to a
 				// missing name does.
-				repo, accessLevel = readableRepo(ctx, name)
+				repo, accessLevel = be.ReadableForUser(ctx, name, user)
 				ctx = proto.WithRepositoryContext(ctx, repo)
 				if repo != nil {
 					// Another repository took the name meanwhile.
@@ -601,7 +601,7 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			repo, accessLevel = be.Readable(ctx, name, user)
 			anonymous = user == nil
 			// Keep the context in step with the repo checked here, so the
-			// handler never sees the one readableRepo looked up.
+			// handler never sees the one ReadableForUser looked up.
 			ctx = proto.WithRepositoryContext(ctx, repo)
 		}
 

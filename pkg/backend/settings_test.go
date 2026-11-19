@@ -56,6 +56,16 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 	return be, cfg
 }
 
+// setAdminKeys lists keys as initial_admin_keys and validates cfg, which is
+// where the config parses them, as a restart with the new list would.
+func setAdminKeys(t *testing.T, cfg *config.Config, keys []string) {
+	t.Helper()
+	cfg.InitialAdminKeys = keys
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAnonAccessConfigOverride(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)

@@ -45,7 +45,7 @@ func TestDefaultPrivate(t *testing.T) {
 	// A key in initial_admin_keys that no account holds is a server admin
 	// and has access to every repository, so it gets the private default.
 	pub := newTestPublicKey(t)
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
 	keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, pub)
 	private, err := be.DefaultPrivate(keyCtx, nil)
 	is.NoErr(err)

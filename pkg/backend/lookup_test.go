@@ -22,7 +22,7 @@ func TestIsCollaboratorNotCollaborator(t *testing.T) {
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
-	_, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 	_, err = be.CreateUser(ctx, "stranger", proto.UserOptions{})
 	is.NoErr(err)

@@ -53,6 +53,7 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	adminKey := uiTestKey(t)
 	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(adminKey)}
+	is.NoErr(cfg.Validate())
 
 	ctx := config.WithContext(context.Background(), cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)

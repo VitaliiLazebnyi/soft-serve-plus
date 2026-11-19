@@ -17,6 +17,7 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
@@ -35,7 +36,7 @@ import (
 // Only the user's stored admin flag counts. It is meant for callers with no
 // live session, such as the mirror job acting for a repository's owner. A
 // caller acting for a live session must also honour an admin key on the
-// session context (see isServerAdmin); ImportRepository does so through
+// session context (see IsServerAdmin); ImportRepository does so through
 // importRemotePolicy.
 func RemotePolicy(cfg *config.Config, user proto.User) ssrf.GitRemotePolicy {
 	return ssrf.GitRemotePolicy{
@@ -64,7 +65,7 @@ var errLFSEndpointUnsupported = errors.New("lfs objects are fetched over http or
 // user, acting live on ctx, supplies to ImportRepository.
 //
 // The caller's own privilege counts: the stored admin flag or an admin key
-// on the session (see isServerAdmin). A mirror is also synced later by the
+// on the session (see IsServerAdmin). A mirror is also synced later by the
 // mirror job, which has no session and re-validates every remote with
 // RemotePolicy for the repository's owner. So for a mirror the leave to use
 // any ssh host is granted only when that later check will grant it too:
@@ -75,7 +76,7 @@ var errLFSEndpointUnsupported = errors.New("lfs objects are fetched over http or
 // caller would otherwise have had.
 func (d *Backend) importRemotePolicy(ctx context.Context, user proto.User, mirror bool) (policy ssrf.GitRemotePolicy, mirrorRestricted bool) {
 	policy = RemotePolicy(d.cfg, user)
-	live := d.isServerAdmin(ctx, user)
+	live := d.IsServerAdmin(ctx, user)
 	policy.AllowAnySSHHost = live
 	if mirror && user != nil && !user.IsAdmin() {
 		policy.AllowAnySSHHost = false
@@ -109,19 +110,20 @@ func redactRemote(remote string) string {
 	return utils.RedactURL(remote)
 }
 
-// checkCanCreate refuses the creation of a new repository name by user when
-// AdminOnlyCreate is set and the caller is not a server admin (see
-// isServerAdmin). It is the backend's own guard, so a caller that skips the
-// SSH and web access checks still cannot create. A nil user without an admin
-// key is anonymous and is refused the same way.
+// checkCanCreate refuses the creation of a new repository name by user, the
+// caller acting on ctx, unless the level they hold on a name that does not
+// exist (BaseAccessLevelForUser) is read-write or above. That level is where
+// the creation rule is stated: admin_only_create, the anonymous level, and
+// admin keys (see IsServerAdmin). The SSH and web handlers compare the same
+// level for the name they were given, which is also how they keep a private
+// repository and a missing one alike; this is the backend's own guard, so a
+// caller that skips those checks still cannot create. A nil user without an
+// admin key is anonymous.
 func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
-	if !d.cfg.AdminOnlyCreate {
-		return nil
+	if d.BaseAccessLevelForUser(ctx, user) < access.ReadWriteAccess {
+		return proto.ErrUnauthorized
 	}
-	if d.isServerAdmin(ctx, user) {
-		return nil
-	}
-	return proto.ErrUnauthorized
+	return nil
 }
 
 // AboutRepo is the repository whose README the TUI shows on its About tab
@@ -150,13 +152,13 @@ func (d *Backend) AboutRepoOwnedByAdmin(ctx context.Context, r proto.Repository)
 var errAboutRepoReserved = fmt.Errorf("%w: only an admin can create the %s repository", proto.ErrUnauthorized, AboutRepo)
 
 // checkCanClaim refuses user taking the new repository name: the
-// AdminOnlyCreate check (see checkCanCreate), and AboutRepo, which only a
-// server admin (see isServerAdmin) may take whatever that setting says.
+// creation rule (see checkCanCreate), and AboutRepo, which only a
+// server admin (see IsServerAdmin) may take whatever that setting says.
 // AboutRepo is matched ignoring case: on a case-insensitive filesystem
 // (default macOS and Windows) a variant such as ".Soft-Serve" claims the
 // same directory, which would lock the admin out of the real name.
 func (d *Backend) checkCanClaim(ctx context.Context, user proto.User, name string) error {
-	if strings.EqualFold(name, AboutRepo) && !d.isServerAdmin(ctx, user) {
+	if strings.EqualFold(name, AboutRepo) && !d.IsServerAdmin(ctx, user) {
 		return errAboutRepoReserved
 	}
 	return d.checkCanCreate(ctx, user)
@@ -164,10 +166,10 @@ func (d *Backend) checkCanClaim(ctx context.Context, user proto.User, name strin
 
 // repoLimited reports whether max_repos_per_user applies to user creating
 // a repository: a limit is set and the caller is not a server admin (see
-// isServerAdmin). Decide it on the caller's own context, which carries the
+// IsServerAdmin). Decide it on the caller's own context, which carries the
 // session's public key.
 func (d *Backend) repoLimited(ctx context.Context, user proto.User) bool {
-	return d.cfg.MaxReposPerUser > 0 && !d.isServerAdmin(ctx, user)
+	return d.cfg.MaxReposPerUser > 0 && !d.IsServerAdmin(ctx, user)
 }
 
 // countRepos returns how many repositories user has created. Repositories
@@ -213,14 +215,14 @@ func (d *Backend) errRepoLimit(user proto.User) error {
 // collaborators can access a private one, so a private default would lock
 // its anonymous creator out at once. Over HTTP the push that created it
 // would itself be refused. So with default_private set, an anonymous caller
-// who is not a server admin (see isServerAdmin) is refused with
+// who is not a server admin (see IsServerAdmin) is refused with
 // proto.ErrAnonymousPrivate before anything is created. Such a caller can
 // still choose a public repository explicitly where the command allows it.
 func (d *Backend) DefaultPrivate(ctx context.Context, user proto.User) (bool, error) {
 	if !d.cfg.DefaultPrivate {
 		return false, nil
 	}
-	if (user == nil || user.ID() == 0) && !d.isServerAdmin(ctx, user) {
+	if (user == nil || user.ID() == 0) && !d.IsServerAdmin(ctx, user) {
 		return false, proto.ErrAnonymousPrivate
 	}
 	return true, nil
@@ -557,7 +559,7 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 	// Refuse at the limit before cloning anything, counting the user's
 	// imports still in flight, which have not registered their repository
 	// yet. registerRepository checks again when it records the repository.
-	admin := d.isServerAdmin(ctx, user)
+	admin := d.IsServerAdmin(ctx, user)
 	limited := d.cfg.MaxReposPerUser > 0 && !admin // as repoLimited
 	slot, err := d.reserveImport(ctx, user, admin, limited)
 	if err != nil {

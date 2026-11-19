@@ -72,7 +72,7 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 // runs a bcrypt can never be faster than one.
 func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 	ctx, be, _ := newLFSTestContext(t)
-	if _, err := be.CreateRepository(ctx, "repo", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// A limit puts the slot channel in the request path, as in production;

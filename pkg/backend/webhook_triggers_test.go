@@ -15,10 +15,12 @@ import (
 	"time"
 
 	charmlog "charm.land/log/v2"
+	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
@@ -1076,7 +1078,9 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository, webhook.EventRepositoryVisibilityChange)
-	ctx := proto.WithUserContext(e.ctx, nil)
+	pub := newTestPublicKey(t)
+	setAdminKeys(t, e.cfg, append(e.cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
+	ctx := context.WithValue(proto.WithUserContext(e.ctx, nil), charmssh.ContextKeyPublicKey, pub)
 
 	is.NoErr(e.be.SetPrivate(ctx, "repo", true))
 	e.awaitDeliveries(t, id, webhook.EventRepositoryVisibilityChange)

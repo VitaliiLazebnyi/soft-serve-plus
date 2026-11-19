@@ -17,71 +17,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// adminKeyList returns the parsed initial_admin_keys. config.AdminKeys
-// parses every entry (trying each as a file first) on every call, and this
-// runs for every SSH session and access check, so the result is cached and
-// rebuilt only when the configured list changes. Config.Validate has
-// already replaced file paths with the keys they held.
-func (d *Backend) adminKeyList() []ssh.PublicKey {
-	d.adminKeysMu.Lock()
-	defer d.adminKeysMu.Unlock()
-	if !d.adminKeysOK || !slices.Equal(d.adminKeysSrc, d.cfg.InitialAdminKeys) {
-		d.adminKeysSrc = slices.Clone(d.cfg.InitialAdminKeys)
-		d.adminKeys = d.cfg.AdminKeys()
-		d.adminKeysOK = true
-		// The owned-admin-key warnings are about the previous list; a key
-		// still listed and still owned by a non-admin is logged again.
-		d.clearOwnedAdminKeyWarnings()
-	}
-	return d.adminKeys
-}
-
-// warnOwnedAdminKey records that the listed admin key ak is owned by the
-// non-admin account username and reports whether that has not been logged
-// yet for this key and owner.
-func (d *Backend) warnOwnedAdminKey(ak, username string) bool {
-	d.warnedOwnedAdminKeysMu.Lock()
-	defer d.warnedOwnedAdminKeysMu.Unlock()
-	if prev, ok := d.warnedOwnedAdminKeys[ak]; ok && prev == username {
-		return false
-	}
-	if d.warnedOwnedAdminKeys == nil {
-		d.warnedOwnedAdminKeys = make(map[string]string)
-	}
-	d.warnedOwnedAdminKeys[ak] = username
-	return true
-}
-
-// forgetOwnedAdminKey drops the owned-admin-key warning recorded for pk,
-// if any, once the key no longer resolves to a non-admin account.
-func (d *Backend) forgetOwnedAdminKey(pk ssh.PublicKey) {
-	d.warnedOwnedAdminKeysMu.Lock()
-	defer d.warnedOwnedAdminKeysMu.Unlock()
-	if len(d.warnedOwnedAdminKeys) == 0 {
-		return
-	}
-	delete(d.warnedOwnedAdminKeys, sshutils.MarshalAuthorizedKey(pk))
-}
-
-// clearOwnedAdminKeyWarnings drops every recorded owned-admin-key warning.
-func (d *Backend) clearOwnedAdminKeyWarnings() {
-	d.warnedOwnedAdminKeysMu.Lock()
-	defer d.warnedOwnedAdminKeysMu.Unlock()
-	clear(d.warnedOwnedAdminKeys)
-}
-
 // IsAdminKey reports whether pk is one of the configured admin keys
-// (initial_admin_keys). It uses the cached key list; see adminKeyList.
+// (initial_admin_keys), which the config parses once, when it is validated.
 func (d *Backend) IsAdminKey(pk ssh.PublicKey) bool {
-	return d.isAdminKey(pk)
-}
-
-// isAdminKey reports whether pk is one of the configured admin keys.
-func (d *Backend) isAdminKey(pk ssh.PublicKey) bool {
 	if pk == nil {
 		return false
 	}
-	for _, k := range d.adminKeyList() {
+	for _, k := range d.cfg.AdminKeys() {
 		if sshutils.KeysEqual(pk, k) {
 			return true
 		}
@@ -89,22 +31,32 @@ func (d *Backend) isAdminKey(pk ssh.PublicKey) bool {
 	return false
 }
 
-// isServerAdmin reports whether the caller is a server admin: user has the
-// admin flag, or the public key on ctx is one of the configured admin keys.
+// IsServerAdmin reports whether the caller is a server admin: user has the
+// admin flag, or the public key the SSH session authenticated with, read
+// from ctx, is one of the configured admin keys. It is the one statement of
+// that rule; every check that honours an admin key asks it.
+//
 // Admin keys are attached to an admin user on every start, but a key that a
-// non-admin account already owns stays on that account, and a key with no
-// unambiguous admin to go to is not attached, so the key is checked here too.
-// It matches the SSH layer's isServerAdmin.
-func (d *Backend) isServerAdmin(ctx context.Context, user proto.User) bool {
-	if user != nil && user.IsAdmin() {
+// non-admin account already owns stays on that account (and such sessions
+// are refused, see ErrAdminKeyNonAdminOwner), and a key with no unambiguous
+// admin to go to is not attached, so the key itself is checked too.
+func (d *Backend) IsServerAdmin(ctx context.Context, user proto.User) bool {
+	if isAccountAdmin(user) {
 		return true
 	}
-	return d.isAdminKey(sshutils.PublicKeyFromContext(ctx))
+	return d.IsAdminKey(sshutils.PublicKeyFromContext(ctx))
+}
+
+// isAccountAdmin reports whether user's account has the admin flag. Readable
+// and the other account-only checks use it; see IsServerAdmin for the rule
+// that also honours an admin key.
+func isAccountAdmin(user proto.User) bool {
+	return user != nil && user.IsAdmin()
 }
 
 // AccessLevelByPublicKey returns the access level of a user's public key for a repository.
 func (d *Backend) AccessLevelByPublicKey(ctx context.Context, repo string, pk ssh.PublicKey) access.AccessLevel {
-	if d.isAdminKey(pk) {
+	if d.IsAdminKey(pk) {
 		return access.AdminAccess
 	}
 
@@ -116,20 +68,21 @@ func (d *Backend) AccessLevelByPublicKey(ctx context.Context, repo string, pk ss
 // any repository is considered: the level it would get for a repository
 // that does not exist.
 func (d *Backend) BaseAccessLevelByPublicKey(ctx context.Context, pk ssh.PublicKey) access.AccessLevel {
-	if d.isAdminKey(pk) {
+	if d.IsAdminKey(pk) {
 		return access.AdminAccess
 	}
 
 	user, _ := d.UserByPublicKey(ctx, pk)
-	return d.baseAccessLevel(ctx, user)
+	return d.baseAccessLevel(user, isAccountAdmin(user), d.AnonAccess(ctx))
 }
 
 // BaseAccessLevelForUser is BaseAccessLevelByPublicKey for a caller whose
 // user is already resolved, such as the user an SSH session stored in its
-// context, so the key is not looked up again. An admin key on ctx still
-// gets admin access (see isServerAdmin).
+// context, so the key is not looked up again. A server admin (see
+// IsServerAdmin), including the holder of an admin key on ctx, gets admin
+// access.
 func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
-	return d.baseAccessLevel(ctx, user)
+	return d.baseAccessLevel(user, d.IsServerAdmin(ctx, user), d.AnonAccess(ctx))
 }
 
 // AccessLevelForUser returns the access level of a user for a repository.
@@ -139,28 +92,20 @@ func (d *Backend) AccessLevelForUser(ctx context.Context, repo string, user prot
 }
 
 // Readable looks a repository up once and returns it together with the
-// caller's access level. The repository is nil when it does not exist or
-// when the caller may not read it, so callers cannot tell the two apart.
-// The level is returned either way so a writer can decide whether a
+// access level of user's account. The repository is nil when it does not
+// exist or when the caller may not read it, so callers cannot tell the two
+// apart. The level is returned either way so a writer can decide whether a
 // missing name may be created.
+//
+// Only the account counts, not an admin key on ctx: callers acting for an
+// SSH session use ReadableForUser.
 func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
-	name = utils.SanitizeRepo(name)
-	r, err := d.Repository(ctx, name)
-	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
-		d.logger.Error("failed to look up repository", "repo", name, "err", err)
-	}
-
-	level := d.accessLevel(ctx, r, name, user)
-	if r == nil || level < access.ReadOnlyAccess {
-		return nil, level
-	}
-
-	return r, level
+	return d.readable(ctx, name, user, isAccountAdmin(user))
 }
 
 // ReadableByPublicKey is Readable for the holder of a public key.
 func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.PublicKey) (proto.Repository, access.AccessLevel) {
-	if d.isAdminKey(pk) {
+	if d.IsAdminKey(pk) {
 		r, _ := d.Repository(ctx, name)
 		return r, access.AdminAccess
 	}
@@ -169,10 +114,10 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 	return d.Readable(ctx, name, user)
 }
 
-// ReadableForUser is ReadableByPublicKey for a caller whose user is already
-// resolved, such as the user an SSH session stored in its context, so the
-// key is not looked up again. An admin key on ctx still sees every
-// repository with admin access, as in ReadableByPublicKey.
+// ReadableForUser is Readable for the caller of an SSH session: user is the
+// user the session stored in its context, and a server admin (see
+// IsServerAdmin), including the holder of an admin key on ctx, gets admin
+// access to every name.
 //
 // The session user is the one resolved when the session authenticated, as
 // for the account commands and BaseAccessLevelForUser: a key removed from
@@ -180,18 +125,29 @@ func (d *Backend) ReadableByPublicKey(ctx context.Context, name string, pk ssh.P
 // Collaborator rows, the repository's privacy and ownership are still read
 // fresh on every call.
 func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
-	if d.isAdminKey(sshutils.PublicKeyFromContext(ctx)) {
-		r, _ := d.Repository(ctx, name)
-		return r, access.AdminAccess
+	return d.readable(ctx, name, user, d.IsServerAdmin(ctx, user))
+}
+
+// readable is Readable with the caller's admin status already decided.
+func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel) {
+	name = utils.SanitizeRepo(name)
+	r, err := d.Repository(ctx, name)
+	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
+		d.logger.Error("failed to look up repository", "repo", name, "err", err)
 	}
 
-	return d.Readable(ctx, name, user)
+	level := d.accessLevel(ctx, r, name, user, admin)
+	if r == nil || level < access.ReadOnlyAccess {
+		return nil, level
+	}
+
+	return r, level
 }
 
 // baseAccessLevel is the level user holds for a repository that does not
-// exist.
+// exist, given whether the caller is an admin and the anonymous level.
 //
-// Server admins (see isServerAdmin) get admin access whatever the flag.
+// Admins get admin access whatever the flag.
 //
 // With AdminOnlyCreate set, only admins may create repositories: registered
 // non-admins get read-only, which keeps their SSH session valid (session.go
@@ -201,16 +157,10 @@ func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.U
 //
 // Without it, this is upstream behaviour: registered users get read-write on
 // a missing name, and anonymous users get the anonymous level.
-func (d *Backend) baseAccessLevel(ctx context.Context, user proto.User) access.AccessLevel {
-	return d.baseAccessLevelWithAnon(ctx, user, d.AnonAccess(ctx))
-}
-
-// baseAccessLevelWithAnon is baseAccessLevel with the anonymous level
-// already read, so a caller that has it does not read the setting again.
-func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, anon access.AccessLevel) access.AccessLevel {
+func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.AccessLevel) access.AccessLevel {
 	adminOnly := d.cfg.AdminOnlyCreate
 	switch {
-	case d.isServerAdmin(ctx, user):
+	case admin:
 		return access.AdminAccess
 	case adminOnly && (user != nil || anon > access.ReadOnlyAccess):
 		// Never read-write or above on a missing name, so never a create.
@@ -224,15 +174,14 @@ func (d *Backend) baseAccessLevelWithAnon(ctx context.Context, user proto.User, 
 }
 
 // accessLevel computes the access level of user for r, which is the
-// repository named name or nil when it does not exist.
-func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User) access.AccessLevel {
-	anon := d.AnonAccess(ctx)
-
-	// If the user is an admin, they have admin access.
-	if user != nil && user.IsAdmin() {
+// repository named name or nil when it does not exist. admin is whether the
+// caller is an admin, as its caller decided.
+func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User, admin bool) access.AccessLevel {
+	if admin {
 		return access.AdminAccess
 	}
 
+	anon := d.AnonAccess(ctx)
 	if r == nil {
 		// A directory with no row is taken (case variant or orphan), not free.
 		// So is a row with no directory (removed by hand, a partial restore
@@ -242,7 +191,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
 			return access.NoAccess
 		}
-		return d.baseAccessLevelWithAnon(ctx, user, anon)
+		return d.baseAccessLevel(user, false, anon)
 	}
 
 	var username string
@@ -262,7 +211,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 // anonymous level and user's collaborator row for r, if any, are known.
 func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess access.AccessLevel, isCollab bool) access.AccessLevel {
 	// If the user is an admin, they have admin access.
-	if user != nil && user.IsAdmin() {
+	if isAccountAdmin(user) {
 		return access.AdminAccess
 	}
 
@@ -307,7 +256,7 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 	if err != nil {
 		return nil, err
 	}
-	if user != nil && user.IsAdmin() {
+	if isAccountAdmin(user) {
 		return repos, nil
 	}
 
@@ -342,7 +291,7 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 // ReadableRepositoriesByPublicKey is ReadableRepositories for the holder of
 // a public key.
 func (d *Backend) ReadableRepositoriesByPublicKey(ctx context.Context, pk ssh.PublicKey) ([]proto.Repository, error) {
-	if d.isAdminKey(pk) {
+	if d.IsAdminKey(pk) {
 		return d.Repositories(ctx)
 	}
 
@@ -445,10 +394,6 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 		return err
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
-			// The key left the account it was logged as owned by.
-			if d.isAdminKey(pk) {
-				d.forgetOwnedAdminKey(pk)
-			}
 			return nil, proto.ErrUserNotFound
 		}
 		d.logger.Error("error finding user", "pk", sshutils.MarshalAuthorizedKey(pk), "error", err)
@@ -463,17 +408,10 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	// would hand them what the key holder does. Acting as nobody instead
 	// strands a legitimate owner without their account, so the session is
 	// refused with an error saying how to fix it.
-	if d.isAdminKey(pk) {
-		if !m.Admin {
-			ak := sshutils.MarshalAuthorizedKey(pk)
-			if d.warnOwnedAdminKey(ak, m.Username) {
-				d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
-					"username", m.Username, "pk", ak)
-			}
-			return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
-		}
-		// The owner was promoted, or the key moved to an admin account.
-		d.forgetOwnedAdminKey(pk)
+	if !m.Admin && d.IsAdminKey(pk) {
+		d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
+			"username", m.Username, "pk", sshutils.MarshalAuthorizedKey(pk))
+		return nil, &ErrAdminKeyNonAdminOwner{Username: m.Username}
 	}
 
 	return &user{

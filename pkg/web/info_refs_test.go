@@ -27,7 +27,7 @@ func TestInfoRefsGitFailure(t *testing.T) {
 
 	ctx, be, _ := newLFSTestContext(t)
 	ctx = log.WithContext(ctx, logger)
-	_, err := be.CreateRepository(ctx, "broken", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "broken", fixtureAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 
 	// A HEAD git cannot read makes the directory no longer a repository
@@ -57,7 +57,7 @@ func newInfoFixture(t *testing.T) *infoFixture {
 	t.Helper()
 	is := is.New(t)
 	ctx, be, _ := newLFSTestContext(t)
-	_, err := be.CreateRepository(ctx, "pub", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "pub", fixtureAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "pub.git")
 	return &infoFixture{handler: testRouter(t, ctx), dir: dir}

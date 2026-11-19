@@ -150,7 +150,7 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 // another created under its name, in that gap is not the one deleted.
 func TestRemovePushCreatedRepositoryChecksWhenDeleting(t *testing.T) {
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.New(t).NoErr(err)
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})

@@ -26,7 +26,7 @@ func TestReadableForUserMatchesByPublicKey(t *testing.T) {
 	otherKey := newTestPublicKey(t)
 	adminKey := newTestPublicKey(t)
 	listedKey := newTestPublicKey(t)
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey)))
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []ssh.PublicKey{ownerKey}})
 	is.NoErr(err)

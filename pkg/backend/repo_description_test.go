@@ -25,7 +25,7 @@ func TestRepositoryDescriptionFile(t *testing.T) {
 		return string(b)
 	}
 
-	if _, err := be.CreateRepository(ctx, "described", nil, proto.RepositoryOptions{Description: "first words"}); err != nil {
+	if _, err := be.CreateRepository(ctx, "described", defaultAdmin(t, be), proto.RepositoryOptions{Description: "first words"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readDesc("described"); got != "first words" {
@@ -48,7 +48,7 @@ func TestRepositoryDescriptionFile(t *testing.T) {
 
 	// A repository created without one still gets an empty description
 	// file, so git does not fall back to its "Unnamed repository" template.
-	if _, err := be.CreateRepository(ctx, "plain", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "plain", defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readDesc("plain"); got != "" {

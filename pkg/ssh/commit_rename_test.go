@@ -20,7 +20,7 @@ func TestSSHRepoCommitRenameQuotedName(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, ctx := startTestServer(t, cfg)
-	if _, err := backend.FromContext(ctx).CreateRepository(ctx, "renames", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := backend.FromContext(ctx).CreateRepository(ctx, "renames", fixtureAdmin(t, backend.FromContext(ctx)), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	bare := filepath.Join(cfg.DataPath, "repos", "renames.git")

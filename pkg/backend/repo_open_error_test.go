@@ -19,7 +19,7 @@ func TestOpenErrorLoggedNotLeaked(t *testing.T) {
 	be, cfg := newTestBackendWithLog(t, logs)
 	ctx := context.Background()
 
-	if _, err := be.CreateRepository(ctx, "existing", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "existing", defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,7 +57,7 @@ func TestOpenErrorLoggedNotLeaked(t *testing.T) {
 
 	t.Run("CreateRepository", func(t *testing.T) {
 		logStart := len(logs.String())
-		_, err := be.CreateRepository(ctx, "new", nil, proto.RepositoryOptions{})
+		_, err := be.CreateRepository(ctx, "new", defaultAdmin(t, be), proto.RepositoryOptions{})
 		check(t, err, logStart)
 	})
 }

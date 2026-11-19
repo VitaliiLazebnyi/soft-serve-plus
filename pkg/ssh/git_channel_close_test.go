@@ -58,7 +58,7 @@ func TestSSHFetchChannelClosedFreesSession(t *testing.T) {
 	addr, ctx := startTestServer(t, cfg)
 
 	be := backend.FromContext(ctx)
-	if _, err := be.CreateRepository(ctx, "big", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := be.CreateRepository(ctx, "big", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// About 3 MB of advertisement: more than the client's channel window

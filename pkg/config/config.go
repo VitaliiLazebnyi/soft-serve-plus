@@ -392,6 +392,12 @@ type Config struct {
 	// DataPath is the path to the directory where Soft Serve will store its data.
 	DataPath string `env:"DATA_PATH" yaml:"-"`
 
+	// adminKeys is InitialAdminKeys parsed by Validate. Validate is the
+	// only place the entries are read as keys or key files, so admin
+	// identity does not depend on the data directory's contents after
+	// start-up.
+	adminKeys []ssh.PublicKey
+
 	// unreadableAdminKeyFiles and ignoredAdminKeys record the
 	// InitialAdminKeys entries Validate dropped: key files that could not
 	// be read or parsed, and entries that are neither a key nor a file path.
@@ -1077,6 +1083,7 @@ func (c *Config) Validate() error {
 	c.ignoredAdminKeys = addToSet(c.ignoredAdminKeys, keys.ignored)
 
 	c.InitialAdminKeys = pks
+	c.adminKeys = keys.pks
 
 	// The public URL is allowed by CORSAllowedOrigins, not added here, so an
 	// environment override of it does not leave the file's URL allowed too.
@@ -1308,25 +1315,27 @@ func addToSet(set map[string]struct{}, items []string) map[string]struct{} {
 	return set
 }
 
-// AdminKeys returns the server admin keys.
+// AdminKeys returns the server admin keys, as parsed by the last Validate.
+// A config that was never validated has none. The slice is shared; callers
+// must not modify it.
 func (c *Config) AdminKeys() []ssh.PublicKey {
-	return parseAuthKeys(c.InitialAdminKeys, c.DataPath).pks
+	return c.adminKeys
 }
 
 // UnreadableAdminKeyFiles returns, sorted and without duplicates, the
-// initial_admin_keys entries that name a key file that could not be read or
-// holds no key, such as a secret that is not mounted yet. Such an entry may
-// stand for a key that is still wanted. Paths are not key material.
+// initial_admin_keys entries Validate found to name a key file that could
+// not be read or holds no key, such as a secret that is not mounted yet.
+// Such an entry may stand for a key that is still wanted. Paths are not key
+// material.
 func (c *Config) UnreadableAdminKeyFiles() []string {
-	set := addToSet(maps.Clone(c.unreadableAdminKeyFiles), parseAuthKeys(c.InitialAdminKeys, c.DataPath).unreadable)
-	return slices.Sorted(maps.Keys(set))
+	return slices.Sorted(maps.Keys(c.unreadableAdminKeyFiles))
 }
 
-// IgnoredAdminKeys returns how many distinct initial_admin_keys entries were
-// ignored because they are neither a key nor a file path, such as a mistyped
-// key. The entries are not returned, as they may hold key material.
+// IgnoredAdminKeys returns how many distinct initial_admin_keys entries
+// Validate ignored because they are neither a key nor a file path, such as a
+// mistyped key. The entries are not returned, as they may hold key material.
 func (c *Config) IgnoredAdminKeys() int {
-	return len(addToSet(maps.Clone(c.ignoredAdminKeys), parseAuthKeys(c.InitialAdminKeys, c.DataPath).ignored))
+	return len(c.ignoredAdminKeys)
 }
 
 func init() {

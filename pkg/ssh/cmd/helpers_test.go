@@ -43,6 +43,8 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	if tweak != nil {
 		tweak(cfg)
 	}
+	// Validate parses the admin keys a tweak may list.
+	is.NoErr(cfg.Validate())
 
 	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)

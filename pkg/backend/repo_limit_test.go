@@ -116,7 +116,7 @@ func TestMaxReposPerUserAdminsExempt(t *testing.T) {
 	}
 
 	pub := newTestPublicKey(t)
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
 	is.NoErr(err)
 	keyCtx := context.WithValue(proto.WithUserContext(ctx, alice), charmssh.ContextKeyPublicKey, pub)

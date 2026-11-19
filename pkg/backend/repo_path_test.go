@@ -109,7 +109,7 @@ func TestConcurrentCreateSameName(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := be.CreateRepository(ctx, "raced", nil, proto.RepositoryOptions{})
+			_, err := be.CreateRepository(ctx, "raced", defaultAdmin(t, be), proto.RepositoryOptions{})
 			errs <- err
 		}()
 	}

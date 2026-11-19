@@ -45,7 +45,7 @@ func newRepoTestUI(t *testing.T) *UI {
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	ctx = backend.WithContext(ctx, be)
 	for _, name := range []string{"a", "b"} {
-		if _, err := be.CreateRepository(ctx, name, nil, proto.RepositoryOptions{}); err != nil {
+		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,4 +178,16 @@ func TestUIRepoOpenDoesNotReadModel(t *testing.T) {
 			t.Fatalf("open returned %#v, want repository a", msg)
 		}
 	}
+}
+
+// fixtureAdmin returns the admin account the first migration creates, the
+// owner of fixture repositories: the backend refuses a create by a caller
+// who may not create, as an anonymous caller may not by default.
+func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

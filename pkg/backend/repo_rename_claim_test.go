@@ -30,9 +30,9 @@ func (s renameHookStore) SetRepoNameByName(ctx context.Context, h db.Handler, na
 func TestRenameRepositoryClaimsNewPath(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
-	_, err := be.CreateRepository(ctx, "a", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 
 	var claimErr error
@@ -53,9 +53,9 @@ func TestRenameRepositoryClaimsNewPath(t *testing.T) {
 func TestRenameRepositoryFailureReleasesClaim(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
-	ctx := backendTestContext(be, cfg)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
-	_, err := be.CreateRepository(ctx, "a", nil, proto.RepositoryOptions{})
+	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 
 	failed := errors.New("store failure")

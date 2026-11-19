@@ -217,7 +217,7 @@ func TestWindowChangeDuringPtyCommand(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, ctx := startTestServer(t, cfg)
-	if _, err := backend.FromContext(ctx).CreateRepository(ctx, "repo1", nil, proto.RepositoryOptions{}); err != nil {
+	if _, err := backend.FromContext(ctx).CreateRepository(ctx, "repo1", fixtureAdmin(t, backend.FromContext(ctx)), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	before := sessionLoops()
