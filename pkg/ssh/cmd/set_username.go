@@ -19,7 +19,7 @@ func SetUsernameCommand() *cobra.Command {
 				return err
 			}
 
-			return be.SetUsername(ctx, user.Username(), args[0])
+			return be.SetOwnUsername(ctx, user, args[0])
 		},
 	}
 

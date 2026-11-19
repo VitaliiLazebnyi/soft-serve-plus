@@ -132,6 +132,24 @@ func boot(t *testing.T, ctx context.Context, cfg *config.Config, dbx *db.DB) {
 	}
 }
 
+// addKeyByName adds pk to the user named name, as an operator would by hand.
+func addKeyByName(ctx context.Context, st *database.Store, h db.Handler, name string, pk ssh.PublicKey) error {
+	u, err := st.FindUserByUsername(ctx, h, name)
+	if err != nil {
+		return err
+	}
+	return st.AddPublicKeyByUserID(ctx, h, u.ID, pk)
+}
+
+// removeKeyByName removes pk from the user named name.
+func removeKeyByName(ctx context.Context, st *database.Store, h db.Handler, name string, pk ssh.PublicKey) error {
+	u, err := st.FindUserByUsername(ctx, h, name)
+	if err != nil {
+		return err
+	}
+	return st.RemovePublicKeyByUserID(ctx, h, u.ID, pk)
+}
+
 // validate validates cfg, which parses initial_admin_keys, as a start does
 // once the config is read.
 func validate(t *testing.T, cfg *config.Config) {
@@ -612,21 +630,21 @@ func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 	tx(func(tx *db.Tx) error {
 		// readd is removed and added back to admin with the user commands
 		// to keep it without the config.
-		if err := st.RemovePublicKeyByUsername(ctx, tx, "admin", pk(readd)); err != nil {
+		if err := removeKeyByName(ctx, st, tx, "admin", pk(readd)); err != nil {
 			return err
 		}
-		if err := st.AddPublicKeyByUsername(ctx, tx, "admin", pk(readd)); err != nil {
+		if err := addKeyByName(ctx, st, tx, "admin", pk(readd)); err != nil {
 			return err
 		}
 		// moved goes to erin.
-		if err := st.RemovePublicKeyByUsername(ctx, tx, "admin", pk(moved)); err != nil {
+		if err := removeKeyByName(ctx, st, tx, "admin", pk(moved)); err != nil {
 			return err
 		}
-		if err := st.AddPublicKeyByUsername(ctx, tx, "erin", pk(moved)); err != nil {
+		if err := addKeyByName(ctx, st, tx, "erin", pk(moved)); err != nil {
 			return err
 		}
 		// Removing other from a user that does not own it changes nothing.
-		if err := st.RemovePublicKeyByUsername(ctx, tx, "erin", pk(other)); !errors.Is(err, db.ErrRecordNotFound) {
+		if err := removeKeyByName(ctx, st, tx, "erin", pk(other)); !errors.Is(err, db.ErrRecordNotFound) {
 			t.Errorf("removing a key erin lacks: err = %v, want %v", err, db.ErrRecordNotFound)
 		}
 		return nil
@@ -677,10 +695,10 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 
 		// The operator keeps the key by hand, on another connection.
 		if err := dbx.TransactionContext(ctx, func(tx2 *db.Tx) error {
-			if err := st.RemovePublicKeyByUsername(ctx, tx2, "admin", pk); err != nil {
+			if err := removeKeyByName(ctx, st, tx2, "admin", pk); err != nil {
 				return err
 			}
-			return st.AddPublicKeyByUsername(ctx, tx2, "admin", pk)
+			return addKeyByName(ctx, st, tx2, "admin", pk)
 		}); err != nil {
 			return err
 		}

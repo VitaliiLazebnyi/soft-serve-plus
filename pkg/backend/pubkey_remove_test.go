@@ -19,19 +19,22 @@ func TestRemoveOwnPublicKey(t *testing.T) {
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	k1, k2 := newTestPublicKey(t), newTestPublicKey(t)
-	_, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
 	is.NoErr(err)
 
-	is.NoErr(be.RemoveOwnPublicKey(ctx, "Alice", k2))
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "alice", k1), ErrLastPublicKey))
+	is.NoErr(be.RemoveOwnPublicKey(ctx, alice, k2))
+	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, alice, k1), ErrLastPublicKey))
 	keys, err := publicKeysOf(be, ctx, "alice")
 	is.NoErr(err)
 	is.Equal(len(keys), 1)
 
 	// A key the account does not hold is not "the last key": it is reported
 	// as not found rather than refused.
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "alice", k2), proto.ErrPublicKeyNotFound))
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, "nobody", k1), proto.ErrUserNotFound))
+	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, alice, k2), proto.ErrPublicKeyNotFound))
+	gone, err := be.CreateUser(ctx, "gone", proto.UserOptions{})
+	is.NoErr(err)
+	is.NoErr(be.DeleteUser(ctx, "gone"))
+	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, gone, k1), proto.ErrUserNotFound))
 
 	is.NoErr(be.RemovePublicKey(ctx, "alice", k1))
 	keys, err = publicKeysOf(be, ctx, "alice")
@@ -62,7 +65,7 @@ func testRemoveOwnPublicKeyConcurrent(t *testing.T, be *Backend, ctx context.Con
 		is := is.New(t)
 		name := fmt.Sprintf("racer%d", i)
 		k1, k2 := newTestPublicKey(t), newTestPublicKey(t)
-		_, err := be.CreateUser(ctx, name, proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
+		u, err := be.CreateUser(ctx, name, proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
 		is.NoErr(err)
 
 		var wg sync.WaitGroup
@@ -73,7 +76,7 @@ func testRemoveOwnPublicKeyConcurrent(t *testing.T, be *Backend, ctx context.Con
 			go func() {
 				defer wg.Done()
 				<-start
-				errs[j] = be.RemoveOwnPublicKey(ctx, name, k)
+				errs[j] = be.RemoveOwnPublicKey(ctx, u, k)
 			}()
 		}
 		close(start)

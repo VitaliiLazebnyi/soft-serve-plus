@@ -22,6 +22,9 @@ type UserStore interface {
 	// FindUserByUsername. Backend.RemoveOwnPublicKey takes it so that
 	// removals of a user's keys count the remaining keys in turn.
 	FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error)
+	// GetUserByIDForUpdate is GetUserByID that also locks the row, as
+	// FindUserByUsernameForUpdate does.
+	GetUserByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.User, error)
 	FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error)
 	GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error)
 	// FindDefaultAdminUserID returns the ID of the lowest-ID admin user. It
@@ -30,8 +33,9 @@ type UserStore interface {
 	CreateUser(ctx context.Context, h db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error
 	DeleteUserByUsername(ctx context.Context, h db.Handler, username string) error
 	SetUsernameByUsername(ctx context.Context, h db.Handler, username string, newUsername string) error
+	SetUsernameByUserID(ctx context.Context, h db.Handler, id int64, newUsername string) error
 	SetAdminByUsername(ctx context.Context, h db.Handler, username string, isAdmin bool) error
-	AddPublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error
-	RemovePublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error
+	AddPublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error
+	RemovePublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error
 	ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64) ([]ssh.PublicKey, error)
 }
