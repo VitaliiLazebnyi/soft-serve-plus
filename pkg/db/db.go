@@ -235,6 +235,22 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		defer func() { <-d.writeSlot }()
 	}
 
+	// On Postgres every transaction runs in READ COMMITTED, whatever the
+	// server, database, role or data source make the default. The store's
+	// row locks (LockAndCountWebhooks, LockUserRepos, the ForUpdate reads)
+	// are followed by reads that must see what the lock's previous holder
+	// committed. Only READ COMMITTED takes a snapshot per statement; under
+	// REPEATABLE READ or SERIALIZABLE the snapshot predates the wait for the
+	// lock, and two creates that took turns would both count the same
+	// number of webhooks and both pass the cap.
+	if d.DriverName() == "postgres" {
+		o := sql.TxOptions{Isolation: sql.LevelReadCommitted}
+		if opts != nil {
+			o.ReadOnly = opts.ReadOnly
+		}
+		opts = &o
+	}
+
 	txx, err := d.DB.BeginTxx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)

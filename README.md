@@ -731,6 +731,14 @@ Soft Serve Plus always sets the session `TimeZone` to UTC, overriding any
 `timezone` in the data source and the server's default, because it stores
 times in UTC.
 
+It also runs every transaction in `READ COMMITTED`, whatever
+`default_transaction_isolation` the server, database, role or data source
+sets. The per-repository and per-user limits lock a row and then count, and
+only `READ COMMITTED` lets the count see what the previous holder of the lock
+committed. A deployment that set `REPEATABLE READ` or `SERIALIZABLE` as the
+default gets `READ COMMITTED` for Soft Serve Plus's transactions from this
+version on.
+
 By default the connection pool has no limit on open connections, so a burst
 of requests can use up Postgres' `max_connections`. Set `db.max_open_conns`
 (and optionally `db.max_idle_conns`, `db.conn_max_lifetime` and

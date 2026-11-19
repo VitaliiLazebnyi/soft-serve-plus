@@ -17,3 +17,10 @@ import (
 func Open(ctx context.Context, tb testing.TB) (*db.DB, error) {
 	return test.Open(ctx, tb)
 }
+
+// SetDefaultIsolation makes level the default transaction isolation of the
+// Postgres test database dbx for the connections it opens from now on.
+func SetDefaultIsolation(ctx context.Context, tb testing.TB, dbx *db.DB, level string) {
+	tb.Helper()
+	test.SetDefaultIsolation(ctx, tb, dbx, level)
+}

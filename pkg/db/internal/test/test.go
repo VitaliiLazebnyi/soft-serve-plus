@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	sstest "github.com/charmbracelet/soft-serve/pkg/test"
+	"github.com/lib/pq"
 )
 
 // OpenSqlite opens a new temp SQLite database for testing, with the
@@ -87,6 +88,36 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 		}
 	})
 	return dbx, nil
+}
+
+// SetDefaultIsolation makes level, such as "repeatable read", the default
+// transaction isolation of the Postgres test database dbx, as a server,
+// database or role setting can, for the connections dbx opens from now on.
+// It closes dbx's idle connections, so that the next statements run on new
+// ones. The test is skipped when the data source sets the default itself,
+// which takes precedence.
+func SetDefaultIsolation(ctx context.Context, tb testing.TB, dbx *db.DB, level string) {
+	tb.Helper()
+	var name string
+	if err := dbx.GetContext(ctx, &name, `SELECT current_database()`); err != nil {
+		tb.Fatal(err)
+	}
+	if _, err := dbx.ExecContext(ctx, "ALTER DATABASE "+pq.QuoteIdentifier(name)+
+		" SET default_transaction_isolation = "+pq.QuoteLiteral(level)); err != nil {
+		tb.Fatal(err)
+	}
+	// The setting applies to new sessions only: drop the pooled ones.
+	dbx.SetMaxIdleConns(0)
+	dbx.SetMaxIdleConns(2)
+	// Checked outside a transaction: transactions run in READ COMMITTED
+	// whatever the default.
+	var got string
+	if err := dbx.GetContext(ctx, &got, `SHOW default_transaction_isolation`); err != nil {
+		tb.Fatal(err)
+	}
+	if got != level {
+		tb.Skipf("the data source overrides the database default isolation level: got %q, want %q", got, level)
+	}
 }
 
 // withDatabase returns dsn with its database set to name. dsn is either a
