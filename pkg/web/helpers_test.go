@@ -15,11 +15,11 @@ import (
 )
 
 // storePasswordHash writes a bcrypt hash of password into username's row,
-// as a database from an older version may hold one. Nothing sets a password
-// any more, and no login reads it.
+// salted as older versions salted it, as a database from such a version may
+// hold one. Nothing sets a password any more, and no login reads it.
 func storePasswordHash(t *testing.T, ctx context.Context, username, password string) {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password+"salty-soft-serve"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
 	}

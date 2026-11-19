@@ -145,7 +145,6 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	worker, err := be.User(ctx, "worker")
 	is.NoErr(err)
 	keys := worker.PublicKeys()
-	is.NoErr(err)
 	is.Equal(len(keys), 1)
 	is.NoErr(runPubkey(workerCtx, "add", sshutils.MarshalAuthorizedKey(newKey())))
 

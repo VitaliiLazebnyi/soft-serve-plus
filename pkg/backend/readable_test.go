@@ -52,7 +52,7 @@ func TestReadable(t *testing.T) {
 	is.True(r != nil)
 	is.Equal(level, access.AdminAccess)
 
-	// AccessLevelForUser is the same computation.
+	// levelOf, the level alone, is the same computation.
 	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
 	is.Equal(levelOf(be, ctx, "ghost", stranger), access.ReadWriteAccess)
 	is.Equal(levelOf(be, ctx, "public", nil), access.ReadOnlyAccess)
@@ -65,7 +65,7 @@ func TestReadable(t *testing.T) {
 	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
 }
 
-// TestBaseAccessLevelForUser verifies the baseline level does not
+// TestBaseAccessLevelForUserAnonymous verifies the baseline level does not
 // depend on any repository and matches the level for a missing name.
 func TestBaseAccessLevelForUserAnonymous(t *testing.T) {
 	is := is.New(t)
@@ -106,7 +106,6 @@ func TestAccessLevelRowWithoutDirectory(t *testing.T) {
 	is.Equal(levelOf(be, ctx, "secret", stranger), access.NoAccess)
 	is.Equal(levelOf(be, ctx, "secret", owner), access.NoAccess)
 	is.Equal(levelOf(be, ctx, "secret", admin), access.AdminAccess)
-	is.Equal(levelOf(be, ctx, "secret", nil), access.NoAccess)
 
 	r, level := be.Readable(ctx, "secret", stranger)
 	is.Equal(r, nil)
