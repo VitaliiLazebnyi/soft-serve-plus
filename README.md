@@ -1164,7 +1164,7 @@ You can also *import* repositories from any public remote. Use the `repo import`
 ssh -p 23231 localhost repo import soft-serve-plus https://github.com/VitaliiLazebnyi/soft-serve-plus
 ```
 
-Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way.
+Use `--mirror` or `-m` to mark the repository as a *pull* mirror. A mirror is synced on the `mirror_pull` schedule, and its syncs have the same transfer limits as an import: an HTTP transfer that stays below 1000 bytes a second for five minutes is aborted, and so is an ssh connection that takes more than 30 seconds to set up or whose server stops answering for a minute. A large remote that sends nothing for five minutes while it prepares the pack can fail its syncs this way. The sync of one mirror, its fetches and its LFS objects together, is given up after an hour; the next run starts it again.
 
 Use `--lfs` to fetch the repository's Git LFS objects too, from the endpoint the remote implies, or `--lfs-endpoint <url>` to name one. Objects are fetched over http or https only: an import that asks for them from an ssh or scp-style remote without an http(s) `--lfs-endpoint` is refused.
 

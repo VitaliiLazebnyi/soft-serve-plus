@@ -173,8 +173,22 @@ func SyncMirrors(ctx context.Context) {
 }
 
 // syncMirrorRepo syncs one pull mirror: its remotes, then its LFS objects.
-func syncMirrorRepo(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
+func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
 	name := repo.Name()
+
+	// One deadline for the whole sync: the job waits for every mirror, and
+	// cron skips its runs while one is still going, so a mirror whose
+	// remote or LFS endpoint keeps a transfer going for ever would stop
+	// every mirror from syncing. The steps below stop quietly once ctx is
+	// done, as at shutdown, so running out of time is logged here.
+	ctx, cancel := context.WithTimeout(jobCtx, mirrorSyncTimeout)
+	defer cancel()
+	defer func() {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && jobCtx.Err() == nil {
+			logger.Warn("mirror sync stopped, it ran out of time", "repo", name, "timeout", mirrorSyncTimeout)
+		}
+	}()
+
 	r, err := repo.Open()
 	if err != nil {
 		logger.Error("error opening repository", "repo", name, "err", err)
@@ -241,7 +255,7 @@ func syncMirrorRepo(ctx context.Context, cfg *config.Config, logger *log.Logger,
 		return
 	}
 
-	if err := b.SyncRepoLFSObjects(ctx, repo, lfs.NewClient(ep)); err != nil {
+	if err := syncRepoLFS(ctx, b, repo, lfs.NewClient(ep)); err != nil {
 		if errors.Is(err, backend.ErrLFSObjectsUnavailable) {
 			// The next sync tries them again.
 			logger.Warn("mirrored repository without some lfs objects", "repo", name, "err", err)
@@ -254,6 +268,16 @@ func syncMirrorRepo(ctx context.Context, cfg *config.Config, logger *log.Logger,
 		logger.Error("failed to store missing lfs objects", "err", err, "path", r.Path)
 	}
 }
+
+// syncRepoLFS stores the LFS objects a mirror sync fetched pointers to.
+// Tests replace it.
+var syncRepoLFS = func(ctx context.Context, b *backend.Backend, repo proto.Repository, client backend.LFSClient) error {
+	return b.SyncRepoLFSObjects(ctx, repo, client)
+}
+
+// mirrorSyncTimeout bounds the whole sync of one mirror, its fetches and its
+// LFS objects. Tests lower it.
+var mirrorSyncTimeout = time.Hour
 
 // mirrorGitTimeout bounds a single git command of a mirror sync.
 //

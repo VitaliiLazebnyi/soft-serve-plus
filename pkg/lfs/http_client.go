@@ -162,7 +162,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 	defer res.Body.Close() //nolint: errcheck
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected server response: %s", res.Status)
+		return nil, fmt.Errorf("unexpected server response: %s", remoteText(res.Status))
 	}
 
 	var response BatchResponse
@@ -192,7 +192,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 	// hash algorithm names different objects, whose content would never
 	// verify against the pointers. An empty hash_algo means sha256.
 	if response.HashAlgo != "" && response.HashAlgo != HashAlgorithmSHA256 {
-		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", response.HashAlgo, HashAlgorithmSHA256)
+		return nil, fmt.Errorf("lfs: batch response uses hash algorithm %q, %q was requested", remoteText(response.HashAlgo), HashAlgorithmSHA256)
 	}
 
 	return &response, nil
@@ -226,7 +226,7 @@ func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc Downloa
 	}
 
 	if result.Transfer != TransferBasic {
-		return fmt.Errorf("transfer adapter not supported: %s", result.Transfer)
+		return fmt.Errorf("transfer adapter not supported: %s", remoteText(result.Transfer))
 	}
 
 	// Only act on objects that were asked for, once each, so a response
@@ -244,7 +244,7 @@ func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc Downloa
 		delete(requested, object.Oid)
 
 		if object.Error != nil {
-			objectError := errors.New(object.Error.Message)
+			objectError := errors.New(remoteText(object.Error.Message))
 			logger.Debugf("Error on object %v: %v", object.Pointer, objectError)
 			if err := dc(object.Pointer, nil, objectError); err != nil {
 				return err
@@ -375,10 +375,10 @@ func handleErrorResponse(logger *log.Logger, resp *http.Response) error {
 
 	var er ErrorResponse
 	if err := decodeJSONLimit(resp.Body, maxErrorResponseSize, &er); err != nil {
-		logger.Debug("error decoding error response", "status", resp.Status, "err", err)
+		logger.Debug("error decoding error response", "status", remoteText(resp.Status), "err", err)
 	}
 	if er.Message == "" {
-		return fmt.Errorf("request failed with status %s", resp.Status)
+		return fmt.Errorf("request failed with status %s", remoteText(resp.Status))
 	}
-	return fmt.Errorf("request failed with status %s: %s", resp.Status, er.Message)
+	return fmt.Errorf("request failed with status %s: %s", remoteText(resp.Status), remoteText(er.Message))
 }
