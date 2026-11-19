@@ -59,7 +59,10 @@ func runTests(m *testing.M) int {
 	// with "too many connections" on slow (-race) runners.
 	cfg.Git.MaxConnections = 10
 	cfg.Git.MaxTimeout = 100
-	cfg.Git.IdleTimeout = 1
+	// Long enough that no client, however slowed by a loaded machine, is
+	// timed out between its steps. A test that waits for the idle timeout
+	// serves its own daemon (startIdleDaemon).
+	cfg.Git.IdleTimeout = 600
 	cfg.Git.ListenAddr = fmt.Sprintf("127.0.0.1:%d", test.RandomPort()) // RandomPort checks only loopback
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
@@ -100,16 +103,49 @@ func runTests(m *testing.M) int {
 // answers fails the test instead of hanging it.
 func dialDaemon(t *testing.T) net.Conn {
 	t.Helper()
+	return dialDaemonAt(t, testDaemon.addr)
+}
+
+// dialDaemonAt is dialDaemon to the daemon at addr.
+func dialDaemonAt(t *testing.T, addr string) net.Conn {
+	t.Helper()
 	var dialer net.Dialer
-	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+	c, err := dialer.DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := c.SetReadDeadline(time.Now().Add(idleWait)); err != nil {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 	return c
+}
+
+// idleWait is how long a test waits for a daemon to answer or close a
+// connection, including one it closes once the idle timeout of
+// startIdleDaemon has passed.
+const idleWait = time.Minute
+
+// startIdleDaemon serves a daemon like the test daemon but with an idle
+// timeout of one second, for a test that waits for the timeout to pass, and
+// returns its address. A client of it cannot be sure to finish a step within
+// the timeout, so only a test that waits for it uses this daemon.
+func startIdleDaemon(t *testing.T) string {
+	t.Helper()
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = 1
+	ctx := backend.WithContext(config.WithContext(context.Background(), &cfg), testBackend)
+	d, err := NewGitDaemon(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+	return l.Addr().String()
 }
 
 // readPktline reads one pkt-line. An ERR packet is returned as a
@@ -138,7 +174,7 @@ func wantErrLine(t *testing.T, what string, err error, want error) {
 // TestIdleTimeout verifies a client that connects and never sends a request
 // is told it timed out once the idle timeout passes.
 func TestIdleTimeout(t *testing.T) {
-	c := dialDaemon(t)
+	c := dialDaemonAt(t, startIdleDaemon(t))
 	line, err := readPktline(c)
 	if err == nil {
 		t.Fatalf("expected a timeout, got line %q", line)
@@ -273,10 +309,11 @@ func clientGoroutines(t *testing.T) int {
 // twice into a channel with room for one, and blocked forever once the
 // handler had stopped listening.
 func TestFailedRequestDoesNotLeak(t *testing.T) {
+	addr := startIdleDaemon(t)
 	var dialer net.Dialer
 	dial := func() *net.TCPConn {
 		t.Helper()
-		c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+		c, err := dialer.DialContext(t.Context(), "tcp", addr)
 		if err != nil {
 			t.Fatalf("failed to connect to daemon: %v", err)
 		}
@@ -286,7 +323,7 @@ func TestFailedRequestDoesNotLeak(t *testing.T) {
 	// Idle until the daemon gives up on the request.
 	idle := dial()
 	defer idle.Close() //nolint:errcheck
-	_ = idle.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = idle.SetDeadline(time.Now().Add(idleWait))
 	if _, err := readPktline(idle); err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
 		t.Errorf("idle connection: expected %q, got %v", git.ErrTimeout, err)
 	}
@@ -298,7 +335,7 @@ func TestFailedRequestDoesNotLeak(t *testing.T) {
 		_ = c.Close()
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(idleWait)
 	for {
 		n := clientGoroutines(t)
 		if n == 0 {
@@ -928,19 +965,12 @@ func TestQuietCloneSlowPack(t *testing.T) {
 func TestNoErrAfterOutput(t *testing.T) {
 	const name = "idleafteradvert"
 	ensureRepo(t, name)
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", testDaemon.addr)
-	if err != nil {
-		t.Fatalf("failed to connect to daemon: %v", err)
-	}
-	defer c.Close() //nolint:errcheck
+	c := dialDaemonAt(t, startIdleDaemon(t))
 	if _, err := io.WriteString(c, pkt("git-upload-pack /"+name+".git\x00")); err != nil {
 		t.Fatal(err)
 	}
 	// Stay silent until the daemon gives up on the connection, then
 	// collect everything it sent.
-	if err := c.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
 	out, err := io.ReadAll(c)
 	if err != nil {
 		t.Fatalf("reading the response: %v", err)
