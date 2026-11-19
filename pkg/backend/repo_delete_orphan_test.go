@@ -125,7 +125,8 @@ func (s *rowAppearsStore) GetRepoByNameForUpdate(ctx context.Context, h db.Handl
 
 func (s *rowAppearsStore) maybeInsert(ctx context.Context, h db.Handler, name string) error {
 	if s.calls.Add(1) == s.insertAt && name == s.name {
-		return s.Store.CreateRepo(ctx, h, models.Repo{Name: name, UserID: s.userID})
+		_, err := s.Store.CreateRepo(ctx, h, models.Repo{Name: name, UserID: s.userID})
+		return err
 	}
 	return nil
 }

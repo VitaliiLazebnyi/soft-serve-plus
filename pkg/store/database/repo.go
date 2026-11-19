@@ -10,15 +10,17 @@ import (
 )
 
 // CreateRepo implements store.Store.
-func (*Store) CreateRepo(ctx context.Context, tx db.Handler, r models.Repo) error {
+func (*Store) CreateRepo(ctx context.Context, tx db.Handler, r models.Repo) (models.Repo, error) {
 	if r.UserID <= 0 {
 		// repos.user_id is NOT NULL and references users.
-		return fmt.Errorf("create repo %q: invalid owner user ID %d", r.Name, r.UserID)
+		return models.Repo{}, fmt.Errorf("create repo %q: invalid owner user ID %d", r.Name, r.UserID)
 	}
+	var m models.Repo
 	query := tx.Rebind(`INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at, user_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?);`)
-	_, err := tx.ExecContext(ctx, query, utils.SanitizeRepo(r.Name), r.ProjectName, r.Description, r.Private, r.Mirror, r.Hidden, r.Anonymous, r.UserID)
-	return err
+			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+			RETURNING *;`)
+	err := tx.GetContext(ctx, &m, query, utils.SanitizeRepo(r.Name), r.ProjectName, r.Description, r.Private, r.Mirror, r.Hidden, r.Anonymous, r.UserID)
+	return m, err
 }
 
 // DeleteRepoByName implements store.Store.

@@ -195,7 +195,8 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 	pub, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 	// A lock of the owner's, which verify lists for others as theirs.
-	is.NoErr(store.FromContext(f.ctx).CreateLFSLockForUser(f.ctx, db.FromContext(f.ctx), pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main"))
+	_, err = store.FromContext(f.ctx).CreateLFSLockForUser(f.ctx, db.FromContext(f.ctx), pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main")
+	is.NoErr(err)
 
 	oid := sha256Hex("x")
 	lfsJSON := map[string]string{"Accept": lfs.MediaType, "Content-Type": lfs.MediaType}

@@ -25,7 +25,8 @@ type RepositoryStore interface {
 	// fields are ignored. UserID must be an existing user; repositories
 	// created anonymously are owned by the default admin and marked
 	// Anonymous.
-	CreateRepo(ctx context.Context, h db.Handler, r models.Repo) error
+	// It returns the repository's row.
+	CreateRepo(ctx context.Context, h db.Handler, r models.Repo) (models.Repo, error)
 	// CountUserRepos counts the repositories userID created, leaving out
 	// those created anonymously that userID owns as the default admin.
 	CountUserRepos(ctx context.Context, h db.Handler, userID int64) (int64, error)

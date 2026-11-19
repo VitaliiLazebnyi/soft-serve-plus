@@ -154,7 +154,7 @@ func TestUserStore(t *testing.T) {
 func TestSetRepoMirrorSyncByName(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const owner = 100 // see newWebhookTestDB
-	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
 		t.Fatal(err)
 	}
 	get := func() (time.Time, bool, string, time.Time) {
@@ -204,7 +204,7 @@ func TestSetRepoMirrorSyncByName(t *testing.T) {
 func TestSetRepoMirrorSyncByNameHostileText(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const owner = 100 // see newWebhookTestDB
-	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ in, want string }{
@@ -230,7 +230,7 @@ func TestRepoStore(t *testing.T) {
 	const owner = 100 // see newWebhookTestDB
 
 	// Names are sanitised: no leading slash, no .git suffix.
-	if err := s.CreateRepo(ctx, dbx, models.Repo{
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{
 		Name:        "/team/app.git",
 		UserID:      owner,
 		ProjectName: "App",
@@ -251,7 +251,7 @@ func TestRepoStore(t *testing.T) {
 	if got, err := s.GetRepoByID(ctx, dbx, r.ID); err != nil || got.Name != "team/app" {
 		t.Errorf("GetRepoByID(%d) = %+v, %v", r.ID, got, err)
 	}
-	if err := s.CreateRepo(ctx, dbx, models.Repo{
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{
 		Name:   "team/app",
 		UserID: owner,
 	}); !errors.Is(err, db.ErrDuplicateKey) {
@@ -303,7 +303,7 @@ func TestRepoStore(t *testing.T) {
 
 	// Anonymous repositories are owned by someone but don't count against
 	// their limit.
-	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "anon", UserID: owner, Anonymous: true}); err != nil {
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "anon", UserID: owner, Anonymous: true}); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.CountUserRepos(ctx, dbx, owner); err != nil || n != 3 { // repo7, repo8, team/app
@@ -517,17 +517,17 @@ func TestLFSLockStore(t *testing.T) {
 	}
 
 	// Paths are stored as given; see TestLFSLockPathStoredAsGiven.
-	if err := s.CreateLFSLockForUser(ctx, dbx, 7, owner, "a.bin", "refs/heads/main"); err != nil {
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, owner, "a.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateLFSLockForUser(ctx, dbx, 7, other.ID, "b.bin", ""); err != nil {
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, other.ID, "b.bin", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateLFSLockForUser(ctx, dbx, 8, owner, "a.bin", ""); err != nil {
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 8, owner, "a.bin", ""); err != nil {
 		t.Fatal(err)
 	}
 	// One lock per path and repository.
-	if err := s.CreateLFSLockForUser(ctx, dbx, 7, other.ID, "a.bin", ""); !errors.Is(err, db.ErrDuplicateKey) {
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, other.ID, "a.bin", ""); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("CreateLFSLockForUser(locked path) error = %v, want ErrDuplicateKey", err)
 	}
 

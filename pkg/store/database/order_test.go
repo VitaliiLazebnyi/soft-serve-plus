@@ -19,7 +19,9 @@ func TestUserVisibleListsAreOrdered(t *testing.T) {
 	rs, us, cs, ts, ls := &Store{}, &Store{}, &Store{}, &Store{}, &Store{}
 
 	for _, name := range []string{"c", "a", "b"} {
-		is.NoErr(rs.CreateRepo(ctx, dbx, models.Repo{Name: name, UserID: 100, ProjectName: name}))
+		if _, err := rs.CreateRepo(ctx, dbx, models.Repo{Name: name, UserID: 100, ProjectName: name}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "repo7", "moved"))
 	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "a", "moved"))

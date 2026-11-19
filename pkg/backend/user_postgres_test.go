@@ -31,7 +31,7 @@ func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 		if err := tx.GetContext(e.ctx, &holder, `SELECT pg_backend_pid();`); err != nil {
 			return err
 		}
-		if err := e.be.store.CreateRepo(e.ctx, tx, models.Repo{
+		if _, err := e.be.store.CreateRepo(e.ctx, tx, models.Repo{
 			Name:   "owned",
 			UserID: owner.ID(),
 		}); err != nil {

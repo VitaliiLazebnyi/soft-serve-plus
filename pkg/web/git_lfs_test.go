@@ -73,7 +73,9 @@ func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 	is.NoErr(err)
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
-	is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"))
+	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
 	is.NoErr(err)
@@ -109,7 +111,9 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 	is.NoErr(err)
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
-	is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"))
+	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
 	is.NoErr(err)
 
@@ -167,7 +171,9 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 	is.NoErr(err)
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
-	is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"))
+	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
 	is.NoErr(err)
 

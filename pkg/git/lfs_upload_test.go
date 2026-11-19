@@ -54,7 +54,7 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := datastore.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: user.ID}); err != nil {
+	if _, err := datastore.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: user.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if r, err := datastore.GetRepoByName(ctx, dbx, "repo1"); err != nil || r.ID != (lfsTestRepo{}).ID() {

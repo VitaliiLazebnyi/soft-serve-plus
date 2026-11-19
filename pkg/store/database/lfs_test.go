@@ -46,7 +46,9 @@ func TestLFSLocksPagingSameSecond(t *testing.T) {
 
 	const n = 60
 	for i := range n {
-		is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "f"+strconv.Itoa(i), "refs/heads/main"))
+		if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "f"+strconv.Itoa(i), "refs/heads/main"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err := dbx.ExecContext(ctx, `UPDATE lfs_locks SET updated_at = '2026-01-01 00:00:00';`)
 	is.NoErr(err)
@@ -72,7 +74,9 @@ func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
 
 	const n = 20
 	for i := range n {
-		is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "f"+strconv.Itoa(i), "refs/heads/main"))
+		if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "f"+strconv.Itoa(i), "refs/heads/main"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	first, err := s.GetLFSLockForPath(ctx, dbx, 7, "f0")
 	is.NoErr(err)
@@ -82,7 +86,9 @@ func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
 		case 1:
 			is.NoErr(s.DeleteLFSLock(ctx, dbx, 7, first.ID))
 		case 2:
-			is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "new", "refs/heads/main"))
+			if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "new", "refs/heads/main"); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 	for i := range n {

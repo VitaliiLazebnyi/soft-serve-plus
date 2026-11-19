@@ -119,12 +119,8 @@ func (d *Backend) IsCollaborator(ctx context.Context, repo string, username stri
 	}
 
 	repo = utils.SanitizeRepo(repo)
-	var m models.Collab
-	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		var err error
-		m, err = d.store.GetCollabByUsernameAndRepo(ctx, tx, username, repo)
-		return err
-	}); err != nil {
+	m, err := d.store.GetCollabByUsernameAndRepo(ctx, d.db, username, repo)
+	if err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return -1, false, nil
 		}

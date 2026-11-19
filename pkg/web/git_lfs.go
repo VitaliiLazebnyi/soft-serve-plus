@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,9 +16,9 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 )
@@ -188,6 +187,26 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 	batchResponse.Transfer = lfs.TransferBasic
 	batchResponse.HashAlgo = lfs.HashAlgorithmSHA256
 
+	// The batch's objects are looked up in one query, not one each.
+	oids := make([]string, 0, len(batchRequest.Objects))
+	for _, o := range batchRequest.Objects {
+		if o.IsValid() {
+			oids = append(oids, o.Oid)
+		}
+	}
+	found, err := datastore.GetLFSObjectsByOids(ctx, dbx, repo.ID(), oids)
+	if err != nil {
+		logger.Error("error getting objects from database", "repo", name, "err", err)
+		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+			Message: "internal server error",
+		})
+		return
+	}
+	recorded := make(map[string]models.LFSObject, len(found))
+	for _, obj := range found {
+		recorded[obj.Oid] = obj
+	}
+
 	actionAuth := lfsActionAuthFor(r, repo.Name(), time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
 	// XXX: We don't support objects TTL for now, probably implement that with
@@ -219,14 +238,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			}
 			exist := err == nil && stat.Mode().IsRegular()
 
-			obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), o.Oid)
-			if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-				logger.Error("error getting object from database", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
-					Message: "internal server error",
-				})
-				return
-			}
+			obj := recorded[o.Oid]
 
 			// A download is read-only: the client's size is checked against
 			// the file and its record, never recorded. A file without a
@@ -282,7 +294,8 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			// The batch API omits actions for objects the server already
 			// has, so the client does not send them again.
 			// https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md#successful-responses
-			present, err := lfsObjectPresent(ctx, strg, dbx, datastore, repo.ID(), o)
+			obj, ok := recorded[o.Oid]
+			present, err := lfsObjectPresent(strg, obj, ok, o)
 			if err != nil {
 				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
 				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
@@ -327,15 +340,9 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 // regular file of that size in storage. A missing, truncated or overgrown file
 // is not present, so the client sends it again and the upload handler restores
 // it. The content is not hashed here, to keep batch requests cheap.
-func lfsObjectPresent(ctx context.Context, strg storage.Storage, dbx *db.DB, datastore store.Store, repoID int64, p lfs.Pointer) (bool, error) {
-	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repoID, p.Oid)
-	if errors.Is(err, db.ErrRecordNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if obj.Size != p.Size {
+// obj is the object's row, if recorded says it has one.
+func lfsObjectPresent(strg storage.Storage, obj models.LFSObject, recorded bool, p lfs.Pointer) (bool, error) {
+	if !recorded || obj.Size != p.Size {
 		return false, nil
 	}
 	stat, err := strg.Stat(path.Join("objects", p.RelativePath()))

@@ -19,8 +19,11 @@ func TestCreateRepoRequiresOwner(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	is.True(s.CreateRepo(ctx, dbx, models.Repo{Name: "ownerless", UserID: 0, Anonymous: true}) != nil)
-	is.NoErr(s.CreateRepo(ctx, dbx, models.Repo{Name: "owned", UserID: 100}))
+	_, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "ownerless", UserID: 0, Anonymous: true})
+	is.True(err != nil)
+	if _, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "owned", UserID: 100}); err != nil {
+		t.Fatal(err)
+	}
 	r, err := s.GetRepoByName(ctx, dbx, "owned")
 	is.NoErr(err)
 	is.Equal(r.UserID, int64(100))
@@ -112,7 +115,9 @@ func TestLFSLockWithoutRefname(t *testing.T) {
 	is.Equal(len(locks), 1)
 	is.True(!locks[0].Refname.Valid)
 
-	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"))
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 	lock, err := s.GetLFSLockForPath(ctx, dbx, 7, "b.bin")
 	is.NoErr(err)
 	is.Equal(lock.Refname.String, "refs/heads/main")

@@ -24,4 +24,7 @@ type LFSLock struct {
 	Refname   sql.NullString `db:"refname"`
 	CreatedAt time.Time      `db:"created_at"`
 	UpdatedAt time.Time      `db:"updated_at"`
+	// OwnerName is the username of the lock's owner (UserID). The lock
+	// reads fill it in; CreateLFSLockForUser leaves it empty.
+	OwnerName string `db:"owner_name"`
 }

@@ -61,7 +61,7 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 			return err
 		}
 		userID = u.ID
-		if err := s.CreateRepo(ctx, tx, models.Repo{Name: "repo", UserID: userID}); err != nil {
+		if _, err := s.CreateRepo(ctx, tx, models.Repo{Name: "repo", UserID: userID}); err != nil {
 			return err
 		}
 		r, err := s.GetRepoByName(ctx, tx, "repo")
@@ -69,7 +69,8 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 			return err
 		}
 		repoID = r.ID
-		return s.CreateLFSLockForUser(ctx, tx, repoID, userID, "foo.png", "refs/heads/main")
+		_, err = s.CreateLFSLockForUser(ctx, tx, repoID, userID, "foo.png", "refs/heads/main")
+		return err
 	}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

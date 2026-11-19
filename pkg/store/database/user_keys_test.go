@@ -56,8 +56,12 @@ func TestGetLFSLocksNonPositiveLimit(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "a.bin", "refs/heads/main"))
-	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"))
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "a.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, limit := range []int{0, -1} {
 		locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, limit)

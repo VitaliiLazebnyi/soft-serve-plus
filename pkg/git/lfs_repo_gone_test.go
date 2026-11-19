@@ -47,7 +47,7 @@ func TestLFSLockOnDeletedRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: admin.ID}); err != nil {
+	if _, err := st.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: admin.ID}); err != nil {
 		t.Fatal(err)
 	}
 	m, err := st.GetRepoByName(ctx, dbx, "repo1")

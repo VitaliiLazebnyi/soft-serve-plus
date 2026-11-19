@@ -34,8 +34,12 @@ func newLocksParamsContext(t *testing.T) context.Context {
 	is.NoErr(err)
 	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
-	is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "a.bin", "refs/heads/main"))
-	is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "b.bin", "refs/heads/main"))
+	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "a.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "b.bin", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx = proto.WithUserContext(ctx, owner)
 	return proto.WithRepositoryContext(ctx, repo)
@@ -181,10 +185,11 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 	repo := proto.RepositoryFromContext(ctx)
 	owner := proto.UserFromContext(ctx)
 
-	is := is.New(t)
 	const n = 30
 	for i := range n {
-		is.NoErr(datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "f"+strconv.Itoa(i)+".bin", "refs/heads/main"))
+		if _, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "f"+strconv.Itoa(i)+".bin", "refs/heads/main"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := dbx.ExecContext(ctx, `UPDATE lfs_locks SET updated_at = '2026-01-01 00:00:00';`); err != nil {
 		t.Fatalf("update: %v", err)
@@ -204,7 +209,7 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 				t.Fatalf("delete %s: %v", first, err)
 			}
 		case 2:
-			if err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "new.bin", "refs/heads/main"); err != nil {
+			if _, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "new.bin", "refs/heads/main"); err != nil {
 				t.Fatalf("create new.bin: %v", err)
 			}
 		}
