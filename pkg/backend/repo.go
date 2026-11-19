@@ -1044,11 +1044,14 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	// renamed is the row of the repository renamed, read and locked in the
 	// transaction.
 	var renamed models.Repo
+	// moved is set once the directory is at np.
+	moved := false
 
-	// The directory is moved inside the transaction, and the move is not
-	// undone if the transaction fails. Cancelling ctx after the move, as a
-	// client disconnecting does, would roll the new name back under the moved
-	// directory, so the rename and its event run to the end once started.
+	// The directory is moved inside the transaction, and moved back if the
+	// transaction fails, as when the commit does. Cancelling ctx after the
+	// move, as a client disconnecting does, would roll the new name back
+	// under the moved directory, so the rename and its event run to the end
+	// once started.
 	ctx = context.WithoutCancel(ctx)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
@@ -1068,11 +1071,15 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
 		}
+		moved = true
 
 		return nil
 	}); err != nil {
 		if claimed {
 			os.Remove(np) //nolint:errcheck
+		}
+		if moved {
+			d.moveRepoDirBack(oldName, op, np)
 		}
 		// claimRepoPath may have created the new name's group
 		// directories; do not leave them behind empty. Only empty
@@ -1107,6 +1114,19 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 
 	d.sendAfterChange(ctx, wh)
 	return nil
+}
+
+// moveRepoDirBack moves the directory of the repository oldName from np,
+// where a rename whose transaction then failed moved it, back to op, where
+// its row says it is. If that fails too, the directory stays at np without
+// a row: it is not served, it is reported when the server starts, and
+// nothing removes it.
+func (d *Backend) moveRepoDirBack(oldName, op, np string) {
+	err := withRepoParent(op, func() error { return os.Rename(np, op) })
+	if err != nil {
+		d.logger.Error("rename failed and the repository directory could not be moved back; move it back by hand",
+			"repo", oldName, "path", np, "want", op, "err", err)
+	}
 }
 
 // Repositories returns every repository.
