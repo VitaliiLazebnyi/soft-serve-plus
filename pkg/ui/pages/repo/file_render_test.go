@@ -92,14 +92,14 @@ func TestFileWithLongLineNotHighlighted(t *testing.T) {
 	select {
 	case cmd = <-done:
 	case <-time.After(time.Minute):
-		t.Fatal("Update did not return within 20s for a 1 MiB identifier")
+		t.Fatal("Update did not return within a minute for a 1 MiB identifier")
 	}
 	rendered := make(chan struct{})
 	go func() { deliverAll(f, cmd); close(rendered) }()
 	select {
 	case <-rendered:
 	case <-time.After(time.Minute):
-		t.Fatal("the render did not finish within 20s for a 1 MiB identifier")
+		t.Fatal("the render did not finish within a minute for a 1 MiB identifier")
 	}
 	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "aaaa") {
 		t.Fatal("the long line was highlighted, or is missing")

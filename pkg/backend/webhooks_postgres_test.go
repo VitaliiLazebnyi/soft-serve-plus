@@ -135,7 +135,7 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 // waitBlockedBy waits until some backend is waiting for a lock held by the
 // backend holder. It returns an error naming op, the operation it watches,
 // if result delivers first, meaning op finished without waiting, or if
-// nothing blocks within 10 seconds. It returns an error rather than failing
+// nothing blocks within a minute. It returns an error rather than failing
 // the test so a caller inside the holder's transaction can return it, which
 // rolls the transaction back and lets the waiting operation finish before
 // the test database is dropped.

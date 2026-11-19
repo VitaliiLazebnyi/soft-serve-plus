@@ -124,7 +124,7 @@ func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 		CmdFunc: func(c *exec.Cmd) {
 			c.Path = sh
 			c.Args = []string{"sh", "-c", "sleep 60 & echo $!; wait"}
-			c.WaitDelay = 100 * time.Millisecond
+			c.WaitDelay = 100 * time.Millisecond // meant to run out: the child holds stdout open
 		},
 	}, func(line string) {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))

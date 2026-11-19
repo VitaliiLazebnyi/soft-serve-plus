@@ -152,12 +152,12 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 	// reply; a request only a little over the limit leaves little unread.
 	get := func(path string) int {
 		// A loaded macOS drops a loopback connect now and then, which
-		// then times out; try again rather than fail.
+		// then times out; try again, for up to closeWait, rather than fail.
 		var conn net.Conn
 		var err error
-		for range 3 {
-			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String()) // one attempt of three
-			if err == nil {
+		for deadline := time.Now().Add(closeWait); ; {
+			conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", l.Addr().String()) // one attempt; the loop retries until the deadline
+			if err == nil || time.Now().After(deadline) {
 				break
 			}
 		}
