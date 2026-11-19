@@ -3,7 +3,6 @@ package backend
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -534,7 +533,7 @@ var errNoAdminUser = errors.New("no admin user found")
 // never fail to find one in practice.
 func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, error) {
 	adminID, err := d.store.FindDefaultAdminUserID(ctx, tx)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, db.ErrRecordNotFound) {
 		return 0, fmt.Errorf("%w to own anonymous repository", errNoAdminUser)
 	}
 	if err != nil {

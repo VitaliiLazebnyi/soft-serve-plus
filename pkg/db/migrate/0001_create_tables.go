@@ -2,7 +2,6 @@ package migrate
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -252,7 +251,7 @@ func importLegacyTables(ctx context.Context, tx *db.Tx) error {
 		if n > 0 {
 			// v0.6 repositories have no owner; give them to the first admin.
 			if err := tx.GetContext(ctx, &owner, "SELECT id FROM users WHERE admin = true ORDER BY id LIMIT 1"); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
+				if errors.Is(err, db.ErrRecordNotFound) {
 					return fmt.Errorf("no admin user to own the imported repositories: user %q exists and is not an admin; make a user an admin and try again", defaultAdminUsername)
 				}
 				return err

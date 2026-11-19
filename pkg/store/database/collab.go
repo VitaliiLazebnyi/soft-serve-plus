@@ -11,7 +11,7 @@ import (
 )
 
 // AddCollabByUsernameAndRepo implements store.Store.
-func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string, level access.AccessLevel) error {
+func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
@@ -19,7 +19,7 @@ func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, use
 
 	repo = utils.SanitizeRepo(repo)
 
-	query := tx.Rebind(`INSERT INTO collabs (access_level, user_id, repo_id, updated_at)
+	query := h.Rebind(`INSERT INTO collabs (access_level, user_id, repo_id, updated_at)
 			VALUES (
 				?,
 				(
@@ -30,12 +30,12 @@ func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, use
 				),
 				CURRENT_TIMESTAMP
 			);`)
-	_, err := tx.ExecContext(ctx, query, level, username, repo)
+	_, err := h.ExecContext(ctx, query, level, username, repo)
 	return err
 }
 
 // GetCollabByUsernameAndRepo implements store.Store.
-func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) (models.Collab, error) {
+func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) (models.Collab, error) {
 	var m models.Collab
 
 	username = strings.ToLower(username)
@@ -45,7 +45,7 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, use
 
 	repo = utils.SanitizeRepo(repo)
 
-	err := tx.GetContext(ctx, &m, tx.Rebind(`
+	err := h.GetContext(ctx, &m, h.Rebind(`
 		SELECT
 			collabs.*
 		FROM
@@ -60,11 +60,11 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, use
 }
 
 // ListCollabsByRepo implements store.Store.
-func (*Store) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo string) ([]models.Collab, error) {
+func (*Store) ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) ([]models.Collab, error) {
 	var m []models.Collab
 
 	repo = utils.SanitizeRepo(repo)
-	query := tx.Rebind(`
+	query := h.Rebind(`
 		SELECT
 			collabs.*
 		FROM
@@ -76,16 +76,16 @@ func (*Store) ListCollabsByRepo(ctx context.Context, tx db.Handler, repo string)
 			collabs.id
 	`)
 
-	err := tx.SelectContext(ctx, &m, query, repo)
+	err := h.SelectContext(ctx, &m, query, repo)
 	return m, err
 }
 
 // ListCollabsByRepoAsUsers implements store.Store.
-func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler, repo string) ([]models.User, error) {
+func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo string) ([]models.User, error) {
 	var m []models.User
 
 	repo = utils.SanitizeRepo(repo)
-	query := tx.Rebind(`
+	query := h.Rebind(`
 		SELECT
 			users.*
 		FROM
@@ -98,26 +98,26 @@ func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, tx db.Handler, repo 
 			users.username
 	`)
 
-	err := tx.SelectContext(ctx, &m, query, repo)
+	err := h.SelectContext(ctx, &m, query, repo)
 	return m, err
 }
 
 // ListCollabsByUserID implements store.Store.
-func (*Store) ListCollabsByUserID(ctx context.Context, tx db.Handler, userID int64) ([]models.Collab, error) {
+func (*Store) ListCollabsByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.Collab, error) {
 	var m []models.Collab
-	err := tx.SelectContext(ctx, &m, tx.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
+	err := h.SelectContext(ctx, &m, h.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
 	return m, err
 }
 
 // RemoveCollabByUsernameAndRepo implements store.Store.
-func (*Store) RemoveCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, username string, repo string) error {
+func (*Store) RemoveCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) error {
 	username = strings.ToLower(username)
 	if err := utils.ValidateUsername(username); err != nil {
 		return err
 	}
 
 	repo = utils.SanitizeRepo(repo)
-	query := tx.Rebind(`
+	query := h.Rebind(`
 		DELETE FROM
 			collabs
 		WHERE
@@ -127,7 +127,7 @@ func (*Store) RemoveCollabByUsernameAndRepo(ctx context.Context, tx db.Handler, 
 				SELECT id FROM repos WHERE name = ?
 			)
 	`)
-	res, err := tx.ExecContext(ctx, query, username, repo)
+	res, err := h.ExecContext(ctx, query, username, repo)
 	if err != nil {
 		return err
 	}

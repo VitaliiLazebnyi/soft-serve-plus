@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"github.com/matryer/is"
 )
 
@@ -66,7 +65,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 
 	// Scoped by repo: the same ID under another repo is not found.
 	_, err = s.GetWebhookByID(ctx, dbx, 8, id)
-	is.True(errors.Is(err, sql.ErrNoRows))
+	is.True(errors.Is(err, db.ErrRecordNotFound))
 
 	is.NoErr(s.UpdateWebhookByID(ctx, dbx, 7, id, "https://93.184.216.35/b", "new", 0, false))
 	wh, err = s.GetWebhookByID(ctx, dbx, 7, id)
@@ -94,7 +93,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	is.NoErr(err)
 	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, id))
 	_, err = s.GetWebhookByID(ctx, dbx, 7, id)
-	is.True(errors.Is(err, sql.ErrNoRows))
+	is.True(errors.Is(err, db.ErrRecordNotFound))
 }
 
 func TestWebhookStoreEvents(t *testing.T) {
@@ -149,8 +148,8 @@ func TestWebhookStoreEvents(t *testing.T) {
 		"missing":        {7, 424242, 4},
 	} {
 		_, err = s.GetActiveWebhookByIDWhereEvent(ctx, dbx, args.repoID, args.id, args.event)
-		if !errors.Is(err, sql.ErrNoRows) {
-			t.Errorf("%s: GetActiveWebhookByIDWhereEvent error = %v, want sql.ErrNoRows", name, err)
+		if !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("%s: GetActiveWebhookByIDWhereEvent error = %v, want db.ErrRecordNotFound", name, err)
 		}
 	}
 
@@ -253,7 +252,7 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 
 	// Scoped by webhook: another webhook's delivery ID is not found.
 	_, err = s.GetWebhookDeliveryByID(ctx, dbx, other, okID)
-	is.True(errors.Is(err, sql.ErrNoRows))
+	is.True(errors.Is(err, db.ErrRecordNotFound))
 
 	all, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
@@ -362,8 +361,8 @@ func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
 // else is.
 func TestIsForeignKeyViolation(t *testing.T) {
 	is := is.New(t)
-	is.True(isForeignKeyViolation(fmt.Errorf("wrapped: %w", &pq.Error{Code: "23503"})))
-	is.True(!isForeignKeyViolation(&pq.Error{Code: "23505"}))
+	is.True(isForeignKeyViolation(fmt.Errorf("wrapped: %w", db.ErrForeignKey)))
+	is.True(!isForeignKeyViolation(db.ErrDuplicateKey))
 	is.True(!isForeignKeyViolation(errors.New("FOREIGN KEY constraint failed")))
 	is.True(!isForeignKeyViolation(nil))
 

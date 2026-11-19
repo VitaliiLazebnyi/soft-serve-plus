@@ -877,6 +877,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("data path must not contain quotes or newlines: %q", c.DataPath)
 	}
 
+	// db.Open takes only these, so a mistyped driver fails here, with the
+	// setting named, rather than when the database is opened.
+	if c.DB.Driver != "sqlite" && c.DB.Driver != "postgres" {
+		return fmt.Errorf("db.driver: %q is not sqlite or postgres", c.DB.Driver)
+	}
+
 	// Use absolute paths
 	if !filepath.IsAbs(c.DataPath) {
 		dp, err := filepath.Abs(c.DataPath)
@@ -1052,7 +1058,7 @@ func (c *Config) Validate() error {
 		c.HTTP.TLSCertPath = filepath.Join(c.DataPath, c.HTTP.TLSCertPath)
 	}
 
-	if strings.HasPrefix(c.DB.Driver, "sqlite") {
+	if c.DB.Driver == "sqlite" {
 		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
 	}
 

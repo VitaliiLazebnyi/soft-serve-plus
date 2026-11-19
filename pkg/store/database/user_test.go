@@ -1,15 +1,15 @@
 package database
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/matryer/is"
 )
 
 // TestFindDefaultAdminUserID verifies that the default admin is the
-// lowest-ID admin, skipping lower-ID non-admins, and that sql.ErrNoRows is
+// lowest-ID admin, skipping lower-ID non-admins, and that db.ErrRecordNotFound is
 // returned when no user is an admin.
 func TestFindDefaultAdminUserID(t *testing.T) {
 	is := is.New(t)
@@ -22,7 +22,7 @@ func TestFindDefaultAdminUserID(t *testing.T) {
 	is.NoErr(err)
 
 	_, err = s.FindDefaultAdminUserID(ctx, dbx)
-	is.True(errors.Is(err, sql.ErrNoRows))
+	is.True(errors.Is(err, db.ErrRecordNotFound))
 
 	_, err = dbx.ExecContext(ctx, `INSERT INTO users (id, username, admin, updated_at) VALUES
 		(200, 'plain1', false, CURRENT_TIMESTAMP),

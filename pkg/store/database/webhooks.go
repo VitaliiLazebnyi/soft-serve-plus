@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -63,10 +62,10 @@ func (*Store) CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.
 	return err
 }
 
-// isForeignKeyViolation reports whether err is a foreign key violation from
-// SQLite or Postgres.
+// isForeignKeyViolation reports whether err, from a db.Handler, which maps
+// driver errors, is a foreign key violation.
 func isForeignKeyViolation(err error) bool {
-	return errors.Is(db.WrapError(err), db.ErrForeignKey)
+	return errors.Is(err, db.ErrForeignKey)
 }
 
 // CreateWebhookEvents implements store.Store.
@@ -200,14 +199,10 @@ func (*Store) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repoID int6
 // database's write lock until it ends, from BEGIN IMMEDIATE (see db.Open) or
 // from its first write, so callers that insert before they count take turns.
 func (*Store) LockAndCountWebhooks(ctx context.Context, h db.Handler, repoID int64) (int, error) {
-	switch driver := h.DriverName(); driver {
-	case "postgres":
+	if h.DriverName() == "postgres" {
 		if _, err := h.ExecContext(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR NO KEY UPDATE;`, repoID); err != nil {
 			return 0, err
 		}
-	case "sqlite":
-	default:
-		return 0, fmt.Errorf("lock and count webhooks: unsupported database driver %q", driver)
 	}
 	var n int
 	err := h.GetContext(ctx, &n, h.Rebind(`SELECT COUNT(*) FROM webhooks WHERE repo_id = ?;`), repoID)

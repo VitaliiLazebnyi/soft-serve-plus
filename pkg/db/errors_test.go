@@ -88,8 +88,6 @@ func TestWrapErrorSqliteConstraints(t *testing.T) {
 		{"unique", `INSERT INTO children (parent_id, name) VALUES (1, 'a')`, ErrDuplicateKey},
 		{"foreign key", `INSERT INTO children (parent_id, name) VALUES (2, 'b')`, ErrForeignKey},
 		{"foreign key delete", `DELETE FROM parents WHERE id = 1`, ErrForeignKey},
-		{"not null", `INSERT INTO children (parent_id, name) VALUES (NULL, 'c')`, ErrNotNull},
-		{"check", `INSERT INTO children (parent_id, name, age) VALUES (1, 'd', -1)`, ErrCheck},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := dbx.ExecContext(ctx, tc.query)
@@ -126,8 +124,6 @@ func TestWrapErrorPostgresConstraints(t *testing.T) {
 	}{
 		{&pq.Error{Code: "23505"}, ErrDuplicateKey},
 		{&pq.Error{Code: "23503"}, ErrForeignKey},
-		{&pq.Error{Code: "23502"}, ErrNotNull},
-		{&pq.Error{Code: "23514"}, ErrCheck},
 	} {
 		if got := WrapError(tc.err); !errors.Is(got, tc.want) || got.Error() != tc.want.Error() {
 			t.Errorf("WrapError(%s) => %v, want %v", tc.err.Code, got, tc.want)

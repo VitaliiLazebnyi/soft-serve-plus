@@ -606,7 +606,7 @@ func lookupHook(ctx context.Context, w models.Webhook, event Event) (models.Webh
 	lctx, cancel := context.WithTimeout(ctx, rereadTimeout)
 	defer cancel()
 	cur, err := store.FromContext(ctx).GetActiveWebhookByIDWhereEvent(lctx, db.FromContext(ctx), w.RepoID, w.ID, int(event))
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, db.ErrRecordNotFound) {
 		return models.Webhook{}, false, nil
 	}
 	if err != nil {

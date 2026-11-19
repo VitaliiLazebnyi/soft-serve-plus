@@ -2,7 +2,6 @@ package migrate
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -222,7 +221,7 @@ func keyOwner(ctx context.Context, tx *db.Tx, ak string) (keyOwnerRow, bool, err
 		FROM users
 		INNER JOIN public_keys ON users.id = public_keys.user_id
 		WHERE public_keys.public_key = ?`), ak)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, db.ErrRecordNotFound) {
 		return o, false, nil
 	}
 	if err != nil {
@@ -244,7 +243,7 @@ func adminUserID(ctx context.Context, tx *db.Tx, logger *log.Logger) (id int64, 
 	if err == nil {
 		return id, true, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if !errors.Is(err, db.ErrRecordNotFound) {
 		return 0, false, fmt.Errorf("look up admin user: %w", err)
 	}
 
@@ -264,7 +263,7 @@ func adminUserID(ctx context.Context, tx *db.Tx, logger *log.Logger) (id int64, 
 	}
 
 	err = tx.GetContext(ctx, &id, byName, defaultAdminUsername, true)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, db.ErrRecordNotFound) {
 		logger.Warn("no admin user to attach initial admin keys to, and the username is taken by a non-admin user",
 			"user", defaultAdminUsername)
 		return 0, false, nil
@@ -372,14 +371,9 @@ func fingerprint(ak string) string {
 }
 
 // insertIgnore builds an INSERT that does nothing on a unique conflict on
-// column, for the transaction's driver. rest starts at "INTO". Naming the
-// column keeps an unrelated conflict, such as a primary key clash, an error
-// on both sqlite (3.24 and later) and postgres, unlike INSERT OR IGNORE.
+// column. rest starts at "INTO". Naming the column keeps an unrelated
+// conflict, such as a primary key clash, an error on both sqlite (3.24 and
+// later) and postgres, unlike INSERT OR IGNORE.
 func insertIgnore(tx *db.Tx, rest, column string) string {
-	switch tx.DriverName() {
-	case "sqlite", "postgres":
-		return tx.Rebind("INSERT " + rest + " ON CONFLICT (" + column + ") DO NOTHING")
-	default:
-		return tx.Rebind("INSERT " + rest)
-	}
+	return tx.Rebind("INSERT " + rest + " ON CONFLICT (" + column + ") DO NOTHING")
 }

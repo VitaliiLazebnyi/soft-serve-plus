@@ -12,8 +12,7 @@ import (
 
 // Open opens a new, empty test database: Postgres when SOFT_SERVE_DB_DRIVER
 // is "postgres" (on the server named by SOFT_SERVE_DB_DATA_SOURCE), SQLite
-// otherwise. The database is removed when the test is done. If ctx is nil,
-// context.TODO() is used.
+// otherwise. The database is removed when the test is done.
 func Open(ctx context.Context, tb testing.TB) (*db.DB, error) {
 	return test.Open(ctx, tb)
 }

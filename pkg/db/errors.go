@@ -18,20 +18,16 @@ var (
 	// deleted.
 	ErrForeignKey = errors.New("value violates foreign key constraint")
 
-	// ErrNotNull is a not-null constraint violation error.
-	ErrNotNull = errors.New("null value violates not-null constraint")
-
-	// ErrCheck is a check constraint violation error.
-	ErrCheck = errors.New("value violates check constraint")
-
-	// ErrRecordNotFound is returned when a record is not found.
+	// ErrRecordNotFound is returned when a record is not found. It is
+	// sql.ErrNoRows under the name the rest of the code uses: a lookup
+	// that finds no row and a write that matches none both return it.
 	ErrRecordNotFound = sql.ErrNoRows
 )
 
 // WrapError maps database driver errors to the errors of this package. It
 // finds driver errors in err's chain, so err may be a driver error wrapped
 // with fmt.Errorf and %w. A constraint violation becomes an error that
-// errors.Is reports as ErrDuplicateKey, ErrForeignKey, ErrNotNull or ErrCheck
+// errors.Is reports as ErrDuplicateKey or ErrForeignKey
 // and whose message is that error's; the driver error stays in its chain, so
 // errors.As still finds it. sql.ErrNoRows becomes ErrRecordNotFound. An error
 // that is already mapped, and any other error, is returned unchanged.
@@ -60,10 +56,6 @@ func WrapError(err error) error {
 				return &mappedError{ErrDuplicateKey, err}
 			case sqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY:
 				return &mappedError{ErrForeignKey, err}
-			case sqlitelib.SQLITE_CONSTRAINT_NOTNULL:
-				return &mappedError{ErrNotNull, err}
-			case sqlitelib.SQLITE_CONSTRAINT_CHECK:
-				return &mappedError{ErrCheck, err}
 			}
 		}
 
@@ -75,10 +67,6 @@ func WrapError(err error) error {
 				return &mappedError{ErrDuplicateKey, err}
 			case "23503": // foreign_key_violation
 				return &mappedError{ErrForeignKey, err}
-			case "23502": // not_null_violation
-				return &mappedError{ErrNotNull, err}
-			case "23514": // check_violation
-				return &mappedError{ErrCheck, err}
 			}
 		}
 	}
