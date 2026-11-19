@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -110,7 +111,11 @@ func TestAboutRepoOwnedByAdmin(t *testing.T) {
 
 	// Created anonymously before the name was reserved: the row names an
 	// admin as owner, but it is not shown.
-	is.NoErr(be.store.CreateRepo(ctx, be.db, AboutRepo, admin.ID(), "", "", false, false, false, true))
+	is.NoErr(be.store.CreateRepo(ctx, be.db, models.Repo{
+		Name:      AboutRepo,
+		UserID:    admin.ID(),
+		Anonymous: true,
+	}))
 	r := aboutRepo()
 	is.Equal(r.UserID(), admin.ID())
 	is.True(!be.AboutRepoOwnedByAdmin(ctx, r))

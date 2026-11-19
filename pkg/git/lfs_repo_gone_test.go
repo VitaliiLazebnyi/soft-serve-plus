@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
@@ -40,13 +41,13 @@ func TestLFSLockOnDeletedRepository(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New(ctx, dbx)
+	st := database.New()
 
 	admin, err := st.FindUserByUsername(ctx, dbx, "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateRepo(ctx, dbx, "repo1", admin.ID, "", "", false, false, false, false); err != nil {
+	if err := st.CreateRepo(ctx, dbx, models.Repo{Name: "repo1", UserID: admin.ID}); err != nil {
 		t.Fatal(err)
 	}
 	m, err := st.GetRepoByName(ctx, dbx, "repo1")

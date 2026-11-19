@@ -58,7 +58,7 @@ func isSqlite(dbx *db.DB) bool {
 func TestWebhookStoreRoundTrip(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "sec", 1, true)
 	is.NoErr(err)
@@ -107,7 +107,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 func TestWebhookStoreEvents(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 
 	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
 	is.NoErr(err)
@@ -207,7 +207,7 @@ func TestWebhookStoreEvents(t *testing.T) {
 func TestWebhookStoreDeliveries(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 
 	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
 	is.NoErr(err)
@@ -216,9 +216,36 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 
 	okID := uuid.New()
 	failID := uuid.New()
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, okID, hook, 4, "https://93.184.216.34/a", "POST", nil, "H: 1", `{"a":1}`, 200, "R: 1", "ok"))
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, failID, hook, 5, "https://93.184.216.34/a", "POST", errors.New("dial refused"), "", "{}", 0, "", ""))
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, uuid.New(), other, 6, "https://93.184.216.35/b", "POST", nil, "", "{}", 204, "", ""))
+	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:              okID,
+		WebhookID:       hook,
+		Event:           4,
+		RequestURL:      "https://93.184.216.34/a",
+		RequestMethod:   "POST",
+		RequestHeaders:  "H: 1",
+		RequestBody:     `{"a":1}`,
+		ResponseStatus:  200,
+		ResponseHeaders: "R: 1",
+		ResponseBody:    "ok",
+	}))
+	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:            failID,
+		WebhookID:     hook,
+		Event:         5,
+		RequestURL:    "https://93.184.216.34/a",
+		RequestMethod: "POST",
+		RequestError:  sql.NullString{String: "dial refused", Valid: true},
+		RequestBody:   "{}",
+	}))
+	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:             uuid.New(),
+		WebhookID:      other,
+		Event:          6,
+		RequestURL:     "https://93.184.216.35/b",
+		RequestMethod:  "POST",
+		RequestBody:    "{}",
+		ResponseStatus: 204,
+	}))
 
 	d, err := s.GetWebhookDeliveryByID(ctx, dbx, hook, okID)
 	is.NoErr(err)
@@ -266,11 +293,17 @@ func deleteWebhookDelivery(t *testing.T, ctx context.Context, dbx *db.DB, id uui
 func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
 	is.NoErr(err)
 	did := uuid.New()
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, did, id, 4, "u", "POST", nil, "", "", 0, "", ""))
+	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:            did,
+		WebhookID:     id,
+		Event:         4,
+		RequestURL:    "u",
+		RequestMethod: "POST",
+	}))
 	is.NoErr(dbx.Close())
 
 	checks := map[string]error{}
@@ -290,7 +323,13 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["GetWebhookDeliveryByID"] = s.GetWebhookDeliveryByID(ctx, dbx, id, did)
 	_, checks["GetWebhookDeliveriesByWebhookID"] = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["ListWebhookDeliveriesByWebhookID"] = s.ListWebhookDeliveriesByWebhookID(ctx, dbx, id)
-	checks["CreateWebhookDelivery"] = s.CreateWebhookDelivery(ctx, dbx, uuid.New(), id, 4, "u", "POST", nil, "", "", 0, "", "")
+	checks["CreateWebhookDelivery"] = s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:            uuid.New(),
+		WebhookID:     id,
+		Event:         4,
+		RequestURL:    "u",
+		RequestMethod: "POST",
+	})
 	checks["PruneWebhookDeliveries"] = s.PruneWebhookDeliveries(ctx, dbx, id, 1)
 
 	for name, err := range checks {
@@ -307,12 +346,20 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
 	is.NoErr(err)
 	vanishOnInsert(t, ctx, dbx, id)
 
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, uuid.New(), id, 1, "https://93.184.216.34/a", "POST", nil, "", "{}", 200, "", ""))
+	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:             uuid.New(),
+		WebhookID:      id,
+		Event:          1,
+		RequestURL:     "https://93.184.216.34/a",
+		RequestMethod:  "POST",
+		RequestBody:    "{}",
+		ResponseStatus: 200,
+	}))
 
 	var n int
 	is.NoErr(dbx.GetContext(ctx, &n, "SELECT COUNT(*) FROM webhook_deliveries"))
@@ -341,7 +388,7 @@ func TestIsForeignKeyViolation(t *testing.T) {
 func TestWebhookListsAreOrderedByID(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	var ids []int64
 	for _, n := range []int{9, 10, 1} {
 		id, err := s.CreateWebhook(ctx, dbx, 7, fmt.Sprintf("https://93.184.216.34/?n=%d", n), "", 1, true)
@@ -371,7 +418,7 @@ func TestWebhookListsAreOrderedByID(t *testing.T) {
 func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 
 	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
 	is.NoErr(err)
@@ -380,7 +427,15 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 
 	insert := func(webhookID int64) uuid.UUID {
 		id := uuid.New()
-		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, id, webhookID, 1, "https://93.184.216.34/a", "POST", nil, "", "{}", 200, "", ""))
+		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+			ID:             id,
+			WebhookID:      webhookID,
+			Event:          1,
+			RequestURL:     "https://93.184.216.34/a",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		}))
 		return id
 	}
 
@@ -432,14 +487,22 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 func TestWebhookDeliveryListingsAreLimited(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
 	is.NoErr(err)
 
 	var ids []uuid.UUID
 	for range maxListedWebhookDeliveries + 5 {
 		id := uuid.New()
-		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, id, hook, 1, "u", "POST", nil, "", "{}", 200, "", ""))
+		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+			ID:             id,
+			WebhookID:      hook,
+			Event:          1,
+			RequestURL:     "u",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		}))
 		ids = append(ids, id)
 	}
 	want := ids[5:]
@@ -463,7 +526,7 @@ func TestWebhookDeliveryListingsAreLimited(t *testing.T) {
 func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
 	is.NoErr(err)
 	other, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 1, true)
@@ -474,12 +537,28 @@ func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 	ids := make([]uuid.UUID, 8)
 	for i := range ids {
 		ids[i] = uuid.MustParse(fmt.Sprintf("%08d-0000-1000-8000-000000000000", 99-i))
-		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, ids[i], hook, 1, "u", "POST", nil, "", "{}", 200, "", ""))
+		is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+			ID:             ids[i],
+			WebhookID:      hook,
+			Event:          1,
+			RequestURL:     "u",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		}))
 		_, err := dbx.ExecContext(ctx, dbx.Rebind(`UPDATE webhook_deliveries SET created_at = ? WHERE id = ?;`),
 			fmt.Sprintf("2024-01-01 00:00:%02d", 59-i), ids[i])
 		is.NoErr(err)
 		if i < 3 {
-			is.NoErr(s.CreateWebhookDelivery(ctx, dbx, uuid.New(), other, 1, "u", "POST", nil, "", "{}", 200, "", ""))
+			is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+				ID:             uuid.New(),
+				WebhookID:      other,
+				Event:          1,
+				RequestURL:     "u",
+				RequestMethod:  "POST",
+				RequestBody:    "{}",
+				ResponseStatus: 200,
+			}))
 		}
 	}
 
@@ -551,7 +630,7 @@ func idsOf(whs []models.Webhook) []int64 {
 func TestLockAndCountWebhooks(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	n, err := s.LockAndCountWebhooks(ctx, dbx, 7)
 	is.NoErr(err)
 	is.Equal(n, 0)

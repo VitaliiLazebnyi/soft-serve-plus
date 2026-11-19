@@ -28,7 +28,7 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &userStore{}
+	s := &Store{}
 
 	good1 := newTestPublicKey(t)
 	good2 := newTestPublicKey(t)
@@ -54,7 +54,7 @@ func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
 func TestGetLFSLocksNonPositiveLimit(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &lfsStore{}
+	s := &Store{}
 
 	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "a.bin", "refs/heads/main"))
 	is.NoErr(s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"))

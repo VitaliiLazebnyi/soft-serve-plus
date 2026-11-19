@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -52,7 +53,15 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return be.store.CreateWebhookDelivery(ctx, tx, delID, hookID, int(webhook.EventPush), "http://127.0.0.1:1/", "POST", nil, "", "{}", 200, "", "")
+		return be.store.CreateWebhookDelivery(ctx, tx, models.WebhookDelivery{
+			ID:             delID,
+			WebhookID:      hookID,
+			Event:          int(webhook.EventPush),
+			RequestURL:     "http://127.0.0.1:1/",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		})
 	}))
 
 	written := make(chan struct{})

@@ -41,7 +41,7 @@ func newTestUIContext(t *testing.T) context.Context {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	return backend.WithContext(ctx, backend.New(ctx, cfg, dbx, dbstore))
 }

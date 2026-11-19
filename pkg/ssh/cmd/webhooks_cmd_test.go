@@ -143,12 +143,18 @@ func whAwaitDeliveries(t *testing.T, ctx context.Context, be *backend.Backend, r
 func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.UUID, status int) {
 	t.Helper()
 	is := is.New(t)
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(
-		ctx, db.FromContext(ctx), id, hookID, int(webhook.EventPush),
-		whURL, "POST", nil,
-		"Content-Type: application/json\nX-SoftServe-Event: push\n", `{"ref":"main"}`,
-		status, "X-Reply: yes\n", "reply body",
-	))
+	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+		ID:              id,
+		WebhookID:       hookID,
+		Event:           int(webhook.EventPush),
+		RequestURL:      whURL,
+		RequestMethod:   "POST",
+		RequestHeaders:  "Content-Type: application/json\nX-SoftServe-Event: push\n",
+		RequestBody:     `{"ref":"main"}`,
+		ResponseStatus:  status,
+		ResponseHeaders: "X-Reply: yes\n",
+		ResponseBody:    "reply body",
+	}))
 }
 
 func TestWebhookCreatePersistsEveryFlag(t *testing.T) {

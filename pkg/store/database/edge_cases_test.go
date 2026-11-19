@@ -17,13 +17,13 @@ import (
 func TestCreateRepoRequiresOwner(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &repoStore{}
+	s := &Store{}
 
-	is.True(s.CreateRepo(ctx, dbx, "ownerless", 0, "", "", false, false, false, true) != nil)
-	is.NoErr(s.CreateRepo(ctx, dbx, "owned", 100, "", "", false, false, false, false))
+	is.True(s.CreateRepo(ctx, dbx, models.Repo{Name: "ownerless", UserID: 0, Anonymous: true}) != nil)
+	is.NoErr(s.CreateRepo(ctx, dbx, models.Repo{Name: "owned", UserID: 100}))
 	r, err := s.GetRepoByName(ctx, dbx, "owned")
 	is.NoErr(err)
-	is.Equal(r.UserID.Int64, int64(100))
+	is.Equal(r.UserID, int64(100))
 }
 
 // Changing a repository or a user moves its updated_at.
@@ -37,7 +37,7 @@ func TestUpdatesSetUpdatedAt(t *testing.T) {
 	is.NoErr(err)
 	cutoff := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	rs := &repoStore{}
+	rs := &Store{}
 	for name, set := range map[string]func(name string) error{
 		"description":  func(n string) error { return rs.SetRepoDescriptionByName(ctx, dbx, n, "d") },
 		"private":      func(n string) error { return rs.SetRepoIsPrivateByName(ctx, dbx, n, true) },
@@ -59,7 +59,7 @@ func TestUpdatesSetUpdatedAt(t *testing.T) {
 	is.NoErr(err)
 	is.True(r.UpdatedAt.After(cutoff))
 
-	us := &userStore{}
+	us := &Store{}
 	user := func(name string) models.User {
 		t.Helper()
 		u, err := us.FindUserByUsername(ctx, dbx, name)
@@ -83,7 +83,7 @@ func TestUpdatesSetUpdatedAt(t *testing.T) {
 func TestAllowKeylessStoredAsText(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &settingsStore{}
+	s := &Store{}
 	for _, allow := range []bool{false, true} {
 		is.NoErr(s.SetAllowKeylessAccess(ctx, dbx, allow))
 		var raw string
@@ -106,7 +106,7 @@ func TestLFSLockWithoutRefname(t *testing.T) {
 	_, err := dbx.ExecContext(ctx, `INSERT INTO lfs_locks (repo_id, user_id, path, refname, updated_at)
 		VALUES (7, 100, 'a.bin', NULL, CURRENT_TIMESTAMP);`)
 	is.NoErr(err)
-	s := &lfsStore{}
+	s := &Store{}
 	locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10)
 	is.NoErr(err)
 	is.Equal(len(locks), 1)
@@ -122,7 +122,7 @@ func TestLFSLockWithoutRefname(t *testing.T) {
 func TestGetWebhooksByRepoIDWhereEventReturnsEachOnce(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
 	is.NoErr(err)
 	is.NoErr(s.CreateWebhookEvents(ctx, dbx, id, []int{1, 2, 3}))
@@ -138,7 +138,7 @@ func TestGetWebhooksByRepoIDWhereEventReturnsEachOnce(t *testing.T) {
 func TestCreateWebhookDeliveryForeignKeyViolationInTransaction(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
-	s := &webhookStore{}
+	s := &Store{}
 	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
 	is.NoErr(err)
 	keep, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 1, true)
@@ -146,14 +146,30 @@ func TestCreateWebhookDeliveryForeignKeyViolationInTransaction(t *testing.T) {
 	vanishOnInsert(t, ctx, dbx, id)
 
 	is.NoErr(dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		if err := s.CreateWebhookDelivery(ctx, tx, uuid.New(), id, 1, "u", "POST", nil, "", "{}", 200, "", ""); err != nil {
+		if err := s.CreateWebhookDelivery(ctx, tx, models.WebhookDelivery{
+			ID:             uuid.New(),
+			WebhookID:      id,
+			Event:          1,
+			RequestURL:     "u",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		}); err != nil {
 			return err
 		}
 		if err := s.PruneWebhookDeliveries(ctx, tx, id, 10); err != nil {
 			return err
 		}
 		// Writes after the skipped insert are kept.
-		return s.CreateWebhookDelivery(ctx, tx, uuid.New(), keep, 1, "u", "POST", nil, "", "{}", 200, "", "")
+		return s.CreateWebhookDelivery(ctx, tx, models.WebhookDelivery{
+			ID:             uuid.New(),
+			WebhookID:      keep,
+			Event:          1,
+			RequestURL:     "u",
+			RequestMethod:  "POST",
+			RequestBody:    "{}",
+			ResponseStatus: 200,
+		})
 	}))
 
 	var n int

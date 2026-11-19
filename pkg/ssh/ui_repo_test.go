@@ -40,7 +40,7 @@ func newRepoTestUI(t *testing.T) *UI {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New(ctx, dbx)
+	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	ctx = backend.WithContext(ctx, be)

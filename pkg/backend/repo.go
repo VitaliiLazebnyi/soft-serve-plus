@@ -431,18 +431,16 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			userID = adminID
 		}
 
-		if err := d.store.CreateRepo(
-			ctx,
-			tx,
-			name,
-			userID,
-			opts.ProjectName,
-			opts.Description,
-			opts.Private,
-			opts.Hidden,
-			opts.Mirror,
-			anonymous,
-		); err != nil {
+		if err := d.store.CreateRepo(ctx, tx, models.Repo{
+			Name:        name,
+			UserID:      userID,
+			ProjectName: opts.ProjectName,
+			Description: opts.Description,
+			Private:     opts.Private,
+			Hidden:      opts.Hidden,
+			Mirror:      opts.Mirror,
+			Anonymous:   anonymous,
+		}); err != nil {
 			return err
 		}
 
@@ -1403,13 +1401,11 @@ func setRemotesMirror(r *git.Repository, rcfg repoConfig, mirror bool) error {
 func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg repoConfig) error {
 	// As in the job, an owner that cannot be looked up is nobody.
 	var owner proto.User
-	if m.UserID.Valid {
-		um, err := d.store.GetUserByID(ctx, d.db, m.UserID.Int64)
-		if err == nil {
-			owner = &user{user: um}
-		} else if !errors.Is(err, db.ErrRecordNotFound) {
-			return err
-		}
+	um, err := d.store.GetUserByID(ctx, d.db, m.UserID)
+	if err == nil {
+		owner = &user{user: um}
+	} else if !errors.Is(err, db.ErrRecordNotFound) {
+		return err
 	}
 	policy := RemotePolicy(d.cfg, owner)
 
@@ -1625,10 +1621,7 @@ func (r *repo) ID() int64 {
 //
 // It implements proto.Repository.
 func (r *repo) UserID() int64 {
-	if r.repo.UserID.Valid {
-		return r.repo.UserID.Int64
-	}
-	return 0
+	return r.repo.UserID
 }
 
 // Description returns the repository's description.

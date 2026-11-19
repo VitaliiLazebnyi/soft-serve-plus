@@ -13,6 +13,7 @@ import (
 	charmlog "charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -441,8 +442,17 @@ func (e whEnv) seedDelivery(t *testing.T, webhookID int64, url string, body stri
 	is := is.New(t)
 	id := uuid.New()
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.CreateWebhookDelivery(e.ctx, tx, id, webhookID, int(webhook.EventPush), url, "POST",
-			nil, "X-Test: 1\n", body, 200, "", "ok")
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, models.WebhookDelivery{
+			ID:             id,
+			WebhookID:      webhookID,
+			Event:          int(webhook.EventPush),
+			RequestURL:     url,
+			RequestMethod:  "POST",
+			RequestHeaders: "X-Test: 1\n",
+			RequestBody:    body,
+			ResponseStatus: 200,
+			ResponseBody:   "ok",
+		})
 	}))
 	return id
 }
@@ -829,8 +839,17 @@ func TestRedeliverUsesStoredContentTypeAfterWebhookChanged(t *testing.T) {
 	// Record a form delivery, then switch the webhook to JSON.
 	delID := uuid.New()
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.CreateWebhookDelivery(e.ctx, tx, delID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
-			nil, "Content-Type: application/x-www-form-urlencoded\nX-Test: 1\n", body, 200, "", "ok")
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, models.WebhookDelivery{
+			ID:             delID,
+			WebhookID:      id,
+			Event:          int(webhook.EventPush),
+			RequestURL:     "http://127.0.0.1:1/",
+			RequestMethod:  "POST",
+			RequestHeaders: "Content-Type: application/x-www-form-urlencoded\nX-Test: 1\n",
+			RequestBody:    body,
+			ResponseStatus: 200,
+			ResponseBody:   "ok",
+		})
 	}))
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
@@ -861,8 +880,17 @@ func TestRedeliverFallsBackOnUnknownStoredContentType(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 	delID := uuid.New()
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.CreateWebhookDelivery(e.ctx, tx, delID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
-			nil, "Content-Type: text/xml\nX-Test: 1\n", `{"ref":"main"}`, 200, "", "ok")
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, models.WebhookDelivery{
+			ID:             delID,
+			WebhookID:      id,
+			Event:          int(webhook.EventPush),
+			RequestURL:     "http://127.0.0.1:1/",
+			RequestMethod:  "POST",
+			RequestHeaders: "Content-Type: text/xml\nX-Test: 1\n",
+			RequestBody:    `{"ref":"main"}`,
+			ResponseStatus: 200,
+			ResponseBody:   "ok",
+		})
 	}))
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
@@ -938,8 +966,17 @@ func TestRedeliverKeepsDeliveryGUID(t *testing.T) {
 	guid := uuid.New()
 	delID := uuid.New()
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.CreateWebhookDelivery(e.ctx, tx, delID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
-			nil, "Content-Type: application/json\nX-Softserve-Delivery: "+guid.String()+"\n", `{"ref":"main"}`, 200, "", "ok")
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, models.WebhookDelivery{
+			ID:             delID,
+			WebhookID:      id,
+			Event:          int(webhook.EventPush),
+			RequestURL:     "http://127.0.0.1:1/",
+			RequestMethod:  "POST",
+			RequestHeaders: "Content-Type: application/json\nX-Softserve-Delivery: " + guid.String() + "\n",
+			RequestBody:    `{"ref":"main"}`,
+			ResponseStatus: 200,
+			ResponseBody:   "ok",
+		})
 	}))
 
 	headers := e.redeliveredHeaders(t, id, delID)
@@ -971,8 +1008,17 @@ func TestRedeliverWithoutStoredGUIDUsesDeliveryID(t *testing.T) {
 
 	badID := uuid.New()
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.CreateWebhookDelivery(e.ctx, tx, badID, id, int(webhook.EventPush), "http://127.0.0.1:1/", "POST",
-			nil, "X-Softserve-Delivery: not-a-uuid\n", `{"ref":"main"}`, 200, "", "ok")
+		return e.be.store.CreateWebhookDelivery(e.ctx, tx, models.WebhookDelivery{
+			ID:             badID,
+			WebhookID:      id,
+			Event:          int(webhook.EventPush),
+			RequestURL:     "http://127.0.0.1:1/",
+			RequestMethod:  "POST",
+			RequestHeaders: "X-Softserve-Delivery: not-a-uuid\n",
+			RequestBody:    `{"ref":"main"}`,
+			ResponseStatus: 200,
+			ResponseBody:   "ok",
+		})
 	}))
 	headers = e.redeliveredHeaders(t, id, badID)
 	is.True(strings.Contains(headers, "X-Softserve-Delivery: "+badID.String()+"\n"))

@@ -1,33 +1,14 @@
 package database
 
-import (
-	"context"
+import "github.com/charmbracelet/soft-serve/pkg/store"
 
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/store"
-)
+// Store implements store.Store on a SQL database. It holds no state: each
+// method runs on the db.Handler it is given, the pool or a transaction.
+type Store struct{}
 
-type datastore struct {
-	*settingsStore
-	*repoStore
-	*userStore
-	*collabStore
-	*lfsStore
-	*accessTokenStore
-	*webhookStore
-}
+var _ store.Store = (*Store)(nil)
 
-// New returns a new store.Store database.
-func New(context.Context, *db.DB) store.Store {
-	s := &datastore{
-		settingsStore:    &settingsStore{},
-		repoStore:        &repoStore{},
-		userStore:        &userStore{},
-		collabStore:      &collabStore{},
-		lfsStore:         &lfsStore{},
-		accessTokenStore: &accessTokenStore{},
-		webhookStore:     &webhookStore{},
-	}
-
-	return s
+// New returns a Store.
+func New() *Store {
+	return &Store{}
 }

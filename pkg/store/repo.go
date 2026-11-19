@@ -20,10 +20,12 @@ type RepositoryStore interface {
 	GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error)
 	GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, error)
 	GetUserRepos(ctx context.Context, h db.Handler, userID int64) ([]models.Repo, error)
-	// CreateRepo creates a repository owned by userID, which must be an
-	// existing user; repositories created anonymously are owned by the
-	// default admin and marked with isAnonymous.
-	CreateRepo(ctx context.Context, h db.Handler, name string, userID int64, projectName string, description string, isPrivate bool, isHidden bool, isMirror bool, isAnonymous bool) error
+	// CreateRepo creates a repository from r's Name, ProjectName,
+	// Description, Private, Hidden, Mirror, Anonymous and UserID; its other
+	// fields are ignored. UserID must be an existing user; repositories
+	// created anonymously are owned by the default admin and marked
+	// Anonymous.
+	CreateRepo(ctx context.Context, h db.Handler, r models.Repo) error
 	// CountUserRepos counts the repositories userID created, leaving out
 	// those created anonymously that userID owns as the default admin.
 	CountUserRepos(ctx context.Context, h db.Handler, userID int64) (int64, error)

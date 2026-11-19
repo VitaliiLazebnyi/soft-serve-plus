@@ -42,7 +42,7 @@ func newTestBackend(t *testing.T) (context.Context, *backend.Backend) {
 		t.Fatal(err)
 	}
 	ctx = db.WithContext(ctx, dbx)
-	st := database.New(ctx, dbx)
+	st := database.New()
 	ctx = store.WithContext(ctx, st)
 	be := backend.New(ctx, cfg, dbx, st)
 	ctx = backend.WithContext(ctx, be)

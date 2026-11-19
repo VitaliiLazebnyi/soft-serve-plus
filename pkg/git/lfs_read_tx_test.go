@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
@@ -51,7 +52,7 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	s := database.New(ctx, dbx)
+	s := database.New()
 
 	var repoID, userID int64
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
@@ -60,7 +61,7 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 			return err
 		}
 		userID = u.ID
-		if err := s.CreateRepo(ctx, tx, "repo", userID, "", "", false, false, false, false); err != nil {
+		if err := s.CreateRepo(ctx, tx, models.Repo{Name: "repo", UserID: userID}); err != nil {
 			return err
 		}
 		r, err := s.GetRepoByName(ctx, tx, "repo")

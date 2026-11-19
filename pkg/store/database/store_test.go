@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"golang.org/x/crypto/ssh"
@@ -20,7 +21,7 @@ import (
 func newStoreTestDB(t *testing.T) (context.Context, *db.DB, store.Store) {
 	t.Helper()
 	ctx, dbx := newWebhookTestDB(t)
-	return ctx, dbx, New(ctx, dbx)
+	return ctx, dbx, New()
 }
 
 func newPublicKey(t *testing.T) ssh.PublicKey {
@@ -153,7 +154,7 @@ func TestUserStore(t *testing.T) {
 func TestSetRepoMirrorSyncByName(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const owner = 100 // see newWebhookTestDB
-	if err := s.CreateRepo(ctx, dbx, "m", owner, "", "", false, false, true, false); err != nil {
+	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
 		t.Fatal(err)
 	}
 	get := func() (time.Time, bool, string, time.Time) {
@@ -203,7 +204,7 @@ func TestSetRepoMirrorSyncByName(t *testing.T) {
 func TestSetRepoMirrorSyncByNameHostileText(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const owner = 100 // see newWebhookTestDB
-	if err := s.CreateRepo(ctx, dbx, "m", owner, "", "", false, false, true, false); err != nil {
+	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "m", UserID: owner, Mirror: true}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ in, want string }{
@@ -229,7 +230,14 @@ func TestRepoStore(t *testing.T) {
 	const owner = 100 // see newWebhookTestDB
 
 	// Names are sanitised: no leading slash, no .git suffix.
-	if err := s.CreateRepo(ctx, dbx, "/team/app.git", owner, "App", "an app", true, true, false, false); err != nil {
+	if err := s.CreateRepo(ctx, dbx, models.Repo{
+		Name:        "/team/app.git",
+		UserID:      owner,
+		ProjectName: "App",
+		Description: "an app",
+		Private:     true,
+		Hidden:      true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.GetRepoByName(ctx, dbx, "team/app")
@@ -237,13 +245,16 @@ func TestRepoStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.Name != "team/app" || r.ProjectName != "App" || r.Description != "an app" ||
-		!r.Private || !r.Hidden || r.Mirror || r.Anonymous || !r.UserID.Valid || r.UserID.Int64 != owner {
+		!r.Private || !r.Hidden || r.Mirror || r.Anonymous || r.UserID != owner {
 		t.Errorf("GetRepoByName(team/app) = %+v", r)
 	}
 	if got, err := s.GetRepoByID(ctx, dbx, r.ID); err != nil || got.Name != "team/app" {
 		t.Errorf("GetRepoByID(%d) = %+v, %v", r.ID, got, err)
 	}
-	if err := s.CreateRepo(ctx, dbx, "team/app", owner, "", "", false, false, false, false); !errors.Is(err, db.ErrDuplicateKey) {
+	if err := s.CreateRepo(ctx, dbx, models.Repo{
+		Name:   "team/app",
+		UserID: owner,
+	}); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("CreateRepo(existing name) error = %v, want ErrDuplicateKey", err)
 	}
 	if _, err := s.GetRepoByName(ctx, dbx, "nope"); !errors.Is(err, db.ErrRecordNotFound) {
@@ -292,7 +303,7 @@ func TestRepoStore(t *testing.T) {
 
 	// Anonymous repositories are owned by someone but don't count against
 	// their limit.
-	if err := s.CreateRepo(ctx, dbx, "anon", owner, "", "", false, false, false, true); err != nil {
+	if err := s.CreateRepo(ctx, dbx, models.Repo{Name: "anon", UserID: owner, Anonymous: true}); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.CountUserRepos(ctx, dbx, owner); err != nil || n != 3 { // repo7, repo8, team/app
