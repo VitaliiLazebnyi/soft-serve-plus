@@ -1267,6 +1267,11 @@ You can delete repositories using the `repo delete <repo>` command.
 ssh -p 23231 localhost repo delete icecream
 ```
 
+A repository directory without a database row, which a crash or a failed
+removal can leave behind, is not served, and `repo delete` reports its name as
+not found and leaves it alone. The server lists such directories in its log
+when it starts; move them away or remove them by hand to free their names.
+
 ### Renaming Repositories
 
 Use the `repo rename <old> <new>` command to rename existing repositories.
