@@ -13,9 +13,9 @@ import (
 	"github.com/lib/pq"
 )
 
-// OpenSqlite opens a new temp SQLite database for testing, with the
-// pragmas the server opens its database with: foreign keys enforced and a
-// busy timeout.
+// OpenSqlite opens a new temp SQLite database for testing. It is a bare
+// path, so foreign keys and the busy timeout are what db.Open adds to any
+// data source, as for the server's.
 // It removes the database file when the test is done using tb.Cleanup.
 // If ctx is nil, context.TODO() is used.
 func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
@@ -23,7 +23,7 @@ func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
 		ctx = context.TODO()
 	}
 	dbpath := filepath.Join(tb.TempDir(), "test.db")
-	dbx, err := db.Open(ctx, "sqlite", dbpath+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	dbx, err := db.Open(ctx, "sqlite", dbpath)
 	if err != nil {
 		return nil, err
 	}

@@ -451,7 +451,9 @@ db:
   driver: "sqlite"
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
-  # Make sure foreign key support is enabled when using SQLite.
+  # With SQLite, foreign keys are always enforced (a data source that turns
+  # them off is refused), and a busy database is waited on for 5 seconds
+  # unless the data source sets its own busy_timeout.
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
@@ -757,6 +759,50 @@ db:
 The same settings apply to SQLite, whose defaults are unchanged: writers
 already take turns through `BEGIN IMMEDIATE` and `busy_timeout`, so SQLite
 needs no limit.
+
+Upgrading a SQLite database: foreign keys are now always enforced. A data
+source that turns them off (`_pragma=foreign_keys(0)`, `_fk=0` or
+`_foreign_keys=0`) is refused at start, so remove that setting. A database
+that was used with foreign keys off can hold rows that refer to deleted ones,
+such as the keys of a deleted user or the webhooks of a deleted repository.
+The first start of this version removes them before it migrates, and logs a
+count per table, with the ids of removed keys, access tokens and webhooks. A
+repository whose owner was deleted is given to the first admin instead, and
+each one is logged by name with its former owner's id. If there is no admin,
+the start stops with an error that names those repositories and changes
+nothing. Make a user an admin, then start again:
+
+- with the previous version running, before upgrading, as an admin with a key
+  listed in `initial_admin_keys` (no user in the database is an admin):
+  `ssh -p 23231 localhost user set-admin USERNAME true`;
+- with the server stopped, on the database file that `db.data_source` names
+  (`soft-serve.db` in the data directory by default):
+  `sqlite3 soft-serve.db "UPDATE users SET admin = 1 WHERE username = 'USERNAME'"`;
+- with no users at all, stop the server and add an admin:
+  `sqlite3 soft-serve.db "INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)"`.
+
+The error names the database file in place of `soft-serve.db`, quoted for
+the shell when it needs to be. Postgres has always enforced foreign keys, so a
+Postgres database holds no such rows.
+
+SQLite keeps its default rollback journal, in which a read waits (up to the
+busy timeout) while a write commits. Write-ahead logging lets reads go on
+during a write. It is not the default because it puts conditions on where the
+database lives and how it is backed up. To switch to it, add
+`&_pragma=journal_mode(WAL)` to `db.data_source`, provided that:
+
+- the data directory is on a local disk. The server and its git hooks share
+  the log through a memory-mapped `-shm` file, which network file systems such
+  as NFS or SMB do not support. Local disks on Linux, macOS and Windows are
+  fine;
+- backups include the `-wal` file. Copy `soft-serve.db`, `soft-serve.db-wal`
+  and `soft-serve.db-shm` together while the server is stopped, or use
+  `sqlite3 soft-serve.db ".backup backup.db"` while it runs. A copy of
+  `soft-serve.db` alone can miss the latest writes.
+
+The mode is stored in the database file, so an existing database switches on
+the next start and stays in WAL mode after the pragma is removed. To switch
+back, stop the server and run `sqlite3 soft-serve.db "PRAGMA journal_mode=DELETE"`.
 
 #### LFS Configuration
 

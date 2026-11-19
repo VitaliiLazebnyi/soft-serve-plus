@@ -292,14 +292,13 @@ func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
 	is.Equal(len(e.deliveredEvents(t, id)), 0)
 }
 
-// Deleting a repository removes its webhooks with their events and deliveries,
-// even on a connection that does not enforce foreign keys. No delivery row is
-// written for the repository event, since its webhook is gone; the attempt is
-// sent unrecorded, so its refusal is logged instead.
+// Deleting a repository removes its webhooks with their events and
+// deliveries. No delivery row is written for the repository event, since its
+// webhook is gone; the attempt is sent unrecorded, so its refusal is logged
+// instead.
 func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	foreignKeysOff(t, e)
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
@@ -1091,20 +1090,6 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 		is.True(strings.Contains(b, `"sender":{"id":0,"username":""}`))
 	}
 	is.True(!strings.Contains(e.logs.String(), "panicked"))
-}
-
-// foreignKeysOff pins the pool to one connection and switches foreign keys off
-// on it, so ON DELETE CASCADE does not remove dependent rows and only explicit
-// deletes do.
-func foreignKeysOff(t *testing.T, e whEnv) {
-	t.Helper()
-	is := is.New(t)
-	e.be.db.SetMaxOpenConns(1)
-	_, err := e.be.db.ExecContext(e.ctx, "PRAGMA foreign_keys = OFF")
-	is.NoErr(err)
-	var on int
-	is.NoErr(e.be.db.GetContext(e.ctx, &on, "PRAGMA foreign_keys"))
-	is.Equal(on, 0)
 }
 
 // A send whose webhook is deleted before it records must not leave a delivery

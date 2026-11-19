@@ -324,7 +324,8 @@ func TestMigrateOverLeftoverTables(t *testing.T) {
 	}
 
 	var settings int
-	if err := dbx.Get(&settings, "SELECT COUNT(*) FROM settings"); err != nil {
+	// The orphan check's marker, on SQLite, is not a seed row.
+	if err := dbx.Get(&settings, dbx.Rebind("SELECT COUNT(*) FROM settings WHERE \"key\" <> ?"), orphansCheckedKey); err != nil {
 		t.Fatal(err)
 	}
 	if settings != 3 {

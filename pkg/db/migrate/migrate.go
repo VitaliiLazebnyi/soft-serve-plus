@@ -84,6 +84,11 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			return err
 		}
 
+		pending := len(migrations) > 0 && migrations[len(migrations)-1].Version > current
+		if err := removeSqliteOrphans(ctx, tx, logger, pending); err != nil {
+			return err
+		}
+
 		for _, m := range migrations {
 			if m.Version <= current {
 				continue
@@ -91,7 +96,7 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 
 			logger.Infof("running migration %d. %s", m.Version, m.Name)
 			if err := m.Migrate(ctx, tx); err != nil {
-				return err
+				return fmt.Errorf("migration %d %s: %w", m.Version, m.Name, err)
 			}
 
 			if _, err := tx.ExecContext(ctx, tx.Rebind("INSERT INTO migrations (name, version) VALUES (?, ?)"), m.Name, m.Version); err != nil {

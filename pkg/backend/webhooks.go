@@ -216,49 +216,16 @@ func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id i
 	dbx := d.db
 	datastore := d.store
 
+	// Its events and deliveries go with it by ON DELETE CASCADE. A webhook
+	// of another repository matches no row and is not found.
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		// Lock the repository's row first, as creating a webhook does, so
-		// that this and a delete of the repository take turns: on Postgres a
-		// webhook deleted here while the repository's delete holds it in
-		// its list made that delete find nothing to delete and report the
-		// repository not found.
+		// that this and a delete of the repository take turns.
 		if _, err := datastore.LockAndCountWebhooks(ctx, tx, repo.ID()); err != nil {
 			return err
 		}
-		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return err
-		}
-		return d.deleteWebhookRows(ctx, tx, repo.ID(), id)
+		return datastore.DeleteWebhookForRepoByID(ctx, tx, repo.ID(), id)
 	})
-}
-
-// deleteWebhookRows removes one webhook of a repository together with its
-// events and deliveries. The rows are removed explicitly rather than through
-// ON DELETE CASCADE, which only applies when the connection enables foreign
-// keys; the default SQLite data source does, but a custom one may not.
-func (d *Backend) deleteWebhookRows(ctx context.Context, tx *db.Tx, repoID int64, id int64) error {
-	if err := d.store.DeleteWebhookDeliveriesByWebhookID(ctx, tx, id); err != nil {
-		return err
-	}
-	if err := d.store.DeleteWebhookEventsByWebhookID(ctx, tx, id); err != nil {
-		return err
-	}
-	return d.store.DeleteWebhookForRepoByID(ctx, tx, repoID, id)
-}
-
-// deleteRepoWebhookRows removes every webhook of a repository with its rows.
-func (d *Backend) deleteRepoWebhookRows(ctx context.Context, tx *db.Tx, repoID int64) error {
-	whs, err := d.store.GetWebhooksByRepoID(ctx, tx, repoID)
-	if err != nil {
-		return err
-	}
-	for _, w := range whs {
-		// A webhook deleted since it was listed is already gone.
-		if err := d.deleteWebhookRows(ctx, tx, repoID, w.ID); err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-			return err
-		}
-	}
-	return nil
 }
 
 // ListWebhookDeliveries lists webhook deliveries for a webhook belonging to
