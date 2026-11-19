@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -73,7 +74,7 @@ func RepoCommand() *cobra.Command {
 				if rr.UserID() > 0 {
 					owner, err = be.UserByID(ctx, rr.UserID())
 					if err != nil {
-						return err
+						return lookupFailed(ctx, log.FromContext(ctx), "look up repository owner", err)
 					}
 				}
 

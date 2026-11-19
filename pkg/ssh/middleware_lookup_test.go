@@ -70,9 +70,10 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	}
 
 	// The handler prints the session's user, or "anon" without one.
+	logs := &syncBuffer{}
 	srv := &ssh.Server{
 		PublicKeyHandler: (&SSHServer{}).PublicKeyHandler,
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.New(&bytes.Buffer{}))(AuthenticationMiddleware(func(s ssh.Session) {
+		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.New(logs))(AuthenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()
@@ -121,5 +122,9 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	}
 	if !strings.Contains(errOut, ErrUserLookupFailed.Error()) {
 		t.Fatalf("lookup failure: stderr %q does not contain %q", errOut, ErrUserLookupFailed)
+	}
+	// The backend leaves logging the failure to the middleware.
+	if !strings.Contains(logs.String(), "failed to look up the session's user") {
+		t.Errorf("lookup failure: logs %q do not name the failed lookup", logs.String())
 	}
 }

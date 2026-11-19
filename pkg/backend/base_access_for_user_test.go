@@ -57,7 +57,7 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 					keyCtx = context.WithValue(ctx, charmssh.ContextKeyPublicKey, tc.pk)
 				}
 				want := tc.want
-				got := be.BaseAccessLevelForUser(keyCtx, tc.user)
+				got := baseLevel(t, be, keyCtx, tc.user)
 				if got != want {
 					t.Errorf("anon=%s adminOnly=%t %s: got %s, want %s", anon, adminOnly, tc.name, got, want)
 				}
@@ -67,5 +67,5 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 
 	// The unowned admin key is recognised from the context alone.
 	keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, listedKey)
-	is.Equal(be.BaseAccessLevelForUser(keyCtx, nil), access.AdminAccess)
+	is.Equal(baseLevel(t, be, keyCtx, nil), access.AdminAccess)
 }

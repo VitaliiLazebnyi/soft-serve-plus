@@ -402,13 +402,34 @@ func refuseUnchecked(w http.ResponseWriter, r *http.Request, err error, lfsJSON 
 	if !errors.Is(err, errAuthUnavailable) {
 		return false
 	}
+	renderUnavailable(w, r, lfsJSON)
+	return true
+}
+
+// renderUnavailable answers 503 Service Unavailable with a Retry-After and
+// no credentials challenge, so git keeps a stored credential; an LFS
+// request gets the LFS JSON error.
+func renderUnavailable(w http.ResponseWriter, r *http.Request, lfsJSON bool) {
 	w.Header().Set("Retry-After", authRetryAfter)
 	if lfsJSON {
 		renderJSON(w, r, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
 	} else {
 		renderStatus(w, http.StatusServiceUnavailable)
 	}
-	return true
+}
+
+// lookupUnavailable answers a request whose repository or access could not
+// be looked up, as when the database is down, with renderUnavailable: the
+// repository may well exist and be readable, so answering "not found" or
+// asking for credentials would mislead the client. The fault is logged,
+// at Debug when the client went away and canceled it.
+func lookupUnavailable(w http.ResponseWriter, r *http.Request, logger *log.Logger, repo string, err error, lfsJSON bool) {
+	if r.Context().Err() != nil {
+		logger.Debug("repository lookup canceled", "repo", repo, "err", err)
+	} else {
+		logger.Error("failed to look up repository", "repo", repo, "err", err)
+	}
+	renderUnavailable(w, r, lfsJSON)
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
@@ -516,9 +537,19 @@ func authorize(need routeAccess, readable bool, level access.AccessLevel, anonym
 }
 
 // requireCaller rejects anonymous requests when keyless access is disabled.
-func requireCaller(w http.ResponseWriter, r *http.Request) bool {
+// When the setting cannot be read, the request is answered as unavailable
+// (see lookupUnavailable) rather than asked for credentials.
+func requireCaller(w http.ResponseWriter, r *http.Request, lfsJSON bool) bool {
 	ctx := r.Context()
-	if proto.UserFromContext(ctx) == nil && !backend.FromContext(ctx).AllowKeyless(ctx) {
+	if proto.UserFromContext(ctx) != nil {
+		return true
+	}
+	allow, err := backend.FromContext(ctx).AllowKeylessSetting(ctx)
+	if err != nil {
+		lookupUnavailable(w, r, log.FromContext(ctx), "", err, lfsJSON)
+		return false
+	}
+	if !allow {
 		askCredentials(w, r)
 		renderUnauthorized(w, r)
 		return false
@@ -541,7 +572,7 @@ func withCaller(next http.Handler) http.HandlerFunc {
 			repos = pathAncestors(mux.Vars(r)["repo"])
 		}
 		r, err := identify(r, repos...)
-		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r) {
+		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r, false) {
 			return
 		}
 
@@ -602,7 +633,7 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 	r, err := identify(orig, gr.name)
 	need := route.access(r.Method, gr.service)
 	lfsJSON := need.lfs
-	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r) {
+	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r, lfsJSON) {
 		return
 	}
 
@@ -620,7 +651,11 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 
 	// repo is nil unless the caller may read it, so a private and a
 	// missing repository are already indistinguishable here.
-	repo, accessLevel := be.Readable(ctx, repoName, user)
+	repo, accessLevel, lerr := be.Readable(ctx, repoName, user)
+	if lerr != nil {
+		lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
+		return
+	}
 	ctx = proto.WithRepositoryContext(ctx, repo)
 	ctx = access.WithContext(ctx, accessLevel)
 	r = r.WithContext(ctx)
@@ -651,6 +686,9 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 		}
 		switch {
+		case errors.Is(cerr, proto.ErrLookupFailed):
+			lookupUnavailable(w, r, logger, repoName, cerr, lfsJSON)
+			return
 		case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
 			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
 			// As above: git sends credentials only after a 401, so ask
@@ -667,7 +705,11 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			// Another request created the name since it was looked
 			// up. Authorize the caller for the repository now there,
 			// as if it had been there all along.
-			repo, accessLevel = be.Readable(ctx, repoName, user)
+			repo, accessLevel, lerr = be.Readable(ctx, repoName, user)
+			if lerr != nil {
+				lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
+				return
+			}
 			ctx = proto.WithRepositoryContext(ctx, repo)
 			ctx = access.WithContext(ctx, accessLevel)
 			r = r.WithContext(ctx)

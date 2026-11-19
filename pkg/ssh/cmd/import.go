@@ -42,7 +42,7 @@ func importCommand() *cobra.Command {
 				LFSEndpoint: lfsEndpoint,
 			})
 			if err != nil {
-				return err
+				return createFailed(ctx, "import repository", err)
 			}
 
 			// Like create: the clone URL on stdout, the rest on stderr.

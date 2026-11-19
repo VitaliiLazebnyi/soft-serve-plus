@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	bm "charm.land/wish/v2/bubbletea"
@@ -101,7 +102,13 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	// AuthenticationMiddleware has already resolved the session's key to a
 	// user (or to nobody) and stored it in the context, so it is not looked
 	// up again here. Admin keys are still recognised from the context's key.
-	if be.BaseAccessLevelForUser(ctx, proto.UserFromContext(ctx)) < access.ReadOnlyAccess {
+	level, err := be.BaseAccessLevelForUser(ctx, proto.UserFromContext(ctx))
+	if err != nil {
+		logAccessCheckFailure(ctx, log.FromContext(ctx), err)
+		wish.Fatalln(s, ErrAccessCheckFailed)
+		return nil, nil
+	}
+	if level < access.ReadOnlyAccess {
 		wish.Fatalln(s, proto.ErrUnauthorized)
 		return nil, nil
 	}

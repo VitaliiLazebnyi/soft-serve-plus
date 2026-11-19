@@ -60,9 +60,36 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 }
 
 // levelOf is the access level Readable gives user's account on repo.
-func levelOf(be *Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
-	_, level := be.Readable(ctx, repo, user)
+func levelOf(t *testing.T, be *Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+	t.Helper()
+	_, level, err := be.Readable(ctx, repo, user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return level
+}
+
+// baseLevel is BaseAccessLevelForUser, failing the test if the lookup failed.
+func baseLevel(t *testing.T, be *Backend, ctx context.Context, user proto.User) access.AccessLevel {
+	t.Helper()
+	level, err := be.BaseAccessLevelForUser(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return level
+}
+
+// noLookupError takes the results of a Readable or ReadableForUser call and
+// returns the repository and level, failing the test if the lookup failed:
+// noLookupError(t)(be.Readable(ctx, name, user)).
+func noLookupError(t *testing.T) func(proto.Repository, access.AccessLevel, error) (proto.Repository, access.AccessLevel) {
+	return func(r proto.Repository, level access.AccessLevel, err error) (proto.Repository, access.AccessLevel) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, level
+	}
 }
 
 // collabOf is IsCollaborator for the repository and user with these names.

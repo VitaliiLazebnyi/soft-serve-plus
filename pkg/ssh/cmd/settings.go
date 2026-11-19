@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -33,7 +34,11 @@ func SettingsCommand() *cobra.Command {
 				cfg := config.FromContext(ctx)
 				switch len(args) {
 				case 0:
-					cmd.Println(be.AllowKeyless(ctx))
+					allow, err := be.AllowKeylessSetting(ctx)
+					if err != nil {
+						return lookupFailed(ctx, log.FromContext(ctx), "read allow-keyless", err)
+					}
+					cmd.Println(allow)
 				case 1:
 					v, err := strconv.ParseBool(args[0])
 					if err != nil {
@@ -63,7 +68,11 @@ func SettingsCommand() *cobra.Command {
 				cfg := config.FromContext(ctx)
 				switch len(args) {
 				case 0:
-					cmd.Println(be.AnonAccess(ctx))
+					level, err := be.AnonAccessSetting(ctx)
+					if err != nil {
+						return lookupFailed(ctx, log.FromContext(ctx), "read anon-access", err)
+					}
+					cmd.Println(level)
 				case 1:
 					al := access.ParseAccessLevel(args[0])
 					if al < 0 {

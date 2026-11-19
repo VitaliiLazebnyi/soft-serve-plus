@@ -50,7 +50,7 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 				return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "repo", tt.collab)
 			}))
 
-			is.Equal(levelOf(be, ctx, "repo", user), tt.want)
+			is.Equal(levelOf(t, be, ctx, "repo", user), tt.want)
 		})
 	}
 }
@@ -68,8 +68,8 @@ func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 	user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
 	is.NoErr(err)
 
-	is.Equal(levelOf(be, ctx, "repo", user), access.NoAccess)
-	is.Equal(levelOf(be, ctx, "repo", nil), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "repo", user), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "repo", nil), access.NoAccess)
 }
 
 // TestAccessLevelPublicRepoNonCollaborator verifies that the anonymous
@@ -103,8 +103,8 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 			user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
 			is.NoErr(err)
 
-			is.Equal(levelOf(be, ctx, "repo", user), tt.want)
-			is.Equal(levelOf(be, ctx, "repo", nil), tt.anon)
+			is.Equal(levelOf(t, be, ctx, "repo", user), tt.want)
+			is.Equal(levelOf(t, be, ctx, "repo", nil), tt.anon)
 		})
 	}
 }

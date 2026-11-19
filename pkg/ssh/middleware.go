@@ -45,9 +45,17 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		// The keyless setting only matters without a key, so a keyed
 		// session does not look it up.
-		if pk == nil && !be.AllowKeyless(ctx) {
-			wish.Fatalln(s, ErrPermissionDenied)
-			return
+		if pk == nil {
+			allow, err := be.AllowKeylessSetting(ctx)
+			if err != nil {
+				logAccessCheckFailure(ctx, log.FromContext(ctx), err)
+				wish.Fatalln(s, ErrAccessCheckFailed)
+				return
+			}
+			if !allow {
+				wish.Fatalln(s, ErrPermissionDenied)
+				return
+			}
 		}
 
 		// Set the auth'd user, or anon, in the context
@@ -70,8 +78,10 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			// or unreachable database, ends the session. Running it as
 			// anonymous instead would deny a registered user their own
 			// repositories, or with anon-access read-write let them create
-			// repositories owned by nobody. The backend logs the cause.
+			// repositories owned by nobody. The cause is logged here, at
+			// Debug when the client went away and canceled the lookup.
 			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+				logUserLookupFailure(ctx, log.FromContext(ctx), err)
 				wish.Fatalln(s, ErrUserLookupFailed)
 				return
 			}
@@ -85,6 +95,30 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		sh(s)
 	}
+}
+
+// ErrAccessCheckFailed is sent to a session whose access could not be
+// checked, as when the database is down. The cause stays in the server log.
+var ErrAccessCheckFailed = errors.New("could not check your access, try again later")
+
+// logAccessCheckFailure logs a failed access check for a session, at Debug
+// when the client went away and canceled it.
+func logAccessCheckFailure(ctx context.Context, logger *log.Logger, err error) {
+	if ctx.Err() != nil {
+		logger.Debug("access check canceled", "err", err)
+		return
+	}
+	logger.Error("failed to check the session's access", "err", err)
+}
+
+// logUserLookupFailure logs a failed lookup of the session's user, at Debug
+// when the client went away and canceled it.
+func logUserLookupFailure(ctx context.Context, logger *log.Logger, err error) {
+	if ctx.Err() != nil {
+		logger.Debug("user lookup canceled", "err", err)
+		return
+	}
+	logger.Error("failed to look up the session's user", "err", err)
 }
 
 // MaxCommandLength is the longest exec command, in bytes, the SSH server
@@ -204,7 +238,12 @@ func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
 	}
 	// The auth middleware has already resolved the session user, so reuse
 	// it rather than looking the key up again (as the TUI does in openRepo).
-	r, _ := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	// A lookup that fails runs the word as a command, which then reports
+	// its own error: this only chooses between the two.
+	r, _, err := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	if err != nil {
+		log.FromContext(ctx).Debug("repository lookup failed, running the word as a command", "word", word, "err", err)
+	}
 	return r == nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"unicode"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -138,7 +139,10 @@ func requireRepo(need access.AccessLevel) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := repoArg(args)
-		repo, level := backend.FromContext(ctx).ReadableForUser(ctx, name, proto.UserFromContext(ctx))
+		repo, level, err := backend.FromContext(ctx).ReadableForUser(ctx, name, proto.UserFromContext(ctx))
+		if err != nil {
+			return lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
+		}
 		if repo == nil && !isServerAdmin(ctx) {
 			return denyRead(ctx)
 		}
@@ -197,9 +201,41 @@ func repoArg(args []string) string {
 }
 
 // repoAccessLevel returns the caller's access level for the sanitized name.
-func repoAccessLevel(ctx context.Context, repo string) access.AccessLevel {
-	_, level := backend.FromContext(ctx).ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
-	return level
+// The error is lookupFailed's when the lookup failed.
+func repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, error) {
+	_, level, err := backend.FromContext(ctx).ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
+	if err != nil {
+		return access.NoAccess, lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
+	}
+	return level, nil
+}
+
+// createFailed returns err, from creating, importing or renaming onto a
+// repository, for the client: a failed lookup (proto.ErrLookupFailed) is
+// logged and answered with errLookupFailed, as by lookupFailed; anything
+// else is returned as it is.
+func createFailed(ctx context.Context, what string, err error) error {
+	if errors.Is(err, proto.ErrLookupFailed) {
+		return lookupFailed(ctx, log.FromContext(ctx), what, err)
+	}
+	return err
+}
+
+// errLookupFailed is returned to the client when a lookup the command needs
+// failed, as when the database is down. The cause stays in the server log:
+// it can name server paths, and the request was not refused.
+var errLookupFailed = errors.New("could not look that up on the server, try again later")
+
+// lookupFailed logs err, from a lookup for what, and returns errLookupFailed
+// for the client. A lookup the client canceled by going away is logged at
+// Debug.
+func lookupFailed(ctx context.Context, logger *log.Logger, what string, err error) error {
+	if ctx.Err() != nil {
+		logger.Debug("lookup canceled", "what", what, "err", err)
+	} else {
+		logger.Error("lookup failed", "what", what, "err", err)
+	}
+	return errLookupFailed
 }
 
 // checkIfServerAdmin is the authorization gate for global (non-repo-scoped)
@@ -236,7 +272,11 @@ func errNotServerAdmin(ctx context.Context) error {
 // whether the name is taken: with one flat namespace, "already exists" is
 // the answer either way.
 func checkIfRepoCollab(cmd *cobra.Command, args []string) error {
-	if repoAccessLevel(cmd.Context(), repoArg(args)) < access.ReadWriteAccess {
+	level, err := repoAccessLevel(cmd.Context(), repoArg(args))
+	if err != nil {
+		return err
+	}
+	if level < access.ReadWriteAccess {
 		return proto.ErrUnauthorized
 	}
 	return nil
@@ -289,6 +329,9 @@ func userByPublicKey(ctx context.Context) (proto.User, error) {
 	var nonAdminOwner *backend.ErrAdminKeyNonAdminOwner
 	if errors.Is(err, proto.ErrUserNotFound) && !errors.As(err, &nonAdminOwner) {
 		return nil, errUnknownKey(ctx)
+	}
+	if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+		return nil, lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
 	}
 	return user, err
 }

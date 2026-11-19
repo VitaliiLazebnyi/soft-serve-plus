@@ -23,11 +23,15 @@ func renameCommand() *cobra.Command {
 
 			// The destination is gated like create: it may already be
 			// somebody else's repository.
-			if repoAccessLevel(ctx, newName) < access.ReadWriteAccess {
+			level, err := repoAccessLevel(ctx, newName)
+			if err != nil {
+				return err
+			}
+			if level < access.ReadWriteAccess {
 				return proto.ErrUnauthorized
 			}
 
-			return be.RenameRepository(ctx, oldName, newName)
+			return createFailed(ctx, "rename repository", be.RenameRepository(ctx, oldName, newName))
 		},
 	}
 

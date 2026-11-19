@@ -63,8 +63,12 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 }
 
 // levelOf is the access level Backend.Readable gives user's account on repo.
-func levelOf(be *backend.Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
-	_, level := be.Readable(ctx, repo, user)
+func levelOf(t *testing.T, be *backend.Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+	t.Helper()
+	_, level, err := be.Readable(ctx, repo, user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return level
 }
 
