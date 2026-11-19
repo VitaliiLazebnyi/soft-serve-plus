@@ -224,19 +224,67 @@ func serveLimits(t *testing.T, l *requestDeadlines, h http.HandlerFunc) string {
 	return srv.URL
 }
 
+// workIdle is the idle timeout of the tests that check that the server's
+// work between reads and writes is not limited by it, and workTime the work
+// they do, long enough that an idle deadline left armed would pass during
+// it. A read or write in the tests moves a few bytes over loopback: the
+// client has sent them before the handler reads (see sentBody), so only the
+// server stalling for workIdle on bytes it already has could fail the test.
+const (
+	workIdle = 5 * time.Second
+	workTime = workIdle * 3 / 2
+)
+
+// sentBody is a request body that closes sent once the client has taken all
+// of it to send. A handler waits for that before it reads, so a client slow
+// to send its body cannot make a read wait out the idle timeout: the test's
+// subject is the server's work, not the client's.
+type sentBody struct {
+	r    *strings.Reader
+	sent chan struct{}
+	once sync.Once
+}
+
+func newSentBody(s string) *sentBody {
+	return &sentBody{r: strings.NewReader(s), sent: make(chan struct{})}
+}
+
+func (b *sentBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if b.r.Len() == 0 {
+		b.once.Do(func() { close(b.sent) })
+	}
+	return n, err
+}
+
+// newSentRequest returns a POST of body to url, whose length is known, so
+// it is sent as it would be from a strings.Reader.
+func newSentRequest(t *testing.T, url string, body *sentBody) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(body.r.Len())
+	return req
+}
+
 // Once the body is read, time the server spends working before it answers
 // is not limited by the idle timeout: the request is neither cancelled nor
 // cut off.
 func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
-	l := &requestDeadlines{idle: 200 * time.Millisecond}
+	t.Parallel()
+	l := &requestDeadlines{idle: workIdle}
 	errc := make(chan error, 1)
+	bodies := make(chan *sentBody, 1)
 	url := serveLimits(t, l, func(w http.ResponseWriter, r *http.Request) {
+		<-(<-bodies).sent
 		if _, err := io.ReadAll(r.Body); err != nil {
 			errc <- err
 			return
 		}
 		select {
-		case <-time.After(4 * l.idle):
+		case <-time.After(workTime):
 		case <-r.Context().Done():
 			errc <- r.Context().Err()
 			return
@@ -245,10 +293,9 @@ func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
 		_, _ = io.WriteString(w, "done")
 	})
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader("body"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body1 := newSentBody("body")
+	bodies <- body1
+	req := newSentRequest(t, url, body1)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -266,10 +313,9 @@ func TestRequestLimitsIdleIgnoresServerWork(t *testing.T) {
 	}
 
 	// The connection is reused for a request without the limits' deadlines.
-	req, err = http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader("again"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body2 := newSentBody("again")
+	bodies <- body2
+	req = newSentRequest(t, url, body2)
 	resp2, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -296,14 +342,12 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// Each read and write here moves a few bytes over loopback and
-			// must finish within the idle timeout even on a loaded machine,
-			// so the timeout is a second, and the work twice that.
-			l := &requestDeadlines{idle: time.Second}
+			l := &requestDeadlines{idle: workIdle}
 			errc := make(chan error, 1)
+			reqBody := newSentBody("body")
 			work := func(r *http.Request) error {
 				select {
-				case <-time.After(2 * l.idle):
+				case <-time.After(workTime):
 					return nil
 				case <-r.Context().Done():
 					return r.Context().Err()
@@ -312,6 +356,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					errc <- func() error {
+						<-reqBody.sent
 						if _, err := io.ReadFull(r.Body, make([]byte, 1)); err != nil {
 							return err
 						}
@@ -341,11 +386,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			}
 			t.Cleanup(srv.Close)
 
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("body"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp, err := srv.Client().Do(req)
+			resp, err := srv.Client().Do(newSentRequest(t, srv.URL, reqBody))
 			if err != nil {
 				t.Fatal(err)
 			}
