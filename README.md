@@ -772,7 +772,8 @@ each one is logged by name with its former owner's id. If there is no admin,
 the start stops with an error that names those repositories and changes
 nothing. Make a user an admin, then start again:
 
-- with the previous version running, before upgrading:
+- with the previous version running, before upgrading, as an admin with a key
+  listed in `initial_admin_keys` (no user in the database is an admin):
   `ssh -p 23231 localhost user set-admin USERNAME true`;
 - with the server stopped, on the database file that `db.data_source` names
   (`soft-serve.db` in the data directory by default):
@@ -780,8 +781,9 @@ nothing. Make a user an admin, then start again:
 - with no users at all, stop the server and add an admin:
   `sqlite3 soft-serve.db "INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)"`.
 
-The error names the database file in place of `soft-serve.db`. Postgres has
-always enforced foreign keys, so a Postgres database holds no such rows.
+The error names the database file in place of `soft-serve.db`, quoted for
+the shell when it needs to be. Postgres has always enforced foreign keys, so a
+Postgres database holds no such rows.
 
 SQLite keeps its default rollback journal, in which a read waits (up to the
 busy timeout) while a write commits. Write-ahead logging lets reads go on

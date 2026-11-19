@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/jmoiron/sqlx"
 )
 
 // orphansCheckedKey names the settings row that says a SQLite database was
@@ -176,7 +178,8 @@ func reassignOwnerlessRepos(ctx context.Context, tx *db.Tx, logger *log.Logger) 
 		}
 		return fmt.Errorf("the owners of these repositories no longer exist and there is no admin to give them to: %s; nothing was changed. "+
 			"Make a user an admin, then start again. "+
-			"With the previous version running, before upgrading: ssh -p PORT HOST user set-admin USERNAME true. "+
+			"With the previous version running, before upgrading, as an admin with a key listed in initial_admin_keys: "+
+			"ssh -p PORT HOST user set-admin USERNAME true. "+
 			"With the server stopped: sqlite3 %s \"UPDATE users SET admin = 1 WHERE username = 'USERNAME'\". "+
 			"With no users at all, stop the server and add an admin: sqlite3 %[2]s \"INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)\"",
 			strings.Join(names, ", "), file)
@@ -194,23 +197,49 @@ func reassignOwnerlessRepos(ctx context.Context, tx *db.Tx, logger *log.Logger) 
 	return nil
 }
 
-// sqliteFile returns the path of the main database file, quoted for a shell
-// when it needs to be, for a message that tells the operator what to run.
-// An in-memory database, which has no path, gives a description instead.
+// sqliteFile returns the path of the main database file, quoted for this
+// system's shell when it needs to be, for a message that tells the operator
+// what to run. An in-memory database, which has no path, gives a description
+// instead.
 func sqliteFile(ctx context.Context, tx *db.Tx) (string, error) {
-	var file string
-	if err := tx.GetContext(ctx, &file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
-		return "", fmt.Errorf("look up the database file: %w", err)
+	file, err := sqliteFilePath(ctx, tx)
+	if err != nil {
+		return "", err
 	}
 	if file == "" {
 		return "DATABASE_FILE (the file db.data_source names)", nil
 	}
-	if strings.IndexFunc(file, func(r rune) bool {
-		return !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+:@,%=\\", r)
-	}) < 0 {
-		return file, nil
+	return shellQuote(runtime.GOOS, file), nil
+}
+
+// sqliteFilePath returns the path of the main database file as SQLite has
+// it, or "" for an in-memory database.
+func sqliteFilePath(ctx context.Context, tx sqlx.QueryerContext) (string, error) {
+	var file string
+	if err := sqlx.GetContext(ctx, tx, &file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
+		return "", fmt.Errorf("look up the database file: %w", err)
 	}
-	return "'" + strings.ReplaceAll(file, "'", `'\''`) + "'", nil
+	return file, nil
+}
+
+// shellQuote quotes path for a command line on goos, when it holds anything
+// outside a set that needs no quoting. Elsewhere than on Windows that is a
+// POSIX shell's single quotes, a single quote in path closing them, written
+// escaped and opening them again. On Windows it is double quotes, which
+// cmd.exe and PowerShell both take and which a Windows path cannot contain;
+// cmd.exe still expands %NAME% in them, and PowerShell $name and backticks.
+func shellQuote(goos, path string) string {
+	safe := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+:@,%="
+	if goos == "windows" {
+		safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\/._-:"
+	}
+	if path != "" && strings.IndexFunc(path, func(r rune) bool { return !strings.ContainsRune(safe, r) }) < 0 {
+		return path
+	}
+	if goos == "windows" {
+		return `"` + path + `"`
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // tableCounts returns the number of rows of every table of the database.

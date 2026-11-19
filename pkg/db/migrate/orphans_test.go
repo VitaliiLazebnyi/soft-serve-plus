@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"maps"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -218,8 +219,8 @@ func TestMigrateDownAndUpKeepsRows(t *testing.T) {
 
 // openSqliteFile opens an empty SQLite database at a file, and a raw
 // connection to it with foreign keys off, as an old data source left them,
-// to write orphans with, and the file's path.
-func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB, string) {
+// to write orphans with.
+func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "soft.db")
 	dbx, err := db.Open(ctx, "sqlite", path)
@@ -236,7 +237,7 @@ func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB, string)
 	if _, err := raw.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatal(err)
 	}
-	return dbx, raw, path
+	return dbx, raw
 }
 
 func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
@@ -256,7 +257,7 @@ func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
 // its name unusable. Once a user is an admin, the upgrade goes through.
 func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	dbx, raw, path := openSqliteFile(t, ctx)
+	dbx, raw := openSqliteFile(t, ctx)
 	all := migrations
 	t.Cleanup(func() { migrations = all })
 	migrations = all[:3]
@@ -279,15 +280,18 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 		t.Fatal("Migrate() without an admin => nil, want an error")
 	}
 	msg := err.Error()
-	// SQLite names the file with symbolic links resolved, as macOS's
-	// temporary directory under /var, a link to /private/var, needs.
-	if p, err := filepath.EvalSymlinks(path); err == nil {
-		path = p
+	// The file as SQLite names it: symbolic links resolved on macOS, 8.3
+	// short names kept on Windows.
+	file, err := sqliteFilePath(ctx, dbx)
+	if err != nil || file == "" {
+		t.Fatalf("database file = %q, %v", file, err)
 	}
+	path := shellQuote(runtime.GOOS, file)
 	for _, want := range []string{
 		"kept (owner id 100)",
 		"nothing was changed",
-		"With the previous version running, before upgrading: ssh -p PORT HOST user set-admin USERNAME true.",
+		"With the previous version running, before upgrading, as an admin with a key listed in initial_admin_keys: " +
+			"ssh -p PORT HOST user set-admin USERNAME true.",
 		"With the server stopped: sqlite3 " + path + ` "UPDATE users SET admin = 1 WHERE username = 'USERNAME'".`,
 		"With no users at all, stop the server and add an admin: sqlite3 " + path +
 			` "INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)"`,
@@ -329,7 +333,7 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 // again when it migrates up: the marker of the first check does not skip it.
 func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	dbx, raw, _ := openSqliteFile(t, ctx)
+	dbx, raw := openSqliteFile(t, ctx)
 	for range 2 {
 		if err := Migrate(ctx, dbx); err != nil {
 			t.Fatal(err)
@@ -349,4 +353,31 @@ func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 		t.Fatalf("Migrate() after rollback => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
+}
+
+// A database path is quoted for the shell of the system the message is
+// shown on, so the command it is pasted into opens that file.
+func TestShellQuote(t *testing.T) {
+	for _, tt := range []struct {
+		goos, path, want string
+	}{
+		{"linux", "/var/lib/soft-serve/soft-serve.db", "/var/lib/soft-serve/soft-serve.db"},
+		{"linux", "/srv/my data/soft.db", "'/srv/my data/soft.db'"},
+		{"linux", "/srv/bob's/soft.db", `'/srv/bob'\''s/soft.db'`},
+		{"linux", "/srv/$HOME/soft.db", "'/srv/$HOME/soft.db'"},
+		{"linux", "/srv/a`id`b/soft.db", "'/srv/a`id`b/soft.db'"},
+		{"darwin", `/srv/x\y/soft.db`, `'/srv/x\y/soft.db'`},
+		{"linux", "/srv/~me/soft.db", "'/srv/~me/soft.db'"},
+		{"windows", `C:\ProgramData\soft-serve\soft-serve.db`, `C:\ProgramData\soft-serve\soft-serve.db`},
+		{"windows", `C:\Users\RUNNER~1\AppData\Local\Temp\soft.db`, `"C:\Users\RUNNER~1\AppData\Local\Temp\soft.db"`},
+		{"windows", `C:\Program Files\soft-serve\soft.db`, `"C:\Program Files\soft-serve\soft.db"`},
+		{"windows", `C:\data\bob's\soft.db`, `"C:\data\bob's\soft.db"`},
+		{"windows", `C:\data\$x\soft.db`, `"C:\data\$x\soft.db"`},
+		{"windows", "C:\\data\\a`b\\soft.db", "\"C:\\data\\a`b\\soft.db\""},
+		{"windows", `\\server\share\soft.db`, `\\server\share\soft.db`},
+	} {
+		if got := shellQuote(tt.goos, tt.path); got != tt.want {
+			t.Errorf("shellQuote(%q, %q) = %s, want %s", tt.goos, tt.path, got, tt.want)
+		}
+	}
 }
