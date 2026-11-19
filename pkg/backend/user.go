@@ -60,8 +60,19 @@ func isAccountAdmin(user proto.User) bool {
 // that does not exist. user is the caller's resolved user, such as the user
 // an SSH session stored in its context. A server admin (see IsServerAdmin),
 // including the holder of an admin key on ctx, gets admin access.
-func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) access.AccessLevel {
-	return d.baseAccessLevel(user, d.IsServerAdmin(ctx, user), d.AnonAccess(ctx))
+//
+// The error is set when the anon-access setting could not be read; the
+// level is then NoAccess.
+func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) (access.AccessLevel, error) {
+	admin := d.IsServerAdmin(ctx, user)
+	if admin {
+		return access.AdminAccess, nil
+	}
+	anon, err := d.anonAccess(ctx)
+	if err != nil {
+		return access.NoAccess, err
+	}
+	return d.baseAccessLevel(user, false, anon), nil
 }
 
 // Readable looks a repository up once and returns it together with the

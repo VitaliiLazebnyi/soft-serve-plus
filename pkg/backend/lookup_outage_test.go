@@ -9,6 +9,7 @@ import (
 	charmlog "charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -53,12 +54,19 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 			ctx := context.Background()
 			_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
 			is.NoErr(err)
+			_, err = be.CreateRepository(ctx, "public", defaultAdmin(t, be), proto.RepositoryOptions{})
+			is.NoErr(err)
 			stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
 			is.NoErr(err)
+			collab, err := be.CreateUser(ctx, "collab", proto.UserOptions{})
+			is.NoErr(err)
+			is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+				return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "private", access.ReadOnlyAccess)
+			}))
 
 			breakTable(t, be, table)
-			for _, user := range []proto.User{nil, stranger} {
-				for _, name := range []string{"private", "ghost"} {
+			for _, user := range []proto.User{nil, stranger, collab} {
+				for _, name := range []string{"private", "public", "ghost"} {
 					r, level, err := be.Readable(ctx, name, user)
 					is.True(err != nil)
 					is.True(r == nil)

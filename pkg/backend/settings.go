@@ -77,8 +77,14 @@ func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 	return level
 }
 
-// anonAccess is AnonAccess with the error of a failed lookup returned. It
-// does not log the error.
+// AnonAccessSetting is AnonAccess with the error of a failed lookup
+// returned rather than read as "no access", for callers that answer a
+// client. It does not log the error.
+func (d *Backend) AnonAccessSetting(ctx context.Context) (access.AccessLevel, error) {
+	return d.anonAccess(ctx)
+}
+
+// anonAccess is AnonAccessSetting.
 func (d *Backend) anonAccess(ctx context.Context) (access.AccessLevel, error) {
 	if d.cfg.AnonAccess != nil {
 		return *d.cfg.AnonAccess, nil

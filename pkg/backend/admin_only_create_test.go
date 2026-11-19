@@ -73,9 +73,9 @@ func TestDatabaseAdminBaseAccessIgnoresFlag(t *testing.T) {
 	is.NoErr(err)
 
 	cfg.AdminOnlyCreate = true
-	is.Equal(be.BaseAccessLevelForUser(ctx, root), access.AdminAccess)
+	is.Equal(baseLevel(t, be, ctx, root), access.AdminAccess)
 	cfg.AdminOnlyCreate = false
-	is.Equal(be.BaseAccessLevelForUser(ctx, root), access.AdminAccess)
+	is.Equal(baseLevel(t, be, ctx, root), access.AdminAccess)
 }
 
 // With the flag off, a registered user on a missing name gets the anonymous
@@ -415,7 +415,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 		is.True(strings.Contains(err.Error(), "user remove-pubkey mallory KEY"))
 	}
 	is.Equal(strings.Count(logs.String(), "admin key is owned by a non-admin account"), 3)
-	is.Equal(be.BaseAccessLevelForUser(context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), nil), access.AdminAccess)
+	is.Equal(baseLevel(t, be, context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), nil), access.AdminAccess)
 
 	// A private repository made with the key goes to the default admin,
 	// and mallory gets nothing on it.

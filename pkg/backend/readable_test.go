@@ -73,11 +73,11 @@ func TestBaseAccessLevelForUserAnonymous(t *testing.T) {
 	ctx := context.Background()
 
 	// No key and no account: the anonymous level.
-	is.Equal(be.BaseAccessLevelForUser(ctx, nil), access.ReadOnlyAccess)
-	is.Equal(be.BaseAccessLevelForUser(ctx, nil), levelOf(t, be, ctx, "ghost", nil))
+	is.Equal(baseLevel(t, be, ctx, nil), access.ReadOnlyAccess)
+	is.Equal(baseLevel(t, be, ctx, nil), levelOf(t, be, ctx, "ghost", nil))
 
 	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
-	is.Equal(be.BaseAccessLevelForUser(ctx, nil), access.NoAccess)
+	is.Equal(baseLevel(t, be, ctx, nil), access.NoAccess)
 }
 
 // TestAccessLevelRowWithoutDirectory verifies a repository row whose

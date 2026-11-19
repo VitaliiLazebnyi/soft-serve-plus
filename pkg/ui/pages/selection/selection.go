@@ -234,8 +234,16 @@ func loadRepos(c common.Common) tea.Msg {
 	}
 	be := c.Backend()
 	pk := c.PublicKey()
-	if pk == nil && !be.AllowKeyless(ctx) {
-		return nil
+	if pk == nil {
+		allow, err := be.AllowKeylessSetting(ctx)
+		if err != nil {
+			// Not "nothing to list": the error screen shows a generic
+			// message for it.
+			return common.LoadError(ctx, err)
+		}
+		if !allow {
+			return nil
+		}
 	}
 
 	// The session user, not a fresh lookup of the key: a lookup that

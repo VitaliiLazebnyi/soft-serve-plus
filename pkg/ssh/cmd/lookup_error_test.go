@@ -269,3 +269,23 @@ func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
 	is.True(errors.Is(gitLookupFailed(context.Background(), logger, "repo", errors.New("db down")), git.ErrSystemMalfunction))
 	is.Equal(strings.Count(buf.String(), "ERRO"), 2)
 }
+
+// While the settings cannot be read, the admin's settings getters say the
+// lookup failed rather than print the fail-closed default as if it were the
+// stored value.
+func TestSettingsGettersLookupFailure(t *testing.T) {
+	is := is.New(t)
+	ctx, be, _ := newLookupTestContext(t)
+	adminCtx := withUser(t, ctx, be, "boss", true)
+	breakTable(t, ctx, "settings")
+	for _, setting := range []string{"allow-keyless", "anon-access"} {
+		c := SettingsCommand()
+		c.SilenceUsage = true
+		var out bytes.Buffer
+		c.SetOut(&out)
+		c.SetErr(io.Discard)
+		c.SetArgs([]string{setting})
+		is.True(errors.Is(c.ExecuteContext(adminCtx), errLookupFailed))
+		is.Equal(out.String(), "")
+	}
+}

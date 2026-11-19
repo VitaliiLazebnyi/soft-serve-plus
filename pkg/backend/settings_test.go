@@ -69,6 +69,16 @@ func levelOf(t *testing.T, be *Backend, ctx context.Context, repo string, user p
 	return level
 }
 
+// baseLevel is BaseAccessLevelForUser, failing the test if the lookup failed.
+func baseLevel(t *testing.T, be *Backend, ctx context.Context, user proto.User) access.AccessLevel {
+	t.Helper()
+	level, err := be.BaseAccessLevelForUser(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return level
+}
+
 // noLookupError takes the results of a Readable or ReadableForUser call and
 // returns the repository and level, failing the test if the lookup failed:
 // noLookupError(t)(be.Readable(ctx, name, user)).

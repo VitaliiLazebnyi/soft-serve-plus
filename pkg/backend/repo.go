@@ -120,7 +120,11 @@ func redactRemote(remote string) string {
 // caller that skips those checks still cannot create. A nil user without an
 // admin key is anonymous.
 func (d *Backend) checkCanCreate(ctx context.Context, user proto.User) error {
-	if d.BaseAccessLevelForUser(ctx, user) < access.ReadWriteAccess {
+	level, err := d.BaseAccessLevelForUser(ctx, user)
+	if err != nil {
+		return err
+	}
+	if level < access.ReadWriteAccess {
 		return proto.ErrUnauthorized
 	}
 	return nil

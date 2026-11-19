@@ -45,9 +45,17 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		// The keyless setting only matters without a key, so a keyed
 		// session does not look it up.
-		if pk == nil && !be.AllowKeyless(ctx) {
-			wish.Fatalln(s, ErrPermissionDenied)
-			return
+		if pk == nil {
+			allow, err := be.AllowKeylessSetting(ctx)
+			if err != nil {
+				logAccessCheckFailure(ctx, log.FromContext(ctx), err)
+				wish.Fatalln(s, ErrAccessCheckFailed)
+				return
+			}
+			if !allow {
+				wish.Fatalln(s, ErrPermissionDenied)
+				return
+			}
 		}
 
 		// Set the auth'd user, or anon, in the context
@@ -87,6 +95,20 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 
 		sh(s)
 	}
+}
+
+// ErrAccessCheckFailed is sent to a session whose access could not be
+// checked, as when the database is down. The cause stays in the server log.
+var ErrAccessCheckFailed = errors.New("could not check your access, try again later")
+
+// logAccessCheckFailure logs a failed access check for a session, at Debug
+// when the client went away and canceled it.
+func logAccessCheckFailure(ctx context.Context, logger *log.Logger, err error) {
+	if ctx.Err() != nil {
+		logger.Debug("access check canceled", "err", err)
+		return
+	}
+	logger.Error("failed to check the session's access", "err", err)
 }
 
 // logUserLookupFailure logs a failed lookup of the session's user, at Debug

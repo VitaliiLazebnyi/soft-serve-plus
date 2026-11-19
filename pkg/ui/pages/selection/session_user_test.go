@@ -53,3 +53,18 @@ func TestSelectionListsSessionUserRepos(t *testing.T) {
 		t.Fatalf("listed %v, want the session user's private repository", got)
 	}
 }
+
+// A keyless session whose keyless setting cannot be read gets the error
+// screen, not an empty list as if there were nothing to show.
+func TestSelectionKeylessSettingLookupFailure(t *testing.T) {
+	ctx, _ := newTestBackend(t)
+	if _, err := db.FromContext(ctx).ExecContext(ctx, "ALTER TABLE settings RENAME TO settings_gone"); err != nil {
+		t.Fatal(err)
+	}
+	c := common.NewCommon(ctx, 80, 40)
+	t.Cleanup(c.Zone.Close)
+	msg, ok := loadRepos(c).(common.ErrorMsg)
+	if !ok || msg.Err == nil {
+		t.Fatalf("loadRepos = %#v, want an error message", msg)
+	}
+}
