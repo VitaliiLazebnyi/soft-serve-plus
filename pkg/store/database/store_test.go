@@ -75,7 +75,7 @@ func TestUserStore(t *testing.T) {
 	}
 
 	// Keys are listed in the order they were added.
-	if err := s.AddPublicKeyByUsername(ctx, dbx, "alice", k3); err != nil {
+	if err := s.AddPublicKeyByUserID(ctx, dbx, u.ID, k3); err != nil {
 		t.Fatal(err)
 	}
 	pks, err := s.ListPublicKeysByUserID(ctx, dbx, u.ID)
@@ -85,7 +85,7 @@ func TestUserStore(t *testing.T) {
 	if !sameKeys(pks, []ssh.PublicKey{k1, k2, k3}) {
 		t.Errorf("ListPublicKeysByUserID() = %d keys, want k1, k2, k3 in order", len(pks))
 	}
-	if err := s.RemovePublicKeyByUsername(ctx, dbx, "alice", k2); err != nil {
+	if err := s.RemovePublicKeyByUserID(ctx, dbx, u.ID, k2); err != nil {
 		t.Fatal(err)
 	}
 	pks, err = s.ListPublicKeysByUserID(ctx, dbx, u.ID)
@@ -100,8 +100,31 @@ func TestUserStore(t *testing.T) {
 	if err := s.CreateUser(ctx, dbx, "bob", false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddPublicKeyByUsername(ctx, dbx, "bob", k1); !errors.Is(err, db.ErrDuplicateKey) {
-		t.Errorf("AddPublicKeyByUsername(bob, alice's key) error = %v, want ErrDuplicateKey", err)
+	bob, err := s.FindUserByUsername(ctx, dbx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPublicKeyByUserID(ctx, dbx, bob.ID, k1); !errors.Is(err, db.ErrDuplicateKey) {
+		t.Errorf("AddPublicKeyByUserID(bob, alice's key) error = %v, want ErrDuplicateKey", err)
+	}
+	// By ID, the row is the account's whatever its name now is.
+	if err := s.SetUsernameByUserID(ctx, dbx, bob.ID, "Robert"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetUserByIDForUpdate(ctx, dbx, bob.ID); err != nil || got.Username != "robert" {
+		t.Errorf("GetUserByIDForUpdate(bob) = %+v, %v, want robert", got, err)
+	}
+	if err := s.SetUsernameByUserID(ctx, dbx, bob.ID, "alice"); !errors.Is(err, db.ErrDuplicateKey) {
+		t.Errorf("SetUsernameByUserID(bob, alice) error = %v, want ErrDuplicateKey", err)
+	}
+	if err := s.SetUsernameByUserID(ctx, dbx, 999999, "nobody"); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("SetUsernameByUserID(missing) error = %v, want ErrRecordNotFound", err)
+	}
+	if err := s.RemovePublicKeyByUserID(ctx, dbx, bob.ID, k1); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("RemovePublicKeyByUserID(bob, alice's key) error = %v, want ErrRecordNotFound", err)
+	}
+	if err := s.SetUsernameByUserID(ctx, dbx, bob.ID, "bob"); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.CreateUser(ctx, dbx, "BOB", false, nil); !errors.Is(err, db.ErrDuplicateKey) {
 		t.Errorf("CreateUser(BOB) with bob taken: error = %v, want ErrDuplicateKey", err)

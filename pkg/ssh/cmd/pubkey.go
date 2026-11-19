@@ -80,7 +80,7 @@ func PubkeyCommand() *cobra.Command {
 				return errListedAdminKey
 			}
 
-			return be.AddPublicKey(ctx, user.Username(), apk)
+			return be.AddOwnPublicKey(ctx, user, apk)
 		},
 	}
 
@@ -109,7 +109,7 @@ func PubkeyCommand() *cobra.Command {
 			// looked the user up. RemoveOwnPublicKey counts again under a
 			// lock, so a removal racing in from another of the user's
 			// sessions cannot leave the account with no keys.
-			err = be.RemoveOwnPublicKey(ctx, user.Username(), apk)
+			err = be.RemoveOwnPublicKey(ctx, user, apk)
 			if errors.Is(err, backend.ErrLastPublicKey) {
 				return errRemoveLastKey
 			}

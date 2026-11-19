@@ -472,10 +472,26 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The row lock keeps the user from being deleted before the insert,
 		// which would then fail on its foreign key.
-		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+		m, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
+		if err != nil {
 			return userNotFound(err)
 		}
-		return userNotFound(d.store.AddPublicKeyByUsername(ctx, tx, username, pk))
+		return d.store.AddPublicKeyByUserID(ctx, tx, m.ID, pk)
+	})
+}
+
+// AddOwnPublicKey adds a public key to user's own account, found by its ID:
+// user is the session's user, resolved when the session authenticated. A
+// lookup by its name could find another account that took the name after a
+// rename, and give that account the key.
+func (d *Backend) AddOwnPublicKey(ctx context.Context, user proto.User, pk ssh.PublicKey) error {
+	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		// The row lock keeps the user from being deleted before the insert,
+		// which would then fail on its foreign key.
+		if _, err := d.store.GetUserByIDForUpdate(ctx, tx, user.ID()); err != nil {
+			return userNotFound(err)
+		}
+		return d.store.AddPublicKeyByUserID(ctx, tx, user.ID(), pk)
 	})
 }
 
@@ -546,13 +562,14 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 	}
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		// The row lock keeps the user from being renamed or deleted before
-		// the removal by username, which would then report the key, not
-		// the user, as missing.
-		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
+		// The row lock keeps the user from being deleted before the
+		// removal, which would then report the key, not the user, as
+		// missing.
+		m, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
+		if err != nil {
 			return userNotFound(err)
 		}
-		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
+		return publicKeyNotFound(d.store.RemovePublicKeyByUserID(ctx, tx, m.ID, pk))
 	})
 }
 
@@ -560,29 +577,24 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 // account's only public key.
 var ErrLastPublicKey = errors.New("cannot remove the account's last public key")
 
-// RemoveOwnPublicKey is RemovePublicKey for a user removing a key from their
-// own account: it refuses, with ErrLastPublicKey, to remove the account's
-// only key, which would leave no way to sign in over SSH.
+// RemoveOwnPublicKey is RemovePublicKey for user, the session's user,
+// removing a key from their own account, found by its ID as in
+// AddOwnPublicKey: it refuses, with ErrLastPublicKey, to remove the
+// account's only key, which would leave no way to sign in over SSH.
 //
 // The count and the removal happen in one transaction that holds the user's
-// row (FindUserByUsernameForUpdate takes the row lock on Postgres; SQLite
+// row (GetUserByIDForUpdate takes the row lock on Postgres; SQLite
 // transactions begin IMMEDIATE and take turns), so two sessions of one user
 // that each remove the other's key at once cannot both pass the check and
 // leave the account with no keys: the second sees one key left and is
-// refused. The lock also keeps the user from being renamed or deleted before
-// the removal by username.
-func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return err
-	}
-
+// refused. The lock also keeps the user from being deleted before the
+// removal.
+func (d *Backend) RemoveOwnPublicKey(ctx context.Context, user proto.User, pk ssh.PublicKey) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		user, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
-		if err != nil {
+		if _, err := d.store.GetUserByIDForUpdate(ctx, tx, user.ID()); err != nil {
 			return userNotFound(err)
 		}
-		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID)
+		keys, err := d.store.ListPublicKeysByUserID(ctx, tx, user.ID())
 		if err != nil {
 			return err
 		}
@@ -591,7 +603,7 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, username string, pk ss
 		}) {
 			return ErrLastPublicKey
 		}
-		return publicKeyNotFound(d.store.RemovePublicKeyByUsername(ctx, tx, username, pk))
+		return publicKeyNotFound(d.store.RemovePublicKeyByUserID(ctx, tx, user.ID(), pk))
 	})
 }
 
@@ -605,6 +617,17 @@ func (d *Backend) SetUsername(ctx context.Context, username string, newUsername 
 	return userNotFound(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			return d.store.SetUsernameByUsername(ctx, tx, username, newUsername)
+		}),
+	)
+}
+
+// SetOwnUsername renames user's own account, found by its ID as in
+// AddOwnPublicKey, so a session whose account was renamed meanwhile renames
+// its own account, not one that took the old name.
+func (d *Backend) SetOwnUsername(ctx context.Context, user proto.User, newUsername string) error {
+	return userNotFound(
+		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			return d.store.SetUsernameByUserID(ctx, tx, user.ID(), newUsername)
 		}),
 	)
 }

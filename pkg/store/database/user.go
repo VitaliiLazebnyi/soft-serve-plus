@@ -13,21 +13,11 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// AddPublicKeyByUsername implements store.Store.
-func (*Store) AddPublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return err
-	}
-
-	var userID int64
-	if err := h.GetContext(ctx, &userID, h.Rebind(`SELECT id FROM users WHERE username = ?`), username); err != nil {
-		return err
-	}
-
+// AddPublicKeyByUserID implements store.Store.
+func (*Store) AddPublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error {
 	query := h.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-	_, err := h.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk))
+	_, err := h.ExecContext(ctx, query, id, sshutils.MarshalAuthorizedKey(pk))
 	return err
 }
 
@@ -117,6 +107,18 @@ func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, use
 	return m, err
 }
 
+// GetUserByIDForUpdate implements store.Store. See
+// FindUserByUsernameForUpdate.
+func (*Store) GetUserByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.User, error) {
+	query := `SELECT * FROM users WHERE id = ?;`
+	if h.DriverName() == "postgres" {
+		query = `SELECT * FROM users WHERE id = $1 FOR UPDATE;`
+	}
+	var m models.User
+	err := h.GetContext(ctx, &m, query, id)
+	return m, err
+}
+
 // GetAllUsers implements store.Store.
 func (*Store) GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error) {
 	var ms []models.User
@@ -150,18 +152,11 @@ func (*Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64
 	return parseStoredKeys(ctx, aks, "user_id", id), nil
 }
 
-// RemovePublicKeyByUsername implements store.Store.
-func (*Store) RemovePublicKeyByUsername(ctx context.Context, h db.Handler, username string, pk ssh.PublicKey) error {
-	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
-		return err
-	}
-
-	query := h.Rebind(`DELETE FROM public_keys
-			WHERE user_id = (SELECT id FROM users WHERE username = ?)
-			AND public_key = ?;`)
+// RemovePublicKeyByUserID implements store.Store.
+func (*Store) RemovePublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error {
+	query := h.Rebind(`DELETE FROM public_keys WHERE user_id = ? AND public_key = ?;`)
 	// Nothing removed means the user does not have the key.
-	return affected(h.ExecContext(ctx, query, username, sshutils.MarshalAuthorizedKey(pk)))
+	return affected(h.ExecContext(ctx, query, id, sshutils.MarshalAuthorizedKey(pk)))
 }
 
 // SetAdminByUsername implements store.Store.
@@ -189,6 +184,17 @@ func (*Store) SetUsernameByUsername(ctx context.Context, h db.Handler, username 
 
 	query := h.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;`)
 	return affected(h.ExecContext(ctx, query, newUsername, username))
+}
+
+// SetUsernameByUserID implements store.Store.
+func (*Store) SetUsernameByUserID(ctx context.Context, h db.Handler, id int64, newUsername string) error {
+	newUsername = strings.ToLower(newUsername)
+	if err := utils.ValidateNewUsername(newUsername); err != nil {
+		return err
+	}
+
+	query := h.Rebind(`UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;`)
+	return affected(h.ExecContext(ctx, query, newUsername, id))
 }
 
 // affected returns the error of an UPDATE or DELETE, or db.ErrRecordNotFound

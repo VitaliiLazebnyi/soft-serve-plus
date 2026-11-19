@@ -32,11 +32,11 @@ func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
 
 	good1 := newTestPublicKey(t)
 	good2 := newTestPublicKey(t)
-	is.NoErr(s.AddPublicKeyByUsername(ctx, dbx, "owner", good1))
+	is.NoErr(s.AddPublicKeyByUserID(ctx, dbx, 100, good1))
 	_, err := dbx.ExecContext(ctx, dbx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 		VALUES (?, ?, CURRENT_TIMESTAMP);`), 100, "ssh-ed25519 not-base64!!")
 	is.NoErr(err)
-	is.NoErr(s.AddPublicKeyByUsername(ctx, dbx, "owner", good2))
+	is.NoErr(s.AddPublicKeyByUserID(ctx, dbx, 100, good2))
 
 	check := func(pks []ssh.PublicKey, err error) {
 		t.Helper()
