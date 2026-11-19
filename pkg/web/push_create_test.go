@@ -47,52 +47,56 @@ func gitRun(t *testing.T, args ...string) {
 	}
 }
 
-// armedRemoval is a removal timer armed for a push-created repository: name
-// is the repository, and remove runs what the timer runs when it fires.
-type armedRemoval struct {
-	name   string
-	remove func()
-}
+// The cleanup tests keep pushCreateTimeout at its default, far longer than
+// any test, so no removal timer fires on its own and nothing a test checks
+// races one. A request arms or stops its repository's timer before it
+// returns, so a test reads the timer's state once the request is done, and
+// fires the real timer itself when it wants the removal to run.
 
-// removalTimers returns the removal timers f's requests arm, as they arm
-// them. pushCreateTimeout stays at its default, far longer than any test,
-// so no timer fires on its own: a test runs a removal when it chooses, and
-// nothing it checks can race a timer.
-func (f *oracleFixture) removalTimers() <-chan armedRemoval {
-	armed := make(chan armedRemoval, 16)
+// pendingState reports whether the repository name is on f's list of
+// push-created repositories, and whether its removal timer is armed.
+func (f *oracleFixture) pendingState(name string) (listed, armed bool) {
 	f.pending.mu.Lock()
-	f.pending.armed = func(name string, remove func()) {
-		armed <- armedRemoval{name: name, remove: remove}
-	}
-	f.pending.mu.Unlock()
-	return armed
+	defer f.pending.mu.Unlock()
+	pc, ok := f.pending.repos[name]
+	return ok, ok && pc.timer != nil
 }
 
-// nextRemoval returns the removal of the next timer armed, which must be
-// for the repository name. A request arms its timer before it returns, so
-// the wait only bounds a test that went wrong.
-func nextRemoval(t *testing.T, armed <-chan armedRemoval, name string) func() {
+// fireTimer makes the armed removal timer of the repository name fire now.
+func (f *oracleFixture) fireTimer(t *testing.T, name string) {
 	t.Helper()
-	select {
-	case a := <-armed:
-		if a.name != name {
-			t.Fatalf("removal timer armed for %q, want %q", a.name, name)
-		}
-		return a.remove
-	case <-time.After(time.Minute):
+	f.pending.mu.Lock()
+	defer f.pending.mu.Unlock()
+	pc, ok := f.pending.repos[name]
+	if !ok || pc.timer == nil {
 		t.Fatalf("no removal timer armed for %q", name)
-		return nil
+	}
+	pc.timer.Reset(0)
+}
+
+// waitUnlisted waits, up to a minute, until the repository name has left
+// f's list: the removal its timer started has ended, whether it removed the
+// repository or kept it.
+func (f *oracleFixture) waitUnlisted(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		if listed, _ := f.pendingState(name); !listed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q still listed a minute after its removal timer fired", name)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-// noRemovalArmed fails the test if a removal timer has been armed. A
-// request arms its timer before it returns, so this holds once it has.
-func noRemovalArmed(t *testing.T, armed <-chan armedRemoval) {
+// wantArmed fails the test unless the removal timer of the repository name
+// is armed as want says.
+func (f *oracleFixture) wantArmed(t *testing.T, name string, want bool) {
 	t.Helper()
-	select {
-	case a := <-armed:
-		t.Fatalf("removal timer armed for %q", a.name)
-	default:
+	if _, armed := f.pendingState(name); armed != want {
+		t.Fatalf("removal timer of %q armed = %v, want %v", name, armed, want)
 	}
 }
 
@@ -104,60 +108,62 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
-	armed := f.removalTimers()
-	// advertise sends the ref advertisement that creates name, and returns
-	// the removal of the timer it arms.
-	advertise := func(name string) func() {
+	// advertise sends the ref advertisement that creates name, which arms
+	// its removal timer.
+	advertise := func(name string) {
 		t.Helper()
 		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
 		is.True(f.exists(name))
-		return nextRemoval(t, armed, name)
+		f.wantArmed(t, name, true)
 	}
 
 	// The push fails: the repository is removed at once.
 	advertise("failed")
 	is.Equal(f.push(t, "failed", auth, "garbage"), http.StatusOK)
 	is.True(!f.exists("failed"))
-	noRemovalArmed(t, armed)
+	listed, _ := f.pendingState("failed")
+	is.True(!listed)
 
 	// A push that updates no ref and does not fail, like git's probe
 	// before a pack larger than http.postBuffer, keeps the repository for
-	// the real push. With no push after it, it goes once the timeout the
-	// probe armed passes; the advertisement's timer, which the probe
-	// stopped, removes nothing.
-	advertised := advertise("probed")
+	// the real push, and arms the timer again. With no push after it, it
+	// goes when that timer fires.
+	advertise("probed")
 	is.Equal(f.push(t, "probed", auth, "0000"), http.StatusOK)
-	probed := nextRemoval(t, armed, "probed")
 	is.True(f.exists("probed"))
-	advertised()
-	is.True(f.exists("probed"))
-	probed()
+	f.fireTimer(t, "probed")
+	f.waitUnlisted(t, "probed")
 	is.True(!f.exists("probed"))
 
-	// The push never arrives.
-	advertise("abandoned")()
+	// The push never arrives: the repository goes when the timer the
+	// advertisement armed fires.
+	advertise("abandoned")
+	f.fireTimer(t, "abandoned")
+	f.waitUnlisted(t, "abandoned")
 	is.True(!f.exists("abandoned"))
 
-	// A repository that got refs is kept, even after a failed push and
-	// the timeout. The refs are written here outside any request.
-	advertised = advertise("kept")
+	// A repository that got refs is kept, even after a failed push. The
+	// refs are written here outside any request. Once a request to it has
+	// ended with refs, it leaves the list, so no timer can remove it.
+	advertise("kept")
 	work := filepath.Join(t.TempDir(), "work")
 	gitRun(t, "init", "-q", "-b", "master", work)
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
 	dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "kept.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
 	is.Equal(f.push(t, "kept", auth, "garbage"), http.StatusOK)
-	noRemovalArmed(t, armed)
-	advertised()
+	listed, _ = f.pendingState("kept")
+	is.True(!listed)
 	is.True(f.exists("kept"))
 
 	// The timer finds the refs too: a repository whose refs were written
 	// with no request to it after the advertisement is kept when the
 	// advertisement's timer fires.
-	advertised = advertise("refs-only")
+	advertise("refs-only")
 	dir = filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "refs-only.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
-	advertised()
+	f.fireTimer(t, "refs-only")
+	f.waitUnlisted(t, "refs-only")
 	is.True(f.exists("refs-only"))
 }
 
@@ -316,7 +322,6 @@ func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
-	armed := f.removalTimers()
 	advertise := func(name string) {
 		t.Helper()
 		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
@@ -324,16 +329,17 @@ func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 	}
 
 	advertise("armed")
-	remove := nextRemoval(t, armed, "armed")
-	is.NoErr(f.pending.close(t.Context()))
+	f.wantArmed(t, "armed", true)
 	f.pending.mu.Lock()
-	stopped := f.pending.repos["armed"].timer == nil
+	pc, gen := f.pending.repos["armed"], f.pending.repos["armed"].gen
 	f.pending.mu.Unlock()
-	is.True(stopped)
+	is.NoErr(f.pending.close(t.Context()))
+	f.wantArmed(t, "armed", false)
 	advertise("late")
-	noRemovalArmed(t, armed)
-	// A timer that fired as close stopped it removes nothing.
-	remove()
+	f.wantArmed(t, "late", false)
+	// A timer that fired as close stopped it removes nothing: run what
+	// it would have run.
+	f.pending.remove("armed", pc, gen)
 	is.True(f.exists("armed"))
 	is.True(f.exists("late"))
 }
@@ -362,7 +368,6 @@ func TestHTTPPushCreateRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	armed := f.removalTimers()
 	t.Cleanup(func() { testHookBeforePushCreate = nil })
 	advertise := func(name string) int {
 		t.Helper()
@@ -383,12 +388,9 @@ func TestHTTPPushCreateRace(t *testing.T) {
 		createFirst("mine", stranger, false)
 		is.Equal(advertise("mine"), http.StatusOK)
 		// This request did not create it, so it does not list it for
-		// removal, and arms no timer.
-		f.pending.mu.Lock()
-		_, listed := f.pending.repos["mine"]
-		f.pending.mu.Unlock()
+		// removal, and no timer can remove it.
+		listed, _ := f.pendingState("mine")
 		is.True(!listed)
-		noRemovalArmed(t, armed)
 		is.True(f.exists("mine"))
 	})
 
