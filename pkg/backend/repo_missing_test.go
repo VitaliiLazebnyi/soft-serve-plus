@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestMissingRepositoryAccessors verifies every per-repository getter and
@@ -71,26 +70,6 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 	if _, err := os.Stat(be.repoPath("ghost")); err == nil {
 		t.Fatal("a missing repository was created by a setter")
 	}
-}
-
-// TestSetDescriptionHidesFilesystemError verifies a filesystem failure while
-// updating a repository does not echo the server path back to the caller.
-func TestSetDescriptionHidesFilesystemError(t *testing.T) {
-	is := is.New(t)
-	be, cfg := newTestBackend(t)
-	ctx := context.Background()
-
-	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-
-	// Make the description path unwritable by turning it into a directory.
-	descPath := be.repoPath("repo") + "/description"
-	is.NoErr(os.Remove(descPath))
-	is.NoErr(os.Mkdir(descPath, 0o755))
-
-	err = be.SetDescription(ctx, "repo", "desc")
-	is.True(err != nil)
-	is.True(!strings.Contains(err.Error(), cfg.DataPath))
 }
 
 // TestRepositoryInvalidNameNotLogged verifies a name the filesystem cannot

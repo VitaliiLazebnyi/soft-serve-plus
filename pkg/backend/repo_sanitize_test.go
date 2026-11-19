@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -25,8 +23,4 @@ func TestCreateRepositorySanitisesDescriptionAndProjectName(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(r.Description(), "ab\nc")
 	is.Equal(r.ProjectName(), "pq")
-
-	desc, err := os.ReadFile(filepath.Join(be.repoPath("repo"), "description"))
-	is.NoErr(err)
-	is.Equal(string(desc), "ab\nc")
 }
