@@ -111,21 +111,29 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 // Other lexers look embedded languages up the same way. Files in them render
 // within the budget, as plain text when highlighting would take longer.
 //
-// The render is not timed. Highlighting these inputs whole takes 0.9 s
-// (x.art) to 6 s, 4.5 to 30 times the budget, so a render that shows them
-// plain was cut off by the budget, or by the cap on lexers the budget
-// cannot stop (x.svelte); without the budget they come back highlighted. A
-// loaded machine tokenises less within the budget, which only makes the
-// text plainer.
+// The render is not timed: a render that shows these inputs plain was cut
+// off by the budget, or by the cap on lexers the budget cannot stop
+// (x.svelte); without the budget they come back highlighted. Each input
+// repeats its block up to HighlightMaxLines, the most lines highlighted at
+// all, so that highlighting it whole takes as long as an input can: 7 s
+// (x.rst) to 15 s (x.art), 35 to 75 times the budget, where 2500 blocks
+// took x.art only 1 s. A machine would have to be that much faster for one
+// to fit the budget; one ten times faster, a 2 s budget, still leaves them
+// all plain. A loaded machine tokenises less within the budget, which only
+// makes the text plainer.
 func TestEmbeddedLanguagesRenderQuickly(t *testing.T) {
+	// fill repeats block, whole lines, up to HighlightMaxLines lines.
+	fill := func(block string) string {
+		return strings.Repeat(block, HighlightMaxLines/strings.Count(block, "\n"))
+	}
 	cases := map[string]string{
-		"x.gmi":    strings.Repeat("```zzz\nx\n```\n", 2500),
-		"x.svelte": strings.Repeat("<script lang=\"zzz\">x</script>\n", 2500),
-		"x.rst":    strings.Repeat(".. code-block:: zzz\n\n   x\n\n", 2500),
-		"x.org":    strings.Repeat("#+begin_src zzz\nx\n#+end_src\n", 2500),
-		"x.raku":   strings.Repeat("=begin code :lang<zzz>\nx\n=end code\n", 2500),
-		"x.art":    strings.Repeat("{!zzz x }\n", 2500),
-		"x.md":     strings.Repeat("```zzz\nx\n```\n", 2500),
+		"x.gmi":    fill("```zzz\nx\n```\n"),
+		"x.svelte": fill("<script lang=\"zzz\">x</script>\n"),
+		"x.rst":    fill(".. code-block:: zzz\n\n   x\n\n"),
+		"x.org":    fill("#+begin_src zzz\nx\n#+end_src\n"),
+		"x.raku":   fill("=begin code :lang<zzz>\nx\n=end code\n"),
+		"x.art":    fill("{!zzz x }\n"),
+		"x.md":     fill("```zzz\nx\n```\n"),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
