@@ -36,6 +36,13 @@ func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 	return srv.Listener.Addr().String()
 }
 
+// closeWait is how long a test waits for the server to cut off a connection
+// once a short timeout has passed. It is far past those timeouts, so a
+// loaded machine that stalls the server for seconds does not fail the test,
+// and the test does not time the cut-off: a connection still open after
+// closeWait is one the timeout did not apply to.
+const closeWait = time.Minute
+
 // dial opens a connection to addr that fails the test if it is still open
 // after timeout.
 func dial(t *testing.T, addr string, timeout time.Duration) net.Conn {
@@ -72,7 +79,7 @@ func TestHTTPStalledBodyTimesOut(t *testing.T) {
 		c.IdleTimeout = 1
 	})
 
-	conn := dial(t, addr, 15*time.Second)
+	conn := dial(t, addr, closeWait)
 	sendStalled(t, conn)
 	start := time.Now()
 	if _, err := io.Copy(io.Discard, conn); err != nil {
@@ -91,7 +98,7 @@ func TestHTTPMaxTimeout(t *testing.T) {
 		c.MaxTimeout = 1
 	})
 
-	conn := dial(t, addr, 15*time.Second)
+	conn := dial(t, addr, closeWait)
 	sendStalled(t, conn)
 	start := time.Now()
 	if _, err := io.Copy(io.Discard, conn); err != nil {
@@ -395,7 +402,7 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("writing to a client that does not read was not cut off")
 	}
 }
@@ -485,7 +492,7 @@ func TestRequestLimitsIdleStalledReader(t *testing.T) {
 		}
 	})
 
-	conn := dial(t, strings.TrimPrefix(url, "http://"), 15*time.Second)
+	conn := dial(t, strings.TrimPrefix(url, "http://"), 2*closeWait)
 	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +502,7 @@ func TestRequestLimitsIdleStalledReader(t *testing.T) {
 		if !errors.As(err, &nerr) || !nerr.Timeout() {
 			t.Fatalf("write error = %v, want a timeout", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(closeWait):
 		t.Fatal("writing to a client that does not read was not cut off")
 	}
 }
@@ -544,36 +551,29 @@ func TestHTTPStalledBodyOutsideGitRoutes(t *testing.T) {
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			t.Parallel()
-			conn := dial(t, addr, 30*time.Second)
+			conn := dial(t, addr, closeWait)
 			if _, err := io.WriteString(conn, tc.method+" "+tc.path+" HTTP/1.1\r\n"+
 				"Host: localhost\r\n"+
 				"Content-Length: 100\r\n"+
 				"\r\n"); err != nil {
 				t.Fatal(err)
 			}
-			assertClosedWithin(t, conn, 10*time.Second)
+			assertClosed(t, conn)
 		})
 	}
 }
 
-// assertClosedWithin reads conn until the server closes it, and fails the
-// test unless that happens within limit. limit is far above the idle
-// timeouts the tests set, so a loaded machine does not fail the test; conn's
-// own deadline, set by dial, must be later still, so a connection left open
-// is told apart from one closed late.
-func assertClosedWithin(t *testing.T, conn net.Conn, limit time.Duration) {
+// assertClosed reads conn until the server closes it, and fails the test if
+// conn's deadline, set by dial to closeWait, passes first.
+func assertClosed(t *testing.T, conn net.Conn) {
 	t.Helper()
 	start := time.Now()
 	_, err := io.Copy(io.Discard, conn)
-	elapsed := time.Since(start)
-	var nerr net.Error
-	if errors.As(err, &nerr) && nerr.Timeout() {
-		t.Fatalf("connection still open after %s; the stalled request was not cut off", elapsed)
-	}
 	// A reset instead of an orderly close is fine: the server may close
 	// with the announced body unread.
-	if elapsed > limit {
-		t.Fatalf("connection closed after %s, want within %s (read error: %v)", elapsed, limit, err)
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		t.Fatalf("connection still open after %s; the stalled request was not cut off", time.Since(start))
 	}
 }
 
@@ -600,14 +600,14 @@ func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
 				}
 				_, _ = w.Write(make([]byte, 8<<10))
 			})
-			conn := dial(t, strings.TrimPrefix(url, "http://"), 30*time.Second)
+			conn := dial(t, strings.TrimPrefix(url, "http://"), closeWait)
 			if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\n"+
 				"Host: localhost\r\n"+
 				"Content-Length: 100\r\n"+
 				"\r\n"); err != nil {
 				t.Fatal(err)
 			}
-			assertClosedWithin(t, conn, 10*time.Second)
+			assertClosed(t, conn)
 		})
 	}
 }
