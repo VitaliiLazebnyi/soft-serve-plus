@@ -744,13 +744,11 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 // only r itself is deleted, by its ID, never what now has its name. ctx may
 // be what stopped the import, so the cleanup does not depend on it.
 func (d *Backend) removeFailedImport(ctx context.Context, r proto.Repository) {
-	err := d.deleteRepository(context.WithoutCancel(ctx), r.Name(), func(_ *db.Tx, m models.Repo) (bool, error) {
-		return m.ID != r.ID(), nil
-	})
+	err := d.DeleteResolvedRepository(context.WithoutCancel(ctx), r)
 	switch {
 	case err == nil:
 		return
-	case errors.Is(err, errRepoKept), errors.Is(err, proto.ErrRepoNotFound):
+	case errors.Is(err, proto.ErrRepoNotFound):
 		d.logger.Info("failed import's repository is gone, leaving its name alone", "name", r.Name())
 	default:
 		d.logger.Error("failed to delete repository", "err", err, "name", r.Name())
@@ -804,15 +802,30 @@ func (d *Backend) fetchImportLFSObjects(ctx context.Context, r proto.Repository,
 
 // DeleteRepository deletes a repository.
 func (d *Backend) DeleteRepository(ctx context.Context, name string) error {
-	return d.deleteRepository(ctx, name, nil)
+	return d.deleteRepository(ctx, name, 0, nil)
+}
+
+// DeleteResolvedRepository deletes r, a repository the caller looked up and
+// authorized before: the repository under r's name, provided it is still r.
+// If another repository has taken the name since, as a rename and a create
+// in between can arrange, it returns proto.ErrRepoNotFound and deletes
+// nothing.
+func (d *Backend) DeleteResolvedRepository(ctx context.Context, r proto.Repository) error {
+	return d.deleteRepository(ctx, r.Name(), r.ID(), nil)
 }
 
 // errRepoKept is returned by deleteRepository when its keep check kept the
 // repository.
 var errRepoKept = errors.New("repository kept")
 
-// deleteRepository is DeleteRepository with an optional check. A non-nil
-// keep runs in the transaction that deletes the repository's row, with that
+// deleteRepository is DeleteRepository with optional checks. With a
+// non-zero id, only the repository with that ID is deleted. Otherwise the
+// repository the delete finds under the name when it starts is the one
+// deleted, and its event the one sent: a repository that takes the name
+// before its row is locked is not deleted. Either way the name is then
+// proto.ErrRepoNotFound.
+//
+// A non-nil keep runs in the transaction that deletes the repository's row, with that
 // row, read and locked (see GetRepoByNameForUpdate) before the check; if it
 // returns true the repository is kept and errRepoKept is returned. The lock
 // holds off collaborator, webhook and LFS rows for the repository and
@@ -823,14 +836,24 @@ var errRepoKept = errors.New("repository kept")
 // A name with no row is proto.ErrRepoNotFound, whatever is on disk: a
 // directory without a row is left alone, and reported when the server
 // starts (see OrphanRepositoryDirs).
-func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(tx *db.Tx, m models.Repo) (bool, error)) error {
+func (d *Backend) deleteRepository(ctx context.Context, name string, id int64, keep func(tx *db.Tx, m models.Repo) (bool, error)) error {
 	name = utils.SanitizeRepo(name)
 
-	ev, err := d.deleteEvent(ctx, name)
+	ev, r, err := d.deleteEvent(ctx, name)
 	if err != nil {
 		return err
 	}
-	repoID, err := d.deleteRepoRow(ctx, name, keep)
+	if r != nil {
+		// A repository without a directory has no event, and is deleted
+		// by its row alone.
+		switch {
+		case id == 0:
+			id = r.ID()
+		case id != r.ID():
+			return proto.ErrRepoNotFound
+		}
+	}
+	repoID, err := d.deleteRepoRow(ctx, name, id, keep)
 	if err != nil {
 		return wrapRepoError(err)
 	}
@@ -853,37 +876,39 @@ type repoDeleteEvent struct {
 	hooks []models.Webhook
 }
 
-// deleteEvent builds the event of deleting the repository name, and reads
-// its subscribers, before anything is deleted: the webhooks go with the
-// row. A repository whose directory is gone has no event, but its row still
-// has to go, so it returns nil. An event that cannot be built (its owner
-// lookup failed) is logged and skipped, and subscribers that cannot be read
-// are logged, rather than stopping the delete. The error is set only when
-// the repository could not be looked up.
-func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEvent, error) {
+// deleteEvent looks up the repository name, and builds the event of
+// deleting it and reads its subscribers before anything is deleted: the
+// webhooks go with the row. A repository whose directory is gone is not
+// found, and has no event, but its row still has to go, so both results
+// are nil. An event that cannot be built (its owner lookup failed) is
+// logged and skipped, and subscribers that cannot be read are logged,
+// rather than stopping the delete. The error is set only when the
+// repository could not be looked up.
+func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEvent, proto.Repository, error) {
 	r, err := d.Repository(ctx, name)
 	switch {
 	case errors.Is(err, proto.ErrRepoNotFound):
-		return nil, nil
+		return nil, nil, nil
 	case err != nil:
-		return nil, err
+		return nil, nil, err
 	}
 	ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
 	if err != nil {
 		d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
-		return nil, nil
+		return nil, r, nil
 	}
 	hooks, err := webhook.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
-		return nil, nil
+		return nil, r, nil
 	}
-	return &repoDeleteEvent{event: ev, hooks: hooks}, nil
+	return &repoDeleteEvent{event: ev, hooks: hooks}, r, nil
 }
 
-// deleteRepoRow deletes the row of the repository name, unless keep (see
-// deleteRepository) keeps it, and returns the deleted row's ID.
-func (d *Backend) deleteRepoRow(ctx context.Context, name string, keep func(tx *db.Tx, m models.Repo) (bool, error)) (int64, error) {
+// deleteRepoRow deletes the row of the repository name, if its ID is id
+// (any, when id is 0) and keep (see deleteRepository) does not keep it, and
+// returns the deleted row's ID.
+func (d *Backend) deleteRepoRow(ctx context.Context, name string, id int64, keep func(tx *db.Tx, m models.Repo) (bool, error)) (int64, error) {
 	var repoID int64
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The row is locked before anything is deleted. A rename that
@@ -895,6 +920,9 @@ func (d *Backend) deleteRepoRow(ctx context.Context, name string, keep func(tx *
 		m, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
 		if err != nil {
 			return err
+		}
+		if id != 0 && m.ID != id {
+			return proto.ErrRepoNotFound
 		}
 		if keep != nil {
 			kept, err := keep(tx, m)
@@ -1167,8 +1195,11 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	ctx = context.WithoutCancel(ctx)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		// Re-read both, so what is written is what was validated.
-		cur, err := d.store.GetRepoByName(ctx, tx, name)
+		// Re-read both, so what is written is what was validated. The row
+		// is locked, so the check holds until the commit: on Postgres a
+		// rename and a create could otherwise put another repository under
+		// the name before the flag is written.
+		cur, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
 		if err != nil {
 			return err
 		}

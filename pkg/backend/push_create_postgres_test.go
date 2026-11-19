@@ -26,7 +26,7 @@ func TestDeleteRepositoryKeepCheckLocksRowPostgres(t *testing.T) {
 	is.NoErr(err)
 
 	result := make(chan error, 1)
-	err = e.be.deleteRepository(e.ctx, "repo", func(tx *db.Tx, m models.Repo) (bool, error) {
+	err = e.be.deleteRepository(e.ctx, "repo", 0, func(tx *db.Tx, m models.Repo) (bool, error) {
 		var holder int
 		if err := tx.GetContext(e.ctx, &holder, `SELECT pg_backend_pid();`); err != nil {
 			return true, err
