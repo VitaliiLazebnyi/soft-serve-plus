@@ -107,7 +107,7 @@ var errRemoteGroup = errors.New("remote groups are not supported on mirrors")
 // the remote no longer has. Naming every remote keeps git from choosing one
 // that was not validated. A remote that fails to fetch does not stop the
 // others; their errors are joined. Once ctx is done no further fetch starts,
-// but one already running is left to finish; see runMirrorGit.
+// and one already running is stopped; see runMirrorGit.
 func syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
@@ -277,44 +277,34 @@ var syncRepoLFS = func(ctx context.Context, b *backend.Backend, repo proto.Repos
 
 // mirrorSyncTimeout bounds the whole sync of one mirror, its fetches and its
 // LFS objects. Tests lower it.
+//
+// Stalls are caught much sooner by the low-speed and keepalive settings in
+// RemoteGitEnv and by the LFS client's stall timeout; this is the backstop
+// for what those miss, such as git:// remotes, which git dials itself with no
+// read timeout, and remotes or LFS endpoints that trickle data just fast
+// enough.
 var mirrorSyncTimeout = time.Hour
 
-// mirrorGitTimeout bounds a single git command of a mirror sync.
-//
-// The job waits for every repository before it finishes, and the scheduler
-// skips its runs while one is still going, so a command that never returns
-// stops every mirror on the server from syncing. Stalls are caught much
-// sooner by the low-speed and keepalive settings in RemoteGitEnv; this is the
-// backstop for what those miss, such as git:// remotes, which git dials itself
-// with no read timeout, and remotes that trickle data just fast enough.
-var mirrorGitTimeout = time.Hour
-
-// mirrorGitWaitDelay is how long, once git is killed, the sync waits for the
-// helpers git started (git-remote-http, ssh) to let go of its output.
-// They inherit git's stderr and outlive it when killed; past this the output
-// is closed and the sync moves on.
+// mirrorGitWaitDelay is how long git has to exit once it was asked to stop,
+// and then how long the sync waits for the helpers git started
+// (git-remote-http, ssh) to let go of its output. Past the first, git is
+// killed; past the second, the output is closed and the sync moves on.
 const mirrorGitWaitDelay = 5 * time.Second
 
 // mirrorGitStderrLimit caps how much of git's stderr is kept for the error.
 // The remote can write to it (remote: lines), so it is not kept in full.
 const mirrorGitStderrLimit = 4 << 10
 
-// runMirrorGit runs one git command of a mirror sync in dir with env applied,
-// killing it after mirrorGitTimeout. Tests replace it.
+// runMirrorGit runs one git command of a mirror sync in dir with env applied.
+// Tests replace it.
 //
-// The command does not get ctx's cancellation. Cancelling would kill git
-// (exec.CommandContext sends SIGKILL, or TerminateProcess on Windows), and a
-// killed git never removes the ref and packed-refs locks it holds, so every
-// later sync of the mirror would fail on "File exists" until someone deletes
-// them by hand. A git command that is already running is left to finish:
-// Server.Shutdown waits for it within its drain deadline, and if the server
-// exits first, git finishes on its own and cleans up after itself, as it
-// did before syncs were cancelled at all. Only a command stalled past
-// mirrorGitTimeout is killed.
+// Once ctx is done, at shutdown or when the sync runs out of time, git is
+// sent SIGTERM (see terminateOnCancel), which it handles by removing the ref
+// and packed-refs locks it holds and exiting. A killed git would leave them,
+// and every later sync of the mirror would fail on "File exists" until
+// someone deleted them by hand. git is killed only if it is still running
+// mirrorGitWaitDelay later.
 var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorGitTimeout)
-	defer cancel()
-
 	var stderr limitedBuffer
 	stderr.limit = mirrorGitStderrLimit
 
@@ -322,6 +312,7 @@ var runMirrorGit = func(ctx context.Context, dir string, env []string, args ...s
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stderr = &stderr
+	terminateOnCancel(cmd)
 	cmd.WaitDelay = mirrorGitWaitDelay
 
 	if err := cmd.Run(); err != nil {
