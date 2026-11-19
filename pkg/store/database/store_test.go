@@ -516,8 +516,8 @@ func TestLFSLockStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Paths are stored without surrounding space or a leading slash.
-	if err := s.CreateLFSLockForUser(ctx, dbx, 7, owner, " /a.bin ", "refs/heads/main"); err != nil {
+	// Paths are stored as given; see TestLFSLockPathStoredAsGiven.
+	if err := s.CreateLFSLockForUser(ctx, dbx, 7, owner, "a.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateLFSLockForUser(ctx, dbx, 7, other.ID, "b.bin", ""); err != nil {
@@ -531,7 +531,7 @@ func TestLFSLockStore(t *testing.T) {
 		t.Errorf("CreateLFSLockForUser(locked path) error = %v, want ErrDuplicateKey", err)
 	}
 
-	l, err := s.GetLFSLockForPath(ctx, dbx, 7, "/a.bin")
+	l, err := s.GetLFSLockForPath(ctx, dbx, 7, "a.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
