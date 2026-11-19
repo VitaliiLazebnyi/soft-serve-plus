@@ -20,7 +20,7 @@ import (
 
 // gitTestTimeout bounds the waits in these tests, so a handler that never
 // returns fails the test instead of hanging it.
-const gitTestTimeout = 30 * time.Second
+const gitTestTimeout = time.Minute
 
 // cancelledPushToCreate runs a push to the missing repository "fresh" as an
 // admin, which creates it, and cancels the session once receive-pack has sent
@@ -446,6 +446,10 @@ func TestRemoveFailedPushRepoLeavesRecreatedDirectory(t *testing.T) {
 }
 
 // A delete that keeps failing is given up after the retry policy's total.
+//
+// Only the policy's waits count toward its total, so the number of attempts
+// is the same however slow the machine is: the test counts them, rather
+// than time the retries, which a loaded machine slows down.
 func TestRemoveFailedPushRepoGivesUp(t *testing.T) {
 	is := is.New(t)
 	dir := emptyBareRepo(t)
@@ -455,9 +459,26 @@ func TestRemoveFailedPushRepoGivesUp(t *testing.T) {
 		return errors.New("directory in use")
 	}
 
-	start := time.Now()
-	removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
-	is.True(calls > 1)
-	is.True(time.Since(start) < 5*time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		removeFailedPushRepo(t.Context(), log.New(io.Discard), "fresh", dir, identify(t, dir), noRowOps(del), fastRetry)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Minute):
+		t.Fatal("the delete was still retried a minute later")
+	}
+	is.Equal(calls, policyAttempts(fastRetry))
 	is.True(dirExists(dir))
+}
+
+// policyAttempts returns how many attempts p allows: one, and one more
+// after each wait that fits in its total.
+func policyAttempts(p retryPolicy) int {
+	n := 1
+	for waited, wait := time.Duration(0), p.first; waited+wait <= p.total; waited, wait = waited+wait, wait*2 {
+		n++
+	}
+	return n
 }
