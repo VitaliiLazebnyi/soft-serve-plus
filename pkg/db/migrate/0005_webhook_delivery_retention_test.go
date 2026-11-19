@@ -24,11 +24,11 @@ func TestWebhookDeliveryRetentionTrims(t *testing.T) {
 	// migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
 	t.Cleanup(func() { migrations = all })
-	migrations = all[:webhookDeliveryRetentionVersion-1]
+	migrations = all[:webhookDeliveryRetention.Version-1]
 	if err := Migrate(ctx, dbx); err != nil {
 		t.Fatalf("Migrate() before retention => %v", err)
 	}
-	migrations = all[:webhookDeliveryRetentionVersion]
+	migrations = all[:webhookDeliveryRetention.Version]
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()

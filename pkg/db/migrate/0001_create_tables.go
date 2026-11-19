@@ -76,7 +76,7 @@ var createTables = Migration{
 			}
 		}
 
-		if err := migrateUp(ctx, tx, createTablesVersion, createTablesName); err != nil {
+		if err := execMigration(ctx, tx, createTablesVersion, createTablesName, false); err != nil {
 			return err
 		}
 
@@ -159,7 +159,7 @@ var createTables = Migration{
 		return nil
 	},
 	Rollback: func(ctx context.Context, tx *db.Tx) error {
-		return migrateDown(ctx, tx, createTablesVersion, createTablesName)
+		return execMigration(ctx, tx, createTablesVersion, createTablesName, true)
 	},
 }
 

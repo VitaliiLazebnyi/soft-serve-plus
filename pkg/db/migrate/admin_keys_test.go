@@ -188,7 +188,7 @@ func TestAdminKeyAddedAfterFirstBootBecomesAdminKey(t *testing.T) {
 	if o, ok := ownerOf(t, dbx, later); ok {
 		t.Errorf("removed key owner = %+v; want it removed", o)
 	}
-	if n := count(t, dbx, `SELECT COUNT(*) FROM settings WHERE "key" LIKE 'initial_admin_key:%'`); n != 0 {
+	if n := count(t, dbx, `SELECT COUNT(*) FROM public_keys WHERE synced_user_id IS NOT NULL`); n != 0 {
 		t.Errorf("synced key records = %d, want 0", n)
 	}
 
@@ -407,7 +407,7 @@ func TestAdminKeyConcurrentBoots(t *testing.T) {
 			t.Errorf("key owner = %+v, %v; want admin", o, ok)
 		}
 	}
-	if n := count(t, dbx, `SELECT COUNT(*) FROM settings WHERE "key" LIKE 'initial_admin_key:%'`); n != len(keys) {
+	if n := count(t, dbx, `SELECT COUNT(*) FROM public_keys WHERE synced_user_id IS NOT NULL`); n != len(keys) {
 		t.Errorf("synced key records = %d, want %d", n, len(keys))
 	}
 }
@@ -651,10 +651,12 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 	}
 
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		var r syncedKeyRow
-		if err := tx.GetContext(ctx, &r, tx.Rebind(`SELECT "key", value FROM settings WHERE "key" = ?`),
-			syncedKeyPrefix+ak); err != nil {
+		keys, err := syncedKeys(ctx, tx)
+		if err != nil {
 			return err
+		}
+		if len(keys) != 1 || keys[0].Key != ak {
+			t.Fatalf("synced keys = %+v, want %s", keys, ak)
 		}
 
 		// The operator keeps the key by hand, on another connection.
@@ -667,7 +669,7 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 			return err
 		}
 
-		return removeSyncedKey(ctx, tx, log.New(io.Discard), r, ak, true)
+		return removeSyncedKey(ctx, tx, log.New(io.Discard), keys[0], true)
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -22,7 +22,7 @@ func TestForeignKeyIndexes(t *testing.T) {
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
 	t.Cleanup(func() { migrations = all })
-	migrations = all[:foreignKeyIndexesVersion]
+	migrations = all[:foreignKeyIndexes.Version]
 
 	indexes := []string{
 		"public_keys_user_id_idx",

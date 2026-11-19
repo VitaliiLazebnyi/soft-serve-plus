@@ -50,7 +50,7 @@ func TestMigrationSQLFilesComplete(t *testing.T) {
 
 	known := map[string]Migration{}
 	for _, m := range migrations {
-		known[fmt.Sprintf("%04d_%s", m.Version, toSnakeCase(m.Name))] = m
+		known[sqlFilePrefix(m.Version, m.Name)] = m
 	}
 
 	have := map[string]map[string]bool{}

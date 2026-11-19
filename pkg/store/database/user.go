@@ -28,19 +28,7 @@ func (*Store) AddPublicKeyByUsername(ctx context.Context, tx db.Handler, usernam
 
 	query := tx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-	ak := sshutils.MarshalAuthorizedKey(pk)
-	if _, err := tx.ExecContext(ctx, query, userID, ak); err != nil {
-		return err
-	}
-
-	return forgetSyncedAdminKey(ctx, tx, ak)
-}
-
-// forgetSyncedAdminKey deletes the record that the initial_admin_keys sync
-// attached ak, so a key added or removed by hand is no longer removed when it
-// leaves the config.
-func forgetSyncedAdminKey(ctx context.Context, tx db.Handler, ak string) error {
-	_, err := tx.ExecContext(ctx, tx.Rebind(`DELETE FROM settings WHERE "key" = ?;`), db.SyncedAdminKeyPrefix+ak)
+	_, err := tx.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk))
 	return err
 }
 
@@ -62,11 +50,7 @@ func (*Store) CreateUser(ctx context.Context, tx db.Handler, username string, is
 	for _, pk := range pks {
 		query := tx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-		ak := sshutils.MarshalAuthorizedKey(pk)
-		if _, err := tx.ExecContext(ctx, query, userID, ak); err != nil {
-			return err
-		}
-		if err := forgetSyncedAdminKey(ctx, tx, ak); err != nil {
+		if _, err := tx.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk)); err != nil {
 			return err
 		}
 	}
@@ -202,13 +186,8 @@ func (*Store) RemovePublicKeyByUsername(ctx context.Context, tx db.Handler, user
 	query := tx.Rebind(`DELETE FROM public_keys
 			WHERE user_id = (SELECT id FROM users WHERE username = ?)
 			AND public_key = ?;`)
-	ak := sshutils.MarshalAuthorizedKey(pk)
-	// Nothing removed means the user does not have the key, and the sync
-	// record (if any) still describes the key where it is.
-	if err := affected(tx.ExecContext(ctx, query, username, ak)); err != nil {
-		return err
-	}
-	return forgetSyncedAdminKey(ctx, tx, ak)
+	// Nothing removed means the user does not have the key.
+	return affected(tx.ExecContext(ctx, query, username, sshutils.MarshalAuthorizedKey(pk)))
 }
 
 // SetAdminByUsername implements store.Store.
