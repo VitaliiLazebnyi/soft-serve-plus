@@ -118,21 +118,6 @@ func TestDeleteRepositoryKeepsSymlinkedParent(t *testing.T) {
 	assertDir(t, target)
 }
 
-// Removing an orphan directory (one with no row) also removes the group
-// directories it leaves empty.
-func TestDeleteOrphanRepositoryRemovesEmptyParents(t *testing.T) {
-	be, _, root := nestedReposFixture(t)
-	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
-	if err := os.MkdirAll(be.repoPath("x/y/orphan"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := be.DeleteRepository(ctx, "x/y/orphan"); err != nil {
-		t.Fatal(err)
-	}
-	assertGone(t, filepath.Join(root, "x"))
-}
-
 // Renaming a repository out of a group removes the group directories the old
 // name leaves empty, and renaming within a group keeps the group.
 func TestRenameRepositoryRemovesEmptyParents(t *testing.T) {

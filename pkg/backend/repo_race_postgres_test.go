@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,26 +9,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 )
 
+// pausingRenameStore runs renamed inside a rename's transaction, right after
+// the row is renamed and so locked.
+type pausingRenameStore struct {
+	store.Store
+	renamed func(newName string)
+}
+
+func (s *pausingRenameStore) SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error {
+	if err := s.Store.SetRepoNameByName(ctx, h, name, newName); err != nil {
+		return err
+	}
+	s.renamed(newName)
+	return nil
+}
+
 // raceRename starts renaming e's repository "repo" to "moved" and returns
-// once the rename has moved the directory and holds the row's lock, inside
-// its transaction. Calling the returned function lets the rename commit and
-// waits for it.
+// once the rename holds the row's lock, inside its transaction. Calling the
+// returned function lets the rename commit and waits for it.
 func raceRename(t *testing.T, e whEnv) (commit func()) {
 	t.Helper()
 	moved := make(chan struct{})
 	release := make(chan struct{})
-	testHookRepoDirUnrecorded = func(name string) {
+	e.be.store = &pausingRenameStore{Store: e.be.store, renamed: func(name string) {
 		if name == "moved" {
 			close(moved)
 			<-release
 		}
-	}
-	t.Cleanup(func() { testHookRepoDirUnrecorded = nil })
+	}}
 	done := make(chan error, 1)
 	go func() { done <- e.be.RenameRepository(e.ctx, "repo", "moved") }()
 	<-moved
