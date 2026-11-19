@@ -221,4 +221,7 @@ func TestServerContextEndsRequestRead(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
 		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
 	}
+	// The handler has returned and given back its connection's slot,
+	// rather than waiting out the ten-minute idle timeout.
+	waitConns(t, d, 0, idleWait)
 }
