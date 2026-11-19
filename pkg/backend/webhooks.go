@@ -77,7 +77,7 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		h, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			return err
+			return webhookNotFound(err)
 		}
 		events, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
 		if err != nil {
@@ -161,7 +161,7 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		// row otherwise and fails with db.ErrRecordNotFound, before the event
 		// rewrite below can touch another repository's webhook.
 		if err := datastore.UpdateWebhookByID(ctx, tx, repo.ID(), id, url, secret, int(contentType), active); err != nil {
-			return err
+			return webhookNotFound(err)
 		}
 
 		currentEvents, err := datastore.GetWebhookEventsByWebhookID(ctx, tx, id)
@@ -224,7 +224,7 @@ func (d *Backend) DeleteWebhook(ctx context.Context, repo proto.Repository, id i
 		if _, err := datastore.LockAndCountWebhooks(ctx, tx, repo.ID()); err != nil {
 			return err
 		}
-		return datastore.DeleteWebhookForRepoByID(ctx, tx, repo.ID(), id)
+		return webhookNotFound(datastore.DeleteWebhookForRepoByID(ctx, tx, repo.ID(), id))
 	})
 }
 
@@ -240,7 +240,7 @@ func (d *Backend) ListWebhookDeliveries(ctx context.Context, repo proto.Reposito
 	var deliveries []models.WebhookDelivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), id); err != nil {
-			return err
+			return webhookNotFound(err)
 		}
 
 		var err error
@@ -281,13 +281,17 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		var err error
 		wh, err = datastore.GetWebhookByID(ctx, tx, repo.ID(), id)
 		if err != nil {
-			d.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
+			if err = webhookNotFound(err); errors.Is(err, proto.ErrWebhookNotFound) {
+				d.logger.Debug("redelivery of an unknown webhook", "webhook", id, "repo", repo.Name())
+			} else {
+				d.logger.Error("error getting webhook", "webhook", id, "repo", repo.Name(), "err", err)
+			}
 			return err
 		}
 
 		delivery, err = datastore.GetWebhookDeliveryByID(ctx, tx, id, delID)
 		if err != nil {
-			return err
+			return deliveryNotFound(err)
 		}
 
 		// Checked after the lookup, so an unknown delivery is reported as
@@ -354,6 +358,24 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 	return webhook.RedeliverWebhook(d.webhookContext(ctx), wh, webhook.Event(delivery.Event), payload, guid)
 }
 
+// webhookNotFound maps a missing webhook row to proto.ErrWebhookNotFound,
+// so the caller never sees the driver's error. Other errors are returned
+// unchanged.
+func webhookNotFound(err error) error {
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrWebhookNotFound
+	}
+	return err
+}
+
+// deliveryNotFound is webhookNotFound for a webhook delivery.
+func deliveryNotFound(err error) error {
+	if errors.Is(err, db.ErrRecordNotFound) {
+		return proto.ErrDeliveryNotFound
+	}
+	return err
+}
+
 // webhookContext returns ctx carrying the backend's own config, database and
 // store. The webhook package reads them from the context: the store and
 // database to record the delivery, and the config for webhook.allowed_hosts.
@@ -405,12 +427,12 @@ func (d *Backend) WebhookDelivery(ctx context.Context, repo proto.Repository, we
 	var delivery webhook.Delivery
 	if err := dbx.ReadTransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := datastore.GetWebhookByID(ctx, tx, repo.ID(), webhookID); err != nil {
-			return err
+			return webhookNotFound(err)
 		}
 
 		del, err := datastore.GetWebhookDeliveryByID(ctx, tx, webhookID, id)
 		if err != nil {
-			return err
+			return deliveryNotFound(err)
 		}
 
 		delivery = webhook.Delivery{

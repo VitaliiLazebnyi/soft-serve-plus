@@ -246,8 +246,18 @@ func (d *Backend) DefaultPrivate(ctx context.Context, user proto.User) (bool, er
 	return true, nil
 }
 
-// CreateRepository creates a new repository.
+// CreateRepository creates a new repository. An error that is not a
+// refusal (see clientError) is logged and returned as proto.ErrServerFault.
 func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
+	r, err := d.createUserRepository(ctx, name, user, opts)
+	if err != nil {
+		return nil, d.clientError(ctx, "create", name, err)
+	}
+	return r, nil
+}
+
+// createUserRepository is CreateRepository without the mapping of errors.
+func (d *Backend) createUserRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
 	if err := d.checkCanClaim(ctx, user, utils.SanitizeRepo(name)); err != nil {
 		return nil, err
 	}
@@ -541,8 +551,18 @@ func (d *Backend) defaultAdminUserID(ctx context.Context, tx *db.Tx) (int64, err
 	return adminID, nil
 }
 
-// ImportRepository imports a repository from remote.
+// ImportRepository imports a repository from remote. An error that is not a
+// refusal (see clientError) is logged and returned as proto.ErrServerFault.
 func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.User, remote string, opts proto.RepositoryOptions) (proto.Repository, error) {
+	r, err := d.importUserRepository(ctx, name, user, remote, opts)
+	if err != nil {
+		return nil, d.clientError(ctx, "import", name, err)
+	}
+	return r, nil
+}
+
+// importUserRepository is ImportRepository without the mapping of errors.
+func (d *Backend) importUserRepository(ctx context.Context, name string, user proto.User, remote string, opts proto.RepositoryOptions) (proto.Repository, error) {
 	name = utils.SanitizeRepo(name)
 	if err := utils.ValidateRepo(name); err != nil {
 		return nil, err
@@ -974,8 +994,14 @@ func (d *Backend) removeRepoFiles(name string, repoID int64) {
 	}
 }
 
-// RenameRepository renames a repository.
+// RenameRepository renames a repository. An error that is not a refusal
+// (see clientError) is logged and returned as proto.ErrServerFault.
 func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName string) error {
+	return d.clientError(ctx, "rename", oldName, d.renameRepository(ctx, oldName, newName))
+}
+
+// renameRepository is RenameRepository without the mapping of errors.
+func (d *Backend) renameRepository(ctx context.Context, oldName string, newName string) error {
 	oldName = utils.SanitizeRepo(oldName)
 	// The repository may predate the rules for new names.
 	if err := utils.ValidateExistingRepo(oldName); err != nil {
@@ -1054,6 +1080,11 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		// directories are removed, and a concurrent create or rename into
 		// the group recreates them through withRepoParent.
 		d.removeEmptyRepoParents(np)
+		// A row with the new name and no directory, which claiming the
+		// path cannot see, takes the name as much as a repository does.
+		if errors.Is(err, db.ErrDuplicateKey) {
+			return proto.ErrRepoExist
+		}
 		return wrapRepoError(err)
 	}
 
@@ -1125,6 +1156,48 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 	}
 
 	return r, nil
+}
+
+// refusals are the errors that refuse a create, import or rename for a
+// reason the client may be told, or that already stand for a fault with a
+// fixed message (proto.ErrLookupFailed, errRepoUpdate, the
+// git.ErrNotAGitRepository of openRepoError), or that say the client went
+// away.
+var refusals = []error{
+	utils.ErrInvalidRepo,
+	proto.ErrUnauthorized,
+	proto.ErrRepoExist,
+	proto.ErrRepoNotFound,
+	proto.ErrRepoLimitReached,
+	proto.ErrAnonymousPrivate,
+	proto.ErrInvalidRemote,
+	proto.ErrImportFailed,
+	proto.ErrImportsDisabled,
+	proto.ErrTooManyImports,
+	proto.ErrLookupFailed,
+	errLFSEndpointUnsupported,
+	errRepoUpdate,
+	git.ErrNotAGitRepository,
+	context.Canceled,
+	context.DeadlineExceeded,
+}
+
+// clientError returns err, from a create, import or rename (op) of the
+// repository name, for the client: a refusal (see refusals) unchanged, and
+// anything else, such as a failed insert, logged with its cause and
+// replaced by proto.ErrServerFault, whose text says nothing about the
+// server.
+func (d *Backend) clientError(ctx context.Context, op, name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, r := range refusals {
+		if errors.Is(err, r) {
+			return err
+		}
+	}
+	d.logger.Error("failed to "+op+" repository", "repo", name, "err", err)
+	return proto.ErrServerFault
 }
 
 // errRepoUpdate replaces filesystem errors, which carry the server data
