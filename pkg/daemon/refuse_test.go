@@ -109,7 +109,7 @@ func holdSlot(t *testing.T, d *GitDaemon, addr string) net.Conn {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	waitConns(t, d, want, 30*time.Second)
+	waitConns(t, d, want, idleWait)
 	return c
 }
 

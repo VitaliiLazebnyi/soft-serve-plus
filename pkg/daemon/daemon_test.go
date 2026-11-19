@@ -672,44 +672,58 @@ func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener
 	return d, l.Addr().String()
 }
 
-// refused dials addr and reports whether the daemon turns the connection away
-// as over the limit. A connection it keeps open sends nothing, so it counts as
-// kept once wait passes without an answer.
-func refused(t *testing.T, addr string, wait time.Duration) (bool, net.Conn) {
+// probeRequest asks for a repository that does not exist. A kept connection
+// sends it to show that the daemon serves it: the answer is
+// git.ErrNotAuthed, never the refusal.
+var probeRequest = pkt("git-upload-pack /missing\x00host=127.0.0.1\x00")
+
+// wantServed fails the test unless the daemon answers a request on c, which
+// it has kept, as it answers any client.
+func wantServed(t *testing.T, what string, c net.Conn) {
 	t.Helper()
-	var dialer net.Dialer
-	c, err := dialer.DialContext(t.Context(), "tcp", addr)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
+	if _, err := io.WriteString(c, probeRequest); err != nil {
+		t.Fatalf("%s: write request: %v", what, err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
-	_ = c.SetReadDeadline(time.Now().Add(wait))
-	_, err = readPktline(c)
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return false, c
+	_, err := readPktline(c)
+	wantErrLine(t, what, err, git.ErrNotAuthed)
+}
+
+// isRefusal reports whether err, from reading a connection's first answer,
+// is a refusal for the connection limit: the refusal itself, or, for one of
+// the connections the daemon closes at once past maxRefusing refusals in
+// progress, the end of the stream or a reset that cost the client the
+// refusal. A kept connection gets none of these before it sends a request.
+func isRefusal(err error) bool {
+	var errLine *git.PktlineError
+	if errors.As(err, &errLine) {
+		return errLine.Text == git.ErrMaxConnections.Error()
 	}
-	if err == nil || err.Error() != git.ErrMaxConnections.Error() {
-		t.Fatalf("got %v, want %q or no answer", err, git.ErrMaxConnections)
-	}
-	return true, c
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || isReset(err)
 }
 
 // TestMaxConnections checks that max_connections N lets N connections in and
 // refuses the next. It used to let only N-1 in, and a limit of 1 none.
+//
+// Nothing is decided by a read that did not end in time. A connection is
+// kept once the daemon counts it, and still served: its request gets an
+// answer. The one past the limit reads the refusal and then the end of the
+// stream. Each is waited for up to idleWait.
 func TestMaxConnections(t *testing.T) {
 	for _, limit := range []int{1, 3} {
 		d, addr := startLimitedDaemon(t, limit)
+		kept := make([]net.Conn, limit)
 		for i := range limit {
-			if r, _ := refused(t, addr, 200*time.Millisecond); r {
-				t.Fatalf("limit %d: connection %d refused", limit, i+1)
-			}
+			kept[i] = holdSlot(t, d, addr)
 		}
-		if r, _ := refused(t, addr, 5*time.Second); !r {
-			t.Fatalf("limit %d: connection %d kept, want it refused", limit, limit+1)
+		over := dialHeld(t, addr, "", git.ErrMaxConnections)
+		if out, err := io.ReadAll(over); err != nil || (len(out) != 0 && string(out) != "0000") {
+			t.Fatalf("limit %d: after the refusal: read %q, %v; want the end of the stream", limit, out, err)
 		}
 		if got := d.conns.Size(); got != limit {
 			t.Fatalf("limit %d: %d connections open", limit, got)
+		}
+		for i, c := range kept {
+			wantServed(t, fmt.Sprintf("limit %d: connection %d", limit, i+1), c)
 		}
 	}
 }
@@ -717,55 +731,82 @@ func TestMaxConnections(t *testing.T) {
 // TestMaxConnectionsBurst dials many connections at once: exactly limit of
 // them are kept. Connections used to be counted in their own goroutines, so
 // a burst passed the check before any was counted.
+//
+// The test waits, up to idleWait, until all but limit of the connections are
+// refused, then checks that each of the others is still served. A
+// connection is never taken for kept because its refusal was slow to come.
 func TestMaxConnectionsBurst(t *testing.T) {
 	const limit, dials = 3, 64
 	d, addr := startLimitedDaemon(t, limit)
-	// Each refused connection gets an answer; wait long enough for all of
-	// them before counting the silent ones as kept.
-	type result struct {
-		c       net.Conn
-		err     error
-		refused bool
-	}
-	results := make(chan result, dials)
+	dialed := make(chan net.Conn, dials)
 	for range dials {
 		go func() {
-			var dialer net.Dialer
-			c, err := dialer.DialContext(t.Context(), "tcp", addr)
+			c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
 			if err != nil {
-				results <- result{err: err}
-				return
+				t.Logf("dial: %v", err)
+				c = nil
 			}
-			_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
-			_, err = readPktline(c)
-			results <- result{c: c, refused: err != nil && err.Error() == git.ErrMaxConnections.Error()}
+			dialed <- c
 		}()
 	}
 	// A burst of loopback dials can time out on macOS when the listen
 	// backlog drops SYNs, without the daemon being involved. Such a dial
 	// never reaches the daemon, so skip it and check the limit over the
 	// connections that did get through.
-	var kept, connected int
+	var conns []net.Conn
 	for range dials {
-		r := <-results
-		if r.err != nil {
-			t.Logf("dial: %v", r.err)
+		if c := <-dialed; c != nil {
+			t.Cleanup(func() { _ = c.Close() })
+			conns = append(conns, c)
+		}
+	}
+	if len(conns) <= limit {
+		t.Skipf("only %d of %d dials connected, need more than %d", len(conns), dials, limit)
+	}
+
+	// Read each connection's first answer.
+	type answer struct {
+		i   int
+		err error
+	}
+	answers := make(chan answer, len(conns))
+	for i, c := range conns {
+		_ = c.SetReadDeadline(time.Now().Add(2 * idleWait))
+		go func() {
+			_, err := readPktline(c)
+			answers <- answer{i, err}
+		}()
+	}
+
+	wantRefused := len(conns) - limit
+	answered := make(map[int]bool)
+	timeout := time.After(idleWait)
+	for len(answered) < wantRefused {
+		select {
+		case a := <-answers:
+			if !isRefusal(a.err) {
+				t.Fatalf("connection %d answered %v before sending a request, want a refusal or no answer", a.i, a.err)
+			}
+			answered[a.i] = true
+		case <-timeout:
+			t.Fatalf("%d of %d connections refused after %s, want %d", len(answered), len(conns), idleWait, wantRefused)
+		}
+	}
+	waitConns(t, d, limit, idleWait)
+
+	// The rest are kept: each still gets an answer to its request.
+	for i, c := range conns {
+		if answered[i] {
 			continue
 		}
-		connected++
-		t.Cleanup(func() { _ = r.c.Close() })
-		if !r.refused {
-			kept++
+		if _, err := io.WriteString(c, probeRequest); err != nil {
+			t.Fatalf("connection %d: write request: %v", i, err)
 		}
-	}
-	if connected <= limit {
-		t.Skipf("only %d of %d dials connected, need more than %d", connected, dials, limit)
-	}
-	if kept != limit {
-		t.Errorf("%d of %d connections kept, want %d", kept, connected, limit)
-	}
-	if got := d.conns.Size(); got != limit {
-		t.Errorf("%d connections open, want %d", got, limit)
+		a := <-answers
+		if a.i != i {
+			t.Fatalf("connection %d answered %v while connection %d waited for an answer", a.i, a.err, i)
+		}
+		wantErrLine(t, fmt.Sprintf("kept connection %d", i), a.err, git.ErrNotAuthed)
 	}
 }
 
