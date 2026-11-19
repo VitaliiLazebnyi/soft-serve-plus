@@ -97,8 +97,8 @@ func (e *testEnv) newWebhook(t *testing.T, url, secret string, contentType Conte
 func (e *testEnv) deliveries(t *testing.T, webhookID int64) []models.WebhookDelivery {
 	t.Helper()
 	is := is.New(t)
-	ds, err := e.ds.GetWebhookDeliveriesByWebhookID(e.ctx, e.dbx, webhookID)
-	is.NoErr(err)
+	var ds []models.WebhookDelivery
+	is.NoErr(e.dbx.SelectContext(e.ctx, &ds, e.dbx.Rebind("SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq"), webhookID))
 	return ds
 }
 

@@ -427,9 +427,9 @@ func TestDeleteWebhookRemovesEvents(t *testing.T) {
 	events, err := e.be.store.GetWebhookEventsByWebhookID(e.ctx, e.be.db, id)
 	is.NoErr(err)
 	is.Equal(len(events), 0)
-	deliveries, err := e.be.store.GetWebhookDeliveriesByWebhookID(e.ctx, e.be.db, id)
-	is.NoErr(err)
-	is.Equal(len(deliveries), 0)
+	var deliveries int
+	is.NoErr(e.be.db.GetContext(e.ctx, &deliveries, e.be.db.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id))
+	is.Equal(deliveries, 0)
 }
 
 // seedDelivery stores a delivery row directly, so the read paths can be

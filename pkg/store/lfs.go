@@ -31,7 +31,5 @@ type LFSStore interface {
 	GetLFSLockForPath(ctx context.Context, h db.Handler, repoID int64, path string) (models.LFSLock, error)
 	GetLFSLockForUserPath(ctx context.Context, h db.Handler, repoID int64, userID int64, path string) (models.LFSLock, error)
 	GetLFSLockByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.LFSLock, error)
-	GetLFSLockForUserByID(ctx context.Context, h db.Handler, repoID int64, userID int64, id int64) (models.LFSLock, error)
 	DeleteLFSLock(ctx context.Context, h db.Handler, repoID int64, id int64) error
-	DeleteLFSLockForUserByID(ctx context.Context, h db.Handler, repoID int64, userID int64, id int64) error
 }

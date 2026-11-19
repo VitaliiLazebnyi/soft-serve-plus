@@ -1060,60 +1060,6 @@ func wrapRepoError(err error) error {
 	return err
 }
 
-// Description returns the description of a repository.
-func (d *Backend) Description(ctx context.Context, name string) (string, error) {
-	name = utils.SanitizeRepo(name)
-	desc, err := d.store.GetRepoDescriptionByName(ctx, d.db, name)
-	if err != nil {
-		return "", wrapRepoError(err)
-	}
-
-	return desc, nil
-}
-
-// IsMirror returns true if the repository is a mirror.
-func (d *Backend) IsMirror(ctx context.Context, name string) (bool, error) {
-	name = utils.SanitizeRepo(name)
-	mirror, err := d.store.GetRepoIsMirrorByName(ctx, d.db, name)
-	if err != nil {
-		return false, wrapRepoError(err)
-	}
-	return mirror, nil
-}
-
-// IsPrivate returns true if the repository is private.
-func (d *Backend) IsPrivate(ctx context.Context, name string) (bool, error) {
-	name = utils.SanitizeRepo(name)
-	private, err := d.store.GetRepoIsPrivateByName(ctx, d.db, name)
-	if err != nil {
-		return false, wrapRepoError(err)
-	}
-
-	return private, nil
-}
-
-// IsHidden returns true if the repository is hidden.
-func (d *Backend) IsHidden(ctx context.Context, name string) (bool, error) {
-	name = utils.SanitizeRepo(name)
-	hidden, err := d.store.GetRepoIsHiddenByName(ctx, d.db, name)
-	if err != nil {
-		return false, wrapRepoError(err)
-	}
-
-	return hidden, nil
-}
-
-// ProjectName returns the project name of a repository.
-func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) {
-	name = utils.SanitizeRepo(name)
-	pname, err := d.store.GetRepoProjectNameByName(ctx, d.db, name)
-	if err != nil {
-		return "", wrapRepoError(err)
-	}
-
-	return pname, nil
-}
-
 // SetHidden sets the hidden flag of a repository.
 func (d *Backend) SetHidden(ctx context.Context, name string, hidden bool) error {
 	name = utils.SanitizeRepo(name)

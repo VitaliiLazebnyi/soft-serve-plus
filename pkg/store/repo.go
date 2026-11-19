@@ -41,15 +41,10 @@ type RepositoryStore interface {
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error
 
-	GetRepoProjectNameByName(ctx context.Context, h db.Handler, name string) (string, error)
 	SetRepoProjectNameByName(ctx context.Context, h db.Handler, name string, projectName string) error
-	GetRepoDescriptionByName(ctx context.Context, h db.Handler, name string) (string, error)
 	SetRepoDescriptionByName(ctx context.Context, h db.Handler, name string, description string) error
-	GetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string, isPrivate bool) error
-	GetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string, isHidden bool) error
-	GetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string, isMirror bool) error
 	// SetRepoMirrorSyncByName records the outcome of a mirror sync:
 	// syncErr is the error of one that failed, and empty for one that

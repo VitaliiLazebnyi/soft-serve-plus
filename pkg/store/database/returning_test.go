@@ -82,7 +82,6 @@ func TestCreatesReturnTheirRow(t *testing.T) {
 		"GetLFSLockByID":        func() (models.LFSLock, error) { return s.GetLFSLockByID(ctx, dbx, 7, l.ID) },
 		"GetLFSLockForPath":     func() (models.LFSLock, error) { return s.GetLFSLockForPath(ctx, dbx, 7, "a.bin") },
 		"GetLFSLockForUserPath": func() (models.LFSLock, error) { return s.GetLFSLockForUserPath(ctx, dbx, 7, owner, "a.bin") },
-		"GetLFSLockForUserByID": func() (models.LFSLock, error) { return s.GetLFSLockForUserByID(ctx, dbx, 7, owner, l.ID) },
 		"GetLFSLocks": func() (models.LFSLock, error) {
 			ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10)
 			if err != nil || len(ls) != 1 {

@@ -75,26 +75,6 @@ func (*Store) GetLFSLockByID(ctx context.Context, h db.Handler, repoID int64, id
 	return lock, err
 }
 
-// GetLFSLockForUserByID implements store.Store.
-func (*Store) GetLFSLockForUserByID(ctx context.Context, h db.Handler, repoID int64, userID int64, id int64) (models.LFSLock, error) {
-	var lock models.LFSLock
-	query := h.Rebind(lfsLocks + `
-		WHERE lfs_locks.id = ? AND lfs_locks.user_id = ? AND lfs_locks.repo_id = ?;
-	`)
-	err := h.GetContext(ctx, &lock, query, id, userID, repoID)
-	return lock, err
-}
-
-// DeleteLFSLockForUserByID implements store.Store.
-func (*Store) DeleteLFSLockForUserByID(ctx context.Context, h db.Handler, repoID int64, userID int64, id int64) error {
-	query := h.Rebind(`
-		DELETE FROM lfs_locks
-		WHERE repo_id = ? AND user_id = ? AND id = ?;
-	`)
-	_, err := h.ExecContext(ctx, query, repoID, userID, id)
-	return err
-}
-
 // DeleteLFSLock implements store.Store.
 func (*Store) DeleteLFSLock(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`

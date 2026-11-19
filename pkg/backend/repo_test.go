@@ -364,9 +364,9 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	}
 	isMirror := func(name string) bool {
 		t.Helper()
-		m, err := be.IsMirror(ctx, name)
+		r, err := be.Repository(ctx, name)
 		is.NoErr(err)
-		return m
+		return r.IsMirror()
 	}
 
 	const sshRemote = "ssh://git@127.0.0.1:1/x.git"
@@ -466,9 +466,9 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 
 	close(release)
 	is.NoErr(<-done)
-	m, err := be.IsMirror(ctx, "slow")
+	slow, err := be.Repository(ctx, "slow")
 	is.NoErr(err)
-	is.True(m)
+	is.True(slow.IsMirror())
 }
 
 // TestImportRepositoryDisabled verifies that when the installed git is too

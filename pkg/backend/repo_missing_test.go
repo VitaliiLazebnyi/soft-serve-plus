@@ -21,24 +21,8 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 	ctx := context.Background()
 
 	tests := map[string]func() error{
-		"Description": func() error {
-			_, err := be.Description(ctx, "ghost")
-			return err
-		},
-		"IsMirror": func() error {
-			_, err := be.IsMirror(ctx, "ghost")
-			return err
-		},
-		"IsPrivate": func() error {
-			_, err := be.IsPrivate(ctx, "ghost")
-			return err
-		},
-		"IsHidden": func() error {
-			_, err := be.IsHidden(ctx, "ghost")
-			return err
-		},
-		"ProjectName": func() error {
-			_, err := be.ProjectName(ctx, "ghost")
+		"Repository": func() error {
+			_, err := be.Repository(ctx, "ghost")
 			return err
 		},
 		"SetHidden":      func() error { return be.SetHidden(ctx, "ghost", true) },
