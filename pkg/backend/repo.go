@@ -854,14 +854,13 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// noRow is set when no row has the name.
 	var noRow bool
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		// With a keep check, the row is locked before the check, so
-		// nothing can be added for the repository between the check and
-		// the delete, only to go with the row by ON DELETE CASCADE.
-		getRepo := d.store.GetRepoByName
-		if keep != nil {
-			getRepo = d.store.GetRepoByNameForUpdate
-		}
-		repom, dberr := getRepo(ctx, tx, name)
+		// The row is locked before anything is deleted. A rename that
+		// commits first then leaves no row with the name, rather than the
+		// webhooks of the renamed repository deleted and its LFS directory
+		// removed below. With a keep check, nothing can be added for the
+		// repository between the check and the delete, only to go with the
+		// row by ON DELETE CASCADE.
+		repom, dberr := d.store.GetRepoByNameForUpdate(ctx, tx, name)
 		if dberr != nil {
 			noRow = errors.Is(dberr, db.ErrRecordNotFound)
 			return dberr
@@ -1204,12 +1203,7 @@ func (d *Backend) ProjectName(ctx context.Context, name string) (string, error) 
 func (d *Backend) SetHidden(ctx context.Context, name string, hidden bool) error {
 	name = utils.SanitizeRepo(name)
 
-	// An UPDATE that matches no row succeeds silently, so look the
-	// repository up first.
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		if _, err := d.store.GetRepoByName(ctx, tx, name); err != nil {
-			return err
-		}
 		return d.store.SetRepoIsHiddenByName(ctx, tx, name, hidden)
 	}))
 }
@@ -1442,12 +1436,9 @@ func (d *Backend) SetDescription(ctx context.Context, name string, desc string) 
 	ctx = context.WithoutCancel(ctx)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		if _, err := d.store.GetRepoByName(ctx, tx, name); err != nil {
-			return err
-		}
-
 		// The row is written first and the file last, so a failure writing
-		// the file rolls the row back and the two stay in step.
+		// the file rolls the row back and the two stay in step. A
+		// repository with no row has its file left alone.
 		if err := d.store.SetRepoDescriptionByName(ctx, tx, name, desc); err != nil {
 			return err
 		}
@@ -1476,7 +1467,8 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 	var changed bool
 	if err := wrapRepoError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			m, err := d.store.GetRepoByName(ctx, tx, name)
+			// Locked, so that changed says what this call did.
+			m, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
 			if err != nil {
 				return err
 			}
@@ -1539,9 +1531,6 @@ func (d *Backend) SetProjectName(ctx context.Context, repo string, name string) 
 
 	return wrapRepoError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-			if _, err := d.store.GetRepoByName(ctx, tx, repo); err != nil {
-				return err
-			}
 			return d.store.SetRepoProjectNameByName(ctx, tx, repo, name)
 		}),
 	)

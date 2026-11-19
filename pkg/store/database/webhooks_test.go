@@ -83,8 +83,8 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	is.Equal(wh.ContentType, 0)
 	is.True(!wh.Active)
 
-	// An update scoped to another repo changes nothing and reports no error.
-	is.NoErr(s.UpdateWebhookByID(ctx, dbx, 8, id, "https://93.184.216.36/c", "x", 0, true))
+	// An update scoped to another repo changes nothing and reports the miss.
+	is.True(errors.Is(s.UpdateWebhookByID(ctx, dbx, 8, id, "https://93.184.216.36/c", "x", 0, true), db.ErrRecordNotFound))
 	wh, err = s.GetWebhookByID(ctx, dbx, 7, id)
 	is.NoErr(err)
 	is.Equal(wh.URL, "https://93.184.216.35/b")
@@ -96,7 +96,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(len(none), 0)
 
-	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 8, id)) // wrong repo: no-op
+	is.True(errors.Is(s.DeleteWebhookForRepoByID(ctx, dbx, 8, id), db.ErrRecordNotFound)) // wrong repo: nothing deleted
 	_, err = s.GetWebhookByID(ctx, dbx, 7, id)
 	is.NoErr(err)
 	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, id))

@@ -91,8 +91,7 @@ func (*Store) CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID i
 // DeleteWebhookForRepoByID implements store.Store.
 func (*Store) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = ?;`)
-	_, err := h.ExecContext(ctx, query, repoID, id)
-	return err
+	return affected(h.ExecContext(ctx, query, repoID, id))
 }
 
 // DeleteWebhookEventsByWebhookID implements store.Store.
@@ -288,8 +287,7 @@ func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler
 // UpdateWebhookByID implements store.Store.
 func (*Store) UpdateWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64, url string, secret string, contentType int, active bool) error {
 	query := h.Rebind(`UPDATE webhooks SET url = ?, secret = ?, content_type = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND id = ?;`)
-	_, err := h.ExecContext(ctx, query, url, secret, contentType, active, repoID, id)
-	return err
+	return affected(h.ExecContext(ctx, query, url, secret, contentType, active, repoID, id))
 }
 
 // placeholders returns n comma-separated "?" placeholders for an IN clause.

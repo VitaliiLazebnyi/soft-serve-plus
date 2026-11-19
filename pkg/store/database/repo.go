@@ -25,8 +25,7 @@ func (*Store) CreateRepo(ctx context.Context, tx db.Handler, r models.Repo) erro
 func (*Store) DeleteRepoByName(ctx context.Context, tx db.Handler, name string) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("DELETE FROM repos WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, name))
 }
 
 // GetAllRepos implements store.Store.
@@ -141,8 +140,7 @@ func (*Store) GetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name str
 func (*Store) SetRepoIsMirrorByName(ctx context.Context, tx db.Handler, name string, isMirror bool) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET mirror = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, isMirror, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, isMirror, name))
 }
 
 // SetRepoMirrorSyncByName implements store.Store. It leaves
@@ -188,24 +186,21 @@ func (*Store) GetRepoProjectNameByName(ctx context.Context, tx db.Handler, name 
 func (*Store) SetRepoDescriptionByName(ctx context.Context, tx db.Handler, name string, description string) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, description, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, description, name))
 }
 
 // SetRepoIsHiddenByName implements store.Store.
 func (*Store) SetRepoIsHiddenByName(ctx context.Context, tx db.Handler, name string, isHidden bool) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, isHidden, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, isHidden, name))
 }
 
 // SetRepoIsPrivateByName implements store.Store.
 func (*Store) SetRepoIsPrivateByName(ctx context.Context, tx db.Handler, name string, isPrivate bool) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, isPrivate, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, isPrivate, name))
 }
 
 // SetRepoNameByName implements store.Store.
@@ -213,26 +208,12 @@ func (*Store) SetRepoNameByName(ctx context.Context, tx db.Handler, name string,
 	name = utils.SanitizeRepo(name)
 	newName = utils.SanitizeRepo(newName)
 	query := tx.Rebind("UPDATE repos SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	res, err := tx.ExecContext(ctx, query, newName, name)
-	if err != nil {
-		return err
-	}
-
-	// Nothing updated means there was no such repository.
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return db.ErrRecordNotFound
-	}
-	return nil
+	return affected(tx.ExecContext(ctx, query, newName, name))
 }
 
 // SetRepoProjectNameByName implements store.Store.
 func (*Store) SetRepoProjectNameByName(ctx context.Context, tx db.Handler, name string, projectName string) error {
 	name = utils.SanitizeRepo(name)
 	query := tx.Rebind("UPDATE repos SET project_name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
-	_, err := tx.ExecContext(ctx, query, projectName, name)
-	return err
+	return affected(tx.ExecContext(ctx, query, projectName, name))
 }
