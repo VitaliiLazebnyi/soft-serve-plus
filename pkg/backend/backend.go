@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 
 	"charm.land/log/v2"
@@ -49,8 +50,20 @@ type Backend struct {
 	renameTxDone func(error) error
 }
 
+// noReplaceObjectsEnv is the variable that makes git read objects as they
+// are stored, ignoring refs/replace (see New).
+const noReplaceObjectsEnv = "GIT_NO_REPLACE_OBJECTS"
+
 // New returns a new Soft Serve backend.
+//
+// It sets GIT_NO_REPLACE_OBJECTS for the process, so every git process the
+// server and its hooks start reads objects as they are stored. A
+// refs/replace ref, which anyone who may push can push and a --mirror
+// import fetches, would otherwise change what the server shows of a
+// repository (trees, blobs, logs, READMEs, webhook payloads), while
+// upload-pack ignores it and clones get the original objects.
 func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Backend {
+	_ = os.Setenv(noReplaceObjectsEnv, "1") // only fails for an invalid name
 	logger := log.FromContext(ctx).WithPrefix("backend")
 	b := &Backend{
 		cfg:    cfg,
