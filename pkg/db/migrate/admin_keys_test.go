@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -23,6 +21,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -47,8 +46,8 @@ func openDB(t *testing.T, ctx context.Context) *db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := fmt.Sprintf("softserve_migrate_test_%d", time.Now().UnixNano())
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
+	name, err := sstest.CreateDB(ctx, admin, "softserve_migrate_test")
+	if err != nil {
 		admin.Close() //nolint:errcheck
 		t.Fatal(err)
 	}
