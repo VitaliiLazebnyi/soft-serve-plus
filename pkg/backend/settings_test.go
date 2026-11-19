@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -62,6 +63,24 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 func levelOf(be *Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
 	_, level := be.Readable(ctx, repo, user)
 	return level
+}
+
+// collabOf is IsCollaborator for the repository and user with these names.
+// A missing repository has no collaborators.
+func collabOf(t *testing.T, be *Backend, ctx context.Context, repo, username string) (access.AccessLevel, bool, error) {
+	t.Helper()
+	u, err := be.User(ctx, username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := be.Repository(ctx, repo)
+	if errors.Is(err, proto.ErrRepoNotFound) {
+		return be.IsCollaborator(ctx, nil, u)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return be.IsCollaborator(ctx, r, u)
 }
 
 // publicKeysOf returns the public keys of the user named username.

@@ -102,6 +102,13 @@ func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo s
 	return m, err
 }
 
+// GetCollabByUserIDAndRepoID implements store.Store.
+func (*Store) GetCollabByUserIDAndRepoID(ctx context.Context, h db.Handler, userID int64, repoID int64) (models.Collab, error) {
+	var m models.Collab
+	err := h.GetContext(ctx, &m, h.Rebind(`SELECT * FROM collabs WHERE user_id = ? AND repo_id = ?`), userID, repoID)
+	return m, err
+}
+
 // ListCollabsByUserID implements store.Store.
 func (*Store) ListCollabsByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.Collab, error) {
 	var m []models.Collab

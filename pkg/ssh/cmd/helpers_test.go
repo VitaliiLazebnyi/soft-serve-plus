@@ -68,6 +68,21 @@ func levelOf(be *backend.Backend, ctx context.Context, repo string, user proto.U
 	return level
 }
 
+// collabOf is Backend.IsCollaborator for the repository and user with these
+// names.
+func collabOf(t *testing.T, be *backend.Backend, ctx context.Context, repo, username string) (access.AccessLevel, bool, error) {
+	t.Helper()
+	u, err := be.User(ctx, username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := be.Repository(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return be.IsCollaborator(ctx, r, u)
+}
+
 // withUser creates a user and returns a context authenticated as them.
 func withUser(t *testing.T, ctx context.Context, be *backend.Backend, username string, admin bool) context.Context {
 	t.Helper()

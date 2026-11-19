@@ -35,9 +35,9 @@ func (s txCheckStore) GetAllowKeylessAccess(ctx context.Context, h db.Handler) (
 	return s.Store.GetAllowKeylessAccess(ctx, h)
 }
 
-func (s txCheckStore) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username, repo string) (models.Collab, error) {
-	s.check("GetCollabByUsernameAndRepo", h)
-	return s.Store.GetCollabByUsernameAndRepo(ctx, h, username, repo)
+func (s txCheckStore) GetCollabByUserIDAndRepoID(ctx context.Context, h db.Handler, userID, repoID int64) (models.Collab, error) {
+	s.check("GetCollabByUserIDAndRepoID", h)
+	return s.Store.GetCollabByUserIDAndRepoID(ctx, h, userID, repoID)
 }
 
 func (s txCheckStore) ListCollabsByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.Collab, error) {
@@ -71,14 +71,15 @@ func TestSingleReadsRunWithoutTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := be.CreateRepository(ctx, "r", admin, proto.RepositoryOptions{}); err != nil {
+	r, err := be.CreateRepository(ctx, "r", admin, proto.RepositoryOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	be.store = txCheckStore{Store: be.store, t: t}
 
 	be.AnonAccess(ctx)
 	be.AllowKeyless(ctx)
-	if _, _, err := be.IsCollaborator(ctx, "r", "admin"); err != nil {
+	if _, _, err := be.IsCollaborator(ctx, r, admin); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := be.Users(ctx); err != nil {

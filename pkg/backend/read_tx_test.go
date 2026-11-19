@@ -129,7 +129,7 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 		if !be.AllowKeyless(rctx()) {
 			t.Errorf("AllowKeyless = false, want true")
 		}
-		if level, ok, err := be.IsCollaborator(rctx(), "repo", "collab"); err != nil || !ok || level != access.ReadOnlyAccess {
+		if level, ok, err := collabOf(t, be, rctx(), "repo", "collab"); err != nil || !ok || level != access.ReadOnlyAccess {
 			t.Errorf("IsCollaborator = %v, %v, %v; want %v, true, nil", level, ok, err, access.ReadOnlyAccess)
 		}
 		if _, err := be.Collaborators(rctx(), "repo"); err != nil {
