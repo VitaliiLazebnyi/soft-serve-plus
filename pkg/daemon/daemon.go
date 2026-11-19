@@ -366,15 +366,16 @@ func (d *GitDaemon) requestContext() (context.Context, context.CancelFunc) {
 
 // readable reports whether the anonymous daemon may serve the repository
 // name. Its database lookups get at most accessTimeout, and a lookup that
-// runs out of time refuses the request.
-func (d *GitDaemon) readable(ctx context.Context, name string) bool {
+// runs out of time refuses the request. The error is set when the
+// repository lookup failed.
+func (d *GitDaemon) readable(ctx context.Context, name string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.accessTimeout)
 	defer cancel()
 	if !d.be.AllowKeyless(ctx) {
-		return false
+		return false, nil
 	}
-	r, _ := d.be.Readable(ctx, name, nil)
-	return r != nil
+	r, _, err := d.be.Readable(ctx, name, nil)
+	return r != nil, err
 }
 
 // handleClient handles a git protocol client. c must already be in d.conns;
@@ -529,8 +530,18 @@ func (d *GitDaemon) authorize(ctx context.Context, req gitRequest) error {
 
 	// The daemon is always anonymous, so a repository it cannot read
 	// gets the anonymous answer whether it is private or missing, and
-	// so does every repository when keyless access is off.
-	if !d.readable(ctx, req.name) {
+	// so does every repository when keyless access is off. A lookup that
+	// failed is a server fault, not a missing repository.
+	ok, err := d.readable(ctx, req.name)
+	if err != nil {
+		if ctx.Err() != nil {
+			d.logger.Debug("git: repository lookup canceled", "repo", req.name, "err", err)
+		} else {
+			d.logger.Error("git: failed to look up repository", "repo", req.name, "err", err)
+		}
+		return git.ErrSystemMalfunction
+	}
+	if !ok {
 		return git.ErrNotAuthed
 	}
 	return nil

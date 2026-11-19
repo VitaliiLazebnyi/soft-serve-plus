@@ -91,7 +91,7 @@ func TestReadableRepositories(t *testing.T) {
 					want[r.Name()] = true
 					continue
 				}
-				if rr, _ := be.Readable(ctx, r.Name(), user); rr != nil {
+				if rr, _ := noLookupError(t)(be.Readable(ctx, r.Name(), user)); rr != nil {
 					want[r.Name()] = true
 				}
 			}

@@ -35,13 +35,13 @@ func TestAdminOnlyCreateFlagOnCapsBaseAccess(t *testing.T) {
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true})
 	is.NoErr(err)
 
-	is.Equal(levelOf(be, ctx, "fresh", user), access.ReadOnlyAccess)
-	is.Equal(levelOf(be, ctx, "fresh", admin), access.AdminAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", admin), access.AdminAccess)
 	// Anonymous access is capped too: even when the server allows read-write
 	// for anonymous users, a missing name is read-only.
 	rw := access.ReadWriteAccess
 	cfg.AnonAccess = &rw
-	is.Equal(levelOf(be, ctx, "fresh", nil), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", nil), access.ReadOnlyAccess)
 }
 
 // With AdminOnlyCreate off (the default), the backend keeps upstream
@@ -58,8 +58,8 @@ func TestAdminOnlyCreateFlagOffKeepsUpstreamBaseAccess(t *testing.T) {
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)
 
-	is.Equal(levelOf(be, ctx, "fresh", user), access.ReadWriteAccess)
-	is.Equal(levelOf(be, ctx, "fresh", nil), access.ReadWriteAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadWriteAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", nil), access.ReadWriteAccess)
 }
 
 // A database admin keeps admin access on a missing name whatever the flag.
@@ -92,10 +92,10 @@ func TestAnonAdminLevelIsCappedOnlyWhenFlagOn(t *testing.T) {
 	cfg.AnonAccess = &anonAdmin
 
 	cfg.AdminOnlyCreate = false
-	is.Equal(levelOf(be, ctx, "fresh", user), access.AdminAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.AdminAccess)
 
 	cfg.AdminOnlyCreate = true
-	is.Equal(levelOf(be, ctx, "fresh", user), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
 }
 
 // backendTestContext wires the config, database and store a backend call
@@ -312,9 +312,9 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 
 			// ReadableForUser honours the key; Readable, for the account
 			// alone, does not, on a missing name as on an existing one.
-			_, level := be.ReadableForUser(keyCtx, "fresh", user)
+			_, level := noLookupError(t)(be.ReadableForUser(keyCtx, "fresh", user))
 			is.Equal(level, access.AdminAccess)
-			is.True(levelOf(be, keyCtx, "fresh", user) < access.ReadWriteAccess)
+			is.True(levelOf(t, be, keyCtx, "fresh", user) < access.ReadWriteAccess)
 
 			_, err = be.CreateRepository(keyCtx, "made", user, proto.RepositoryOptions{})
 			is.NoErr(err)
@@ -366,12 +366,12 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 
 	for i, u := range load("mallory") {
 		is.True(!u.IsAdmin())
-		is.Equal(levelOf(be, ctx, "fresh", u), access.ReadOnlyAccess)
+		is.Equal(levelOf(t, be, ctx, "fresh", u), access.ReadOnlyAccess)
 		_, err := be.CreateRepository(ctx, fmt.Sprintf("mallory-%d", i), u, proto.RepositoryOptions{})
 		is.True(errors.Is(err, proto.ErrUnauthorized))
 	}
 	for i, u := range load("boss") {
-		is.Equal(levelOf(be, ctx, "fresh", u), access.AdminAccess)
+		is.Equal(levelOf(t, be, ctx, "fresh", u), access.AdminAccess)
 		_, err := be.CreateRepository(ctx, fmt.Sprintf("boss-%d", i), u, proto.RepositoryOptions{})
 		is.NoErr(err)
 	}
@@ -424,7 +424,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	mallory, err := be.User(ctx, "mallory")
 	is.NoErr(err)
 	is.True(r.UserID() != mallory.ID())
-	is.Equal(levelOf(be, ctx, "secret", mallory), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "secret", mallory), access.NoAccess)
 
 	u, err = be.UserByPublicKey(ctx, bossKey)
 	is.NoErr(err)

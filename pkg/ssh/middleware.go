@@ -70,8 +70,15 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			// or unreachable database, ends the session. Running it as
 			// anonymous instead would deny a registered user their own
 			// repositories, or with anon-access read-write let them create
-			// repositories owned by nobody. The backend logs the cause.
+			// repositories owned by nobody. The cause is logged here, at
+			// Debug when the client went away and canceled the lookup.
 			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
+				logger := log.FromContext(ctx)
+				if ctx.Err() != nil {
+					logger.Debug("user lookup canceled", "err", err)
+				} else {
+					logger.Error("failed to look up the session's user", "err", err)
+				}
 				wish.Fatalln(s, ErrUserLookupFailed)
 				return
 			}
@@ -204,7 +211,9 @@ func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
 	}
 	// The auth middleware has already resolved the session user, so reuse
 	// it rather than looking the key up again (as the TUI does in openRepo).
-	r, _ := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
+	// A lookup that fails runs the word as a command, which then reports
+	// its own error: this only chooses between the two.
+	r, _, _ := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
 	return r == nil
 }
 

@@ -30,17 +30,17 @@ func TestOrphanRepoDirectoryIsNotClaimable(t *testing.T) {
 	orphan := filepath.Join(cfg.DataPath, "repos", "orphan.git")
 	is.NoErr(os.MkdirAll(orphan, 0o755))
 
-	is.Equal(levelOf(be, ctx, "orphan", user), access.NoAccess)
-	is.Equal(levelOf(be, ctx, "orphan", nil), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "orphan", user), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "orphan", nil), access.NoAccess)
 
 	_, err = be.CreateRepository(ctx, "orphan", user, proto.RepositoryOptions{})
 	is.True(errors.Is(err, proto.ErrRepoExist))
 
 	// A genuinely new name is still creatable, unless admin-only creation is on.
-	is.Equal(levelOf(be, ctx, "fresh", user), access.ReadWriteAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadWriteAccess)
 	cfg.AdminOnlyCreate = true
-	is.Equal(levelOf(be, ctx, "fresh", user), access.ReadOnlyAccess)
-	is.Equal(levelOf(be, ctx, "orphan", user), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, ctx, "orphan", user), access.NoAccess)
 }
 
 // TestCaseVariantOfExistingRepo verifies that a name differing only by case
@@ -64,7 +64,7 @@ func TestCaseVariantOfExistingRepo(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(cfg.DataPath, "repos", "SECRET.git"))
 	caseInsensitive := statErr == nil
 
-	level := levelOf(be, ctx, "SECRET", attacker)
+	level := levelOf(t, be, ctx, "SECRET", attacker)
 	_, createErr := be.CreateRepository(ctx, "SECRET", attacker, proto.RepositoryOptions{})
 
 	if caseInsensitive {
@@ -80,12 +80,12 @@ func TestCaseVariantOfExistingRepo(t *testing.T) {
 	is.NoErr(err)
 	is.True(r.IsPrivate())
 	is.Equal(r.UserID(), owner.ID())
-	is.Equal(levelOf(be, ctx, "secret", attacker), access.NoAccess)
+	is.Equal(levelOf(t, be, ctx, "secret", attacker), access.NoAccess)
 
 	// With admin-only creation on, no case variant is creatable by the
 	// attacker, whatever the filesystem.
 	cfg.AdminOnlyCreate = true
-	level = levelOf(be, ctx, "Secret", attacker)
+	level = levelOf(t, be, ctx, "Secret", attacker)
 	_, createErr = be.CreateRepository(ctx, "Secret", attacker, proto.RepositoryOptions{})
 	is.True(errors.Is(createErr, proto.ErrUnauthorized))
 	if caseInsensitive {
@@ -158,7 +158,7 @@ func TestRegisterRepositoryAdoptsClaimedPath(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(r.UserID(), owner.ID())
 	is.True(r.IsPrivate())
-	is.Equal(levelOf(be, ctx, "imported", owner), access.AdminAccess)
+	is.Equal(levelOf(t, be, ctx, "imported", owner), access.AdminAccess)
 
 	// The name is now taken on both axes.
 	_, err = be.CreateRepository(ctx, "imported", owner, proto.RepositoryOptions{})

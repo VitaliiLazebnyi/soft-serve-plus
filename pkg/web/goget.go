@@ -97,7 +97,12 @@ func goGetHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Readable loads the repository once and returns nil when it
 			// is missing or the caller may not read it.
-			if found, _ := be.Readable(ctx, candidate, callerFor(ctx, candidate)); found != nil {
+			found, _, err := be.Readable(ctx, candidate, callerFor(ctx, candidate))
+			if err != nil {
+				lookupUnavailable(w, r, logger, candidate, err, false)
+				return
+			}
+			if found != nil {
 				name = utils.SanitizeRepo(candidate)
 				break
 			}

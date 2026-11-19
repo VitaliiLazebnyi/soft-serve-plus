@@ -115,7 +115,7 @@ func TestCollaboratorLookedUpByUserID(t *testing.T) {
 		return be.store.AddCollabByUsernameAndRepo(ctx, tx, "alice", "private", access.ReadWriteAccess)
 	}))
 
-	r, level := be.Readable(ctx, "private", session)
+	r, level := noLookupError(t)(be.Readable(ctx, "private", session))
 	is.True(r == nil)
 	is.Equal(level, access.NoAccess)
 	repos, err := be.ReadableRepositories(ctx, session)
@@ -125,7 +125,81 @@ func TestCollaboratorLookedUpByUserID(t *testing.T) {
 	// The account that holds the name now has the row.
 	alice, err := be.User(ctx, "alice")
 	is.NoErr(err)
-	r, level = be.Readable(ctx, "private", alice)
+	r, level = noLookupError(t)(be.Readable(ctx, "private", alice))
 	is.True(r != nil)
 	is.Equal(level, access.ReadWriteAccess)
+}
+
+// breakTable renames table so every query on it fails, as a database fault
+// would.
+func breakTable(t *testing.T, be *Backend, table string) {
+	t.Helper()
+	if _, err := be.db.ExecContext(context.Background(), "ALTER TABLE "+table+" RENAME TO "+table+"_gone"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A lookup that fails is returned, not answered as a missing or unreadable
+// repository: Readable and ReadableForUser give the error with no
+// repository and no access, and leave logging it to the caller.
+func TestReadableReturnsLookupErrors(t *testing.T) {
+	is := is.New(t)
+	var logs syncBuffer
+	be, _ := newTestBackendWithLog(t, &logs)
+	ctx := context.Background()
+
+	admin := defaultAdmin(t, be)
+	_, err := be.CreateRepository(ctx, "private", admin, proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
+	is.NoErr(err)
+
+	// Without the collaborators table, the stranger's level is unknown.
+	breakTable(t, be, "collabs")
+	for _, readable := range []func(context.Context, string, proto.User) (proto.Repository, access.AccessLevel, error){be.Readable, be.ReadableForUser} {
+		r, level, err := readable(ctx, "private", stranger)
+		is.True(err != nil)
+		is.True(r == nil)
+		is.Equal(level, access.NoAccess)
+	}
+	// The owner and admins need no collaborator row.
+	r, level := noLookupError(t)(be.Readable(ctx, "private", admin))
+	is.True(r != nil)
+	is.Equal(level, access.AdminAccess)
+
+	// Without the repositories table, the lookup fails for admins too.
+	breakTable(t, be, "repos")
+	r, level, err = be.ReadableForUser(ctx, "private", admin)
+	is.True(err != nil)
+	is.True(r == nil)
+	is.Equal(level, access.NoAccess)
+	_, err = be.ReadableRepositoriesForUser(ctx, stranger)
+	is.True(err != nil)
+
+	is.True(!strings.Contains(logs.String(), "ERRO"))
+}
+
+// The user and token lookups leave logging a failure to their callers,
+// which know whether the client went away (item 259).
+func TestUserLookupErrorsNotLogged(t *testing.T) {
+	is := is.New(t)
+	var logs syncBuffer
+	be, _ := newTestBackendWithLog(t, &logs)
+	ctx := context.Background()
+	u, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	token, err := be.CreateAccessToken(ctx, u, "t", time.Now().Add(time.Hour))
+	is.NoErr(err)
+
+	breakTable(t, be, "users")
+	_, err = be.User(ctx, "alice")
+	is.True(err != nil && !errors.Is(err, proto.ErrUserNotFound))
+	_, err = be.UserByID(ctx, u.ID())
+	is.True(err != nil && !errors.Is(err, proto.ErrUserNotFound))
+	_, err = be.UserByPublicKey(ctx, newTestPublicKey(t))
+	is.True(err != nil && !errors.Is(err, proto.ErrUserNotFound))
+	_, err = be.UserByAccessToken(ctx, token)
+	is.True(err != nil && !errors.Is(err, proto.ErrUserNotFound))
+
+	is.True(!strings.Contains(logs.String(), "ERRO"))
 }

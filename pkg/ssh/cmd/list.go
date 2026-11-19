@@ -1,8 +1,9 @@
 package cmd
 
 import (
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -18,10 +19,11 @@ func listCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			pk := sshutils.PublicKeyFromContext(ctx)
-			repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
+			// The session user, not a fresh lookup of the key: a lookup
+			// that failed would list what an anonymous caller sees.
+			repos, err := be.ReadableRepositoriesForUser(ctx, proto.UserFromContext(ctx))
 			if err != nil {
-				return err
+				return lookupFailed(ctx, log.FromContext(ctx), "list repositories", err)
 			}
 			for _, r := range repos {
 				if !r.IsHidden() || all {

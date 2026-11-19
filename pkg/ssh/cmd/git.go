@@ -193,6 +193,19 @@ func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLe
 	return nil
 }
 
+// gitLookupFailed logs err, from looking up repository repo, and returns
+// git.ErrSystemMalfunction for the client: the lookup failed, so the
+// repository is neither known missing nor known unreadable. A lookup the
+// client canceled is logged at Debug.
+func gitLookupFailed(ctx context.Context, logger *log.Logger, repo string, err error) error {
+	if ctx.Err() != nil {
+		logger.Debug("repository lookup canceled", "repo", repo, "err", err)
+	} else {
+		logger.Error("failed to look up repository", "repo", repo, "err", err)
+	}
+	return git.ErrSystemMalfunction
+}
+
 // gitServiceError logs a failed git service and returns the error for the
 // client. A client that goes away early, such as one that only reads the ref
 // advertisement, cancels the session context, or closes its channel so the
@@ -430,7 +443,10 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 	// rule as every other SSH command, so a key in initial_admin_keys that no
 	// account holds is admin here too. (A listed key held by a non-admin
 	// account never gets this far: the SSH middleware refuses its session.)
-	repo, accessLevel := be.ReadableForUser(ctx, name, user)
+	repo, accessLevel, err := be.ReadableForUser(ctx, name, user)
+	if err != nil {
+		return gitLookupFailed(ctx, logger, name, err)
+	}
 	ctx = proto.WithRepositoryContext(ctx, repo)
 	// As in denyRead, a server admin is never anonymous: nothing is hidden
 	// from them.
@@ -494,7 +510,11 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 				// It was removed while this push waited. Look the name
 				// up again, so the push creates it as a push to a
 				// missing name does.
-				repo, accessLevel = be.ReadableForUser(ctx, name, user)
+				var lerr error
+				repo, accessLevel, lerr = be.ReadableForUser(ctx, name, user)
+				if lerr != nil {
+					return gitLookupFailed(ctx, logger, name, lerr)
+				}
 				ctx = proto.WithRepositoryContext(ctx, repo)
 				if repo != nil {
 					// Another repository took the name meanwhile.
@@ -598,7 +618,11 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 			// account gets the answer any caller without an account gets.
 			// git-lfs-transfer stays on SSH and keeps the admin key's
 			// access.
-			repo, accessLevel = be.Readable(ctx, name, user)
+			var lerr error
+			repo, accessLevel, lerr = be.Readable(ctx, name, user)
+			if lerr != nil {
+				return gitLookupFailed(ctx, logger, name, lerr)
+			}
 			anonymous = user == nil
 			// Keep the context in step with the repo checked here, so the
 			// handler never sees the one ReadableForUser looked up.

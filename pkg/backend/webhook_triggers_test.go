@@ -352,11 +352,11 @@ func TestCollaboratorChangesKeepWhenEventFails(t *testing.T) {
 	// Its event fails to be recorded; wait for that to finish before the
 	// next change, which would otherwise read while the record writes.
 	e.awaitLog(t, "webhook event not delivered")
-	is.Equal(levelOf(e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
+	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
 
 	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
 	// The repository is public, so a non-collaborator gets read-only.
-	is.Equal(levelOf(e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
 	// Wait for both events, so neither is still writing under the test's
 	// temporary directory when it is removed.
 	e.be.WaitForDeliveries(e.ctx)
@@ -683,11 +683,11 @@ func TestCollaboratorEventBuildFailure(t *testing.T) {
 	corruptOwner(t, e)
 
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
-	is.Equal(levelOf(e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
+	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
 
 	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
 	// The repository is public, so a non-collaborator gets read-only.
-	is.Equal(levelOf(e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
 	is.True(strings.Contains(e.logs.String(), "collaborator added but webhook event skipped"))
 	is.True(strings.Contains(e.logs.String(), "collaborator removed but webhook event skipped"))
 

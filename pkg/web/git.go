@@ -402,13 +402,34 @@ func refuseUnchecked(w http.ResponseWriter, r *http.Request, err error, lfsJSON 
 	if !errors.Is(err, errAuthUnavailable) {
 		return false
 	}
+	renderUnavailable(w, r, lfsJSON)
+	return true
+}
+
+// renderUnavailable answers 503 Service Unavailable with a Retry-After and
+// no credentials challenge, so git keeps a stored credential; an LFS
+// request gets the LFS JSON error.
+func renderUnavailable(w http.ResponseWriter, r *http.Request, lfsJSON bool) {
 	w.Header().Set("Retry-After", authRetryAfter)
 	if lfsJSON {
 		renderJSON(w, r, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
 	} else {
 		renderStatus(w, http.StatusServiceUnavailable)
 	}
-	return true
+}
+
+// lookupUnavailable answers a request whose repository or access could not
+// be looked up, as when the database is down, with renderUnavailable: the
+// repository may well exist and be readable, so answering "not found" or
+// asking for credentials would mislead the client. The fault is logged,
+// at Debug when the client went away and canceled it.
+func lookupUnavailable(w http.ResponseWriter, r *http.Request, logger *log.Logger, repo string, err error, lfsJSON bool) {
+	if r.Context().Err() != nil {
+		logger.Debug("repository lookup canceled", "repo", repo, "err", err)
+	} else {
+		logger.Error("failed to look up repository", "repo", repo, "err", err)
+	}
+	renderUnavailable(w, r, lfsJSON)
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
@@ -620,7 +641,11 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 
 	// repo is nil unless the caller may read it, so a private and a
 	// missing repository are already indistinguishable here.
-	repo, accessLevel := be.Readable(ctx, repoName, user)
+	repo, accessLevel, lerr := be.Readable(ctx, repoName, user)
+	if lerr != nil {
+		lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
+		return
+	}
 	ctx = proto.WithRepositoryContext(ctx, repo)
 	ctx = access.WithContext(ctx, accessLevel)
 	r = r.WithContext(ctx)
@@ -667,7 +692,11 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			// Another request created the name since it was looked
 			// up. Authorize the caller for the repository now there,
 			// as if it had been there all along.
-			repo, accessLevel = be.Readable(ctx, repoName, user)
+			repo, accessLevel, lerr = be.Readable(ctx, repoName, user)
+			if lerr != nil {
+				lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
+				return
+			}
 			ctx = proto.WithRepositoryContext(ctx, repo)
 			ctx = access.WithContext(ctx, accessLevel)
 			r = r.WithContext(ctx)

@@ -374,7 +374,12 @@ func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, user
 	// the one AuthenticationMiddleware put on the session context, so
 	// opening a repository does not look the key up again; an admin key
 	// on the context still gets admin access.
-	r, _ := be.ReadableForUser(ctx, rn, user)
+	r, _, err := be.ReadableForUser(ctx, rn, user)
+	if err != nil {
+		// Not a missing repository: the error screen shows a generic
+		// message for it and keeps the cause out of the session.
+		return nil, err
+	}
 	if r == nil {
 		return nil, common.ErrMissingRepo
 	}

@@ -70,9 +70,14 @@ func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) a
 // apart. The level is returned either way so a writer can decide whether a
 // missing name may be created.
 //
+// The error is set only when a lookup failed, as when the database is
+// down; the repository is then nil and the level NoAccess. It is not
+// logged here: the caller answers the client and logs it, so a lookup that
+// failed is not reported as a missing repository.
+//
 // Only the account counts, not an admin key on ctx: callers acting for an
 // SSH session use ReadableForUser.
-func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel, error) {
 	return d.readable(ctx, name, user, isAccountAdmin(user))
 }
 
@@ -86,24 +91,27 @@ func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (p
 // that account mid-session keeps the session's user until it reconnects.
 // Collaborator rows, the repository's privacy and ownership are still read
 // fresh on every call.
-func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel) {
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel, error) {
 	return d.readable(ctx, name, user, d.IsServerAdmin(ctx, user))
 }
 
 // readable is Readable with the caller's admin status already decided.
-func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel) {
+func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel, error) {
 	name = utils.SanitizeRepo(name)
 	r, err := d.Repository(ctx, name)
 	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
-		d.logger.Error("failed to look up repository", "repo", name, "err", err)
+		return nil, access.NoAccess, fmt.Errorf("look up repository %q: %w", name, err)
 	}
 
-	level := d.accessLevel(ctx, r, name, user, admin)
+	level, err := d.accessLevel(ctx, r, name, user, admin)
+	if err != nil {
+		return nil, access.NoAccess, err
+	}
 	if r == nil || level < access.ReadOnlyAccess {
-		return nil, level
+		return nil, level, nil
 	}
 
-	return r, level
+	return r, level, nil
 }
 
 // baseAccessLevel is the level user holds for a repository that does not
@@ -137,10 +145,11 @@ func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.Acces
 
 // accessLevel computes the access level of user for r, which is the
 // repository named name or nil when it does not exist. admin is whether the
-// caller is an admin, as its caller decided.
-func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User, admin bool) access.AccessLevel {
+// caller is an admin, as its caller decided. The error is set when the
+// collaborator lookup failed.
+func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User, admin bool) (access.AccessLevel, error) {
 	if admin {
-		return access.AdminAccess
+		return access.AdminAccess, nil
 	}
 
 	anon := d.AnonAccess(ctx)
@@ -151,18 +160,16 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		// so it must not fall back to the level for a free name, which would
 		// show a private repository in listings that walk the rows.
 		if d.repoPathExists(name) || d.repoRowExists(ctx, name) {
-			return access.NoAccess
+			return access.NoAccess, nil
 		}
-		return d.baseAccessLevel(user, false, anon)
+		return d.baseAccessLevel(user, false, anon), nil
 	}
 
 	collabAccess, isCollab, err := d.IsCollaborator(ctx, r, user)
 	if err != nil {
-		// Fall through to the non-collaborator rules, which deny access to
-		// a private repository, but leave a trace of the failed lookup.
-		d.logger.Error("error checking collaborator", "repo", name, "user_id", user.ID(), "err", err)
+		return access.NoAccess, fmt.Errorf("look up collaborator on %q: %w", name, err)
 	}
-	return repoAccessLevel(r, user, anon, collabAccess, isCollab)
+	return repoAccessLevel(r, user, anon, collabAccess, isCollab), nil
 }
 
 // repoAccessLevel is accessLevel for an existing repository r once the
@@ -246,14 +253,16 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 	return readable, nil
 }
 
-// ReadableRepositoriesByPublicKey is ReadableRepositories for the holder of
-// a public key.
-func (d *Backend) ReadableRepositoriesByPublicKey(ctx context.Context, pk ssh.PublicKey) ([]proto.Repository, error) {
-	if d.IsAdminKey(pk) {
+// ReadableRepositoriesForUser is ReadableRepositories for the caller of an
+// SSH session: user is the user the session stored in its context, and a
+// server admin (see IsServerAdmin), including the holder of an admin key on
+// ctx, is listed every repository. The session's key is not looked up again,
+// as for ReadableForUser, so a failed lookup cannot turn the list into the
+// anonymous one; an error listing the repositories is returned.
+func (d *Backend) ReadableRepositoriesForUser(ctx context.Context, user proto.User) ([]proto.Repository, error) {
+	if d.IsServerAdmin(ctx, user) {
 		return d.Repositories(ctx)
 	}
-
-	user, _ := d.UserByPublicKey(ctx, pk)
 	return d.ReadableRepositories(ctx, user)
 }
 
@@ -279,7 +288,6 @@ func (d *Backend) User(ctx context.Context, username string) (proto.User, error)
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
-		d.logger.Error("error finding user", "username", username, "error", err)
 		return nil, err
 	}
 
@@ -306,7 +314,6 @@ func (d *Backend) UserByID(ctx context.Context, id int64) (proto.User, error) {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
-		d.logger.Error("error finding user", "id", id, "error", err)
 		return nil, err
 	}
 
@@ -354,7 +361,6 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
-		d.logger.Error("error finding user", "pk", sshutils.MarshalAuthorizedKey(pk), "error", err)
 		return nil, err
 	}
 
@@ -408,11 +414,6 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, proto.ErrUserNotFound
 		}
-		// An expired token is a failed login, not a server error.
-		if errors.Is(err, proto.ErrTokenExpired) {
-			return nil, err
-		}
-		d.logger.Error("failed to find user by access token", "err", err)
 		return nil, err
 	}
 

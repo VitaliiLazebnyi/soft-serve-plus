@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -237,7 +238,9 @@ func loadRepos(c common.Common) tea.Msg {
 		return nil
 	}
 
-	repos, err := be.ReadableRepositoriesByPublicKey(ctx, pk)
+	// The session user, not a fresh lookup of the key: a lookup that
+	// failed would list what an anonymous caller sees.
+	repos, err := be.ReadableRepositoriesForUser(ctx, proto.UserFromContext(ctx))
 	if err != nil {
 		return common.LoadError(ctx, err)
 	}

@@ -27,7 +27,7 @@ func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 	attacker := proto.UserFromContext(attackerCtx)
 	_, err := be.CreateRepository(attackerCtx, "victim", attacker, proto.RepositoryOptions{})
 	is.NoErr(err)
-	is.Equal(levelOf(be, attackerCtx, "victim", attacker), access.AdminAccess)
+	is.Equal(levelOf(t, be, attackerCtx, "victim", attacker), access.AdminAccess)
 
 	// Repository admin access must not authorize global user commands.
 	for _, args := range [][]string{
@@ -70,7 +70,7 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 
 			attackerCtx := withUser(t, ctx, be, "attacker", false)
 			attacker := proto.UserFromContext(attackerCtx)
-			is.Equal(levelOf(be, attackerCtx, "nonexistent", attacker), tt.missing)
+			is.Equal(levelOf(t, be, attackerCtx, "nonexistent", attacker), tt.missing)
 
 			err := runUser(t, attackerCtx, "set-admin", "attacker", "true")
 			if !errors.Is(err, proto.ErrUnauthorized) {
@@ -130,7 +130,7 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "writer", access.ReadWriteAccess))
 	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess))
 	victim := proto.UserFromContext(victimCtx)
-	is.Equal(levelOf(be, victimCtx, "repo", victim), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, victimCtx, "repo", victim), access.ReadOnlyAccess)
 
 	for _, args := range [][]string{
 		{"collab", "add", "repo", "victim", "no-access"},
@@ -147,7 +147,7 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 	// Nothing changed: the victim can still read and the peer keeps write.
 	_, isCollab, _ := collabOf(t, be, ctx, "repo", "victim")
 	is.Equal(isCollab, false)
-	is.Equal(levelOf(be, victimCtx, "repo", victim), access.ReadOnlyAccess)
+	is.Equal(levelOf(t, be, victimCtx, "repo", victim), access.ReadOnlyAccess)
 	level, isCollab, err := collabOf(t, be, ctx, "repo", "peer")
 	is.NoErr(err)
 	is.True(isCollab)
