@@ -62,6 +62,20 @@ func (f *oracleFixture) pendingState(name string) (listed, armed bool) {
 	return ok, ok && pc.timer != nil
 }
 
+// pendingEntry returns the list entry of the repository name, the
+// generation it is at, and its removal timer, as a timer armed now would
+// see them.
+func (f *oracleFixture) pendingEntry(t *testing.T, name string) (*pushCreate, int, *time.Timer) {
+	t.Helper()
+	f.pending.mu.Lock()
+	defer f.pending.mu.Unlock()
+	pc, ok := f.pending.repos[name]
+	if !ok {
+		t.Fatalf("%q is not listed", name)
+	}
+	return pc, pc.gen, pc.timer
+}
+
 // fireTimer makes the armed removal timer of the repository name fire now.
 func (f *oracleFixture) fireTimer(t *testing.T, name string) {
 	t.Helper()
@@ -128,9 +142,22 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	// before a pack larger than http.postBuffer, keeps the repository for
 	// the real push, and arms the timer again. With no push after it, it
 	// goes when that timer fires.
+	//
+	// The probe stops the advertisement's timer, and a removal that timer
+	// started anyway, having fired as the probe began, removes nothing:
+	// the probe changed the generation it was armed with. Both are checked
+	// on the advertisement's own timer and generation.
 	advertise("probed")
+	adPC, adGen, adTimer := f.pendingEntry(t, "probed")
 	is.Equal(f.push(t, "probed", auth, "0000"), http.StatusOK)
+	if adTimer.Stop() {
+		t.Fatal("the advertisement's removal timer was still armed after the probe")
+	}
+	f.pending.remove("probed", adPC, adGen)
 	is.True(f.exists("probed"))
+	listed, _ = f.pendingState("probed")
+	is.True(listed)
+	f.wantArmed(t, "probed", true)
 	f.fireTimer(t, "probed")
 	f.waitUnlisted(t, "probed")
 	is.True(!f.exists("probed"))
@@ -145,7 +172,10 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	// A repository that got refs is kept, even after a failed push. The
 	// refs are written here outside any request. Once a request to it has
 	// ended with refs, it leaves the list, so no timer can remove it.
+	// The advertisement's removal, run after the push as a timer that
+	// fired late would, removes nothing.
 	advertise("kept")
+	adPC, adGen, _ = f.pendingEntry(t, "kept")
 	work := filepath.Join(t.TempDir(), "work")
 	gitRun(t, "init", "-q", "-b", "master", work)
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
@@ -154,6 +184,7 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	is.Equal(f.push(t, "kept", auth, "garbage"), http.StatusOK)
 	listed, _ = f.pendingState("kept")
 	is.True(!listed)
+	f.pending.remove("kept", adPC, adGen)
 	is.True(f.exists("kept"))
 
 	// The timer finds the refs too: a repository whose refs were written
@@ -330,9 +361,7 @@ func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 
 	advertise("armed")
 	f.wantArmed(t, "armed", true)
-	f.pending.mu.Lock()
-	pc, gen := f.pending.repos["armed"], f.pending.repos["armed"].gen
-	f.pending.mu.Unlock()
+	pc, gen, _ := f.pendingEntry(t, "armed")
 	is.NoErr(f.pending.close(t.Context()))
 	f.wantArmed(t, "armed", false)
 	advertise("late")
