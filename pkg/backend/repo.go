@@ -708,11 +708,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 
 	defer func() {
 		if err != nil {
-			// ctx may be what stopped the import, so the cleanup must
-			// not depend on it.
-			if rerr := d.DeleteRepository(context.WithoutCancel(ctx), imp.name); rerr != nil {
-				d.logger.Error("failed to delete repository", "err", rerr, "name", imp.name)
-			}
+			d.removeFailedImport(ctx, r)
 		}
 	}()
 
@@ -737,6 +733,24 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 	}
 
 	return r, nil
+}
+
+// removeFailedImport deletes r, the repository of an import that failed
+// after registering it. The import is a visible repository by then, so its
+// owner may have deleted it and created another under the name meanwhile;
+// only r itself is deleted, by its ID, never what now has its name. ctx may
+// be what stopped the import, so the cleanup does not depend on it.
+func (d *Backend) removeFailedImport(ctx context.Context, r proto.Repository) {
+	err := d.deleteRepository(context.WithoutCancel(ctx), r.Name(), func(_ *db.Tx, m models.Repo) (bool, error) {
+		return m.ID != r.ID(), nil
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, errRepoKept), errors.Is(err, proto.ErrRepoNotFound):
+		d.logger.Info("failed import's repository is gone, leaving its name alone", "name", r.Name())
+	default:
+		d.logger.Error("failed to delete repository", "err", err, "name", r.Name())
+	}
 }
 
 // fetchImportLFSObjects fetches the LFS objects of an imported repository.
