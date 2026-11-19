@@ -5,24 +5,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
-
-// sourceLimit is how long rendering one of the inputs below as source may
-// take. The render is bound by HighlightBudget and then shows plain text: it
-// takes about 0.2 s, and 0.35 s on a loaded machine, race detector or not.
-// Without the budget, the embedded languages take about 6 s, and 12 s under
-// the race detector.
-func sourceLimit() time.Duration {
-	if raceEnabled {
-		return 6 * time.Second
-	}
-	return 3 * time.Second
-}
 
 // lookups counts the times chroma's registry is searched for a lexer by
 // file name or content, as it is for the language of a code block.
@@ -55,13 +42,12 @@ func init() {
 	lexers.GlobalLexerRegistry.Register(lookupProbe{})
 }
 
-// renderTimed renders content as the file name, as markdown when glamour is
-// set, and returns the rendered text and how long the render took.
-func renderTimed(t *testing.T, content, name string, glamour bool) (string, time.Duration) {
+// render renders content as the file name, as markdown when glamour is set,
+// and returns the rendered text.
+func render(t *testing.T, content, name string, glamour bool) string {
 	t.Helper()
 	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
 	c.UseGlamour = glamour
-	start := time.Now()
 	cmd := c.SetContent(content, name)
 	for cmd != nil {
 		msg := cmd()
@@ -70,16 +56,25 @@ func renderTimed(t *testing.T, content, name string, glamour bool) (string, time
 		}
 		cmd = c.Update(msg)
 	}
-	return c.GetContent(), time.Since(start)
+	return c.GetContent()
 }
+
+// highlighted reports whether rendered text has chroma's colours. Text shown
+// plain, as when highlighting ran out of its budget, has none.
+func highlighted(out string) bool { return strings.Contains(out, "\x1b[") }
 
 // Code blocks cost chroma a language lookup each, about 2.4 ms for a
 // language it does not know. A README renders its code blocks as plain
 // text, without a lookup, and markdown shown as source is highlighted
 // within a time budget, so neither takes long however many blocks it has or
 // how they are written. Highlighting the blocks of these READMEs made five
-// lookups a block. TestEmbeddedLanguagesRenderQuickly has inputs that take
-// seconds without the budget; these take at most 0.8 s.
+// lookups a block.
+//
+// Neither is timed. Rendered as markdown, the lookups are counted. Shown as
+// source, these inputs take at most 0.8 s even without the budget, so a
+// time limit here could not tell the budget is there: the budget is
+// TestEmbeddedLanguagesRenderQuickly's check, with inputs that take seconds
+// without it, and the render as source is only checked to show the content.
 func TestCodeBlocksRenderQuickly(t *testing.T) {
 	cases := map[string]string{
 		"indented code before markers": strings.Repeat("    code\n>\n", 500),
@@ -95,8 +90,8 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 		for _, glamour := range []bool{true, false} {
 			t.Run(name, func(t *testing.T) {
 				if !glamour {
-					if _, took := renderTimed(t, content, "README.md", false); took > sourceLimit() {
-						t.Fatalf("rendering as source took %v; want at most %v", took, sourceLimit())
+					if out := render(t, content, "README.md", false); strings.TrimSpace(out) == "" {
+						t.Fatal("rendering as source lost the content")
 					}
 					return
 				}
@@ -104,7 +99,7 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 				// its last token, and the README's own name is looked
 				// up.
 				lookups.Store(0)
-				renderTimed(t, content, "README.md", true)
+				render(t, content, "README.md", true)
 				if n := lookups.Load(); n > 10 {
 					t.Fatalf("rendering as markdown searched the registry %d times; want no search per code block", n)
 				}
@@ -115,6 +110,13 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 
 // Other lexers look embedded languages up the same way. Files in them render
 // within the budget, as plain text when highlighting would take longer.
+//
+// The render is not timed. Highlighting these inputs whole takes 0.9 s
+// (x.art) to 6 s, 4.5 to 30 times the budget, so a render that shows them
+// plain was cut off by the budget, or by the cap on lexers the budget
+// cannot stop (x.svelte); without the budget they come back highlighted. A
+// loaded machine tokenises less within the budget, which only makes the
+// text plainer.
 func TestEmbeddedLanguagesRenderQuickly(t *testing.T) {
 	cases := map[string]string{
 		"x.gmi":    strings.Repeat("```zzz\nx\n```\n", 2500),
@@ -127,9 +129,9 @@ func TestEmbeddedLanguagesRenderQuickly(t *testing.T) {
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			out, took := renderTimed(t, content, name, false)
-			if took > sourceLimit() {
-				t.Fatalf("rendering took %v; want at most %v", took, sourceLimit())
+			out := render(t, content, name, false)
+			if highlighted(out) {
+				t.Fatal("rendered highlighted; want plain text once the budget ran out")
 			}
 			if !strings.Contains(out, "zzz") {
 				t.Fatal("the content is missing")
@@ -142,16 +144,16 @@ func TestEmbeddedLanguagesRenderQuickly(t *testing.T) {
 // a Go code block shown as source.
 func TestOrdinaryFilesHighlighted(t *testing.T) {
 	goFile := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n"
-	if out, _ := renderTimed(t, strings.Repeat(goFile, 20), "main.go", false); !strings.Contains(out, "\x1b[") {
+	if out := render(t, strings.Repeat(goFile, 20), "main.go", false); !highlighted(out) {
 		t.Fatal("a Go file was not highlighted")
 	}
 	readme := "# Title\n\nSome text.\n\n```go\n" + goFile + "```\n"
-	if out, _ := renderTimed(t, readme, "README.md", false); !strings.Contains(out, "\x1b[38;5;39mfunc") {
+	if out := render(t, readme, "README.md", false); !strings.Contains(out, "\x1b[38;5;39mfunc") {
 		t.Fatalf("the Go block of a README shown as source was not highlighted:\n%q", out)
 	}
 	// Rendered as markdown, the README keeps its code, styled but not
 	// highlighted.
-	if out, _ := renderTimed(t, readme, "README.md", true); !strings.Contains(out, "Println") || strings.Contains(out, "\x1b[38;5;39mfunc") {
+	if out := render(t, readme, "README.md", true); !strings.Contains(out, "Println") || strings.Contains(out, "\x1b[38;5;39mfunc") {
 		t.Fatalf("the Go block of a README was not shown as plain code:\n%q", out)
 	}
 }
