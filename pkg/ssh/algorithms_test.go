@@ -104,13 +104,6 @@ func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) (strin
 	return addr, ctx
 }
 
-// startServer starts an SSH server with cfg on a local port and returns its
-// address, the context it runs with and the server.
-func startServer(t *testing.T, cfg *config.Config) (string, context.Context, *SSHServer) {
-	t.Helper()
-	return startServerWithLogger(t, cfg, log.Default())
-}
-
 // startServerWithLogger starts an SSH server with cfg and logger on a local
 // port and returns its address, the context it runs with and the server.
 func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context, *SSHServer) {
