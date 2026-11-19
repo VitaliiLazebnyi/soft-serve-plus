@@ -562,9 +562,9 @@ func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.P
 	}
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		// The row lock keeps the user from being renamed or deleted before
-		// the removal by username, which would then report the key, not
-		// the user, as missing.
+		// The row lock keeps the user from being deleted before the
+		// removal, which would then report the key, not the user, as
+		// missing.
 		m, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username)
 		if err != nil {
 			return userNotFound(err)

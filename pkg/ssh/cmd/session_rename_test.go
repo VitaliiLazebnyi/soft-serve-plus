@@ -52,18 +52,20 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 
 	// An admin renames the account; another account takes the old name.
 	is.NoErr(be.SetUsername(ctx, "alice", "carol"))
-	mk := newKey()
-	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{mk}})
+	// The other account has two keys, so removing one of them is not
+	// refused as its last key: only the account decides.
+	mk, mk2 := newKey(), newKey()
+	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{mk, mk2}})
 	is.NoErr(err)
 
 	is.NoErr(run(sessCtx, PubkeyCommand(), "add", sshutils.MarshalAuthorizedKey(k2)))
 	is.Equal(len(keysOf(ctx, "carol")), 2)
-	is.Equal(len(keysOf(ctx, "alice")), 1)
+	is.Equal(len(keysOf(ctx, "alice")), 2)
 
 	// The other account's key is not the session's to remove.
 	err = run(sessCtx, PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(mk))
-	is.True(err != nil)
-	is.Equal(len(keysOf(ctx, "alice")), 1)
+	is.True(errors.Is(err, proto.ErrPublicKeyNotFound))
+	is.Equal(len(keysOf(ctx, "alice")), 2)
 	is.NoErr(run(sessCtx, PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(k2)))
 	is.Equal(len(keysOf(ctx, "carol")), 1)
 
@@ -72,5 +74,5 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	is.NoErr(err)
 	_, err = be.User(ctx, "carol")
 	is.True(errors.Is(err, proto.ErrUserNotFound))
-	is.Equal(len(keysOf(ctx, "alice")), 1) // the other account kept its name and key
+	is.Equal(len(keysOf(ctx, "alice")), 2) // the other account kept its name and keys
 }
