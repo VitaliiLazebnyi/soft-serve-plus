@@ -109,12 +109,12 @@ func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.U
 // readable is Readable with the caller's admin status already decided.
 func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel, error) {
 	name = utils.SanitizeRepo(name)
-	r, err := d.Repository(ctx, name)
-	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
+	r, collab, err := d.repositoryWithCollab(ctx, name, user)
+	if err != nil {
 		return nil, access.NoAccess, fmt.Errorf("look up repository %q: %w", name, err)
 	}
 
-	level, err := d.accessLevel(ctx, r, name, user, admin)
+	level, err := d.accessLevel(ctx, r, collab, name, user, admin)
 	if err != nil {
 		return nil, access.NoAccess, err
 	}
@@ -154,11 +154,48 @@ func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.Acces
 	return anon
 }
 
+// collabRow is what the access check reads of a repository's row: whether
+// there is one, and the caller's collaborator row on it, its level and
+// whether there is one.
+type collabRow struct {
+	row   bool
+	level access.AccessLevel
+	ok    bool
+}
+
+// repositoryWithCollab is Repository with user's collaborator row on the
+// repository read in the same query. The query runs for every name, missing
+// ones and ones with no directory included, and is the only lookup of the
+// repository: an existing private repository and a missing name then cost
+// the same lookups that can fail (this one, and the anon-access setting),
+// and fail alike, so an outage does not tell the two apart. A repository
+// that is not found, for want of a row or of a directory, is nil with no
+// error; collab.row says whether there is a row.
+func (d *Backend) repositoryWithCollab(ctx context.Context, name string, user proto.User) (proto.Repository, collabRow, error) {
+	var userID int64
+	if user != nil {
+		userID = user.ID()
+	}
+	m, level, ok, err := d.store.GetRepoWithCollabByName(ctx, d.db, name, userID)
+	switch {
+	case errors.Is(err, db.ErrRecordNotFound):
+		return nil, collabRow{}, nil
+	case err != nil:
+		return nil, collabRow{}, err
+	}
+	collab := collabRow{row: true, level: level, ok: ok && userID != 0}
+	rp := d.repoPath(name)
+	if !d.repoDirFound(rp) {
+		return nil, collab, nil
+	}
+	return &repo{name: name, path: rp, repo: m, logger: d.logger}, collab, nil
+}
+
 // accessLevel computes the access level of user for r, which is the
-// repository named name or nil when it does not exist. admin is whether the
-// caller is an admin, as its caller decided. The error is set when the
-// collaborator lookup failed.
-func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name string, user proto.User, admin bool) (access.AccessLevel, error) {
+// repository named name or nil when it does not exist, and on which user's
+// collaborator row is collab. admin is whether the caller is an admin, as
+// its caller decided. The error is set when a lookup failed.
+func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, collab collabRow, name string, user proto.User, admin bool) (access.AccessLevel, error) {
 	if admin {
 		return access.AdminAccess, nil
 	}
@@ -175,24 +212,13 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, name stri
 		// or an unmounted volume): its settings are unknown to the caller,
 		// so it must not fall back to the level for a free name, which would
 		// show a private repository in listings that walk the rows.
-		if d.repoPathExists(name) {
-			return access.NoAccess, nil
-		}
-		row, err := d.repoRowExists(ctx, name)
-		if err != nil {
-			return access.NoAccess, err
-		}
-		if row {
+		if collab.row || d.repoPathExists(name) {
 			return access.NoAccess, nil
 		}
 		return d.baseAccessLevel(user, false, anon), nil
 	}
 
-	collabAccess, isCollab, err := d.IsCollaborator(ctx, r, user)
-	if err != nil {
-		return access.NoAccess, fmt.Errorf("look up collaborator on %q: %w", name, err)
-	}
-	return repoAccessLevel(r, user, anon, collabAccess, isCollab), nil
+	return repoAccessLevel(r, user, anon, collab.level, collab.ok), nil
 }
 
 // repoAccessLevel is accessLevel for an existing repository r once the

@@ -1223,14 +1223,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository, error) {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
-	if _, err := os.Stat(rp); err != nil {
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-		case isInvalidName(err):
-			d.logger.Debug("invalid repository name", "err", err)
-		default:
-			d.logger.Errorf("failed to stat repository path: %v", err)
-		}
+	if !d.repoDirFound(rp) {
 		return nil, proto.ErrRepoNotFound
 	}
 
@@ -1296,6 +1289,24 @@ func (d *Backend) clientError(ctx context.Context, op, name string, err error) e
 		d.logger.Error(msg, "repo", name, "err", err)
 	}
 	return proto.ErrServerFault
+}
+
+// repoDirFound reports whether the repository directory rp can be found. A
+// path the filesystem refuses as a name, which comes straight from a
+// request, is logged at Debug; any other failure but a missing directory
+// at Error.
+func (d *Backend) repoDirFound(rp string) bool {
+	_, err := os.Stat(rp)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, fs.ErrNotExist):
+	case isInvalidName(err):
+		d.logger.Debug("invalid repository name", "err", err)
+	default:
+		d.logger.Errorf("failed to stat repository path: %v", err)
+	}
+	return false
 }
 
 // errRepoUpdate replaces filesystem errors, which carry the server data
@@ -1695,21 +1706,6 @@ func (d *Backend) repoPath(name string) string {
 func (d *Backend) repoPathExists(name string) bool {
 	_, err := os.Lstat(d.repoPath(name))
 	return err == nil
-}
-
-// repoRowExists reports whether the database holds a row for the
-// repository. The error is set when the lookup failed: the caller must not
-// take the name for free, nor for taken, since either answer for a missing
-// name would differ from the error an existing one gets.
-func (d *Backend) repoRowExists(ctx context.Context, name string) (bool, error) {
-	_, err := d.store.GetRepoByName(ctx, d.db, name)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, db.ErrRecordNotFound) {
-		return false, nil
-	}
-	return false, fmt.Errorf("look up repository row %q: %w", name, err)
 }
 
 var _ proto.Repository = (*repo)(nil)
