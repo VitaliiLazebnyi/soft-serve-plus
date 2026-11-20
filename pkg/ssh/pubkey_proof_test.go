@@ -86,8 +86,9 @@ func TestPubkeyAddProofOverSSH(t *testing.T) {
 		return stderr.String(), err
 	}
 
-	// In a pty the proof cannot be piped in; the command says what to do.
-	if out, err := run(true, nil); err == nil || !strings.Contains(out, "needs proof") {
+	// In a pty the input is a terminal, so the command refuses at once,
+	// even with a valid proof on that input, and says what to do.
+	if out, err := run(true, proof); err == nil || !strings.Contains(out, "needs proof") || !strings.Contains(out, "terminal") {
 		t.Fatalf("pubkey add in a pty: %v: %q", err, out)
 	}
 	if out, err := run(false, proof); err != nil {
