@@ -156,7 +156,7 @@ func TestCustomConfigLocation(t *testing.T) {
 	is.Equal(cfg.Name, "Soft Serve Plus")
 }
 
-func TestCheckConfigLocation(t *testing.T) {
+func TestLoadChecksConfigLocation(t *testing.T) {
 	td := t.TempDir()
 	t.Setenv("SOFT_SERVE_DATA_PATH", td)
 	existing := filepath.Join(td, "custom.yaml")
@@ -176,15 +176,15 @@ func TestCheckConfigLocation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("SOFT_SERVE_CONFIG_LOCATION", tc.location)
-			err := DefaultConfig().CheckConfigLocation()
+			err := DefaultConfig().load()
 			if tc.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_CONFIG_LOCATION") {
-					t.Fatalf("CheckConfigLocation() = %v, want an error naming the variable", err)
+					t.Fatalf("load() = %v, want an error naming the variable", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("CheckConfigLocation() = %v, want nil", err)
+				t.Fatalf("load() = %v, want nil", err)
 			}
 		})
 	}

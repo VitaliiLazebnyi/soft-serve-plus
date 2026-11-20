@@ -562,7 +562,7 @@ line.
 A few environment variables have no `config.yaml` setting:
 
 - `SOFT_SERVE_DATA_PATH`: The data directory (see above). Defaults to `data`
-- `SOFT_SERVE_CONFIG_LOCATION`: Path to an existing config file to use instead of `<data path>/config.yaml`
+- `SOFT_SERVE_CONFIG_LOCATION`: Path to an existing config file to use instead of `<data path>/config.yaml`. A relative path is relative to the directory `soft serve` starts in
 - `SOFT_SERVE_DEBUG`: Set to `true` to log at debug level, including SSH authentication attempts
 - `SOFT_SERVE_VERBOSE`: Set to `true`, together with `SOFT_SERVE_DEBUG`, to also log the caller, database queries, and each SSH session's client key and environment
 - `SOFT_SERVE_NO_COLOR`: Set to `1` to turn off colors in the `soft` command's output and syntax coloring in `repo blob -c`

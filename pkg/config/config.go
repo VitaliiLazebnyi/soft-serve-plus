@@ -361,6 +361,9 @@ type Config struct {
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
 
+	// configPath is the absolute path of the config file Load resolved.
+	configPath string
+
 	// unknownKeys records the config file keys no setting is read from,
 	// and removed the removed settings the file or the environment sets.
 	unknownKeys []UnknownKey
@@ -749,10 +752,12 @@ func Load() (*Config, error) {
 
 // load is Load on c, which holds the defaults or values a test chose.
 func (c *Config) load() error {
-	if err := c.CheckConfigLocation(); err != nil {
+	path, err := c.locateFile()
+	if err != nil {
 		return err
 	}
-	if path := c.ConfigPath(); exist(path) {
+	c.configPath = path
+	if exist(path) {
 		if err := c.readFile(path); err != nil {
 			return err
 		}
@@ -795,40 +800,45 @@ func DefaultDataPath() string {
 	return dp
 }
 
-// ConfigPath returns the path to the config file.
-func (c *Config) ConfigPath() string { //nolint:revive
-	// If we have a custom config location set, then use that.
-	if path := os.Getenv("SOFT_SERVE_CONFIG_LOCATION"); exist(path) {
-		return path
+// ConfigPath returns the config file: for a config from Load, the absolute
+// path Load resolved, whether or not the file exists; for any other,
+// config.yaml in the data path.
+func (c *Config) ConfigPath() string {
+	if c.configPath != "" {
+		return c.configPath
 	}
-
-	// Otherwise, look in the data path.
 	return filepath.Join(c.DataPath, "config.yaml")
 }
 
-// CheckConfigLocation returns an error when SOFT_SERVE_CONFIG_LOCATION names
-// a file that does not exist. Without this check the server would silently
-// start on the default config, and write it to the data directory, after a
-// typo in the variable or with a config file that is not mounted yet.
-// Naming the default location in the data directory is allowed, since the
-// server writes the default config there on its first start.
-func (c *Config) CheckConfigLocation() error {
-	path := os.Getenv("SOFT_SERVE_CONFIG_LOCATION")
-	if path == "" {
-		return nil
+// locateFile returns the absolute path of the config file:
+// SOFT_SERVE_CONFIG_LOCATION, resolved against the working directory once
+// here, or config.yaml in the data path. Environ hands the path to hooks,
+// which start in a repository's directory, and a relative one would name
+// another file there (R29).
+//
+// It is an error for SOFT_SERVE_CONFIG_LOCATION to name a file that does
+// not exist: the server would otherwise start on the default config, and
+// write it to the data directory, after a typo in the variable or with a
+// config file that is not mounted yet. Naming the default location in the
+// data directory is allowed, since the server writes the default config
+// there on its first start.
+func (c *Config) locateFile() (string, error) {
+	def, err := filepath.Abs(filepath.Join(c.DataPath, "config.yaml"))
+	if err != nil {
+		return "", err
 	}
-	_, err := os.Stat(path)
-	if err == nil || samePath(path, filepath.Join(c.DataPath, "config.yaml")) {
-		return nil
+	loc := os.Getenv("SOFT_SERVE_CONFIG_LOCATION")
+	if loc == "" {
+		return def, nil
 	}
-	return fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
-}
-
-// samePath reports whether a and b name the same path once made absolute.
-func samePath(a, b string) bool {
-	a, errA := filepath.Abs(a)
-	b, errB := filepath.Abs(b)
-	return errA == nil && errB == nil && a == b
+	path, err := filepath.Abs(loc)
+	if err != nil {
+		return "", fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
+	}
+	if _, err := os.Stat(path); err != nil && path != def {
+		return "", fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
+	}
+	return path, nil
 }
 
 func exist(path string) bool {

@@ -328,3 +328,42 @@ max_blob_size: -1
 		}
 	}
 }
+
+// A relative SOFT_SERVE_CONFIG_LOCATION is resolved once, at load, against
+// the working directory the server starts in. ConfigPath and the
+// environment hooks get name that file wherever they are used from: a hook
+// starts in a repository's directory, where the relative path named another
+// file and every push failed (R29, CFG-1).
+func TestRelativeConfigLocation(t *testing.T) {
+	clearSoftServeEnv(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("conf.yaml", []byte("name: relative\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SOFT_SERVE_DATA_PATH", filepath.Join(dir, "data"))
+	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", "conf.yaml")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "relative" {
+		t.Fatalf("Load() name %q, want the relative file's", cfg.Name)
+	}
+	want := filepath.Join(dir, "conf.yaml")
+	if got := cfg.ConfigPath(); got != want {
+		t.Errorf("ConfigPath() = %q, want %q", got, want)
+	}
+
+	// From another directory, as a hook runs.
+	t.Chdir(t.TempDir())
+	if got := cfg.ConfigPath(); got != want {
+		t.Errorf("ConfigPath() from another directory = %q, want %q", got, want)
+	}
+	if !slices.Contains(cfg.Environ(), "SOFT_SERVE_CONFIG_LOCATION="+want) {
+		t.Errorf("Environ() does not name %s", want)
+	}
+	if !cfg.Exist() {
+		t.Error("Exist() = false from another directory")
+	}
+}
