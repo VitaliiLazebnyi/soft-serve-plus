@@ -695,6 +695,20 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 		return nil, err
 	}
 
+	// The LFS endpoint goes into the clone's config while the directory is
+	// still the import's own: once the repository is registered, its owner
+	// can delete it and create another under the name, whose config this
+	// must not touch.
+	if imp.lfs != nil {
+		if err := setImportLFSURL(imp.path, imp.lfsEndpoint); err != nil {
+			d.logger.Error("failed to set repository config", "err", err, "path", imp.path)
+			if rerr := d.removeRepoDir(imp.path); rerr != nil {
+				err = errors.Join(err, rerr)
+			}
+			return nil, err
+		}
+	}
+
 	// Registering is a short database and filesystem step, run to the end
 	// even if ctx is cancelled meanwhile: stopping it once the row is
 	// committed would leave a registered repository behind with no cleanup
@@ -716,17 +730,6 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 		return r, nil
 	}
 
-	rr, err := r.Open()
-	if err != nil {
-		d.logger.Error("failed to open repository", "err", err, "path", imp.path)
-		return nil, err
-	}
-
-	if err := rr.ConfigSet("lfs.url", imp.lfsEndpoint); err != nil {
-		d.logger.Error("failed to set repository config", "err", err, "path", imp.path)
-		return nil, err
-	}
-
 	if err := d.fetchImportLFSObjects(ctx, r, imp.lfs); err != nil {
 		d.logger.Error("failed to store missing lfs objects", "err", err, "path", imp.path)
 		return nil, err
@@ -746,11 +749,33 @@ func (d *Backend) removeFailedImport(ctx context.Context, r proto.Repository) {
 	})
 	switch {
 	case err == nil:
+		return
 	case errors.Is(err, errRepoKept), errors.Is(err, proto.ErrRepoNotFound):
 		d.logger.Info("failed import's repository is gone, leaving its name alone", "name", r.Name())
 	default:
 		d.logger.Error("failed to delete repository", "err", err, "name", r.Name())
+		return
 	}
+	// The repository was deleted under the import, which may have stored LFS
+	// objects for it since that delete removed its LFS storage. IDs are never
+	// reused, so nothing else can use the directory.
+	if _, err := d.store.GetRepoByID(context.WithoutCancel(ctx), d.db, r.ID()); !errors.Is(err, db.ErrRecordNotFound) {
+		return
+	}
+	lfsPath := filepath.Join(d.cfg.DataPath, "lfs", strconv.FormatInt(r.ID(), 10))
+	if err := os.RemoveAll(lfsPath); err != nil {
+		d.logger.Error("failed to delete lfs objects of a failed import", "repo", r.Name(), "path", lfsPath, "err", err)
+	}
+}
+
+// setImportLFSURL sets lfs.url, where the mirror job later reads the LFS
+// endpoint, in the git config of the clone at dir.
+func setImportLFSURL(dir, endpoint string) error {
+	r, err := git.Open(dir)
+	if err != nil {
+		return err
+	}
+	return r.ConfigSet("lfs.url", endpoint)
 }
 
 // fetchImportLFSObjects fetches the LFS objects of an imported repository.
