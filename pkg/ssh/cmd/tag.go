@@ -64,10 +64,8 @@ func tagDeleteCommand() *cobra.Command {
 				return proto.ErrMirrorReadOnly
 			}
 
-			logger := log.FromContext(ctx)
 			r, err := rr.Open()
 			if err != nil {
-				logger.Error("failed to open repo", "err", err, "repo", rr.Name())
 				return err
 			}
 
@@ -85,17 +83,17 @@ func tagDeleteCommand() *cobra.Command {
 				return git.ErrReferenceNotExist
 			}
 
-			// The event needs only the ID. Reading the commit would
-			// fail for one git cannot parse, and such a tag must still
-			// be deletable.
+			// The event needs only the ID the ref holds. Reading the
+			// tagged commit would fail for a tag on a tree or a blob, or
+			// on a commit git cannot parse, and such a tag must still be
+			// deletable. Failures are returned, not logged: they are the
+			// client's to see.
 			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
-				logger.Error("failed to get tag commit", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
 			if err := r.DeleteTag(tag); err != nil {
-				logger.Error("failed to delete tag", "err", err, "repo", rr.Name(), "tag", tag)
 				return err
 			}
 
@@ -106,7 +104,7 @@ func tagDeleteCommand() *cobra.Command {
 			defer cancel()
 			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID)
 			if err != nil {
-				logger.Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
+				log.FromContext(ctx).Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
 				return nil
 			}
 
