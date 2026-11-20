@@ -3,7 +3,6 @@ package testscript
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,22 +56,24 @@ func cmdWebhookDeliveries(user string, keys ...ssh.Signer) func(ts *testscript.T
 
 // runSoftCommand runs cmd over SSH as user and returns its stdout.
 func runSoftCommand(ts *testscript.TestScript, user string, keys []ssh.Signer, cmd string) (string, error) {
-	cli, err := ssh.Dial(
-		"tcp",
-		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-		&ssh.ClientConfig{
-			User:            user,
-			Auth:            []ssh.AuthMethod{ssh.PublicKeys(keys...)},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		},
-	)
+	// As for soft and friends, the connection is bounded by commandTimeout
+	// (see dialSSH), and a command that runs past it fails the script.
+	cli, bound, err := dialSSH(ts, &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(keys...)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
 	if err != nil {
 		return "", err
 	}
 	defer cli.Close() //nolint:errcheck
+	defer bound.stop()
 
 	sess, err := cli.NewSession()
 	if err != nil {
+		if bound.fired() {
+			failStuck(ts, cmd)
+		}
 		return "", err
 	}
 	defer sess.Close() //nolint:errcheck
@@ -80,5 +81,9 @@ func runSoftCommand(ts *testscript.TestScript, user string, keys []ssh.Signer, c
 	var out bytes.Buffer
 	sess.Stdout = &out
 	err = sess.Run(cmd)
+	bound.stop()
+	if bound.fired() {
+		failStuck(ts, cmd)
+	}
 	return out.String(), err
 }
