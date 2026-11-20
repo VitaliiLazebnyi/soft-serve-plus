@@ -32,17 +32,10 @@ func branchCommand() *cobra.Command {
 
 func branchListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "list REPOSITORY",
-		Short:             "List repository branches",
-		Args:              cobra.ExactArgs(1),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
-
+		Use:   "list REPOSITORY",
+		Short: "List repository branches",
+		Args:  cobra.ExactArgs(1),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
 			r, err := rr.Open()
 			if err != nil {
 				return err
@@ -56,7 +49,7 @@ func branchListCommand() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	return cmd
@@ -64,16 +57,11 @@ func branchListCommand() *cobra.Command {
 
 func branchDefaultCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "default REPOSITORY [BRANCH]",
-		Short:             "Set or get the default branch",
-		Args:              cobra.RangeArgs(1, 2),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "default REPOSITORY [BRANCH]",
+		Short: "Set or get the default branch",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, level access.AccessLevel) error {
 			ctx := cmd.Context()
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			r, err := rr.Open()
 			if err != nil {
@@ -89,8 +77,8 @@ func branchDefaultCommand() *cobra.Command {
 
 				cmd.Println(utils.Sanitize(head.Name().Short()))
 			case 2:
-				if err := requireLevel(ctx, access.ReadWriteAccess); err != nil {
-					return err
+				if level < access.ReadWriteAccess {
+					return proto.ErrUnauthorized
 				}
 
 				branch := args[1]
@@ -141,7 +129,7 @@ func branchDefaultCommand() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	return cmd
@@ -149,17 +137,12 @@ func branchDefaultCommand() *cobra.Command {
 
 func branchDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "delete REPOSITORY BRANCH",
-		Aliases:           []string{"remove", "rm", "del"},
-		Short:             "Delete a branch",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:     "delete REPOSITORY BRANCH",
+		Aliases: []string{"remove", "rm", "del"},
+		Short:   "Delete a branch",
+		Args:    cobra.ExactArgs(2),
+		RunE: withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 			if rr.IsMirror() {
 				return proto.ErrMirrorReadOnly
 			}
@@ -221,7 +204,7 @@ func branchDeleteCommand() *cobra.Command {
 			// session neither waits on receivers nor cancels the delivery.
 			backend.FromContext(ctx).SendEventAfterChange(ctx, wh)
 			return nil
-		},
+		}),
 	}
 
 	return cmd

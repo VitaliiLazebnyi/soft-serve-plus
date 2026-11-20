@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
-	"text/template"
-	"unicode"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -20,58 +17,6 @@ import (
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
-
-var templateFuncs = template.FuncMap{
-	"trim":                    strings.TrimSpace,
-	"trimRightSpace":          trimRightSpace,
-	"trimTrailingWhitespaces": trimRightSpace,
-	"rpad":                    rpad,
-	"gt":                      cobra.Gt,
-	"eq":                      cobra.Eq,
-}
-
-const (
-	// UsageTemplate is the template used for the help output.
-	UsageTemplate = `Usage:{{if .Runnable}}
-  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
-  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
-
-Aliases:
-  {{.NameAndAliases}}{{end}}{{if .HasExample}}
-
-Examples:
-{{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
-
-Available Commands:{{range $cmds}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
-
-{{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) (or .IsAvailableCommand (eq .Name "help")))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if not .AllChildCommandsHaveGroup}}
-
-Additional Commands:{{range $cmds}}{{if (and (eq .GroupID "") (or .IsAvailableCommand (eq .Name "help")))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
-
-Flags:
-{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
-
-Global Flags:
-{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasHelpSubCommands}}
-
-Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
-  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
-
-Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
-`
-)
-
-// UsageFunc is a function that can be used as a cobra.Command's
-// UsageFunc to render the help output.
-func UsageFunc(c *cobra.Command) error {
-	t := template.New("usage")
-	t.Funcs(templateFuncs)
-	template.Must(t.Parse(c.UsageTemplate()))
-	return t.Execute(c.OutOrStderr(), c)
-}
 
 // SSHCommand returns the ssh invocation that reaches the server, such as
 // "ssh -p 23231 localhost", for help and error output. The root command
@@ -92,16 +37,6 @@ func SSHCommand(cfg *config.Config) string {
 	return sshCmd + " " + hostname
 }
 
-func trimRightSpace(s string) string {
-	return strings.TrimRightFunc(s, unicode.IsSpace)
-}
-
-// rpad adds padding to the right of a string.
-func rpad(s string, padding int) string {
-	template := fmt.Sprintf("%%-%ds", padding)
-	return fmt.Sprintf(template, s)
-}
-
 // denyReadAs is the one answer for a caller who may not read a repository,
 // whether it is missing or private: anon for anonymous callers (HTTP 401),
 // registered for everyone else (HTTP 404).
@@ -119,56 +54,58 @@ func denyRead(ctx context.Context) error {
 	return denyReadAs(anonymous, proto.ErrUnauthorized, proto.ErrRepoNotFound)
 }
 
-// repoContextKey holds the repoStash a gate stored for the command.
-type repoContextKey struct{}
+// repoRunE is the body of a repo-scoped command. repo is the repository
+// named by the command's first argument, as withRepo resolved it, and level
+// the caller's access level on it.
+type repoRunE func(cmd *cobra.Command, args []string, repo proto.Repository, level access.AccessLevel) error
 
-// repoStash is the repository a gate resolved for a command and the
-// caller's access level on it. repo is nil only for server admins acting
-// on a name with no repository behind it.
-type repoStash struct {
-	repo  proto.Repository
-	level access.AccessLevel
-}
-
-// requireRepo gates a repo-scoped command: the caller must be able to read
-// the repository named by the first argument and hold at least need on it.
-// Readability is decided before existence, so a caller who cannot read gets
-// denyRead's answer whether or not the repository exists. Server admins
-// pass with a nil repository so RunE can act on orphaned rows.
-func requireRepo(need access.AccessLevel) func(*cobra.Command, []string) error {
+// withRepo returns the RunE of a repo-scoped command: the caller must be
+// able to read the repository named by the first argument and hold at
+// least need on it, and fn then runs with that repository. Readability is
+// decided before existence, so a caller who cannot read gets denyRead's
+// answer whether or not the repository exists.
+func withRepo(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-		name := repoArg(args)
-		repo, level, err := backend.FromContext(ctx).ReadableForUser(ctx, name, proto.UserFromContext(ctx))
+		repo, level, err := gateRepo(cmd.Context(), args, need)
 		if err != nil {
-			return lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
+			return err
 		}
-		if repo == nil && !isServerAdmin(ctx) {
-			return denyRead(ctx)
+		if repo == nil {
+			return denyRead(cmd.Context())
 		}
-
-		cmd.SetContext(context.WithValue(ctx, repoContextKey{}, repoStash{repo: repo, level: level}))
-		return requireLevel(cmd.Context(), need)
+		return fn(cmd, args, repo, level)
 	}
 }
 
-// requireLevel checks the stashed access level against need; use it in
-// setter arms of commands gated with requireRepo.
-func requireLevel(ctx context.Context, need access.AccessLevel) error {
-	if _, level, _ := repoFromContext(ctx); level < need {
-		return proto.ErrUnauthorized
+// withRepoOrName is withRepo for the commands a server admin may also run
+// on a name with a row but no repository directory (delete, rename and
+// collab), so they can act on such a row: fn then gets a nil repository
+// and acts on the name.
+func withRepoOrName(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		repo, level, err := gateRepo(cmd.Context(), args, need)
+		if err != nil {
+			return err
+		}
+		return fn(cmd, args, repo, level)
 	}
-	return nil
 }
 
-// repoFromContext returns the repository and access level stored by
-// requireRepo. The error is denyRead's answer when no repository exists.
-func repoFromContext(ctx context.Context) (proto.Repository, access.AccessLevel, error) {
-	stash, _ := ctx.Value(repoContextKey{}).(repoStash)
-	if stash.repo == nil {
-		return nil, stash.level, denyRead(ctx)
+// gateRepo looks up the repository named by args and checks that the
+// caller may read it and holds at least need on it. The repository is nil
+// only for a server admin and a name with no repository behind it.
+func gateRepo(ctx context.Context, args []string, need access.AccessLevel) (proto.Repository, access.AccessLevel, error) {
+	repo, level, err := backend.FromContext(ctx).ReadableForUser(ctx, repoArg(args), proto.UserFromContext(ctx))
+	if err != nil {
+		return nil, level, lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
 	}
-	return stash.repo, stash.level, nil
+	if repo == nil && !isServerAdmin(ctx) {
+		return nil, level, denyRead(ctx)
+	}
+	if level < need {
+		return nil, level, proto.ErrUnauthorized
+	}
+	return repo, level, nil
 }
 
 // isServerAdmin reports whether the session's caller is a server admin,

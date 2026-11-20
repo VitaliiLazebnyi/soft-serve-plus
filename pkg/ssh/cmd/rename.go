@@ -10,12 +10,11 @@ import (
 
 func renameCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "rename REPOSITORY NEW_NAME",
-		Aliases:           []string{"mv", "move"},
-		Short:             "Rename an existing repository",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:     "rename REPOSITORY NEW_NAME",
+		Aliases: []string{"mv", "move"},
+		Short:   "Rename an existing repository",
+		Args:    cobra.ExactArgs(2),
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			oldName := repoArg(args)
@@ -32,7 +31,7 @@ func renameCommand() *cobra.Command {
 			}
 
 			return createFailed(ctx, "rename repository", be.RenameRepository(ctx, oldName, newName))
-		},
+		}),
 	}
 
 	return cmd

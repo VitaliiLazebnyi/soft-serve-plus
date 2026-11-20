@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/dustin/go-humanize"
@@ -45,17 +46,12 @@ func init() {
 
 func webhookListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "list REPOSITORY",
-		Short:             "List repository webhooks",
-		Args:              cobra.ExactArgs(1),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "list REPOSITORY",
+		Short: "List repository webhooks",
+		Args:  cobra.ExactArgs(1),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			webhooks, err := be.ListWebhooks(ctx, repo)
 			if err != nil {
@@ -80,7 +76,7 @@ func webhookListCommand() *cobra.Command {
 			}
 			cmd.Println(table)
 			return nil
-		},
+		}),
 	}
 
 	return cmd
@@ -92,17 +88,12 @@ func webhookCreateCommand() *cobra.Command {
 	var active bool
 	var contentType string
 	cmd := &cobra.Command{
-		Use:               "create REPOSITORY URL",
-		Short:             "Create a repository webhook",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "create REPOSITORY URL",
+		Short: "Create a repository webhook",
+		Args:  cobra.ExactArgs(2),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			evs, err := parseWebhookEvents(events)
 			if err != nil {
@@ -116,7 +107,7 @@ func webhookCreateCommand() *cobra.Command {
 
 			url := utils.Sanitize(args[1])
 			return be.CreateWebhook(ctx, repo, strings.TrimSpace(url), ct, secret, evs, active)
-		},
+		}),
 	}
 
 	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, available events are (%s)", strings.Join(webhookEvents, ", ")))
@@ -157,17 +148,12 @@ func parseWebhookContentType(s string) (webhook.ContentType, error) {
 
 func webhookDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "delete REPOSITORY WEBHOOK_ID",
-		Short:             "Delete a repository webhook",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "delete REPOSITORY WEBHOOK_ID",
+		Short: "Delete a repository webhook",
+		Args:  cobra.ExactArgs(2),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -175,7 +161,7 @@ func webhookDeleteCommand() *cobra.Command {
 			}
 
 			return be.DeleteWebhook(ctx, repo, id)
-		},
+		}),
 	}
 
 	return cmd
@@ -188,17 +174,12 @@ func webhookUpdateCommand() *cobra.Command {
 	var contentType string
 	var url string
 	cmd := &cobra.Command{
-		Use:               "update REPOSITORY WEBHOOK_ID",
-		Short:             "Update a repository webhook",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "update REPOSITORY WEBHOOK_ID",
+		Short: "Update a repository webhook",
+		Args:  cobra.ExactArgs(2),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -253,7 +234,7 @@ func webhookUpdateCommand() *cobra.Command {
 			}
 
 			return be.UpdateWebhook(ctx, repo, id, newURL, newContentType, newSecret, newEvents, newActive)
-		},
+		}),
 	}
 
 	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, replacing the current ones; available events are (%s); pass --events= to remove them all", strings.Join(webhookEvents, ", ")))
@@ -283,17 +264,12 @@ func webhookDeliveriesCommand() *cobra.Command {
 
 func webhookDeliveriesListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "list REPOSITORY WEBHOOK_ID",
-		Short:             "List webhook deliveries",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "list REPOSITORY WEBHOOK_ID",
+		Short: "List webhook deliveries",
+		Args:  cobra.ExactArgs(2),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -320,7 +296,7 @@ func webhookDeliveriesListCommand() *cobra.Command {
 			}
 			cmd.Println(table)
 			return nil
-		},
+		}),
 	}
 
 	return cmd
@@ -328,17 +304,12 @@ func webhookDeliveriesListCommand() *cobra.Command {
 
 func webhookDeliveriesRedeliverCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "redeliver REPOSITORY WEBHOOK_ID DELIVERY_ID",
-		Short:             "Redeliver a webhook delivery",
-		Args:              cobra.ExactArgs(3),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "redeliver REPOSITORY WEBHOOK_ID DELIVERY_ID",
+		Short: "Redeliver a webhook delivery",
+		Args:  cobra.ExactArgs(3),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -351,7 +322,7 @@ func webhookDeliveriesRedeliverCommand() *cobra.Command {
 			}
 
 			return be.RedeliverWebhookDelivery(ctx, repo, id, delID)
-		},
+		}),
 	}
 
 	return cmd
@@ -359,17 +330,12 @@ func webhookDeliveriesRedeliverCommand() *cobra.Command {
 
 func webhookDeliveriesGetCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "get REPOSITORY WEBHOOK_ID DELIVERY_ID",
-		Short:             "Get a webhook delivery",
-		Args:              cobra.ExactArgs(3),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "get REPOSITORY WEBHOOK_ID DELIVERY_ID",
+		Short: "Get a webhook delivery",
+		Args:  cobra.ExactArgs(3),
+		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -421,7 +387,7 @@ func webhookDeliveriesGetCommand() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	return cmd

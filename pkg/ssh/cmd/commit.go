@@ -8,6 +8,7 @@ import (
 	gansi "charm.land/glamour/v2/ansi"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -20,18 +21,11 @@ func commitCommand() *cobra.Command {
 	var patchOnly bool
 
 	cmd := &cobra.Command{
-		Use:               "commit REPOSITORY REVISION",
-		Short:             "Print out a commit and its diff",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+		Use:   "commit REPOSITORY REVISION",
+		Short: "Print out a commit and its diff",
+		Args:  cobra.ExactArgs(2),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			rev := args[1]
-
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 
 			r, err := rr.Open()
 			if err != nil {
@@ -114,7 +108,7 @@ func commitCommand() *cobra.Command {
 			)
 
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().BoolVarP(&color, "color", "c", false, "Colorize output")

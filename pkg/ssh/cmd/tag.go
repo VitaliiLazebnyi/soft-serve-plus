@@ -28,18 +28,11 @@ func tagCommand() *cobra.Command {
 
 func tagListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "list REPOSITORY",
-		Aliases:           []string{"ls"},
-		Short:             "List repository tags",
-		Args:              cobra.ExactArgs(1),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
-
+		Use:     "list REPOSITORY",
+		Aliases: []string{"ls"},
+		Short:   "List repository tags",
+		Args:    cobra.ExactArgs(1),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
 			r, err := rr.Open()
 			if err != nil {
 				return err
@@ -53,7 +46,7 @@ func tagListCommand() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	return cmd
@@ -61,17 +54,12 @@ func tagListCommand() *cobra.Command {
 
 func tagDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "delete REPOSITORY TAG",
-		Aliases:           []string{"remove", "rm", "del"},
-		Short:             "Delete a tag",
-		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:     "delete REPOSITORY TAG",
+		Aliases: []string{"remove", "rm", "del"},
+		Short:   "Delete a tag",
+		Args:    cobra.ExactArgs(2),
+		RunE: withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
-			}
 			if rr.IsMirror() {
 				return proto.ErrMirrorReadOnly
 			}
@@ -126,7 +114,7 @@ func tagDeleteCommand() *cobra.Command {
 			// session neither waits on receivers nor cancels the delivery.
 			backend.FromContext(ctx).SendEventAfterChange(ctx, wh)
 			return nil
-		},
+		}),
 	}
 
 	return cmd
