@@ -221,15 +221,16 @@ func limitHandlers(next ssh.Handler, maxSessions int) ssh.Handler {
 
 // setSessionHandlers sets up how srv handles session channels, the only
 // channels it accepts: ssh.DefaultSessionHandler behind
-// filterSessionRequests, limited by limitSessions, running srv.Handler,
-// which must already be set, limited by limitHandlers, both to maxSessions.
+// filterSessionRequests, with a context of the channel's own
+// (channelContext), limited by limitSessions, running srv.Handler, which
+// must already be set, limited by limitHandlers, both to maxSessions.
 // forwardWindowChanges wraps the limit too, so a session it refuses still
 // has its window changes forwarded. Inside the limit, pauseLifetime stops
 // the lifetime clock of a connection without an account while the handler
 // runs.
 func setSessionHandlers(srv *ssh.Server, maxSessions int) {
 	srv.ChannelHandlers = map[string]ssh.ChannelHandler{
-		"session": limitSessions(filterSessionRequests(ssh.DefaultSessionHandler), maxSessions),
+		"session": limitSessions(channelContext(filterSessionRequests(ssh.DefaultSessionHandler)), maxSessions),
 	}
 	srv.Handler = forwardWindowChanges(limitHandlers(pauseLifetime(srv.Handler), maxSessions))
 }

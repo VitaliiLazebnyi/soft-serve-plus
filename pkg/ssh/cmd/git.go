@@ -183,12 +183,18 @@ func gitLookupFailed(ctx context.Context, logger *log.Logger, repo string, err e
 
 // gitServiceError logs a failed git service and returns the error for the
 // client. A client that goes away early, such as one that only reads the ref
-// advertisement, cancels the session context, or closes its channel so the
-// write of git's output fails. git then gets the end of its input (and
-// SIGPIPE on its output) and exits; it is killed only if it has not exited
-// WaitDelay later. The service reports that as context.Canceled. It is not a
-// server failure, so it is logged at Debug and not reported as one.
-func gitServiceError(logger *log.Logger, service git.Service, repo string, err error) error {
+// advertisement, closes its session channel, which ends the session context,
+// or the whole connection; a write of git's output to it then fails as well.
+// git gets the end of its input (and SIGPIPE on its output) and exits; it is
+// killed only if it has not exited WaitDelay later. The service reports that
+// as context.Canceled; or, when git saw the end of its input and failed
+// before the cancellation reached the service, as git's own failure, with
+// ctx done or the channel closed. None of these is a server failure, so they
+// are logged at Debug and not reported as one.
+func gitServiceError(ctx context.Context, logger *log.Logger, service git.Service, repo string, err error) error {
+	if !errors.Is(err, context.Canceled) && (ctx.Err() != nil || channelClosed(ctx)) {
+		err = fmt.Errorf("client went away: %w (%w)", context.Canceled, err)
+	}
 	if errors.Is(err, context.Canceled) {
 		logger.Debug("git service cancelled", "service", service, "err", err, "repo", repo)
 		return err
@@ -196,6 +202,23 @@ func gitServiceError(logger *log.Logger, service git.Service, repo string, err e
 
 	logger.Error("failed to handle git service", "service", service, "err", err, "repo", repo)
 	return git.ErrSystemMalfunction
+}
+
+// channelClosed reports whether the client has closed the session's channel,
+// by sending it a keepalive request that wants no reply: on a closed channel
+// the send fails at once, and nothing goes out. x/crypto marks the channel
+// closed before it ends the client's input there, so a git that failed for
+// the end of its input after the client closed the channel always finds it
+// marked, even before the session context ends. On an open channel the
+// client ignores the request, as OpenSSH does keepalives it gets no reply
+// for.
+func channelClosed(ctx context.Context) bool {
+	s := sshutils.SessionFromContext(ctx)
+	if s == nil {
+		return false
+	}
+	_, err := s.SendRequest("keepalive@openssh.com", false, nil)
+	return err != nil
 }
 
 // gitRequest is what every git service over SSH starts from: the
@@ -322,7 +345,7 @@ func runUploadPack(cmd *cobra.Command, args []string, service git.Service) error
 	}()
 
 	if err := service.Handler(r.ctx, r.scmd); err != nil {
-		return gitServiceError(r.logger, service, r.name, err)
+		return gitServiceError(r.ctx, r.logger, service, r.name, err)
 	}
 	return nil
 }
@@ -415,7 +438,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 			endPush = func() {}
 			removePushCreated(context.WithoutCancel(r.ctx), r, created)
 		}
-		return gitServiceError(r.logger, git.ReceivePackService, r.name, err)
+		return gitServiceError(r.ctx, r.logger, git.ReceivePackService, r.name, err)
 	}
 
 	if err := git.EnsureDefaultBranch(r.ctx, r.scmd.Dir); err != nil {
@@ -540,7 +563,7 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 	}()
 
 	if err := run(r.ctx, r.scmd); err != nil {
-		return gitServiceError(r.logger, service, r.name, err)
+		return gitServiceError(r.ctx, r.logger, service, r.name, err)
 	}
 	return nil
 }
