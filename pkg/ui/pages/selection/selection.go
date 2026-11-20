@@ -366,6 +366,10 @@ func (s *Selection) View() string {
 		rs := lipgloss.NewStyle().
 			Height(s.common.Height - hm)
 		status := common.ScrollPercent(s.readme.ScrollPosition())
+		if s.readme.Rendering() {
+			// The readme on screen is not the one being rendered.
+			status = "loading…"
+		}
 		readmeStatus := lipgloss.NewStyle().
 			Align(lipgloss.Right).
 			Width(s.common.Width - wm).
