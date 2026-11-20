@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -125,6 +126,39 @@ func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
 
 	close(release)
 	e.drainDeliveries(t)
+	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+}
+
+// A push queued before shutdown starts is still sent: WaitForDeliveries runs
+// the queued jobs to the end of its wait, and a push job is one of them.
+// Regression (review round 1): the job stopped as soon as the queue was
+// closed, so the push lost every event, recorded nowhere.
+func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	release := make(chan struct{})
+	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
+
+	// Shutdown starts while the push job waits behind the blocker.
+	waited := make(chan struct{})
+	go func() {
+		defer close(waited)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		e.be.WaitForDeliveries(ctx)
+	}()
+	waitFor(t, "the queue to close", e.be.deliveries.closedForTest)
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(time.Minute):
+		t.Fatal("timed out waiting for shutdown")
+	}
+
 	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
 }
 

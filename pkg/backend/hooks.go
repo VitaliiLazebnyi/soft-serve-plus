@@ -99,7 +99,8 @@ func (d *Backend) queuePushEvents(ctx context.Context, repo proto.Repository, us
 // with ID id. It runs on the delivery queue. The repository is read again,
 // so the payloads describe it as it is now, under its current name. Each
 // payload is built just before it is sent, so a push of many refs holds one
-// at a time. It stops when the server starts shutting down.
+// at a time. A job queued before shutdown runs like any other; shutdown's
+// wait for the queue (WaitForDeliveries) bounds it.
 func (d *Backend) sendPushEvents(ctx context.Context, id int64, user proto.User, refs []hooks.HookArg, subs pushSubscribers) {
 	m, err := d.store.GetRepoByID(ctx, d.db, id)
 	if errors.Is(err, db.ErrRecordNotFound) {
@@ -112,10 +113,6 @@ func (d *Backend) sendPushEvents(ctx context.Context, id int64, user proto.User,
 	}
 	repo := d.repoFromRow(m.Name, m)
 	d.forEachPushEvent(ctx, repo, user, refs, subs, func(whs []models.Webhook, ev webhook.EventPayload) bool {
-		if d.deliveries.isClosed() {
-			d.logger.Warn("push webhook events skipped: server is shutting down", "repo_id", id)
-			return false
-		}
 		if err := webhook.Deliver(ctx, whs, ev); err != nil {
 			d.logEventNotDelivered(ev, err)
 		}
@@ -125,10 +122,11 @@ func (d *Backend) sendPushEvents(ctx context.Context, id int64, user proto.User,
 
 // forEachPushEvent builds, for each ref in order, the branch/tag event of a
 // created or deleted ref and then the push event, each only when it has
-// subscribers, and calls fn with them. It stops when fn returns false. A
-// payload that cannot be built is logged and skipped.
-func (d *Backend) forEachPushEvent(ctx context.Context, repo proto.Repository, user proto.User, refs []hooks.HookArg, subs pushSubscribers, fn func([]models.Webhook, webhook.EventPayload) bool) {
-	for _, ref := range refs {
+// subscribers, and calls fn with them. It stops when fn returns false, and
+// returns how many refs it went through to the end. A payload that cannot
+// be built is logged and skipped.
+func (d *Backend) forEachPushEvent(ctx context.Context, repo proto.Repository, user proto.User, refs []hooks.HookArg, subs pushSubscribers, fn func([]models.Webhook, webhook.EventPayload) bool) int {
+	for i, ref := range refs {
 		var ev webhook.Event
 		switch {
 		case git.IsZeroHash(ref.OldSha):
@@ -140,17 +138,18 @@ func (d *Backend) forEachPushEvent(ctx context.Context, repo proto.Repository, u
 			if payload, err := d.buildPushEvent(ctx, ev, repo, user, ref); err != nil {
 				d.logger.Error("error creating branch_tag webhook", "repo", repo.Name(), "ref", ref.RefName, "err", err)
 			} else if !fn(whs, payload) {
-				return
+				return i
 			}
 		}
 		if whs := subs[webhook.EventPush]; len(whs) > 0 {
 			if payload, err := d.buildPushEvent(ctx, webhook.EventPush, repo, user, ref); err != nil {
 				d.logger.Error("error creating push webhook", "repo", repo.Name(), "ref", ref.RefName, "err", err)
 			} else if !fn(whs, payload) {
-				return
+				return i
 			}
 		}
 	}
+	return len(refs)
 }
 
 // buildPushEvent builds the payload of event ev for ref, giving it at most
@@ -165,12 +164,4 @@ func (d *Backend) buildPushEvent(ctx context.Context, ev webhook.Event, repo pro
 		return webhook.NewBranchTagEvent(ctx, user, repo, ref.RefName, ref.OldSha, ref.NewSha)
 	}
 	return nil, fmt.Errorf("not a push event: %v", ev)
-}
-
-// isClosed reports whether the queue refuses new deliveries, that is,
-// whether the server is shutting down.
-func (q *deliveryQueue) isClosed() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.closed
 }
