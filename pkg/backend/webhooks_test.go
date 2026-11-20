@@ -427,9 +427,9 @@ func TestDeleteWebhookRemovesEvents(t *testing.T) {
 	events, err := e.be.store.GetWebhookEventsByWebhookID(e.ctx, e.be.db, id)
 	is.NoErr(err)
 	is.Equal(len(events), 0)
-	deliveries, err := e.be.store.GetWebhookDeliveriesByWebhookID(e.ctx, e.be.db, id)
-	is.NoErr(err)
-	is.Equal(len(deliveries), 0)
+	var deliveries int
+	is.NoErr(e.be.db.GetContext(e.ctx, &deliveries, e.be.db.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id))
+	is.Equal(deliveries, 0)
 }
 
 // seedDelivery stores a delivery row directly, so the read paths can be
@@ -632,7 +632,7 @@ func TestRedeliverAfterPrune(t *testing.T) {
 		return e.be.store.PruneWebhookDeliveries(e.ctx, tx, id, 1)
 	}))
 
-	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, old), db.ErrRecordNotFound))
+	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, old), proto.ErrDeliveryNotFound))
 	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, kept))
 
 	// The redelivery is recorded next to the delivery it repeats.
@@ -652,8 +652,8 @@ func TestRedeliverFailures(t *testing.T) {
 	_ = other
 
 	// Unknown delivery and unknown webhook are both reported as not found.
-	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, uuid.New()), db.ErrRecordNotFound))
-	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, 424242, good), db.ErrRecordNotFound))
+	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, uuid.New()), proto.ErrDeliveryNotFound))
+	is.True(errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, 424242, good), proto.ErrWebhookNotFound))
 	// Delivery exists, but its body is not valid JSON.
 	is.True(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, bad) != nil)
 	// A webhook owned by another repo cannot be redelivered through this one.

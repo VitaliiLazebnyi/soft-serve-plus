@@ -27,25 +27,10 @@ func (*Store) CreateAccessToken(ctx context.Context, h db.Handler, name string, 
 	return t, err
 }
 
-// DeleteAccessToken implements store.Store.
-func (*Store) DeleteAccessToken(ctx context.Context, h db.Handler, id int64) error {
-	query := h.Rebind(`DELETE FROM access_tokens WHERE id = ?`)
-	_, err := h.ExecContext(ctx, query, id)
-	return err
-}
-
 // DeleteAccessTokenForUser implements store.Store.
 func (*Store) DeleteAccessTokenForUser(ctx context.Context, h db.Handler, userID int64, id int64) error {
 	query := h.Rebind(`DELETE FROM access_tokens WHERE user_id = ? AND id = ?`)
 	return affected(h.ExecContext(ctx, query, userID, id))
-}
-
-// GetAccessToken implements store.Store.
-func (*Store) GetAccessToken(ctx context.Context, h db.Handler, id int64) (models.AccessToken, error) {
-	query := h.Rebind(`SELECT * FROM access_tokens WHERE id = ?`)
-	var m models.AccessToken
-	err := h.GetContext(ctx, &m, query, id)
-	return m, err
 }
 
 // GetAccessTokensByUserID implements store.Store.

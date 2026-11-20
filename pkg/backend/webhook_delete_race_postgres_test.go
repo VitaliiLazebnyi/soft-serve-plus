@@ -80,5 +80,5 @@ func TestDeleteWebhookRacingRepositoryDeletePostgres(t *testing.T) {
 	_, err := e.be.Repository(e.ctx, "repo")
 	is.True(errors.Is(err, proto.ErrRepoNotFound))
 	// The webhook went with its repository; deleting it found nothing.
-	is.True(errors.Is(<-hookDeleted, db.ErrRecordNotFound))
+	is.True(errors.Is(<-hookDeleted, proto.ErrWebhookNotFound))
 }

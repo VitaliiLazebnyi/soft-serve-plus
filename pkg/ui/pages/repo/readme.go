@@ -209,39 +209,13 @@ func (r *Readme) updateReadmeCmd() tea.Cmd {
 // readmeTooLarge is shown in place of a README larger than the size limit.
 const readmeTooLarge = "The README is larger than the size limit and is not shown."
 
-// findReadme returns the README of ref and its path, searched for in the
-// root, .github and docs, in that order, as backend.Readme does. It returns
-// "" and no error when there is none, and an error wrapping
+// findReadme returns the README of ref and its path (see backend.Readme).
+// It returns "" and no error when there is none, and an error wrapping
 // git.ErrFileTooLarge when every README it found is larger than limit.
-//
-// It differs from backend.Readme in two ways. backend.Readme goes on to
-// the next directory after any error and reports only the error of the last
-// one it looked in, so it cannot tell a README too large to show from none;
-// findReadme keeps the too-large error. And findReadme stops at the first
-// error that is neither "too large" nor "not found", such as a git failure,
-// and returns it, where backend.Readme would look on and could show a
-// README from a later directory.
-//
-// TODO(tracker 287): make backend.Readme report a README too large to show
-// and stop at other errors, then call it here instead.
 func findReadme(ctx context.Context, repo proto.Repository, ref *git.Reference, limit int64) (string, string, error) {
-	var tooLarge error
-	for _, dir := range []string{".", ".github", "docs"} {
-		// Tree paths always use forward slashes, whatever the OS.
-		rm, rp, err := backend.LatestFile(ctx, repo, ref, path.Join(dir, "[rR][eE][aA][dD][mM][eE]*"), limit)
-		switch {
-		case err == nil:
-			return rm, rp, nil
-		case errors.Is(err, git.ErrFileTooLarge):
-			if tooLarge == nil {
-				tooLarge = err
-			}
-		case errors.Is(err, git.ErrFileNotFound), errors.Is(err, git.ErrRevisionNotExist):
-			// No README here, or no such directory.
-		default:
-			// A git failure: report it rather than look on.
-			return "", "", err
-		}
+	rm, rp, err := backend.Readme(ctx, repo, ref, limit)
+	if errors.Is(err, git.ErrFileNotFound) {
+		return "", "", nil
 	}
-	return "", "", tooLarge
+	return rm, rp, err
 }

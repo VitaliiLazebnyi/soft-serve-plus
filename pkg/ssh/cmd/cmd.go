@@ -322,11 +322,11 @@ func userByPublicKey(ctx context.Context) (proto.User, error) {
 	}
 	be := backend.FromContext(ctx)
 	user, err := be.UserByPublicKey(ctx, sshutils.PublicKeyFromContext(ctx))
-	// ErrAdminKeyNonAdminOwner also matches proto.ErrUserNotFound, but the
+	// AdminKeyNonAdminOwnerError also matches proto.ErrUserNotFound, but the
 	// key does belong to a user, so it keeps its own message. Over SSH this
 	// is unreachable, since the auth middleware refuses those sessions
 	// before any command runs; the check is a safeguard should that change.
-	var nonAdminOwner *backend.ErrAdminKeyNonAdminOwner
+	var nonAdminOwner *backend.AdminKeyNonAdminOwnerError
 	if errors.Is(err, proto.ErrUserNotFound) && !errors.As(err, &nonAdminOwner) {
 		return nil, errUnknownKey(ctx)
 	}

@@ -1,8 +1,6 @@
 package backend
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,31 +38,27 @@ func refuseRepoUpdate(t *testing.T, e whEnv, column string) {
 	is.NoErr(err)
 }
 
-// A description the database refuses is not written to the repository's
-// description file either.
-func TestSetDescriptionDBFailureKeepsFile(t *testing.T) {
+// A description the database refuses leaves the stored one as it was.
+func TestSetDescriptionDBFailureKeepsDescription(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	is.NoErr(e.be.SetDescription(e.ctx, "repo", "before"))
 	refuseRepoUpdate(t, e, "description")
 
 	is.True(e.be.SetDescription(e.ctx, "repo", "after") != nil)
-	got, err := os.ReadFile(filepath.Join(e.be.repoPath("repo"), "description"))
+	r, err := e.be.Repository(e.ctx, "repo")
 	is.NoErr(err)
-	is.Equal(string(got), "before")
+	is.Equal(r.Description(), "before")
 }
 
-// A visibility change the database refuses leaves git-daemon-export-ok as it
-// was.
-func TestSetPrivateDBFailureKeepsExportFile(t *testing.T) {
+// A visibility change the database refuses leaves the repository as it was.
+func TestSetPrivateDBFailureKeepsVisibility(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	fp := filepath.Join(e.be.repoPath("repo"), "git-daemon-export-ok")
-	_, err := os.Stat(fp)
-	is.NoErr(err)
 	refuseRepoUpdate(t, e, "private")
 
 	is.True(e.be.SetPrivate(e.ctx, "repo", true) != nil)
-	_, err = os.Stat(fp)
+	r, err := e.be.Repository(e.ctx, "repo")
 	is.NoErr(err)
+	is.True(!r.IsPrivate())
 }

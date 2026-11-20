@@ -125,7 +125,7 @@ func TestOrphanRepositoryDirsCaseVariant(t *testing.T) {
 	}
 }
 
-// ReportOrphanRepositories names each orphan, up to maxReportedOrphans, and
+// reportOrphans names each orphan, up to maxReportedOrphans, and
 // counts the rest.
 func TestReportOrphanRepositories(t *testing.T) {
 	var logs bytes.Buffer
@@ -134,7 +134,11 @@ func TestReportOrphanRepositories(t *testing.T) {
 		mkdirs(t, be, "orphan"+strings.Repeat("x", i)+".git")
 	}
 
-	be.ReportOrphanRepositories(context.Background())
+	orphans, err := be.OrphanRepositoryDirs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	be.reportOrphans(orphans)
 
 	out := logs.String()
 	if n := strings.Count(out, "repository directory has no database row"); n != maxReportedOrphans {
@@ -183,11 +187,11 @@ func TestOrphanRepositoryDirsMatchesByPathFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	orphans, compares, err := be.orphanRepositoryDirs(ctx)
+	scan, err := be.scanRepoDirs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(orphans) != 0 || compares != 0 {
-		t.Errorf("orphanRepositoryDirs => %q with %d identity comparisons, want none and 0", orphans, compares)
+	if len(scan.orphans) != 0 || scan.compares != 0 {
+		t.Errorf("scanRepoDirs => %q with %d identity comparisons, want none and 0", scan.orphans, scan.compares)
 	}
 }

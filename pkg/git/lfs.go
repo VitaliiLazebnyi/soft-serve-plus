@@ -8,9 +8,8 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
-	"runtime"
+	"runtime/debug"
 	"strconv"
-	"strings"
 	"time"
 
 	"charm.land/log/v2"
@@ -108,7 +107,7 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		stdin:   stdin,
 	}, &lfsLogger{logger})
 
-	err := processCommands(processor, handler, op)
+	err := processCommands(processor, op, logger)
 	if errors.Is(err, errLFSCommandTooLarge) {
 		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
 	}
@@ -129,78 +128,19 @@ func lfsTransferError(ctx context.Context, err error) error {
 	return err
 }
 
-// processCommands runs the transfer processor's command loop.
-//
-// The processor reads the argument of a "version" command without checking
-// that one was sent (`len(msgs) > 0 && msgs[1]`), so a bare "version" panics
-// the loop. That happens right after the command packet is read, before the
-// processor writes anything or reads further, so the stream is still in step:
-// answer the way the guard means to (400 "unknown version") and carry on with
-// the next command. Any other panic is not ours to swallow.
-func processCommands(p *transfer.Processor, handler *transfer.Pktline, op string) error {
-	for {
-		resume, err := processCommandsOnce(p, handler, op)
-		if !resume {
-			return err
-		}
-	}
-}
-
-func processCommandsOnce(p *transfer.Processor, handler *transfer.Pktline, op string) (resume bool, err error) {
+// processCommands runs the transfer processor's command loop. A panic in it
+// ends the session with an error rather than the process: the processor
+// trusts its input in places, for example it reads the argument of a
+// "version" command without checking that one was sent. The panic is
+// logged with its stack, which the session's error does not carry.
+func processCommands(p *transfer.Processor, op string, logger *log.Logger) (err error) {
 	defer func() {
-		r := recover()
-		if r == nil {
-			return
-		}
-		if !isBareVersionPanic(r) {
-			panic(r)
-		}
-		if err = handler.SendError(transfer.StatusBadRequest, "unknown version"); err == nil {
-			resume = true
+		if r := recover(); r != nil {
+			logger.Error("lfs transfer command processor panicked", "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("lfs transfer: command processor panicked: %v", r)
 		}
 	}()
-	return false, p.ProcessCommands(op)
-}
-
-// processCommandsFunc is the function whose own unguarded index panics on a
-// bare "version" command.
-//
-// isBareVersionPanic relies on msgs[1] being the only runtime error
-// ProcessCommands can raise in its own frame. Re-check that against
-// ProcessCommands on every bump of github.com/charmbracelet/git-lfs-transfer
-// in go.mod: a second unguarded index or dereference there would be answered
-// as a bare version.
-const processCommandsFunc = "github.com/charmbracelet/git-lfs-transfer/transfer.(*Processor).ProcessCommands"
-
-// isBareVersionPanic reports whether r is the processor indexing past the
-// single field of a bare "version" command. It must be called from the
-// deferred function that recovered r, while the panicking frames are still on
-// the stack: the runtime error has to be raised in ProcessCommands itself,
-// not in a backend method it called. ProcessCommands has one unguarded index
-// (msgs[1] for "version") and dereferences nothing that can be nil, so a
-// runtime error raised in its own frame is that index. The runtime's message
-// text is not matched: it is not part of any API.
-func isBareVersionPanic(r any) bool {
-	if _, ok := r.(runtime.Error); !ok {
-		return false
-	}
-	pcs := make([]uintptr, 32)
-	frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
-	// Skip this function and the deferred one, up to the runtime's panic
-	// frames; the first frame past those is where the panic was raised.
-	inRuntime := false
-	for {
-		frame, more := frames.Next()
-		switch {
-		case strings.HasPrefix(frame.Function, "runtime."):
-			inRuntime = true
-		case inRuntime:
-			return frame.Function == processCommandsFunc
-		}
-		if !more {
-			return false
-		}
-	}
+	return p.ProcessCommands(op)
 }
 
 // Batch implements transfer.Backend.

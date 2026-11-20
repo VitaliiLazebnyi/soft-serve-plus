@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
@@ -10,7 +11,16 @@ import (
 // RepositoryStore is an interface for managing repositories.
 type RepositoryStore interface {
 	GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error)
+	// GetRepoWithCollabByName is GetRepoByName that also returns, in the
+	// same query, the access level of userID's collaborator row on the
+	// repository, with ok false when userID has none.
+	GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (_ models.Repo, level access.AccessLevel, ok bool, _ error)
 	GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
+	// GetRepoByIDForUpdate is GetRepoByID that also locks the row until the
+	// transaction ends, on Postgres, as GetRepoByNameForUpdate does. It
+	// waits for a transaction that holds the row's lock to end, so it reads
+	// the row as that transaction leaves it.
+	GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
 	// GetRepoByNameForUpdate is GetRepoByName that also locks the row until
 	// the transaction ends, on Postgres, with FOR UPDATE: the only row lock
 	// that also holds off the key-share lock a foreign key check takes, so
@@ -41,18 +51,14 @@ type RepositoryStore interface {
 	DeleteRepoByName(ctx context.Context, h db.Handler, name string) error
 	SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error
 
-	GetRepoProjectNameByName(ctx context.Context, h db.Handler, name string) (string, error)
 	SetRepoProjectNameByName(ctx context.Context, h db.Handler, name string, projectName string) error
-	GetRepoDescriptionByName(ctx context.Context, h db.Handler, name string) (string, error)
 	SetRepoDescriptionByName(ctx context.Context, h db.Handler, name string, description string) error
-	GetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string, isPrivate bool) error
-	GetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string, isHidden bool) error
-	GetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string) (bool, error)
 	SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string, isMirror bool) error
-	// SetRepoMirrorSyncByName records the outcome of a mirror sync:
-	// syncErr is the error of one that failed, and empty for one that
-	// succeeded, which also sets the time of the last sync to now.
-	SetRepoMirrorSyncByName(ctx context.Context, h db.Handler, name string, syncErr string) error
+	// SetRepoMirrorSyncByID records the outcome of a mirror sync of the
+	// repository id: syncErr is the error of one that failed, and empty for
+	// one that succeeded, which also sets the time of the last sync to now.
+	// No such repository is db.ErrRecordNotFound.
+	SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64, syncErr string) error
 }

@@ -364,9 +364,9 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	}
 	isMirror := func(name string) bool {
 		t.Helper()
-		m, err := be.IsMirror(ctx, name)
+		r, err := be.Repository(ctx, name)
 		is.NoErr(err)
-		return m
+		return r.IsMirror()
 	}
 
 	const sshRemote = "ssh://git@127.0.0.1:1/x.git"
@@ -466,9 +466,9 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 
 	close(release)
 	is.NoErr(<-done)
-	m, err := be.IsMirror(ctx, "slow")
+	slow, err := be.Repository(ctx, "slow")
 	is.NoErr(err)
-	is.True(m)
+	is.True(slow.IsMirror())
 }
 
 // TestImportRepositoryDisabled verifies that when the installed git is too
@@ -520,37 +520,25 @@ func TestImportRepositoryDisabled(t *testing.T) {
 	}
 }
 
-// TestImportGateRetriesUnreadableVersion verifies that a failure to read
-// git's version closes the gate only until the next check, while a version
-// that was read is cached.
-func TestImportGateRetriesUnreadableVersion(t *testing.T) {
+// TestImportGateChecksOnce verifies that git's version is read once per
+// backend, whatever the outcome: a version that could not be read keeps
+// imports off until restart.
+func TestImportGateChecksOnce(t *testing.T) {
 	is := is.New(t)
 	var calls int
-	var err error
-	version := git.Version{Major: 2, Minor: 45}
+	err := errors.New("fork/exec git: resource temporarily unavailable")
 	orig := binVersion
 	binVersion = func() (git.Version, error) {
 		calls++
-		return version, err
+		return git.Version{Major: 2, Minor: 45}, err
 	}
 	t.Cleanup(func() { binVersion = orig })
 
 	be, _ := newTestBackend(t)
-
-	err = errors.New("fork/exec git: resource temporarily unavailable")
 	is.True(be.ImportsDisabledReason() != "")
-	is.True(be.ImportsDisabledReason() != "")
-	is.Equal(calls, 2) // a failed read is not cached
-
 	err = nil
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(calls, 3) // a successful read is
-
-	// Once read, a later failure to run git does not matter.
-	err = errors.New("exec: git: not found")
-	is.Equal(be.ImportsDisabledReason(), "")
-	is.Equal(calls, 3)
+	is.True(be.ImportsDisabledReason() != "")
+	is.Equal(calls, 1)
 }
 
 // TestImportRefusesSSHLFSEndpoint verifies that an import asking for LFS

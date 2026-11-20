@@ -19,7 +19,8 @@ func TestRecordMirrorSyncCapsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := seedCreate(be, ctx, "m", admin, proto.RepositoryOptions{Mirror: true}); err != nil {
+	m, err := seedCreate(be, ctx, "m", admin, proto.RepositoryOptions{Mirror: true})
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,7 +32,7 @@ func TestRecordMirrorSyncCapsError(t *testing.T) {
 		{"not utf-8", "\x00" + strings.Repeat("\xffa", maxMirrorErrorLen)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := be.RecordMirrorSync(ctx, "m", errors.New(tc.msg)); err != nil {
+			if err := be.RecordMirrorSync(ctx, m, errors.New(tc.msg)); err != nil {
 				t.Fatal(err)
 			}
 			st, err := be.MirrorSyncStatus(ctx, "m")

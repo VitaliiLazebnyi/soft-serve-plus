@@ -254,7 +254,7 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 	_, err = s.GetWebhookDeliveryByID(ctx, dbx, other, okID)
 	is.True(errors.Is(err, db.ErrRecordNotFound))
 
-	all, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
+	all, err := allDeliveries(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(all), 2)
 
@@ -264,10 +264,10 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 
 	// Deleting a webhook deletes its deliveries; the other webhook's stay.
 	is.NoErr(s.DeleteWebhookForRepoByID(ctx, dbx, 7, hook))
-	all, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
+	all, err = allDeliveries(ctx, dbx, hook)
 	is.NoErr(err)
 	is.Equal(len(all), 0)
-	all, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, other)
+	all, err = allDeliveries(ctx, dbx, other)
 	is.NoErr(err)
 	is.Equal(len(all), 1)
 }
@@ -312,7 +312,6 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	checks["CreateWebhookEvents"] = s.CreateWebhookEvents(ctx, dbx, id, []int{4})
 	checks["DeleteWebhookEventsByID"] = s.DeleteWebhookEventsByID(ctx, dbx, id, []int64{1})
 	_, checks["GetWebhookDeliveryByID"] = s.GetWebhookDeliveryByID(ctx, dbx, id, did)
-	_, checks["GetWebhookDeliveriesByWebhookID"] = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	_, checks["ListWebhookDeliveriesByWebhookID"] = s.ListWebhookDeliveriesByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookDelivery"] = s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
 		ID:            uuid.New(),
@@ -443,7 +442,7 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 		t.Helper()
 		list, err := s.ListWebhookDeliveriesByWebhookID(ctx, dbx, hook)
 		is.NoErr(err)
-		all, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
+		all, err := allDeliveries(ctx, dbx, hook)
 		is.NoErr(err)
 		for _, got := range [][]models.WebhookDelivery{list, all} {
 			ids := make([]uuid.UUID, len(got))
@@ -472,9 +471,9 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 	check()
 }
 
-// The delivery listings are bounded: past maxListedWebhookDeliveries rows,
-// as when pruning has fallen behind, they return the most recent ones,
-// oldest first, and leave the older ones out.
+// The delivery listing is bounded: past maxListedWebhookDeliveries rows,
+// as when pruning has fallen behind, it returns the most recent ones,
+// oldest first, and leaves the older ones out.
 func TestWebhookDeliveryListingsAreLimited(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
@@ -500,15 +499,11 @@ func TestWebhookDeliveryListingsAreLimited(t *testing.T) {
 
 	list, err := s.ListWebhookDeliveriesByWebhookID(ctx, dbx, hook)
 	is.NoErr(err)
-	all, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
-	is.NoErr(err)
-	for _, got := range [][]models.WebhookDelivery{list, all} {
-		gotIDs := make([]uuid.UUID, len(got))
-		for i, d := range got {
-			gotIDs[i] = d.ID
-		}
-		is.Equal(gotIDs, want)
+	gotIDs := make([]uuid.UUID, len(list))
+	for i, d := range list {
+		gotIDs[i] = d.ID
 	}
+	is.Equal(gotIDs, want)
 }
 
 // Pruning keeps the most recently recorded deliveries of one webhook and
@@ -555,7 +550,7 @@ func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 
 	keptIDs := func() []uuid.UUID {
 		t.Helper()
-		all, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, hook)
+		all, err := allDeliveries(ctx, dbx, hook)
 		is.NoErr(err)
 		out := []uuid.UUID{}
 		for _, d := range all {
@@ -567,7 +562,7 @@ func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 	is.NoErr(s.PruneWebhookDeliveries(ctx, dbx, hook, 5))
 	is.Equal(keptIDs(), ids[3:]) // the three recorded first are gone
 
-	others, err := s.GetWebhookDeliveriesByWebhookID(ctx, dbx, other)
+	others, err := allDeliveries(ctx, dbx, other)
 	is.NoErr(err)
 	is.Equal(len(others), 3)
 
@@ -579,7 +574,7 @@ func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 
 	is.NoErr(s.PruneWebhookDeliveries(ctx, dbx, hook, 0))
 	is.Equal(keptIDs(), []uuid.UUID{})
-	others, err = s.GetWebhookDeliveriesByWebhookID(ctx, dbx, other)
+	others, err = allDeliveries(ctx, dbx, other)
 	is.NoErr(err)
 	is.Equal(len(others), 3)
 }
@@ -634,4 +629,11 @@ func TestLockAndCountWebhooks(t *testing.T) {
 	n, err = s.LockAndCountWebhooks(ctx, dbx, 7)
 	is.NoErr(err)
 	is.Equal(n, 3)
+}
+
+// allDeliveries returns every delivery recorded for webhookID, oldest first.
+func allDeliveries(ctx context.Context, dbx *db.DB, webhookID int64) ([]models.WebhookDelivery, error) {
+	var ds []models.WebhookDelivery
+	err := dbx.SelectContext(ctx, &ds, dbx.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq;`), webhookID)
+	return ds, err
 }

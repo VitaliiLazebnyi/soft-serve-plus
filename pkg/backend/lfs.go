@@ -109,7 +109,7 @@ func (d *Backend) SyncRepoLFSObjects(ctx context.Context, repo proto.Repository,
 func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient LFSClient, incremental bool) error {
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	lfsRoot := filepath.Join(d.cfg.DataPath, "lfs", repoID)
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger := d.logger.WithPrefix("lfs")
 
 	r, err := repo.Open()
 	if err != nil {
@@ -139,18 +139,18 @@ func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository
 	start := time.Now()
 	switch {
 	case since == nil:
-		err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, nil)
+		err = d.storeMissingLFSObjects(ctx, repo, r, lfsClient, lfsRoot, tips, nil)
 		fullScan = start
 	case slices.Equal(since, tips):
 		// Nothing changed since the last complete sync.
 		return nil
 	default:
-		err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, since)
+		err = d.storeMissingLFSObjects(ctx, repo, r, lfsClient, lfsRoot, tips, since)
 		var scanErr *lfsScanError
 		if errors.As(err, &scanErr) && ctx.Err() == nil {
 			// For example, an old tip was pruned since the last sync.
 			logger.Warn("scanning the whole repository for lfs objects, scanning the new history failed", "repo", repo.Name(), "err", err)
-			err = storeMissingLFSObjects(ctx, repo, r, d.db, d.store, lfsClient, lfsRoot, tips, nil)
+			err = d.storeMissingLFSObjects(ctx, repo, r, lfsClient, lfsRoot, tips, nil)
 			fullScan = start
 		}
 	}
@@ -254,13 +254,13 @@ func isObjectID(s string) bool {
 	return err == nil
 }
 
+// lfsBatchSize is how many objects one download batch request asks for.
+const lfsBatchSize = 20
+
 // storeMissingLFSObjects stores the missing LFS objects of the pointers
 // reachable from include but not from exclude. Errors of the scan itself are
 // returned as an *lfsScanError.
-func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, dbx *db.DB, datastore store.Store, lfsClient LFSClient, lfsRoot string, include, exclude []string) error {
-	// TODO: support S3 storage
-	strg := storage.NewLocalStorage(lfsRoot)
-
+func (d *Backend) storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.Repository, lfsClient LFSClient, lfsRoot string, include, exclude []string) error {
 	// Cancel the scan when we return early so its goroutines and git
 	// processes don't stay blocked on pointerChan.
 	ctx, cancel := context.WithCancel(ctx)
@@ -270,185 +270,76 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 	errChan := make(chan error, 1)
 	go searchPointerBlobs(ctx, r, include, exclude, pointerChan, errChan)
 
+	s := &lfsSync{
+		ctx:       ctx,
+		repo:      repo,
+		dbx:       d.db,
+		datastore: d.store,
+		client:    lfsClient,
+		// TODO: support S3 storage
+		strg:     storage.NewLocalStorage(lfsRoot),
+		logger:   d.logger.WithPrefix("lfs"),
+		recorded: make(map[string]int64),
+		verified: make(map[string]bool),
+		queued:   make(map[lfsPointerKey]bool),
+		batched:  make(map[string]bool),
+	}
+	return s.run(pointerChan, errChan)
+}
+
+// lfsPointerKey is an LFS pointer's oid and size. Different pointer blobs can
+// share both, for example when one has a trailing line, so pointers are
+// queued once per key. Pointers can also share an oid but not the size, when
+// one of them is malformed; each one is tried, as the first one scanned may
+// be the bad one.
+type lfsPointerKey struct {
+	oid  string
+	size int64
+}
+
+// lfsSync is one run of storeMissingLFSObjects: it checks each pointer the
+// scan finds against storage and the database, and downloads the objects
+// that are missing in batches.
+type lfsSync struct {
+	ctx       context.Context
+	repo      proto.Repository
+	dbx       *db.DB
+	datastore store.Store
+	client    LFSClient
+	strg      storage.Storage
+	logger    *log.Logger
+
 	// recorded holds the recorded sizes of the objects that are already in
 	// the database but to be downloaded. Those only need their content
 	// written, and their record corrected if the size is wrong.
-	recorded := make(map[string]int64)
+	recorded map[string]int64
 	// verified caches whether the file on disk of an oid holds the object,
 	// so each one is hashed at most once per sync.
-	verified := make(map[string]bool)
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	verified map[string]bool
+	// unavailable counts the objects the remote could not provide.
+	unavailable int
 
-	// isObject reports whether the file on disk of oid is a regular file of
-	// size bytes that holds the object; one that can't be read is not. It
-	// is only checked when its size or its record disagrees with a pointer,
-	// as hashing every object on every sync would read all of them.
-	isObject := func(oid string, size int64) bool {
-		if ok, checked := verified[oid]; checked {
-			return ok
-		}
-		ok := lfs.HasObject(strg, oid, size)
-		verified[oid] = ok
-		return ok
-	}
-	var unavailable int
-	objectFailed := func(p lfs.Pointer, err error) {
-		logger.Warn("skipping lfs object", "repo", repo.Name(), "oid", p.Oid, "err", err)
-		unavailable++
-	}
+	// queued holds the pointers already queued for download.
+	queued map[lfsPointerKey]bool
+	// batch is the next download batch, and batched the oids in it. The
+	// download callback expects each oid once per batch, so a pointer whose
+	// oid is already in the batch waits in deferred for a later one.
+	batch, deferred []lfs.Pointer
+	batched         map[string]bool
+}
 
-	download := func(pointers []lfs.Pointer) error {
-		pending := make(map[string]lfs.Pointer, len(pointers))
-		for _, p := range pointers {
-			pending[p.Oid] = p
-		}
-
-		if err := lfsClient.Download(ctx, pointers, func(got lfs.Pointer, content io.ReadCloser, objectError error) error {
-			if content != nil {
-				defer content.Close() //nolint: errcheck
-			}
-
-			// The pointer comes from the remote's response. Only take
-			// objects we asked for, and go by our own pointer from then on.
-			p, ok := pending[got.Oid]
-			if !got.IsValid() || !ok {
-				logger.Warn("ignoring lfs object that was not requested", "repo", repo.Name(), "oid", got.Oid)
-				return nil
-			}
-			delete(pending, got.Oid)
-
-			if objectError != nil {
-				objectFailed(p, objectError)
-				return nil
-			}
-
-			// StoreObject streams the object to a temporary file outside of
-			// any database transaction, so a slow download doesn't hold the
-			// write lock, verifies it, and records it. If recording fails,
-			// the object stays on disk and the next sync records it.
-			err := lfs.StoreObject(ctx, strg, dbx, datastore, repo.ID(), p.Oid, p.Size, content)
-			if errors.Is(err, lfs.ErrObjectSizeMismatch) || errors.Is(err, lfs.ErrObjectOidMismatch) {
-				objectFailed(p, fmt.Errorf("content does not match: %w", err))
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-
-			verified[p.Oid] = true
-
-			if size, ok := recorded[p.Oid]; ok && size != p.Size {
-				// Older versions could record the size of a malformed
-				// pointer; the content now proves this one right.
-				return datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), p.Oid, p.Size)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		for _, p := range pending {
-			objectFailed(p, errors.New("not returned by the remote"))
-		}
-		return nil
-	}
-
-	// missing reports whether the object of pointer has to be downloaded.
-	// An object already on disk is recorded if it isn't yet.
-	missing := func(pointer lfs.Pointer) (bool, error) {
-		obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)
-		if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
-			return false, err
-		}
-
-		// A file of the wrong size, such as one an interrupted download left
-		// behind, counts as missing and is downloaded again.
-		name := path.Join("objects", pointer.RelativePath())
-		fi, err := strg.Stat(name)
-		switch {
-		case err == nil && fi.Size() == pointer.Size && (obj.ID == 0 || obj.Size == pointer.Size):
-			// The object is on disk, make sure it's recorded.
-			if obj.ID == 0 {
-				if err := recordLFSObject(ctx, dbx, datastore, repo.ID(), pointer); err != nil {
-					return false, err
-				}
-			}
-			return false, nil
-		case err == nil && fi.Size() == pointer.Size:
-			// The object is on disk, but recorded with another size, which
-			// older versions could take from a malformed pointer. If the
-			// file is the object, its size is the right one.
-			if isObject(pointer.Oid, fi.Size()) {
-				logger.Info("correcting the recorded size of lfs object", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "recorded", obj.Size)
-				return false, datastore.UpdateLFSObjectSize(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size)
-			}
-		case err == nil && obj.ID != 0 && obj.Size == fi.Size():
-			// The file and its record agree on another size. If the file is
-			// the object, this pointer is malformed, and downloading it
-			// would only fail its verification on every sync. Older versions
-			// could store and record a file cut short, though, which this
-			// pointer may be the only right one for.
-			if isObject(pointer.Oid, fi.Size()) {
-				logger.Debug("ignoring lfs pointer with the wrong size", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "stored", obj.Size)
-				return false, nil
-			}
-		case err != nil && !errors.Is(err, fs.ErrNotExist):
-			return false, err
-		}
-
-		if obj.ID != 0 {
-			recorded[pointer.Oid] = obj.Size
-		}
-		return true, nil
-	}
-
-	// Different pointer blobs can share an oid and size, for example when
-	// one has a trailing line, so pointers are queued once per oid and size.
-	// Pointers can also share an oid but not the size, when one of them is
-	// malformed; each one is tried, as the first one scanned may be the bad
-	// one.
-	type pointerKey struct {
-		oid  string
-		size int64
-	}
-	queued := make(map[pointerKey]bool)
-
-	// The download callback expects each oid once per batch, so a pointer
-	// whose oid is already in the batch waits in deferred for a later one.
-	var batch, deferred []lfs.Pointer
-	batched := make(map[string]bool)
-	flush := func() error {
-		if len(batch) == 0 {
-			return nil
-		}
-		if err := download(batch); err != nil {
-			return err
-		}
-		batch = nil
-		clear(batched)
-		return nil
-	}
-	queue := func(pointer lfs.Pointer) error {
-		if batched[pointer.Oid] {
-			deferred = append(deferred, pointer)
-			return nil
-		}
-		batched[pointer.Oid] = true
-		batch = append(batch, pointer)
-		// Limit batch requests to 20 objects
-		if len(batch) >= 20 {
-			return flush()
-		}
-		return nil
-	}
-
-	for pointer := range pointerChan {
-		key := pointerKey{pointer.Oid, pointer.Size}
-		if queued[key] {
+// run checks each pointer from pointers, the scan's output, downloads the
+// missing objects, and returns the scan's error from errs as an
+// *lfsScanError, or an *lfsObjectsUnavailableError if some objects could
+// not be had.
+func (s *lfsSync) run(pointers <-chan lfs.PointerBlob, errs <-chan error) error {
+	for pointer := range pointers {
+		key := lfsPointerKey{pointer.Oid, pointer.Size}
+		if s.queued[key] {
 			continue
 		}
 
-		need, err := missing(pointer.Pointer)
+		need, err := s.missing(pointer.Pointer)
 		if err != nil {
 			return err
 		}
@@ -456,43 +347,199 @@ func storeMissingLFSObjects(ctx context.Context, repo proto.Repository, r *git.R
 			continue
 		}
 
-		queued[key] = true
-		if err := queue(pointer.Pointer); err != nil {
+		s.queued[key] = true
+		if err := s.queue(pointer.Pointer); err != nil {
 			return err
 		}
 	}
 
-	if err, ok := <-errChan; ok {
+	if err, ok := <-errs; ok {
 		return &lfsScanError{err}
 	}
 
 	// Download whatever is left over from the last, partial batch, then the
 	// pointers that shared an oid with another one in their batch. Those
 	// are checked again, as the other pointer may have stored the object.
-	for len(batch) > 0 || len(deferred) > 0 {
-		if err := flush(); err != nil {
+	for len(s.batch) > 0 || len(s.deferred) > 0 {
+		if err := s.flush(); err != nil {
 			return err
 		}
 
-		pointers := deferred
-		deferred = nil
-		for _, pointer := range pointers {
-			need, err := missing(pointer)
+		deferred := s.deferred
+		s.deferred = nil
+		for _, pointer := range deferred {
+			need, err := s.missing(pointer)
 			if err != nil {
 				return err
 			}
 			if need {
-				if err := queue(pointer); err != nil {
+				if err := s.queue(pointer); err != nil {
 					return err
 				}
 			}
 		}
 	}
 
-	if unavailable > 0 {
-		return &lfsObjectsUnavailableError{count: unavailable}
+	if s.unavailable > 0 {
+		return &lfsObjectsUnavailableError{count: s.unavailable}
+	}
+	return nil
+}
+
+// isObject reports whether the file on disk of oid is a regular file of
+// size bytes that holds the object; one that can't be read is not. It is
+// only checked when its size or its record disagrees with a pointer, as
+// hashing every object on every sync would read all of them.
+func (s *lfsSync) isObject(oid string, size int64) bool {
+	if ok, checked := s.verified[oid]; checked {
+		return ok
+	}
+	ok := lfs.HasObject(s.strg, oid, size)
+	s.verified[oid] = ok
+	return ok
+}
+
+// objectFailed logs and counts an object the remote could not provide.
+func (s *lfsSync) objectFailed(p lfs.Pointer, err error) {
+	s.logger.Warn("skipping lfs object", "repo", s.repo.Name(), "oid", p.Oid, "err", err)
+	s.unavailable++
+}
+
+// missing reports whether the object of pointer has to be downloaded. An
+// object already on disk is recorded if it isn't yet.
+func (s *lfsSync) missing(pointer lfs.Pointer) (bool, error) {
+	ctx, repo := s.ctx, s.repo
+	obj, err := s.datastore.GetLFSObjectByOid(ctx, s.dbx, repo.ID(), pointer.Oid)
+	if err != nil && !errors.Is(err, db.ErrRecordNotFound) {
+		return false, err
 	}
 
+	// A file of the wrong size, such as one an interrupted download left
+	// behind, counts as missing and is downloaded again.
+	name := path.Join("objects", pointer.RelativePath())
+	fi, err := s.strg.Stat(name)
+	switch {
+	case err == nil && fi.Size() == pointer.Size && (obj.ID == 0 || obj.Size == pointer.Size):
+		// The object is on disk, make sure it's recorded.
+		if obj.ID == 0 {
+			if err := recordLFSObject(ctx, s.dbx, s.datastore, repo.ID(), pointer); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	case err == nil && fi.Size() == pointer.Size:
+		// The object is on disk, but recorded with another size, which
+		// older versions could take from a malformed pointer. If the file
+		// is the object, its size is the right one.
+		if s.isObject(pointer.Oid, fi.Size()) {
+			s.logger.Info("correcting the recorded size of lfs object", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "recorded", obj.Size)
+			return false, s.datastore.UpdateLFSObjectSize(ctx, s.dbx, repo.ID(), pointer.Oid, pointer.Size)
+		}
+	case err == nil && obj.ID != 0 && obj.Size == fi.Size():
+		// The file and its record agree on another size. If the file is the
+		// object, this pointer is malformed, and downloading it would only
+		// fail its verification on every sync. Older versions could store
+		// and record a file cut short, though, which this pointer may be
+		// the only right one for.
+		if s.isObject(pointer.Oid, fi.Size()) {
+			s.logger.Debug("ignoring lfs pointer with the wrong size", "repo", repo.Name(), "oid", pointer.Oid, "size", pointer.Size, "stored", obj.Size)
+			return false, nil
+		}
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return false, err
+	}
+
+	if obj.ID != 0 {
+		s.recorded[pointer.Oid] = obj.Size
+	}
+	return true, nil
+}
+
+// queue adds pointer to the next batch, or defers it when its oid is in the
+// batch already, and downloads the batch once it is full.
+func (s *lfsSync) queue(pointer lfs.Pointer) error {
+	if s.batched[pointer.Oid] {
+		s.deferred = append(s.deferred, pointer)
+		return nil
+	}
+	s.batched[pointer.Oid] = true
+	s.batch = append(s.batch, pointer)
+	if len(s.batch) >= lfsBatchSize {
+		return s.flush()
+	}
+	return nil
+}
+
+// flush downloads the batch, if any, and starts a new one.
+func (s *lfsSync) flush() error {
+	if len(s.batch) == 0 {
+		return nil
+	}
+	if err := s.download(s.batch); err != nil {
+		return err
+	}
+	s.batch = nil
+	clear(s.batched)
+	return nil
+}
+
+// download downloads and stores the objects of pointers, one batch.
+func (s *lfsSync) download(pointers []lfs.Pointer) error {
+	pending := make(map[string]lfs.Pointer, len(pointers))
+	for _, p := range pointers {
+		pending[p.Oid] = p
+	}
+
+	if err := s.client.Download(s.ctx, pointers, func(got lfs.Pointer, content io.ReadCloser, objectError error) error {
+		if content != nil {
+			defer content.Close() //nolint: errcheck
+		}
+
+		// The pointer comes from the remote's response. Only take objects
+		// we asked for, and go by our own pointer from then on.
+		p, ok := pending[got.Oid]
+		if !got.IsValid() || !ok {
+			s.logger.Warn("ignoring lfs object that was not requested", "repo", s.repo.Name(), "oid", got.Oid)
+			return nil
+		}
+		delete(pending, got.Oid)
+
+		if objectError != nil {
+			s.objectFailed(p, objectError)
+			return nil
+		}
+		return s.store(p, content)
+	}); err != nil {
+		return err
+	}
+
+	for _, p := range pending {
+		s.objectFailed(p, errors.New("not returned by the remote"))
+	}
+	return nil
+}
+
+// store stores the downloaded object of p from content. StoreObject streams
+// the object to a temporary file outside of any database transaction, so a
+// slow download doesn't hold the write lock, verifies it, and records it. If
+// recording fails, the object stays on disk and the next sync records it.
+func (s *lfsSync) store(p lfs.Pointer, content io.Reader) error {
+	err := lfs.StoreObject(s.ctx, s.strg, s.dbx, s.datastore, s.repo.ID(), p.Oid, p.Size, content)
+	if errors.Is(err, lfs.ErrObjectSizeMismatch) || errors.Is(err, lfs.ErrObjectOidMismatch) {
+		s.objectFailed(p, fmt.Errorf("content does not match: %w", err))
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	s.verified[p.Oid] = true
+
+	if size, ok := s.recorded[p.Oid]; ok && size != p.Size {
+		// Older versions could record the size of a malformed pointer; the
+		// content now proves this one right.
+		return s.datastore.UpdateLFSObjectSize(s.ctx, s.dbx, s.repo.ID(), p.Oid, p.Size)
+	}
 	return nil
 }
 

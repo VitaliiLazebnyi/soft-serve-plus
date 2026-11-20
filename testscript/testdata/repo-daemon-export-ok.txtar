@@ -1,0 +1,21 @@
+# vi: set ft=conf
+
+# The server no longer writes git-daemon-export-ok, and removes at start-up
+# the ones older versions wrote, so a stock git daemon pointed at the data
+# directory does not keep exporting a repository made private since.
+
+exec soft serve &
+ensureserverrunning SSH_PORT
+soft repo create repo1
+! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
+stopserver
+
+# as an older version left it
+mkfile $DATA_PATH/repos/repo1.git/git-daemon-export-ok ''
+exec soft serve &
+ensureserverrunning SSH_PORT
+! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
+soft repo private repo1 true
+! exists $DATA_PATH/repos/repo1.git/git-daemon-export-ok
+
+[windows] stopserver
