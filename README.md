@@ -1590,6 +1590,21 @@ example. Global hooks run only when they are executable. Windows has no execute
 bit, so there every global hook file is run with `sh`, the one that comes with
 Git for Windows, the way git runs its own hooks.
 
+Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
+`GIT_DIR` and `GIT_PUSH_OPTION_*`), they get:
+
+- `SOFT_SERVE_REPO_NAME`: the repository's name;
+- `SOFT_SERVE_REPO_PATH`: its directory;
+- `SOFT_SERVE_USERNAME`: the account that pushed, unset for an anonymous push;
+- `SOFT_SERVE_PUBLIC_KEY`: over SSH, the key the pusher signed in with (empty
+  for a keyless session);
+- `SOFT_SERVE_DATA_PATH`, `SOFT_SERVE_CONFIG_LOCATION` and the server's other
+  settings as `SOFT_SERVE_*` variables (see [Server Configuration](#server-configuration)),
+  the database data source `SOFT_SERVE_DB_DATA_SOURCE` included.
+
+No other git command the server runs, such as a fetch or a clone over any of
+SSH, HTTP or `git://`, gets these variables.
+
 Here's an example of sending a message after receiving a push event. Create an
 executable file `<data path>/hooks/update`:
 

@@ -31,64 +31,64 @@ func LogPath(cfg *config.Config) string {
 	return filepath.Join(cfg.DataPath, "log", "hooks.log")
 }
 
-// Transport is the server a git service runs for. It decides which request
+// Transport is the server a push came to. It decides which request
 // variables Env sets.
 type Transport int
 
-// The transports.
+// The transports a push can come over.
 const (
 	// TransportSSH is the SSH server.
 	TransportSSH Transport = iota + 1
 	// TransportHTTP is the HTTP server.
 	TransportHTTP
-	// TransportDaemon is the git:// daemon.
-	TransportDaemon
 )
 
-// Request is what Env needs to know about the request a git service runs
-// for.
+// Request is what Env needs to know about the push a receive-pack runs for.
 type Request struct {
-	// Transport is the server the request came to.
+	// Transport is the server the push came to.
 	Transport Transport
 	// Repo is the repository name, sanitized.
 	Repo string
-	// User is the account making the request, or nil.
+	// User is the account pushing, or nil.
 	User proto.User
 	// PublicKey is the key an SSH session authenticated with, or nil.
 	PublicKey gossh.PublicKey
-	// Host is the host a git:// client named in its request.
-	Host string
 	// Protocol is the GIT_PROTOCOL value to pass to git, or "".
 	Protocol string
 }
 
-// Env returns the environment a git service and the hooks it runs get for
-// req, on top of the server's own (see pkg/git's serviceEnv):
+// Env returns the environment git receive-pack and the hooks it runs get
+// for req, on top of the server's own (see pkg/git's serviceEnv):
 //
 //   - SOFT_SERVE_REPO_NAME, SOFT_SERVE_REPO_PATH and SOFT_SERVE_LOG_PATH;
 //   - SOFT_SERVE_PUBLIC_KEY over SSH, empty for a keyless session;
-//   - SOFT_SERVE_HOST over git://;
 //   - SOFT_SERVE_USERNAME when there is a user;
 //   - the server config, from cfg.Environ;
 //   - GIT_PROTOCOL when req has one.
+//
+// Only receive-pack runs hooks. Every other git service gets ProtocolEnv,
+// so a fetch, including an anonymous one, never carries the server config.
 func Env(cfg *config.Config, req Request) []string {
 	env := []string{
 		"SOFT_SERVE_REPO_NAME=" + req.Repo,
 		"SOFT_SERVE_REPO_PATH=" + RepoPath(cfg, req.Repo),
 		"SOFT_SERVE_LOG_PATH=" + LogPath(cfg),
 	}
-	switch req.Transport {
-	case TransportSSH:
+	if req.Transport == TransportSSH {
 		env = append(env, "SOFT_SERVE_PUBLIC_KEY="+sshutils.MarshalAuthorizedKey(req.PublicKey))
-	case TransportDaemon:
-		env = append(env, "SOFT_SERVE_HOST="+req.Host)
 	}
 	if req.User != nil {
 		env = append(env, "SOFT_SERVE_USERNAME="+req.User.Username())
 	}
 	env = append(env, cfg.Environ()...)
-	if req.Protocol != "" {
-		env = append(env, "GIT_PROTOCOL="+req.Protocol)
+	return append(env, ProtocolEnv(req.Protocol)...)
+}
+
+// ProtocolEnv returns the environment of a git service that runs no hooks:
+// GIT_PROTOCOL, when protocol is not empty, and nothing else.
+func ProtocolEnv(protocol string) []string {
+	if protocol == "" {
+		return nil
 	}
-	return env
+	return []string{"GIT_PROTOCOL=" + protocol}
 }

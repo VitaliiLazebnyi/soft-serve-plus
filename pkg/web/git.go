@@ -841,12 +841,16 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		cmd.Args = append(cmd.Args, "--stateless-rpc")
 	}
 
-	cmd.Env = hooks.Env(cfg, hooks.Request{
-		Transport: hooks.TransportHTTP,
-		Repo:      repoName,
-		User:      gr.user,
-		Protocol:  version,
-	})
+	// Only receive-pack runs hooks, so only it gets their environment.
+	cmd.Env = hooks.ProtocolEnv(version)
+	if service == git.ReceivePackService {
+		cmd.Env = hooks.Env(cfg, hooks.Request{
+			Transport: hooks.TransportHTTP,
+			Repo:      repoName,
+			User:      gr.user,
+			Protocol:  version,
+		})
+	}
 
 	// The service waits for its read of the body to end, so the body is not
 	// read after this handler returns or while the gzip reader is closed.
@@ -878,7 +882,6 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 
 func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
-	cfg := s.cfg
 	logger := log.FromContext(ctx)
 	dir, repoName, file, service := gr.dir, gr.name, gr.file, gr.service
 	protocol := r.Header.Get("Git-Protocol")
@@ -917,12 +920,8 @@ func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitR
 		Args:   []string{"--stateless-rpc", "--advertise-refs"},
 	}
 
-	cmd.Env = hooks.Env(cfg, hooks.Request{
-		Transport: hooks.TransportHTTP,
-		Repo:      repoName,
-		User:      gr.user,
-		Protocol:  protocol,
-	})
+	// A ref advertisement runs no hooks, for receive-pack either.
+	cmd.Env = hooks.ProtocolEnv(protocol)
 
 	if err := service.Handler(ctx, cmd); err != nil {
 		if refs.started {
