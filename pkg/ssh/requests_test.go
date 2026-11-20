@@ -30,6 +30,44 @@ func allStacks() string {
 	}
 }
 
+// goroutineBlocked reports whether one goroutine waits in state, as its
+// stack header names it (such as "[sync.Cond.Wait"), with every one of
+// frames in its stack.
+func goroutineBlocked(state string, frames ...string) bool {
+	for _, g := range strings.Split(allStacks(), "\n\n") {
+		header, stack, _ := strings.Cut(g, "\n")
+		if !strings.Contains(header, state) {
+			continue
+		}
+		all := true
+		for _, f := range frames {
+			if !strings.Contains(stack, f) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// goroutinesWith returns how many goroutines have frame in their stack.
+func goroutinesWith(frame string) int {
+	n := 0
+	for _, g := range strings.Split(allStacks(), "\n\n") {
+		if strings.Contains(g, frame) {
+			n++
+		}
+	}
+	return n
+}
+
+// limitHandlersFrame is the stack frame of a session handler that
+// limitHandlers runs, from the count of handlers up to its decrement.
+const limitHandlersFrame = "github.com/charmbracelet/soft-serve/pkg/ssh.limitHandlers.func1("
+
 // sessionLoopFrame is the stack frame of a charm.land/ssh session request
 // loop.
 const sessionLoopFrame = "charm.land/ssh.(*session).handleRequests("

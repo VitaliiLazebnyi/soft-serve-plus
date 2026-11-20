@@ -46,6 +46,16 @@ func writeManyRefs(t *testing.T, dir string, n int) {
 	}
 }
 
+// copyBlockedOnWindow reports whether the git service's copy of git's output
+// to an SSH session waits for the client to open the channel's window.
+func copyBlockedOnWindow() bool {
+	return goroutineBlocked("[sync.Cond.Wait",
+		"golang.org/x/crypto/ssh.(*window).reserve(",
+		"charm.land/ssh.(*session).Write(",
+		"github.com/charmbracelet/soft-serve/pkg/git.progressWriter.Write(",
+	)
+}
+
 // R32 / SSH-4: a fetch whose channel the client closes while the connection
 // stays open, as interrupting a clone over an OpenSSH ControlMaster
 // connection does, must not keep git running and the session's place under
@@ -83,12 +93,15 @@ func TestSSHFetchChannelClosedFreesSession(t *testing.T) {
 	if err := s.Start("git-upload-pack big"); err != nil {
 		t.Fatal(err)
 	}
-	// Wait for the advertisement to start, then stop reading it and close
-	// the channel, keeping the connection.
+	// Wait for the advertisement to start and for the server's copy of it
+	// to block on the client's full channel window, then close the
+	// channel, keeping the connection.
 	if _, err := stdout.Read(make([]byte, 1)); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
+	waitFor(t, "the advertisement to fill the channel window", func() bool {
+		return copyBlockedOnWindow()
+	})
 	_ = s.Close()
 
 	// The channel's place is freed when it closes, but the command's only
