@@ -49,6 +49,19 @@ func (t *scriptT) Run(_ string, f func(testscript.T)) {
 // the test.
 func runCommandScript(t *testing.T, script string, env map[string]string) (bool, string) {
 	t.Helper()
+	pass, log, panicked := prepareCommandScript(t, script, env)()
+	if panicked != nil {
+		t.Fatalf("script panicked: %v\n%s", panicked, log)
+	}
+	return pass, log
+}
+
+// prepareCommandScript sets script up to run with the harness commands and
+// env, and returns the function that runs it. That function may run on any
+// goroutine: it reports whether the script passed, its log, and what a
+// command panicked with, if one did.
+func prepareCommandScript(t *testing.T, script string, env map[string]string) func() (pass bool, log string, panicked any) {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "cmd.txtar"), []byte(script), 0o600); err != nil {
 		t.Fatal(err)
@@ -62,34 +75,36 @@ func runCommandScript(t *testing.T, script string, env map[string]string) (bool,
 		t.Fatal(err)
 	}
 
-	st := &scriptT{}
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Fatalf("script panicked: %v\n%s", r, st.log.String())
-			}
-		}()
-		testscript.RunT(st, testscript.Params{
-			Dir: dir,
-			Cmds: map[string]func(ts *testscript.TestScript, neg bool, args []string){
-				"readfile":               cmdReadfile,
-				"ensureserverrunning":    cmdEnsureServerRunning,
-				"ensureservernotrunning": cmdEnsureServerNotRunning,
-				"stopserver":             cmdStopserver,
-				"ui":                     cmdUI(signer),
-				"writestderr": func(ts *testscript.TestScript, _ bool, args []string) {
-					_, _ = fmt.Fprint(ts.Stderr(), strings.Join(args, " "))
+	return func() (pass bool, log string, panicked any) {
+		st := &scriptT{}
+		func() {
+			defer func() { panicked = recover() }()
+			testscript.RunT(st, testscript.Params{
+				Dir: dir,
+				Cmds: map[string]func(ts *testscript.TestScript, neg bool, args []string){
+					"readfile":               cmdReadfile,
+					"ensureserverrunning":    cmdEnsureServerRunning,
+					"ensureservernotrunning": cmdEnsureServerNotRunning,
+					"stopserver":             cmdStopserver,
+					"ui":                     cmdUI(signer),
+					"soft":                   cmdSoft("admin", signer),
+					// No key file: no test of these commands gets as far as
+					// authenticating.
+					"git": cmdGit(filepath.Join(dir, "no-key")),
+					"writestderr": func(ts *testscript.TestScript, _ bool, args []string) {
+						_, _ = fmt.Fprint(ts.Stderr(), strings.Join(args, " "))
+					},
 				},
-			},
-			Setup: func(e *testscript.Env) error {
-				for k, v := range env {
-					e.Setenv(k, v)
-				}
-				return nil
-			},
-		})
-	}()
-	return !st.failed, st.log.String()
+				Setup: func(e *testscript.Env) error {
+					for k, v := range env {
+						e.Setenv(k, v)
+					}
+					return nil
+				},
+			})
+		}()
+		return !st.failed, st.log.String(), panicked
+	}
 }
 
 // listeningPort returns the port of a listener that accepts and drops

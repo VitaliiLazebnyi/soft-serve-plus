@@ -64,6 +64,10 @@ func coverDirSet() bool {
 }
 
 func TestMain(m *testing.M) {
+	if limit := os.Getenv(boundedEnv); limit != "" {
+		// A git command a script runs (see execBounded).
+		os.Exit(runBounded(limit, os.Args[1:]))
+	}
 	if os.Getenv("WAITEXIT_CHILD") == "1" {
 		// A process for TestWaitExit that runs until its stdin closes.
 		_, _ = io.Copy(io.Discard, os.Stdin)
@@ -351,27 +355,37 @@ func testEnviron(cfg *config.Config) []string {
 
 func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
-		cli, err := ssh.Dial(
-			"tcp",
-			net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-			&ssh.ClientConfig{
-				User:            user,
-				Auth:            []ssh.AuthMethod{ssh.PublicKeys(keys...)},
-				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			},
-		)
-		ts.Check(err)
-		defer cli.Close() //nolint:errcheck
-
-		sess, err := cli.NewSession()
-		ts.Check(err)
-		defer sess.Close() //nolint:errcheck
-
-		sess.Stdout = ts.Stdout()
-		sess.Stderr = ts.Stderr()
-
-		check(ts, sess.Run(strings.Join(args, " ")), neg)
+		runSoft(ts, neg, args, &ssh.ClientConfig{
+			User:            user,
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(keys...)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		})
 	}
+}
+
+// runSoft runs the soft command args over SSH as config says.
+func runSoft(ts *testscript.TestScript, neg bool, args []string, config *ssh.ClientConfig) {
+	cli, bound, err := dialSSH(ts, config)
+	ts.Check(err)
+	defer cli.Close() //nolint:errcheck
+	defer bound.stop()
+
+	sess, err := cli.NewSession()
+	if err != nil && bound.fired() {
+		failStuck(ts, "soft "+strings.Join(args, " "))
+	}
+	ts.Check(err)
+	defer sess.Close() //nolint:errcheck
+
+	sess.Stdout = ts.Stdout()
+	sess.Stderr = ts.Stderr()
+
+	err = sess.Run(strings.Join(args, " "))
+	bound.stop()
+	if bound.fired() {
+		failStuck(ts, "soft "+strings.Join(args, " "))
+	}
+	check(ts, err, neg)
 }
 
 // cmdKeylessSoft is like cmdSoft, but authenticates with zero public keys,
@@ -386,30 +400,15 @@ func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, ne
 // method"), regardless of BatchMode. golang.org/x/crypto/ssh has no such
 // restriction, so it's used directly here instead of shelling out.
 func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
-	cli, err := ssh.Dial(
-		"tcp",
-		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-		&ssh.ClientConfig{
-			User: "keyless",
-			Auth: []ssh.AuthMethod{
-				ssh.KeyboardInteractive(func(_, _ string, _ []string, _ []bool) ([]string, error) {
-					return nil, nil
-				}),
-			},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	runSoft(ts, neg, args, &ssh.ClientConfig{
+		User: "keyless",
+		Auth: []ssh.AuthMethod{
+			ssh.KeyboardInteractive(func(_, _ string, _ []string, _ []bool) ([]string, error) {
+				return nil, nil
+			}),
 		},
-	)
-	ts.Check(err)
-	defer cli.Close() //nolint:errcheck
-
-	sess, err := cli.NewSession()
-	ts.Check(err)
-	defer sess.Close() //nolint:errcheck
-
-	sess.Stdout = ts.Stdout()
-	sess.Stderr = ts.Stderr()
-
-	check(ts, sess.Run(strings.Join(args, " ")), neg)
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
 }
 
 // uiStep is one step of a ui command: wait for text to show, or type keys.
@@ -529,25 +528,31 @@ func (r *outputRecorder) wait(text string, mark int) error {
 // its text in what the session wrote after the keys of the step before it
 // were typed, so it sees the screen those keys led to. Every failure is
 // returned, so that "! ui" stops at the first one instead of going on with
-// what failed to open.
+// what failed to open; only a session still open after commandTimeout fails
+// the script (see dialSSH).
 func runUI(ts *testscript.TestScript, key ssh.Signer, steps []uiStep, command string) error {
-	cli, err := ssh.Dial(
-		"tcp",
-		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
-		&ssh.ClientConfig{
-			User:            "git",
-			Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		},
-	)
+	cli, bound, err := dialSSH(ts, &ssh.ClientConfig{
+		User:            "git",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck
+	defer bound.stop()
 
+	// failed returns err, from setting up the session, unless the
+	// session failed because the bound closed it: that fails the script.
+	failed := func(err error) error {
+		if bound.fired() {
+			failStuck(ts, "ui "+command)
+		}
+		return err
+	}
 	sess, err := cli.NewSession()
 	if err != nil {
-		return err
+		return failed(err)
 	}
 	defer sess.Close() //nolint:errcheck
 
@@ -562,14 +567,14 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, steps []uiStep, command st
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
-		return err
+		return failed(err)
 	}
 
 	if err := sess.RequestPty("dumb", 40, 80, ssh.TerminalModes{}); err != nil {
-		return err
+		return failed(err)
 	}
 	if err := sess.Start(command); err != nil {
-		return err
+		return failed(err)
 	}
 
 	stepsErr := make(chan error, 1)
@@ -598,7 +603,12 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, steps []uiStep, command st
 
 	err = sess.Wait()
 	rec.end()
-	if stepErr := <-stepsErr; stepErr != nil {
+	stepErr := <-stepsErr
+	bound.stop()
+	if bound.fired() {
+		failStuck(ts, "ui "+command)
+	}
+	if stepErr != nil {
 		return stepErr
 	}
 	return err
@@ -646,11 +656,25 @@ var loopbackClient = &http.Client{
 	},
 }
 
+// sshConfig is the ssh_config git's ssh reads. The servers listen on
+// loopback only, and macOS's ssh, given the name localhost with
+// AddressFamily inet and no ConnectTimeout, waits for ever when its connect
+// fails, instead of reporting the error: under load a connect to loopback
+// can fail (KNOWN_ISSUES item 309), and a script then hung until the test
+// binary timed out. So localhost is dialed at loopback by address, and
+// ConnectTimeout bounds the connect and the wait for the server's banner.
+// ConnectionAttempts makes ssh try a failed connect twice more, about a
+// second apart: only the TCP connect is retried, so nothing that reached
+// the server is sent again.
 var sshConfig = `
+Host localhost
+  HostName ` + loopback + `
 Host *
   UserKnownHostsFile %q
   StrictHostKeyChecking no
   AddressFamily inet
+  ConnectTimeout 120
+  ConnectionAttempts 3
   IdentityAgent none
   IdentitiesOnly yes
   ServerAliveInterval 60
@@ -677,7 +701,7 @@ func cmdGit(key string) func(ts *testscript.TestScript, neg bool, args []string)
 			"-c", "user.email=john@example.com",
 			"-c", "user.name=John Doe",
 		}, args...)
-		check(ts, ts.Exec("git", args...), neg)
+		check(ts, execBounded(ts, "git", args...), neg)
 	}
 }
 

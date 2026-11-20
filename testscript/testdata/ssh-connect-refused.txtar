@@ -1,0 +1,21 @@
+# vi: set ft=conf
+
+# A git command whose SSH connection is refused fails after ssh's three
+# connect attempts, about two seconds. macOS's ssh, given the name
+# localhost with AddressFamily inet and no ConnectTimeout, waits for ever
+# when the connect fails, so on a loaded machine a connect that failed once
+# hung the script until the test binary timed out. The harness's ssh_config
+# dials localhost at 127.0.0.1, sets a ConnectTimeout, and has ssh try a
+# failed connect three times (ConnectionAttempts).
+
+# no server runs yet, so nothing listens on the reserved SSH port
+! git clone ssh://localhost:$SSH_PORT/repo1 repo1
+stderr 'connect to host .* port '$SSH_PORT
+! exists repo1
+
+# so does an LFS locks request, whose git-lfs dials the server with the same
+# ssh, and reports only ssh's exit status
+git init locks
+git -C locks remote add origin ssh://localhost:$SSH_PORT/repo1
+! git -C locks lfs locks
+stderr 'Error while retrieving locks: exit status 255'
