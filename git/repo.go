@@ -229,15 +229,30 @@ func (r *Repository) treeMissing(ref string) bool {
 		return false
 	}
 	isCommit, _ := resolves(ref + "^{commit}")
-	return !isCommit && !r.namesRef(git.CommandOptions{}, ref)
+	return !isCommit && !r.refUnreadable(git.CommandOptions{}, ref)
 }
 
-// namesRef reports whether rev names a ref that exists, such as a branch,
-// whatever its object: "rev-parse --symbolic-full-name" prints the ref's
-// full name for it, and nothing for a raw object ID or an expression such
-// as main~1. A ref whose object cannot be read is then the repository's
-// fault, not a revision the client got wrong. It runs under opts' context
-// and timeout, or r's context.
+// refUnreadable reports whether rev is a ref that exists but whose object
+// git cannot read, which is the repository's fault rather than a revision
+// the client got wrong. That is so when rev names a ref (namesRef) and the
+// ref does not peel ("rev-parse --verify --quiet REV^{}" fails): a ref to a
+// blob, for example a tag on one, peels, and is the client asking for a
+// tree or commit where there is none. A raw object ID that names nothing
+// and an unknown name are no refs. It runs under opts' context and timeout,
+// or r's context.
+func (r *Repository) refUnreadable(opts git.CommandOptions, rev string) bool {
+	if !r.namesRef(opts, rev) {
+		return false
+	}
+	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{}").
+		AddOptions(r.withCtx(opts))
+	return cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path) != nil
+}
+
+// namesRef reports whether rev names a ref that exists, such as a branch
+// or a detached HEAD, whatever its object: "rev-parse --symbolic-full-name"
+// prints the ref's full name for it, or HEAD for a detached HEAD, and
+// nothing for a raw object ID or an expression such as main~1.
 func (r *Repository) namesRef(opts git.CommandOptions, rev string) bool {
 	var out bytes.Buffer
 	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", rev).
@@ -245,7 +260,8 @@ func (r *Repository) namesRef(opts git.CommandOptions, rev string) bool {
 	if err := cmd.RunInDirPipeline(&out, io.Discard, r.Path); err != nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(out.String()), "refs/")
+	name := strings.TrimSpace(out.String())
+	return strings.HasPrefix(name, "refs/") || name == "HEAD"
 }
 
 // LsTree returns the root tree of the given reference. It only resolves

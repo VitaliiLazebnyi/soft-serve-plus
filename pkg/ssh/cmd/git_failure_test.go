@@ -170,6 +170,9 @@ func TestOpenFailureIsServerFailure(t *testing.T) {
 			{"commit", "r", "main"},
 			{"blob", "r", "f"},
 			{"info", "r"},
+			{"branch", "default", "r"},
+			{"branch", "delete", "r", "other"},
+			{"tag", "delete", "r", "v1"},
 		} {
 			g.logs.reset()
 			g.wantGitFailed(t, "open repository", []string{g.dir, "does not exist"}, args...)
@@ -259,5 +262,47 @@ func TestBranchDefaultFromDetachedHEAD(t *testing.T) {
 	}
 	if n := g.logs.count("WARN"); n != 1 || g.logs.count("ERRO") != 0 {
 		t.Errorf("want the old default branch read logged once at Warn, log:\n%s", g.logs.String())
+	}
+}
+
+// A tag on a blob, lightweight or annotated, names no tree or commit: asking
+// for one there is the client's mistake, answered "revision does not
+// exist" and not logged as a server failure.
+func TestTagOnBlobIsRevisionNotExist(t *testing.T) {
+	g := newGitFailureRepo(t, nil)
+	gittest.Git(t, g.dir, nil, "update-ref", "refs/tags/blobtag", g.blob)
+	gittest.Git(t, g.dir, nil, "tag", "-a", "-m", "on a blob", "annblob", g.blob)
+
+	for _, args := range [][]string{
+		{"tree", "r", "blobtag", "f"},
+		{"blob", "r", "blobtag", "f"},
+		{"tree", "r", "annblob", "f"},
+		{"blob", "-r", "r", "annblob", "f"},
+		{"commit", "r", "blobtag"},
+		{"commit", "r", "annblob"},
+	} {
+		_, _, err := runRepoOutput(t, g.ctx, args...)
+		if !errors.Is(err, git.ErrRevisionNotExist) {
+			t.Errorf("%v: err = %v, want %v", args, err, git.ErrRevisionNotExist)
+		}
+	}
+	if n := g.logs.count("ERRO"); n != 0 {
+		t.Errorf("a tag on a blob was logged as a server failure:\n%s", g.logs.String())
+	}
+}
+
+// A detached HEAD whose commit object is gone is the repository failing,
+// as a branch without its commit is.
+func TestDetachedHEADWithoutCommitIsServerFailure(t *testing.T) {
+	for _, args := range [][]string{
+		{"commit", "r", "HEAD"},
+		{"tree", "r", "HEAD", "f"},
+	} {
+		g := newGitFailureRepo(t, nil)
+		gittest.Git(t, g.dir, nil, "update-ref", "--no-deref", "HEAD", g.commit)
+		if err := os.Remove(looseObject(g.dir, g.commit)); err != nil {
+			t.Fatal(err)
+		}
+		g.wantGitFailed(t, "git failed", []string{g.commit, "fatal", "bad object", "unable to read"}, args...)
 	}
 }

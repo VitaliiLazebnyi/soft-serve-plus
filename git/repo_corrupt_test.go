@@ -76,25 +76,50 @@ func TestLsTreeMissingTreeIsNotMissingRevision(t *testing.T) {
 	}
 }
 
-// TestMissingCommitObjectOfRef checks that a branch whose commit object is
-// gone is the repository failing, for both the tree and the commit lookup,
-// while a raw object ID that names nothing still is a missing revision.
+// TestMissingCommitObjectOfRef checks that a ref whose commit object is
+// gone (a branch, an annotated tag, a detached HEAD) is the repository
+// failing, for both the tree and the commit lookup, while a raw object ID
+// that names nothing, an unknown name and a tag on a blob, lightweight or
+// annotated, still are missing revisions.
 func TestMissingCommitObjectOfRef(t *testing.T) {
 	t.Parallel()
 	bare := filepath.Join(t.TempDir(), "r.git")
 	gittest.Git(t, filepath.Dir(bare), nil, "init", "-q", "--bare", bare)
-	root := gittest.Commit(t, bare, gittest.Valid, gittest.Tree(t, bare, "f", "root\n"), "root")
+	tree := gittest.Tree(t, bare, "f", "root\n")
+	blob := gittest.Git(t, bare, nil, "rev-parse", tree+":f")
+	root := gittest.Commit(t, bare, gittest.Valid, tree, "root")
 	gittest.Git(t, bare, nil, "update-ref", "refs/heads/main", root)
+	gittest.Git(t, bare, nil, "update-ref", "refs/tags/blobtag", blob)
+	gittest.Git(t, bare, nil, "tag", "-a", "-m", "on a blob", "annblob", blob)
+	gittest.Git(t, bare, nil, "tag", "-a", "-m", "on main", "anngone", root)
 	gittest.Git(t, bare, nil, "symbolic-ref", "HEAD", "refs/heads/main")
 	if err := os.Remove(filepath.Join(bare, "objects", root[:2], root[2:])); err != nil {
 		t.Fatal(err)
+	}
+
+	detached := filepath.Join(t.TempDir(), "d.git")
+	gittest.Git(t, filepath.Dir(detached), nil, "init", "-q", "--bare", detached)
+	dcommit := gittest.Commit(t, detached, gittest.Valid, gittest.Tree(t, detached, "f", "root\n"), "root")
+	gittest.Git(t, detached, nil, "update-ref", "--no-deref", "HEAD", dcommit)
+	if err := os.Remove(filepath.Join(detached, "objects", dcommit[:2], dcommit[2:])); err != nil {
+		t.Fatal(err)
+	}
+	drepo, err := Open(detached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drepo.LsTree("HEAD"); err == nil || errors.Is(err, ErrRevisionNotExist) {
+		t.Errorf("LsTree(HEAD) of a detached HEAD without its commit: err = %v, want git's failure", err)
+	}
+	if _, err := drepo.CommitByRevision("HEAD"); err == nil || errors.Is(err, ErrRevisionNotExist) {
+		t.Errorf("CommitByRevision(HEAD) of a detached HEAD without its commit: err = %v, want git's failure", err)
 	}
 
 	repo, err := Open(bare)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{"main", "refs/heads/main", "HEAD"} {
+	for _, ref := range []string{"main", "refs/heads/main", "HEAD", "anngone"} {
 		if _, err := repo.LsTree(ref); err == nil || errors.Is(err, ErrRevisionNotExist) {
 			t.Errorf("LsTree(%q): err = %v, want git's failure", ref, err)
 		}
@@ -102,7 +127,7 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 			t.Errorf("CommitByRevision(%q): err = %v, want git's failure", ref, err)
 		}
 	}
-	for _, rev := range []string{root, "nope", "main~1"} {
+	for _, rev := range []string{root, "nope", "main~1", "blobtag", "annblob"} {
 		if _, err := repo.LsTree(rev); !errors.Is(err, ErrRevisionNotExist) {
 			t.Errorf("LsTree(%q): err = %v, want ErrRevisionNotExist", rev, err)
 		}
