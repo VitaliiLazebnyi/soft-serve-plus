@@ -53,10 +53,9 @@ func collabAddCommand() *cobra.Command {
 		Short: "Add a collaborator to a repo",
 		Long:  "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
 		Args:  cobra.RangeArgs(2, 3),
-		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo := repoArg(args)
 			username := args[1]
 			level := access.ReadWriteAccess
 			if len(args) > 2 {
@@ -69,8 +68,15 @@ func collabAddCommand() *cobra.Command {
 			if err := checkCollabManage(ctx); err != nil {
 				return err
 			}
+			ctx, err := eventSenderContext(ctx)
+			if err != nil {
+				return err
+			}
 
-			return be.AddCollaborator(ctx, repo, username, level)
+			if rr == nil {
+				return be.AddCollaborator(ctx, repoArg(args), username, level)
+			}
+			return be.AddResolvedCollaborator(ctx, rr, username, level)
 		}),
 	}
 
@@ -82,17 +88,23 @@ func collabRemoveCommand() *cobra.Command {
 		Use:   "remove REPOSITORY USERNAME",
 		Args:  cobra.ExactArgs(2),
 		Short: "Remove a collaborator from a repo",
-		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
-			repo := repoArg(args)
 			username := args[1]
 
 			if err := checkCollabManage(ctx); err != nil {
 				return err
 			}
+			ctx, err := eventSenderContext(ctx)
+			if err != nil {
+				return err
+			}
 
-			return be.RemoveCollaborator(ctx, repo, username)
+			if rr == nil {
+				return be.RemoveCollaborator(ctx, repoArg(args), username)
+			}
+			return be.RemoveResolvedCollaborator(ctx, rr, username)
 		}),
 	}
 

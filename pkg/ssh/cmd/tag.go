@@ -59,7 +59,10 @@ func tagDeleteCommand() *cobra.Command {
 		Short:   "Delete a tag",
 		Args:    cobra.ExactArgs(2),
 		RunE: withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
-			ctx := cmd.Context()
+			ctx, err := eventSenderContext(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if rr.IsMirror() {
 				return proto.ErrMirrorReadOnly
 			}

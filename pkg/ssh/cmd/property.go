@@ -30,7 +30,10 @@ type repoProperty struct {
 	setBool func(ctx context.Context, be *backend.Backend, repo proto.Repository, value bool) error
 }
 
-// repoProperties are the property commands of `repo`.
+// repoProperties are the property commands of `repo`. Each setter acts on
+// the repository the command checked (Backend.SetResolvedHidden and the
+// like), not whatever repository has its name by then; the mirror flag has
+// no such setter yet and is set by name.
 //
 // Changing the visibility, the hidden flag or the mirror flag takes admin
 // access: making a private repository public exposes it to everyone and a
@@ -46,7 +49,7 @@ var repoProperties = []repoProperty{
 		need:    access.ReadWriteAccess,
 		get:     func(r proto.Repository) string { return utils.Sanitize(r.Description()) },
 		setText: func(ctx context.Context, be *backend.Backend, r proto.Repository, v string) error {
-			return be.SetDescription(ctx, r.Name(), v)
+			return be.SetResolvedDescription(ctx, r, v)
 		},
 	},
 	{
@@ -56,7 +59,7 @@ var repoProperties = []repoProperty{
 		need:    access.AdminAccess,
 		get:     func(r proto.Repository) string { return strconv.FormatBool(r.IsHidden()) },
 		setBool: func(ctx context.Context, be *backend.Backend, r proto.Repository, v bool) error {
-			return be.SetHidden(ctx, r.Name(), v)
+			return be.SetResolvedHidden(ctx, r, v)
 		},
 	},
 	{
@@ -74,7 +77,7 @@ var repoProperties = []repoProperty{
 		need:  access.AdminAccess,
 		get:   func(r proto.Repository) string { return strconv.FormatBool(r.IsPrivate()) },
 		setBool: func(ctx context.Context, be *backend.Backend, r proto.Repository, v bool) error {
-			return be.SetPrivate(ctx, r.Name(), v)
+			return be.SetResolvedPrivate(ctx, r, v)
 		},
 	},
 	{
@@ -84,7 +87,7 @@ var repoProperties = []repoProperty{
 		need:    access.ReadWriteAccess,
 		get:     func(r proto.Repository) string { return utils.Sanitize(r.ProjectName()) },
 		setText: func(ctx context.Context, be *backend.Backend, r proto.Repository, v string) error {
-			return be.SetProjectName(ctx, r.Name(), v)
+			return be.SetResolvedProjectName(ctx, r, v)
 		},
 	},
 }

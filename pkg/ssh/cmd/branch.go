@@ -80,6 +80,10 @@ func branchDefaultCommand() *cobra.Command {
 				if level < access.ReadWriteAccess {
 					return proto.ErrUnauthorized
 				}
+				ctx, err := eventSenderContext(ctx)
+				if err != nil {
+					return err
+				}
 
 				branch := args[1]
 				branches, _ := r.Branches()
@@ -142,7 +146,10 @@ func branchDeleteCommand() *cobra.Command {
 		Short:   "Delete a branch",
 		Args:    cobra.ExactArgs(2),
 		RunE: withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
-			ctx := cmd.Context()
+			ctx, err := eventSenderContext(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if rr.IsMirror() {
 				return proto.ErrMirrorReadOnly
 			}

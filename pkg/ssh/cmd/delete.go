@@ -13,10 +13,18 @@ func deleteCommand() *cobra.Command {
 		Aliases: []string{"del", "remove", "rm"},
 		Short:   "Delete a repository",
 		Args:    cobra.ExactArgs(1),
-		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
-			ctx := cmd.Context()
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+			ctx, err := eventSenderContext(cmd.Context())
+			if err != nil {
+				return err
+			}
 			be := backend.FromContext(ctx)
-			return be.DeleteRepository(ctx, repoArg(args))
+			// A server admin may delete a row with no repository
+			// directory, which only the name can reach.
+			if rr == nil {
+				return be.DeleteRepository(ctx, repoArg(args))
+			}
+			return be.DeleteResolvedRepository(ctx, rr)
 		}),
 	}
 
