@@ -1,0 +1,44 @@
+# vi: set ft=conf
+
+# A push event names the account that pushed as its sender and pusher, over
+# SSH (the key's account) and over HTTP (the token's account).
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo1
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+soft repo collab add repo1 user1 read-write
+usoft token create 'push'
+cp stdout utokenfile
+envfile UTOKEN=utokenfile
+new-webhook WH_SENDER
+soft repo webhook create repo1 $WH_SENDER -e push
+
+# over SSH, as admin
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md 'hello'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+webhook-deliveries repo1 1 1
+envmatch SSH_ID stdout '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+soft repo webhook deliver get repo1 1 $SSH_ID
+stdout '"sender":\{"id":[1-9][0-9]*,"username":"admin"\}'
+stdout '"pusher":\{"id":[1-9][0-9]*,"username":"admin"\}'
+
+# over HTTP, as user1
+mkfile ./repo1/README.md 'again'
+git -C repo1 commit -am 'second'
+git -C repo1 push http://user1:$UTOKEN@127.0.0.1:$HTTP_PORT/repo1 HEAD:master
+webhook-deliveries repo1 1 2
+# the list is oldest first, so the last ID is the HTTP push's
+envmatch HTTP_ID stdout '(?s).*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+soft repo webhook deliver get repo1 1 $HTTP_ID
+stdout '"sender":\{"id":[1-9][0-9]*,"username":"user1"\}'
+stdout '"pusher":\{"id":[1-9][0-9]*,"username":"user1"\}'
+
+# stop the server
+[windows] stopserver
