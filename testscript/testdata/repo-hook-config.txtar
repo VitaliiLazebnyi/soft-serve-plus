@@ -6,6 +6,10 @@
 # break pushes. A config it cannot load fails the hook with a generic error
 # for the client; the details go to the hook log.
 
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# script below; it is made LF.
+[windows] dos2unix legacy-pre-receive
+
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
