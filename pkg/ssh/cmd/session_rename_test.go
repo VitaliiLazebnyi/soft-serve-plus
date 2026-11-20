@@ -45,7 +45,8 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 		is.NoErr(err)
 		return u.PublicKeys()
 	}
-	k1, k2 := newKey(), newKey()
+	k1, k2signer := newKey(), newEd25519Signer(t)
+	k2 := k2signer.PublicKey()
 	session, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{k1}})
 	is.NoErr(err)
 	sessCtx := context.WithValue(proto.WithUserContext(ctx, session), ssh.ContextKeyPublicKey, k1)
@@ -58,7 +59,9 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{mk, mk2}})
 	is.NoErr(err)
 
-	is.NoErr(run(sessCtx, PubkeyCommand(), "add", sshutils.MarshalAuthorizedKey(k2)))
+	// The proof signs the account's name as it is now.
+	_, err = runPubkeyIn(sessCtx, proofFor(t, k2signer, "carol"), "add", sshutils.MarshalAuthorizedKey(k2))
+	is.NoErr(err)
 	is.Equal(len(keysOf(ctx, "carol")), 2)
 	is.Equal(len(keysOf(ctx, "alice")), 2)
 

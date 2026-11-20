@@ -1,9 +1,10 @@
 # vi: set ft=conf
 
 # A key in initial_admin_keys that is owned by a non-admin account is
-# refused for SSH sessions. `pubkey add` takes any public key without proof
-# of holding its private half, so user1 can claim admin2's public key before
-# an operator lists it. When admin2 later logs in with that key, the session
+# refused for SSH sessions. Before `pubkey add` asked for proof of holding a
+# key's private half, user1 could claim admin2's public key before an
+# operator listed it; an admin attaching it to the wrong account does the
+# same. When admin2 later logs in with that key, the session
 # must not belong to user1 (user1 would own every repository admin2 creates)
 # and must not fall back to anonymous or keyless access either. admin2 gets
 # an error saying how an admin fixes it.
@@ -13,9 +14,12 @@ exec soft serve &
 # wait for SSH server to start
 ensureserverrunning SSH_PORT
 
-# user1 claims admin2's public key, which is not an admin key yet
+# user1 has admin2's public key, which is not an admin key yet: it was
+# claimed before proofs were asked for. pubkey add now refuses it without one.
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
-usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
+! usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
+stderr 'needs proof that you hold the key''s private half'
+soft user add-pubkey user1 "$ADMIN2_AUTHORIZED_KEY"
 usoft token create 'read'
 stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile

@@ -2,8 +2,8 @@
 
 # With admin_only_create on, only an account with the admin flag may create a
 # repository by pushing over HTTP. Owning a key listed in initial_admin_keys
-# does not count: `pubkey add` takes any public key without proof of holding
-# its private half, so a user could claim a key before an operator lists it.
+# does not count: a user could have claimed a key before an operator listed
+# it, as `pubkey add` allowed without proof of holding its private half.
 
 env SOFT_SERVE_ADMIN_ONLY_CREATE=true
 
@@ -17,7 +17,7 @@ soft settings anon-access read-write
 # user1 is an ordinary account; it claims admin2's public key, which is not
 # an admin key yet
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
-usoft pubkey add "$ADMIN2_AUTHORIZED_KEY"
+soft user add-pubkey user1 "$ADMIN2_AUTHORIZED_KEY"
 usoft token create 'push'
 stdout '^ss_[0-9a-f]+$'
 cp stdout utokenfile
