@@ -1,12 +1,45 @@
 package cmd
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
+
+// TestRepoPropertyLevels checks the level each property command needs to
+// change its property: read-write for the text properties, admin for the
+// boolean ones, whose access check comes before the value is parsed. Any
+// reader may print every property.
+func TestRepoPropertyLevels(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	ownerCtx := withUser(t, ctx, be, "owner", false)
+	writerCtx := withUser(t, ctx, be, "writer", false)
+	_, err := be.CreateRepository(ownerCtx, "r", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
+	is.NoErr(err)
+	is.NoErr(be.AddCollaborator(ownerCtx, "r", "writer", access.ReadWriteAccess))
+
+	for _, prop := range []string{"description", "project-name"} {
+		is.NoErr(runRepo(t, writerCtx, prop, "r", "a", "b"))
+		out, _, err := runRepoOutput(t, writerCtx, prop, "r")
+		is.NoErr(err)
+		is.Equal(strings.TrimSpace(out), "a b")
+	}
+	for _, prop := range []string{"hidden", "mirror", "private"} {
+		for _, v := range []string{"true", "maybe"} {
+			if err := runRepo(t, writerCtx, prop, "r", v); !errors.Is(err, proto.ErrUnauthorized) {
+				t.Errorf("repo %s r %s as a writer: err = %v, want %v", prop, v, err, proto.ErrUnauthorized)
+			}
+		}
+		out, _, err := runRepoOutput(t, writerCtx, prop, "r")
+		is.NoErr(err)
+		is.Equal(strings.TrimSpace(out), "false")
+	}
+}
 
 func TestParseBool(t *testing.T) {
 	t.Parallel()
@@ -37,12 +70,11 @@ func TestParseBool(t *testing.T) {
 	}
 }
 
-// wantInvalidBool accepts both the shared parseBool error and the
-// command-specific errors of hidden and allow-keyless; all of them name the
-// accepted values as "true or false".
+// wantInvalidBool accepts only the shared parseBool error, which every SSH
+// command that takes a boolean argument returns.
 func wantInvalidBool(t *testing.T, err error) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "invalid ") || !strings.Contains(err.Error(), "true or false") {
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value") || !strings.Contains(err.Error(), "true or false") {
 		t.Fatalf("expected invalid boolean error, got %v", err)
 	}
 }

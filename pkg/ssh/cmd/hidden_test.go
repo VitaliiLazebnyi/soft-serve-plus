@@ -46,8 +46,8 @@ func TestRepoHiddenParsesBool(t *testing.T) {
 	is.True(hidden())
 	for _, arg := range []string{"yes", "no", "off", "maybe", "", "true "} {
 		_, _, err := runRepoOutput(t, ownerCtx, "hidden", "secret", arg)
-		if err == nil || !strings.Contains(err.Error(), "invalid hidden value") {
-			t.Errorf("hidden %q: err = %v, want an invalid hidden value error", arg, err)
+		if err == nil || !strings.Contains(err.Error(), "invalid boolean value") {
+			t.Errorf("hidden %q: err = %v, want an invalid boolean value error", arg, err)
 		}
 		if !hidden() {
 			t.Fatalf("hidden %q unhid the repository", arg)

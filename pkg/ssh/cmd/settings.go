@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -40,9 +39,9 @@ func SettingsCommand() *cobra.Command {
 					}
 					cmd.Println(allow)
 				case 1:
-					v, err := strconv.ParseBool(args[0])
+					v, err := parseBool(args[0])
 					if err != nil {
-						return fmt.Errorf("invalid allow-keyless value %q: want true or false", args[0])
+						return err
 					}
 					if err := be.SetAllowKeyless(ctx, v); err != nil {
 						return err

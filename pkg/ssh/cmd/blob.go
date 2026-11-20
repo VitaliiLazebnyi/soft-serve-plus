@@ -26,12 +26,11 @@ func blobCommand() *cobra.Command {
 
 	commonStyle := styles.DefaultStyles()
 	cmd := &cobra.Command{
-		Use:               "blob REPOSITORY [REFERENCE] [PATH]",
-		Aliases:           []string{"cat", "show"},
-		Short:             "Print out the contents of file at path",
-		Args:              cobra.RangeArgs(1, 3),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:     "blob REPOSITORY [REFERENCE] [PATH]",
+		Aliases: []string{"cat", "show"},
+		Short:   "Print out the contents of file at path",
+		Args:    cobra.RangeArgs(1, 3),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			ref := ""
 			fp := ""
@@ -41,11 +40,6 @@ func blobCommand() *cobra.Command {
 			case 3:
 				ref = args[1]
 				fp = args[2]
-			}
-
-			repo, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
 			}
 
 			r, err := repo.Open()
@@ -119,7 +113,7 @@ func blobCommand() *cobra.Command {
 
 			cmd.Println(c)
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().BoolVarP(&raw, "raw", "r", false, "Print the raw contents, unformatted and without a size limit")

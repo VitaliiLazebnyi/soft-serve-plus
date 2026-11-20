@@ -134,8 +134,8 @@ func TestSettingsAllowKeylessParsesBool(t *testing.T) {
 
 	for _, arg := range []string{"nope", "yes", "off", ""} {
 		_, _, err := runSettings(t, ctx, "allow-keyless", arg)
-		if err == nil {
-			t.Errorf("allow-keyless %q: nil error, want an invalid value error", arg)
+		if err == nil || !strings.Contains(err.Error(), "invalid boolean value") {
+			t.Errorf("allow-keyless %q: err = %v, want the shared invalid boolean value error", arg, err)
 		}
 		if !be.AllowKeyless(ctx) {
 			t.Errorf("allow-keyless %q changed the setting to false", arg)

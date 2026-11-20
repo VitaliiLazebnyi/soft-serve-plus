@@ -49,12 +49,11 @@ func checkCollabManage(ctx context.Context) error {
 
 func collabAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "add REPOSITORY USERNAME [LEVEL]",
-		Short:             "Add a collaborator to a repo",
-		Long:              "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
-		Args:              cobra.RangeArgs(2, 3),
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "add REPOSITORY USERNAME [LEVEL]",
+		Short: "Add a collaborator to a repo",
+		Long:  "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
+		Args:  cobra.RangeArgs(2, 3),
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			repo := repoArg(args)
@@ -72,7 +71,7 @@ func collabAddCommand() *cobra.Command {
 			}
 
 			return be.AddCollaborator(ctx, repo, username, level)
-		},
+		}),
 	}
 
 	return cmd
@@ -80,11 +79,10 @@ func collabAddCommand() *cobra.Command {
 
 func collabRemoveCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "remove REPOSITORY USERNAME",
-		Args:              cobra.ExactArgs(2),
-		Short:             "Remove a collaborator from a repo",
-		PersistentPreRunE: requireRepo(access.AdminAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "remove REPOSITORY USERNAME",
+		Args:  cobra.ExactArgs(2),
+		Short: "Remove a collaborator from a repo",
+		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			repo := repoArg(args)
@@ -95,7 +93,7 @@ func collabRemoveCommand() *cobra.Command {
 			}
 
 			return be.RemoveCollaborator(ctx, repo, username)
-		},
+		}),
 	}
 
 	return cmd
@@ -103,11 +101,10 @@ func collabRemoveCommand() *cobra.Command {
 
 func collabListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "list REPOSITORY",
-		Short:             "List collaborators and their access levels for a repo",
-		Args:              cobra.ExactArgs(1),
-		PersistentPreRunE: requireRepo(access.ReadWriteAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "list REPOSITORY",
+		Short: "List collaborators and their access levels for a repo",
+		Args:  cobra.ExactArgs(1),
+		RunE: withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			be := backend.FromContext(ctx)
 			repo := repoArg(args)
@@ -121,7 +118,7 @@ func collabListCommand() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	return cmd

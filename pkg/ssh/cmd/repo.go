@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// RepoCommand returns a command for managing repositories. Each leaf owns
-// its PersistentPreRunE gate because cobra runs only the nearest one.
+// RepoCommand returns a command for managing repositories. Each
+// repo-scoped leaf gates itself with withRepo.
 func RepoCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "repo",
@@ -31,32 +31,25 @@ func RepoCommand() *cobra.Command {
 		commitCommand(),
 		createCommand(),
 		deleteCommand(),
-		descriptionCommand(),
-		hiddenCommand(),
 		importCommand(),
 		listCommand(),
-		mirrorCommand(),
-		privateCommand(),
-		projectName(),
 		renameCommand(),
 		tagCommand(),
 		treeCommand(),
 		webhookCommand(),
 	)
+	for _, p := range repoProperties {
+		cmd.AddCommand(p.command())
+	}
 
 	cmd.AddCommand(
 		&cobra.Command{
-			Use:               "info REPOSITORY",
-			Short:             "Get information about a repository",
-			Args:              cobra.ExactArgs(1),
-			PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-			RunE: func(cmd *cobra.Command, _ []string) error {
+			Use:   "info REPOSITORY",
+			Short: "Get information about a repository",
+			Args:  cobra.ExactArgs(1),
+			RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, level access.AccessLevel) error {
 				ctx := cmd.Context()
 				be := backend.FromContext(ctx)
-				rr, level, err := repoFromContext(ctx)
-				if err != nil {
-					return err
-				}
 
 				r, err := rr.Open()
 				if err != nil {
@@ -123,7 +116,7 @@ func RepoCommand() *cobra.Command {
 				}
 
 				return nil
-			},
+			}),
 		},
 	)
 

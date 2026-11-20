@@ -271,8 +271,6 @@ func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
 		return len(a) > maxSuggestionArgLength
 	})
 
-	rootCmd.SetUsageTemplate(cmd.UsageTemplate)
-	rootCmd.SetUsageFunc(cmd.UsageFunc)
 	rootCmd.AddCommand(
 		cmd.GitUploadPackCommand(),
 		cmd.GitUploadArchiveCommand(),

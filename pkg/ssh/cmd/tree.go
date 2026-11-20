@@ -14,11 +14,10 @@ import (
 // treeCommand returns a command that list file or directory at path.
 func treeCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "tree REPOSITORY [REFERENCE] [PATH]",
-		Short:             "Print repository tree at path",
-		Args:              cobra.RangeArgs(1, 3),
-		PersistentPreRunE: requireRepo(access.ReadOnlyAccess),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "tree REPOSITORY [REFERENCE] [PATH]",
+		Short: "Print repository tree at path",
+		Args:  cobra.RangeArgs(1, 3),
+		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			path := ""
 			ref := ""
@@ -28,10 +27,6 @@ func treeCommand() *cobra.Command {
 			case 3:
 				ref = args[1]
 				path = args[2]
-			}
-			rr, _, err := repoFromContext(ctx)
-			if err != nil {
-				return err
 			}
 
 			r, err := rr.Open()
@@ -84,7 +79,7 @@ func treeCommand() *cobra.Command {
 				cmd.PrintErrln(err)
 			}
 			return nil
-		},
+		}),
 	}
 	return cmd
 }
