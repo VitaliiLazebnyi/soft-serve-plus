@@ -296,7 +296,7 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, openRepoError(d.logger, err, rp)
 	}
 
-	return d.registerRepository(ctx, name, user, opts, limited, nil)
+	return d.registerRepository(ctx, name, user, opts, limited)
 }
 
 // claimRepoPath creates the repository directory, failing if anything already
@@ -415,9 +415,8 @@ func renameOntoClaim(op, np string, claimed *bool) error {
 // registerRepository records a bare repository that already exists at the
 // name's path and finishes setting it up. The directory is removed on failure.
 // When limited, max_repos_per_user is checked in the same transaction that
-// records the repository. committed, if not nil, runs right after that
-// transaction commits.
-func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool, committed func()) (proto.Repository, error) {
+// records the repository.
+func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
 	rp := d.repoPath(name)
 	opts.ProjectName = utils.Sanitize(opts.ProjectName)
 	opts.Description = utils.Sanitize(opts.Description)
@@ -491,9 +490,6 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 		return nil, err
 	}
 
-	if committed != nil {
-		committed()
-	}
 	if d.afterRegister != nil {
 		d.afterRegister()
 	}
@@ -556,9 +552,8 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
-	// Refuse at the limit before cloning anything, counting the user's
-	// imports still in flight, which have not registered their repository
-	// yet. registerRepository checks again when it records the repository.
+	// Refuse at the limit before cloning anything. registerRepository
+	// checks again when it records the repository.
 	admin := d.IsServerAdmin(ctx, user)
 	limited := d.cfg.MaxReposPerUser > 0 && !admin // as repoLimited
 	slot, err := d.reserveImport(ctx, user, admin, limited)
@@ -598,7 +593,6 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		env:       RemoteGitEnv(d.cfg, v.ForClone()),
 		opts:      opts,
 		limited:   limited,
-		committed: slot.markRegistered,
 	}
 
 	// LFS objects are fetched only when asked for (--lfs or --lfs-endpoint);
@@ -678,9 +672,6 @@ type importSpec struct {
 	opts        proto.RepositoryOptions
 	// limited says whether max_repos_per_user applies (see repoLimited).
 	limited bool
-	// committed, if set, runs once the repository row is committed, so the
-	// import stops counting against max_repos_per_user (see importSlot).
-	committed func()
 }
 
 // importRepository clones the remote into the claimed directory, registers
@@ -709,7 +700,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 	// committed would leave a registered repository behind with no cleanup
 	// to remove it. A stopped import still ends at the LFS fetch below,
 	// whose failure removes the repository.
-	r, err := d.registerRepository(context.WithoutCancel(ctx), imp.name, user, imp.opts, imp.limited, imp.committed)
+	r, err := d.registerRepository(context.WithoutCancel(ctx), imp.name, user, imp.opts, imp.limited)
 	if err != nil {
 		d.logger.Error("failed to create repository", "err", err, "name", imp.name)
 		return nil, err
