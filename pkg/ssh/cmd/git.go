@@ -264,7 +264,7 @@ func (r *gitRequest) hookEnv(refs *hooks.PushRefs) []string {
 // to, or nil, after logging why, when it cannot be created: the push then
 // goes ahead without sending its webhooks.
 func (r *gitRequest) newPushRefs() *hooks.PushRefs {
-	refs, err := hooks.NewPushRefs()
+	refs, err := hooks.NewPushRefs(r.cfg)
 	if err != nil {
 		r.logger.Error("push webhooks will not be sent", "repo", r.name, "err", err)
 		return nil

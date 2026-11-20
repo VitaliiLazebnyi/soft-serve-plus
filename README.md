@@ -1627,8 +1627,10 @@ Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
   settings as `SOFT_SERVE_*` variables (see [Server Configuration](#server-configuration)),
   except the database data source, `SOFT_SERVE_DB_DATA_SOURCE`, which may hold
   a password;
-- `SOFT_SERVE_PUSH_REFS`: a file the server reads to learn which refs the push
-  updated; the generated `post-receive` script writes to it.
+- `SOFT_SERVE_PUSH_REFS`: a file under `<data path>/tmp` that the server reads
+  to learn which refs the push updated; the generated `post-receive` script
+  writes to it. The server removes it after the push, and any left by a
+  server that stopped mid-push when it next starts.
 
 No other git command the server runs, such as a fetch or a clone over any of
 SSH, HTTP or `git://`, gets these variables.

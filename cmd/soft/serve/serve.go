@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/spf13/cobra"
 )
 
@@ -78,6 +79,13 @@ func run(c *cobra.Command, syncHooks bool) error {
 	logPath := filepath.Join(cfg.DataPath, "log")
 	if err := os.MkdirAll(logPath, 0o700); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
+	}
+
+	// A server that stopped mid-push can leave the push's refs file behind.
+	if n, err := hooks.RemoveStalePushRefs(cfg); err != nil {
+		log.FromContext(ctx).Warn("failed to remove stale push refs files", "removed", n, "err", err)
+	} else if n > 0 {
+		log.FromContext(ctx).Info("removed stale push refs files", "removed", n)
 	}
 
 	db := db.FromContext(ctx)

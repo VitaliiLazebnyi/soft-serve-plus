@@ -846,7 +846,7 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 	cmd.Env = hooks.ProtocolEnv(version)
 	var refs *hooks.PushRefs
 	if service == git.ReceivePackService {
-		refs = newPushRefs(logger, repoName)
+		refs = newPushRefs(cfg, logger, repoName)
 		if refs != nil {
 			defer removePushRefs(logger, refs)
 		}
@@ -895,8 +895,8 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 // newPushRefs returns the file a push's post-receive hook writes its refs
 // to, or nil, after logging why, when it cannot be created: the push then
 // goes ahead without sending its webhooks.
-func newPushRefs(logger *log.Logger, repo string) *hooks.PushRefs {
-	refs, err := hooks.NewPushRefs()
+func newPushRefs(cfg *config.Config, logger *log.Logger, repo string) *hooks.PushRefs {
+	refs, err := hooks.NewPushRefs(cfg)
 	if err != nil {
 		logger.Error("push webhooks will not be sent", "repo", repo, "err", err)
 		return nil

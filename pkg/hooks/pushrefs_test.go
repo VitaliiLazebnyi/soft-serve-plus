@@ -8,23 +8,31 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
 func TestPushRefs(t *testing.T) {
-	p, err := NewPushRefs()
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	p, err := NewPushRefs(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := strings.TrimPrefix(p.Env(), PushRefsEnv+"=")
-	if path == p.Env() || !filepath.IsAbs(path) {
-		t.Fatalf("Env() = %q, want %s=<absolute path>", p.Env(), PushRefsEnv)
+	if path == p.Env() || filepath.Dir(path) != filepath.Join(cfg.DataPath, "tmp") {
+		t.Fatalf("Env() = %q, want %s=<data path>/tmp/...", p.Env(), PushRefsEnv)
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
-		t.Errorf("refs file mode %v, want 0600", fi.Mode().Perm())
+	di, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && (fi.Mode().Perm() != 0o600 || di.Mode().Perm() != 0o700) {
+		t.Errorf("refs file mode %v and directory mode %v, want 0600 and 0700", fi.Mode().Perm(), di.Mode().Perm())
 	}
 
 	// Nothing written: no refs.
@@ -64,6 +72,40 @@ func TestPushRefs(t *testing.T) {
 	// Removing twice is fine.
 	if err := p.Remove(); err != nil {
 		t.Errorf("second Remove: %v", err)
+	}
+}
+
+// Refs files a stopped server left behind are removed at the next start;
+// other files in the directory are not.
+func TestRemoveStalePushRefs(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	if n, err := RemoveStalePushRefs(cfg); n != 0 || err != nil {
+		t.Fatalf("RemoveStalePushRefs without a directory = %d, %v", n, err)
+	}
+	var stale []string
+	for range 2 {
+		p, err := NewPushRefs(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale = append(stale, strings.TrimPrefix(p.Env(), PushRefsEnv+"="))
+	}
+	other := filepath.Join(PushRefsDir(cfg), "other")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := RemoveStalePushRefs(cfg)
+	if n != 2 || err != nil {
+		t.Fatalf("RemoveStalePushRefs = %d, %v, want 2, nil", n, err)
+	}
+	for _, p := range stale {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still there: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("other file removed: %v", err)
 	}
 }
 

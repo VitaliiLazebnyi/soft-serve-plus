@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
 // PushRefsEnv names the file a push's post-receive hook writes the refs it
@@ -28,10 +31,25 @@ type PushRefs struct {
 	path string
 }
 
-// NewPushRefs creates an empty refs file for one push, readable and writable
-// only by the server's user. The caller must call Remove.
-func NewPushRefs() (*PushRefs, error) {
-	f, err := os.CreateTemp("", "soft-serve-push-*.refs")
+// pushRefsPattern is the name pattern of refs files, for os.CreateTemp.
+const pushRefsPattern = "soft-serve-push-*.refs"
+
+// PushRefsDir returns the directory refs files are created in: tmp under
+// cfg's data path, private to the server's user, not the shared temporary
+// directory.
+func PushRefsDir(cfg *config.Config) string {
+	return filepath.Join(cfg.DataPath, "tmp")
+}
+
+// NewPushRefs creates an empty refs file for one push in PushRefsDir,
+// readable and writable only by the server's user. The caller must call
+// Remove.
+func NewPushRefs(cfg *config.Config) (*PushRefs, error) {
+	dir := PushRefsDir(cfg)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create push refs directory: %w", err)
+	}
+	f, err := os.CreateTemp(dir, pushRefsPattern)
 	if err != nil {
 		return nil, fmt.Errorf("create push refs file: %w", err)
 	}
@@ -68,6 +86,29 @@ func (p *PushRefs) Remove() error {
 		return fmt.Errorf("remove push refs file: %w", err)
 	}
 	return nil
+}
+
+// RemoveStalePushRefs removes the refs files left in PushRefsDir by a server
+// that stopped before it could remove them, and returns how many it
+// removed. The server calls it at start, before any push can create one.
+func RemoveStalePushRefs(cfg *config.Config) (int, error) {
+	paths, err := filepath.Glob(filepath.Join(PushRefsDir(cfg), pushRefsPattern))
+	if err != nil {
+		return 0, fmt.Errorf("find stale push refs files: %w", err)
+	}
+	var errs []error
+	n := 0
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	if err := errors.Join(errs...); err != nil {
+		return n, fmt.Errorf("remove stale push refs files: %w", err)
+	}
+	return n, nil
 }
 
 // errBadRefLine is a line of a refs file that is not "<old> <new> <ref>".
