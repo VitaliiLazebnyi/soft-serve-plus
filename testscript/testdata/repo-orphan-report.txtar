@@ -1,0 +1,18 @@
+# vi: set ft=conf
+
+# A repository directory without a database row is reported in the server log
+# when the server starts, and is left alone: it is not served and repo delete
+# does not remove it.
+
+mkdir $DATA_PATH/repos/team/orphan.git
+exec soft serve &
+ensureserverrunning SSH_PORT
+
+! soft repo delete team/orphan
+stderr 'repository not found'
+exists $DATA_PATH/repos/team/orphan.git
+
+stopserver
+wait
+stderr 'repository directory has no database row'
+stderr 'orphan\.git'

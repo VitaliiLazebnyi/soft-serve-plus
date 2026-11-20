@@ -147,3 +147,47 @@ func TestReportOrphanRepositories(t *testing.T) {
 		t.Errorf("orphan path not logged:\n%s", out)
 	}
 }
+
+// APFS ignores Unicode normalization, so a repository whose row names the
+// decomposed form of its name while its directory is spelled precomposed
+// is not an orphan.
+func TestOrphanRepositoryDirsNormalizationVariant(t *testing.T) {
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	const (
+		precomposed = "\uD55C"             // 한
+		decomposed  = "\u1112\u1161\u11AB" // 한 as jamo
+	)
+	if _, err := be.CreateRepository(ctx, precomposed, defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !be.repoPathExists(decomposed) {
+		t.Skip("filesystem keeps Unicode normalization forms apart")
+	}
+	if err := be.store.SetRepoNameByName(ctx, be.db, precomposed, decomposed); err != nil {
+		t.Fatal(err)
+	}
+	if got := orphansOf(t, be); len(got) != 0 {
+		t.Errorf("OrphanRepositoryDirs => %q, want none", got)
+	}
+}
+
+// A data directory whose repositories and groups are all spelled as their
+// rows name them is matched by path alone: the scan makes no identity
+// comparison, so its cost does not grow with groups times repositories.
+func TestOrphanRepositoryDirsMatchesByPathFirst(t *testing.T) {
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	for _, name := range []string{"a/one", "a/two", "b/c/three", "four"} {
+		if _, err := be.CreateRepository(ctx, name, defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphans, compares, err := be.orphanRepositoryDirs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 || compares != 0 {
+		t.Errorf("orphanRepositoryDirs => %q with %d identity comparisons, want none and 0", orphans, compares)
+	}
+}

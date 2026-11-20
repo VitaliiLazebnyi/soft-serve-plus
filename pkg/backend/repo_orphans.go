@@ -52,15 +52,26 @@ func (d *Backend) ReportOrphanRepositories(ctx context.Context) {
 // Nothing may create, rename or delete repositories meanwhile: a create or
 // import in progress has its directory before its row.
 func (d *Backend) OrphanRepositoryDirs(ctx context.Context) ([]string, error) {
+	orphans, _, err := d.orphanRepositoryDirs(ctx)
+	return orphans, err
+}
+
+// orphanRepositoryDirs is OrphanRepositoryDirs that also returns how many
+// identity comparisons it made. Every directory whose path is a row's, or a
+// group's above one, is matched by path alone, so a data directory with no
+// orphans and no variant spellings costs none, however many repositories
+// and groups it has.
+func (d *Backend) orphanRepositoryDirs(ctx context.Context) ([]string, int, error) {
 	root := filepath.Join(d.cfg.DataPath, "repos")
 	rows, err := d.store.GetAllRepos(ctx, d.db)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// The rows' directories, and the group directories above them, by
 	// path and by identity.
-	repos, groups := newDirSet(), newDirSet()
+	var compares int
+	repos, groups := newDirSet(&compares), newDirSet(&compares)
 	for _, m := range rows {
 		rp := d.repoPath(m.Name)
 		repos.add(rp)
@@ -100,10 +111,16 @@ func (d *Backend) OrphanRepositoryDirs(ctx context.Context) ([]string, error) {
 		if link {
 			skip = nil
 		}
+		// Paths first, in both sets: an identity comparison is made only
+		// for a directory no row names exactly.
 		switch {
-		case groups.has(p, fi):
+		case groups.paths[p]:
 			return nil
-		case repos.has(p, fi):
+		case repos.paths[p]:
+			return skip
+		case groups.sameAs(fi):
+			return nil
+		case repos.sameAs(fi):
 			return skip
 		case strings.HasSuffix(de.Name(), ".git"):
 			orphans = append(orphans, p)
@@ -115,9 +132,9 @@ func (d *Backend) OrphanRepositoryDirs(ctx context.Context) ([]string, error) {
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return orphans, nil
+	return orphans, compares, nil
 }
 
 // dirSet is a set of directories, matched by path and, failing that, by
@@ -125,10 +142,12 @@ func (d *Backend) OrphanRepositoryDirs(ctx context.Context) ([]string, error) {
 type dirSet struct {
 	paths map[string]bool
 	infos []os.FileInfo
+	// compares counts the identity comparisons made.
+	compares *int
 }
 
-func newDirSet() *dirSet {
-	return &dirSet{paths: make(map[string]bool)}
+func newDirSet(compares *int) *dirSet {
+	return &dirSet{paths: make(map[string]bool), compares: compares}
 }
 
 // add adds the directory at p, by path, and by identity if it exists.
@@ -139,12 +158,11 @@ func (s *dirSet) add(p string) {
 	}
 }
 
-// has reports whether the directory at p, whose FileInfo is fi, is in s.
-func (s *dirSet) has(p string, fi os.FileInfo) bool {
-	if s.paths[p] {
-		return true
-	}
+// sameAs reports whether the directory whose FileInfo is fi is the same
+// directory as one in s.
+func (s *dirSet) sameAs(fi os.FileInfo) bool {
 	for _, other := range s.infos {
+		*s.compares++
 		if os.SameFile(fi, other) {
 			return true
 		}
