@@ -1200,6 +1200,11 @@ over SSH is running when the removal comes due. Which repositories are waiting
 for their push is only kept in memory, so one still waiting when the server
 restarts is kept empty; delete it with `repo delete` if it is not wanted.
 
+Over SSH, git creates the repository and pushes in one session. If that push
+fails without writing any ref, the repository is removed at once, under the
+same rules: it is kept if it was used meanwhile, or if another push or LFS
+upload to it is running.
+
 ### Nested Repositories
 
 Repositories can be nested too:
