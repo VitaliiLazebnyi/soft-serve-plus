@@ -96,6 +96,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	// Nothing serves requests yet, so no create, rename or delete is in
 	// progress to leave a directory without its row for a moment.
 	be.ReportOrphanRepositories(ctx)
+	be.ReportDaemonExportFiles(ctx)
 	ensureDefaultRepo(ctx, cfg, be, logger)
 
 	srv.SSHServer, err = sshsrv.NewSSHServer(ctx)
