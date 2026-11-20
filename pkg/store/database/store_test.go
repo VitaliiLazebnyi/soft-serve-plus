@@ -559,12 +559,6 @@ func TestLFSLockStore(t *testing.T) {
 	if _, err := s.GetLFSLockByID(ctx, dbx, 8, l.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("GetLFSLockByID(other repo) error = %v, want ErrRecordNotFound", err)
 	}
-	if got, err := s.GetLFSLockForUserPath(ctx, dbx, 7, owner, "a.bin"); err != nil || got.ID != l.ID {
-		t.Errorf("GetLFSLockForUserPath() = %+v, %v", got, err)
-	}
-	if _, err := s.GetLFSLockForUserPath(ctx, dbx, 7, other.ID, "a.bin"); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetLFSLockForUserPath(not the owner) error = %v, want ErrRecordNotFound", err)
-	}
 
 	// Pages follow the lock ID: afterID is the last ID of the previous page.
 	ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 1)

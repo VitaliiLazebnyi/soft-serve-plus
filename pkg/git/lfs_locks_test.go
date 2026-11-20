@@ -256,7 +256,7 @@ func TestLFSLockOwnership(t *testing.T) {
 	if out := session("owner", lock("a.bin")); !strings.Contains(out, "status 201") {
 		t.Fatalf("owner lock: %q", out)
 	}
-	ownerLock, err := datastore.GetLFSLockForUserPath(ctx, dbx, 1, users["owner"].id, "a.bin")
+	ownerLock, err := datastore.GetLFSLockForPath(ctx, dbx, 1, "a.bin")
 	if err != nil {
 		t.Fatalf("owner lock: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestLFSLockOwnership(t *testing.T) {
 
 	// The owner still unlocks their own lock without force.
 	session("other", lock("b.bin"))
-	otherLock, err := datastore.GetLFSLockForUserPath(ctx, dbx, 1, users["other"].id, "b.bin")
+	otherLock, err := datastore.GetLFSLockForPath(ctx, dbx, 1, "b.bin")
 	if err != nil {
 		t.Fatalf("other lock: %v", err)
 	}

@@ -29,7 +29,6 @@ type LFSStore interface {
 	// above afterID, in ID order; afterID 0 starts at the first lock.
 	GetLFSLocks(ctx context.Context, h db.Handler, repoID int64, afterID int64, limit int) ([]models.LFSLock, error)
 	GetLFSLockForPath(ctx context.Context, h db.Handler, repoID int64, path string) (models.LFSLock, error)
-	GetLFSLockForUserPath(ctx context.Context, h db.Handler, repoID int64, userID int64, path string) (models.LFSLock, error)
 	GetLFSLockByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.LFSLock, error)
 	DeleteLFSLock(ctx context.Context, h db.Handler, repoID int64, id int64) error
 }

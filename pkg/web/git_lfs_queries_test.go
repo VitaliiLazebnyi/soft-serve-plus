@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
@@ -24,9 +23,6 @@ type countingStore struct {
 	store.Store
 	objectLookups atomic.Int32
 	userLookups   atomic.Int32
-	// beforeReadBack, if set, runs before a lock is read back by path, as a
-	// force-unlock by another client could.
-	beforeReadBack func()
 }
 
 func (s *countingStore) GetLFSObjectByOid(ctx context.Context, h db.Handler, repoID int64, oid string) (models.LFSObject, error) {
@@ -37,14 +33,6 @@ func (s *countingStore) GetLFSObjectByOid(ctx context.Context, h db.Handler, rep
 func (s *countingStore) GetUserByID(ctx context.Context, h db.Handler, id int64) (models.User, error) {
 	s.userLookups.Add(1)
 	return s.Store.GetUserByID(ctx, h, id)
-}
-
-// GetLFSLockForUserPath is how a lock create used to read its lock back.
-func (s *countingStore) GetLFSLockForUserPath(ctx context.Context, h db.Handler, repoID int64, userID int64, path string) (models.LFSLock, error) {
-	if s.beforeReadBack != nil {
-		s.beforeReadBack()
-	}
-	return s.Store.GetLFSLockForUserPath(ctx, h, repoID, userID, path)
 }
 
 // withCountingStore routes e's requests through a countingStore.
@@ -150,45 +138,5 @@ func TestLFSLocksNameOwnersWithoutLookups(t *testing.T) {
 	_ = repo
 	if n := cs.userLookups.Load(); n != 0 {
 		t.Errorf("owner lookups = %d, want 0", n)
-	}
-}
-
-// A lock that is created and then force-unlocked by another client before
-// the response is written was still created: the response is the lock, not
-// a 500. The create used to read its lock back by path and fail when it was
-// gone.
-func TestLFSLockCreateReturnsLockForceUnlockedMeanwhile(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	dbx := db.FromContext(ctx)
-	repo := proto.RepositoryFromContext(ctx)
-	cs := &countingStore{Store: store.FromContext(ctx)}
-	cs.beforeReadBack = func() {
-		lock, err := cs.Store.GetLFSLockForPath(ctx, dbx, repo.ID(), "c.bin")
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if err := cs.Store.DeleteLFSLock(ctx, dbx, repo.ID(), lock.ID); err != nil {
-			t.Error(err)
-		}
-	}
-	ctx = access.WithContext(store.WithContext(ctx, cs), access.ReadWriteAccess)
-
-	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks",
-		strings.NewReader(`{"path":"c.bin","ref":{"name":"refs/heads/main"}}`))
-	req.Header.Set("Accept", lfs.MediaType)
-	req.Header.Set("Content-Type", lfs.MediaType)
-	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocks, w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusCreated, w.Body)
-	}
-	var resp lfs.LockResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Lock.ID == "" || resp.Lock.Path != "c.bin" || resp.Lock.Owner.Name != "owner" || resp.Lock.LockedAt.IsZero() {
-		t.Errorf("lock = %+v, want c.bin held by owner", resp.Lock)
 	}
 }
