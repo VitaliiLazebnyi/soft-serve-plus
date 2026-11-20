@@ -5,6 +5,11 @@
 # each push's webhooks once: the server sends them, from the refs that
 # `soft hook post-receive` records for it.
 
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# scripts and the expected output below; they are made LF. The hooks'
+# output is compared as written.
+[windows] dos2unix legacy-pre-receive legacy-update legacy-post-receive legacy-post-update record.sh post-receive.txt
+
 mkdir out
 env HOOK_OUT=$WORK/out
 
@@ -42,7 +47,6 @@ cmp stdout received-first.txt
 exec git -C repo1 rev-parse HEAD
 cp stdout head1
 envfile HEAD1=head1
-[windows] dos2unix out/post-receive
 cmpenv out/post-receive post-receive.txt
 
 # A second push is the fence: the server sends a repository's push events one
