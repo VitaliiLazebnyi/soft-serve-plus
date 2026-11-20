@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,14 +92,24 @@ func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
 	is.NoErr(os.Chmod(objects, 0o555))
 	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
 
+	// Make the directory removable once the first removal failed. The
+	// goroutine reports a timeout instead of failing the test itself.
+	released := make(chan error, 1)
 	go func() {
-		waitFor(t, "the first removal to fail", func() bool {
-			return strings.Contains(logs.String(), "failed to delete repository directory")
-		})
-		os.Chmod(objects, 0o755) //nolint:errcheck
+		deadline := time.Now().Add(time.Minute)
+		for !strings.Contains(logs.String(), "failed to delete repository directory") {
+			if time.Now().After(deadline) {
+				released <- errors.New("the first removal never failed")
+				os.Chmod(objects, 0o755) //nolint:errcheck
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		released <- os.Chmod(objects, 0o755)
 	}()
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
+	is.NoErr(<-released)
 	is.NoErr(err)
 	is.True(removed)
 	_, err = os.Stat(dir)
@@ -130,4 +141,84 @@ func TestRemovePushCreatedRepositoryGivesUpOnDirectory(t *testing.T) {
 	is.True(strings.Contains(logs.String(), "failed to remove the directory of a repository created by a failed push"))
 	_, err = os.Stat(be.repoPath("stuck"))
 	is.NoErr(err)
+}
+
+// HEAD is fixed only on the repository the push created. One renamed or
+// created under the name since is left as it is. HEAD used to be pointed
+// at a branch of whatever had the name.
+func TestRemovePushCreatedRepositoryLeavesHeadOfAnother(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	created, err := be.CreateRepository(ctx, "name", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	is.NoErr(be.RenameRepository(ctx, "name", "moved"))
+	_, err = be.CreateRepository(ctx, "name", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	dir := be.repoPath("name")
+	is.NoErr(exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing").Run())
+	commitTo(t, dir, "refs/heads/feature")
+
+	removed, err := be.RemovePushCreatedRepository(ctx, created)
+	is.NoErr(err)
+	is.True(!removed)
+	head, err := exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD").Output()
+	is.NoErr(err)
+	is.Equal(strings.TrimSpace(string(head)), "refs/heads/missing")
+}
+
+// A ref written while the leftover directory is retried, as the failed
+// push's lingering receive-pack can on Windows, stops the retry: the
+// directory stays, to be reported at start-up, rather than being removed
+// with what was pushed.
+func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not prevent removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove the directory regardless of its mode")
+	}
+	is := is.New(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
+	be.pushCreatedRetry = retryPolicy{first: 10 * time.Millisecond, total: time.Hour}
+	ctx := backendTestContext(be, cfg)
+	r, err := be.CreateRepository(ctx, "late", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	dir := be.repoPath("late")
+	objects := filepath.Join(dir, "objects")
+	is.NoErr(os.Chmod(objects, 0o555))
+	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
+
+	// Once the first removal failed, a ref appears and the directory
+	// becomes removable.
+	wrote := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(time.Minute)
+		for !strings.Contains(logs.String(), "failed to delete repository directory") {
+			if time.Now().After(deadline) {
+				wrote <- errors.New("the first removal never failed")
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		ref := filepath.Join(dir, "refs", "heads", "pushed")
+		if err := os.MkdirAll(filepath.Dir(ref), 0o755); err != nil {
+			wrote <- err
+			return
+		}
+		if err := os.WriteFile(ref, []byte(strings.Repeat("a", 40)+"\n"), 0o600); err != nil {
+			wrote <- err
+			return
+		}
+		wrote <- os.Chmod(objects, 0o755)
+	}()
+
+	removed, err := be.RemovePushCreatedRepository(ctx, r)
+	is.NoErr(<-wrote)
+	is.NoErr(err)
+	is.True(removed) // the row is gone
+	_, err = os.Stat(filepath.Join(dir, "refs", "heads", "pushed"))
+	is.NoErr(err) // the pushed ref is kept
+	is.True(strings.Contains(logs.String(), "wrote refs to the repository after its row was deleted"))
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -132,9 +133,7 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	// is gone, so none can write a ref after this check.
 	rp := d.repoPath(name)
 	if hasRefs(rp) {
-		if err := gitsvc.EnsureDefaultBranch(ctx, rp); err != nil {
-			d.logger.Warn("failed to set the default branch of a repository created by a push", "repo", name, "err", err)
-		}
+		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
 	}
 
@@ -158,6 +157,20 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	return true, nil
 }
 
+// headOnPushedBranch points the HEAD of created, kept because a failed push
+// wrote refs to it, at a pushed branch, as after a push that succeeded. It
+// does so only while the name still belongs to created: another repository
+// renamed or created under it meanwhile is not touched.
+func (d *Backend) headOnPushedBranch(ctx context.Context, name string, created proto.Repository) {
+	m, err := d.store.GetRepoByName(ctx, d.db, name)
+	if err != nil || m.ID != created.ID() {
+		return
+	}
+	if err := gitsvc.EnsureDefaultBranch(ctx, d.repoPath(name)); err != nil {
+		d.logger.Warn("failed to set the default branch of a repository created by a push", "repo", name, "err", err)
+	}
+}
+
 // retryPolicy waits first, doubles the wait after each attempt, and gives up
 // once the sum of the waits would go past total. Only the waits count, not
 // the time the attempts take, so the number of attempts is the same however
@@ -175,12 +188,18 @@ var pushCreatedDirRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * 
 // git process of the failed push can hold the directory open for a moment
 // after the push ended. Nothing else uses the directory meanwhile: while it
 // is there, its name can be neither created, imported nor renamed onto, and
-// a delete needs a row.
+// a delete needs a row. That lingering git process can still write refs,
+// though, so a directory that has refs is left in place, without a row, and
+// reported at start-up rather than removed with what was pushed.
 func (d *Backend) removePushCreatedDir(name, rp string) {
 	policy := d.pushCreatedRetry
 	var waited time.Duration
 	for wait := policy.first; ; wait *= 2 {
 		if _, err := os.Lstat(rp); errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		if refFilesLeft(rp) {
+			d.logger.Error("a failed push wrote refs to the repository after its row was deleted; leaving its directory, which is reported at start-up", "repo", name, "path", rp)
 			return
 		}
 		if waited+wait > policy.total {
@@ -193,6 +212,39 @@ func (d *Backend) removePushCreatedDir(name, rp string) {
 			d.logger.Debug("failed to remove the directory of a repository created by a failed push, retrying", "repo", name, "err", err)
 		}
 	}
+}
+
+// refFilesLeft reports whether the directory rp, of a repository partly
+// removed, still holds a ref: a file under refs or reftable, or a ref line
+// in packed-refs. It reads the files, not git, which would fail on a
+// directory half gone. Anything it cannot read counts as a ref.
+func refFilesLeft(rp string) bool {
+	for _, dir := range []string{"refs", "reftable"} {
+		found := false
+		err := filepath.WalkDir(filepath.Join(rp, dir), func(_ string, de fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !de.IsDir() {
+				found = true
+				return fs.SkipAll
+			}
+			return nil
+		})
+		if found || (err != nil && !errors.Is(err, fs.ErrNotExist)) {
+			return true
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(rp, "packed-refs"))
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "^") {
+			return true
+		}
+	}
+	return false
 }
 
 // RepositoryHasRefs reports whether the repository r has any ref. A

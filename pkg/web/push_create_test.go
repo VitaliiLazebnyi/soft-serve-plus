@@ -440,3 +440,47 @@ func TestHTTPPushCreateRace(t *testing.T) {
 		is.True(!f.exists("claimed"))
 	})
 }
+
+// A failed push can have written refs before it failed: receive-pack
+// updates them before the hooks run. The repository is then handed to the
+// backend's removal, which keeps it and points HEAD at the pushed branch.
+// It used to leave the list with HEAD naming a branch that does not exist.
+func TestHTTPPushCreateFailedPushWithRefsGetsHead(t *testing.T) {
+	is := is.New(t)
+	f := newOracleFixture(t)
+	auth := "Token " + f.token
+	is.Equal(f.do(http.MethodGet, "/pushed.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+	dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "pushed.git")
+	gitRun(t, "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing")
+	tree := gitOutput(t, "-C", dir, "mktree")
+	commit := gitOutput(t, "-C", dir, "commit-tree", tree, "-m", "x")
+	gitRun(t, "-C", dir, "update-ref", "refs/heads/feature", commit)
+
+	// A receive-pack request that fails after its refs landed.
+	ctx, done, _ := f.pending.begin(f.ctx, "pushed")
+	is.True(done != nil)
+	markPushFailed(ctx)
+	done()
+
+	is.True(f.exists("pushed"))
+	listed, _ := f.pendingState("pushed")
+	is.True(!listed)
+	is.Equal(gitOutput(t, "-C", dir, "symbolic-ref", "HEAD"), "refs/heads/feature")
+}
+
+// gitOutput runs git and returns its trimmed output, failing the test on
+// error.
+func gitOutput(t *testing.T, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Env = append(cmd.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@b",
+		"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@b")
+	cmd.Stdin = strings.NewReader("")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}

@@ -141,9 +141,11 @@ func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context
 }
 
 // end is called when a request to a listed repository ends. Once no
-// request is in flight, a repository with refs leaves the list. One
-// without refs is removed if the request was a failed push, and otherwise
-// gets pushCreateTimeout for the push to arrive.
+// request is in flight, a failed push hands the repository to the
+// backend's removal, which keeps one with refs and points its HEAD at a
+// pushed branch (a push can fail after its refs landed). Otherwise a
+// repository with refs leaves the list, and one without gets
+// pushCreateTimeout for the push to arrive.
 func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 	p.mu.Lock()
 	pc.inflight--
@@ -155,11 +157,11 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 	gen := pc.gen
 	p.mu.Unlock()
 
-	refs := backend.FromContext(pc.ctx).RepositoryHasRefs(pc.repo)
-	if failed && !refs {
+	if failed {
 		p.remove(name, pc, gen)
 		return
 	}
+	refs := backend.FromContext(pc.ctx).RepositoryHasRefs(pc.repo)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
