@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -336,6 +337,34 @@ func quarantines(t *testing.T, dir string) []string {
 	return m
 }
 
+// quarantineBytes returns how many bytes the files in the quarantine
+// directories of the bare repository dir hold.
+func quarantineBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+	var n int64
+	for _, q := range quarantines(t, dir) {
+		// A file can go while the walk runs; what is left still counts.
+		_ = filepath.WalkDir(q, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil //nolint: nilerr // see above
+			}
+			// The size from the open file, not from the directory
+			// listing: NTFS updates a listed size lazily, so the
+			// pack index-pack is writing can be listed as empty.
+			f, err := os.Open(path)
+			if err != nil {
+				return nil //nolint: nilerr // see above
+			}
+			defer f.Close() //nolint: errcheck
+			if info, err := f.Stat(); err == nil {
+				n += info.Size()
+			}
+			return nil
+		})
+	}
+	return n
+}
+
 // R33: a push whose client goes away mid-pack must not leave the partly
 // received pack behind. git must be told the input ended, not killed: a
 // killed receive-pack cannot remove its quarantine directory, and nothing
@@ -386,15 +415,15 @@ func TestReceivePackInterruptedLeavesNoQuarantine(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("timed out sending the push")
 	}
+	// Cancel once index-pack has written some of what it has into the
+	// quarantine directory.
 	deadline := time.Now().Add(testTimeout)
-	for len(quarantines(t, dir)) == 0 {
+	for quarantineBytes(t, dir) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("receive-pack made no quarantine directory")
+			t.Fatal("receive-pack wrote nothing into a quarantine directory")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// Let index-pack write some of what it has.
-	time.Sleep(200 * time.Millisecond)
 	cancel()
 
 	err := waitErr(t, errc)
