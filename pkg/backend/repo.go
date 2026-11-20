@@ -1082,16 +1082,22 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 		// A COMMIT whose answer was lost, as when the connection drops
 		// during it, can have committed. The row decides where the
 		// directory belongs.
-		switch committed, cerr := d.renameCommitted(ctx, renamed.ID, newName); {
+		switch name, cerr := d.renamedRowName(ctx, renamed.ID); {
 		case cerr != nil:
 			d.logger.Error("rename failed and its outcome is unknown; leaving the repository directory where it is, it is reported at start-up if it has no row",
 				"repo", oldName, "path", np, "err", err, "lookup_err", cerr)
 			return wrapRepoError(err)
-		case committed:
+		case name == newName:
 			d.logger.Warn("rename committed although its transaction reported an error", "repo", oldName, "new", newName, "err", err)
 			err = nil
-		default:
+		case name == oldName:
 			d.moveRepoDirBack(oldName, op, np)
+		default:
+			// Renamed again by another session since: the directory
+			// belongs with neither name this call knows of.
+			d.logger.Error("rename failed and the repository now has another name; leaving its directory where it is, it is reported at start-up",
+				"repo", oldName, "row_name", name, "path", np, "err", err)
+			return wrapRepoError(err)
 		}
 	}
 	if err != nil {
@@ -1133,15 +1139,27 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	return nil
 }
 
-// renameCommitted reports whether the row of the repository id is named
-// newName, read afresh: whether a rename whose transaction reported an
-// error committed after all.
-func (d *Backend) renameCommitted(ctx context.Context, id int64, newName string) (bool, error) {
-	m, err := d.store.GetRepoByID(ctx, d.db, id)
-	if err != nil {
-		return false, err
-	}
-	return m.Name == newName, nil
+// renamedRowCheckTimeout bounds how long renamedRowName waits for the
+// row's lock.
+const renamedRowCheckTimeout = time.Minute
+
+// renamedRowName returns the name in the row of the repository id, after a
+// rename whose transaction reported an error, to tell whether it committed
+// after all. The row is read locked, in a transaction of its own: on
+// Postgres a COMMIT still in flight on the lost connection, waiting on
+// synchronous replication say, holds the row's lock and is invisible to a
+// plain read until it ends; the locked read waits for it, so it sees the
+// row as that COMMIT leaves it.
+func (d *Backend) renamedRowName(ctx context.Context, id int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, renamedRowCheckTimeout)
+	defer cancel()
+	var name string
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		m, err := d.store.GetRepoByIDForUpdate(ctx, tx, id)
+		name = m.Name
+		return err
+	})
+	return name, err
 }
 
 // moveBackAttempts bounds how often moveRepoDirBack tries to move a

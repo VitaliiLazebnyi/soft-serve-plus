@@ -82,13 +82,13 @@ func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 	is.True(os.IsNotExist(err))
 }
 
-// failingByIDStore fails every lookup by ID, as a database that went away
+// failingByIDStore fails every locked lookup by ID, as a database that went away
 // with the connection would.
 type failingByIDStore struct {
 	store.Store
 }
 
-func (failingByIDStore) GetRepoByID(context.Context, db.Handler, int64) (models.Repo, error) {
+func (failingByIDStore) GetRepoByIDForUpdate(context.Context, db.Handler, int64) (models.Repo, error) {
 	return models.Repo{}, errors.New("driver: bad connection")
 }
 
@@ -111,4 +111,32 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 	is.True(be.RenameRepository(ctx, "old", "new") != nil)
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
 	is.NoErr(err) // where the committed row puts it
+}
+
+// After a failed rename, the directory is moved back only if the row still
+// has the old name. A row renamed by another session since has a name this
+// rename does not know of, so the directory stays where it is. It used to
+// be moved back whenever the row did not have the new name.
+func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	r, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	_, err = be.db.ExecContext(ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
+	is.NoErr(err)
+	be.store = unpinnableRenameStore{Store: be.store}
+	be.renameTxDone = func(err error) error {
+		// Another session renames the row once this one's transaction
+		// has failed.
+		_, xerr := be.db.ExecContext(ctx, be.db.Rebind(`UPDATE repos SET name = 'third' WHERE id = ?`), r.ID())
+		is.NoErr(xerr)
+		return err
+	}
+
+	is.True(be.RenameRepository(ctx, "old", "new") != nil)
+	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
+	is.NoErr(err) // left where it is
+	_, err = os.Lstat(be.repoPath("old"))
+	is.True(os.IsNotExist(err))
 }

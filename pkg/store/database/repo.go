@@ -90,6 +90,18 @@ func (*Store) GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.R
 	return repo, err
 }
 
+// GetRepoByIDForUpdate implements store.Store. See LockUserRepos for the
+// driver switch.
+func (*Store) GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
+	query := "SELECT * FROM repos WHERE id = ?;"
+	if h.DriverName() == "postgres" {
+		query = "SELECT * FROM repos WHERE id = $1 FOR UPDATE;"
+	}
+	var repo models.Repo
+	err := h.GetContext(ctx, &repo, query, id)
+	return repo, err
+}
+
 // GetRepoByNameForUpdate implements store.Store. See LockUserRepos
 // for the driver switch.
 func (*Store) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
