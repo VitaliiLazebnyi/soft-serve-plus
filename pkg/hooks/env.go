@@ -72,7 +72,7 @@ const dataSourceEnv = "SOFT_SERVE_DB_DATA_SOURCE="
 //   - SOFT_SERVE_PUBLIC_KEY over SSH, empty for a keyless session;
 //   - SOFT_SERVE_USERNAME when there is a user;
 //   - SOFT_SERVE_PUSH_REFS when req has Refs;
-//   - SOFT_SERVE_HOOK_CONFIG, the server's effective config for `soft hook`
+//   - SOFT_SERVE_HOOK_CONFIG, the server's settings for `soft hook`
 //     (see WriteConfig);
 //   - the server config, from cfg.Environ, without the database data
 //     source;

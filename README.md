@@ -1631,13 +1631,17 @@ Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
   to learn which refs the push updated; the generated `post-receive` script
   writes to it. The server removes it after the push, and any left by a
   server that stopped mid-push when it next starts;
-- `SOFT_SERVE_HOOK_CONFIG`: `<data path>/hook-config.yaml`, the configuration
-  the server runs with, all of it, readable only by the server's user. The
-  server writes it when it starts, and `soft hook` (run by hooks from older
-  versions) reads it instead of `config.yaml`, so an edit to `config.yaml`
-  reaches hooks only when the server restarts, and a mistake in it does not
-  break pushes meanwhile. If `soft hook` cannot load it, the push fails with
-  `internal server error` and the reason goes to `<data path>/log/hooks.log`.
+- `SOFT_SERVE_HOOK_CONFIG`: `<data path>/hook-config.yaml`, the settings of the
+  running server that `soft hook` (run by hooks from older versions) uses: its
+  log format and time format, with `<data path>/log/hooks.log` as the log
+  file. It holds nothing else, no database data source, keys or key paths.
+  The server writes it when it starts, and `soft hook` reads it instead of
+  `config.yaml`, so an edit to `config.yaml` reaches hooks only when the
+  server restarts, and a mistake in it does not break pushes meanwhile. If
+  `soft hook` cannot load it, the push fails with `internal server error`
+  and the reason goes to `<data path>/log/hooks.log`. The file is created
+  with mode 0600; on Windows that mode means nothing, and the file has the
+  access the data directory's ACLs give it.
 
 No other git command the server runs, such as a fetch or a clone over any of
 SSH, HTTP or `git://`, gets these variables.

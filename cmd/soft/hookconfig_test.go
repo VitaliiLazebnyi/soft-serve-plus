@@ -19,20 +19,20 @@ func setHookEnv(t *testing.T) (dataPath, logPath string) {
 	t.Setenv("SOFT_SERVE_DATA_PATH", dataPath)
 	t.Setenv("SOFT_SERVE_LOG_PATH", logPath)
 	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", "")
-	t.Setenv("SOFT_SERVE_NAME", "from the environment")
+	t.Setenv("SOFT_SERVE_LOG_FORMAT", "text")
 	if err := os.WriteFile(filepath.Join(dataPath, "config.yaml"), []byte("ssh: {max_timeout: -5}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dataPath, logPath
 }
 
-// A hook runs with the server's effective config from the hook config file,
+// A hook logs as the server does, with the settings from the hook config file,
 // whatever config.yaml and the environment say (R45).
 func TestLoadHookConfigReadsTheServersConfig(t *testing.T) {
 	dataPath, logPath := setHookEnv(t)
 	server := config.DefaultConfig()
 	server.DataPath = dataPath
-	server.Name = "the server"
+	server.Log.Format = "json"
 	if err := server.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +45,8 @@ func TestLoadHookConfigReadsTheServersConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Name != "the server" {
-		t.Errorf("name %q, want the server's", cfg.Name)
+	if cfg.Log.Format != "json" {
+		t.Errorf("log format %q, want the server's", cfg.Log.Format)
 	}
 	if cfg.Log.Path != logPath {
 		t.Errorf("log path %q, want %q", cfg.Log.Path, logPath)

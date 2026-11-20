@@ -27,7 +27,7 @@ func loadConfig(cfg *config.Config) error {
 }
 
 // loadHookConfig returns the config a `soft hook` command runs with: the
-// server's effective config, from the file the server names in
+// settings the server wrote for hooks to the file it names in
 // SOFT_SERVE_HOOK_CONFIG (see hooks.WriteConfig), so neither an edit to
 // config.yaml after the server started nor a typo in it reaches the hook.
 // A server that sets no such file, one from before it, gets the old load
