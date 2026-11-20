@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -106,7 +107,7 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 		stdin:   stdin,
 	}, &lfsLogger{logger})
 
-	err := processCommands(processor, op)
+	err := processCommands(processor, op, logger)
 	if errors.Is(err, errLFSCommandTooLarge) {
 		logger.Warn("closing session: client sent a command that is too large", "limit", lfs.MaxBatchRequestSize)
 	}
@@ -130,10 +131,12 @@ func lfsTransferError(ctx context.Context, err error) error {
 // processCommands runs the transfer processor's command loop. A panic in it
 // ends the session with an error rather than the process: the processor
 // trusts its input in places, for example it reads the argument of a
-// "version" command without checking that one was sent.
-func processCommands(p *transfer.Processor, op string) (err error) {
+// "version" command without checking that one was sent. The panic is
+// logged with its stack, which the session's error does not carry.
+func processCommands(p *transfer.Processor, op string, logger *log.Logger) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			logger.Error("lfs transfer command processor panicked", "panic", r, "stack", string(debug.Stack()))
 			err = fmt.Errorf("lfs transfer: command processor panicked: %v", r)
 		}
 	}()

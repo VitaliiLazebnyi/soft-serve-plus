@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -23,7 +24,9 @@ func TestLFSTransferBareVersion(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
+	var logs bytes.Buffer
 	ctx := config.WithContext(context.Background(), cfg)
+	ctx = log.WithContext(ctx, log.New(&logs))
 	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
 	ctx = proto.WithUserContext(ctx, lfsTestUser{})
 
@@ -38,5 +41,9 @@ func TestLFSTransferBareVersion(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "status 200") {
 		t.Errorf("commands after the bare version were served\noutput: %q", out.String())
+	}
+	// The log has where it panicked, which the error does not.
+	if !strings.Contains(logs.String(), "processCommands") {
+		t.Errorf("panic logged without its stack:\n%s", logs.String())
 	}
 }
