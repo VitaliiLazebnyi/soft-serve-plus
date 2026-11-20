@@ -22,9 +22,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
-	"github.com/charmbracelet/soft-serve/pkg/stats"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/web"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -33,7 +33,7 @@ type Server struct {
 	SSHServer   *sshsrv.SSHServer
 	GitDaemon   *daemon.GitDaemon
 	HTTPServer  *web.HTTPServer
-	StatsServer *stats.StatsServer
+	StatsServer *http.Server
 	CertLoader  *CertReloader
 	Cron        *cron.Scheduler
 	Config      *config.Config
@@ -113,10 +113,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, fmt.Errorf("create http server: %w", err)
 	}
 
-	srv.StatsServer, err = stats.NewStatsServer(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create stats server: %w", err)
-	}
+	srv.StatsServer = newStatsServer()
 
 	if cfg.HTTP.TLSKeyPath != "" && cfg.HTTP.TLSCertPath != "" {
 		srv.CertLoader, err = NewCertReloader(cfg.HTTP.TLSCertPath, cfg.HTTP.TLSKeyPath)
@@ -139,6 +136,20 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}
 
 	return srv, nil
+}
+
+// newStatsServer returns the stats server: the Prometheus metrics on
+// /metrics, and nothing else. Start binds its listener.
+func newStatsServer() *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	return &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		MaxHeaderBytes:    http.DefaultMaxHeaderBytes,
+	}
 }
 
 // warnIfAnonAdminAccess logs a loud warning if the server's effective,

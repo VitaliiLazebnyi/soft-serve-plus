@@ -4,9 +4,13 @@
 # running on the default config
 env SOFT_SERVE_CONFIG_LOCATION=$WORK/missing.yaml
 
+# a command that does not use the server's config does not read it
+exec soft --version
+
 # checked first so that a regression fails here instead of starting a server
-! exec soft --version
+! exec soft admin migrate
 stderr 'SOFT_SERVE_CONFIG_LOCATION'
+! exists $DATA_PATH/config.yaml
 
 ! exec soft serve
 stderr 'SOFT_SERVE_CONFIG_LOCATION'

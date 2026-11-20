@@ -2,6 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,5 +59,46 @@ func TestSourceDate(t *testing.T) {
 	}
 	if d, err := sourceDate(""); err != nil || time.Since(d) > time.Minute {
 		t.Errorf("sourceDate(\"\") = %v, %v; want now", d, err)
+	}
+}
+
+// Commands that do not act on the server's data read no server config and
+// open no server log: --version, --help and man succeed in a directory whose
+// data/config.yaml the server would refuse, and create no log file (R60,
+// CFG-9).
+func TestNonServerCommandsLoadNoConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.MkdirAll("data", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("data", "config.yaml"), []byte("db:\n  driver: mysql\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"SOFT_SERVE_DATA_PATH", "SOFT_SERVE_CONFIG_LOCATION"} {
+		t.Setenv(k, "")
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logPath := filepath.Join(dir, "logs", "soft.log")
+	t.Setenv("SOFT_SERVE_LOG_PATH", logPath)
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	t.Cleanup(func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		rootCmd.SetArgs(nil)
+	})
+	for _, args := range [][]string{{"--version"}, {"--help"}, {"man"}} {
+		out.Reset()
+		if code := run(context.Background(), args); code != 0 {
+			t.Errorf("soft %v exited %d: %s", args, code, out.String())
+		}
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("soft --version, --help and man created the server log %s: %v", logPath, err)
 	}
 }

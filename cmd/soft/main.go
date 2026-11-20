@@ -13,14 +13,14 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/soft-serve/cmd"
 	"github.com/charmbracelet/soft-serve/cmd/soft/admin"
 	"github.com/charmbracelet/soft-serve/cmd/soft/browse"
 	"github.com/charmbracelet/soft-serve/cmd/soft/hook"
 	"github.com/charmbracelet/soft-serve/cmd/soft/serve"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	logr "github.com/charmbracelet/soft-serve/pkg/log"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/version"
+	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
 	"github.com/spf13/cobra"
@@ -157,47 +157,54 @@ func init() {
 	}
 	rootCmd.Version = Version
 
-	version.Version = Version
+	webhook.Version = Version
 }
 
 func main() {
 	superviseIfInit()
+	os.Exit(run(context.Background(), os.Args[1:]))
+}
 
-	ctx := context.Background()
-	isHook := isHookCommand(os.Args[1:])
-	var cfg *config.Config
-	// cfgErr is a hook's failure to load the config, reported once its
-	// logger is open.
-	var cfgErr error
-	if isHook {
-		cfg, cfgErr = loadHookConfig()
-	} else {
-		var err error
-		if cfg, err = config.Load(); err != nil {
-			log.Fatal(err)
+// run runs the soft command args and returns the exit status. Only the
+// commands that act on the server's data load the server config and open
+// its log: serve and admin's subcommands do it themselves (cmd.LoadConfig),
+// and a hook here, from the file the server writes for hooks. Any other
+// command, such as --version, man or a local browse, reads neither.
+func run(ctx context.Context, args []string) int {
+	rootCmd.SetArgs(args)
+	if isHookCommand(args) {
+		var f *os.File
+		var ok bool
+		if ctx, f, ok = hookContext(ctx); !ok {
+			return 1
+		}
+		if f != nil {
+			defer f.Close() //nolint: errcheck
 		}
 	}
 
-	ctx = config.WithContext(ctx, cfg)
-	logger, f, err := logr.NewLogger(cfg)
+	// GOMAXPROCS is left to the Go runtime: since Go 1.25 it follows the
+	// container's cgroup CPU limit and updates it when the limit changes.
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// hookContext returns ctx with the config and logger of a `soft hook`
+// command, and the hook log file to close. It reports false when the config
+// cannot be loaded; the error is then in the hook log and the client is told
+// only that the server failed.
+func hookContext(ctx context.Context) (context.Context, *os.File, bool) {
+	cfg, cfgErr := loadHookConfig()
+	logger, f, err := cmd.NewLogger(cfg)
 	if err != nil {
-		if isHook {
-			// A hook's stderr is relayed to the git client as "remote:"
-			// lines. Don't send it server paths or server logs; drop the
-			// hook logs instead.
-			logger.SetOutput(io.Discard)
-		} else {
-			// logger still writes to stderr.
-			logger.Warn("failed to open log file, logging to stderr", "err", err)
-		}
+		// A hook's stderr is relayed to the git client as "remote:"
+		// lines. Don't send it server paths or server logs; drop the
+		// hook logs instead.
+		logger.SetOutput(io.Discard)
 	}
-
-	ctx = log.WithContext(ctx, logger)
-	if f != nil {
-		defer f.Close() //nolint: errcheck
-	}
-
-	// Set global logger
 	log.SetDefault(logger)
 
 	if cfgErr != nil {
@@ -209,15 +216,12 @@ func main() {
 		if f != nil {
 			f.Close() //nolint: errcheck
 		}
-		os.Exit(1)
+		return ctx, nil, false
 	}
 
-	// GOMAXPROCS is left to the Go runtime: since Go 1.25 it follows the
-	// container's cgroup CPU limit and updates it when the limit changes.
-
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		os.Exit(1)
-	}
+	ctx = config.WithContext(ctx, cfg)
+	ctx = log.WithContext(ctx, logger)
+	return ctx, f, true
 }
 
 // isHookCommand reports whether args run the hook command or one of its

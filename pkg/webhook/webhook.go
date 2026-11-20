@@ -30,7 +30,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/charmbracelet/soft-serve/pkg/version"
 	"github.com/google/go-querystring/query"
 	"github.com/google/uuid"
 )
@@ -47,6 +46,10 @@ type Delivery struct {
 	models.WebhookDelivery
 	Event Event
 }
+
+// Version is the server version that webhook requests name in their
+// User-Agent, "SoftServe/<Version>". The soft command sets it at start.
+var Version = ""
 
 // ErrWebhookInactive is returned when a delivery is redelivered to a webhook
 // that is not active. Activate the webhook first to send to it again.
@@ -248,7 +251,7 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 
 	headers := http.Header{}
 	headers.Add("Content-Type", contentType.String())
-	headers.Add("User-Agent", "SoftServe/"+version.Version)
+	headers.Add("User-Agent", "SoftServe/"+Version)
 	headers.Add("X-SoftServe-Event", event.String())
 
 	// A random (version 4) ID: version 1 would embed the server's MAC address.
