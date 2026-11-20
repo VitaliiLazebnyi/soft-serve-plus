@@ -105,7 +105,35 @@ func gateRepo(ctx context.Context, args []string, need access.AccessLevel) (prot
 	if level < need {
 		return nil, level, proto.ErrUnauthorized
 	}
+	if testHookAfterGate != nil {
+		testHookAfterGate()
+	}
 	return repo, level, nil
+}
+
+// testHookAfterGate, when set, runs once gateRepo has let a command through,
+// before the command acts.
+var testHookAfterGate func()
+
+// eventSenderContext returns ctx with the session's user read again by its
+// ID, for the sender of the webhook event a command sends. The session
+// resolved its user when it authenticated, and the account may have been
+// renamed since; the ID is the same account. Without a session user, as for
+// a configured admin key no account holds, ctx is returned as it is.
+func eventSenderContext(ctx context.Context) (context.Context, error) {
+	user := proto.UserFromContext(ctx)
+	if user == nil {
+		return ctx, nil
+	}
+	cur, err := backend.FromContext(ctx).UserByID(ctx, user.ID())
+	switch {
+	case errors.Is(err, proto.ErrUserNotFound):
+		// The account was deleted during the session.
+		return nil, errUnknownKey(ctx)
+	case err != nil:
+		return nil, lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
+	}
+	return proto.WithUserContext(ctx, cur), nil
 }
 
 // isServerAdmin reports whether the session's caller is a server admin,
