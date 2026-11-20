@@ -742,6 +742,12 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 	defer func() {
 		if err != nil {
 			d.removeFailedImport(ctx, r)
+			return
+		}
+		// git clone runs no hooks, so nothing else records when the
+		// imported history was last changed.
+		if lerr := d.populateLastModified(context.WithoutCancel(ctx), imp.name); lerr != nil {
+			d.logger.Warn("failed to record the last change of an imported repository", "repo", imp.name, "err", lerr)
 		}
 	}()
 
@@ -1708,7 +1714,7 @@ func (d *Backend) repoRowExists(ctx context.Context, name string) (bool, error) 
 
 var _ proto.Repository = (*repo)(nil)
 
-// repo is a Git repository with metadata stored in a SQLite database.
+// repo is a Git repository with metadata stored in the database.
 type repo struct {
 	name   string
 	path   string
@@ -1772,7 +1778,7 @@ func (r *repo) Open() (*git.Repository, error) {
 // openRepoError returns the error to show to clients when git does not accept
 // a repository. git's reason (for example "detected dubious ownership") names
 // the server path, so it is logged here and the client gets the plain
-// ErrNotAGitRepository, as before. Other errors are returned unchanged.
+// ErrNotAGitRepository. Other errors are returned unchanged.
 func openRepoError(logger *log.Logger, err error, path string) error {
 	if !errors.Is(err, git.ErrNotAGitRepository) {
 		return err
@@ -1803,32 +1809,48 @@ func (r *repo) CreatedAt() time.Time {
 	return r.repo.CreatedAt
 }
 
-// UpdatedAt returns the repository's last update time.
+// UpdatedAt returns the repository's last update time: the time of its
+// latest commit, as recorded in info/last-modified after each push, import
+// and mirror sync (see populateLastModified), or the time its row last
+// changed when there is no such file, as for a repository nothing was
+// pushed to yet. It runs no git: the TUI asks it for every listed
+// repository.
+//
+// It implements proto.Repository.
 func (r *repo) UpdatedAt() time.Time {
-	// Try to read the last modified time from the info directory.
 	if t, err := readOneline(filepath.Join(r.path, "info", "last-modified")); err == nil {
 		if t, err := time.Parse(time.RFC3339, t); err == nil {
 			return t
 		}
 	}
-
-	rr, err := git.Open(r.path)
-	if err == nil {
-		t, err := rr.LatestCommitTime()
-		if err == nil {
-			return t
-		}
-	}
-
 	return r.repo.UpdatedAt
 }
 
-func (r *repo) writeLastModified(t time.Time) error {
-	fp := filepath.Join(r.path, "info", "last-modified")
+// populateLastModified writes the time of the latest commit of the
+// repository name to its info/last-modified, where UpdatedAt reads it.
+// The post-update hook calls it after a push; an import and a mirror sync
+// run no hooks, so they call it themselves.
+//
+// A repository without refs, such as an empty import or mirror, has no
+// commit to date: there is nothing to record, and UpdatedAt keeps falling
+// back to the row.
+func (d *Backend) populateLastModified(_ context.Context, name string) error {
+	rp := d.repoPath(name)
+	if !hasRefs(rp) {
+		return nil
+	}
+	r, err := git.Open(rp)
+	if err != nil {
+		return err
+	}
+	t, err := r.LatestCommitTime()
+	if err != nil {
+		return err
+	}
+	fp := filepath.Join(rp, "info", "last-modified")
 	if err := os.MkdirAll(filepath.Dir(fp), os.ModePerm); err != nil {
 		return err
 	}
-
 	return os.WriteFile(fp, []byte(t.Format(time.RFC3339)), os.ModePerm) //nolint:gosec
 }
 

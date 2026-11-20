@@ -109,7 +109,7 @@ func (d *Backend) SyncRepoLFSObjects(ctx context.Context, repo proto.Repository,
 func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository, lfsClient LFSClient, incremental bool) error {
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	lfsRoot := filepath.Join(d.cfg.DataPath, "lfs", repoID)
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger := d.logger.WithPrefix("lfs")
 
 	r, err := repo.Open()
 	if err != nil {
@@ -278,7 +278,7 @@ func (d *Backend) storeMissingLFSObjects(ctx context.Context, repo proto.Reposit
 		client:    lfsClient,
 		// TODO: support S3 storage
 		strg:     storage.NewLocalStorage(lfsRoot),
-		logger:   log.FromContext(ctx).WithPrefix("lfs"),
+		logger:   d.logger.WithPrefix("lfs"),
 		recorded: make(map[string]int64),
 		verified: make(map[string]bool),
 		queued:   make(map[lfsPointerKey]bool),

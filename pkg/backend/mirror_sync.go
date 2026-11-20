@@ -25,8 +25,15 @@ type MirrorSync struct {
 // RecordMirrorSync records the outcome of a sync of the mirror r: syncErr
 // is its error, or nil for a sync that succeeded. It records it on r's row,
 // by ID, wherever r is now; a mirror deleted meanwhile is
-// proto.ErrRepoNotFound.
+// proto.ErrRepoNotFound. After a sync that succeeded it also records when
+// the mirrored history last changed (see UpdatedAt): git fetch runs no
+// hooks.
 func (d *Backend) RecordMirrorSync(ctx context.Context, r proto.Repository, syncErr error) error {
+	if syncErr == nil {
+		if err := d.populateLastModified(ctx, r.Name()); err != nil {
+			d.logger.Warn("failed to record the last change of a mirror", "repo", r.Name(), "err", err)
+		}
+	}
 	msg := ""
 	if syncErr != nil {
 		// Valid UTF-8 first, so the cut below lands between characters;
