@@ -140,8 +140,11 @@ var errRepoEmpty = errors.New("repository is empty")
 // says so rather than "reference does not exist".
 func repoHead(ctx context.Context, rr proto.Repository, r *git.Repository) (*git.Reference, error) {
 	head, err := r.HEAD()
-	if !errors.Is(err, git.ErrReferenceNotExist) {
-		return head, err
+	switch {
+	case err == nil:
+		return head, nil
+	case !errors.Is(err, git.ErrReferenceNotExist):
+		return nil, gitFailed(ctx, "read HEAD", rr.Name(), err)
 	}
 	switch bs, err := r.Branches(); {
 	case err != nil:
@@ -151,7 +154,7 @@ func repoHead(ctx context.Context, rr proto.Repository, r *git.Repository) (*git
 	}
 	name, err := r.SymbolicRef(git.HEAD, "")
 	if err != nil {
-		return nil, fmt.Errorf("default branch does not exist: %w", err)
+		return nil, gitFailed(ctx, "read HEAD", rr.Name(), err)
 	}
 	return nil, fmt.Errorf("default branch %q does not exist", git.ReferenceName(name).Short())
 }

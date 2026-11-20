@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -48,6 +49,9 @@ func TestRefListingFailureIsReported(t *testing.T) {
 		{"tag", "list", "r"},
 		{"tag", "delete", "r", "v1"},
 		{"info", "r"},
+		{"branch", "default", "r"},
+		{"tree", "r"},
+		{"blob", "r", "f"},
 	} {
 		logs.Reset()
 		out, stderr, err := runRepoOutput(t, ownerCtx, args...)
@@ -82,4 +86,25 @@ func TestBranchesEmpty(t *testing.T) {
 	is.True(errors.Is(err, errRepoEmpty))
 	_, _, err = runRepoOutput(t, ownerCtx, "info", "empty")
 	is.NoErr(err)
+}
+
+// gitFailed logs a git run that failed because the client went away, its
+// context canceled, at Debug and not at Error, and still answers
+// errGitFailed.
+func TestGitFailedCanceledLogsAtDebug(t *testing.T) {
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(log.WithContext(t.Context(), log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})))
+	cancel()
+
+	err := gitFailed(ctx, "list branches", "r", errors.New("signal: killed"))
+	if !errors.Is(err, errGitFailed) {
+		t.Fatalf("err = %v, want %v", err, errGitFailed)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "DEBU") || !strings.Contains(out, "signal: killed") {
+		t.Errorf("want the failure logged at Debug, log:\n%s", out)
+	}
+	if strings.Contains(out, "ERRO") {
+		t.Errorf("a canceled git run was logged at Error:\n%s", out)
+	}
 }

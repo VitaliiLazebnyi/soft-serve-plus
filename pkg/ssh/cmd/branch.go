@@ -186,7 +186,7 @@ func branchDeleteCommand() *cobra.Command {
 			// the branch being deleted, which does exist.
 			head, err := r.HEAD()
 			if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
-				return err
+				return gitFailed(ctx, "read HEAD", rr.Name(), err)
 			}
 
 			if head != nil && head.Name().Short() == branch {
@@ -195,14 +195,17 @@ func branchDeleteCommand() *cobra.Command {
 
 			// The event needs only the ID. Reading the commit would
 			// fail for one git cannot parse, and such a branch must
-			// still be deletable.
+			// still be deletable. The branch was just listed, so a failure to read or delete
+			// it is the server's: it is logged, and the client gets a
+			// generic error. That includes a delete of the same branch
+			// that another session finished in between.
 			branchID, err := r.ShowRefVerify(git.RefsHeads+branch, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
-				return err
+				return gitFailed(ctx, "read branch", rr.Name(), err)
 			}
 
 			if err := r.DeleteBranch(branch, gitm.DeleteBranchOptions{Force: true}); err != nil {
-				return err
+				return gitFailed(ctx, "delete branch", rr.Name(), err)
 			}
 
 			// The branch is already deleted, so a failed event is logged rather

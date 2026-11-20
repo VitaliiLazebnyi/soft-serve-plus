@@ -97,7 +97,9 @@ func tagDeleteCommand() *cobra.Command {
 			// on a commit git cannot parse, and such a tag must still be
 			// deletable. The tag was just listed, so a failure to read
 			// or delete it is the server's: it is logged, and the client
-			// gets a generic error.
+			// gets a generic error. So is a delete of the same tag that
+			// another session finished in between: this one then fails
+			// with errGitFailed, and git's error is logged at Error.
 			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
 				return gitFailed(ctx, "read tag", rr.Name(), err)
