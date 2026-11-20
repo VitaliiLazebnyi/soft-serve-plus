@@ -29,48 +29,9 @@ var (
 	// SOFT_SERVE_DATA_PATH, i.e. not from a Soft Serve Plus server.
 	ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server")
 
-	// Deprecated: this flag is ignored.
-	configPath string
-
-	// Command is the hook command.
-	Command = &cobra.Command{
-		Use:    "hook",
-		Short:  "Run git server hooks",
-		Long:   "Handles Soft Serve Plus git server hooks.",
-		Hidden: true,
-		PersistentPreRunE: func(c *cobra.Command, args []string) error {
-			logger := log.FromContext(c.Context())
-			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
-			// in the working directory, which for a hook is the repository:
-			// opening the backend would create a data directory and an
-			// empty database inside it. The server always sets it.
-			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
-				logger.Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
-				return ErrNoDataPath
-			}
-			if err := cmd.InitBackendContext(c, args); err != nil {
-				logger.Error("failed to initialize backend context", "err", err)
-				return ErrInternalServerError
-			}
-
-			return nil
-		},
-		PersistentPostRunE: func(c *cobra.Command, args []string) error {
-			// The hook has done its work by now, so a failure to close the
-			// database is only logged: failing here would make git reject a
-			// push that pre-receive or update accepted.
-			if err := cmd.CloseDBContext(c, args); err != nil {
-				log.FromContext(c.Context()).Error("failed to close backend", "err", err)
-			}
-
-			return nil
-		},
-	}
-
-	// Git hooks read the config from the environment, based on
-	// $SOFT_SERVE_DATA_PATH. We already parse the config when the binary
-	// starts, so we don't need to do it again.
-	// The --config flag is now deprecated.
+	// hooksRunE runs a git hook. Git hooks read the config from the
+	// environment, based on $SOFT_SERVE_DATA_PATH, which the binary parses
+	// when it starts.
 	hooksRunE = cmd.CloseDBOnError(func(c *cobra.Command, args []string) error {
 		ctx := c.Context()
 		hks := backend.FromContext(ctx)
@@ -134,42 +95,80 @@ var (
 
 		return nil
 	})
-
-	preReceiveCmd = &cobra.Command{
-		Use:   "pre-receive",
-		Short: "Run git pre-receive hook",
-		RunE:  hooksRunE,
-	}
-
-	updateCmd = &cobra.Command{
-		Use:   "update",
-		Short: "Run git update hook",
-		Args:  cobra.ExactArgs(3),
-		RunE:  hooksRunE,
-	}
-
-	postReceiveCmd = &cobra.Command{
-		Use:   "post-receive",
-		Short: "Run git post-receive hook",
-		RunE:  hooksRunE,
-	}
-
-	postUpdateCmd = &cobra.Command{
-		Use:   "post-update",
-		Short: "Run git post-update hook",
-		RunE:  hooksRunE,
-	}
 )
 
-func init() {
-	Command.PersistentFlags().StringVar(&configPath, "config", "", "path to config file (deprecated)")
-	_ = Command.PersistentFlags().MarkDeprecated("config", "it is ignored; run \"soft admin sync-hooks\" to regenerate the hooks without it")
-	Command.AddCommand(
-		preReceiveCmd,
-		updateCmd,
-		postReceiveCmd,
-		postUpdateCmd,
+// NewCommand returns a new hook command with its subcommands.
+//
+// Each call builds a new command tree. Cobra keeps a subcommand's context
+// from its first run, and InitBackendContext stores the database and
+// backend in it, so a tree run twice would run the second time with the
+// first run's config and closed database.
+func NewCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:    "hook",
+		Short:  "Run git server hooks",
+		Long:   "Handles Soft Serve Plus git server hooks.",
+		Hidden: true,
+		PersistentPreRunE: func(c *cobra.Command, args []string) error {
+			logger := log.FromContext(c.Context())
+			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
+			// in the working directory, which for a hook is the repository:
+			// opening the backend would create a data directory and an
+			// empty database inside it. The server always sets it.
+			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
+				logger.Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
+				return ErrNoDataPath
+			}
+			if err := cmd.InitBackendContext(c, args); err != nil {
+				logger.Error("failed to initialize backend context", "err", err)
+				return ErrInternalServerError
+			}
+
+			return nil
+		},
+		PersistentPostRunE: func(c *cobra.Command, args []string) error {
+			// The hook has done its work by now, so a failure to close the
+			// database is only logged: failing here would make git reject a
+			// push that pre-receive or update accepted.
+			if err := cmd.CloseDBContext(c, args); err != nil {
+				log.FromContext(c.Context()).Error("failed to close backend", "err", err)
+			}
+
+			return nil
+		},
+	}
+
+	// The --config flag is deprecated and ignored: git hooks read the
+	// config from the environment, based on $SOFT_SERVE_DATA_PATH.
+	var configPath string
+	command.PersistentFlags().StringVar(&configPath, "config", "", "path to config file (deprecated)")
+	_ = command.PersistentFlags().MarkDeprecated("config", "it is ignored; run \"soft admin sync-hooks\" to regenerate the hooks without it")
+
+	command.AddCommand(
+		&cobra.Command{
+			Use:   hooks.PreReceiveHook,
+			Short: "Run git pre-receive hook",
+			RunE:  hooksRunE,
+		},
+		&cobra.Command{
+			Use:   hooks.UpdateHook,
+			Short: "Run git update hook",
+			Args:  cobra.ExactArgs(3),
+			RunE:  hooksRunE,
+		},
+		&cobra.Command{
+			Use:   hooks.PostReceiveHook,
+			Short: "Run git post-receive hook",
+			RunE:  hooksRunE,
+		},
+		&cobra.Command{
+			Use:   hooks.PostUpdateHook,
+			Short: "Run git post-update hook",
+			RunE:  hooksRunE,
+		},
 	)
+
+	return command
 }
 
 func runCommand(ctx context.Context, in io.Reader, out io.Writer, err io.Writer, name string, args ...string) error {

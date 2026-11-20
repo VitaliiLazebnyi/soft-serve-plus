@@ -38,15 +38,16 @@ func TestServeStartErrorShutsDown(t *testing.T) {
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	Command.SetArgs([]string{})
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	err = Command.ExecuteContext(ctx)
+	command := NewCommand()
+	command.SetArgs([]string{})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	err = command.ExecuteContext(ctx)
 	if err == nil || !strings.Contains(err.Error(), "HTTP server") {
 		t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
 	}
 
-	dbx := db.FromContext(Command.Context())
+	dbx := db.FromContext(command.Context())
 	is.True(dbx != nil)
 	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("database ping returned %v, want it closed", err)
@@ -122,16 +123,16 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 			ctx := config.WithContext(context.Background(), cfg)
 			ctx = log.WithContext(ctx, log.New(io.Discard))
 
-			t.Cleanup(func() { syncHooks = false })
-			Command.SetArgs(append([]string{}, tc.args...))
-			Command.SetOut(io.Discard)
-			Command.SetErr(io.Discard)
-			err := Command.ExecuteContext(ctx)
+			command := NewCommand()
+			command.SetArgs(append([]string{}, tc.args...))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			err := command.ExecuteContext(ctx)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("serve returned %v, want a %q error", err, tc.want)
 			}
 
-			dbx := db.FromContext(Command.Context())
+			dbx := db.FromContext(command.Context())
 			if dbx == nil {
 				t.Fatal("no database in the command context")
 			}
@@ -178,11 +179,11 @@ func TestServeUsesContextConfig(t *testing.T) {
 
 	// Starting the HTTP server fails, after the directories and hooks are
 	// set up.
-	t.Cleanup(func() { syncHooks = false })
-	Command.SetArgs([]string{"--sync-hooks"})
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	err = Command.ExecuteContext(ctx)
+	command := NewCommand()
+	command.SetArgs([]string{"--sync-hooks"})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	err = command.ExecuteContext(ctx)
 	if err == nil || !strings.Contains(err.Error(), "HTTP server") {
 		t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
 	}
