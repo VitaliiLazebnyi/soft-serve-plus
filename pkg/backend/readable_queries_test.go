@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -64,4 +65,27 @@ func TestReadableLookupsMatchForPrivateAndMissing(t *testing.T) {
 		return st.n.Load()
 	}
 	is.Equal(lookups("private"), lookups("missing"))
+}
+
+// With only the collaborators table failing, an existing private repository
+// and a missing name answer alike, for an anonymous caller and for a
+// stranger: both lookups go through the same failing query. A missing name
+// used to skip it and answer as free, while the private repository failed.
+func TestReadableCollabOutageAnswersAlike(t *testing.T) {
+	is := is.New(t)
+	be := newLookupBackend(t, nil)
+	ctx := context.Background()
+	_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
+	is.NoErr(err)
+	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
+	is.NoErr(err)
+	breakTable(t, be, "collabs")
+
+	for _, user := range []proto.User{nil, stranger} {
+		answer := func(name string) string {
+			r, level, err := be.Readable(ctx, name, user)
+			return fmt.Sprintf("%v %v %v", r != nil, level, err != nil)
+		}
+		is.Equal(answer("private"), answer("missing"))
+	}
 }

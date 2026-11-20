@@ -154,24 +154,24 @@ func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.Acces
 	return anon
 }
 
-// collabRow is a user's collaborator row on a repository: its level, and
+// collabRow is what the access check reads of a repository's row: whether
+// there is one, and the caller's collaborator row on it, its level and
 // whether there is one.
 type collabRow struct {
+	row   bool
 	level access.AccessLevel
 	ok    bool
 }
 
 // repositoryWithCollab is Repository with user's collaborator row on the
-// repository read in the same query. A registered stranger on a private
-// repository then costs as many lookups that can fail as a missing name
-// does (the repository, and the anon-access setting), so an outage does not
-// tell the two apart by which lookup failed. A repository that is not found
-// is nil with no error.
+// repository read in the same query. The query runs for every name, missing
+// ones and ones with no directory included, and is the only lookup of the
+// repository: an existing private repository and a missing name then cost
+// the same lookups that can fail (this one, and the anon-access setting),
+// and fail alike, so an outage does not tell the two apart. A repository
+// that is not found, for want of a row or of a directory, is nil with no
+// error; collab.row says whether there is a row.
 func (d *Backend) repositoryWithCollab(ctx context.Context, name string, user proto.User) (proto.Repository, collabRow, error) {
-	rp := d.repoPath(name)
-	if !d.repoDirFound(rp) {
-		return nil, collabRow{}, nil
-	}
 	var userID int64
 	if user != nil {
 		userID = user.ID()
@@ -183,7 +183,12 @@ func (d *Backend) repositoryWithCollab(ctx context.Context, name string, user pr
 	case err != nil:
 		return nil, collabRow{}, err
 	}
-	return &repo{name: name, path: rp, repo: m, logger: d.logger}, collabRow{level: level, ok: ok && userID != 0}, nil
+	collab := collabRow{row: true, level: level, ok: ok && userID != 0}
+	rp := d.repoPath(name)
+	if !d.repoDirFound(rp) {
+		return nil, collab, nil
+	}
+	return &repo{name: name, path: rp, repo: m, logger: d.logger}, collab, nil
 }
 
 // accessLevel computes the access level of user for r, which is the
@@ -207,14 +212,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, collab co
 		// or an unmounted volume): its settings are unknown to the caller,
 		// so it must not fall back to the level for a free name, which would
 		// show a private repository in listings that walk the rows.
-		if d.repoPathExists(name) {
-			return access.NoAccess, nil
-		}
-		row, err := d.repoRowExists(ctx, name)
-		if err != nil {
-			return access.NoAccess, err
-		}
-		if row {
+		if collab.row || d.repoPathExists(name) {
 			return access.NoAccess, nil
 		}
 		return d.baseAccessLevel(user, false, anon), nil
