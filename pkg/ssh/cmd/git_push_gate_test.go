@@ -3,16 +3,23 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
+	"github.com/spf13/cobra"
 )
 
 // A push over SSH counts as running for the removal of a repository an
@@ -244,4 +251,64 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 		t.Fatal("the push wrote to the repository that replaced the one it created")
 	}
 	is.True(!strings.Contains(out.String(), "refs/heads/main")) // and git never ran on it
+}
+
+// beginPushFailStore fails GetRepoByName, which BeginPush reads the
+// repository with, once armed.
+type beginPushFailStore struct {
+	store.Store
+	armed *atomic.Bool
+}
+
+var errInjectedBeginPush = errors.New("injected repos read failure: /server/path")
+
+func (s beginPushFailStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	if s.armed.Load() {
+		return models.Repo{}, errInjectedBeginPush
+	}
+	return s.Store.GetRepoByName(ctx, h, name)
+}
+
+// A push or LFS upload whose BeginPush cannot read the repository fails on
+// the server: the database error is logged once, and the client gets
+// git.ErrSystemMalfunction, not the error.
+func TestBeginPushLookupFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		exists bool
+		cmd    func() *cobra.Command
+		args   []string
+	}{
+		{"push", true, GitReceivePackCommand, []string{"shared"}},
+		{"push to create", false, GitReceivePackCommand, []string{"shared"}},
+		{"lfs upload", true, GitLFSTransfer, []string{"shared", "upload"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+			armed := new(atomic.Bool)
+			ctx, be, logs := newLookupTestContextWith(t, func(s store.Store) store.Store {
+				return beginPushFailStore{Store: s, armed: armed}
+			})
+			adminCtx := withUser(t, ctx, be, "boss", true)
+			if tc.exists {
+				_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
+				is.NoErr(err)
+			}
+			testHookBeforeBeginPush = func() { armed.Store(true) }
+			t.Cleanup(func() { testHookBeforeBeginPush = nil })
+
+			c := tc.cmd()
+			c.SilenceUsage = true
+			c.SilenceErrors = true
+			c.SetIn(strings.NewReader(""))
+			c.SetOut(io.Discard)
+			c.SetErr(io.Discard)
+			c.SetArgs(tc.args)
+			err := c.ExecuteContext(adminCtx)
+			is.True(errors.Is(err, git.ErrSystemMalfunction))
+			is.True(!strings.Contains(err.Error(), "/server/path"))
+			is.Equal(logs.count("ERRO"), 1)
+			is.True(strings.Contains(logs.String(), "/server/path"))
+		})
+	}
 }

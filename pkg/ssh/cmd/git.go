@@ -352,7 +352,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		}
 		// Hold off the removal of a repository a push created and left
 		// without refs while this push may write some.
-		done, err := beginPush(r.ctx, be, r.repo)
+		done, err := beginPush(r.ctx, be, r.logger, r.repo)
 		switch {
 		case err == nil:
 			endPush = done
@@ -389,7 +389,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		// row just created: an admin may have deleted the repository
 		// since, and someone else created another under the same name,
 		// which this push was never checked against.
-		done, err := beginPush(r.ctx, be, created)
+		done, err := beginPush(r.ctx, be, r.logger, created)
 		if err != nil {
 			// Deleted, and perhaps replaced, already.
 			return err
@@ -527,7 +527,7 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 	} else if operation == lfs.OperationUpload {
 		// An upload writes to the repository like a push, so it holds off
 		// the same removal.
-		done, err := beginPush(r.ctx, r.be, r.repo)
+		done, err := beginPush(r.ctx, r.be, r.logger, r.repo)
 		if err != nil {
 			return err
 		}
@@ -551,10 +551,16 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 var testHookBeforeBeginPush func()
 
 // beginPush marks a push or LFS upload to repo as running; see
-// backend.BeginPush.
-func beginPush(ctx context.Context, be *backend.Backend, repo proto.Repository) (func(), error) {
+// backend.BeginPush. A repository gone or replaced meanwhile is
+// proto.ErrRepoNotFound; a failed lookup of it is logged, and the client
+// gets git.ErrSystemMalfunction (see gitLookupFailed).
+func beginPush(ctx context.Context, be *backend.Backend, logger *log.Logger, repo proto.Repository) (func(), error) {
 	if testHookBeforeBeginPush != nil {
 		testHookBeforeBeginPush()
 	}
-	return be.BeginPush(ctx, repo)
+	done, err := be.BeginPush(ctx, repo)
+	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
+		return nil, gitLookupFailed(ctx, logger, repo.Name(), err)
+	}
+	return done, err
 }
