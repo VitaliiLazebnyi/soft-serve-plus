@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -214,23 +216,115 @@ func TestBadRequests(t *testing.T) {
 // close the connection at once, so the late input drew a reset: the client's
 // next write failed, or its read lost the ERR packet to the reset.
 func TestRefusalSurvivesLateInput(t *testing.T) {
-	c := dialDaemon(t)
-	if _, err := io.WriteString(c, pkt("git-upload-archive /missing\x00host=127.0.0.1\x00")); err != nil {
+	conns := make(chan *recordedConn, 1)
+	_, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
+		return &recordingListener{Listener: inner, conns: conns}
+	}, func(d *GitDaemon) {
+		// The daemon waits for the client to hang up however late the
+		// rest of the request comes.
+		d.refuseLinger = time.Hour
+	})
+	c := dialDaemonAt(t, addr)
+	request := pkt("git-upload-archive /missing\x00host=127.0.0.1\x00")
+	if _, err := io.WriteString(c, request); err != nil {
 		t.Fatalf("failed to write request: %v", err)
 	}
-	// Let the daemon answer before the rest of the request goes out.
-	time.Sleep(200 * time.Millisecond)
+	var conn *recordedConn
+	select {
+	case conn = <-conns:
+	case <-time.After(idleWait):
+		t.Fatal("the daemon did not accept the connection")
+	}
+	// The rest of the request goes out once the daemon has written its
+	// answer and is done writing.
+	select {
+	case <-conn.shut:
+	case <-conn.closed:
+		t.Fatal("the daemon closed the connection at once after its answer")
+	case <-time.After(idleWait):
+		t.Fatal("the daemon did not answer")
+	}
+	sent := len(request)
 	for _, p := range []string{pkt("argument --format=tar\n"), pkt("argument HEAD\n"), "0000"} {
 		if _, err := io.WriteString(c, p); err != nil {
 			t.Fatalf("write after the refusal failed: %v", err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		sent += len(p)
 	}
+	conn.waitRead(t, sent)
 	line, err := readPktline(c)
 	if err == nil {
 		t.Fatalf("expected ERR %q, got line %q", git.ErrNotAuthed, line)
 	}
 	wantErrLine(t, "late input", err, git.ErrNotAuthed)
+}
+
+// recordingListener is a listener whose connections record what the daemon
+// does with them. It sends each one on conns.
+type recordingListener struct {
+	net.Listener
+	conns chan<- *recordedConn
+}
+
+func (l *recordingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	rc := &recordedConn{Conn: c, readMore: make(chan struct{}, 1), shut: make(chan struct{}), closed: make(chan struct{})}
+	l.conns <- rc
+	return rc, nil
+}
+
+// recordedConn is a connection that counts the bytes read from it, and
+// closes shut once its write side is shut and closed once it is closed.
+type recordedConn struct {
+	net.Conn
+	read     atomic.Int64
+	readMore chan struct{}
+	shut     chan struct{}
+	closed   chan struct{}
+	shutOnce sync.Once
+	once     sync.Once
+}
+
+func (c *recordedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.read.Add(int64(n))
+		select {
+		case c.readMore <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+// waitRead waits for the daemon to read n bytes from c. It fails the test if
+// the daemon closes c first: input that reaches a closed connection draws a
+// reset, which the client's next write or read gets instead of the answer.
+func (c *recordedConn) waitRead(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.After(idleWait)
+	for c.read.Load() < int64(n) {
+		select {
+		case <-c.readMore:
+		case <-c.closed:
+			t.Fatalf("the daemon closed the connection after reading %d of the %d bytes sent", c.read.Load(), n)
+		case <-deadline:
+			t.Fatalf("the daemon read %d of the %d bytes sent", c.read.Load(), n)
+		}
+	}
+}
+
+func (c *recordedConn) CloseWrite() error {
+	defer c.shutOnce.Do(func() { close(c.shut) })
+	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+
+func (c *recordedConn) Close() error {
+	defer c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 // TestRefusalReleasesConnection verifies a refused client that neither sends
