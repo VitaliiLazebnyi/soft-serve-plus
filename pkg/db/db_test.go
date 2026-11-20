@@ -27,12 +27,39 @@ func TestOpenUnknownDriver(t *testing.T) {
 	}
 }
 
+// waitingForWriter reports whether a goroutine waits for another write
+// transaction: for its turn in DB.transaction, or for SQLite's write lock in
+// SQLite's busy handler.
+func waitingForWriter() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, frames, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[select") && strings.HasPrefix(frames, "github.com/charmbracelet/soft-serve/pkg/db.(*DB).transaction(") {
+			return true
+		}
+		if strings.Contains(frames, "modernc.org/sqlite/lib._sqliteDefaultBusyCallback(") {
+			return true
+		}
+	}
+	return false
+}
+
 // TestSqliteReadThenWriteWaitsForWriter checks that a transaction that reads
 // before it writes waits (busy_timeout) for another connection's write
 // transaction to commit instead of failing at once with "database is locked".
 func TestSqliteReadThenWriteWaitsForWriter(t *testing.T) {
 	ctx := context.Background()
-	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
+	// A busy timeout of a minute, so that a loaded machine does not make
+	// the wait for the writer run out.
+	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(60000)"
 	d, err := Open(ctx, "sqlite", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -74,8 +101,19 @@ func TestSqliteReadThenWriteWaitsForWriter(t *testing.T) {
 		})
 	}()
 
-	// Give the second transaction time to hit the lock before releasing.
-	time.Sleep(200 * time.Millisecond)
+	// Release the writer once the second transaction waits for it.
+	deadline := time.Now().Add(time.Minute)
+	for !waitingForWriter() {
+		select {
+		case err := <-readerErr:
+			t.Fatalf("read-then-write transaction ended without waiting for the writer: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the read-then-write transaction did not wait for the writer's lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	close(release)
 
 	if err := <-writerErr; err != nil {

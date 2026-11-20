@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -184,13 +186,72 @@ func TestStoreObjectReadFailure(t *testing.T) {
 // windowsRenameStorage mimics how Windows treats a rename while it is in
 // flight: MoveFileEx holds the file open for delete until it returns, so
 // another rename onto the target and an os.Open of it fail with "Access is
-// denied". Each rename stays in flight for hold after the file is in place.
+// denied". The first rename stays in flight, after the file is in place,
+// until the other uploads of the object have got to placing it too: they
+// wait for the object's lock, or their rename onto it was denied.
 type windowsRenameStorage struct {
 	storage.Storage
-	hold time.Duration
+	// others is how many other uploads the first rename waits for.
+	others int
 
 	mu       sync.Mutex
 	inFlight map[string]bool
+	held     bool
+	denied   int
+	// waitErr is set when the first rename gave up waiting.
+	waitErr error
+}
+
+// holdFirst keeps the first rename in flight until the other uploads have
+// got to placing the object, or for a minute.
+func (w *windowsRenameStorage) holdFirst() {
+	w.mu.Lock()
+	first := !w.held
+	w.held = true
+	w.mu.Unlock()
+	if !first {
+		return
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		w.mu.Lock()
+		arrived := w.denied + objectLockWaiters()
+		w.mu.Unlock()
+		if arrived >= w.others {
+			return
+		}
+		if time.Now().After(deadline) {
+			w.mu.Lock()
+			w.waitErr = fmt.Errorf("%d of %d other uploads got to placing the object while a rename was in flight", arrived, w.others)
+			w.mu.Unlock()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// objectLockWaiters returns how many goroutines wait for an object's lock in
+// placeObject.
+func objectLockWaiters() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, stack, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[sync.Mutex.Lock") &&
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/lfs.(*keyedMutex).lock(") &&
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/lfs.placeObject(") {
+			n++
+		}
+	}
+	return n
 }
 
 func (w *windowsRenameStorage) busy(name string) bool {
@@ -202,6 +263,7 @@ func (w *windowsRenameStorage) busy(name string) bool {
 func (w *windowsRenameStorage) Rename(oldName, newName string) error {
 	w.mu.Lock()
 	if w.inFlight[newName] {
+		w.denied++
 		w.mu.Unlock()
 		return errors.New("rename: Access is denied.")
 	}
@@ -215,7 +277,7 @@ func (w *windowsRenameStorage) Rename(oldName, newName string) error {
 	if err := w.Storage.Rename(oldName, newName); err != nil {
 		return err
 	}
-	time.Sleep(w.hold)
+	w.holdFirst()
 	return nil
 }
 
@@ -234,15 +296,15 @@ func TestStoreObjectConcurrentRename(t *testing.T) {
 	sum := sha256.Sum256([]byte(content))
 	oid := hex.EncodeToString(sum[:])
 	root := t.TempDir()
+	const n = 4
 	strg := &windowsRenameStorage{
 		Storage:  storage.NewLocalStorage(root),
-		hold:     20 * time.Millisecond,
+		others:   n - 1,
 		inFlight: map[string]bool{},
 	}
 	var mu sync.Mutex
 	datastore := &memLFSStore{objects: map[string]int64{}}
 
-	const n = 4
 	errs := make([]error, n)
 	var wg sync.WaitGroup
 	for i := range n {
@@ -253,6 +315,9 @@ func TestStoreObjectConcurrentRename(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	if strg.waitErr != nil {
+		t.Fatal(strg.waitErr)
+	}
 
 	for i, err := range errs {
 		if err != nil {

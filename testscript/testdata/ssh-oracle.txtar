@@ -52,12 +52,12 @@ stderr 'you are not authorized to do this'
 stderr 'you are not authorized to do this'
 
 # the TUI reports both as missing instead of refusing one of them
-uui '"    q"' secret
+uui -wait 'missing repo' '"q"' secret
 cp stdout tui-secret.txt
 grep 'missing repo' tui-secret.txt
 ! grep 'unauthorized' tui-secret.txt
 ! stderr 'unauthorized'
-uui '"    q"' ghost
+uui -wait 'missing repo' '"q"' ghost
 cp stdout tui-ghost.txt
 grep 'missing repo' tui-ghost.txt
 ! grep 'unauthorized' tui-ghost.txt
@@ -117,11 +117,11 @@ soft repo list
 ! stdout 'orphan'
 
 # the TUI still reports both as missing for the registered user
-uui '"    q"' secret
+uui -wait 'missing repo' '"q"' secret
 cp stdout tui-secret2.txt
 grep 'missing repo' tui-secret2.txt
 ! grep 'unauthorized' tui-secret2.txt
-uui '"    q"' ghost
+uui -wait 'missing repo' '"q"' ghost
 cp stdout tui-ghost2.txt
 grep 'missing repo' tui-ghost2.txt
 ! grep 'unauthorized' tui-ghost2.txt

@@ -412,70 +412,125 @@ func cmdKeylessSoft(ts *testscript.TestScript, neg bool, args []string) {
 	check(ts, sess.Run(strings.Join(args, " ")), neg)
 }
 
+// uiStep is one step of a ui command: wait for text to show, or type keys.
+type uiStep struct {
+	wait string
+	keys string
+}
+
 func cmdUI(key ssh.Signer) func(ts *testscript.TestScript, neg bool, args []string) {
 	return func(ts *testscript.TestScript, neg bool, args []string) {
-		const usage = "usage: ui [-wait text] <quoted string input> [repository | command...]"
-		// -wait holds the input back until the screen shows text, for
-		// content the TUI loads in the background.
-		waitFor := ""
-		if len(args) > 0 && args[0] == "-wait" {
-			if len(args) < 2 {
-				ts.Fatalf(usage)
+		const usage = "usage: ui {-wait text | <quoted string input>}... [repository | command...]"
+		// The steps run in order: -wait holds everything after it back
+		// until the screen shows text, and a quoted string types its
+		// keys. Keys are typed only once a -wait has shown the screen
+		// they are meant for, so no step depends on how fast the TUI is.
+		var steps []uiStep
+	parse:
+		for len(args) > 0 {
+			switch {
+			case args[0] == "-wait":
+				if len(args) < 2 || args[1] == "" {
+					ts.Fatalf(usage)
+				}
+				steps = append(steps, uiStep{wait: args[1]})
+				args = args[2:]
+			case strings.HasPrefix(args[0], `"`):
+				in, err := strconv.Unquote(args[0])
+				if err != nil {
+					ts.Fatalf("ui: input must be a quoted string: %v", err)
+				}
+				if in != "" && (len(steps) == 0 || steps[len(steps)-1].wait == "") {
+					ts.Fatalf("ui: input %q must follow a -wait for the screen it is typed on", in)
+				}
+				steps = append(steps, uiStep{keys: in})
+				args = args[1:]
+			default:
+				break parse
 			}
-			waitFor, args = args[1], args[2:]
 		}
-		if len(args) < 1 {
+		if len(steps) == 0 || steps[len(steps)-1].wait != "" {
+			// Without keys at the end, nothing quits the TUI.
 			ts.Fatalf(usage)
-			return
-		}
-		in, err := strconv.Unquote(args[0])
-		if err != nil {
-			ts.Fatalf("ui: input must be a quoted string: %v", err)
 		}
 		// An optional repository name opens the TUI on that repository;
 		// a command (more words, a flag, or a top-level command name that
 		// is no readable repository) runs with the pty instead.
-		check(ts, runUI(ts, key, in, strings.Join(args[1:], " "), waitFor), neg)
+		check(ts, runUI(ts, key, steps, strings.Join(args, " ")), neg)
 	}
 }
 
-// uiWaitTimeout bounds how long "ui -wait" waits for its text.
+// uiWaitTimeout bounds how long each "ui -wait" waits for its text.
 const uiWaitTimeout = time.Minute
 
-// outputWatcher records what the TUI writes and closes found once the output
-// contains text.
-type outputWatcher struct {
-	mu    sync.Mutex
-	text  []byte
-	buf   []byte
-	found chan struct{}
-	done  bool
+// outputRecorder records what the TUI writes, so that a -wait can look for
+// its text in what came after the keys typed before it.
+type outputRecorder struct {
+	mu      sync.Mutex
+	buf     []byte
+	ended   bool
+	changed chan struct{}
 }
 
-func newOutputWatcher(text string) *outputWatcher {
-	return &outputWatcher{text: []byte(text), found: make(chan struct{})}
+func newOutputRecorder() *outputRecorder {
+	return &outputRecorder{changed: make(chan struct{})}
 }
 
-func (w *outputWatcher) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.done {
-		return len(p), nil
-	}
-	w.buf = append(w.buf, p...)
-	if bytes.Contains(w.buf, w.text) {
-		w.done = true
-		w.buf = nil
-		close(w.found)
-	}
+func (r *outputRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf = append(r.buf, p...)
+	close(r.changed)
+	r.changed = make(chan struct{})
 	return len(p), nil
 }
 
+// end records that the session is over, so that a -wait stops waiting.
+func (r *outputRecorder) end() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ended = true
+	close(r.changed)
+	r.changed = make(chan struct{})
+}
+
+// mark returns the length of the output so far.
+func (r *outputRecorder) mark() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.buf)
+}
+
+// wait waits for text to show in the output after mark.
+func (r *outputRecorder) wait(text string, mark int) error {
+	deadline := time.NewTimer(uiWaitTimeout)
+	defer deadline.Stop()
+	for {
+		r.mu.Lock()
+		found := bytes.Contains(r.buf[mark:], []byte(text))
+		ended, changed := r.ended, r.changed
+		r.mu.Unlock()
+		switch {
+		case found:
+			return nil
+		case ended:
+			return fmt.Errorf("ui: the session ended before %q appeared", text)
+		}
+		select {
+		case <-changed:
+		case <-deadline.C:
+			return fmt.Errorf("ui: %q did not appear within %v", text, uiWaitTimeout)
+		}
+	}
+}
+
 // runUI opens a session with a pty over SSH running command (empty for the
-// TUI), types in one rune at a time and waits for the session to end. With waitFor set, it starts typing only once the
-// output shows waitFor. Every failure is returned, so that "! ui" stops at
-// the first one instead of going on with what failed to open.
-func runUI(ts *testscript.TestScript, key ssh.Signer, in, command, waitFor string) error {
+// TUI), runs steps and waits for the session to end. A -wait step looks for
+// its text in what the session wrote after the keys of the step before it
+// were typed, so it sees the screen those keys led to. Every failure is
+// returned, so that "! ui" stops at the first one instead of going on with
+// what failed to open.
+func runUI(ts *testscript.TestScript, key ssh.Signer, steps []uiStep, command string) error {
 	cli, err := ssh.Dial(
 		"tcp",
 		net.JoinHostPort(loopback, ts.Getenv("SSH_PORT")),
@@ -501,13 +556,9 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, command, waitFor strin
 	// in the output
 	defer ts.Stdout().Write([]byte("\n")) //nolint:errcheck
 
-	sess.Stdout = ts.Stdout()
+	rec := newOutputRecorder()
+	sess.Stdout = io.MultiWriter(ts.Stdout(), rec)
 	sess.Stderr = ts.Stderr()
-	var watcher *outputWatcher
-	if waitFor != "" {
-		watcher = newOutputWatcher(waitFor)
-		sess.Stdout = io.MultiWriter(ts.Stdout(), watcher)
-	}
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
@@ -521,41 +572,36 @@ func runUI(ts *testscript.TestScript, key ssh.Signer, in, command, waitFor strin
 		return err
 	}
 
-	waitErr := make(chan error, 1)
+	stepsErr := make(chan error, 1)
 	go func() {
-		defer stdin.Close() //nolint:errcheck
-		if watcher != nil {
-			select {
-			case <-watcher.found:
-				waitErr <- nil
-			case <-time.After(uiWaitTimeout):
-				// Type the input anyway, so that it can still quit the TUI.
-				waitErr <- fmt.Errorf("ui: %q did not appear within %v", waitFor, uiWaitTimeout)
+		mark := 0
+		for _, s := range steps {
+			if s.wait != "" {
+				if err := rec.wait(s.wait, mark); err != nil {
+					// End the session, which would otherwise wait
+					// for keys that are never typed.
+					_ = sess.Close()
+					stepsErr <- err
+					return
+				}
+				continue
 			}
-		} else {
-			waitErr <- nil
+			mark = rec.mark()
+			if _, err := io.WriteString(stdin, s.keys); err != nil {
+				stepsErr <- err
+				return
+			}
 		}
-		for _, r := range in {
-			_, _ = io.WriteString(stdin, string(r))
-
-			// Wait for the UI to process the input
-			time.Sleep(100 * time.Millisecond)
-		}
+		_ = stdin.Close()
+		stepsErr <- nil
 	}()
 
-	if err := sess.Wait(); err != nil {
-		return err
+	err = sess.Wait()
+	rec.end()
+	if stepErr := <-stepsErr; stepErr != nil {
+		return stepErr
 	}
-	select {
-	case err := <-waitErr:
-		return err
-	default:
-		// The session ended before the input started.
-		if watcher != nil {
-			return fmt.Errorf("ui: the session ended before %q appeared", waitFor)
-		}
-		return nil
-	}
+	return err
 }
 
 func cmdDos2Unix(ts *testscript.TestScript, neg bool, args []string) {

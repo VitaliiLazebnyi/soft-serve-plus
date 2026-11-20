@@ -121,15 +121,33 @@ func holdSlot(t *testing.T, d *GitDaemon, addr string) net.Conn {
 // to it.
 func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
 	t.Parallel()
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	conns := make(chan *recordedConn, 2)
+	d, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
+		return &recordingListener{Listener: inner, conns: conns}
+	}, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	accepted := func() *recordedConn {
+		t.Helper()
+		select {
+		case c := <-conns:
+			return c
+		case <-time.After(idleWait):
+			t.Fatal("the daemon did not accept the connection")
+			return nil
+		}
+	}
 	holdSlot(t, d, addr)
+	accepted() // the held one
 	c := dialHeld(t, addr, "", git.ErrMaxConnections)
+	refused := accepted() // accepted before it was refused
+	sent := 0
 	for i := range 20 {
-		if _, err := io.WriteString(c, pkt("argument HEAD\n")); err != nil {
+		n, err := io.WriteString(c, pkt("argument HEAD\n"))
+		if err != nil {
 			t.Fatalf("write %d after the refusal: %v", i+1, err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		sent += n
 	}
+	refused.waitRead(t, sent)
 	// The daemon shut its side after the error and its flush packet: the
 	// client reads a clean end of the stream, not a reset.
 	if out, err := io.ReadAll(c); err != nil || (len(out) != 0 && string(out) != "0000") {

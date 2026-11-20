@@ -533,6 +533,8 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 			}
 			defer c.Close() //nolint: errcheck
 
+			// The request loops running before any session of this test.
+			loops := sessionLoops()
 			s, err := c.NewSession()
 			if err != nil {
 				t.Fatal(err)
@@ -542,6 +544,9 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 			}
 			<-started
 			_ = s.Close()
+			// The closed session's request loop ends with its channel,
+			// while its command still runs.
+			waitSessionLoops(t, loops)
 
 			// The channel's place comes back once the server has seen the
 			// close, but the command still runs, so a second one is
@@ -576,7 +581,15 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 					t.Fatal("the second session was neither refused nor started")
 				}
 				_ = s2.Close()
-				time.Sleep(20 * time.Millisecond)
+				// The next attempt starts once the server is done with this
+				// one: its request loop, which ends with the channel, and
+				// its refused handler, which runs on a goroutine of its
+				// own and may still be giving its count back, so that only
+				// the blocked command's handler is left.
+				waitSessionLoops(t, loops)
+				waitFor(t, "the refused handler to return", func() bool {
+					return goroutinesWith(limitHandlersFrame) == 1
+				})
 			}
 
 			release()

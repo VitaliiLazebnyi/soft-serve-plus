@@ -474,20 +474,43 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	release := make(chan struct{})
 	readDone := make(chan struct{})
 	reading := make(chan struct{})
+	readReturned := make(chan struct{})
+	addrs := make(chan string, 2)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addrs <- r.RemoteAddr
+		if r.URL.Path == "/after" {
+			// The connection runs one handler at a time, so this one
+			// starts only once the first one has returned and the
+			// server has dropped its stream's state: let the read
+			// return now.
+			close(release)
+			return
+		}
 		r.Body = &releasedBody{ReadCloser: r.Body, release: release, done: readDone}
 		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				close(reading)
 				_, _ = r.Body.Read(make([]byte, 1))
+				// A deadline set by the read panics, and kills the
+				// test binary, before this.
+				close(readReturned)
 			}()
 			<-reading
 			_, _ = io.WriteString(w, "ok")
 		}))
 	}))
 	srv.EnableHTTP2 = true
+	// One stream, and so one handler, at a time on the connection: the
+	// server starts the second request's handler only after the first
+	// one's has returned and its response writer has let go of the
+	// stream.
+	srv.Config.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: 1}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
+	client := srv.Client()
+	// The second request waits for the first stream to close instead of
+	// opening a connection of its own.
+	client.Transport.(*http.Transport).HTTP2 = &http.HTTP2Config{StrictMaxConcurrentRequests: true}
 
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
@@ -495,7 +518,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := srv.Client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,18 +529,28 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	if _, err := io.ReadAll(resp.Body); err != nil {
 		t.Fatalf("reading the response: %v", err)
 	}
-	// Give the server time to finish with the stream after the handler
-	// returned, then let the read return.
-	time.Sleep(200 * time.Millisecond)
-	close(release)
+	afterReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/after", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := client.Do(afterReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = after.Body.Close()
+	if first, second := <-addrs, <-addrs; first != second {
+		t.Fatalf("the second request came over %s, not over the first one's connection %s", second, first)
+	}
 	select {
 	case <-readDone:
 	case <-time.After(closeWait):
 		t.Fatal("the read did not return")
 	}
-	// A panic in the reading goroutine would kill the test binary before
-	// this point; give it the time to happen.
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-readReturned:
+	case <-time.After(closeWait):
+		t.Fatal("the read did not return to the goroutine that made it")
+	}
 }
 
 // A client that stops reading the response is cut off after the idle

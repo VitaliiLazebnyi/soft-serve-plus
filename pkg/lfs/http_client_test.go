@@ -22,29 +22,114 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
 
-const (
-	// A slow transfer must not stall out while its chunks still flow, so
-	// the gap between them stays far under testStallTimeout even when a
-	// loaded machine runs the sender late.
-	testStallTimeout = time.Second
-	testChunkDelay   = 50 * time.Millisecond
-	testChunks       = 30 // 1.5s in all, past testStallTimeout
-)
+// testStallTimeout is the stall timeout of the test that waits for a
+// stalled transfer to fail. The transfers that must not stall out run with
+// a stall timeout of a minute instead, and check that every read and write
+// pushes the deadline forward, which is what keeps a long transfer alive
+// however slow it is in all, rather than timing chunks against the timeout.
+const testStallTimeout = time.Second
+
+// testPause is a pause the slow transfers take halfway, as a slow peer
+// would. It is input, not a bound: it only has to be long enough for the
+// clock to move, so that a deadline pushed after it is later than one set
+// before it.
+const testPause = 20 * time.Millisecond
+
+// testChunks chunks of testChunk make a transfer of several reads and
+// writes of the connection.
+const testChunks = 30
+
+var testChunk = strings.Repeat("c", 32<<10)
 
 // newLoopbackAdapter returns an HTTPClient whose client is set up
 // by newTransferClient like the shared secureHTTPClient, starting from the
 // same whole-request timeout as ssrf.NewSecureClient, but whose transport may
 // reach the loopback test server, which the SSRF-safe dialer would refuse.
-func newLoopbackAdapter(t *testing.T) *HTTPClient {
+// Its connections have stall as their stall timeout and record what is done
+// with them in the returned log.
+func newLoopbackAdapter(t *testing.T, stall time.Duration) (*HTTPClient, *connLog) {
 	t.Helper()
 	old := stallTimeout
-	stallTimeout = testStallTimeout
+	stallTimeout = stall
 	t.Cleanup(func() { stallTimeout = old })
 
-	tr := &http.Transport{DialContext: (&net.Dialer{}).DialContext}
+	conns := &connLog{}
+	dial := (&net.Dialer{}).DialContext
+	tr := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &loggedConn{Conn: c, log: conns}, nil
+	}}
 	t.Cleanup(tr.CloseIdleConnections)
 	client := newTransferClient(&http.Client{Timeout: ssrf.ClientTimeout, Transport: tr})
-	return &HTTPClient{client: client}
+	return &HTTPClient{client: client}, conns
+}
+
+// connLog records, for the connections under the stall timeout, how many
+// deadlines were set and the deadline each read and each write ran under.
+type connLog struct {
+	mu                            sync.Mutex
+	deadlines                     int
+	readDeadlines, writeDeadlines []time.Time
+}
+
+// check fails the test unless the connections were read and written, had a
+// deadline set for each read and write, and the deadlines of the reads
+// (reads true) or of the writes (reads false) moved forward over the
+// transfer, which paused halfway.
+func (l *connLog) check(t *testing.T, reads bool) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	nr, nw := len(l.readDeadlines), len(l.writeDeadlines)
+	if nr == 0 || nw == 0 {
+		t.Fatalf("%d reads and %d writes, want some of both", nr, nw)
+	}
+	if l.deadlines < nr+nw {
+		t.Fatalf("%d deadlines set for %d reads and %d writes: a transfer that takes longer than the stall timeout in all would stall out", l.deadlines, nr, nw)
+	}
+	what, ds := "write", l.writeDeadlines
+	if reads {
+		what, ds = "read", l.readDeadlines
+	}
+	// A deadline set after the pause is later than the first one, unless
+	// the deadline is not pushed forward.
+	first, last := ds[0], ds[len(ds)-1]
+	if !last.After(first) {
+		t.Fatalf("the last %s ran under the deadline %v, not after the first one's %v: the %s does not push the deadline forward", what, last, first, what)
+	}
+}
+
+// loggedConn is a connection that records in log what is done with it. A
+// read or write runs under the last deadline set.
+type loggedConn struct {
+	net.Conn
+	log      *connLog
+	deadline time.Time
+}
+
+func (c *loggedConn) SetDeadline(t time.Time) error {
+	c.log.mu.Lock()
+	c.log.deadlines++
+	c.deadline = t
+	c.log.mu.Unlock()
+	return c.Conn.SetDeadline(t) //nolint:wrapcheck
+}
+
+func (c *loggedConn) Read(b []byte) (int, error) {
+	c.log.mu.Lock()
+	c.log.readDeadlines = append(c.log.readDeadlines, c.deadline)
+	c.log.mu.Unlock()
+	return c.Conn.Read(b) //nolint:wrapcheck
+}
+
+func (c *loggedConn) Write(b []byte) (int, error) {
+	c.log.mu.Lock()
+	c.log.writeDeadlines = append(c.log.writeDeadlines, c.deadline)
+	c.log.mu.Unlock()
+	return c.Conn.Write(b) //nolint:wrapcheck
 }
 
 func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
@@ -54,20 +139,23 @@ func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
 	}
 }
 
-// A download whose body keeps flowing for longer than the stall timeout must
-// be read in full.
+// A download is read in full, and every read of it pushes the stall
+// deadline forward, so one that keeps flowing for longer than the stall
+// timeout in all does not stall out.
 func TestHTTPClientSlowDownloadCompletes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		for range testChunks {
-			_, _ = io.WriteString(w, "chunk")
+		for i := range testChunks {
+			if i == testChunks/2 {
+				time.Sleep(testPause) // a slow server; see testPause
+			}
+			_, _ = io.WriteString(w, testChunk)
 			w.(http.Flusher).Flush()
-			time.Sleep(testChunkDelay)
 		}
 	}))
 	defer srv.Close()
 
-	a := newLoopbackAdapter(t)
+	a, conns := newLoopbackAdapter(t, time.Minute)
 	rc, err := a.download(context.Background(), &Link{Href: srv.URL})
 	if err != nil {
 		t.Fatalf("Download: %v", err)
@@ -77,26 +165,30 @@ func TestHTTPClientSlowDownloadCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading body: %v", err)
 	}
-	if want := strings.Repeat("chunk", testChunks); string(b) != want {
-		t.Fatalf("body = %q, want %q", b, want)
+	if want := strings.Repeat(testChunk, testChunks); string(b) != want {
+		t.Fatalf("body is %d bytes, want %d", len(b), len(want))
 	}
+	conns.check(t, true)
 }
 
-// slowReader yields its chunks with a delay before each.
-type slowReader struct{ left int }
+// chunkReader yields testChunks chunks of testChunk, one a read, and
+// pauses for testPause halfway.
+type chunkReader struct{ left int }
 
-func (r *slowReader) Read(p []byte) (int, error) {
+func (r *chunkReader) Read(p []byte) (int, error) {
 	if r.left == 0 {
 		return 0, io.EOF
 	}
-	time.Sleep(testChunkDelay)
+	if r.left == testChunks/2 {
+		time.Sleep(testPause) // a slow client; see testPause
+	}
 	r.left--
-	return copy(p, "chunk"), nil
+	return copy(p, testChunk), nil
 }
 
-// A request whose body keeps flowing for longer than the stall timeout must
-// succeed, even though nothing is read from the server meanwhile: writes
-// alone keep the connection alive.
+// A request body is sent in full, and every write of it pushes the stall
+// deadline forward although nothing is read from the server meanwhile:
+// writes alone keep the connection alive.
 func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,12 +198,12 @@ func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := newLoopbackAdapter(t)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL, &slowReader{left: testChunks})
+	a, conns := newLoopbackAdapter(t, time.Minute)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL, &chunkReader{left: testChunks})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.ContentLength = int64(len("chunk") * testChunks)
+	req.ContentLength = int64(len(testChunk) * testChunks)
 	res, err := a.client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT: %v", err)
@@ -120,9 +212,10 @@ func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
-	if want := strings.Repeat("chunk", testChunks); <-got != want {
+	if want := strings.Repeat(testChunk, testChunks); <-got != want {
 		t.Fatal("server did not receive the whole request body")
 	}
+	conns.check(t, false)
 }
 
 // A server that stops sending must still fail the transfer, both before the
@@ -143,7 +236,7 @@ func TestHTTPClientStalledTransferFails(t *testing.T) {
 			defer srv.Close()
 			defer close(release)
 
-			a := newLoopbackAdapter(t)
+			a, _ := newLoopbackAdapter(t, testStallTimeout)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 

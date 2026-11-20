@@ -6,14 +6,14 @@ exec soft serve &
 ensureserverrunning SSH_PORT
 
 # test repositories tab
-ui '"    q"'
+ui -wait 'No items' '"q"'
 cp stdout home.txt
 grep 'Test Soft Serve' home.txt
 grep '• Repositories' home.txt
 grep 'No items' home.txt
 
 # test about tab
-ui '"\t    q"'
+ui -wait 'No items' '"\t"' -wait 'An admin can create' '"q"'
 cp stdout about.txt
 grep 'An admin can create a `.soft-serve` repository' about.txt
 
@@ -34,7 +34,7 @@ git -C config commit -m 'Initial commit'
 git -C config push origin HEAD
 
 # test repositories tab, once the list has loaded in the background
-ui -wait Config '"    q"'
+ui -wait Config '"q"'
 cp stdout home2.txt
 grep 'Config 🌐' home2.txt
 grep 'Test Soft Serve' home2.txt
@@ -42,14 +42,14 @@ grep 'git clone ssh://localhost:.*/.soft-serve' home2.txt
 
 # a private repository is marked as such
 soft repo private .soft-serve true
-ui -wait Config '"    q"'
+ui -wait 'Config 🔒' '"q"'
 cp stdout home3.txt
 grep 'Config 🔒' home3.txt
 ! grep '🌐' home3.txt
 soft repo private .soft-serve false
 
 # test about tab
-ui -wait Config '"\t      q"'
+ui -wait Config '"\t"' -wait 'Hello World' '"q"'
 cp stdout about2.txt
 grep '• About' about2.txt
 grep 'Hello World' about2.txt

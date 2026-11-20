@@ -2,6 +2,8 @@ package git
 
 import (
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -137,10 +139,24 @@ func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("timed out waiting for the output to be flushed")
 	}
+	// The handler waits for the input once git has exited; until it is
+	// there, it must not have returned.
+	deadline := time.Now().Add(testTimeout)
+	for !joiningStdin() {
+		select {
+		case err := <-errc:
+			t.Fatalf("the handler returned (%v) while the client's input was still being read", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the handler did not wait for the client's input")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	select {
 	case err := <-errc:
 		t.Fatalf("the handler returned (%v) while the client's input was still being read", err)
-	case <-time.After(100 * time.Millisecond): // a check that the handler did not return, which load can only make pass
+	default:
 	}
 
 	// The client is done sending.
@@ -151,6 +167,27 @@ func TestGitServiceJoinsUninterruptibleStdinWhenAsked(t *testing.T) {
 	if r.reading.Load() {
 		t.Error("the handler returned while the client's input was still being read")
 	}
+}
+
+// joiningStdin reports whether a git service handler waits, once git has
+// exited, for the copy of its input to end.
+func joiningStdin() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, stack, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[chan receive") && strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/git.joinStdin(") {
+			return true
+		}
+	}
+	return false
 }
 
 // resettingStallingReader is a deadlineStallingReader that, like the git

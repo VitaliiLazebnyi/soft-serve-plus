@@ -11,6 +11,8 @@ import (
 	"net/http/httptrace"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -143,6 +145,29 @@ func checkHandled(t *testing.T, name string, h handled) {
 	}
 }
 
+// joiningBody reports whether serviceRpc waits, once git has exited, for the
+// copy of the request body to end.
+func joiningBody() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, stack, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[chan receive") &&
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/git.joinStdin(") &&
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*gitServer).serviceRpc(") {
+			return true
+		}
+	}
+	return false
+}
+
 // A client that sends a gzip request git rejects, so git exits, and then
 // keeps the request open without sending more must not leave the body being
 // read after the handler returns, or the deferred close of the gzip reader
@@ -184,10 +209,24 @@ func TestServiceRpcJoinsBodyRead(t *testing.T) {
 	case <-time.After(closeWait):
 		t.Fatal("timed out waiting for git to exit")
 	}
+	// The handler waits for the body once git has exited; until it is
+	// there, it must not have returned.
+	deadline := time.Now().Add(closeWait)
+	for !joiningBody() {
+		select {
+		case h := <-results:
+			t.Fatalf("the handler returned while the client was still sending: %+v", h)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the handler did not wait for the request body")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	select {
 	case h := <-results:
 		t.Fatalf("the handler returned while the client was still sending: %+v", h)
-	case <-time.After(100 * time.Millisecond): // a check that the handler did not return, which load can only make pass
+	default:
 	}
 
 	// The client is done sending.

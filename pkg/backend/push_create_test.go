@@ -3,6 +3,8 @@ package backend
 import (
 	"errors"
 	"os/exec"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +102,27 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 	}
 }
 
+// pushWaitsForGate reports whether a BeginPush waits for its repository's
+// push gate, which a removal holds.
+func pushWaitsForGate() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, frames, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[sync.RWMutex.RLock") && strings.Contains(frames, "pkg/backend.(*Backend).BeginPush(") {
+			return true
+		}
+	}
+	return false
+}
+
 // A repository is not removed while a push to it runs, and a push that
 // starts while it is being removed waits for that and then finds it gone,
 // rather than writing refs into a directory about to be deleted.
@@ -130,10 +153,21 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 			}
 			pushErr <- err
 		}()
-		select {
-		case err := <-pushErr:
-			t.Errorf("push started during the removal: %v", err)
-		case <-time.After(200 * time.Millisecond): // a check that no push started, which load can only make pass
+		// The push waits for the removal to end before it starts.
+		deadline := time.Now().Add(time.Minute)
+		for !pushWaitsForGate() {
+			select {
+			case err := <-pushErr:
+				t.Errorf("push started during the removal: %v", err)
+				pushErr <- err
+				return
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Error("the push neither started nor waited for the removal")
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	t.Cleanup(func() { testHookBeforePushCreatedDelete = nil })

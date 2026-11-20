@@ -323,18 +323,31 @@ func TestEnsureDefaultRepoCreateErrorSkipped(t *testing.T) {
 func TestAbortOnSignal(t *testing.T) {
 	is := is.New(t)
 	var logs bytes.Buffer
-	sigs := make(chan os.Signal, 1)
+	// Unbuffered, so that a send returns only once the loop has taken the
+	// signal.
+	sigs := make(chan os.Signal)
 	abort, stop := abortOnSignal(sigs, log.New(&logs))
 	defer stop()
 
 	sigs <- syscall.SIGHUP
+	// The loop takes another signal only once it is done with the SIGHUP:
+	// had that aborted the wait, the loop would have ended instead.
 	select {
+	case sigs <- syscall.SIGHUP:
 	case <-abort.Done():
 		t.Fatal("SIGHUP aborted the wait")
-	case <-time.After(50 * time.Millisecond): // a check that SIGHUP did not abort, which load can only make pass
+	case <-time.After(time.Minute):
+		t.Fatal("the loop did not take a signal after SIGHUP")
+	}
+	if abort.Err() != nil {
+		t.Fatal("SIGHUP aborted the wait")
 	}
 
-	sigs <- syscall.SIGTERM
+	select {
+	case sigs <- syscall.SIGTERM:
+	case <-time.After(time.Minute):
+		t.Fatal("the loop did not take SIGTERM")
+	}
 	select {
 	case <-abort.Done():
 	case <-time.After(time.Minute):

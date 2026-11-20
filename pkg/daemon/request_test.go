@@ -166,11 +166,10 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 		t.Fatalf("public repo was refused: %q", got)
 	}
 
-	// The daemon records the request after the client hangs up.
-	deadline := time.Now().Add(idleWait)
-	for sampleCount(t, git.UploadPackService) == before && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// The daemon records a request, and logs what it logs about it, before
+	// it lets go of its connection, which it does after the client hangs
+	// up: once it holds no connection, it is done with both requests.
+	waitConns(t, d, 0, idleWait)
 	// Other tests' requests may finish meanwhile, so only check that this
 	// one was counted.
 	if got := sampleCount(t, git.UploadPackService) - before; got < 1 {
