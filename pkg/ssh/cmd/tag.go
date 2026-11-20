@@ -33,7 +33,7 @@ func tagListCommand() *cobra.Command {
 		Short:   "List repository tags",
 		Args:    cobra.ExactArgs(1),
 		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -70,7 +70,7 @@ func tagDeleteCommand() *cobra.Command {
 				return proto.ErrMirrorReadOnly
 			}
 
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}

@@ -52,6 +52,9 @@ func TestRefListingFailureIsReported(t *testing.T) {
 		{"branch", "default", "r"},
 		{"tree", "r"},
 		{"blob", "r", "f"},
+		{"commit", "r", "main"},
+		{"tree", "r", "main", "f"},
+		{"blob", "r", "main", "f"},
 	} {
 		logs.Reset()
 		out, stderr, err := runRepoOutput(t, ownerCtx, args...)

@@ -36,7 +36,7 @@ func branchListCommand() *cobra.Command {
 		Short: "List repository branches",
 		Args:  cobra.ExactArgs(1),
 		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -66,7 +66,7 @@ func branchDefaultCommand() *cobra.Command {
 		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, level access.AccessLevel) error {
 			ctx := cmd.Context()
 
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -108,7 +108,12 @@ func branchDefaultCommand() *cobra.Command {
 				// The default branch before the change, for the event. HEAD
 				// can name a branch that does not exist yet, so it is read
 				// as a symbolic ref rather than resolved.
-				oldHead, _ := r.SymbolicRef(git.HEAD, "")
+				// A failure to read it only leaves the event without the
+				// old branch, so it is logged and the change goes on.
+				oldHead, err := r.SymbolicRef(git.HEAD, "")
+				if err != nil {
+					log.FromContext(ctx).Warn("failed to read the default branch before changing it", "err", err, "repo", rr.Name())
+				}
 				oldBranch := git.ReferenceName(oldHead).Short()
 
 				if _, err := r.SymbolicRef(git.HEAD, gitm.RefsHeads+branch, gitm.SymbolicRefOptions{
@@ -116,7 +121,7 @@ func branchDefaultCommand() *cobra.Command {
 						Context: ctx,
 					},
 				}); err != nil {
-					return err
+					return gitFailed(ctx, "set default branch", rr.Name(), err)
 				}
 
 				// TODO: move this to backend?
@@ -160,7 +165,7 @@ func branchDeleteCommand() *cobra.Command {
 				return proto.ErrMirrorReadOnly
 			}
 
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -195,10 +200,11 @@ func branchDeleteCommand() *cobra.Command {
 
 			// The event needs only the ID. Reading the commit would
 			// fail for one git cannot parse, and such a branch must
-			// still be deletable. The branch was just listed, so a failure to read or delete
-			// it is the server's: it is logged, and the client gets a
-			// generic error. That includes a delete of the same branch
-			// that another session finished in between.
+			// still be deletable. The branch was just listed, so a
+			// failure to read or delete it is the server's: it is
+			// logged, and the client gets a generic error. That
+			// includes a delete of the same branch that another
+			// session finished in between.
 			branchID, err := r.ShowRefVerify(git.RefsHeads+branch, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
 				return gitFailed(ctx, "read branch", rr.Name(), err)

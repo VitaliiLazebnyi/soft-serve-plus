@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -219,6 +220,23 @@ func gitFailed(ctx context.Context, what, repo string, err error) error {
 		logger.Error("git failed", "what", what, "repo", repo, "err", err)
 	}
 	return errGitFailed
+}
+
+// openRepository opens rr's git repository for a command. Opening fails
+// only for a reason of the server's, such as a directory git does not
+// accept ("detected dubious ownership", which names the server path), so
+// the client gets errGitFailed. The backend has already logged a directory
+// git does not accept; any other failure is logged here.
+func openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, error) {
+	r, err := rr.Open()
+	switch {
+	case err == nil:
+		return r, nil
+	case errors.Is(err, git.ErrNotAGitRepository):
+		return nil, errGitFailed
+	default:
+		return nil, gitFailed(ctx, "open repository", rr.Name(), err)
+	}
 }
 
 // checkIfServerAdmin is the authorization gate for global (non-repo-scoped)

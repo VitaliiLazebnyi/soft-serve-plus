@@ -42,7 +42,7 @@ func blobCommand() *cobra.Command {
 				fp = args[2]
 			}
 
-			r, err := repo.Open()
+			r, err := openRepository(cmd.Context(), repo)
 			if err != nil {
 				return err
 			}
@@ -57,7 +57,7 @@ func blobCommand() *cobra.Command {
 				ref = head.ID
 			}
 
-			tree, err := r.LsTree(ref)
+			tree, err := readTree(ctx, repo, r, ref)
 			if err != nil {
 				return err
 			}
@@ -67,7 +67,7 @@ func blobCommand() *cobra.Command {
 				return proto.ErrFileNotFound
 			}
 			if err != nil {
-				return err
+				return gitFailed(ctx, "read tree", repo.Name(), err)
 			}
 
 			if te.Type() != "blob" {
@@ -77,7 +77,10 @@ func blobCommand() *cobra.Command {
 			if raw {
 				// Stream the exact bytes: nothing is held in memory, so no
 				// size limit applies.
-				return r.WriteBlob(ctx, te.ID(), cmd.OutOrStdout())
+				if err := r.WriteBlob(ctx, te.ID(), cmd.OutOrStdout()); err != nil {
+					return gitFailed(ctx, "read blob", repo.Name(), err)
+				}
+				return nil
 			}
 
 			bts, err := te.File().ContentsLimit(config.FromContext(ctx).BlobSizeLimit())
@@ -85,7 +88,7 @@ func blobCommand() *cobra.Command {
 				return fmt.Errorf("%w: use --raw to print", err)
 			}
 			if err != nil {
-				return err
+				return gitFailed(ctx, "read blob", repo.Name(), err)
 			}
 
 			if isBin, _ := git.IsBinary(bytes.NewReader(bts)); isBin {

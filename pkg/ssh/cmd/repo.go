@@ -52,7 +52,7 @@ func RepoCommand() *cobra.Command {
 				ctx := cmd.Context()
 				be := backend.FromContext(ctx)
 
-				r, err := rr.Open()
+				r, err := openRepository(cmd.Context(), rr)
 				if err != nil {
 					return err
 				}
@@ -93,8 +93,12 @@ func RepoCommand() *cobra.Command {
 					// The error can carry what the remote wrote, so
 					// only read-write collaborators and admins see it.
 					st, err := be.MirrorSyncStatus(ctx, rr.Name())
-					if err != nil {
+					if errors.Is(err, proto.ErrRepoNotFound) {
+						// Renamed or deleted since the access check.
 						return err
+					}
+					if err != nil {
+						return lookupFailed(ctx, log.FromContext(ctx), "read mirror sync status", err)
 					}
 					if !st.SyncedAt.IsZero() {
 						cmd.Println("Last Sync:", st.SyncedAt.UTC().Format(time.RFC3339))
@@ -133,6 +137,21 @@ func RepoCommand() *cobra.Command {
 // errRepoEmpty is returned for an empty repository by commands that need a
 // default branch.
 var errRepoEmpty = errors.New("repository is empty")
+
+// readTree returns the root tree of ref in r, rr's repository. A ref that
+// does not resolve is the client's to see, as git.ErrRevisionNotExist; any
+// other failure is git failing on the server.
+func readTree(ctx context.Context, rr proto.Repository, r *git.Repository, ref string) (*git.Tree, error) {
+	tree, err := r.LsTree(ref)
+	switch {
+	case err == nil:
+		return tree, nil
+	case errors.Is(err, git.ErrRevisionNotExist):
+		return nil, err
+	default:
+		return nil, gitFailed(ctx, "read tree", rr.Name(), err)
+	}
+}
 
 // repoHead returns the repository r of rr's HEAD reference, the default branch. An
 // empty repository, or a HEAD that names a branch that does not exist, such
