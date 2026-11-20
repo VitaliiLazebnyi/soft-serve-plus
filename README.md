@@ -1599,7 +1599,8 @@ Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
 - `SOFT_SERVE_PUBLIC_KEY`: over SSH, the key the pusher signed in with (empty
   for a keyless session);
 - `SOFT_SERVE_DATA_PATH`, `SOFT_SERVE_CONFIG_LOCATION` and the server's other
-  settings as `SOFT_SERVE_*` variables (see [Server Configuration](#server-configuration)).
+  settings as `SOFT_SERVE_*` variables (see [Server Configuration](#server-configuration)),
+  the database data source `SOFT_SERVE_DB_DATA_SOURCE` included.
 
 No other git command the server runs, such as a fetch or a clone over any of
 SSH, HTTP or `git://`, gets these variables.
