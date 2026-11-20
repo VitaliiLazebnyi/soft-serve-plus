@@ -270,7 +270,9 @@ func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
 	dir := be.repoPath("tables")
 	_, err = os.Stat(filepath.Join(dir, "reftable", "tables.list"))
 	is.NoErr(err) // the repository is a reftable one
-	logs.dir = filepath.Join(dir, "objects")
+	// The reftable files survive the first removal, as files held open
+	// do on Windows.
+	logs.dir = filepath.Join(dir, "reftable")
 	is.NoErr(os.Chmod(logs.dir, 0o555))
 	t.Cleanup(func() { os.Chmod(logs.dir, 0o755) }) //nolint:errcheck
 
