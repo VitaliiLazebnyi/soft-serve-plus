@@ -15,7 +15,6 @@ import (
 // Backend is the Soft Serve backend that handles users, repositories, and
 // server settings management and operations.
 type Backend struct {
-	ctx    context.Context
 	cfg    *config.Config
 	db     *db.DB
 	store  store.Store
@@ -50,7 +49,6 @@ type Backend struct {
 func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Backend {
 	logger := log.FromContext(ctx).WithPrefix("backend")
 	b := &Backend{
-		ctx:    ctx,
 		cfg:    cfg,
 		db:     db,
 		store:  st,

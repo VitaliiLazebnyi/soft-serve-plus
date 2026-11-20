@@ -102,33 +102,6 @@ func (*Store) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name str
 	return repo, err
 }
 
-// GetRepoDescriptionByName implements store.Store.
-func (*Store) GetRepoDescriptionByName(ctx context.Context, h db.Handler, name string) (string, error) {
-	var description string
-	name = utils.SanitizeRepo(name)
-	query := h.Rebind("SELECT description FROM repos WHERE name = ?;")
-	err := h.GetContext(ctx, &description, query, name)
-	return description, err
-}
-
-// GetRepoIsHiddenByName implements store.Store.
-func (*Store) GetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string) (bool, error) {
-	var isHidden bool
-	name = utils.SanitizeRepo(name)
-	query := h.Rebind("SELECT hidden FROM repos WHERE name = ?;")
-	err := h.GetContext(ctx, &isHidden, query, name)
-	return isHidden, err
-}
-
-// GetRepoIsMirrorByName implements store.Store.
-func (*Store) GetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string) (bool, error) {
-	var isMirror bool
-	name = utils.SanitizeRepo(name)
-	query := h.Rebind("SELECT mirror FROM repos WHERE name = ?;")
-	err := h.GetContext(ctx, &isMirror, query, name)
-	return isMirror, err
-}
-
 // SetRepoIsMirrorByName implements store.Store.
 func (*Store) SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string, isMirror bool) error {
 	name = utils.SanitizeRepo(name)
@@ -155,24 +128,6 @@ func (*Store) SetRepoMirrorSyncByName(ctx context.Context, h db.Handler, name st
 	}
 	_, err := h.ExecContext(ctx, h.Rebind(query), syncErr, name)
 	return err
-}
-
-// GetRepoIsPrivateByName implements store.Store.
-func (*Store) GetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string) (bool, error) {
-	var isPrivate bool
-	name = utils.SanitizeRepo(name)
-	query := h.Rebind("SELECT private FROM repos WHERE name = ?;")
-	err := h.GetContext(ctx, &isPrivate, query, name)
-	return isPrivate, err
-}
-
-// GetRepoProjectNameByName implements store.Store.
-func (*Store) GetRepoProjectNameByName(ctx context.Context, h db.Handler, name string) (string, error) {
-	var pname string
-	name = utils.SanitizeRepo(name)
-	query := h.Rebind("SELECT project_name FROM repos WHERE name = ?;")
-	err := h.GetContext(ctx, &pname, query, name)
-	return pname, err
 }
 
 // SetRepoDescriptionByName implements store.Store.

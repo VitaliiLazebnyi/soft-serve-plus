@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"github.com/jmoiron/sqlx"
 )
 
 // trace logs a query at debug level. Only the number of arguments is logged,
@@ -49,21 +48,6 @@ func (d *DB) GetContext(ctx context.Context, dest interface{}, query string, arg
 	return mapError(d.errLog, d.DB.GetContext(ctx, dest, query, args...))
 }
 
-// QueryxContext wraps sqlx.QueryxContext: it logs the query and the
-// number of its arguments, and maps the error with WrapError.
-func (d *DB) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
-	trace(d.logger, query, args...)
-	rows, err := d.DB.QueryxContext(ctx, query, args...)
-	return rows, mapError(d.errLog, err)
-}
-
-// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
-// query and the number of its arguments. The error from scanning the row is not mapped.
-func (d *DB) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row {
-	trace(d.logger, query, args...)
-	return d.DB.QueryRowxContext(ctx, query, args...)
-}
-
 // ExecContext wraps sqlx.ExecContext: it logs the query and the
 // number of its arguments, and maps the error with WrapError.
 func (d *DB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
@@ -84,21 +68,6 @@ func (t *Tx) SelectContext(ctx context.Context, dest interface{}, query string, 
 func (t *Tx) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
 	return mapError(t.errLog, t.Tx.GetContext(ctx, dest, query, args...))
-}
-
-// QueryxContext wraps sqlx.QueryxContext: it logs the query and the
-// number of its arguments, and maps the error with WrapError.
-func (t *Tx) QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
-	trace(t.logger, query, args...)
-	rows, err := t.Tx.QueryxContext(ctx, query, args...)
-	return rows, mapError(t.errLog, err)
-}
-
-// QueryRowxContext is a wrapper around sqlx.QueryRowxContext that logs the
-// query and the number of its arguments. The error from scanning the row is not mapped.
-func (t *Tx) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row {
-	trace(t.logger, query, args...)
-	return t.Tx.QueryRowxContext(ctx, query, args...)
 }
 
 // ExecContext wraps sqlx.ExecContext: it logs the query and the

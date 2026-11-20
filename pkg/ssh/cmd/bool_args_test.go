@@ -59,14 +59,14 @@ func TestRepoBoolArgs(t *testing.T) {
 
 	get := map[string]func() bool{
 		"hidden": func() bool {
-			v, err := be.IsHidden(ctx, "r")
+			r, err := be.Repository(ctx, "r")
 			is.NoErr(err)
-			return v
+			return r.IsHidden()
 		},
 		"private": func() bool {
-			v, err := be.IsPrivate(ctx, "r")
+			r, err := be.Repository(ctx, "r")
 			is.NoErr(err)
-			return v
+			return r.IsPrivate()
 		},
 	}
 	for _, prop := range []string{"hidden", "private"} {

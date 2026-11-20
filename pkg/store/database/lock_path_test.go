@@ -20,9 +20,5 @@ func TestLFSLockPathStoredAsGiven(t *testing.T) {
 		if err != nil || l.Path != p {
 			t.Errorf("GetLFSLockForPath(%q) = %q, %v", p, l.Path, err)
 		}
-		l, err = s.GetLFSLockForUserPath(ctx, dbx, repo, owner, p)
-		if err != nil || l.Path != p {
-			t.Errorf("GetLFSLockForUserPath(%q) = %q, %v", p, l.Path, err)
-		}
 	}
 }

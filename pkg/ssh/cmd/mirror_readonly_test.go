@@ -74,13 +74,13 @@ func TestMirrorHiddenSettersNeedAdmin(t *testing.T) {
 	}
 
 	is.NoErr(runRepo(t, bossCtx, "hidden", "repo", "true"))
-	hidden, err := be.IsHidden(ctx, "repo")
+	r, err := be.Repository(ctx, "repo")
 	is.NoErr(err)
-	is.True(hidden)
+	is.True(r.IsHidden())
 	if err := runRepo(t, writerCtx, "hidden", "repo", "false"); !errors.Is(err, proto.ErrUnauthorized) {
 		t.Errorf("unhide by a read-write collaborator: got %v, want ErrUnauthorized", err)
 	}
-	hidden, err = be.IsHidden(ctx, "repo")
+	r, err = be.Repository(ctx, "repo")
 	is.NoErr(err)
-	is.True(hidden)
+	is.True(r.IsHidden())
 }

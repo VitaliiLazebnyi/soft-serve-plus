@@ -141,9 +141,6 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 		if _, err := be.Repositories(rctx()); err != nil {
 			t.Errorf("Repositories: %v", err)
 		}
-		if _, err := be.Description(rctx(), "repo"); err != nil {
-			t.Errorf("Description: %v", err)
-		}
 		if _, err := be.Webhook(rctx(), repo, hookID); err != nil {
 			t.Errorf("Webhook: %v", err)
 		}

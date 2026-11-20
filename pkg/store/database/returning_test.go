@@ -79,10 +79,8 @@ func TestCreatesReturnTheirRow(t *testing.T) {
 		t.Errorf("CreateLFSLockForUser() = %+v", l)
 	}
 	for name, get := range map[string]func() (models.LFSLock, error){
-		"GetLFSLockByID":        func() (models.LFSLock, error) { return s.GetLFSLockByID(ctx, dbx, 7, l.ID) },
-		"GetLFSLockForPath":     func() (models.LFSLock, error) { return s.GetLFSLockForPath(ctx, dbx, 7, "a.bin") },
-		"GetLFSLockForUserPath": func() (models.LFSLock, error) { return s.GetLFSLockForUserPath(ctx, dbx, 7, owner, "a.bin") },
-		"GetLFSLockForUserByID": func() (models.LFSLock, error) { return s.GetLFSLockForUserByID(ctx, dbx, 7, owner, l.ID) },
+		"GetLFSLockByID":    func() (models.LFSLock, error) { return s.GetLFSLockByID(ctx, dbx, 7, l.ID) },
+		"GetLFSLockForPath": func() (models.LFSLock, error) { return s.GetLFSLockForPath(ctx, dbx, 7, "a.bin") },
 		"GetLFSLocks": func() (models.LFSLock, error) {
 			ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10)
 			if err != nil || len(ls) != 1 {

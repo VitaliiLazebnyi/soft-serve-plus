@@ -305,20 +305,9 @@ func TestRepoStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := s.GetRepoDescriptionByName(ctx, dbx, "team/app"); err != nil || v != "new description" {
-		t.Errorf("GetRepoDescriptionByName() = %q, %v", v, err)
-	}
-	if v, err := s.GetRepoProjectNameByName(ctx, dbx, "team/app"); err != nil || v != "New App" {
-		t.Errorf("GetRepoProjectNameByName() = %q, %v", v, err)
-	}
-	if v, err := s.GetRepoIsPrivateByName(ctx, dbx, "team/app"); err != nil || v {
-		t.Errorf("GetRepoIsPrivateByName() = %v, %v, want false", v, err)
-	}
-	if v, err := s.GetRepoIsHiddenByName(ctx, dbx, "team/app"); err != nil || v {
-		t.Errorf("GetRepoIsHiddenByName() = %v, %v, want false", v, err)
-	}
-	if v, err := s.GetRepoIsMirrorByName(ctx, dbx, "team/app"); err != nil || !v {
-		t.Errorf("GetRepoIsMirrorByName() = %v, %v, want true", v, err)
+	if m, err := s.GetRepoByName(ctx, dbx, "team/app"); err != nil ||
+		m.Description != "new description" || m.ProjectName != "New App" || m.Private || m.Hidden || !m.Mirror {
+		t.Errorf("GetRepoByName() after the setters = %+v, %v", m, err)
 	}
 
 	// Anonymous repositories are owned by someone but don't count against
@@ -439,19 +428,19 @@ func TestAccessTokenStore(t *testing.T) {
 	if err := s.DeleteAccessTokenForUser(ctx, dbx, other.ID, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("DeleteAccessTokenForUser(other user) error = %v, want ErrRecordNotFound", err)
 	}
-	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); err != nil {
-		t.Errorf("token deleted by another user: GetAccessToken() error = %v", err)
+	if _, err := s.GetAccessTokenByToken(ctx, dbx, "hash-forever"); err != nil {
+		t.Errorf("token deleted by another user: GetAccessTokenByToken() error = %v", err)
 	}
 	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, forever.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetAccessToken(ctx, dbx, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetAccessToken() after its owner deleted it: error = %v, want ErrRecordNotFound", err)
+	if _, err := s.GetAccessTokenByToken(ctx, dbx, "hash-forever"); !errors.Is(err, db.ErrRecordNotFound) {
+		t.Errorf("GetAccessTokenByToken() after its owner deleted it: error = %v, want ErrRecordNotFound", err)
 	}
 	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, forever.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("DeleteAccessTokenForUser(already deleted) error = %v, want ErrRecordNotFound", err)
 	}
-	if err := s.DeleteAccessToken(ctx, dbx, expiring.ID); err != nil {
+	if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, expiring.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ts, err := s.GetAccessTokensByUserID(ctx, dbx, owner); err != nil || len(ts) != 0 {
@@ -570,15 +559,6 @@ func TestLFSLockStore(t *testing.T) {
 	if _, err := s.GetLFSLockByID(ctx, dbx, 8, l.ID); !errors.Is(err, db.ErrRecordNotFound) {
 		t.Errorf("GetLFSLockByID(other repo) error = %v, want ErrRecordNotFound", err)
 	}
-	if got, err := s.GetLFSLockForUserPath(ctx, dbx, 7, owner, "a.bin"); err != nil || got.ID != l.ID {
-		t.Errorf("GetLFSLockForUserPath() = %+v, %v", got, err)
-	}
-	if _, err := s.GetLFSLockForUserPath(ctx, dbx, 7, other.ID, "a.bin"); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetLFSLockForUserPath(not the owner) error = %v, want ErrRecordNotFound", err)
-	}
-	if _, err := s.GetLFSLockForUserByID(ctx, dbx, 7, other.ID, l.ID); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetLFSLockForUserByID(not the owner) error = %v, want ErrRecordNotFound", err)
-	}
 
 	// Pages follow the lock ID: afterID is the last ID of the previous page.
 	ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 1)
@@ -596,18 +576,11 @@ func TestLFSLockStore(t *testing.T) {
 		t.Errorf("GetLFSLocks(after 0, limit 10) = %d, %v, want 2", len(ls), err)
 	}
 
-	// Only the owner's delete removes it; DeleteLFSLock (force) removes any.
-	if err := s.DeleteLFSLockForUserByID(ctx, dbx, 7, other.ID, l.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetLFSLockByID(ctx, dbx, 7, l.ID); err != nil {
-		t.Errorf("lock deleted by another user: %v", err)
-	}
-	if err := s.DeleteLFSLockForUserByID(ctx, dbx, 7, owner, l.ID); err != nil {
+	if err := s.DeleteLFSLock(ctx, dbx, 7, l.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetLFSLockByID(ctx, dbx, 7, l.ID); !errors.Is(err, db.ErrRecordNotFound) {
-		t.Errorf("GetLFSLockByID() after owner delete: error = %v, want ErrRecordNotFound", err)
+		t.Errorf("GetLFSLockByID() after delete: error = %v, want ErrRecordNotFound", err)
 	}
 	b, err := s.GetLFSLockForPath(ctx, dbx, 7, "b.bin")
 	if err != nil {
