@@ -31,7 +31,7 @@ git -C repo-ret tag v3
 git -C repo-ret push origin v3
 
 # all five were sent
-webhook-received
+webhook-received 5
 stdout -count=4 '^branch_tag_create '
 stdout -count=1 '^branch_tag_delete '
 

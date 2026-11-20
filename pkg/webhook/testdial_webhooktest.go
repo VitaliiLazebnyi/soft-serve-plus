@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
@@ -20,7 +21,11 @@ import (
 // that address instead of the webhook's host, whatever
 // webhook.allowed_hosts says. Webhook URLs are still validated
 // as usual, so the tests use public addresses, but nothing leaves the machine:
-// the requests reach a receiver the test runs on loopback.
+// the requests reach a receiver the test runs locally. An address of the form
+// unix:<path> is a Unix socket, which the testscript receiver uses: a loopback
+// TCP connect can stall for seconds on a busy macOS machine and fail with
+// ETIMEDOUT, and nothing sends a failed delivery again, so the event would be
+// lost. Any other address is dialed over TCP.
 //
 // SOFT_SERVE_TEST_WEBHOOK_MAX_DELIVERIES lowers how many deliveries each
 // webhook keeps, so a test can reach the limit with a few events.
@@ -33,11 +38,15 @@ func init() {
 	if addr == "" {
 		return
 	}
+	network := "tcp"
+	if path, ok := strings.CutPrefix(addr, "unix:"); ok {
+		network, addr = "unix", path
+	}
 	useOnlySecureHTTPClient = true
 	secureHTTPClient = &http.Client{
 		Timeout: ssrf.ClientTimeout,
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
 			},

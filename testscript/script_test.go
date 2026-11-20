@@ -9,13 +9,13 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -233,11 +233,18 @@ func TestScript(t *testing.T) {
 			e.Setenv("SOFT_SERVE_TESTRUN", "1")
 
 			// Every webhook request of the server and its hooks goes to this
-			// script's local receiver, never to the webhook's host.
-			rcv := newWebhookReceiver()
-			e.Defer(rcv.srv.Close)
+			// script's local receiver, never to the webhook's host. They
+			// reach it over a Unix socket; WEBHOOK_RECEIVER_TCP_ADDR is its
+			// loopback TCP address, for a script that turns the redirect off
+			// and sends to the receiver's own URL.
+			rcv, err := newWebhookReceiver(context.Background())
+			if err != nil {
+				return err
+			}
+			e.Defer(rcv.close)
 			e.Values[webhookReceiverKey{}] = rcv
-			e.Setenv("SOFT_SERVE_TEST_WEBHOOK_ADDR", rcv.srv.Listener.Addr().String())
+			e.Setenv("SOFT_SERVE_TEST_WEBHOOK_ADDR", "unix:"+rcv.unix.Addr().String())
+			e.Setenv("WEBHOOK_RECEIVER_TCP_ADDR", rcv.tcp.Addr().String())
 
 			// This will disable the default lipgloss renderer colors
 			e.Setenv("SOFT_SERVE_NO_COLOR", "1")
@@ -728,34 +735,142 @@ type webhookReceiverKey struct{}
 
 // webhookReceiver is a local HTTP server that accepts every webhook request
 // and remembers the event and path of each.
+//
+// The soft binary built with the webhooktest tag dials every webhook request
+// to its Unix socket. A loopback TCP connect can stall for seconds on a busy
+// macOS machine and fail with ETIMEDOUT (KNOWN_ISSUES item 309); nothing sends
+// a failed delivery again, so the event would never arrive. It also listens
+// on loopback TCP for repo-webhook-allowed-hosts, which tests the client that
+// sends to internal addresses and so needs one.
 type webhookReceiver struct {
-	srv      *httptest.Server
+	srv  *http.Server
+	unix net.Listener
+	tcp  net.Listener
+	dir  string
+
 	mu       sync.Mutex
 	received []string
+	// arrived is closed, and replaced, whenever a request is added to
+	// received.
+	arrived chan struct{}
+
+	// blocking, when set, is called by waitFor each time it found too few
+	// requests and is about to wait for the next one. A test sets it to send
+	// a request only once waitFor waits.
+	blocking func()
 }
 
-func newWebhookReceiver() *webhookReceiver {
-	r := &webhookReceiver{}
-	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_, _ = io.Copy(io.Discard, req.Body)
+func newWebhookReceiver(ctx context.Context) (*webhookReceiver, error) {
+	var lc net.ListenConfig
+	r := &webhookReceiver{arrived: make(chan struct{})}
+	// Not a t.TempDir: a socket path must stay within about 100 bytes.
+	dir, err := os.MkdirTemp("", "webhook")
+	if err != nil {
+		return nil, err
+	}
+	r.dir = dir
+	r.unix, err = lc.Listen(ctx, "unix", filepath.Join(dir, "s"))
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	r.tcp, err = lc.Listen(ctx, "tcp", loopback+":0")
+	if err != nil {
+		_ = r.unix.Close()
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	r.srv = &http.Server{ //nolint:gosec // a test receiver; every request is answered at once
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			_, _ = io.Copy(io.Discard, req.Body)
+			r.mu.Lock()
+			r.received = append(r.received, req.Header.Get("X-SoftServe-Event")+" "+req.URL.Path)
+			close(r.arrived)
+			r.arrived = make(chan struct{})
+			r.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+	go r.srv.Serve(r.unix) //nolint:errcheck
+	go r.srv.Serve(r.tcp)  //nolint:errcheck
+	return r, nil
+}
+
+func (r *webhookReceiver) close() {
+	_ = r.srv.Close()
+	_ = os.RemoveAll(r.dir)
+}
+
+// webhookWait is how long webhook-received waits for the requests it expects.
+const webhookWait = time.Minute
+
+// waitFor waits until at least n requests have arrived, or until timeout
+// passes. It returns every request received by then and whether there were n.
+func (r *webhookReceiver) waitFor(n int, timeout time.Duration) ([]string, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
 		r.mu.Lock()
-		r.received = append(r.received, req.Header.Get("X-SoftServe-Event")+" "+req.URL.Path)
+		got := slices.Clone(r.received)
+		arrived := r.arrived
 		r.mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	return r
+		if len(got) >= n {
+			return got, true
+		}
+		if r.blocking != nil {
+			r.blocking()
+		}
+		select {
+		case <-arrived:
+		case <-timer.C:
+			return got, false
+		}
+	}
 }
 
-// cmdWebhookReceived prints one "event path" line per webhook request the
-// script's receiver got, in order.
+// cmdWebhookReceived implements "webhook-received <count>". It waits until the
+// script's receiver has got at least count requests in all, counting every
+// request since the script started, then prints one "event path" line per
+// request it has got, in the order they arrived. It fails if fewer than count
+// arrive within webhookWait (a minute); the error lists the ones that did.
+//
+// The script states the total it expects, so a request that is sent late, by
+// a server under load or by a delivery queued in the background, is waited
+// for rather than missed. More requests than count are printed too: compare
+// stdout with the exact list, or count the lines, to refuse extra ones.
+//
+// It cannot show that a request will not come. A step that must send nothing
+// passes the total the script already has, so the command returns at once;
+// that alone only shows that nothing has arrived yet. The script then shows
+// that the step is over, in one of two ways:
+//
+//   - A fence: a later request that must arrive, such as a push or a
+//     redelivery to the same webhook. The script waits for it with the new
+//     total and compares the whole list. A request wrongly sent by the step
+//     arrives before the fence, since a push's hook sends its events before
+//     the push returns and a repository's background deliveries are sent one
+//     at a time, in order. The fence must not look like anything the step
+//     could send by mistake, or a wrong request could pass for it: use
+//     another event, or another webhook.
+//   - For a send that is refused, the failed delivery, read before this
+//     command: it is recorded only once the attempt is over.
+//
+// So no script waits a minute for nothing, and none passes because it did
+// not wait.
 func cmdWebhookReceived(ts *testscript.TestScript, neg bool, args []string) {
-	if neg || len(args) != 0 {
-		ts.Fatalf("usage: webhook-received")
+	if neg || len(args) != 1 {
+		ts.Fatalf("usage: webhook-received <count>")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n < 0 {
+		ts.Fatalf("webhook-received: count must be a number of requests, not %q", args[0])
 	}
 	rcv := ts.Value(webhookReceiverKey{}).(*webhookReceiver)
-	rcv.mu.Lock()
-	defer rcv.mu.Unlock()
-	for _, line := range rcv.received {
+	got, ok := rcv.waitFor(n, webhookWait)
+	if !ok {
+		ts.Fatalf("webhook-received: got %d of %d requests within %v:\n%s", len(got), n, webhookWait, strings.Join(got, "\n"))
+	}
+	for _, line := range got {
 		_, _ = fmt.Fprintln(ts.Stdout(), line)
 	}
 }

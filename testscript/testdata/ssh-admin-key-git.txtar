@@ -99,7 +99,7 @@ git -C apriv push origin HEAD
 soft repo webhook deliver list upriv 1
 stdout '✅.*push'
 ! stdout '❌'
-webhook-received
+webhook-received 1
 stdout 'push /hooks/WH_UPRIV'
 
 # a listed key attached to a non-admin account is refused outright, git
