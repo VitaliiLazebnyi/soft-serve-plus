@@ -12,7 +12,6 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
@@ -100,11 +99,11 @@ func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 	is.True(!errors.Is(runRepo(t, keyCtx, "import", "imported", "https://example.invalid/x.git"), proto.ErrUnauthorized))
 }
 
-// `pubkey add` takes any public key without proof of holding its private
-// half, so a non-admin may not attach a key listed in initial_admin_keys to
-// their own account. The refusal says the key is listed, so a new admin
-// knows to ask an admin. A key another account owns is still a duplicate.
-// A server admin may attach a listed key, and ordinary keys are unaffected.
+// A non-admin may not attach a key listed in initial_admin_keys to their
+// own account, even with proof of holding it. The refusal says the key is
+// listed, so a new admin knows to ask an admin. A key another account owns
+// is still taken. A server admin may attach a listed key, and ordinary keys
+// are unaffected.
 func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	is := is.New(t)
 	newKey := func() gossh.PublicKey {
@@ -138,15 +137,18 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 
 	workerCtx := session("worker", false)
 	is.True(errors.Is(runPubkey(workerCtx, "add", sshutils.MarshalAuthorizedKey(adminPub)), errListedAdminKey))
-	taken := newKey()
-	_, err := be.CreateUser(ctx, "other", proto.UserOptions{PublicKeys: []gossh.PublicKey{taken}})
+	taken := newEd25519Signer(t)
+	_, err := be.CreateUser(ctx, "other", proto.UserOptions{PublicKeys: []gossh.PublicKey{taken.PublicKey()}})
 	is.NoErr(err)
-	is.True(errors.Is(runPubkey(workerCtx, "add", sshutils.MarshalAuthorizedKey(taken)), db.ErrDuplicateKey))
+	_, err = runPubkeyIn(workerCtx, proofFor(t, taken, "worker"), "add", sshutils.MarshalAuthorizedKey(taken.PublicKey()))
+	is.True(errors.Is(err, errPubkeyTaken))
 	worker, err := be.User(ctx, "worker")
 	is.NoErr(err)
 	keys := worker.PublicKeys()
 	is.Equal(len(keys), 1)
-	is.NoErr(runPubkey(workerCtx, "add", sshutils.MarshalAuthorizedKey(newKey())))
+	fresh := newEd25519Signer(t)
+	_, err = runPubkeyIn(workerCtx, proofFor(t, fresh, "worker"), "add", sshutils.MarshalAuthorizedKey(fresh.PublicKey()))
+	is.NoErr(err)
 
 	is.NoErr(runPubkey(session("boss", true), "add", sshutils.MarshalAuthorizedKey(adminPub)))
 }

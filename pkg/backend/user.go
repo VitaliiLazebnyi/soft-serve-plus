@@ -506,16 +506,38 @@ func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.Publ
 	})
 }
 
+// ErrSessionKeyRemoved is returned by AddOwnPublicKey when the key the
+// session authenticated with no longer belongs to the session's account.
+var ErrSessionKeyRemoved = errors.New("the key this session authenticated with is no longer on your account")
+
 // AddOwnPublicKey adds a public key to user's own account, found by its ID:
-// user is the session's user, resolved when the session authenticated. A
-// lookup by its name could find another account that took the name after a
-// rename, and give that account the key.
-func (d *Backend) AddOwnPublicKey(ctx context.Context, user proto.User, pk ssh.PublicKey) error {
+// user is the session's user, resolved when the session authenticated with
+// sessionKey. A lookup by its name could find another account that took the
+// name after a rename, and give that account the key.
+//
+// The key is added only while sessionKey still belongs to the account, so a
+// session whose key an admin removed, as when it was compromised, cannot add
+// a key of its own choosing in its place; it gets ErrSessionKeyRemoved.
+func (d *Backend) AddOwnPublicKey(ctx context.Context, user proto.User, sessionKey, pk ssh.PublicKey) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The row lock keeps the user from being deleted before the insert,
-		// which would then fail on its foreign key.
+		// which would then fail on its foreign key, and holds off the
+		// removal of its keys (RemovePublicKey and RemoveOwnPublicKey take
+		// the same lock), so the check below holds until the commit.
 		if _, err := d.store.GetUserByIDForUpdate(ctx, tx, user.ID()); err != nil {
 			return userNotFound(err)
+		}
+		if sessionKey == nil {
+			return ErrSessionKeyRemoved
+		}
+		owner, err := d.store.FindUserByPublicKey(ctx, tx, sessionKey)
+		switch {
+		case errors.Is(err, db.ErrRecordNotFound):
+			return ErrSessionKeyRemoved
+		case err != nil:
+			return err
+		case owner.ID != user.ID():
+			return ErrSessionKeyRemoved
 		}
 		return d.store.AddPublicKeyByUserID(ctx, tx, user.ID(), pk)
 	})

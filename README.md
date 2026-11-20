@@ -1064,8 +1064,9 @@ Users can manage their keys using the `pubkey` command:
 # List user keys
 ssh -p 23231 localhost pubkey list
 
-# Add key
-ssh -p 23231 localhost pubkey add ssh-ed25519 AAAA...
+# Add a key (see below for the proof it needs)
+printf %s USERNAME | ssh-keygen -Y sign -n pubkey-add@soft-serve-plus -f ~/.ssh/id_new |
+  ssh -p 23231 localhost pubkey add "$(cat ~/.ssh/id_new.pub)"
 
 # Wanna change your username?
 ssh -p 23231 localhost set-username yolo
@@ -1074,8 +1075,33 @@ ssh -p 23231 localhost set-username yolo
 ssh -p 23231 localhost info
 ```
 
-`pubkey add` does not ask for proof that you hold the key's private half, so
-keys listed in `initial_admin_keys` get extra care:
+`pubkey add` asks for proof that you hold the private half of the key you add,
+so nobody can attach a key that is not theirs, such as one published on a code
+host, and later sign in as its holder or receive what is meant for them. The
+proof is an SSH signature (SSHSIG) made with the new key:
+
+- the namespace is `pubkey-add@soft-serve-plus`;
+- the message is your username, as `info` prints it, with or without one
+  trailing newline.
+
+`ssh-keygen -Y sign` (OpenSSH 8.1 or later) makes it, reading the message from
+its input and writing the signature to its output. Pipe the signature into
+`pubkey add`, connected as you are now (with a key already on your account):
+
+```sh
+printf %s alice | ssh-keygen -Y sign -n pubkey-add@soft-serve-plus -f ~/.ssh/id_new |
+  ssh -p 23231 localhost pubkey add "$(cat ~/.ssh/id_new.pub)"
+```
+
+Without a valid signature, `pubkey add` fails and says how to make one. It
+reads the signature from its input, so run it without `-t`: with a terminal
+it fails at once instead of waiting. Server admins need no proof, for their
+own keys or with `user add-pubkey` for others. A key already attached to an
+account, yours or another one, is refused with the same error, which does not
+say whose it is. `pubkey add` also fails once the key your session signed in
+with has been removed from your account.
+
+Keys listed in `initial_admin_keys` get extra care:
 
 - Only an admin can attach a listed key to an account (`user add-pubkey
   USERNAME KEY`). A non-admin running `pubkey add` with one gets an error
@@ -1083,7 +1109,8 @@ keys listed in `initial_admin_keys` get extra care:
   whose key was just listed, ask an existing admin to attach it, or log in
   with that key: it already has admin rights from the config.
 - If a listed key belongs to a non-admin account (for example, someone
-  added it before it was listed), the server refuses SSH sessions with that
+  added it before `pubkey add` asked for proof, or before it was listed), the
+  server refuses SSH sessions with that
   key and logs a warning. The error names the account. If the account is
   the key holder's own, make it an admin with `user set-admin USERNAME
   true`; otherwise remove the key from it with `user remove-pubkey USERNAME

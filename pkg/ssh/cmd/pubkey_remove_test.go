@@ -63,7 +63,7 @@ func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
 	}
 
 	// With a second key, the session key is still refused.
-	if err := runPubkey(ctx1, "add", sshutils.MarshalAuthorizedKey(k2)); err != nil {
+	if err := be.AddPublicKey(ctx, "alice", k2); err != nil {
 		t.Fatal(err)
 	}
 	if err := runPubkey(ctx1, "remove", sshutils.MarshalAuthorizedKey(k1)); !errors.Is(err, errRemoveSessionKey) {
