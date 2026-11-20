@@ -278,6 +278,8 @@ func TestTagOnBlobIsRevisionNotExist(t *testing.T) {
 		{"blob", "r", "blobtag", "f"},
 		{"tree", "r", "annblob", "f"},
 		{"blob", "-r", "r", "annblob", "f"},
+		// Guards only: git log on a tag on a blob exits 0 with no
+		// commits, which is a missing revision without the peel check.
 		{"commit", "r", "blobtag"},
 		{"commit", "r", "annblob"},
 	} {

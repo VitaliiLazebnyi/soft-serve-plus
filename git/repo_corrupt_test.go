@@ -92,6 +92,10 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 	gittest.Git(t, bare, nil, "update-ref", "refs/tags/blobtag", blob)
 	gittest.Git(t, bare, nil, "tag", "-a", "-m", "on a blob", "annblob", blob)
 	gittest.Git(t, bare, nil, "tag", "-a", "-m", "on main", "anngone", root)
+	// Names that start with a dash, which git would read as an option
+	// without --end-of-options in namesRef and refUnreadable.
+	gittest.Git(t, bare, nil, "update-ref", "refs/heads/-dash", root)
+	gittest.Git(t, bare, nil, "update-ref", "refs/tags/-dashtag", blob)
 	gittest.Git(t, bare, nil, "symbolic-ref", "HEAD", "refs/heads/main")
 	if err := os.Remove(filepath.Join(bare, "objects", root[:2], root[2:])); err != nil {
 		t.Fatal(err)
@@ -119,7 +123,7 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{"main", "refs/heads/main", "HEAD", "anngone"} {
+	for _, ref := range []string{"main", "refs/heads/main", "HEAD", "anngone", "-dash"} {
 		if _, err := repo.LsTree(ref); err == nil || errors.Is(err, ErrRevisionNotExist) {
 			t.Errorf("LsTree(%q): err = %v, want git's failure", ref, err)
 		}
@@ -127,7 +131,7 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 			t.Errorf("CommitByRevision(%q): err = %v, want git's failure", ref, err)
 		}
 	}
-	for _, rev := range []string{root, "nope", "main~1", "blobtag", "annblob"} {
+	for _, rev := range []string{root, "nope", "main~1", "blobtag", "annblob", "-dashtag"} {
 		if _, err := repo.LsTree(rev); !errors.Is(err, ErrRevisionNotExist) {
 			t.Errorf("LsTree(%q): err = %v, want ErrRevisionNotExist", rev, err)
 		}
