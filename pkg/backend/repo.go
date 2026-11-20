@@ -1150,9 +1150,19 @@ const renamedRowCheckTimeout = time.Minute
 // synchronous replication say, holds the row's lock and is invisible to a
 // plain read until it ends; the locked read waits for it, so it sees the
 // row as that COMMIT leaves it.
+//
+// On SQLite the row is read plainly. A SQLite rename fails at its COMMIT or
+// not at all, and has nothing in flight to wait for once it returned; a
+// write transaction would only take the database's write lock, and another
+// writer holding it past busy_timeout would turn a move back into leaving
+// the directory.
 func (d *Backend) renamedRowName(ctx context.Context, id int64) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, renamedRowCheckTimeout)
 	defer cancel()
+	if d.db.DriverName() != "postgres" {
+		m, err := d.store.GetRepoByID(ctx, d.db, id)
+		return m.Name, err
+	}
 	var name string
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		m, err := d.store.GetRepoByIDForUpdate(ctx, tx, id)

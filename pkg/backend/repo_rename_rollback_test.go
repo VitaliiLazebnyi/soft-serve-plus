@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -82,13 +83,17 @@ func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 	is.True(os.IsNotExist(err))
 }
 
-// failingByIDStore fails every locked lookup by ID, as a database that went away
+// failingByIDStore fails every lookup by ID, as a database that went away
 // with the connection would.
 type failingByIDStore struct {
 	store.Store
 }
 
 func (failingByIDStore) GetRepoByIDForUpdate(context.Context, db.Handler, int64) (models.Repo, error) {
+	return models.Repo{}, errors.New("driver: bad connection")
+}
+
+func (failingByIDStore) GetRepoByID(context.Context, db.Handler, int64) (models.Repo, error) {
 	return models.Repo{}, errors.New("driver: bad connection")
 }
 
@@ -138,5 +143,42 @@ func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
 	is.NoErr(err) // left where it is
 	_, err = os.Lstat(be.repoPath("old"))
+	is.True(os.IsNotExist(err))
+}
+
+// On SQLite the re-check after a failed rename does not wait for the
+// database's write lock: another writer holding it does not keep the
+// directory from going back to its row. The re-check used to take the
+// write lock and, past busy_timeout, leave the directory at the new name.
+func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	if be.db.DriverName() != "sqlite" {
+		t.Skip("SQLite only")
+	}
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	_, err = be.db.ExecContext(ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
+	is.NoErr(err)
+	be.store = unpinnableRenameStore{Store: be.store}
+
+	// Another writer takes the write lock once the rename's transaction
+	// has failed, and keeps it until the rename returns.
+	var holder *sql.Tx
+	be.renameTxDone = func(err error) error {
+		var berr error
+		holder, berr = be.db.BeginTx(ctx, nil)
+		is.NoErr(berr)
+		_, berr = holder.ExecContext(ctx, `CREATE TABLE held (n INTEGER)`)
+		is.NoErr(berr)
+		return err
+	}
+	renameErr := be.RenameRepository(ctx, "old", "new")
+	is.NoErr(holder.Rollback())
+	is.True(renameErr != nil)
+	_, err = os.Stat(filepath.Join(be.repoPath("old"), "HEAD"))
+	is.NoErr(err) // moved back to its row
+	_, err = os.Lstat(be.repoPath("new"))
 	is.True(os.IsNotExist(err))
 }
