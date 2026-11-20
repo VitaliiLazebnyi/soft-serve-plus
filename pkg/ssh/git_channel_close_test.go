@@ -4,17 +4,94 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
+
+// Tracker 266: a client that closes a fetch's channel while git waits for
+// its wants, keeping the connection open as an OpenSSH ControlMaster
+// does, has gone away; git then fails for want of input, and that is not
+// a server failure to log at Error.
+func TestSSHFetchChannelClosedIsNotAServerError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	var logs syncBuffer
+	logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
+	addr, ctx := startSSHServer(t, cfg, logger)
+
+	be := backend.FromContext(ctx)
+	if _, err := be.CreateRepository(ctx, "small", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	writeManyRefs(t, filepath.Join(cfg.DataPath, "repos", "small.git"), 1)
+
+	c, err := dialClient(t, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+
+	s, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := s.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An input that stays open: without one the client sends the end of
+	// its input at once, and git fails for that whether or not the channel
+	// is closed.
+	stdin, stdinW := io.Pipe()
+	defer stdinW.Close() //nolint: errcheck
+	s.Stdin = stdin
+	if err := s.Start("git-upload-pack small"); err != nil {
+		t.Fatal(err)
+	}
+	// Read the advertisement to its flush packet: git now waits for the
+	// client's wants.
+	for {
+		var size [4]byte
+		if _, err := io.ReadFull(stdout, size[:]); err != nil {
+			t.Fatal(err)
+		}
+		n, err := strconv.ParseUint(string(size[:]), 16, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+		if _, err := io.CopyN(io.Discard, stdout, int64(n)-4); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Close the channel, keeping the connection.
+	_ = s.Close()
+
+	waitCtx, cancel := context.WithTimeout(t.Context(), sessionLoopsWait)
+	defer cancel()
+	for !strings.Contains(logs.String(), "git service") {
+		if waitCtx.Err() != nil {
+			t.Fatalf("the fetch did not end: %s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if out := logs.String(); strings.Contains(out, "ERRO") {
+		t.Fatalf("a client that closed its channel was logged as an error:\n%s", out)
+	}
+}
 
 // writeManyRefs gives the bare repository dir n branches on one empty
 // commit, written as packed-refs, so its ref advertisement is about 60

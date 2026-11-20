@@ -232,16 +232,15 @@ func TestSSHServerMaxSessions(t *testing.T) {
 	_ = s2.Close()
 }
 
-// A server built by NewSSHServer refuses a command while max_sessions
-// commands run, even when their channels are closed.
-//
-// The place is held here by a TUI session whose channel the client then
-// closes. The TUI program is bound to the connection's context, not the
-// channel's (newSessionProgram passes tea.WithContext(s.Context())), so
-// closing the channel does not stop it: it keeps its handler slot until the
-// connection closes. That is the ControlMaster case limitHandlers exists
-// for, and what makes this a test of commands counted, not channels.
-func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
+// A TUI session whose channel the client closes ends, and its place under
+// max_sessions is free for the next command on the connection. The TUI
+// program is bound to the session's context (newSessionProgram passes
+// tea.WithContext(s.Context())), which ends with the session's channel
+// (channelContext), not with the connection, so a client multiplexing one
+// connection (OpenSSH's ControlMaster) does not leave it running.
+// TestLimitHandlersWhileClosedSessionRuns covers a handler that outlives
+// its channel.
+func TestSSHServerClosedTUIFreesItsPlace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxSessions = 1
@@ -271,26 +270,20 @@ func TestSSHServerMaxSessionsCountsCommands(t *testing.T) {
 	}
 	_ = tui.Close()
 
-	for i := 0; i < 3; i++ {
-		var s *gossh.Session
-		waitFor(t, "the closed channel's place", func() bool {
-			s, err = c.NewSession()
-			return err == nil
-		})
-		done := make(chan error, 1)
+	waitFor(t, "a command to run after the TUI's channel closed", func() bool {
+		s, err := c.NewSession()
+		if err != nil {
+			return false // the channel's place is not free yet
+		}
+		defer s.Close() //nolint: errcheck
 		var stderr bytes.Buffer
 		s.Stderr = &stderr
-		go func() { done <- s.Run("repo list") }()
-		select {
-		case err := <-done:
-			if err == nil || !strings.Contains(stderr.String(), msgTooManySessions) {
-				t.Fatalf("command ran while the TUI runs: %v: %q", err, stderr.String())
-			}
-		case <-time.After(sessionLoopsWait):
-			t.Fatal("command neither refused nor finished")
+		err = s.Run("repo list")
+		if err != nil && !strings.Contains(stderr.String(), msgTooManySessions) {
+			t.Fatalf("repo list: %v: %q", err, stderr.String())
 		}
-		_ = s.Close()
-	}
+		return err == nil
+	})
 }
 
 // TestSSHServerHandshakeTimeoutFreesPlace checks that a client which opens a

@@ -393,8 +393,8 @@ func redactURLArg(arg string) string {
 }
 
 // sessionContext returns a context derived from the session's context that
-// carries the session itself. The session's context belongs to the
-// connection, and a client multiplexing sessions over one connection (such as
+// carries the session itself. The values of the session's context belong to
+// the connection (see channelContext), and a client multiplexing sessions over one connection (such as
 // OpenSSH with ControlMaster) would otherwise have each session read another
 // session's environment, e.g. its GIT_PROTOCOL.
 func sessionContext(s ssh.Session) context.Context {
