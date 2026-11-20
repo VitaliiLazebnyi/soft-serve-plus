@@ -66,7 +66,7 @@ git -C repo1 commit -am 'second'
 exec git -C repo1 rev-parse HEAD
 cp stdout head2
 envfile HEAD2=head2
-git -C repo1 push http://user1:$UTOKEN@localhost:$HTTP_PORT/repo1 HEAD:master
+git -C repo1 push http://user1:$UTOKEN@127.0.0.1:$HTTP_PORT/repo1 HEAD:master
 cmpenv out/pre-receive http-pre-receive.txt
 cmpenv out/update http-update.txt
 cmpenv out/post-receive http-pre-receive.txt
