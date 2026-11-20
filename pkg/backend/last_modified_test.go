@@ -85,3 +85,26 @@ func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
 	is.NoErr(err)
 	is.True(r.UpdatedAt().Equal(longAgo))
 }
+
+// An empty import, or a sync of an empty mirror, has no commit to record:
+// it is not a failure to warn about. Each used to log a warning.
+func TestEmptyImportRecordsNoLastModified(t *testing.T) {
+	is := is.New(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+
+	src := t.TempDir()
+	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	imp := importSpec{name: "empty", path: be.repoPath("empty"), remote: src, logRemote: src}
+	is.NoErr(claimRepoPath(imp.path))
+	r, err := be.importRepository(ctx, defaultAdmin(t, be), imp)
+	is.NoErr(err)
+	is.NoErr(be.RecordMirrorSync(ctx, r, nil))
+
+	is.True(!strings.Contains(logs.String(), "failed to record the last change"))
+	_, err = os.Stat(imp.path + "/info/last-modified")
+	is.True(os.IsNotExist(err))
+}

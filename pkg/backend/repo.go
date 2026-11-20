@@ -1830,13 +1830,20 @@ func (r *repo) UpdatedAt() time.Time {
 // repository name to its info/last-modified, where UpdatedAt reads it.
 // The post-update hook calls it after a push; an import and a mirror sync
 // run no hooks, so they call it themselves.
-func (d *Backend) populateLastModified(ctx context.Context, name string) error {
+//
+// A repository without refs, such as an empty import or mirror, has no
+// commit to date: there is nothing to record, and UpdatedAt keeps falling
+// back to the row.
+func (d *Backend) populateLastModified(_ context.Context, name string) error {
 	rp := d.repoPath(name)
+	if !hasRefs(rp) {
+		return nil
+	}
 	r, err := git.Open(rp)
 	if err != nil {
 		return err
 	}
-	t, err := r.WithContext(ctx).LatestCommitTime()
+	t, err := r.LatestCommitTime()
 	if err != nil {
 		return err
 	}
