@@ -22,9 +22,6 @@ func blobCommand() *cobra.Command {
 	var linenumber bool
 	var color bool
 	var raw bool
-	noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR"))
-
-	commonStyle := styles.DefaultStyles()
 	cmd := &cobra.Command{
 		Use:     "blob REPOSITORY [REFERENCE] [PATH]",
 		Aliases: []string{"cat", "show"},
@@ -105,6 +102,9 @@ func blobCommand() *cobra.Command {
 			// Highlighted or numbered output is for reading in a
 			// terminal, so it is stripped of the escape sequences and
 			// control characters a file can carry.
+			// Read only for the output that uses them: every session builds
+			// the command tree, whichever command it runs.
+			noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR"))
 			if (color && !noColor) || linenumber {
 				c = utils.Sanitize(c)
 			}
@@ -116,7 +116,7 @@ func blobCommand() *cobra.Command {
 			}
 
 			if linenumber {
-				c, _ = common.FormatLineNumber(commonStyle, c, color && !noColor)
+				c, _ = common.FormatLineNumber(styles.DefaultStyles(), c, color && !noColor)
 			}
 
 			cmd.Println(c)

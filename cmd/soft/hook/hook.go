@@ -22,8 +22,8 @@ import (
 )
 
 var (
-	// ErrInternalServerError indicates that an internal server error occurred.
-	ErrInternalServerError = errors.New("internal server error")
+	// errInternalServerError indicates that an internal server error occurred.
+	errInternalServerError = errors.New("internal server error")
 
 	// ErrNoDataPath is returned when a hook runs without
 	// SOFT_SERVE_DATA_PATH, i.e. not from a Soft Serve Plus server.
@@ -128,7 +128,7 @@ func NewCommand() *cobra.Command {
 			}
 			if err := cmd.InitBackendContext(c, args); err != nil {
 				logger.Error("failed to initialize backend context", "err", err)
-				return ErrInternalServerError
+				return errInternalServerError
 			}
 
 			return nil
@@ -178,21 +178,21 @@ func NewCommand() *cobra.Command {
 	return command
 }
 
-func runCommand(ctx context.Context, in io.Reader, out io.Writer, err io.Writer, name string, args ...string) error {
+func runCommand(ctx context.Context, in io.Reader, out, errOut io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = in
 	cmd.Stdout = out
-	cmd.Stderr = err
+	cmd.Stderr = errOut
 	return cmd.Run()
 }
 
-func runCustomHook(ctx context.Context, path string, in io.Reader, out io.Writer, err io.Writer, args ...string) error {
-	name, hookArgs, ok, cmdErr := customHookCommand(runtime.GOOS, path)
-	if cmdErr != nil || !ok {
-		return cmdErr
+func runCustomHook(ctx context.Context, path string, in io.Reader, out, errOut io.Writer, args ...string) error {
+	name, hookArgs, ok, err := customHookCommand(runtime.GOOS, path)
+	if err != nil || !ok {
+		return err
 	}
 
-	return runCommand(ctx, in, out, err, name, append(hookArgs, args...)...)
+	return runCommand(ctx, in, out, errOut, name, append(hookArgs, args...)...)
 }
 
 // customHookCommand returns the program and leading arguments that run the
