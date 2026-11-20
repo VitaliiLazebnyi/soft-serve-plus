@@ -1016,6 +1016,9 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return errRepoUpdate
 	}
 	claimed := true
+	// renamed is the row of the repository renamed, read and locked in the
+	// transaction.
+	var renamed models.Repo
 
 	// The directory is moved inside the transaction, and the move is not
 	// undone if the transaction fails. Cancelling ctx after the move, as a
@@ -1027,6 +1030,11 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		// The directory checks above find a repository whose name differs
 		// only in case on a case-insensitive filesystem, so the row decides:
 		// with no row named oldName this fails before the directory moves.
+		var err error
+		renamed, err = d.store.GetRepoByNameForUpdate(ctx, tx, oldName)
+		if err != nil {
+			return err
+		}
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
 		}
@@ -1053,14 +1061,13 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 	d.removeEmptyRepoParents(op)
 
 	// The rename is committed, so an event problem is logged, not returned.
+	// The event is for the row this call renamed: by the time the new name
+	// is looked up again, another repository can have it.
 	ctx, cancel := AfterChangeContext(ctx)
 	defer cancel()
 	user := proto.UserFromContext(ctx)
-	repo, err := d.Repository(ctx, newName)
-	if err != nil {
-		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
-		return nil
-	}
+	renamed.Name = newName
+	repo := d.repoFromRow(newName, renamed)
 
 	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
@@ -1136,11 +1143,44 @@ func wrapRepoError(err error) error {
 
 // SetHidden sets the hidden flag of a repository.
 func (d *Backend) SetHidden(ctx context.Context, name string, hidden bool) error {
+	return d.setHidden(ctx, name, 0, hidden)
+}
+
+// SetResolvedHidden is SetHidden for r, a repository the caller looked up
+// and authorized before: see lockResolved.
+func (d *Backend) SetResolvedHidden(ctx context.Context, r proto.Repository, hidden bool) error {
+	return d.setHidden(ctx, r.Name(), r.ID(), hidden)
+}
+
+func (d *Backend) setHidden(ctx context.Context, name string, id int64, hidden bool) error {
 	name = utils.SanitizeRepo(name)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		if _, err := d.lockResolved(ctx, tx, name, id); err != nil {
+			return err
+		}
 		return d.store.SetRepoIsHiddenByName(ctx, tx, name, hidden)
 	}))
+}
+
+// lockResolved checks, in tx, that the repository name is still the one
+// with ID id, a caller resolved and authorized before acting on it, and
+// locks its row until tx ends, so the name keeps meaning that repository
+// for the rest of tx. Another repository renamed or created under the name
+// since is proto.ErrRepoNotFound: the caller did not authorize that one.
+// With id 0 it does nothing, for callers that act on the name.
+func (d *Backend) lockResolved(ctx context.Context, tx *db.Tx, name string, id int64) (models.Repo, error) {
+	if id == 0 {
+		return models.Repo{}, nil
+	}
+	m, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
+	if err != nil {
+		return m, err
+	}
+	if m.ID != id {
+		return m, proto.ErrRepoNotFound
+	}
+	return m, nil
 }
 
 // mirrorCheckTimeout bounds the hostname lookups SetMirror makes when it
@@ -1364,25 +1404,53 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg re
 
 // SetDescription sets the description of a repository.
 func (d *Backend) SetDescription(ctx context.Context, name string, desc string) error {
+	return d.setDescription(ctx, name, 0, desc)
+}
+
+// SetResolvedDescription is SetDescription for r, a repository the caller
+// looked up and authorized before: see lockResolved.
+func (d *Backend) SetResolvedDescription(ctx context.Context, r proto.Repository, desc string) error {
+	return d.setDescription(ctx, r.Name(), r.ID(), desc)
+}
+
+func (d *Backend) setDescription(ctx context.Context, name string, id int64, desc string) error {
 	name = utils.SanitizeRepo(name)
 	desc = utils.Sanitize(desc)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		if _, err := d.lockResolved(ctx, tx, name, id); err != nil {
+			return err
+		}
 		return d.store.SetRepoDescriptionByName(ctx, tx, name, desc)
 	}))
 }
 
 // SetPrivate sets the private flag of a repository.
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
+	return d.setPrivate(ctx, name, 0, private)
+}
+
+// SetResolvedPrivate is SetPrivate for r, a repository the caller looked up
+// and authorized before: see lockResolved.
+func (d *Backend) SetResolvedPrivate(ctx context.Context, r proto.Repository, private bool) error {
+	return d.setPrivate(ctx, r.Name(), r.ID(), private)
+}
+
+func (d *Backend) setPrivate(ctx context.Context, name string, id int64, private bool) error {
 	name = utils.SanitizeRepo(name)
 
 	var changed bool
+	var m models.Repo
 	if err := wrapRepoError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 			// Locked, so that changed says what this call did.
-			m, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
+			var err error
+			m, err = d.store.GetRepoByNameForUpdate(ctx, tx, name)
 			if err != nil {
 				return err
+			}
+			if id != 0 && m.ID != id {
+				return proto.ErrRepoNotFound
 			}
 			changed = m.Private != private
 			return d.store.SetRepoIsPrivateByName(ctx, tx, name, private)
@@ -1396,14 +1464,13 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 	}
 
 	// The change is committed, so its event is sent even if ctx ends
-	// meanwhile, and an event problem is logged, not returned.
+	// meanwhile, and an event problem is logged, not returned. The event is
+	// for the row this call changed: by the time the name is looked up
+	// again, another repository can have it.
 	ctx, cancel := AfterChangeContext(ctx)
 	defer cancel()
-	repo, err := d.Repository(ctx, name)
-	if err != nil {
-		d.logger.Error("visibility change committed but webhook event skipped", "repo", name, "err", err)
-		return nil
-	}
+	m.Private = private
+	repo := d.repoFromRow(name, m)
 
 	wh, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), repo, webhook.RepositoryEventActionVisibilityChange)
 	if err != nil {
@@ -1417,14 +1484,32 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 
 // SetProjectName sets the project name of a repository.
 func (d *Backend) SetProjectName(ctx context.Context, repo string, name string) error {
+	return d.setProjectName(ctx, repo, 0, name)
+}
+
+// SetResolvedProjectName is SetProjectName for r, a repository the caller
+// looked up and authorized before: see lockResolved.
+func (d *Backend) SetResolvedProjectName(ctx context.Context, r proto.Repository, name string) error {
+	return d.setProjectName(ctx, r.Name(), r.ID(), name)
+}
+
+func (d *Backend) setProjectName(ctx context.Context, repo string, id int64, name string) error {
 	repo = utils.SanitizeRepo(repo)
 	name = utils.Sanitize(name)
 
 	return wrapRepoError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			if _, err := d.lockResolved(ctx, tx, repo, id); err != nil {
+				return err
+			}
 			return d.store.SetRepoProjectNameByName(ctx, tx, repo, name)
 		}),
 	)
+}
+
+// repoFromRow returns the repository of row m under name.
+func (d *Backend) repoFromRow(name string, m models.Repo) *repo {
+	return &repo{name: name, path: d.repoPath(name), repo: m, logger: d.logger}
 }
 
 // repoPath returns the path to a repository.

@@ -46,8 +46,9 @@ type RepositoryStore interface {
 	SetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string, isPrivate bool) error
 	SetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string, isHidden bool) error
 	SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string, isMirror bool) error
-	// SetRepoMirrorSyncByName records the outcome of a mirror sync:
-	// syncErr is the error of one that failed, and empty for one that
-	// succeeded, which also sets the time of the last sync to now.
-	SetRepoMirrorSyncByName(ctx context.Context, h db.Handler, name string, syncErr string) error
+	// SetRepoMirrorSyncByID records the outcome of a mirror sync of the
+	// repository id: syncErr is the error of one that failed, and empty for
+	// one that succeeded, which also sets the time of the last sync to now.
+	// No such repository is db.ErrRecordNotFound.
+	SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64, syncErr string) error
 }
