@@ -356,48 +356,60 @@ func TestTUIWindowSizeClamped(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Read the output in the background, so the TUI never blocks on
-			// it, and track when it last produced a frame.
+			// it.
 			var mu sync.Mutex
-			var total int
-			var lastRead time.Time
+			var out []byte
 			go func() {
 				buf := make([]byte, 4096)
 				for {
 					n, rerr := stdout.Read(buf)
-					if n > 0 {
-						mu.Lock()
-						total += n
-						lastRead = time.Now()
-						mu.Unlock()
-					}
+					mu.Lock()
+					out = append(out, buf[:n]...)
+					mu.Unlock()
 					if rerr != nil {
 						return
 					}
 				}
 			}()
-			// Wait for the first frame and for the output to go quiet,
-			// instead of a fixed wait.
-			waitFor(t, "the TUI to draw and settle", func() bool {
+			// drawn reports whether the output after its first mark
+			// bytes holds text; written returns how long it is.
+			drawn := func(text string, mark int) func() bool {
+				return func() bool {
+					mu.Lock()
+					defer mu.Unlock()
+					return bytes.Contains(out[mark:], []byte(text))
+				}
+			}
+			written := func() int {
 				mu.Lock()
 				defer mu.Unlock()
-				return total > 0 && time.Since(lastRead) > 300*time.Millisecond
-			})
-			check()
+				return len(out)
+			}
+			// The renderer sizes its screen and cell buffer for a frame
+			// before it writes the frame, so once a frame at the size
+			// under test is out, its memory is taken. The help line ends
+			// with this only when the screen is wider than the 80
+			// columns of the window-change case before its resize.
+			const wide = "toggle help"
 			if tc.resize == nil {
+				waitFor(t, "the TUI to draw its first frame", drawn(wide, 0))
+				check()
 				return
 			}
+			waitFor(t, "the TUI to draw its first frame", drawn("Repositories", 0))
+			if drawn(wide, 0)() {
+				t.Fatalf("the help line ends with %q at 80 columns too: it shows no longer which size a frame was drawn for", wide)
+			}
+			check()
 
+			mark := written()
 			if ok, err := s.SendRequest("window-change", true, tc.resize); err != nil || !ok {
 				t.Fatalf("window-change: %t, %v", ok, err)
 			}
 			// The reply comes from the request loop, before the TUI has
-			// handled the resize, so quiet output proves nothing here: watch
-			// the heap for a while and fail as soon as it is over the limit.
-			deadline := time.Now().Add(time.Second) // a check that the heap stays under the limit, which load can only make pass
-			for time.Now().Before(deadline) {
-				check()
-				time.Sleep(50 * time.Millisecond)
-			}
+			// handled the resize: wait for the frame at the new size,
+			// among what the TUI wrote after the request went out.
+			waitFor(t, "the TUI to draw at the new size", drawn(wide, mark))
 			check()
 		})
 	}
