@@ -60,7 +60,7 @@ func TestOpenRepoOutageSameAnswer(t *testing.T) {
 			}
 			for _, user := range []proto.User{nil, stranger} {
 				for _, name := range []string{"private", "ghost"} {
-					_, err := openRepo(ctx, cfg, be, user, name)
+					_, err := openRepo(ctx, be, user, name)
 					if err == nil || errors.Is(err, common.ErrMissingRepo) {
 						t.Fatalf("openRepo(%s) = %v, want a failed lookup", name, err)
 					}

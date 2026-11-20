@@ -100,7 +100,7 @@ var (
 		Namespace: "soft_serve",
 		Subsystem: "ssh",
 		Name:      "create_repo_total",
-		Help:      "The total number of create repo requests",
+		Help:      "The total number of repositories created by a push over SSH",
 	})
 )
 
@@ -442,7 +442,9 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		return gitServiceError(r.ctx, r.logger, git.ReceivePackService, r.name, err)
 	}
 
-	if err := git.EnsureDefaultBranch(r.ctx, r.scmd.Dir); err != nil {
+	// The push succeeded, so HEAD is fixed even if the client has gone
+	// meanwhile, as the failure path does.
+	if err := git.EnsureDefaultBranch(context.WithoutCancel(r.ctx), r.scmd.Dir); err != nil {
 		r.logger.Error("failed to ensure default branch", "err", err, "repo", r.name)
 		return git.ErrSystemMalfunction
 	}

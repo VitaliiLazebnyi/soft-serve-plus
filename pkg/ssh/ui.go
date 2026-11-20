@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -350,25 +349,17 @@ func (ui *UI) openRepoCmd(rn string) tea.Cmd {
 	ui.repoGen++
 	gen := ui.repoGen
 	ctx := ui.common.Context()
-	cfg := ui.common.Config()
 	be := ui.common.Backend()
 	user := proto.UserFromContext(ctx)
 	return func() tea.Msg {
-		r, err := openRepo(ctx, cfg, be, user, rn)
+		r, err := openRepo(ctx, be, user, rn)
 		return repoOpenedMsg{gen: gen, repo: r, err: err}
 	}
 }
 
 // openRepo opens repository rn for user, the session user. An admin key on
 // ctx still opens every repository.
-func openRepo(ctx context.Context, cfg *config.Config, be *backend.Backend, user proto.User, rn string) (proto.Repository, error) {
-	if cfg == nil {
-		return nil, errors.New("config is nil")
-	}
-	if be == nil {
-		return nil, errors.New("backend is nil")
-	}
-
+func openRepo(ctx context.Context, be *backend.Backend, user proto.User, rn string) (proto.Repository, error) {
 	// A repository the caller cannot read is reported as missing, so a
 	// private repository and a missing one behave the same. The user is
 	// the one AuthenticationMiddleware put on the session context, so
