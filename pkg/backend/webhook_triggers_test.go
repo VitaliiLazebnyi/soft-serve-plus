@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -24,7 +22,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -116,16 +113,13 @@ func (e whEnv) awaitLog(t *testing.T, text string) {
 	})
 }
 
-// A branch or tag creation sends branch_tag_create. The post-receive hook is
-// run as the admin named by SOFT_SERVE_USERNAME.
-func TestPostReceiveHookSendsBranchTagCreate(t *testing.T) {
+// A branch or tag creation sends branch_tag_create.
+func TestAfterPushSendsBranchTagCreate(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -133,13 +127,12 @@ func TestPostReceiveHookSendsBranchTagCreate(t *testing.T) {
 }
 
 // A branch or tag deletion sends branch_tag_delete.
-func TestPostReceiveHookSendsBranchTagDelete(t *testing.T) {
+func TestAfterPushSendsBranchTagDelete(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: someSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 
@@ -147,45 +140,13 @@ func TestPostReceiveHookSendsBranchTagDelete(t *testing.T) {
 }
 
 // A plain ref update sends no branch_tag event.
-func TestPostReceiveHookPlainUpdateSendsNoBranchTag(t *testing.T) {
+func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: someSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
-}
-
-// Failing to send the event is logged, not returned, so the hook still
-// completes. Dropping the webhooks table makes the lookup fail.
-func TestPostReceiveHookSurvivesSendFailure(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	e.seedHook(t, webhook.EventBranchTagCreate)
-	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhooks")
-	is.NoErr(err)
-
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.True(strings.Contains(e.logs.String(), "error sending branch_tag webhook"))
-}
-
-// A hook for an unknown user is logged and nothing is sent.
-func TestPostReceiveHookUnknownUser(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "nobody")
-	id := e.seedHook(t, webhook.EventBranchTagCreate)
-
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
 	is.Equal(len(e.deliveredEvents(t, id)), 0)
@@ -301,10 +262,8 @@ func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
 func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
@@ -399,14 +358,13 @@ func makeCommit(t *testing.T, path string) string {
 }
 
 // A push that moves a branch sends a push event describing its commits.
-func TestPostReceiveHookSendsPushEvent(t *testing.T) {
+func TestAfterPushSendsPushEvent(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -415,14 +373,13 @@ func TestPostReceiveHookSendsPushEvent(t *testing.T) {
 
 // A new branch on a repository with commits sends both branch_tag_create and
 // push, in that order.
-func TestPostReceiveHookSendsBranchTagThenPush(t *testing.T) {
+func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -431,14 +388,13 @@ func TestPostReceiveHookSendsBranchTagThenPush(t *testing.T) {
 
 // A push that updates several refs sends the events of each ref, in the
 // order git lists them.
-func TestPostReceiveHookSendsEventsForEachRef(t *testing.T) {
+func TestAfterPushSendsEventsForEachRef(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{
+	e.afterPush(t, e.admin, []hooks.HookArg{
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
 	})
@@ -451,14 +407,13 @@ func TestPostReceiveHookSendsEventsForEachRef(t *testing.T) {
 
 // A push that deletes a branch sends branch_tag_delete and then a push event
 // with no commits, without logging an error.
-func TestPostReceiveHookDeleteSendsBranchTagThenPush(t *testing.T) {
+func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: commit, NewSha: zeroSha, RefName: "refs/heads/main",
 	}})
 
@@ -466,100 +421,16 @@ func TestPostReceiveHookDeleteSendsBranchTagThenPush(t *testing.T) {
 	is.True(!strings.Contains(e.logs.String(), "error creating push webhook"))
 }
 
-// A failed push event send is logged and does not stop the hook.
-func TestPostReceiveHookSurvivesPushSendFailure(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	e.seedHook(t, webhook.EventPush)
-	commit := makeCommit(t, e.be.repoPath("repo"))
-	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhooks")
-	is.NoErr(err)
-
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
-	}})
-
-	is.True(strings.Contains(e.logs.String(), "error sending push webhook"))
-}
-
-// A hook for a repository that does not exist is logged and does nothing.
-func TestPostReceiveHookUnknownRepository(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
-
-	e.be.PostReceive(e.ctx, "missing", []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.True(strings.Contains(e.logs.String(), "error finding repository"))
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
-}
-
-// The hook identifies the user by public key when SOFT_SERVE_PUBLIC_KEY is
-// set. A known key sends the event as that user.
-func TestPostReceiveHookIdentifiesUserByPublicKey(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	pub := whTestKey(t)
-	_, err := e.be.CreateUser(e.ctx, "keyed", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
-	is.NoErr(err)
-	t.Setenv("SOFT_SERVE_USERNAME", "")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", string(ssh.MarshalAuthorizedKey(pub)))
-	id := e.seedHook(t, webhook.EventBranchTagCreate)
-
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
-}
-
-// An unparseable public key stops the hook before any event is sent.
-func TestPostReceiveHookInvalidPublicKey(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "not a key")
-	id := e.seedHook(t, webhook.EventBranchTagCreate)
-
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
-}
-
-// A public key with no user row, such as an initial_admin_keys entry with no
-// account, still sends the event: the SSH layer authorized the push.
-func TestPostReceiveHookUnknownPublicKey(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", string(ssh.MarshalAuthorizedKey(whTestKey(t))))
-	id := e.seedHook(t, webhook.EventBranchTagCreate)
-
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
-		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
-	}})
-
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
-}
-
 // A push with neither a public key nor a username, such as an anonymous HTTP
 // or keyless SSH push with anon-access read-write, still sends its events:
 // the server authorized the push.
-func TestPostReceiveHookAnonymousPush(t *testing.T) {
+func TestAfterPushAnonymousPush(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
+	e.afterPush(t, nil, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -587,26 +458,14 @@ func TestAddCollaboratorTwice(t *testing.T) {
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 }
 
-// whTestKey returns a fresh ed25519 public key for a test user.
-func whTestKey(t *testing.T) ssh.PublicKey {
-	t.Helper()
-	is := is.New(t)
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	is.NoErr(err)
-	signer, err := ssh.NewSignerFromKey(priv)
-	is.NoErr(err)
-	return signer.PublicKey()
-}
-
 // With both SHAs zero the event is classified as a creation, because the old
 // SHA is checked first. This documents that classification.
-func TestPostReceiveHookBothShasZeroIsCreate(t *testing.T) {
+func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 

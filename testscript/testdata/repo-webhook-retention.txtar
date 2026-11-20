@@ -1,8 +1,8 @@
 # vi: set ft=conf
 
-# Deliveries recorded by the git update hook, which runs as its own process
-# for every pushed ref, are pruned to the newest ones on every record. The
-# test build lets the limit be lowered to 3.
+# Deliveries of push events, which the server records after each push, are
+# pruned to the newest ones on every record. The test build lets the limit be
+# lowered to 3.
 env SOFT_SERVE_TEST_WEBHOOK_MAX_DELIVERIES=3
 
 # start soft serve
@@ -19,7 +19,7 @@ mkfile ./repo-ret/README.md 'foobar'
 git -C repo-ret add -A
 git -C repo-ret commit -m 'first'
 
-# five events, each recorded by a separate hook process, in this order:
+# five events, from five pushes, recorded in this order:
 # create main, create v1, delete v1, create v2, create v3
 git -C repo-ret push origin HEAD
 git -C repo-ret tag v1
@@ -37,8 +37,9 @@ stdout -count=1 '^branch_tag_delete '
 
 # only the three most recent are kept, oldest first: delete v1, create v2,
 # create v3. The list is in recording order, and the only three of the five
-# events that read delete, create, create in that order are the last three.
-soft repo webhook deliver list repo-ret 1
+# events that read delete, create, create in that order are the last three,
+# so the list reads that way once the last one is recorded.
+webhook-deliveries repo-ret 1 3 '(?s)branch_tag_delete.*branch_tag_create.*branch_tag_create'
 stdout -count=3 '✅'
 stdout -count=2 'branch_tag_create'
 stdout -count=1 'branch_tag_delete'

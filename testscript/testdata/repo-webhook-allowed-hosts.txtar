@@ -46,9 +46,9 @@ ensureserverrunning SSH_PORT
 mkfile ./repo-internal/README.md 'second'
 git -C repo-internal commit -am 'second'
 git -C repo-internal push origin HEAD
-# the failed delivery is recorded once the attempt is over, so by then the
-# receiver has had all it will get: still only the first push
-soft repo webhook deliver list repo-internal 1
+# the failed delivery is recorded once the attempt is over, so once it is
+# the receiver has had all it will get: still only the first push
+webhook-deliveries repo-internal 1 2
 stdout -count=1 '✅.*push'
 stdout -count=1 '❌.*push'
 webhook-received 1

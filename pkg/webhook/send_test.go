@@ -504,12 +504,22 @@ func TestSendWebhookBodyReadErrorStillRecordsDelivery(t *testing.T) {
 	is.True(strings.Contains(ds[0].RequestError.String, "unexpected EOF"))
 }
 
+// sendEvent sends payload to the repository's subscribers, as the server's
+// delivery queue does: Subscribers, then Deliver.
+func sendEvent(ctx context.Context, payload EventPayload) error {
+	hooks, err := Subscribers(ctx, payload)
+	if err != nil {
+		return err
+	}
+	return Deliver(ctx, hooks, payload)
+}
+
 func TestSendEventNoWebhooksIsNoop(t *testing.T) {
 	is := is.New(t)
 	useHTTPClient(t)
 	e := newTestEnv(t)
 
-	is.NoErr(SendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
 }
 
 func TestSendEventDeliversToSubscribedWebhooksOnly(t *testing.T) {
@@ -521,7 +531,7 @@ func TestSendEventDeliversToSubscribedWebhooksOnly(t *testing.T) {
 	push := e.newWebhook(t, srv.URL+"/push", "", ContentTypeJSON, EventPush)
 	other := e.newWebhook(t, srv.URL+"/collab", "", ContentTypeJSON, EventCollaborator)
 
-	is.NoErr(SendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 1)
 	is.Equal(len(e.deliveries(t, push.ID)), 1)
@@ -539,7 +549,7 @@ func TestSendEventDeliversToEveryWebhook(t *testing.T) {
 		ws = append(ws, e.newWebhook(t, fmt.Sprintf("%s/%d", srv.URL, i), "", ContentTypeJSON, EventPush))
 	}
 
-	is.NoErr(SendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 3)
 	for _, w := range ws {
@@ -547,7 +557,7 @@ func TestSendEventDeliversToEveryWebhook(t *testing.T) {
 	}
 }
 
-// BUG (suspect a): SendEvent returns on the first SendWebhook error, so the
+// BUG (suspect a): sending an event returned on the first SendWebhook error, so the
 // webhooks after the failing one are never delivered. Every subscribed webhook
 // must be attempted, and the failure must still be reported.
 func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
@@ -561,7 +571,7 @@ func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
 	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, e.repo.ID, bad.ID, bad.URL, "", 99, true))
 	good := e.newWebhook(t, srv.URL+"/good", "", ContentTypeJSON, EventPush)
 
-	err := SendEvent(e.ctx, samplePayloadFor(e))
+	err := sendEvent(e.ctx, samplePayloadFor(e))
 	is.True(err != nil)
 	is.Equal(len(e.deliveries(t, good.ID)), 1)
 	is.Equal(rec.calls, 1)
@@ -573,7 +583,7 @@ func TestSendEventWebhookLookupErrorReturned(t *testing.T) {
 	e := newTestEnv(t)
 	is.NoErr(e.dbx.Close())
 
-	is.True(SendEvent(e.ctx, samplePayloadFor(e)) != nil)
+	is.True(sendEvent(e.ctx, samplePayloadFor(e)) != nil)
 }
 
 func TestSendWebhookRecordErrorReturned(t *testing.T) {

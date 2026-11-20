@@ -443,8 +443,8 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 	// so SQLite takes its write lock and syncs once.
 	//
 	// On Postgres seq is taken from its sequence when a row is inserted, not
-	// when it commits. Deliveries of one webhook are recorded by separate
-	// processes (the server and each git hook), so a delivery whose
+	// when it commits. Deliveries of one webhook can be recorded at once (a
+	// background delivery and a redelivery, say), so a delivery whose
 	// transaction commits late can already be older, by seq, than the
 	// newest maxDeliveries rows and be pruned by the next record. That needs
 	// maxDeliveries deliveries of the same webhook recorded while its insert
@@ -613,15 +613,6 @@ func lookupHook(ctx context.Context, w models.Webhook, event Event) (models.Webh
 		return models.Webhook{}, false, err
 	}
 	return cur, true, nil
-}
-
-// SendEvent sends a webhook event to the repository's subscribers.
-func SendEvent(ctx context.Context, payload EventPayload) error {
-	hooks, err := Subscribers(ctx, payload)
-	if err != nil {
-		return err
-	}
-	return Deliver(ctx, hooks, payload)
 }
 
 func repoURL(publicURL string, repo string) string {

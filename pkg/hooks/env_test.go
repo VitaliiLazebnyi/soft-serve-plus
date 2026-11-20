@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -35,13 +36,15 @@ func TestRepoPath(t *testing.T) {
 }
 
 // withoutServerConfig returns env without the entries of cfg.Environ, and
-// fails unless env has every one of them.
+// fails unless env has every one of them but the database data source, which
+// it must not have.
 func withoutServerConfig(t *testing.T, cfg *config.Config, env []string) []string {
 	t.Helper()
 	server := cfg.Environ()
 	for _, kv := range server {
-		if !slices.Contains(env, kv) {
-			t.Errorf("env lacks server config %q", kv)
+		dataSource := strings.HasPrefix(kv, "SOFT_SERVE_DB_DATA_SOURCE=")
+		if has := slices.Contains(env, kv); has == dataSource {
+			t.Errorf("env has %q: %v, want %v", kv, has, !dataSource)
 		}
 	}
 	var out []string
@@ -91,6 +94,10 @@ func TestEnv(t *testing.T) {
 		name: "http anonymous",
 		req:  Request{Transport: TransportHTTP, Repo: "repo"},
 		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath},
+	}, {
+		name: "refs",
+		req:  Request{Transport: TransportHTTP, Repo: "repo", Refs: &PushRefs{path: "/tmp/refs"}},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUSH_REFS=/tmp/refs"},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := withoutServerConfig(t, cfg, Env(cfg, tc.req))

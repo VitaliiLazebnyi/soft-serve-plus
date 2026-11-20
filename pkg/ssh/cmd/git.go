@@ -247,15 +247,47 @@ type gitRequest struct {
 	scmd     git.ServiceCommand
 }
 
-// hookEnv returns the environment receive-pack and its hooks run with.
-func (r *gitRequest) hookEnv() []string {
+// hookEnv returns the environment receive-pack and its hooks run with, refs
+// being where post-receive writes the refs the push updated.
+func (r *gitRequest) hookEnv(refs *hooks.PushRefs) []string {
 	return hooks.Env(r.cfg, hooks.Request{
 		Transport: hooks.TransportSSH,
 		Repo:      r.name,
 		User:      r.user,
 		PublicKey: sshutils.PublicKeyFromContext(r.ctx),
 		Protocol:  r.protocol,
+		Refs:      refs,
 	})
+}
+
+// newPushRefs returns the file a push's post-receive hook writes its refs
+// to, or nil, after logging why, when it cannot be created: the push then
+// goes ahead without sending its webhooks.
+func (r *gitRequest) newPushRefs() *hooks.PushRefs {
+	refs, err := hooks.NewPushRefs()
+	if err != nil {
+		r.logger.Error("push webhooks will not be sent", "repo", r.name, "err", err)
+		return nil
+	}
+	return refs
+}
+
+// afterPush removes refs and hands the refs the push updated to the
+// backend, which does the work of the post-receive and post-update hooks.
+// The refs are updated already, whether or not the client stayed to the
+// end, so this runs either way, and not with the session's context.
+func (r *gitRequest) afterPush(refs *hooks.PushRefs) {
+	if refs == nil {
+		return
+	}
+	updated, err := refs.Refs()
+	if err != nil {
+		r.logger.Error("failed to read the pushed refs", "repo", r.name, "err", err)
+	}
+	if err := refs.Remove(); err != nil {
+		r.logger.Warn("failed to remove the push refs file", "err", err)
+	}
+	r.be.AfterPush(context.WithoutCancel(r.ctx), r.repo, r.user, updated)
 }
 
 // newGitRequest looks up the repository args[0] names for the session's
@@ -432,7 +464,9 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		receivePackSeconds.Add(time.Since(r.start).Seconds())
 	}()
 
-	r.scmd.Env = r.hookEnv()
+	refs := r.newPushRefs()
+	defer r.afterPush(refs)
+	r.scmd.Env = r.hookEnv(refs)
 	if err := git.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
 		if created != nil {
 			// The push may have failed because the session ended, so the

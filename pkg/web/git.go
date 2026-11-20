@@ -841,14 +841,21 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		cmd.Args = append(cmd.Args, "--stateless-rpc")
 	}
 
-	// Only receive-pack runs hooks, so only it gets their environment.
+	// Only receive-pack runs hooks, so only it gets their environment, and
+	// a file its post-receive hook writes the updated refs to.
 	cmd.Env = hooks.ProtocolEnv(version)
+	var refs *hooks.PushRefs
 	if service == git.ReceivePackService {
+		refs = newPushRefs(logger, repoName)
+		if refs != nil {
+			defer removePushRefs(logger, refs)
+		}
 		cmd.Env = hooks.Env(cfg, hooks.Request{
 			Transport: hooks.TransportHTTP,
 			Repo:      repoName,
 			User:      gr.user,
 			Protocol:  version,
+			Refs:      refs,
 		})
 	}
 
@@ -860,7 +867,18 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 	cmd.JoinStdin = true
 	cmd.Stdout = w
 
-	if err := service.Handler(ctx, cmd); err != nil {
+	err := service.Handler(ctx, cmd)
+	if service == git.ReceivePackService {
+		if err == nil {
+			if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
+				logger.Errorf("failed to ensure default branch: %s", err)
+			}
+		}
+		// The refs a push updated are already updated, whether or not
+		// the client stayed to the end, so their work is done either way.
+		s.afterPush(ctx, logger, gr.repo, gr.user, refs)
+	}
+	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// The client went away before git was done.
 			logger.Debugf("service cancelled: %v", err)
@@ -872,12 +890,37 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		}
 		return
 	}
+}
 
-	if service == git.ReceivePackService {
-		if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
-			logger.Errorf("failed to ensure default branch: %s", err)
-		}
+// newPushRefs returns the file a push's post-receive hook writes its refs
+// to, or nil, after logging why, when it cannot be created: the push then
+// goes ahead without sending its webhooks.
+func newPushRefs(logger *log.Logger, repo string) *hooks.PushRefs {
+	refs, err := hooks.NewPushRefs()
+	if err != nil {
+		logger.Error("push webhooks will not be sent", "repo", repo, "err", err)
+		return nil
 	}
+	return refs
+}
+
+// removePushRefs removes refs, logging a failure.
+func removePushRefs(logger *log.Logger, refs *hooks.PushRefs) {
+	if err := refs.Remove(); err != nil {
+		logger.Warn("failed to remove the push refs file", "err", err)
+	}
+}
+
+// afterPush hands the refs a push to repo by user updated to the backend.
+func (s *gitServer) afterPush(ctx context.Context, logger *log.Logger, repo proto.Repository, user proto.User, refs *hooks.PushRefs) {
+	if refs == nil || repo == nil {
+		return
+	}
+	updated, err := refs.Refs()
+	if err != nil {
+		logger.Error("failed to read the pushed refs", "repo", repo.Name(), "err", err)
+	}
+	s.be.AfterPush(ctx, repo, user, updated)
 }
 
 func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {

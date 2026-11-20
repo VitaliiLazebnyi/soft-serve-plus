@@ -14,6 +14,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -114,9 +115,8 @@ func TestCustomHookHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// When a hook fails, the hook command still closes the database: cobra
-// skips the command's PersistentPostRunE, which closes it otherwise.
-func TestHookErrorClosesDB(t *testing.T) {
+// A failing custom hook fails the hook command.
+func TestHookErrorReturned(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil && runtime.GOOS == "windows" {
 		t.Skip("custom hook is a shell script and sh is not found")
 	}
@@ -125,11 +125,11 @@ func TestHookErrorClosesDB(t *testing.T) {
 	// its first run, so a second run used the first run's config and found
 	// no custom hook in the first run's (deleted) data path.
 	for _, name := range []string{"first", "second"} {
-		t.Run(name, testHookErrorClosesDB)
+		t.Run(name, testHookErrorReturned)
 	}
 }
 
-func testHookErrorClosesDB(t *testing.T) {
+func testHookErrorReturned(t *testing.T) {
 	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {
@@ -151,17 +151,75 @@ func testHookErrorClosesDB(t *testing.T) {
 	command.SetIn(strings.NewReader(""))
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	postUpdate, err := command.ExecuteContextC(ctx)
-	if err == nil {
+	if err := command.ExecuteContext(ctx); err == nil {
 		t.Fatal("hook returned nil for a failing custom hook")
 	}
+}
 
-	dbx := db.FromContext(postUpdate.Context())
-	if dbx == nil {
-		t.Fatal("no database in the command context")
-	}
-	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("database ping returned %v, want it closed", err)
+// No hook opens the database or leaves one in the data path: the server does
+// the work of post-receive and post-update (R53, R55), and pre-receive and
+// update only run the custom hook. post-receive, as run by hooks generated
+// before soft stopped being called, writes its refs to $SOFT_SERVE_PUSH_REFS
+// for the server, and gives them to the custom hook too.
+func TestHooksOpenNoDatabase(t *testing.T) {
+	zero, one := strings.Repeat("0", 40), strings.Repeat("1", 40)
+	refLines := zero + " " + one + " refs/heads/main\n" + zero + " " + one + " refs/tags/v1\n"
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		input string
+	}{
+		{"pre-receive", nil, refLines},
+		{"update", []string{"refs/heads/main", zero, one}, ""},
+		{"post-receive", nil, refLines},
+		{"post-update", []string{"refs/heads/main", "refs/tags/v1"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+			refs := filepath.Join(t.TempDir(), "refs")
+			if err := os.WriteFile(refs, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(hooks.PushRefsEnv, refs)
+			cfg := config.DefaultConfig()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			ctx := config.WithContext(context.Background(), cfg)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+
+			command := NewCommand()
+			command.SetArgs(append([]string{tc.name}, tc.args...))
+			command.SetIn(strings.NewReader(tc.input))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			sub, err := command.ExecuteContextC(ctx)
+			if err != nil {
+				t.Fatalf("hook: %v", err)
+			}
+			if dbx := db.FromContext(sub.Context()); dbx != nil {
+				t.Error("the hook opened the database")
+			}
+			entries, err := os.ReadDir(cfg.DataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				t.Errorf("hook created %s in the data path", e.Name())
+			}
+
+			got, err := os.ReadFile(refs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if tc.name == "post-receive" {
+				want = refLines
+			}
+			if string(got) != want {
+				t.Errorf("refs file %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -210,50 +268,6 @@ func TestHookFailsOnUnreadableInput(t *testing.T) {
 			}
 			if _, err := os.Stat(marker); err == nil {
 				t.Error("the custom hook ran on part of the input")
-			}
-		})
-	}
-}
-
-// pre-receive and update, run by hooks generated before they stopped calling
-// soft, only run the custom hook: they open no database and leave none in the
-// data path (R55).
-func TestPreReceiveAndUpdateOpenNoDatabase(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		args  []string
-		input string
-	}{
-		{"pre-receive", nil, strings.Repeat("0", 40) + " " + strings.Repeat("1", 40) + " refs/heads/main\n"},
-		{"update", []string{"refs/heads/main", strings.Repeat("0", 40), strings.Repeat("1", 40)}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
-			cfg := config.DefaultConfig()
-			if err := cfg.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			ctx := config.WithContext(context.Background(), cfg)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
-
-			command := NewCommand()
-			command.SetArgs(append([]string{tc.name}, tc.args...))
-			command.SetIn(strings.NewReader(tc.input))
-			command.SetOut(io.Discard)
-			command.SetErr(io.Discard)
-			sub, err := command.ExecuteContextC(ctx)
-			if err != nil {
-				t.Fatalf("hook: %v", err)
-			}
-			if dbx := db.FromContext(sub.Context()); dbx != nil {
-				t.Error("the hook opened the database")
-			}
-			entries, err := os.ReadDir(cfg.DataPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, e := range entries {
-				t.Errorf("hook created %s in the data path", e.Name())
 			}
 		})
 	}
