@@ -209,9 +209,9 @@ func webhookUpdateCommand() *cobra.Command {
 
 			newActive := wh.Active
 			if flags.Changed("active") {
-				active, err := strconv.ParseBool(active)
+				active, err := parseBool(active)
 				if err != nil {
-					return fmt.Errorf("invalid active value: %w", err)
+					return fmt.Errorf("--active: %w", err)
 				}
 
 				newActive = active

@@ -70,12 +70,11 @@ func TestParseBool(t *testing.T) {
 	}
 }
 
-// wantInvalidBool accepts both the shared parseBool error and the
-// command-specific error of allow-keyless; both name the
-// accepted values as "true or false".
+// wantInvalidBool accepts only the shared parseBool error, which every SSH
+// command that takes a boolean argument returns.
 func wantInvalidBool(t *testing.T, err error) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "invalid ") || !strings.Contains(err.Error(), "true or false") {
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value") || !strings.Contains(err.Error(), "true or false") {
 		t.Fatalf("expected invalid boolean error, got %v", err)
 	}
 }

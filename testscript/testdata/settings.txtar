@@ -18,7 +18,7 @@ stdout 'false.*'
 soft settings allow-keyless true
 ! soft settings allow-keyless nope
 ! stdout .
-stderr 'invalid allow-keyless value'
+stderr 'invalid boolean value'
 soft settings allow-keyless
 stdout 'true.*'
 soft settings allow-keyless false

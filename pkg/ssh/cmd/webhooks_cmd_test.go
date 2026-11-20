@@ -416,8 +416,8 @@ func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
 
 	for _, v := range []string{"yes", "no", "off", "maybe", "True "} {
 		err := runRepo(t, ownerCtx, "webhook", "update", "hooks", ids, "--active", v)
-		if err == nil || !strings.Contains(err.Error(), "invalid active value") {
-			t.Errorf("--active %q: err = %v, want an invalid active value error", v, err)
+		if err == nil || !strings.Contains(err.Error(), "--active: invalid boolean value") {
+			t.Errorf("--active %q: err = %v, want the shared invalid boolean value error, naming the flag", v, err)
 		}
 		is.Equal(whSnapshot(t, ownerCtx, be), before)
 	}
@@ -920,7 +920,7 @@ func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
 	}{
 		"url":          {"--url=", "invalid"},
 		"content type": {"--content-type=", webhook.ErrInvalidContentType.Error()},
-		"active":       {"--active=", "invalid active value"},
+		"active":       {"--active=", "--active: invalid boolean value"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
