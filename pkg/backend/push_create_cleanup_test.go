@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -167,10 +168,32 @@ func TestRemovePushCreatedRepositoryLeavesHeadOfAnother(t *testing.T) {
 	is.Equal(strings.TrimSpace(string(head)), "refs/heads/missing")
 }
 
-// A ref written while the leftover directory is retried, as the failed
-// push's lingering receive-pack can on Windows, stops the retry: the
-// directory stays, to be reported at start-up, rather than being removed
-// with what was pushed.
+// refOnFailureLog is a log sink that, when the delete logs that it could
+// not remove the repository directory, writes a ref into that directory
+// before the log call returns: what a lingering receive-pack can do right
+// after the row is gone, placed before the first retry without depending on
+// timing.
+type refOnFailureLog struct {
+	syncBuffer
+	ref  string
+	once sync.Once
+	err  error
+}
+
+func (w *refOnFailureLog) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "failed to delete repository directory") {
+		w.once.Do(func() {
+			if w.err = os.MkdirAll(filepath.Dir(w.ref), 0o755); w.err == nil {
+				w.err = os.WriteFile(w.ref, []byte(strings.Repeat("a", 40)+"\n"), 0o600)
+			}
+		})
+	}
+	return w.syncBuffer.Write(p)
+}
+
+// A ref written once the row is gone, as the failed push's lingering
+// receive-pack can on Windows, stops the retry: the directory stays, to be
+// reported at start-up, rather than being removed with what was pushed.
 func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")
@@ -179,46 +202,25 @@ func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
 		t.Skip("root can remove the directory regardless of its mode")
 	}
 	is := is.New(t)
-	var logs syncBuffer
-	be, cfg := newTestBackendWithLog(t, &logs)
-	be.pushCreatedRetry = retryPolicy{first: 10 * time.Millisecond, total: time.Hour}
+	logs := &refOnFailureLog{}
+	be, cfg := newTestBackendWithLog(t, logs)
+	// A few short waits: without the check the retry gives up at once and
+	// the test fails on the log below, with no timing involved.
+	be.pushCreatedRetry = retryPolicy{first: time.Millisecond, total: 3 * time.Millisecond}
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "late", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 	dir := be.repoPath("late")
+	logs.ref = filepath.Join(dir, "refs", "heads", "pushed")
 	objects := filepath.Join(dir, "objects")
 	is.NoErr(os.Chmod(objects, 0o555))
 	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
 
-	// Once the first removal failed, a ref appears and the directory
-	// becomes removable.
-	wrote := make(chan error, 1)
-	go func() {
-		deadline := time.Now().Add(time.Minute)
-		for !strings.Contains(logs.String(), "failed to delete repository directory") {
-			if time.Now().After(deadline) {
-				wrote <- errors.New("the first removal never failed")
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		ref := filepath.Join(dir, "refs", "heads", "pushed")
-		if err := os.MkdirAll(filepath.Dir(ref), 0o755); err != nil {
-			wrote <- err
-			return
-		}
-		if err := os.WriteFile(ref, []byte(strings.Repeat("a", 40)+"\n"), 0o600); err != nil {
-			wrote <- err
-			return
-		}
-		wrote <- os.Chmod(objects, 0o755)
-	}()
-
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(<-wrote)
 	is.NoErr(err)
+	is.NoErr(logs.err)
 	is.True(removed) // the row is gone
-	_, err = os.Stat(filepath.Join(dir, "refs", "heads", "pushed"))
+	_, err = os.Stat(logs.ref)
 	is.NoErr(err) // the pushed ref is kept
 	is.True(strings.Contains(logs.String(), "wrote refs to the repository after its row was deleted"))
 }
