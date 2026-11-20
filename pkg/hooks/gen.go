@@ -10,7 +10,6 @@ import (
 	"text/template"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // The names of git server-side hooks.
@@ -30,8 +29,7 @@ const (
 // This function should be called by the backend when a repository is created.
 // TODO: support context.
 func GenerateHooks(_ context.Context, cfg *config.Config, repo string) error {
-	repo = utils.SanitizeRepo(repo) + ".git"
-	hooksPath := filepath.Join(cfg.DataPath, "repos", repo, "hooks")
+	hooksPath := filepath.Join(RepoPath(cfg, repo), "hooks")
 	if err := os.MkdirAll(hooksPath, os.ModePerm); err != nil {
 		return err
 	}

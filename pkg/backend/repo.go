@@ -1687,9 +1687,7 @@ func (d *Backend) repoFromRow(name string, m models.Repo) *repo {
 
 // repoPath returns the path to a repository.
 func (d *Backend) repoPath(name string) string {
-	name = utils.SanitizeRepo(name)
-	rn := strings.ReplaceAll(name, "/", string(os.PathSeparator))
-	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
+	return hooks.RepoPath(d.cfg, name)
 }
 
 // repoPathExists reports whether anything occupies the repository's directory,

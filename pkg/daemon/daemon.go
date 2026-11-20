@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -511,14 +511,12 @@ func parseRequest(line []byte) (gitRequest, error) {
 
 // reposDir returns the directory the repositories are in.
 func (d *GitDaemon) reposDir() string {
-	return filepath.Join(d.cfg.DataPath, "repos")
+	return hooks.ReposPath(d.cfg)
 }
 
-// repoDir returns the directory of the request's repository. Bare
-// repositories end in ".git"; see
-// https://git-scm.com/docs/gitrepository-layout.
+// repoDir returns the directory of the request's repository.
 func (d *GitDaemon) repoDir(req gitRequest) string {
-	return filepath.Join(d.reposDir(), req.name+".git")
+	return hooks.RepoPath(d.cfg, req.name)
 }
 
 // authorize returns nil if the daemon may serve req, and otherwise the error
@@ -602,20 +600,17 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 
 // environ returns the environment git runs with for req.
 func (d *GitDaemon) environ(req gitRequest) []string {
-	// Environment variables to pass down to git hooks.
-	envs := []string{
-		"SOFT_SERVE_REPO_NAME=" + req.name,
-		"SOFT_SERVE_REPO_PATH=" + d.repoDir(req),
-		"SOFT_SERVE_HOST=" + req.host,
-		"SOFT_SERVE_LOG_PATH=" + filepath.Join(d.cfg.DataPath, "log", "hooks.log"),
-	}
-
-	// Pass the requested protocol version down to git.
+	// Only the requested protocol version reaches GIT_PROTOCOL.
+	var protocol string
 	if req.version != "" {
-		envs = append(envs, "GIT_PROTOCOL=version="+req.version)
+		protocol = "version=" + req.version
 	}
-
-	return append(envs, d.cfg.Environ()...)
+	return hooks.Env(d.cfg, hooks.Request{
+		Transport: hooks.TransportDaemon,
+		Repo:      req.name,
+		Host:      req.host,
+		Protocol:  protocol,
+	})
 }
 
 // keepAlive returns the uploadpack.keepAlive interval, in seconds, for a

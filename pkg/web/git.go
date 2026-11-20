@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -118,7 +118,7 @@ func (g gitRoute) newRequest(r *http.Request) *gitRequest {
 	if gr.service == "" && gr.file == "info/refs" {
 		gr.service = getServiceType(r)
 	}
-	gr.dir = filepath.Join(g.server.cfg.DataPath, "repos", gr.name+".git")
+	gr.dir = hooks.RepoPath(g.server.cfg, gr.name)
 	return gr
 }
 
@@ -841,23 +841,12 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		cmd.Args = append(cmd.Args, "--stateless-rpc")
 	}
 
-	user := gr.user
-	cmd.Env = cfg.Environ()
-	cmd.Env = append(cmd.Env, []string{
-		"SOFT_SERVE_REPO_NAME=" + repoName,
-		"SOFT_SERVE_REPO_PATH=" + dir,
-		"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
-	}...)
-	if user != nil {
-		cmd.Env = append(cmd.Env, []string{
-			"SOFT_SERVE_USERNAME=" + user.Username(),
-		}...)
-	}
-	if len(version) != 0 {
-		cmd.Env = append(cmd.Env, []string{
-			fmt.Sprintf("GIT_PROTOCOL=%s", version),
-		}...)
-	}
+	cmd.Env = hooks.Env(cfg, hooks.Request{
+		Transport: hooks.TransportHTTP,
+		Repo:      repoName,
+		User:      gr.user,
+		Protocol:  version,
+	})
 
 	// The service waits for its read of the body to end, so the body is not
 	// read after this handler returns or while the gzip reader is closed.
@@ -928,21 +917,12 @@ func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitR
 		Args:   []string{"--stateless-rpc", "--advertise-refs"},
 	}
 
-	user := gr.user
-	cmd.Env = cfg.Environ()
-	cmd.Env = append(cmd.Env, []string{
-		"SOFT_SERVE_REPO_NAME=" + repoName,
-		"SOFT_SERVE_REPO_PATH=" + dir,
-		"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
-	}...)
-	if user != nil {
-		cmd.Env = append(cmd.Env, []string{
-			"SOFT_SERVE_USERNAME=" + user.Username(),
-		}...)
-	}
-	if len(protocol) != 0 {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_PROTOCOL=%s", protocol))
-	}
+	cmd.Env = hooks.Env(cfg, hooks.Request{
+		Transport: hooks.TransportHTTP,
+		Repo:      repoName,
+		User:      gr.user,
+		Protocol:  protocol,
+	})
 
 	if err := service.Handler(ctx, cmd); err != nil {
 		if refs.started {

@@ -1,0 +1,149 @@
+# vi: set ft=conf
+
+# Custom hooks: the server-wide hooks in $DATA_PATH/hooks and a repository's
+# own hooks/<hook>.d scripts run for every hook type, over SSH and HTTP, with
+# the stdin, arguments and environment git gives them. A failing pre-receive
+# or update hook refuses the push.
+
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# script and the expected outputs below. The hooks write LF, as git gives
+# them their input, so the files from here are made LF, and the hooks'
+# output is compared as written.
+[windows] dos2unix record.sh ssh-pre-receive.txt ssh-update.txt ssh-repo-update.txt ssh-post-update.txt http-pre-receive.txt http-update.txt http-post-update.txt
+
+mkdir out
+env HOOK_OUT=$WORK/out
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo1
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+soft repo collab add repo1 user1 read-write
+usoft token create 'push'
+cp stdout utokenfile
+envfile UTOKEN=utokenfile
+
+# the server-wide hooks
+cp record.sh $DATA_PATH/hooks/pre-receive
+cp record.sh $DATA_PATH/hooks/update
+cp record.sh $DATA_PATH/hooks/post-receive
+cp record.sh $DATA_PATH/hooks/post-update
+chmod 0755 $DATA_PATH/hooks/pre-receive
+chmod 0755 $DATA_PATH/hooks/update
+chmod 0755 $DATA_PATH/hooks/post-receive
+chmod 0755 $DATA_PATH/hooks/post-update
+# and the repository's own pre-receive and update hooks
+cp record.sh $DATA_PATH/repos/repo1.git/hooks/pre-receive.d/custom
+cp record.sh $DATA_PATH/repos/repo1.git/hooks/update.d/custom
+chmod 0755 $DATA_PATH/repos/repo1.git/hooks/pre-receive.d/custom
+chmod 0755 $DATA_PATH/repos/repo1.git/hooks/update.d/custom
+
+# a push over SSH runs each hook once
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md 'hello'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+exec git -C repo1 rev-parse HEAD
+cp stdout head1
+envfile HEAD1=head1
+
+cmpenv out/pre-receive ssh-pre-receive.txt
+cmpenv out/update ssh-update.txt
+cmpenv out/post-receive ssh-pre-receive.txt
+cmpenv out/post-update ssh-post-update.txt
+cmpenv out/repo-pre-receive ssh-pre-receive.txt
+# the wrapper gives a repository's update hook an empty line on stdin
+cmpenv out/repo-update ssh-repo-update.txt
+rm out/pre-receive out/update out/post-receive out/post-update out/repo-pre-receive out/repo-update
+
+# a push over HTTP, with a token, gets the token's user and no key
+mkfile ./repo1/README.md 'hello again'
+git -C repo1 commit -am 'second'
+exec git -C repo1 rev-parse HEAD
+cp stdout head2
+envfile HEAD2=head2
+git -C repo1 push http://user1:$UTOKEN@localhost:$HTTP_PORT/repo1 HEAD:master
+cmpenv out/pre-receive http-pre-receive.txt
+cmpenv out/update http-update.txt
+cmpenv out/post-receive http-pre-receive.txt
+cmpenv out/post-update http-post-update.txt
+rm out/pre-receive out/update out/post-receive out/post-update out/repo-pre-receive out/repo-update
+
+# a failing server-wide update hook refuses the ref, and post-receive does not run
+mkfile out/deny-update ''
+git -C repo1 checkout -b denied
+! git -C repo1 push origin denied
+stderr 'denied by update'
+! exists out/post-receive
+soft repo branch list repo1
+! stdout denied
+rm out/deny-update out/pre-receive out/update out/repo-pre-receive out/repo-update
+
+# so does a failing server-wide pre-receive hook
+mkfile out/deny-pre-receive ''
+! git -C repo1 push origin denied
+stderr 'denied by pre-receive'
+! exists out/update
+! exists out/post-receive
+soft repo branch list repo1
+! stdout denied
+rm out/deny-pre-receive
+
+# stop the server
+[windows] stopserver
+
+-- record.sh --
+#!/bin/sh
+# Records how the hook was run: its arguments, a few variables and its stdin.
+case "$0" in
+*.d/*) name=repo-$(basename "$(dirname "$0")" .d) ;;
+*) name=$(basename "$0") ;;
+esac
+{
+	printf 'args:'
+	for a in "$@"; do printf ' %s' "$a"; done
+	printf '\n'
+	printf 'repo=%s user=%s key=%s data=%s\n' "$SOFT_SERVE_REPO_NAME" "$SOFT_SERVE_USERNAME" "${SOFT_SERVE_PUBLIC_KEY:+set}" "${SOFT_SERVE_DATA_PATH:+set}"
+	printf 'stdin:\n'
+	cat
+} >>"$HOOK_OUT/$name"
+if [ -f "$HOOK_OUT/deny-$name" ]; then
+	echo "denied by $name" >&2
+	exit 1
+fi
+exit 0
+-- ssh-pre-receive.txt --
+args:
+repo=repo1 user=admin key=set data=set
+stdin:
+0000000000000000000000000000000000000000 $HEAD1 refs/heads/master
+-- ssh-update.txt --
+args: refs/heads/master 0000000000000000000000000000000000000000 $HEAD1
+repo=repo1 user=admin key=set data=set
+stdin:
+-- ssh-repo-update.txt --
+args: refs/heads/master 0000000000000000000000000000000000000000 $HEAD1
+repo=repo1 user=admin key=set data=set
+stdin:
+
+-- ssh-post-update.txt --
+args: refs/heads/master
+repo=repo1 user=admin key=set data=set
+stdin:
+-- http-pre-receive.txt --
+args:
+repo=repo1 user=user1 key= data=set
+stdin:
+$HEAD1 $HEAD2 refs/heads/master
+-- http-update.txt --
+args: refs/heads/master $HEAD1 $HEAD2
+repo=repo1 user=user1 key= data=set
+stdin:
+-- http-post-update.txt --
+args: refs/heads/master
+repo=repo1 user=user1 key= data=set
+stdin:

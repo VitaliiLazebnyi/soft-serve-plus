@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -257,11 +257,7 @@ func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 	// repo should be in the form of "repo.git"
 	name := utils.SanitizeRepo(args[0])
 	user := proto.UserFromContext(ctx)
-	// git bare repositories should end in ".git"
-	// https://git-scm.com/docs/gitrepository-layout
-	repoDir := name + ".git"
-	reposDir := filepath.Join(cfg.DataPath, "repos")
-	if err := git.EnsureWithin(reposDir, repoDir); err != nil {
+	if err := git.EnsureWithin(hooks.ReposPath(cfg), name+".git"); err != nil {
 		return nil, err
 	}
 
@@ -275,28 +271,23 @@ func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 	}
 	ctx = proto.WithRepositoryContext(ctx, repo)
 
-	repoPath := filepath.Join(reposDir, repoDir)
-	// Environment variables to pass down to git hooks.
-	envs := []string{
-		"SOFT_SERVE_REPO_NAME=" + name,
-		"SOFT_SERVE_REPO_PATH=" + repoPath,
-		"SOFT_SERVE_PUBLIC_KEY=" + sshutils.MarshalAuthorizedKey(sshutils.PublicKeyFromContext(ctx)),
-		"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
-	}
-	if user != nil {
-		envs = append(envs, "SOFT_SERVE_USERNAME="+user.Username())
-	}
-	envs = append(envs, cfg.Environ()...)
-
-	// Add GIT_PROTOCOL from session.
+	// The session's GIT_PROTOCOL, if it sent one, goes to git.
+	var protocol string
 	if sess := sshutils.SessionFromContext(ctx); sess != nil {
 		for _, env := range sess.Environ() {
-			if strings.HasPrefix(env, "GIT_PROTOCOL=") {
-				envs = append(envs, env)
+			if v, ok := strings.CutPrefix(env, "GIT_PROTOCOL="); ok {
+				protocol = v
 				break
 			}
 		}
 	}
+	envs := hooks.Env(cfg, hooks.Request{
+		Transport: hooks.TransportSSH,
+		Repo:      name,
+		User:      user,
+		PublicKey: sshutils.PublicKeyFromContext(ctx),
+		Protocol:  protocol,
+	})
 
 	return &gitRequest{
 		ctx:    ctx,
@@ -315,7 +306,7 @@ func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 			Stdout: cmd.OutOrStdout(),
 			Stderr: cmd.ErrOrStderr(),
 			Env:    envs,
-			Dir:    repoPath,
+			Dir:    hooks.RepoPath(cfg, name),
 		},
 	}, nil
 }
