@@ -50,9 +50,13 @@ func TestRemoveDaemonExportFiles(t *testing.T) {
 	}
 	is.True(strings.Contains(logs.String(), "removed=3"))
 
-	n, err := removeDaemonExportFiles([]string{be.repoPath("public"), be.repoPath("orphan")})
-	is.NoErr(err)
-	is.Equal(n, 0)
+	// A second start-up check, over every directory, finds nothing left,
+	// and neither fails to scan nor fails to remove anything.
+	var again syncBuffer
+	be.logger = log.New(&again)
+	be.CheckRepositoryDirs(ctx)
+	is.True(!strings.Contains(again.String(), daemonExportFile))
+	is.True(!strings.Contains(again.String(), "ERRO"))
 }
 
 // repoCountingStore counts GetAllRepos calls.
