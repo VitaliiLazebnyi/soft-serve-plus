@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testdial"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
@@ -410,11 +411,21 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 
 // Over HTTP/2 too, a client that stops reading the response is cut off
 // after the idle timeout.
+//
+// The connection is an in-memory pipe: the test is about the HTTP/2 stream,
+// not the socket, and a pipe has no loopback connect for a loaded macOS
+// machine to stall or fail (KNOWN_ISSUES item 309).
 func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	t.Parallel()
 	l := &requestDeadlines{idle: 200 * time.Millisecond}
+	// proto is the request's protocol as the handler saw it, set before
+	// started is closed.
+	var proto string
+	started := make(chan struct{})
 	errc := make(chan error, 1)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proto = r.Proto
+		close(started)
 		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			buf := make([]byte, 32*1024)
 			for {
@@ -426,9 +437,14 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 			}
 		}))
 	}))
+	n := &testdial.Network{}
+	_ = srv.Listener.Close()
+	srv.Listener = n.Listen()
 	srv.EnableHTTP2 = true
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
+	client := srv.Client()
+	client.Transport.(*http.Transport).DialContext = n.Dial
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 	if err != nil {
@@ -436,13 +452,21 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	}
 	// On a loaded machine the server may reset the stream before the
 	// client has read the response header; the write was cut off all the
-	// same.
-	resp, err := srv.Client().Do(req)
+	// same. But a request that failed before it reached the handler says
+	// nothing about the cut-off, so the handler must have started. The
+	// handler checks the protocol, as it sees it whether or not the client
+	// gets the response header.
+	resp, err := client.Do(req)
 	if err == nil {
 		defer resp.Body.Close() //nolint:errcheck
-		if resp.ProtoMajor != 2 {
-			t.Fatalf("protocol = %s, want HTTP/2", resp.Proto)
-		}
+	}
+	select {
+	case <-started:
+	case <-time.After(closeWait):
+		t.Fatalf("the request did not reach the handler: %v", err)
+	}
+	if proto != "HTTP/2.0" {
+		t.Fatalf("protocol = %s, want HTTP/2.0", proto)
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error
