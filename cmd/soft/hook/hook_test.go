@@ -215,6 +215,50 @@ func TestHookFailsOnUnreadableInput(t *testing.T) {
 	}
 }
 
+// pre-receive and update, run by hooks generated before they stopped calling
+// soft, only run the custom hook: they open no database and leave none in the
+// data path (R55).
+func TestPreReceiveAndUpdateOpenNoDatabase(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		input string
+	}{
+		{"pre-receive", nil, strings.Repeat("0", 40) + " " + strings.Repeat("1", 40) + " refs/heads/main\n"},
+		{"update", []string{"refs/heads/main", strings.Repeat("0", 40), strings.Repeat("1", 40)}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+			cfg := config.DefaultConfig()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			ctx := config.WithContext(context.Background(), cfg)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+
+			command := NewCommand()
+			command.SetArgs(append([]string{tc.name}, tc.args...))
+			command.SetIn(strings.NewReader(tc.input))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			sub, err := command.ExecuteContextC(ctx)
+			if err != nil {
+				t.Fatalf("hook: %v", err)
+			}
+			if dbx := db.FromContext(sub.Context()); dbx != nil {
+				t.Error("the hook opened the database")
+			}
+			entries, err := os.ReadDir(cfg.DataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				t.Errorf("hook created %s in the data path", e.Name())
+			}
+		})
+	}
+}
+
 // The ignored --config flag is marked deprecated, so cobra hides it and says
 // so when it is used.
 func TestConfigFlagDeprecated(t *testing.T) {

@@ -1590,6 +1590,12 @@ example. Global hooks run only when they are executable. Windows has no execute
 bit, so there every global hook file is run with `sh`, the one that comes with
 Git for Windows, the way git runs its own hooks.
 
+The generated `pre-receive` and `update` scripts run the global hook
+themselves and start no `soft` process, so a push of many refs costs a shell per
+ref, not a program that opens the database. Repositories whose hooks were
+written by an older version keep calling `soft hook` until you run
+`soft admin sync-hooks` (or start the server once with `--sync-hooks`).
+
 Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
 `GIT_DIR` and `GIT_PUSH_OPTION_*`), they get:
 
