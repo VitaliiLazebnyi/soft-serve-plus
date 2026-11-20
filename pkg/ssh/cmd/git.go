@@ -1,13 +1,9 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -107,67 +103,46 @@ var (
 
 // GitUploadPackCommand returns a cobra command for git-upload-pack.
 func GitUploadPackCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "git-upload-pack REPO",
-		Short:  "Git upload pack",
-		Args:   cobra.ExactArgs(1),
-		Hidden: true,
-		RunE:   gitRunE,
-	}
-
-	return cmd
+	return gitCommand("git-upload-pack REPO", "Git upload pack", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
+		return runUploadPack(cmd, args, git.UploadPackService)
+	})
 }
 
 // GitUploadArchiveCommand returns a cobra command for git-upload-archive.
 func GitUploadArchiveCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "git-upload-archive REPO",
-		Short:  "Git upload archive",
-		Args:   cobra.ExactArgs(1),
-		Hidden: true,
-		RunE:   gitRunE,
-	}
-
-	return cmd
+	return gitCommand("git-upload-archive REPO", "Git upload archive", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
+		return runUploadPack(cmd, args, git.UploadArchiveService)
+	})
 }
 
 // GitReceivePackCommand returns a cobra command for git-receive-pack.
 func GitReceivePackCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "git-receive-pack REPO",
-		Short:  "Git receive pack",
-		Args:   cobra.ExactArgs(1),
-		Hidden: true,
-		RunE:   gitRunE,
-	}
-
-	return cmd
+	return gitCommand("git-receive-pack REPO", "Git receive pack", cobra.ExactArgs(1), runReceivePack)
 }
 
 // GitLFSAuthenticateCommand returns a cobra command for git-lfs-authenticate.
 func GitLFSAuthenticateCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "git-lfs-authenticate REPO OPERATION",
-		Short:  "Git LFS authenticate",
-		Args:   cobra.ExactArgs(2),
-		Hidden: true,
-		RunE:   gitRunE,
-	}
-
-	return cmd
+	return gitCommand("git-lfs-authenticate REPO OPERATION", "Git LFS authenticate", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
+		return runLFS(cmd, args, git.LFSAuthenticateService)
+	})
 }
 
 // GitLFSTransfer returns a cobra command for git-lfs-transfer.
 func GitLFSTransfer() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "git-lfs-transfer REPO OPERATION",
-		Short:  "Git LFS transfer",
-		Args:   cobra.ExactArgs(2),
-		Hidden: true,
-		RunE:   gitRunE,
-	}
+	return gitCommand("git-lfs-transfer REPO OPERATION", "Git LFS transfer", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
+		return runLFS(cmd, args, git.LFSTransferService)
+	})
+}
 
-	return cmd
+// gitCommand returns the hidden command of a git service.
+func gitCommand(use, short string, args cobra.PositionalArgs, run func(*cobra.Command, []string) error) *cobra.Command {
+	return &cobra.Command{
+		Use:    use,
+		Short:  short,
+		Args:   args,
+		Hidden: true,
+		RunE:   run,
+	}
 }
 
 // errLFSAuthNoAccount is returned by git-lfs-authenticate to a caller whose
@@ -223,203 +198,30 @@ func gitServiceError(logger *log.Logger, service git.Service, repo string, err e
 	return git.ErrSystemMalfunction
 }
 
-// deleteFailedPushRepo deletes a repository created by a push that failed,
-// unless the push already wrote refs to it. receive-pack updates the refs and
-// reports success to the client before the post-receive hooks run, so a push
-// can fail after the client was told it succeeded, for example when the client
-// goes away while the hooks run. Such a repository is kept, and its HEAD is
-// pointed at a pushed branch as after a push that finished, so it does not
-// name a branch that does not exist.
-//
-// orig identifies the directory the push created, taken right after
-// creating it (see dirIdentity); nil if it could not be identified.
-//
-// The push may have failed because the session context was cancelled, so ctx
-// must not be the cancelled one.
-func deleteFailedPushRepo(ctx context.Context, be *backend.Backend, logger *log.Logger, name, dir string, orig os.FileInfo) {
-	removeFailedPushRepo(ctx, logger, name, dir, orig, failedPushRepoOps{
-		del:       be.DeleteRepository,
-		removeDir: be.RemoveRepositoryDir,
-		rowExists: func(ctx context.Context, name string) (bool, error) {
-			_, err := be.Repository(ctx, name)
-			if errors.Is(err, proto.ErrRepoNotFound) {
-				return false, nil
-			}
-			return err == nil, err
-		},
-	}, failedPushRetry)
+// gitRequest is what every git service over SSH starts from: the
+// repository the first argument names, the caller's access to it, and the
+// command that runs the service in it.
+type gitRequest struct {
+	ctx    context.Context
+	be     *backend.Backend
+	logger *log.Logger
+	start  time.Time
+	// name is the repository name, sanitized.
+	name string
+	user proto.User
+	// repo is nil when the repository is missing or the caller may not
+	// read it; level is the caller's access level either way.
+	repo  proto.Repository
+	level access.AccessLevel
+	// anonymous is as for denyRead: no account and not a server admin.
+	anonymous bool
+	scmd      git.ServiceCommand
 }
 
-// failedPushRepoOps are the backend operations removeFailedPushRepo uses.
-type failedPushRepoOps struct {
-	// del deletes the repository, its row first and then its directory.
-	del func(ctx context.Context, name string) error
-	// rowExists reports whether a repository with the name is listed.
-	rowExists func(ctx context.Context, name string) (bool, error)
-	// removeDir removes the leftover directory of a deleted repository and
-	// the group directories it leaves empty.
-	removeDir func(dir string) error
-}
-
-// failedPushRetry is how removeFailedPushRepo retries: a first wait of 100ms,
-// doubled after each attempt, within a 5s budget. The waits that fit add up
-// to 3.1s (100ms to 1.6s), since the next one would go past the budget.
-var failedPushRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * time.Second}
-
-// retryPolicy waits first, doubles the wait after each attempt, and gives up
-// once the sum of the waits would go past total. Only the waits count
-// toward total, not the time the attempts take or a sleep that runs over, so
-// the number of attempts is the same however slow the host is: on Windows
-// starting git for the refs check alone can take a large part of a short
-// budget, and a sleep can run past its wait by the timer resolution. The
-// time spent waiting is the sum of the waits that fit, which can be well
-// short of total.
-type retryPolicy struct {
-	first, total time.Duration
-}
-
-// removeFailedPushRepo is deleteFailedPushRepo with the backend operations
-// and the retry policy passed in.
-//
-// The delete is retried until the repository's directory is gone. On
-// Windows the git wrapper runs receive-pack in a child process that outlives
-// the killed wrapper for a moment and holds the directory, so the first
-// removal can fail. The delete removes the repository's row before its
-// directory, and a failure to remove the directory leaves the directory
-// behind.
-//
-// orig identifies the directory the push created. It is taken when the
-// repository is created, not once the push has failed: by then another
-// session may have deleted the repository, while the push still ran, and
-// pushed a new one with the name, whose directory would pass for this
-// push's own. A nil orig matches no directory, so nothing is deleted.
-//
-// The refs are checked again before each attempt as long as the repository's
-// row exists, since the surviving receive-pack could still write them, and
-// only while the directory is still the one this push created. Once
-// the row is gone the repository is deleted, and later attempts only remove
-// the leftover directory, and only while no repository with the name is
-// listed and the directory is still the one this push created: another
-// session may have removed the leftover and created a new repository with
-// the name, which must be left alone.
-func removeFailedPushRepo(ctx context.Context, logger *log.Logger, name, dir string, orig os.FileInfo, ops failedPushRepoOps, policy retryPolicy) {
-	if orig == nil {
-		logger.Error("directory of repo created by a failed push was not identified, keeping it", "repo", name)
-		return
-	}
-	var waited time.Duration
-	wait := policy.first
-	rowGone := false
-	for {
-		var err error
-		if !rowGone {
-			// The directory is checked to be the one this push created
-			// before its refs are checked and it is deleted: another
-			// session may have deleted the repository and created a new
-			// one with the name, during the push or, when a delete
-			// failed with no row left, as DeleteRepository can when it
-			// cannot remove the directory as an orphan, between attempts.
-			switch same, serr := sameDir(orig, dir); {
-			case errors.Is(serr, fs.ErrNotExist):
-				return
-			case serr != nil:
-				logger.Error("failed to identify directory of repo created by a failed push, keeping it", "err", serr, "repo", name)
-				return
-			case !same:
-				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
-				return
-			}
-			// --git-dir keeps git from looking for a repository in the
-			// parent directories if this one is not one.
-			out, cerr := exec.CommandContext(ctx, "git", "--git-dir="+dir, "for-each-ref", "--count=1").Output()
-			if cerr != nil {
-				logger.Error("failed to check refs of repo created by a failed push, keeping it", "err", cerr, "repo", name)
-				return
-			}
-			if len(bytes.TrimSpace(out)) > 0 {
-				logger.Warn("keeping repo created by a failed push, it already has refs", "repo", name)
-				if err := git.EnsureDefaultBranch(ctx, dir); err != nil {
-					logger.Warn("failed to ensure default branch of kept repo", "err", err, "repo", name)
-				}
-				return
-			}
-
-			err = ops.del(ctx, name)
-			if err == nil || errors.Is(err, proto.ErrRepoNotFound) {
-				rowGone = true
-			}
-		} else {
-			exists, rerr := ops.rowExists(ctx, name)
-			if rerr != nil {
-				logger.Error("failed to look up repo created by a failed push, leaving its directory", "err", rerr, "repo", name)
-				return
-			}
-			if exists {
-				logger.Warn("repo created by a failed push was re-created, leaving it", "repo", name)
-				return
-			}
-			switch same, serr := sameDir(orig, dir); {
-			case errors.Is(serr, fs.ErrNotExist):
-				return
-			case serr != nil:
-				// The directory cannot be identified, so it is not removed
-				// on this attempt.
-				err = serr
-			case !same:
-				logger.Warn("directory of repo created by a failed push was re-created, leaving it", "repo", name)
-				return
-			default:
-				err = ops.removeDir(dir)
-			}
-		}
-
-		if rowGone {
-			if _, serr := os.Lstat(dir); errors.Is(serr, fs.ErrNotExist) {
-				return
-			}
-		}
-
-		if waited+wait > policy.total {
-			if err == nil {
-				err = errors.New("repository directory still exists")
-			}
-			logger.Error("failed to delete repo created by a failed push", "err", err, "repo", name)
-			return
-		}
-		time.Sleep(wait)
-		waited += wait
-		wait *= 2
-	}
-}
-
-// sameDir reports whether the directory at dir is the one orig identifies.
-// A nil orig matches nothing.
-func sameDir(orig os.FileInfo, dir string) (bool, error) {
-	fi, err := dirIdentity(dir)
-	if err != nil {
-		return false, err
-	}
-	return orig != nil && os.SameFile(orig, fi), nil
-}
-
-// dirIdentity returns the FileInfo of the directory at dir with its identity
-// loaded, for os.SameFile. It stats an open handle rather than the path: on
-// Windows os.Lstat records only the path, and os.SameFile loads the volume
-// and file index from that path when it is called, so two Lstat results taken
-// at different times would both describe whatever is at the path at
-// comparison time. File.Stat reads the identity from the handle right away.
-// The handle is opened sharing read and write, so a process that has the
-// directory as its working directory does not make it fail.
-func dirIdentity(dir string) (os.FileInfo, error) {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close() //nolint: errcheck
-	return f.Stat()
-}
-
-func gitRunE(cmd *cobra.Command, args []string) error {
+// newGitRequest looks up the repository args[0] names for the session's
+// caller and prepares the service command: its directory, its input and
+// output, and the environment the hooks read.
+func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 	ctx := cmd.Context()
 	cfg := config.FromContext(ctx)
 	be := backend.FromContext(ctx)
@@ -428,44 +230,36 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 
 	// repo should be in the form of "repo.git"
 	name := utils.SanitizeRepo(args[0])
-	pk := sshutils.PublicKeyFromContext(ctx)
-	ak := sshutils.MarshalAuthorizedKey(pk)
 	user := proto.UserFromContext(ctx)
 	// git bare repositories should end in ".git"
 	// https://git-scm.com/docs/gitrepository-layout
 	repoDir := name + ".git"
 	reposDir := filepath.Join(cfg.DataPath, "repos")
 	if err := git.EnsureWithin(reposDir, repoDir); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Set repo in context. ReadableForUser applies the same server admin
-	// rule as every other SSH command, so a key in initial_admin_keys that no
-	// account holds is admin here too. (A listed key held by a non-admin
-	// account never gets this far: the SSH middleware refuses its session.)
-	repo, accessLevel, err := be.ReadableForUser(ctx, name, user)
+	// ReadableForUser applies the same server admin rule as every other SSH
+	// command, so a key in initial_admin_keys that no account holds is admin
+	// here too. (A listed key held by a non-admin account never gets this
+	// far: the SSH middleware refuses its session.)
+	repo, level, err := be.ReadableForUser(ctx, name, user)
 	if err != nil {
-		return gitLookupFailed(ctx, logger, name, err)
+		return nil, gitLookupFailed(ctx, logger, name, err)
 	}
 	ctx = proto.WithRepositoryContext(ctx, repo)
-	// As in denyRead, a server admin is never anonymous: nothing is hidden
-	// from them.
-	anonymous := user == nil && !isServerAdmin(ctx)
 
+	repoPath := filepath.Join(reposDir, repoDir)
 	// Environment variables to pass down to git hooks.
 	envs := []string{
 		"SOFT_SERVE_REPO_NAME=" + name,
-		"SOFT_SERVE_REPO_PATH=" + filepath.Join(reposDir, repoDir),
-		"SOFT_SERVE_PUBLIC_KEY=" + ak,
+		"SOFT_SERVE_REPO_PATH=" + repoPath,
+		"SOFT_SERVE_PUBLIC_KEY=" + sshutils.MarshalAuthorizedKey(sshutils.PublicKeyFromContext(ctx)),
 		"SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log"),
 	}
-
 	if user != nil {
-		envs = append(envs,
-			"SOFT_SERVE_USERNAME="+user.Username(),
-		)
+		envs = append(envs, "SOFT_SERVE_USERNAME="+user.Username())
 	}
-
 	envs = append(envs, cfg.Environ()...)
 
 	// Add GIT_PROTOCOL from session.
@@ -478,221 +272,295 @@ func gitRunE(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	repoPath := filepath.Join(reposDir, repoDir)
-	service := git.Service(cmd.Name())
-	stdin := cmd.InOrStdin()
-	stdout := cmd.OutOrStdout()
-	stderr := cmd.ErrOrStderr()
-	scmd := git.ServiceCommand{
-		Stdin:  stdin,
-		Stdout: stdout,
-		Stderr: stderr,
-		Env:    envs,
-		Dir:    repoPath,
+	return &gitRequest{
+		ctx:    ctx,
+		be:     be,
+		logger: logger,
+		start:  start,
+		name:   name,
+		user:   user,
+		repo:   repo,
+		level:  level,
+		// As in denyRead, a server admin is never anonymous: nothing is
+		// hidden from them.
+		anonymous: user == nil && !isServerAdmin(ctx),
+		scmd: git.ServiceCommand{
+			Stdin:  cmd.InOrStdin(),
+			Stdout: cmd.OutOrStdout(),
+			Stderr: cmd.ErrOrStderr(),
+			Env:    envs,
+			Dir:    repoPath,
+		},
+	}, nil
+}
+
+// setRepo makes repo the request's repository, as after looking the name up
+// again.
+func (r *gitRequest) setRepo(repo proto.Repository, level access.AccessLevel) {
+	r.repo, r.level = repo, level
+	r.ctx = proto.WithRepositoryContext(r.ctx, repo)
+}
+
+// runUploadPack runs git-upload-pack or git-upload-archive, which read the
+// repository.
+func runUploadPack(cmd *cobra.Command, args []string, service git.Service) error {
+	r, err := newGitRequest(cmd, args)
+	if err != nil {
+		return err
+	}
+	if err := gitAccess(r.anonymous, r.repo, r.level, access.ReadOnlyAccess); err != nil {
+		return err
 	}
 
-	switch service {
-	case git.ReceivePackService:
-		if repo != nil {
-			if err := gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess); err != nil {
-				return err
-			}
-			if repo.IsMirror() {
-				return proto.ErrMirrorReadOnly
-			}
-			// Hold off the removal of a repository an HTTP push created
-			// and left without refs while this push may write some.
-			done, err := beginPush(ctx, be, repo)
-			switch {
-			case err == nil:
-				defer done()
-			case errors.Is(err, proto.ErrRepoNotFound):
-				// It was removed while this push waited. Look the name
-				// up again, so the push creates it as a push to a
-				// missing name does.
-				var lerr error
-				repo, accessLevel, lerr = be.ReadableForUser(ctx, name, user)
-				if lerr != nil {
-					return gitLookupFailed(ctx, logger, name, lerr)
-				}
-				ctx = proto.WithRepositoryContext(ctx, repo)
-				if repo != nil {
-					// Another repository took the name meanwhile.
-					return err
-				}
-			default:
-				return err
-			}
-		}
+	counter, seconds := uploadPackCounter, uploadPackSeconds
+	if service == git.UploadArchiveService {
+		counter, seconds = uploadArchiveCounter, uploadArchiveSeconds
+	}
+	counter.WithLabelValues(r.name).Inc()
+	defer func() {
+		seconds.WithLabelValues(r.name).Add(time.Since(r.start).Seconds())
+	}()
 
-		// A missing name is created for a caller who may write; anything
-		// else goes through the same check as every other service.
-		created := repo == nil && accessLevel >= access.ReadWriteAccess
-		var createdDir os.FileInfo
-		if created {
-			private, err := be.DefaultPrivate(ctx, user)
-			if errors.Is(err, proto.ErrAnonymousPrivate) {
-				return fmt.Errorf("%w; authenticate to create %s by pushing, or ask an admin", err, name)
-			}
-			if err != nil {
-				return err
-			}
-			if _, err := be.CreateRepository(ctx, name, user, proto.RepositoryOptions{Private: private}); err != nil {
-				if errors.Is(err, proto.ErrLookupFailed) {
-					return gitLookupFailed(ctx, logger, name, err)
-				}
-				// Mostly a bad name or a limit, which the client is told;
-				// the backend logs its own failures.
-				logger.Debug("failed to create repo", "err", err, "repo", name)
-				return err
-			}
-			createRepoCounter.WithLabelValues(name).Inc()
-			// Identify the new directory now, before the push runs, so a
-			// failed push removes only the repository it created.
-			var ierr error
-			if createdDir, ierr = dirIdentity(repoPath); ierr != nil {
-				logger.Error("failed to identify directory of repo created by push", "err", ierr, "repo", name)
-			}
-		} else if repo == nil {
-			return gitAccess(anonymous, repo, accessLevel, access.ReadWriteAccess)
-		}
+	if err := service.Handler(r.ctx, r.scmd); err != nil {
+		return gitServiceError(r.logger, service, r.name, err)
+	}
+	return nil
+}
 
-		// Count only pushes that passed the access check, so a refused
-		// name never becomes a metric label.
-		receivePackCounter.WithLabelValues(name).Inc()
-		defer func() {
-			receivePackSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
-		}()
+// runReceivePack runs git-receive-pack. A push to a missing name that the
+// caller may write creates the repository; if the push then fails, the
+// backend removes the repository again unless it was used meanwhile (see
+// Backend.RemovePushCreatedRepository).
+func runReceivePack(cmd *cobra.Command, args []string) error {
+	r, err := newGitRequest(cmd, args)
+	if err != nil {
+		return err
+	}
+	be := r.be
 
-		if err := service.Handler(ctx, scmd); err != nil {
-			if created {
-				deleteFailedPushRepo(context.WithoutCancel(ctx), be, logger, name, repoPath, createdDir)
-			}
+	// endPush ends the push that BeginPush marked as running, at the
+	// latest when the command returns.
+	endPush := func() {}
+	defer func() { endPush() }()
 
-			return gitServiceError(logger, service, name, err)
-		}
-
-		if err := git.EnsureDefaultBranch(ctx, scmd.Dir); err != nil {
-			logger.Error("failed to ensure default branch", "err", err, "repo", name)
-			return git.ErrSystemMalfunction
-		}
-
-		return nil
-	case git.UploadPackService, git.UploadArchiveService:
-		if err := gitAccess(anonymous, repo, accessLevel, access.ReadOnlyAccess); err != nil {
+	if r.repo != nil {
+		if err := gitAccess(r.anonymous, r.repo, r.level, access.ReadWriteAccess); err != nil {
 			return err
 		}
-
-		switch service {
-		case git.UploadArchiveService:
-			uploadArchiveCounter.WithLabelValues(name).Inc()
-			defer func() {
-				uploadArchiveSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
-			}()
-		default:
-			uploadPackCounter.WithLabelValues(name).Inc()
-			defer func() {
-				uploadPackSeconds.WithLabelValues(name).Add(time.Since(start).Seconds())
-			}()
+		if r.repo.IsMirror() {
+			return proto.ErrMirrorReadOnly
 		}
-
-		if err := service.Handler(ctx, scmd); err != nil {
-			return gitServiceError(logger, service, name, err)
-		}
-
-		return nil
-	case git.LFSTransferService, git.LFSAuthenticateService:
-		operation := args[1]
-		var need access.AccessLevel
-		switch operation {
-		case lfs.OperationDownload:
-			need = access.ReadOnlyAccess
-		case lfs.OperationUpload:
-			need = access.ReadWriteAccess
-		default:
-			return git.ErrInvalidRequest
-		}
-
-		if service == git.LFSAuthenticateService {
-			// git-lfs-authenticate issues a token for the account, and the
-			// HTTP LFS endpoint checks that token against the account's own
-			// access; it knows nothing about admin keys. Authorize with the
-			// account's access here too, so a listed admin key with no
-			// account gets the answer any caller without an account gets.
-			// git-lfs-transfer stays on SSH and keeps the admin key's
-			// access.
-			var lerr error
-			repo, accessLevel, lerr = be.Readable(ctx, name, user)
+		// Hold off the removal of a repository a push created and left
+		// without refs while this push may write some.
+		done, err := beginPush(r.ctx, be, r.logger, r.repo)
+		switch {
+		case err == nil:
+			endPush = done
+		case errors.Is(err, proto.ErrRepoNotFound):
+			// It was removed while this push waited. Look the name up
+			// again, so the push creates it as a push to a missing name
+			// does.
+			repo, level, lerr := be.ReadableForUser(r.ctx, r.name, r.user)
 			if lerr != nil {
-				return gitLookupFailed(ctx, logger, name, lerr)
+				return gitLookupFailed(r.ctx, r.logger, r.name, lerr)
 			}
-			anonymous = user == nil
-			// Keep the context in step with the repo checked here, so the
-			// handler never sees the one ReadableForUser looked up.
-			ctx = proto.WithRepositoryContext(ctx, repo)
-		}
-
-		if err := gitAccess(anonymous, repo, accessLevel, need); err != nil {
+			r.setRepo(repo, level)
+			if repo != nil {
+				// Another repository took the name meanwhile.
+				return err
+			}
+		default:
 			return err
 		}
+	}
 
+	// A missing name is created for a caller who may write; anything else
+	// goes through the same check as every other service.
+	var created proto.Repository
+	if r.repo == nil {
+		if r.level < access.ReadWriteAccess {
+			return gitAccess(r.anonymous, r.repo, r.level, access.ReadWriteAccess)
+		}
+		if created, err = createByPush(r); err != nil {
+			return err
+		}
+		// git writes to the repository's directory, found by name. Before
+		// it does, BeginPush confirms that the name still belongs to the
+		// row just created: an admin may have deleted the repository
+		// since, and someone else created another under the same name,
+		// which this push was never checked against.
+		done, err := beginPush(r.ctx, be, r.logger, created)
+		if err != nil {
+			// Deleted, and perhaps replaced, already.
+			return err
+		}
+		endPush = done
+		r.setRepo(created, r.level)
+	}
+
+	// Count only pushes that passed the access check, so a refused name
+	// never becomes a metric label.
+	receivePackCounter.WithLabelValues(r.name).Inc()
+	defer func() {
+		receivePackSeconds.WithLabelValues(r.name).Add(time.Since(r.start).Seconds())
+	}()
+
+	if err := git.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
+		if created != nil {
+			// The push may have failed because the session ended, so the
+			// removal must not use its context. It must run after the
+			// push has ended, or it would find this push running and
+			// keep the repository.
+			endPush()
+			endPush = func() {}
+			removePushCreated(context.WithoutCancel(r.ctx), r, created)
+		}
+		return gitServiceError(r.logger, git.ReceivePackService, r.name, err)
+	}
+
+	if err := git.EnsureDefaultBranch(r.ctx, r.scmd.Dir); err != nil {
+		r.logger.Error("failed to ensure default branch", "err", err, "repo", r.name)
+		return git.ErrSystemMalfunction
+	}
+	return nil
+}
+
+// createByPush creates the missing repository r names for a push to it.
+func createByPush(r *gitRequest) (proto.Repository, error) {
+	private, err := r.be.DefaultPrivate(r.ctx, r.user)
+	if errors.Is(err, proto.ErrAnonymousPrivate) {
+		return nil, fmt.Errorf("%w; authenticate to create %s by pushing, or ask an admin", err, r.name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	created, err := r.be.CreateRepository(r.ctx, r.name, r.user, proto.RepositoryOptions{Private: private})
+	if err != nil {
+		if errors.Is(err, proto.ErrLookupFailed) {
+			return nil, gitLookupFailed(r.ctx, r.logger, r.name, err)
+		}
+		// Mostly a bad name or a limit, which the client is told; the
+		// backend logs its own failures.
+		r.logger.Debug("failed to create repo", "err", err, "repo", r.name)
+		return nil, err
+	}
+	createRepoCounter.WithLabelValues(r.name).Inc()
+	return created, nil
+}
+
+// removePushCreated removes created, the repository a push created, after
+// the push failed, unless it was used meanwhile; see
+// Backend.RemovePushCreatedRepository. receive-pack updates the refs and
+// reports success to the client before the post-receive hooks run, so a
+// push can fail after the client was told it succeeded, for example when
+// the client goes away while the hooks run; such a repository is kept, with
+// its HEAD on a pushed branch.
+func removePushCreated(ctx context.Context, r *gitRequest, created proto.Repository) {
+	removed, err := r.be.RemovePushCreatedRepository(ctx, created)
+	switch {
+	case errors.Is(err, proto.ErrRepoNotFound):
+		// Deleted, or renamed, meanwhile.
+	case err != nil:
+		r.logger.Error("failed to remove repo created by a failed push", "err", err, "repo", r.name)
+	case removed:
+		r.logger.Debug("removed repo created by a failed push", "repo", r.name)
+	default:
+		r.logger.Warn("keeping repo created by a failed push, it was used meanwhile", "repo", r.name)
+	}
+}
+
+// runLFS runs git-lfs-transfer or git-lfs-authenticate for the operation
+// args[1] names.
+func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
+	r, err := newGitRequest(cmd, args)
+	if err != nil {
+		return err
+	}
+
+	operation := args[1]
+	var need access.AccessLevel
+	switch operation {
+	case lfs.OperationDownload:
+		need = access.ReadOnlyAccess
+	case lfs.OperationUpload:
+		need = access.ReadWriteAccess
+	default:
+		return git.ErrInvalidRequest
+	}
+
+	if service == git.LFSAuthenticateService {
+		// git-lfs-authenticate issues a token for the account, and the
+		// HTTP LFS endpoint checks that token against the account's own
+		// access; it knows nothing about admin keys. Authorize with the
+		// account's access here too, so a listed admin key with no account
+		// gets the answer any caller without an account gets.
+		// git-lfs-transfer stays on SSH and keeps the admin key's access.
+		repo, level, lerr := r.be.Readable(r.ctx, r.name, r.user)
+		if lerr != nil {
+			return gitLookupFailed(r.ctx, r.logger, r.name, lerr)
+		}
+		// Keep the context in step with the repo checked here, so the
+		// handler never sees the one ReadableForUser looked up.
+		r.setRepo(repo, level)
+		r.anonymous = r.user == nil
+	}
+
+	if err := gitAccess(r.anonymous, r.repo, r.level, need); err != nil {
+		return err
+	}
+
+	r.scmd.Args = []string{r.name, operation}
+	counter, seconds := lfsTransferCounter, lfsTransferSeconds
+	run := git.LFSTransfer
+	if service == git.LFSAuthenticateService {
 		// A caller without an account that may read the repository, such
 		// as an unregistered key on a public repository with anonymous
 		// access, has no account to issue a token for. Say so instead of
 		// failing in the handler. The repository is readable to it, so
 		// this reveals nothing about it.
-		if service == git.LFSAuthenticateService && user == nil {
-			logger.Debug("refusing git-lfs-authenticate without an account", "repo", name, "operation", operation)
+		if r.user == nil {
+			r.logger.Debug("refusing git-lfs-authenticate without an account", "repo", r.name, "operation", operation)
 			return errLFSAuthNoAccount
 		}
-
+		counter, seconds = lfsAuthenticateCounter, lfsAuthenticateSeconds
+		run = git.LFSAuthenticate
+	} else if operation == lfs.OperationUpload {
 		// An upload writes to the repository like a push, so it holds off
 		// the same removal.
-		if service == git.LFSTransferService && operation == lfs.OperationUpload {
-			done, err := beginPush(ctx, be, repo)
-			if err != nil {
-				return err
-			}
-			defer done()
+		done, err := beginPush(r.ctx, r.be, r.logger, r.repo)
+		if err != nil {
+			return err
 		}
-
-		scmd.Args = []string{
-			name,
-			args[1],
-		}
-
-		switch service {
-		case git.LFSTransferService:
-			lfsTransferCounter.WithLabelValues(name, operation).Inc()
-			defer func() {
-				lfsTransferSeconds.WithLabelValues(name, operation).Add(time.Since(start).Seconds())
-			}()
-		default:
-			lfsAuthenticateCounter.WithLabelValues(name, operation).Inc()
-			defer func() {
-				lfsAuthenticateSeconds.WithLabelValues(name, operation).Add(time.Since(start).Seconds())
-			}()
-		}
-
-		if err := service.Handler(ctx, scmd); err != nil {
-			return gitServiceError(logger, service, name, err)
-		}
-
-		return nil
+		defer done()
 	}
 
-	return errors.New("unsupported git service")
+	counter.WithLabelValues(r.name, operation).Inc()
+	defer func() {
+		seconds.WithLabelValues(r.name, operation).Add(time.Since(r.start).Seconds())
+	}()
+
+	if err := run(r.ctx, r.scmd); err != nil {
+		return gitServiceError(r.logger, service, r.name, err)
+	}
+	return nil
 }
 
 // testHookBeforeBeginPush, when set, runs in beginPush before the push is
-// marked as running.
+// marked as running: for a push to a missing name, right after the push
+// created the repository.
 var testHookBeforeBeginPush func()
 
 // beginPush marks a push or LFS upload to repo as running; see
-// backend.BeginPush.
-func beginPush(ctx context.Context, be *backend.Backend, repo proto.Repository) (func(), error) {
+// backend.BeginPush. A repository gone or replaced meanwhile is
+// proto.ErrRepoNotFound; a failed lookup of it is logged, and the client
+// gets git.ErrSystemMalfunction (see gitLookupFailed).
+func beginPush(ctx context.Context, be *backend.Backend, logger *log.Logger, repo proto.Repository) (func(), error) {
 	if testHookBeforeBeginPush != nil {
 		testHookBeforeBeginPush()
 	}
-	return be.BeginPush(ctx, repo)
+	done, err := be.BeginPush(ctx, repo)
+	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
+		return nil, gitLookupFailed(ctx, logger, repo.Name(), err)
+	}
+	return done, err
 }
