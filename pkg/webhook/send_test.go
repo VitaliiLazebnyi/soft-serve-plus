@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -367,6 +368,29 @@ func TestSendWebhookNetworkErrorRecorded(t *testing.T) {
 	is.Equal(ds[0].ResponseBody, "")
 }
 
+// waitingForWriteTurn reports whether a goroutine waits for its turn to
+// begin a write transaction in db.DB to record a delivery.
+func waitingForWriteTurn() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, frames, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[select") &&
+			strings.HasPrefix(frames, "github.com/charmbracelet/soft-serve/pkg/db.(*DB).transaction(") &&
+			strings.Contains(frames, "github.com/charmbracelet/soft-serve/pkg/webhook.recordDelivery(") {
+			return true
+		}
+	}
+	return false
+}
+
 // TestSendWebhookRecordWaitsForWriteTurn holds this process's SQLite write
 // turn while a delivery is recorded, for longer than the record used to
 // allow. The record waits for its turn, so the delivery is still in the
@@ -384,6 +408,16 @@ func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 	go func() {
 		done <- e.dbx.TransactionContext(context.Background(), func(*db.Tx) error {
 			close(held)
+			// Hold the turn from when the record waits for it for
+			// longer than the 5 seconds the record used to wait. Load
+			// can only make the hold longer.
+			deadline := time.Now().Add(time.Minute)
+			for !waitingForWriteTurn() {
+				if time.Now().After(deadline) {
+					return errors.New("the record never waited for the write turn")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			time.Sleep(6 * time.Second)
 			return nil
 		})
