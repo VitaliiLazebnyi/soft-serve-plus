@@ -287,13 +287,14 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 		t.Fatalf("database file = %q, %v", file, err)
 	}
 	path := shellQuote(runtime.GOOS, file)
+	note := shellNote(runtime.GOOS)
 	for _, want := range []string{
 		"kept (owner id 100)",
 		"nothing was changed",
 		"With the previous version running, before upgrading, as an admin with a key listed in initial_admin_keys: " +
 			"ssh -p PORT HOST user set-admin USERNAME true.",
-		"With the server stopped: sqlite3 " + path + ` "UPDATE users SET admin = 1 WHERE username = 'USERNAME'".`,
-		"With no users at all, stop the server and add an admin: sqlite3 " + path +
+		"With the server stopped" + note + ": sqlite3 " + path + ` "UPDATE users SET admin = 1 WHERE username = 'USERNAME'".`,
+		"With no users at all, stop the server and add an admin" + note + ": sqlite3 " + path +
 			` "INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)"`,
 	} {
 		if !strings.Contains(msg, want) {
@@ -353,6 +354,20 @@ func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 		t.Fatalf("Migrate() after rollback => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
+}
+
+// The message says which shell its commands are quoted for where that is
+// not the plain one: on Windows, whose double quotes still let cmd.exe
+// expand %NAME% and PowerShell $name, it names cmd.exe (tracker 322).
+func TestShellNote(t *testing.T) {
+	if got := shellNote("windows"); got != " (in cmd.exe)" {
+		t.Errorf("shellNote(windows) = %q, want it to name cmd.exe", got)
+	}
+	for _, goos := range []string{"linux", "darwin", "freebsd"} {
+		if got := shellNote(goos); got != "" {
+			t.Errorf("shellNote(%s) = %q, want none", goos, got)
+		}
+	}
 }
 
 // A database path is quoted for the shell of the system the message is

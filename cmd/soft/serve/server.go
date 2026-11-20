@@ -21,7 +21,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/cron"
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
@@ -41,7 +40,6 @@ type Server struct {
 	Cron        *cron.Scheduler
 	Config      *config.Config
 	Backend     *backend.Backend
-	DB          *db.DB
 
 	logger *log.Logger
 	ctx    context.Context
@@ -58,13 +56,11 @@ type Server struct {
 }
 
 // NewServer returns a new *Server configured to serve Soft Serve. The SSH
-// server key-pair will be created if none exists.
-// It expects a context with *backend.Backend, *db.DB, *log.Logger, and
-// *config.Config attached.
+// host key and the client key are created if they do not exist. It expects a
+// context with *backend.Backend, *log.Logger and *config.Config attached.
 func NewServer(ctx context.Context) (_ *Server, err error) {
 	cfg := config.FromContext(ctx)
 	be := backend.FromContext(ctx)
-	db := db.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("server")
 	// The cron jobs run with a context Shutdown and Close cancel, so a
 	// running mirror sync starts no further git command or lfs request and
@@ -75,7 +71,6 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	srv := &Server{
 		Config:   cfg,
 		Backend:  be,
-		DB:       db,
 		logger:   logger,
 		ctx:      ctx,
 		jobCtx:   jobCtx,

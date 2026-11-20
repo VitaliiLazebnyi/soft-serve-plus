@@ -180,9 +180,9 @@ func reassignOwnerlessRepos(ctx context.Context, tx *db.Tx, logger *log.Logger) 
 			"Make a user an admin, then start again. "+
 			"With the previous version running, before upgrading, as an admin with a key listed in initial_admin_keys: "+
 			"ssh -p PORT HOST user set-admin USERNAME true. "+
-			"With the server stopped: sqlite3 %s \"UPDATE users SET admin = 1 WHERE username = 'USERNAME'\". "+
-			"With no users at all, stop the server and add an admin: sqlite3 %[2]s \"INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)\"",
-			strings.Join(names, ", "), file)
+			"With the server stopped%[3]s: sqlite3 %[2]s \"UPDATE users SET admin = 1 WHERE username = 'USERNAME'\". "+
+			"With no users at all, stop the server and add an admin%[3]s: sqlite3 %[2]s \"INSERT INTO users (username, admin, updated_at) VALUES ('admin', 1, CURRENT_TIMESTAMP)\"",
+			strings.Join(names, ", "), file, shellNote(runtime.GOOS))
 	}
 	if err != nil {
 		return fmt.Errorf("look up an admin for repositories whose owner no longer exists: %w", err)
@@ -240,6 +240,18 @@ func shellQuote(goos, path string) string {
 		return `"` + path + `"`
 	}
 	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// shellNote names, for a message, the shell its commands are quoted for on
+// goos when that is not plain: on Windows, cmd.exe. The double quotes
+// shellQuote uses there keep a path whole in PowerShell too, but PowerShell
+// expands $name and backticks inside them, and cmd.exe %NAME%, so the
+// message says which shell it means rather than look right for both.
+func shellNote(goos string) string {
+	if goos == "windows" {
+		return " (in cmd.exe)"
+	}
+	return ""
 }
 
 // tableCounts returns the number of rows of every table of the database.

@@ -176,6 +176,9 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 	readmeExample := rest[start : start+strings.Index(rest[start:], "```")]
 	checkPubKeyAuths("README", readmeExample)
 
+	// And the note about RSA keys further down.
+	checkRSANote(t, doc)
+
 	// The config file has the public key authentication example as comment
 	// lines after "only signs with ssh-rsa".
 	file := string(defaultConfigFile)
@@ -192,6 +195,48 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 		b.WriteString("  " + strings.TrimPrefix(l, "  #   ") + "\n")
 	}
 	checkPubKeyAuths("config file", b.String())
+}
+
+// checkRSANote checks that the README's note about RSA keys, in doc, says what
+// the defaults do: SHA-2 RSA signatures are accepted and SHA-1 ssh-rsa ones
+// refused unless configured. It used to say ssh-rsa was accepted (R103,
+// OPS-9).
+func checkRSANote(t *testing.T, doc string) {
+	t.Helper()
+	i := strings.Index(doc, "## A note about RSA keys")
+	if i < 0 {
+		t.Fatal("README has no note about RSA keys")
+	}
+	note := doc[i+len("## A note about RSA keys"):]
+	note = note[:strings.Index(note, "\n## ")]
+	// One sentence per line, to look at what each says.
+	sentences := strings.Split(strings.ReplaceAll(strings.ReplaceAll(note, "\n", " "), ". ", ".\n"), "\n")
+
+	defaults := DefaultSSHPublicKeyAuthAlgorithms()
+	for _, algo := range []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512} {
+		if !slices.Contains(defaults, algo) {
+			t.Fatalf("%s is not accepted by default", algo)
+		}
+		if !strings.Contains(note, "`"+algo+"`") {
+			t.Errorf("the RSA note does not name %s, which is accepted by default", algo)
+		}
+	}
+	if slices.Contains(defaults, ssh.KeyAlgoRSA) {
+		t.Fatal("ssh-rsa is accepted by default")
+	}
+	var found bool
+	for _, s := range sentences {
+		if !strings.Contains(s, "`"+ssh.KeyAlgoRSA+"`") {
+			continue
+		}
+		found = true
+		if !strings.Contains(s, "refuse") || !strings.Contains(s, "public_key_auth_algorithms") {
+			t.Errorf("the RSA note says of ssh-rsa %q; want that it is refused unless added to ssh.public_key_auth_algorithms", s)
+		}
+	}
+	if !found {
+		t.Error("the RSA note does not say what happens to ssh-rsa signatures")
+	}
 }
 
 // withoutMLDSA drops the ML-DSA algorithms, which x/crypto supports only

@@ -1661,11 +1661,13 @@ Now, you should get a message after pushing changes to any repository.
 
 ## A note about RSA keys
 
-RSA keys work: the server accepts RSA signatures made with SHA-2
-(`rsa-sha2-256` and `rsa-sha2-512`), which current OpenSSH clients use, as
-well as the legacy SHA-1 `ssh-rsa` signatures of older clients. Ed25519 keys
-are still the better choice for new keys. Not sure what type of keys you
-have? You can check with the following:
+RSA keys work: by default the server accepts RSA signatures made with SHA-2
+(`rsa-sha2-256` and `rsa-sha2-512`), which OpenSSH 7.2 and later use. It
+refuses the SHA-1 `ssh-rsa` signatures of older clients unless `ssh-rsa` is
+appended to `ssh.public_key_auth_algorithms` (see
+[SSH Algorithms](#ssh-algorithms)). Ed25519 keys are still the better choice
+for new keys. Not sure what type of keys you have? You can check with the
+following:
 
 ```sh
 $ find ~/.ssh/id_*.pub -exec ssh-keygen -l -f {} \;

@@ -35,10 +35,6 @@ var (
 	// against. It's set via ldflags when building.
 	CommitSHA = ""
 
-	// CommitDate contains the date of the commit that this application was
-	// built against. It's set via ldflags when building.
-	CommitDate = ""
-
 	rootCmd = &cobra.Command{
 		Use:          "soft [PATH]",
 		Short:        "A self-hostable Git server for the command line",
