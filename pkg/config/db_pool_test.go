@@ -25,7 +25,7 @@ func TestDBPoolLimits(t *testing.T) {
 		is.NoErr(os.Unsetenv(k))
 	}
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.DB.MaxOpenConns, 0)
 	is.Equal(cfg.DB.MaxIdleConns, 0)
 	is.Equal(cfg.DB.ConnMaxLifetime, 0)
@@ -36,7 +36,7 @@ func TestDBPoolLimits(t *testing.T) {
 	t.Setenv("SOFT_SERVE_DB_CONN_MAX_LIFETIME", "1800")
 	t.Setenv("SOFT_SERVE_DB_CONN_MAX_IDLE_TIME", "300")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.DB.MaxOpenConns, 20)
 	is.Equal(cfg.DB.MaxIdleConns, 5)
 	is.Equal(cfg.DB.ConnMaxLifetime, 1800)

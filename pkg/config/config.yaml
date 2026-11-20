@@ -1,48 +1,38 @@
-package config
-
-import (
-	"bytes"
-	"fmt"
-	"strings"
-	"text/template"
-	"unicode/utf8"
-)
-
-var configFileTmpl = template.Must(template.New("config").Funcs(template.FuncMap{"q": yamlQuote}).Parse(`# Soft Serve Plus Server configurations
+# Soft Serve Plus Server configurations
 
 # The name of the server.
 # This is the name that will be displayed in the UI.
-name: {{ q .Name }}
+name: "Soft Serve Plus"
 
 # Logging configuration.
 log:
   # Log format to use. Valid values are "json", "logfmt", and "text".
-  format: {{ q .Log.Format }}
+  format: "text"
   # Time format for the log "time" field.
   # Should be described in Golang's time format.
-  time_format: {{ q .Log.TimeFormat }}
+  time_format: "2006-01-02 15:04:05"
   # Path to the log file. Leave empty to write to stderr. A relative path
   # is relative to the data directory.
-  #path: {{ q .Log.Path }}
+  #path: ""
 
 # The SSH server configuration.
 ssh:
   # Enable SSH.
-  enabled: {{ .SSH.Enabled }}
+  enabled: true
 
   # The address on which the SSH server will listen.
-  listen_addr: {{ q .SSH.ListenAddr }}
+  listen_addr: ":23231"
 
   # The public URL of the SSH server.
   # This is the address that will be used to clone repositories.
-  public_url: {{ q .SSH.PublicURL }}
+  public_url: "ssh://localhost:23231"
 
   # The path to the SSH server's private key.
-  key_path: {{ q .SSH.KeyPath }}
+  key_path: "ssh/soft_serve_host_ed25519"
 
   # The path to the server's client private key. This key will be used to
   # authenticate the server to make git requests to ssh remotes.
-  client_key_path: {{ q .SSH.ClientKeyPath }}
+  client_key_path: "ssh/soft_serve_client_ed25519"
 
   # How the server's ssh client verifies host keys of ssh remotes it imports
   # or mirrors from, checked against <data_path>/ssh/known_hosts.
@@ -51,7 +41,7 @@ ssh:
   # already in known_hosts; use it with a pre-seeded known_hosts file. The
   # client always runs with BatchMode=yes, so it fails fast instead of
   # prompting for a passphrase.
-  client_strict_host_key_checking: {{ q .SSH.ClientStrictHostKeyChecking }}
+  client_strict_host_key_checking: "accept-new"
 
   # The ssh hosts that repositories may be imported from or mirrored. The
   # client key above is presented to every host a user imports from, so list
@@ -65,30 +55,26 @@ ssh:
   # resolves the name again, so prefer hostnames for anything you do not
   # control. The list is matched against the name given to ssh; your
   # ssh_config still applies to it.
-  client_allowed_hosts:
-{{- range .SSH.ClientAllowedHosts }}
-    - {{ q . }}
-{{- else }} []
+  client_allowed_hosts: []
     # - "git.internal.example"
     # - "gitlab.corp:2222"
     # - "10.0.0.0/8"
-{{- end }}
 
   # The maximum number of seconds a connection can take, whatever it does.
   # The idle timeout is reset by every packet, keepalives included, so this
   # is what bounds a connection that stays busy or keeps a command running,
   # such as a TUI session left open. The default of 6 hours lets a large
   # clone over a slow link finish. A value of 0 means no timeout.
-  max_timeout: {{ .SSH.MaxTimeout }}
+  max_timeout: 21600
 
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
-  idle_timeout: {{ .SSH.IdleTimeout }}
+  idle_timeout: 600
 
   # The number of seconds a client has to finish the SSH handshake and
   # authenticate before the connection is closed, like OpenSSH's
   # LoginGraceTime. A value of 0 means no limit.
-  handshake_timeout: {{ .SSH.HandshakeTimeout }}
+  handshake_timeout: 120
 
   # The maximum number of SSH connections open at once, in total and from
   # one client address (one IPv4 address or one IPv6 /64). Connections over
@@ -97,13 +83,13 @@ ssh:
   # that never authenticates can keep one. A value of 0 means no limit.
   # Many clients behind one NAT or CI egress address share the per-address
   # limit; raise max_connections_per_ip, or set it to 0, for such setups.
-  max_connections: {{ .SSH.MaxConnections }}
-  max_connections_per_ip: {{ .SSH.MaxConnectionsPerIP }}
+  max_connections: 256
+  max_connections_per_ip: 32
 
   # The maximum number of sessions open at once on one SSH connection, like
   # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
   # value of 0 means no limit.
-  max_sessions: {{ .SSH.MaxSessions }}
+  max_sessions: 10
 
   # The key exchange algorithms, ciphers and MACs the SSH server offers, in
   # order of preference. When a list is empty, the server offers every
@@ -130,21 +116,9 @@ ssh:
   #     - "hmac-sha2-256"
   #     - "hmac-sha2-512"
   #     - "hmac-sha1" # legacy, appended
-  kex_algorithms:
-{{- range .SSH.KexAlgorithms }}
-    - {{ q . }}
-{{- else }} []
-{{- end }}
-  ciphers:
-{{- range .SSH.Ciphers }}
-    - {{ q . }}
-{{- else }} []
-{{- end }}
-  macs:
-{{- range .SSH.MACs }}
-    - {{ q . }}
-{{- else }} []
-{{- end }}
+  kex_algorithms: []
+  ciphers: []
+  macs: []
 
   # The signature algorithms the SSH server accepts for client public key
   # authentication. When empty, the server accepts every algorithm
@@ -165,37 +139,33 @@ ssh:
   #     - "rsa-sha2-256"
   #     - "rsa-sha2-512"
   #     - "ssh-rsa" # legacy, appended
-  public_key_auth_algorithms:
-{{- range .SSH.PublicKeyAuthAlgorithms }}
-    - {{ q . }}
-{{- else }} []
-{{- end }}
+  public_key_auth_algorithms: []
 
 # The Git daemon configuration.
 git:
   # Enable the Git daemon.
-  enabled: {{ .Git.Enabled }}
+  enabled: true
 
   # The address on which the Git daemon will listen.
-  listen_addr: {{ q .Git.ListenAddr }}
+  listen_addr: ":9418"
 
   # The public URL of the Git daemon server.
   # This is the address that will be used to clone repositories.
-  public_url: {{ q .Git.PublicURL }}
+  public_url: "git://localhost"
 
   # The maximum number of seconds a connection can take. The idle timeout
   # is reset by every byte, so this is what bounds a client that trickles
   # its request or reads its pack slowly. The default of 6 hours lets a
   # large clone over a slow link finish; git daemon's --timeout bounds only
   # inactivity, like idle_timeout. A value of 0 means no timeout.
-  max_timeout: {{ .Git.MaxTimeout }}
+  max_timeout: 21600
 
   # The number of seconds a connection can be idle before it is closed.
   # A value of 0 means no timeout.
   # Independently of it, a client has 10 seconds to send its request.
   # While a pack is prepared, keepalives are sent every idle_timeout/2
   # seconds (at least 1) so that the connection does not go idle.
-  idle_timeout: {{ .Git.IdleTimeout }}
+  idle_timeout: 3
 
   # The maximum number of concurrent connections, in total (at least 1)
   # and from one client address (one IPv4 address or one IPv6 /64; 0 means
@@ -208,28 +178,28 @@ git:
   # it when many clients share one NAT or CI egress address. The
   # per-address limit keeps one address from taking every connection, not
   # a few addresses together.
-  max_connections: {{ .Git.MaxConnections }}
-  max_connections_per_ip: {{ .Git.MaxConnectionsPerIP }}
+  max_connections: 32
+  max_connections_per_ip: 8
 
 # The HTTP server configuration.
 http:
   # Enable the HTTP server.
-  enabled: {{ .HTTP.Enabled }}
+  enabled: true
 
   # The address on which the HTTP server will listen.
-  listen_addr: {{ q .HTTP.ListenAddr }}
+  listen_addr: ":23232"
 
   # The path to the TLS private key.
-  tls_key_path: {{ q .HTTP.TLSKeyPath }}
+  tls_key_path: ""
 
   # The path to the TLS certificate. Set both paths to serve HTTPS, or
   # neither to serve plain HTTP.
-  tls_cert_path: {{ q .HTTP.TLSCertPath }}
+  tls_cert_path: ""
 
   # The public URL of the HTTP server.
   # This is the address that will be used to clone repositories.
   # Make sure to use https:// if you are using TLS.
-  public_url: {{ q .HTTP.PublicURL }}
+  public_url: "http://localhost:23232"
 
   # The maximum number of seconds a request can take. The idle timeout is
   # reset by every byte, so this is what bounds a client that trickles its
@@ -237,13 +207,13 @@ http:
   # large clone over a slow link finish; a reverse proxy's timeouts (such as
   # nginx's proxy_read_timeout) usually bound only inactivity, like
   # idle_timeout. A value of 0 means no timeout.
-  max_timeout: {{ .HTTP.MaxTimeout }}
+  max_timeout: 21600
 
   # The number of seconds a request can go without reading from or writing
   # to the client before it is closed. Time the server spends working
   # between reads and writes does not count.
   # A value of 0 means no timeout.
-  idle_timeout: {{ .HTTP.IdleTimeout }}
+  idle_timeout: 60
 
   # The maximum number of git and LFS requests served at once, in total and
   # from one client address (one IPv4 address or one IPv6 /64). Requests
@@ -256,8 +226,8 @@ http:
   # and limit clients at the proxy. Raise it when many clients share one
   # NAT or CI egress address. The per-address limit keeps one address from
   # taking every request slot, not a few addresses together.
-  max_connections: {{ .HTTP.MaxConnections }}
-  max_connections_per_ip: {{ .HTTP.MaxConnectionsPerIP }}
+  max_connections: 64
+  max_connections_per_ip: 16
 
   # The cross-origin request security options
   cors:
@@ -274,12 +244,8 @@ http:
       - "Access-Control-Request-Method"
       - "Access-Control-Allow-Origin"
     # The allowed cross-origin URLs. The public URL is always allowed.
-    allowed_origins:
-{{- range .HTTP.CORS.AllowedOrigins }}
-      - {{ q . }}
-{{- else }} []
+    allowed_origins: []
       # - "https://example.com"
-{{- end }}
     # The allowed cross-origin methods
     allowed_methods:
       - "GET"
@@ -291,18 +257,18 @@ http:
 # The stats server configuration.
 stats:
   # Enable the stats server.
-  enabled: {{ .Stats.Enabled }}
+  enabled: true
 
   # The address on which the stats server will listen. It serves Prometheus
   # metrics at /metrics without authentication, and they name repositories,
   # private ones included, so keep it off untrusted networks.
-  listen_addr: {{ q .Stats.ListenAddr }}
+  listen_addr: "localhost:23233"
 
 # The database configuration.
 db:
   # The database driver to use.
   # Valid values are "sqlite" and "postgres".
-  driver: {{ q .DB.Driver }}
+  driver: "sqlite"
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # With SQLite, foreign keys are always enforced (a data source that turns
@@ -311,7 +277,7 @@ db:
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
-  data_source: {{ q .DB.DataSource }}
+  data_source: "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 
   # Connection pool limits. 0 keeps the database/sql default: no limit on
   # open connections, 2 idle connections, and no limit on how long a
@@ -319,17 +285,17 @@ db:
   # below the server's max_connections (minus what other clients use) so a
   # burst of requests waits for a free connection instead of failing.
   # Durations are in seconds.
-  max_open_conns: {{ .DB.MaxOpenConns }}
-  max_idle_conns: {{ .DB.MaxIdleConns }}
-  conn_max_lifetime: {{ .DB.ConnMaxLifetime }}
-  conn_max_idle_time: {{ .DB.ConnMaxIdleTime }}
+  max_open_conns: 0
+  max_idle_conns: 0
+  conn_max_lifetime: 0
+  conn_max_idle_time: 0
 
 # Git LFS configuration.
 lfs:
   # Enable Git LFS.
-  enabled: {{ .LFS.Enabled }}
+  enabled: true
   # Enable Git LFS over SSH (the git-lfs-transfer protocol).
-  ssh_enabled: {{ .LFS.SSHEnabled }}
+  ssh_enabled: false
 
 # Cron job configuration
 jobs:
@@ -337,10 +303,10 @@ jobs:
   # descriptor such as "@hourly" or "@every 10m". Set to "" to disable
   # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
   # it; it keeps this value.
-  mirror_pull: {{ q .Jobs.MirrorPull }}
+  mirror_pull: "@every 10m"
   # Remove temporary files that interrupted LFS uploads and mirror
   # downloads left behind for more than a day.
-  lfs_sweep: {{ q .Jobs.LFSSweep }}
+  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
@@ -357,14 +323,10 @@ webhook:
   # inside their own range; a broad range such as 0.0.0.0/0 does not open
   # them. The list is checked when a webhook is created or updated, and
   # again on every delivery, so existing webhooks follow the current list.
-  allowed_hosts:
-{{- range .Webhook.AllowedHosts }}
-    - {{ q . }}
-{{- else }} []
+  allowed_hosts: []
     # - "jenkins.internal.example"
     # - "10.0.0.0/8"
     # - "127.0.0.1:8080"
-{{- end }}
 
 # Additional admin keys. A listed key that no account holds is still a
 # server admin over SSH, git transport included, but it can't take LFS locks
@@ -407,7 +369,7 @@ webhook:
 # while handling input, so this limit is also what keeps one file view from
 # stalling a session: raising it, or 0 for no limit, makes large files slow
 # to open and costly in memory. Defaults to 1048576 (1 MiB).
-#max_blob_size: 1048576
+max_blob_size: 1048576
 
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without
@@ -422,41 +384,3 @@ webhook:
 # Name of a repository to create automatically on boot if it doesn't already
 # exist. Empty disables this behavior.
 #default_repo: ""
-`))
-
-// yamlQuote renders s as a YAML double-quoted scalar that reads back as s.
-// Backslashes and quotes are escaped, so a Windows path such as
-// C:\data\soft-serve.db is not read as escape sequences, and characters YAML
-// does not allow in a document, or would fold, are written as \u escapes.
-func yamlQuote(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch {
-		case r == '\\':
-			b.WriteString(`\\`)
-		case r == '"':
-			b.WriteString(`\"`)
-		case r == '\n':
-			b.WriteString(`\n`)
-		case r == '\t':
-			b.WriteString(`\t`)
-		case r < 0x20, r == 0x7f, r >= 0x80 && r < 0xa0, r == 0x2028, r == 0x2029, r == 0xfeff, r == 0xfffe, r == 0xffff, r == utf8.RuneError:
-			fmt.Fprintf(&b, `\u%04x`, r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
-}
-
-// newConfigFile renders cfg as a config file. It fails rather than return
-// a file cut short where the template stopped.
-func newConfigFile(cfg *Config) (string, error) {
-	var b bytes.Buffer
-	if err := configFileTmpl.Execute(&b, cfg); err != nil {
-		return "", fmt.Errorf("render config file: %w", err)
-	}
-	return b.String(), nil
-}

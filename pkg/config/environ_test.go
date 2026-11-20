@@ -141,7 +141,7 @@ func clearSoftServeEnv(t *testing.T) {
 }
 
 // Hooks and other subprocesses get the server's config only through
-// Environ, which a child reads back with ParseEnv. Every field must survive
+// Environ, which a child reads back as Load does. Every field must survive
 // that trip, so a field added to Config but not to Environ fails here.
 func TestEnvironRoundTrip(t *testing.T) {
 	clearSoftServeEnv(t)
@@ -173,8 +173,8 @@ func TestEnvironRoundTrip(t *testing.T) {
 	}
 
 	got := DefaultConfig()
-	if err := got.ParseEnv(); err != nil {
-		t.Fatalf("ParseEnv(Environ()): %v", err)
+	if err := parseEnv(got); err != nil {
+		t.Fatalf("load(Environ()): %v", err)
 	}
 
 	gv := reflect.ValueOf(got).Elem()
@@ -188,7 +188,7 @@ func TestEnvironRoundTrip(t *testing.T) {
 		}
 		gotv := gv.FieldByIndex(fieldIndex(t, gv.Type(), path))
 		if !reflect.DeepEqual(wv.Interface(), gotv.Interface()) {
-			t.Errorf("%s: ParseEnv(Environ()) = %#v, want %#v", path, deref(gotv), deref(wv))
+			t.Errorf("%s: load(Environ()) = %#v, want %#v", path, deref(gotv), deref(wv))
 		}
 	})
 }

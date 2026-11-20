@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	_ "embed" // config.yaml
 	"errors"
 	"fmt"
 	"io"
@@ -402,8 +403,9 @@ type Config struct {
 	// InitialAdminKeys entries Validate dropped: key files that could not
 	// be read or parsed, and entries that are neither a key nor a file path.
 	// Validate rewrites InitialAdminKeys to the valid keys only, so these
-	// are the only record of them. They are sets because Validate runs once
-	// per config source, and more than once for the environment.
+	// are the only record of them. They are sets that each Validate adds
+	// to: a config validated again, as a caller that changes a loaded
+	// config does, still knows what the first Validate dropped.
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
 
@@ -429,7 +431,7 @@ func (c *Config) Environ() []string {
 		return envs
 	}
 
-	// TestEnvironRoundTrip checks that ParseEnv reads every field back, so
+	// TestEnvironRoundTrip checks that the environment Load reads gives every field back, so
 	// a new field must be added here. Log.Path is left out on purpose: the
 	// server gives hooks their own log file.
 	envs = append(envs, []string{
@@ -523,9 +525,10 @@ func IsVerbose() bool {
 	return IsDebug() && verbose
 }
 
-// parseFile parses the given file as a configuration file.
-// The file must be in YAML format.
-func parseFile(cfg *Config, path string) error {
+// readFile decodes the config file at path into c, over the values c
+// already holds, and records the keys no setting is read from. It does not
+// validate: load does that once, after the environment.
+func (c *Config) readFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -533,7 +536,7 @@ func parseFile(cfg *Config, path string) error {
 
 	// An empty or comment-only file has no YAML document and decodes to
 	// io.EOF. Treat it like an empty document and keep the defaults.
-	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(c); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode config: %w", err)
 	}
 
@@ -543,9 +546,8 @@ func parseFile(cfg *Config, path string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("decode config: %w", err)
 	}
-	cfg.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
-
-	return cfg.Validate()
+	c.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
+	return nil
 }
 
 // findUnknownKeys returns the keys of the mappings in n that no field of t,
@@ -617,20 +619,14 @@ func (c *Config) UnknownKeys() []UnknownKey {
 	return slices.Clone(c.unknownKeys)
 }
 
-// ParseFile parses the config from the default file path.
-// This also calls Validate() on the config.
-func (c *Config) ParseFile() error {
-	return parseFile(c, c.ConfigPath())
-}
-
-// parseEnv parses the environment variables as a configuration file.
-func parseEnv(cfg *Config) error {
+// readEnv applies the SOFT_SERVE_* environment variables to c, over the
+// values c already holds. Like readFile, it does not validate.
+func (c *Config) readEnv() error {
 	// Initial admin keys from the config file and the environment are
 	// merged, not overridden. Keep the file keys to add them back below.
-	fileAdminKeys := slices.Clone(cfg.InitialAdminKeys)
+	fileAdminKeys := slices.Clone(c.InitialAdminKeys)
 
-	// Override with environment variables
-	if err := env.ParseWithOptions(cfg, env.Options{
+	if err := env.ParseWithOptions(c, env.Options{
 		Prefix: "SOFT_SERVE_",
 	}); err != nil {
 		return fmt.Errorf("parse environment variables: %w", err)
@@ -639,15 +635,14 @@ func parseEnv(cfg *Config) error {
 	// blank, as in the Docker image, so it then still holds the file's keys,
 	// whose quotes are not the environment's to strip.
 	if v := os.Getenv("SOFT_SERVE_INITIAL_ADMIN_KEYS"); v != "" {
-		cfg.InitialAdminKeys = trimOuterQuotes(cfg.InitialAdminKeys)
+		c.InitialAdminKeys = trimOuterQuotes(c.InitialAdminKeys)
 	}
 
 	// The env parser leaves the list alone when the variable is unset and
 	// replaces it otherwise. Either way, the env keys come first, followed
 	// by each file key not already listed.
-	cfg.InitialAdminKeys = mergeAdminKeys(cfg.InitialAdminKeys, fileAdminKeys)
-
-	return cfg.Validate()
+	c.InitialAdminKeys = mergeAdminKeys(c.InitialAdminKeys, fileAdminKeys)
+	return nil
 }
 
 // mergeAdminKeys returns the entries of a followed by those of b, each
@@ -666,39 +661,52 @@ func mergeAdminKeys(a, b []string) []string {
 	return merged
 }
 
-// ParseEnv parses the config from the environment variables.
-// This also calls Validate() on the config.
-func (c *Config) ParseEnv() error {
-	return parseEnv(c)
+// Load returns the server's config: the defaults, then the config file, if
+// there is one, then the SOFT_SERVE_* environment variables, validated once
+// on the result. So the environment can repair a value from the file, and
+// Validate sees each value once.
+func Load() (*Config, error) {
+	cfg := DefaultConfig()
+	if err := cfg.load(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
-// Parse parses the config from the default file path and environment variables.
-// This also calls Validate() on the config.
-func (c *Config) Parse() error {
-	if err := c.ParseFile(); err != nil {
+// load is Load on c, which holds the defaults or values a test chose.
+func (c *Config) load() error {
+	if err := c.CheckConfigLocation(); err != nil {
 		return err
 	}
-
-	return c.ParseEnv()
+	if path := c.ConfigPath(); exist(path) {
+		if err := c.readFile(path); err != nil {
+			return err
+		}
+	}
+	if err := c.readEnv(); err != nil {
+		return err
+	}
+	return c.Validate()
 }
 
-// writeConfig writes the configuration to the given file.
-func writeConfig(cfg *Config, path string) error {
+// defaultConfigFile is the file the server writes on its first start. It
+// holds DefaultConfig's values, with a comment for each setting
+// (TestDefaultConfigFileMatchesDefaults), and is the README's sample.
+//
+//go:embed config.yaml
+var defaultConfigFile []byte
+
+// WriteDefaultFile writes the default config file to ConfigPath, creating
+// its directory if needed. It writes the defaults, not c, so environment
+// overrides are not saved to the file.
+func (c *Config) WriteDefaultFile() error {
+	path := c.ConfigPath()
 	// The config can hold secrets such as a database password, so only
 	// the server's user may read it.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	content, err := newConfigFile(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-// WriteConfig writes the configuration to the default file.
-func (c *Config) WriteConfig() error {
-	return writeConfig(c, c.ConfigPath())
+	return os.WriteFile(path, defaultConfigFile, 0o600)
 }
 
 // DefaultDataPath returns the path to the data directory.
@@ -794,9 +802,10 @@ func (c *Config) UnboundedTimeouts() []string {
 	return names
 }
 
-// DefaultConfig returns the default Config. All the path values are relative
-// to the data directory.
-// Use Validate() to validate the config and ensure absolute paths.
+// DefaultConfig returns the default Config: the values config.yaml holds,
+// and the data path. The other paths are relative to the data directory and
+// use forward slashes, as config.yaml does; Validate joins them to the data
+// path with the OS separator.
 func DefaultConfig() *Config {
 	return &Config{
 		Name: "Soft Serve Plus",
@@ -806,8 +815,8 @@ func DefaultConfig() *Config {
 			Enabled:                     true,
 			ListenAddr:                  ":23231",
 			PublicURL:                   "ssh://localhost:23231",
-			KeyPath:                     filepath.Join("ssh", "soft_serve_host_ed25519"),
-			ClientKeyPath:               filepath.Join("ssh", "soft_serve_client_ed25519"),
+			KeyPath:                     "ssh/soft_serve_host_ed25519",
+			ClientKeyPath:               "ssh/soft_serve_client_ed25519",
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  DefaultMaxTimeout,
 			IdleTimeout:                 10 * 60, // 10 minutes
@@ -874,22 +883,28 @@ func (c *Config) BlobSizeLimit() int64 {
 	return c.MaxBlobSize
 }
 
-// Validate validates the configuration.
-// It updates the configuration with absolute paths.
+// Validate checks the configuration and resolves it: relative paths become
+// absolute under the data path, lists lose blank entries, and the
+// allowlists and admin keys are parsed. Load runs it once, on what the file
+// and the environment produced.
 func (c *Config) Validate() error {
+	if err := c.resolveDataPath(); err != nil {
+		return err
+	}
+	c.resolvePaths()
+	if err := c.check(); err != nil {
+		return err
+	}
+	return c.parseLists()
+}
+
+// resolveDataPath checks the data path and makes it absolute.
+func (c *Config) resolveDataPath() error {
 	// The data path is handed to ssh inside a double-quoted option value,
 	// where nothing escapes a quote or a newline.
 	if strings.ContainsAny(c.DataPath, "\"\n\r") {
 		return fmt.Errorf("data path must not contain quotes or newlines: %q", c.DataPath)
 	}
-
-	// db.Open takes only these, so a mistyped driver fails here, with the
-	// setting named, rather than when the database is opened.
-	if c.DB.Driver != "sqlite" && c.DB.Driver != "postgres" {
-		return fmt.Errorf("db.driver: %q is not sqlite or postgres", c.DB.Driver)
-	}
-
-	// Use absolute paths
 	if !filepath.IsAbs(c.DataPath) {
 		dp, err := filepath.Abs(c.DataPath)
 		if err != nil {
@@ -897,10 +912,39 @@ func (c *Config) Validate() error {
 		}
 		c.DataPath = dp
 	}
+	return nil
+}
+
+// resolvePaths makes the relative paths absolute under the data path and
+// drops trailing slashes from the public URLs.
+func (c *Config) resolvePaths() {
+	for _, p := range []*string{&c.SSH.KeyPath, &c.SSH.ClientKeyPath, &c.HTTP.TLSKeyPath, &c.HTTP.TLSCertPath, &c.Log.Path} {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(c.DataPath, *p)
+		}
+	}
+	if c.DB.Driver == "sqlite" && strings.TrimSpace(c.DB.DataSource) != "" {
+		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
+	}
 
 	c.SSH.PublicURL = strings.TrimRight(c.SSH.PublicURL, "/")
 	c.Git.PublicURL = strings.TrimRight(c.Git.PublicURL, "/")
 	c.HTTP.PublicURL = strings.TrimRight(c.HTTP.PublicURL, "/")
+}
+
+// check rejects values the server cannot use.
+func (c *Config) check() error {
+	// db.Open takes only these, so a mistyped driver fails here, with the
+	// setting named, rather than when the database is opened.
+	if c.DB.Driver != "sqlite" && c.DB.Driver != "postgres" {
+		return fmt.Errorf("db.driver: %q is not sqlite or postgres", c.DB.Driver)
+	}
+	// An empty SQLite data source would name the data directory itself, or
+	// a file named after the options db.Open adds. An empty Postgres one is
+	// valid: lib/pq then reads the PG* environment variables.
+	if c.DB.Driver == "sqlite" && strings.TrimSpace(c.DB.DataSource) == "" {
+		return errors.New(`db.data_source: empty; with sqlite it names the database file, such as "soft-serve.db"`)
+	}
 
 	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
 	// value without a scheme or a host would hand clients unusable links.
@@ -940,70 +984,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.SSH.KeyPath != "" && !filepath.IsAbs(c.SSH.KeyPath) {
-		c.SSH.KeyPath = filepath.Join(c.DataPath, c.SSH.KeyPath)
-	}
-
-	if c.SSH.ClientKeyPath != "" && !filepath.IsAbs(c.SSH.ClientKeyPath) {
-		c.SSH.ClientKeyPath = filepath.Join(c.DataPath, c.SSH.ClientKeyPath)
-	}
-
-	for _, v := range []struct {
-		name  string
-		value int
-	}{
-		{"db.max_open_conns", c.DB.MaxOpenConns},
-		{"db.max_idle_conns", c.DB.MaxIdleConns},
-		{"db.conn_max_lifetime", c.DB.ConnMaxLifetime},
-		{"db.conn_max_idle_time", c.DB.ConnMaxIdleTime},
-	} {
-		if v.value < 0 {
-			return fmt.Errorf("%s: %d is negative; use 0 for the default", v.name, v.value)
-		}
+	if err := c.checkNotNegative(); err != nil {
+		return err
 	}
 
 	if c.Git.Enabled && c.Git.MaxConnections < 1 {
 		return fmt.Errorf("git.max_connections: %d must be at least 1", c.Git.MaxConnections)
-	}
-
-	for _, v := range []struct {
-		name  string
-		value int
-	}{
-		{"ssh.max_timeout", c.SSH.MaxTimeout},
-		{"ssh.idle_timeout", c.SSH.IdleTimeout},
-		{"git.max_timeout", c.Git.MaxTimeout},
-		{"git.idle_timeout", c.Git.IdleTimeout},
-	} {
-		if v.value < 0 {
-			return fmt.Errorf("%s: %d is negative; use 0 for no timeout", v.name, v.value)
-		}
-	}
-
-	if c.Git.MaxConnectionsPerIP < 0 {
-		return fmt.Errorf("git.max_connections_per_ip: %d is negative; use 0 for no limit", c.Git.MaxConnectionsPerIP)
-	}
-
-	for _, v := range []struct {
-		name  string
-		value int
-	}{
-		{"http.max_timeout", c.HTTP.MaxTimeout},
-		{"http.idle_timeout", c.HTTP.IdleTimeout},
-		{"http.max_connections", c.HTTP.MaxConnections},
-		{"http.max_connections_per_ip", c.HTTP.MaxConnectionsPerIP},
-	} {
-		if v.value < 0 {
-			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
-		}
-	}
-
-	if c.MaxReposPerUser < 0 {
-		return fmt.Errorf("max_repos_per_user: %d is negative; use 0 for no limit", c.MaxReposPerUser)
-	}
-
-	if c.MaxBlobSize < 0 {
-		return fmt.Errorf("max_blob_size: %d is negative; use 0 for no limit", c.MaxBlobSize)
 	}
 
 	switch c.SSH.ClientStrictHostKeyChecking {
@@ -1016,81 +1002,91 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ssh.client_strict_host_key_checking: %q is not one of %q, %q",
 			c.SSH.ClientStrictHostKeyChecking, StrictHostKeyCheckingAcceptNew, StrictHostKeyCheckingYes)
 	}
+	return nil
+}
 
-	// Drop blanks so an unset env var does not read as one empty entry, then
-	// parse once, rejecting anything unreadable now rather than at the first
-	// import.
-	c.SSH.ClientAllowedHosts = slices.DeleteFunc(slices.Clone(c.SSH.ClientAllowedHosts), func(s string) bool {
-		return strings.TrimSpace(s) == ""
-	})
+// checkNotNegative rejects a negative count, size or number of seconds,
+// telling the operator what the setting's 0 means.
+func (c *Config) checkNotNegative() error {
+	const (
+		noLimit   = "use 0 for no limit"
+		noTimeout = "use 0 for no timeout"
+		dbDefault = "use 0 for the default"
+	)
+	for _, v := range []struct {
+		name  string
+		value int64
+		zero  string
+	}{
+		{"db.max_open_conns", int64(c.DB.MaxOpenConns), dbDefault},
+		{"db.max_idle_conns", int64(c.DB.MaxIdleConns), dbDefault},
+		{"db.conn_max_lifetime", int64(c.DB.ConnMaxLifetime), dbDefault},
+		{"db.conn_max_idle_time", int64(c.DB.ConnMaxIdleTime), dbDefault},
+		{"ssh.max_timeout", int64(c.SSH.MaxTimeout), noTimeout},
+		{"ssh.idle_timeout", int64(c.SSH.IdleTimeout), noTimeout},
+		{"git.max_timeout", int64(c.Git.MaxTimeout), noTimeout},
+		{"git.idle_timeout", int64(c.Git.IdleTimeout), noTimeout},
+		{"git.max_connections_per_ip", int64(c.Git.MaxConnectionsPerIP), noLimit},
+		{"http.max_timeout", int64(c.HTTP.MaxTimeout), noLimit},
+		{"http.idle_timeout", int64(c.HTTP.IdleTimeout), noLimit},
+		{"http.max_connections", int64(c.HTTP.MaxConnections), noLimit},
+		{"http.max_connections_per_ip", int64(c.HTTP.MaxConnectionsPerIP), noLimit},
+		{"max_repos_per_user", int64(c.MaxReposPerUser), noLimit},
+		{"max_blob_size", c.MaxBlobSize, noLimit},
+		{"ssh.handshake_timeout", int64(c.SSH.HandshakeTimeout), noLimit},
+		{"ssh.max_connections", int64(c.SSH.MaxConnections), noLimit},
+		{"ssh.max_connections_per_ip", int64(c.SSH.MaxConnectionsPerIP), noLimit},
+		{"ssh.max_sessions", int64(c.SSH.MaxSessions), noLimit},
+	} {
+		if v.value < 0 {
+			return fmt.Errorf("%s: %d is negative; %s", v.name, v.value, v.zero)
+		}
+	}
+	return nil
+}
+
+// parseLists drops blank entries from the lists, so an unset environment
+// variable does not read as one empty entry, and parses the allowlists, the
+// SSH algorithm lists and the admin keys once, rejecting anything
+// unreadable now rather than at first use.
+func (c *Config) parseLists() error {
+	notBlank := func(l []string) []string {
+		return slices.DeleteFunc(slices.Clone(l), func(s string) bool {
+			return strings.TrimSpace(s) == ""
+		})
+	}
+
+	c.SSH.ClientAllowedHosts = notBlank(c.SSH.ClientAllowedHosts)
 	allowed, err := ssrf.ParseAllowedHosts(c.SSH.ClientAllowedHosts)
 	if err != nil {
 		return fmt.Errorf("ssh.client_allowed_hosts: %w", err)
 	}
 	c.SSH.allowedHosts = allowed
 
-	for _, v := range []struct {
-		name  string
-		value int
-	}{
-		{"ssh.handshake_timeout", c.SSH.HandshakeTimeout},
-		{"ssh.max_connections", c.SSH.MaxConnections},
-		{"ssh.max_connections_per_ip", c.SSH.MaxConnectionsPerIP},
-		{"ssh.max_sessions", c.SSH.MaxSessions},
-	} {
-		if v.value < 0 {
-			return fmt.Errorf("%s: %d is negative; use 0 for no limit", v.name, v.value)
-		}
-	}
-
 	if err := c.SSH.validateAlgorithms(); err != nil {
 		return err
 	}
 
-	c.Webhook.AllowedHosts = slices.DeleteFunc(slices.Clone(c.Webhook.AllowedHosts), func(s string) bool {
-		return strings.TrimSpace(s) == ""
-	})
+	c.Webhook.AllowedHosts = notBlank(c.Webhook.AllowedHosts)
 	webhookAllowed, err := ssrf.ParseAllowedHosts(c.Webhook.AllowedHosts)
 	if err != nil {
 		return fmt.Errorf("webhook.allowed_hosts: %w", err)
 	}
 	c.Webhook.allowedHosts = webhookAllowed
 
-	if c.HTTP.TLSKeyPath != "" && !filepath.IsAbs(c.HTTP.TLSKeyPath) {
-		c.HTTP.TLSKeyPath = filepath.Join(c.DataPath, c.HTTP.TLSKeyPath)
-	}
-
-	if c.HTTP.TLSCertPath != "" && !filepath.IsAbs(c.HTTP.TLSCertPath) {
-		c.HTTP.TLSCertPath = filepath.Join(c.DataPath, c.HTTP.TLSCertPath)
-	}
-
-	if c.DB.Driver == "sqlite" {
-		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
-	}
-
-	if c.Log.Path != "" && !filepath.IsAbs(c.Log.Path) {
-		c.Log.Path = filepath.Join(c.DataPath, c.Log.Path)
-	}
-
-	// Validate keys
-	pks := make([]string, 0)
 	keys := parseAuthKeys(c.InitialAdminKeys, c.DataPath)
+	pks := make([]string, 0, len(keys.pks))
 	for _, key := range keys.pks {
-		ak := sshutils.MarshalAuthorizedKey(key)
-		pks = append(pks, ak)
+		pks = append(pks, sshutils.MarshalAuthorizedKey(key))
 	}
+	c.InitialAdminKeys = pks
+	c.adminKeys = keys.pks
 	c.unreadableAdminKeyFiles = addToSet(c.unreadableAdminKeyFiles, keys.unreadable)
 	c.ignoredAdminKeys = addToSet(c.ignoredAdminKeys, keys.ignored)
 
-	c.InitialAdminKeys = pks
-	c.adminKeys = keys.pks
-
 	// The public URL is allowed by CORSAllowedOrigins, not added here, so an
 	// environment override of it does not leave the file's URL allowed too.
-	c.HTTP.CORS.AllowedOrigins = slices.DeleteFunc(slices.Clone(c.HTTP.CORS.AllowedOrigins), func(s string) bool {
-		return strings.TrimSpace(s) == ""
-	})
-
+	c.HTTP.CORS.AllowedOrigins = notBlank(c.HTTP.CORS.AllowedOrigins)
 	return nil
 }
 

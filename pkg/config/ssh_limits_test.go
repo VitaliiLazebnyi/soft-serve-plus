@@ -21,7 +21,7 @@ func TestSSHLimitsEnv(t *testing.T) {
 	t.Setenv("SOFT_SERVE_SSH_MAX_SESSIONS", "0")
 	t.Setenv("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT", "30")
 	cfg := DefaultConfig()
-	if err := cfg.ParseEnv(); err != nil {
+	if err := parseEnv(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.SSH.MaxConnections != 7 || cfg.SSH.MaxConnectionsPerIP != 3 || cfg.SSH.MaxSessions != 0 || cfg.SSH.HandshakeTimeout != 30 {
@@ -47,7 +47,7 @@ func TestSSHLimitsConfigFileRoundTrip(t *testing.T) {
 	cfg.SSH.MaxSessions = 4
 	cfg.SSH.HandshakeTimeout = 9
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	file, err := newConfigFile(cfg)
+	file, err := marshalConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,7 @@ func TestParseMultipleKeys(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_DATA_PATH"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.InitialAdminKeys, []string{
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8",
@@ -38,12 +38,12 @@ func TestMergeInitAdminKeys(t *testing.T) {
 	is.NoErr(os.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "testdata/k1.pub"))
 	t.Cleanup(func() { is.NoErr(os.Unsetenv("SOFT_SERVE_INITIAL_ADMIN_KEYS")) })
 	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
+		DB:               DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8 a@b"},
 	}
-	is.NoErr(cfg.WriteConfig())
-	is.NoErr(cfg.Parse())
+	is.NoErr(writeTestConfig(t, cfg))
+	is.NoErr(cfg.load())
 	is.Equal(cfg.InitialAdminKeys, []string{
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8",
@@ -53,7 +53,7 @@ func TestMergeInitAdminKeys(t *testing.T) {
 func TestValidateInitAdminKeys(t *testing.T) {
 	is := is.New(t)
 	cfg := &Config{
-		DB:       DBConfig{Driver: "sqlite"},
+		DB:       DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath: t.TempDir(),
 		InitialAdminKeys: []string{
 			"testdata/k1.pub",
@@ -61,8 +61,8 @@ func TestValidateInitAdminKeys(t *testing.T) {
 			"",
 		},
 	}
-	is.NoErr(cfg.WriteConfig())
-	is.NoErr(cfg.Parse())
+	is.NoErr(writeTestConfig(t, cfg))
+	is.NoErr(cfg.load())
 	is.Equal(cfg.InitialAdminKeys, []string{
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
 	})
@@ -78,7 +78,7 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	notAKey := filepath.Join(t.TempDir(), "id_ed25519")
 	is.NoErr(os.WriteFile(notAKey, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n"), 0o600))
 	cfg := &Config{
-		DB:       DBConfig{Driver: "sqlite"},
+		DB:       DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath: t.TempDir(),
 		InitialAdminKeys: []string{
 			"testdata/k1.pub",
@@ -109,28 +109,26 @@ func TestUnreadableAdminKeyFiles(t *testing.T) {
 	is.Equal(len(cfg.AdminKeys()), 1)
 
 	// A config whose entries all parse has none.
-	ok := &Config{DB: DBConfig{Driver: "sqlite"}, InitialAdminKeys: []string{"testdata/k1.pub", "", "# comment"}}
+	ok := &Config{DB: DBConfig{Driver: "sqlite", DataSource: ":memory:"}, InitialAdminKeys: []string{"testdata/k1.pub", "", "# comment"}}
 	is.NoErr(ok.Validate())
 	is.Equal(len(ok.AdminKeys()), 1)
 	is.Equal(ok.UnreadableAdminKeyFiles(), []string(nil))
 	is.Equal(ok.IgnoredAdminKeys(), 0)
 }
 
-// Parse runs Validate after the file and again after the environment, and a
-// caller may parse again, so Validate sees the same entries several times.
-// They are recorded once.
+// The config file and the environment may list the same entries. They are
+// recorded once.
 func TestUnreadableAdminKeyFilesNotDuplicated(t *testing.T) {
 	is := is.New(t)
 	missing := filepath.Join(t.TempDir(), "not-mounted-yet.pub")
 	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", missing+"\nnot a key")
 	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
+		DB:               DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{missing, "not a key"},
 	}
-	is.NoErr(cfg.WriteConfig())
-	is.NoErr(cfg.Parse())
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(writeTestConfig(t, cfg))
+	is.NoErr(cfg.load())
 	is.Equal(cfg.UnreadableAdminKeyFiles(), []string{missing})
 	is.Equal(cfg.IgnoredAdminKeys(), 1)
 }
@@ -146,7 +144,7 @@ func TestCustomConfigLocation(t *testing.T) {
 	is.NoErr(os.Setenv("SOFT_SERVE_CONFIG_LOCATION", "testdata/config.yaml"))
 	is.NoErr(os.Setenv("SOFT_SERVE_DATA_PATH", td))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.Parse())
+	is.NoErr(cfg.load())
 	is.Equal(cfg.Name, "Test server name")
 	// If we unset the custom location, then use the default location.
 	is.NoErr(os.Unsetenv("SOFT_SERVE_CONFIG_LOCATION"))
@@ -204,13 +202,13 @@ func TestParseDefaultRepo(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_DEFAULT_REPO"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.DefaultRepo, "gitops")
 }
 
 func TestParseDefaultRepoFromFile(t *testing.T) {
 	is := is.New(t)
-	cfg := &Config{DataPath: t.TempDir(), DB: DBConfig{Driver: "sqlite"}}
+	cfg := &Config{DataPath: t.TempDir(), DB: DBConfig{Driver: "sqlite", DataSource: ":memory:"}}
 	is.NoErr(parseFile(cfg, "testdata/config_default_repo.yaml"))
 	is.Equal(cfg.DefaultRepo, "gitops")
 }
@@ -243,7 +241,7 @@ func TestParseMultipleHeaders(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.HTTP.CORS.AllowedHeaders, []string{
 		"Accept",
 		"Accept-Language",
@@ -258,7 +256,7 @@ func TestParseMultipleOrigins(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.HTTP.CORS.AllowedOrigins, []string{
 		"http://example.com",
 		"https://example.com",
@@ -274,12 +272,8 @@ func TestValidateDoesNotDuplicatePublicURLOrigin(t *testing.T) {
 	is := is.New(t)
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	is.NoErr(cfg.WriteConfig())
-	// cmd/soft parses the config file and then the environment, and each
-	// step runs Validate.
-	is.NoErr(cfg.Parse())
-	is.NoErr(cfg.ParseEnv())
-	is.NoErr(cfg.Validate())
+	is.NoErr(writeTestConfig(t, cfg))
+	is.NoErr(cfg.load())
 	is.Equal(len(cfg.HTTP.CORS.AllowedOrigins), 0)
 	is.Equal(cfg.CORSAllowedOrigins(), []string{"http://localhost:23232"})
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS="))
@@ -333,7 +327,7 @@ func TestParseMultipleMethods(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.HTTP.CORS.AllowedMethods, []string{
 		"GET",
 		"POST",
@@ -348,7 +342,7 @@ func TestAdminOnlyCreateOffByDefault(t *testing.T) {
 	t.Setenv("SOFT_SERVE_ADMIN_ONLY_CREATE", "")
 	is.NoErr(os.Unsetenv("SOFT_SERVE_ADMIN_ONLY_CREATE"))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(!cfg.AdminOnlyCreate)
 }
 
@@ -359,7 +353,7 @@ func TestParseAdminOnlyCreateEnv(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_ADMIN_ONLY_CREATE"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(cfg.AdminOnlyCreate)
 }
 
@@ -386,7 +380,7 @@ func TestAdminOnlyCreateFalseInEnviron(t *testing.T) {
 func TestAnonAccessEnvUnsetByDefault(t *testing.T) {
 	is := is.New(t)
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	// nil is the "no override" sentinel.
 	is.True(cfg.AnonAccess == nil)
 }
@@ -398,7 +392,7 @@ func TestParseAnonAccessEnv(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_ANON_ACCESS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(cfg.AnonAccess != nil)
 	is.Equal(*cfg.AnonAccess, access.AdminAccess)
 }
@@ -412,14 +406,14 @@ func TestParseRejectsInvalidAnonAccess(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_ANON_ACCESS"))
 	})
 	cfg := DefaultConfig()
-	err := cfg.ParseEnv()
+	err := parseEnv(cfg)
 	is.True(err != nil)
 }
 
 func TestAllowKeylessEnvUnsetByDefault(t *testing.T) {
 	is := is.New(t)
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	// nil is the "no override" sentinel — distinct from an explicit false.
 	is.True(cfg.AllowKeyless == nil)
 }
@@ -431,7 +425,7 @@ func TestParseAllowKeylessEnvTrue(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_ALLOW_KEYLESS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(cfg.AllowKeyless != nil)
 	is.Equal(*cfg.AllowKeyless, true)
 }
@@ -443,7 +437,7 @@ func TestParseAllowKeylessEnvFalse(t *testing.T) {
 		is.NoErr(os.Unsetenv("SOFT_SERVE_ALLOW_KEYLESS"))
 	})
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	// Explicit false must survive as a real override, not collapse back to
 	// "unset" — that's the whole reason this field is a *bool.
 	is.True(cfg.AllowKeyless != nil)
@@ -548,26 +542,6 @@ func TestMergeAdminKeys(t *testing.T) {
 	}
 }
 
-// TestParseEnvAdminKeysTwice checks that applying the environment again, as
-// cmd/soft does after Parse, keeps the merged file and env keys.
-func TestParseEnvAdminKeysTwice(t *testing.T) {
-	is := is.New(t)
-	t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "testdata/k1.pub")
-	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
-		DataPath:         t.TempDir(),
-		InitialAdminKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8 a@b"},
-	}
-	want := []string{
-		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
-		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8",
-	}
-	is.NoErr(cfg.ParseEnv())
-	is.Equal(cfg.InitialAdminKeys, want)
-	is.NoErr(cfg.ParseEnv())
-	is.Equal(cfg.InitialAdminKeys, want)
-}
-
 // An authorized_keys file can hold several keys, one per line. Every key is
 // an admin key, and a line that is not a key is counted as ignored.
 func TestAdminKeyFileWithSeveralKeys(t *testing.T) {
@@ -577,7 +551,7 @@ func TestAdminKeyFileWithSeveralKeys(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "authorized_keys")
 	is.NoErr(os.WriteFile(file, []byte("# ops\n"+k1+" a@b\r\n\nssh-ed25519 AAAAtypo\n"+k2+" c@d\n"), 0o600))
 	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
+		DB:               DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{file},
 	}
@@ -597,7 +571,7 @@ func TestAdminKeysParsedOnlyByValidate(t *testing.T) {
 	k2 := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8"
 	dp := t.TempDir()
 	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
+		DB:               DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath:         dp,
 		InitialAdminKeys: []string{k1},
 	}
@@ -624,7 +598,7 @@ func TestAdminKeyFileRepeatsKey(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "authorized_keys")
 	is.NoErr(os.WriteFile(file, []byte(k1+" a@b\n"+k1+"  c@d\n"), 0o600))
 	cfg := &Config{
-		DB:               DBConfig{Driver: "sqlite"},
+		DB:               DBConfig{Driver: "sqlite", DataSource: ":memory:"},
 		DataPath:         t.TempDir(),
 		InitialAdminKeys: []string{k1 + " x@y", file},
 	}
@@ -640,12 +614,12 @@ func TestMaxReposPerUser(t *testing.T) {
 	t.Setenv("SOFT_SERVE_MAX_REPOS_PER_USER", "")
 	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_REPOS_PER_USER"))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.MaxReposPerUser, 0) // no limit by default
 
 	t.Setenv("SOFT_SERVE_MAX_REPOS_PER_USER", "3")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.MaxReposPerUser, 3)
 	// Hooks re-read the config from the environment.
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_MAX_REPOS_PER_USER=3"))
@@ -659,7 +633,7 @@ func TestMaxReposPerUser(t *testing.T) {
 
 	t.Setenv("SOFT_SERVE_MAX_REPOS_PER_USER", "-1")
 	cfg = DefaultConfig()
-	is.True(cfg.ParseEnv() != nil)
+	is.True(parseEnv(cfg) != nil)
 }
 
 func TestMaxBlobSize(t *testing.T) {
@@ -668,14 +642,14 @@ func TestMaxBlobSize(t *testing.T) {
 	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "")
 	is.NoErr(os.Unsetenv("SOFT_SERVE_MAX_BLOB_SIZE"))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.MaxBlobSize, int64(DefaultMaxBlobSize))
 	is.Equal(cfg.BlobSizeLimit(), int64(DefaultMaxBlobSize))
 	is.Equal((*Config)(nil).BlobSizeLimit(), int64(DefaultMaxBlobSize))
 
 	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "0")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.BlobSizeLimit(), int64(0)) // no limit
 	// Hooks re-read the config from the environment.
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_MAX_BLOB_SIZE=0"))
@@ -689,7 +663,7 @@ func TestMaxBlobSize(t *testing.T) {
 
 	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "-1")
 	cfg = DefaultConfig()
-	is.True(cfg.ParseEnv() != nil)
+	is.True(parseEnv(cfg) != nil)
 }
 
 func TestDefaultPrivate(t *testing.T) {
@@ -698,13 +672,13 @@ func TestDefaultPrivate(t *testing.T) {
 	t.Setenv("SOFT_SERVE_DEFAULT_PRIVATE", "")
 	is.NoErr(os.Unsetenv("SOFT_SERVE_DEFAULT_PRIVATE"))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(!cfg.DefaultPrivate) // public by default, as upstream
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_DEFAULT_PRIVATE=false"))
 
 	t.Setenv("SOFT_SERVE_DEFAULT_PRIVATE", "true")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.True(cfg.DefaultPrivate)
 	// Hooks re-read the config from the environment.
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_DEFAULT_PRIVATE=true"))
@@ -738,7 +712,7 @@ func TestQuotedInitAdminKeys(t *testing.T) {
 			t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", tc.env)
 			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 			cfg := DefaultConfig()
-			is.NoErr(cfg.ParseEnv())
+			is.NoErr(parseEnv(cfg))
 			is.Equal(cfg.InitialAdminKeys, tc.want)
 			is.Equal(cfg.IgnoredAdminKeys(), 0)
 		})
@@ -746,7 +720,7 @@ func TestQuotedInitAdminKeys(t *testing.T) {
 
 	// Unmatched or inner quotes are not stripped.
 	is := is.New(t)
-	cfg := &Config{DB: DBConfig{Driver: "sqlite"}, InitialAdminKeys: []string{"'" + k2 + `"`, `"` + k2}}
+	cfg := &Config{DB: DBConfig{Driver: "sqlite", DataSource: ":memory:"}, InitialAdminKeys: []string{"'" + k2 + `"`, `"` + k2}}
 	is.NoErr(cfg.Validate())
 	is.Equal(len(cfg.AdminKeys()), 0)
 	is.Equal(cfg.IgnoredAdminKeys(), 2)
@@ -775,7 +749,7 @@ func TestOuterQuotedInitAdminKeys(t *testing.T) {
 			t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", tc.env)
 			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 			cfg := DefaultConfig()
-			is.NoErr(cfg.ParseEnv())
+			is.NoErr(parseEnv(cfg))
 			is.Equal(cfg.InitialAdminKeys, tc.want)
 			is.Equal(cfg.IgnoredAdminKeys(), 0)
 		})
@@ -789,7 +763,7 @@ func TestOuterQuotedInitAdminKeys(t *testing.T) {
 		t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 		cfg := DefaultConfig()
 		cfg.InitialAdminKeys = []string{k2}
-		is.NoErr(cfg.ParseEnv())
+		is.NoErr(parseEnv(cfg))
 		is.Equal(cfg.InitialAdminKeys, []string{k1, k2})
 		is.Equal(cfg.IgnoredAdminKeys(), 0)
 	})
@@ -803,7 +777,7 @@ func TestOuterQuotedInitAdminKeys(t *testing.T) {
 		t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 		cfg := DefaultConfig()
 		cfg.InitialAdminKeys = []string{"'" + k1, k2 + "'"}
-		is.NoErr(cfg.ParseEnv())
+		is.NoErr(parseEnv(cfg))
 		is.Equal(len(cfg.InitialAdminKeys), 0)
 		is.Equal(cfg.IgnoredAdminKeys(), 2)
 	})
@@ -814,7 +788,7 @@ func TestOuterQuotedInitAdminKeys(t *testing.T) {
 		t.Setenv("SOFT_SERVE_INITIAL_ADMIN_KEYS", "'"+k1+"\n"+k2+`"`)
 		t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 		cfg := DefaultConfig()
-		is.NoErr(cfg.ParseEnv())
+		is.NoErr(parseEnv(cfg))
 		is.Equal(len(cfg.InitialAdminKeys), 0)
 		is.Equal(cfg.IgnoredAdminKeys(), 2)
 	})
@@ -851,7 +825,7 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	t.Setenv("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS", "127.0.0.1,hooks.internal:9000")
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	if err := cfg.ParseEnv(); err != nil {
+	if err := parseEnv(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(cfg.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
@@ -862,13 +836,13 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 	}
 
 	// The written config file round-trips the list.
-	if err := cfg.WriteConfig(); err != nil {
+	if err := writeTestConfig(t, cfg); err != nil {
 		t.Fatal(err)
 	}
 	os.Unsetenv("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS") //nolint:errcheck // restored by t.Setenv above
 	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", cfg.ConfigPath())
 	fromFile := &Config{DataPath: cfg.DataPath}
-	if err := fromFile.ParseFile(); err != nil {
+	if err := fromFile.load(); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(fromFile.Webhook.AllowedHosts, []string{"127.0.0.1", "hooks.internal:9000"}) {
@@ -944,8 +918,7 @@ git:
 func TestConfigSamplesHaveNoUnknownKeys(t *testing.T) {
 	is := is.New(t)
 	var doc yaml.Node
-	file, err := newConfigFile(DefaultConfig())
-	is.NoErr(err)
+	file := string(defaultConfigFile)
 	is.NoErr(yaml.Unmarshal([]byte(file), &doc))
 	is.Equal(findUnknownKeys(&doc, reflect.TypeFor[Config](), ""), []UnknownKey(nil))
 
@@ -962,15 +935,15 @@ func TestConfigSamplesHaveNoUnknownKeys(t *testing.T) {
 	is.Equal(findUnknownKeys(&doc, reflect.TypeFor[Config](), ""), []UnknownKey(nil))
 }
 
-// WriteConfig keeps the config, which can hold a database password, and a
-// data directory it creates private to the server's user.
-func TestWriteConfigIsPrivate(t *testing.T) {
+// WriteDefaultFile keeps the config, which can hold a database password,
+// and a data directory it creates private to the server's user.
+func TestWriteDefaultFileIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permissions")
 	}
 	cfg := DefaultConfig()
 	cfg.DataPath = filepath.Join(t.TempDir(), "data")
-	if err := cfg.WriteConfig(); err != nil {
+	if err := cfg.WriteDefaultFile(); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]os.FileMode{

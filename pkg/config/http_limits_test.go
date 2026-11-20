@@ -25,7 +25,7 @@ func TestHTTPLimits(t *testing.T) {
 		is.NoErr(os.Unsetenv(k))
 	}
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.HTTP.MaxTimeout, DefaultMaxTimeout)
 	is.Equal(cfg.HTTP.IdleTimeout, 60)
 	is.Equal(cfg.HTTP.MaxConnections, 64)
@@ -36,7 +36,7 @@ func TestHTTPLimits(t *testing.T) {
 	t.Setenv("SOFT_SERVE_HTTP_MAX_CONNECTIONS", "8")
 	t.Setenv("SOFT_SERVE_HTTP_MAX_CONNECTIONS_PER_IP", "2")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.HTTP.MaxTimeout, 3600)
 	is.Equal(cfg.HTTP.IdleTimeout, 30)
 	is.Equal(cfg.HTTP.MaxConnections, 8)
