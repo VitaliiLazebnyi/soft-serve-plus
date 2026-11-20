@@ -92,20 +92,34 @@ func TestHookConfigRoundTrip(t *testing.T) {
 	}
 }
 
-// A hook config that cannot be read or decoded, or has a key it should not
-// have, is an error that
-// names the file.
+// Keys the reader does not know, as in a newer server's file after a
+// downgrade or a log setting this version lacks, are ignored, and the known
+// settings are read. Refusing them would fail every push through an older
+// version's hook until the server rewrote the file.
+func TestReadConfigIgnoresUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hook-config.yaml")
+	if err := os.WriteFile(path, []byte("log:\n  format: json\n  color: never\nfuture:\n  setting: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ReadConfig(path, dir)
+	if err != nil {
+		t.Fatalf("ReadConfig with unknown keys: %v", err)
+	}
+	if cfg.Log.Format != "json" {
+		t.Errorf("log format %q, want json", cfg.Log.Format)
+	}
+}
+
+// A hook config that cannot be read or decoded is an error that names the
+// file.
 func TestReadConfigErrors(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")
-	if err := os.WriteFile(bad, []byte("ssh: [not a map\n"), 0o600); err != nil {
+	if err := os.WriteFile(bad, []byte("log: [not a map\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	invalid := filepath.Join(dir, "invalid.yaml")
-	if err := os.WriteFile(invalid, []byte("db:\n  data_source: x\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{filepath.Join(dir, "missing.yaml"), bad, invalid} {
+	for _, path := range []string{filepath.Join(dir, "missing.yaml"), bad} {
 		if _, err := ReadConfig(path, dir); err == nil || !strings.Contains(err.Error(), filepath.Base(path)) {
 			t.Errorf("ReadConfig(%s) = %v, want an error naming it", filepath.Base(path), err)
 		}

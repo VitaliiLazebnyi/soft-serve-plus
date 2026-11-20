@@ -71,8 +71,14 @@ func WriteConfig(cfg *config.Config) error {
 
 // ReadConfig reads the settings WriteConfig wrote to path into the default
 // config, for a server whose data path is dataPath (which the file leaves
-// out). It does not read config.yaml or the environment. A key the file
-// should not have is an error.
+// out). It does not read config.yaml or the environment.
+//
+// Only the keys of hookConfig are read, and other keys are ignored rather
+// than refused. The server, which writes the file, decides what it holds
+// (TestHookConfigRoundTrip keeps secrets out of it), so refusing keys adds
+// no safety. Refusing them would also fail every push through a hook from
+// an older version whenever a newer server's file has a key this one does
+// not know, after a downgrade say, until the next restart rewrote it.
 func ReadConfig(path, dataPath string) (*config.Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -81,9 +87,7 @@ func ReadConfig(path, dataPath string) (*config.Config, error) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dataPath
 	hc := hookConfig{Log: cfg.Log}
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&hc); err != nil && !errors.Is(err, io.EOF) {
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&hc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("decode hook config %s: %w", path, err)
 	}
 	cfg.Log = hc.Log
