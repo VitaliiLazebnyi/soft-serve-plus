@@ -71,6 +71,11 @@ func (p *pushGates) release(name string, g *pushGate) {
 // repository's gate held.
 var testHookBeforePushCreatedDelete func()
 
+// testHookAfterRefSnapshot, when set, runs in pushCreatedRefSnapshot with
+// the repository's directory rp, right after the snapshot of its refs, so
+// it follows the snapshot wherever RemovePushCreatedRepository takes it.
+var testHookAfterRefSnapshot func(rp string)
+
 // BeginPush marks a push to the existing repository repo as running until
 // the returned function is called; RemovePushCreatedRepository does not
 // remove a repository while a push to it runs. If a removal of the
@@ -129,14 +134,15 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	}
 	defer g.rw.Unlock()
 
-	// Checked with the gate held: no push can start until the repository
-	// is gone, so none can write a ref after this check.
-	// What the refs look like before the check for refs, so the retry
-	// below can tell a ref written since from what was always there: a
-	// lingering git process that writes one after the check is then still
-	// seen.
+	// With the gate held no push can start until the repository is gone,
+	// but a lingering git process can still write a ref. So the refs are
+	// first snapshotted and only then checked: a ref written before the
+	// check keeps the repository, and one written after it differs from
+	// the snapshot, so the retry in removePushCreatedDir does not remove
+	// it. A snapshot taken after the check would miss a ref written
+	// between the two.
 	rp := d.repoPath(name)
-	refs := readRefState(rp)
+	refs := pushCreatedRefSnapshot(rp)
 	if hasRefs(rp) {
 		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
@@ -160,6 +166,16 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	}
 	d.removePushCreatedDir(name, rp, refs)
 	return true, nil
+}
+
+// pushCreatedRefSnapshot is readRefState for RemovePushCreatedRepository,
+// followed by testHookAfterRefSnapshot.
+func pushCreatedRefSnapshot(rp string) refState {
+	st := readRefState(rp)
+	if testHookAfterRefSnapshot != nil {
+		testHookAfterRefSnapshot(rp)
+	}
+	return st
 }
 
 // headOnPushedBranch points the HEAD of created, kept because a failed push

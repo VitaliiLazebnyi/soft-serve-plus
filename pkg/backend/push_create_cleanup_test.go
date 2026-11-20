@@ -68,6 +68,34 @@ func TestRemovePushCreatedRepositoryKeptWithRefsGetsHead(t *testing.T) {
 	is.Equal(strings.TrimSpace(string(head)), "refs/heads/feature")
 }
 
+// A ref a lingering git process writes after the snapshot of the refs and
+// before the check for refs keeps the repository: the check sees it. With
+// the snapshot taken after the check, the ref was in the snapshot and not
+// seen by the check, and the repository was removed with it.
+func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	r, err := be.CreateRepository(ctx, "late", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	dir := be.repoPath("late")
+	wrote := false
+	testHookAfterRefSnapshot = func(rp string) {
+		commitTo(t, rp, "refs/heads/main")
+		wrote = true
+	}
+	t.Cleanup(func() { testHookAfterRefSnapshot = nil })
+
+	removed, err := be.RemovePushCreatedRepository(ctx, r)
+	is.NoErr(err)
+	is.True(wrote)
+	is.True(!removed)
+	_, err = be.Repository(ctx, "late")
+	is.NoErr(err) // the row is kept
+	_, err = os.Stat(filepath.Join(dir, "refs", "heads", "main"))
+	is.NoErr(err) // and so is the ref
+}
+
 // On Windows the failed push's git process can hold the directory open for
 // a moment, so a removal of the directory that fails once the row is gone
 // is tried again. Here a directory without write permission stands in for
