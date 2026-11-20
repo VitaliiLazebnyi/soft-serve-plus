@@ -99,12 +99,12 @@ func httpClient(ctx context.Context) *http.Client {
 	return allowingClient.client
 }
 
-// do sends a webhook.
+// do sends a webhook request, a POST.
 // Caller must close the returned body.
 // A returned error never contains the webhook URL's path, query, fragment or
 // user info, which can hold secrets (see redactURL).
-func do(ctx context.Context, url string, method string, headers http.Header, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+func do(ctx context.Context, url string, headers http.Header, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, utils.RedactURLError(err, redactURL)
 	}
@@ -292,7 +292,7 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 
 	sctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
-	res, reqErr := do(sctx, w.URL, http.MethodPost, req.headers, strings.NewReader(req.body))
+	res, reqErr := do(sctx, w.URL, req.headers, strings.NewReader(req.body))
 
 	resStatus := 0
 	resHeaders := ""
