@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,28 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 )
+
+// scanBlockedOnSend reports whether a scan waits to send a pointer nobody
+// reads.
+func scanBlockedOnSend() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, frames, _ := strings.Cut(g, "\n")
+		blocked := strings.Contains(header, "[select") || strings.Contains(header, "[chan send")
+		if blocked && strings.HasPrefix(frames, "github.com/charmbracelet/soft-serve/pkg/lfs.searchPointerBlobs.func") {
+			return true
+		}
+	}
+	return false
+}
 
 // TestSearchPointerBlobsCancel verifies that the scan stops once its context
 // is canceled, even when nobody reads the remaining pointers, and reports
@@ -88,7 +111,13 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 	// Read one pointer, let the scanner block on the next one, then stop
 	// reading and cancel.
 	<-pointerChan
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(time.Minute)
+	for !scanBlockedOnSend() {
+		if time.Now().After(deadline) {
+			t.Fatal("the scan did not block on sending the next pointer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 
 	select {
