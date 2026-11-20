@@ -2,8 +2,9 @@
 
 # webhook.allowed_hosts lets webhooks reach the internal addresses it lists.
 # The requests go straight to the script's loopback receiver through the
-# SSRF-protected client, so the test dial override is turned off.
-env RCV=$SOFT_SERVE_TEST_WEBHOOK_ADDR
+# SSRF-protected client, over loopback TCP, so the test dial override is
+# turned off.
+env RCV=$WEBHOOK_RECEIVER_TCP_ADDR
 env SOFT_SERVE_TEST_WEBHOOK_ADDR=
 env SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS=127.0.0.1
 
@@ -32,7 +33,7 @@ mkfile ./repo-internal/README.md 'foobar'
 git -C repo-internal add -A
 git -C repo-internal commit -m 'first'
 git -C repo-internal push origin HEAD
-webhook-received
+webhook-received 1
 [windows] dos2unix received-first.txt
 cmp stdout received-first.txt
 
@@ -45,11 +46,13 @@ ensureserverrunning SSH_PORT
 mkfile ./repo-internal/README.md 'second'
 git -C repo-internal commit -am 'second'
 git -C repo-internal push origin HEAD
-webhook-received
-cmp stdout received-first.txt
+# the failed delivery is recorded once the attempt is over, so by then the
+# receiver has had all it will get: still only the first push
 soft repo webhook deliver list repo-internal 1
 stdout -count=1 '✅.*push'
 stdout -count=1 '❌.*push'
+webhook-received 1
+cmp stdout received-first.txt
 
 # and a new webhook to it is refused at create
 ! soft repo webhook create repo-internal http://$RCV/hooks/again -e push

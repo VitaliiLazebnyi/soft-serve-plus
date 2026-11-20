@@ -24,7 +24,7 @@ git -C repo1 push origin HEAD
 soft repo webhook deliver list repo1 1
 stdout '✅.*branch_tag_create'
 stdout '✅.*push'
-webhook-received
+webhook-received 2
 [windows] dos2unix received.txt
 cmp stdout received.txt
 

@@ -31,7 +31,7 @@ soft repo webhook deliver list repo-123 1
 stdout '✅.*branch_tag_create'
 stdout '✅.*push'
 ! stdout '❌'
-webhook-received
+webhook-received 2
 [windows] dos2unix received.txt
 cmp stdout received.txt
 

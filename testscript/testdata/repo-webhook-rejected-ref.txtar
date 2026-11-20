@@ -15,7 +15,7 @@ ensureserverrunning SSH_PORT
 soft repo create repo1
 
 new-webhook WH_REPO1
-soft repo webhook create repo1 $WH_REPO1 -e branch_tag_create -e push
+soft repo webhook create repo1 $WH_REPO1 -e branch_tag_create -e branch_tag_delete -e push
 
 git clone ssh://localhost:$SSH_PORT/repo1 repo1
 mkfile ./repo1/README.md 'foobar'
@@ -30,8 +30,13 @@ soft repo branch list repo1
 stdout 'foo'
 ! stdout 'foo/bar'
 
-# only the push of refs/heads/foo was delivered
-webhook-received
+# a branch pushed and deleted after the rejected push sends its events after
+# anything that push could have sent, and its deletion is not one of the
+# creation events that push would send, so the whole list shows that it sent
+# nothing
+git -C repo1 push origin HEAD:refs/heads/baz
+git -C repo1 push origin --delete baz
+webhook-received 6
 [windows] dos2unix received.txt
 cmp stdout received.txt
 
@@ -41,4 +46,8 @@ cmp stdout received.txt
 
 -- received.txt --
 branch_tag_create /hooks/WH_REPO1
+push /hooks/WH_REPO1
+branch_tag_create /hooks/WH_REPO1
+push /hooks/WH_REPO1
+branch_tag_delete /hooks/WH_REPO1
 push /hooks/WH_REPO1
