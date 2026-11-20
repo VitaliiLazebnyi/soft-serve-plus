@@ -1,0 +1,103 @@
+# vi: set ft=conf
+
+# Only git receive-pack runs hooks, so only it gets the hook environment and
+# the server config. Every other service the server starts, over SSH, HTTP and
+# git://, gets GIT_PROTOCOL and none of it, so a fetch never carries the
+# database data source.
+
+# A git on PATH, ahead of the real one, records the variables each git service
+# the server starts gets, apart from the process-wide switches every git child
+# inherits.
+[windows] skip 'the recording git is a shell script'
+exec which git
+cp stdout realgit
+envfile REAL_GIT=realgit
+mkdir out fakebin
+cp fakegit.sh fakebin/git
+chmod 0755 fakebin/git
+env SERVICE_ENV_OUT=$WORK/out
+env PATH=$WORK/fakebin${:}$PATH
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo1
+soft user create user1 --key "$USER1_AUTHORIZED_KEY"
+soft repo collab add repo1 user1 read-write
+usoft token create 'push'
+cp stdout utokenfile
+envfile UTOKEN=utokenfile
+
+# a push over SSH: receive-pack gets the hook environment
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md 'hello'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+grep '^SOFT_SERVE_REPO_NAME$' out/receive-pack
+grep '^SOFT_SERVE_DATA_PATH$' out/receive-pack
+grep '^SOFT_SERVE_PUBLIC_KEY$' out/receive-pack
+# the clone before it: upload-pack gets none of it
+exists out/upload-pack
+! grep '^SOFT_SERVE_' out/upload-pack
+rm out/receive-pack out/upload-pack
+
+# a fetch and an archive over SSH
+git -C repo1 fetch origin
+exists out/upload-pack
+! grep '^SOFT_SERVE_' out/upload-pack
+git archive --remote=ssh://localhost:$SSH_PORT/repo1 -o repo1.tar HEAD
+exists out/upload-archive
+! grep '^SOFT_SERVE_' out/upload-archive
+rm out/upload-pack out/upload-archive
+
+# a clone over HTTP: the ref advertisement and the fetch get none of it
+git clone http://localhost:$HTTP_PORT/repo1 repo1-http
+exists out/upload-pack-advertise
+! grep '^SOFT_SERVE_' out/upload-pack-advertise
+grep '^GIT_PROTOCOL$' out/upload-pack-advertise
+exists out/upload-pack
+! grep '^SOFT_SERVE_' out/upload-pack
+grep '^GIT_PROTOCOL$' out/upload-pack
+rm out/upload-pack-advertise out/upload-pack
+
+# a push over HTTP: the advertisement gets none of it, receive-pack all
+mkfile ./repo1/README.md 'hello again'
+git -C repo1 commit -am 'second'
+git -C repo1 push http://user1:$UTOKEN@localhost:$HTTP_PORT/repo1 HEAD:master
+exists out/receive-pack-advertise
+! grep '^SOFT_SERVE_' out/receive-pack-advertise
+grep '^SOFT_SERVE_REPO_NAME$' out/receive-pack
+grep '^SOFT_SERVE_USERNAME$' out/receive-pack
+! grep '^SOFT_SERVE_PUBLIC_KEY$' out/receive-pack
+rm out/receive-pack-advertise out/receive-pack
+
+# a clone over git:// gets the protocol version and nothing else
+git clone git://localhost:$GIT_PORT/repo1 repo1-daemon
+exists out/upload-pack
+! grep '^SOFT_SERVE_' out/upload-pack
+grep '^GIT_PROTOCOL$' out/upload-pack
+
+# stop the server
+[windows] stopserver
+
+-- fakegit.sh --
+#!/bin/sh
+# Records, for a git service, the names of the SOFT_SERVE_* variables and
+# GIT_PROTOCOL in its environment, then runs the real git.
+svc=
+adv=
+for a in "$@"; do
+	case "$a" in
+	upload-pack | upload-archive | receive-pack) svc=$a ;;
+	--advertise-refs) adv=-advertise ;;
+	esac
+done
+if [ -n "$svc" ]; then
+	env | sed -n 's/^\(SOFT_SERVE_[A-Z0-9_]*\)=.*/\1/p; s/^\(GIT_PROTOCOL\)=.*/\1/p' |
+		grep -v -E '^SOFT_SERVE_(DEBUG|VERBOSE|NO_COLOR|TESTRUN|TEST_.*)$' |
+		sort >>"$SERVICE_ENV_OUT/$svc$adv"
+fi
+exec "$REAL_GIT" "$@"

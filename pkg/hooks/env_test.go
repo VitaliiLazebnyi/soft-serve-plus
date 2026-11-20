@@ -91,10 +91,6 @@ func TestEnv(t *testing.T) {
 		name: "http anonymous",
 		req:  Request{Transport: TransportHTTP, Repo: "repo"},
 		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath},
-	}, {
-		name: "daemon",
-		req:  Request{Transport: TransportDaemon, Repo: "repo", Host: "example.com", Protocol: "version=1"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_HOST=example.com", "GIT_PROTOCOL=version=1"},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := withoutServerConfig(t, cfg, Env(cfg, tc.req))
@@ -102,5 +98,16 @@ func TestEnv(t *testing.T) {
 				t.Errorf("Env request variables\n got %q\nwant %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestProtocolEnv: a service that runs no hooks gets GIT_PROTOCOL and
+// nothing else.
+func TestProtocolEnv(t *testing.T) {
+	if got, want := ProtocolEnv("version=2"), []string{"GIT_PROTOCOL=version=2"}; !slices.Equal(got, want) {
+		t.Errorf("ProtocolEnv(version=2) = %q, want %q", got, want)
+	}
+	if got := ProtocolEnv(""); len(got) != 0 {
+		t.Errorf("ProtocolEnv(\"\") = %q, want none", got)
 	}
 }

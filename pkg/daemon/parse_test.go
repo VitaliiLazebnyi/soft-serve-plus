@@ -3,7 +3,6 @@ package daemon
 import (
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/git"
@@ -33,17 +32,15 @@ func TestParseRequest(t *testing.T) {
 	}
 }
 
+// TestEnviron: the daemon runs no hooks, so git gets only the requested
+// protocol version, never the hook variables or the server config with its
+// database data source.
 func TestEnviron(t *testing.T) {
 	env := testDaemon.environ(gitRequest{service: git.UploadPackService, name: "r", host: "h", version: "2"})
-	for _, want := range []string{"SOFT_SERVE_REPO_NAME=r", "SOFT_SERVE_HOST=h", "GIT_PROTOCOL=version=2"} {
-		if !slices.Contains(env, want) {
-			t.Errorf("environment lacks %q: %q", want, env)
-		}
+	if want := []string{"GIT_PROTOCOL=version=2"}; !slices.Equal(env, want) {
+		t.Errorf("environ = %q, want %q", env, want)
 	}
-	env = testDaemon.environ(gitRequest{service: git.UploadPackService, name: "r"})
-	for _, e := range env {
-		if strings.HasPrefix(e, "GIT_PROTOCOL=") {
-			t.Errorf("GIT_PROTOCOL set without a requested version: %q", e)
-		}
+	if env := testDaemon.environ(gitRequest{service: git.UploadPackService, name: "r"}); len(env) != 0 {
+		t.Errorf("environ without a requested version = %q, want none", env)
 	}
 }

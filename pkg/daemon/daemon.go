@@ -599,18 +599,15 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 }
 
 // environ returns the environment git runs with for req.
+//
+// The daemon serves only upload-pack and upload-archive, which run no hooks,
+// so git gets no hook environment and none of the server config: only the
+// requested protocol version, as GIT_PROTOCOL.
 func (d *GitDaemon) environ(req gitRequest) []string {
-	// Only the requested protocol version reaches GIT_PROTOCOL.
-	var protocol string
-	if req.version != "" {
-		protocol = "version=" + req.version
+	if req.version == "" {
+		return nil
 	}
-	return hooks.Env(d.cfg, hooks.Request{
-		Transport: hooks.TransportDaemon,
-		Repo:      req.name,
-		Host:      req.host,
-		Protocol:  protocol,
-	})
+	return hooks.ProtocolEnv("version=" + req.version)
 }
 
 // keepAlive returns the uploadpack.keepAlive interval, in seconds, for a

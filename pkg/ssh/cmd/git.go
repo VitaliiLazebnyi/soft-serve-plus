@@ -241,12 +241,26 @@ type gitRequest struct {
 	level access.AccessLevel
 	// anonymous is as for denyRead: no account and not a server admin.
 	anonymous bool
-	scmd      git.ServiceCommand
+	cfg       *config.Config
+	// protocol is the session's GIT_PROTOCOL, or "".
+	protocol string
+	scmd     git.ServiceCommand
+}
+
+// hookEnv returns the environment receive-pack and its hooks run with.
+func (r *gitRequest) hookEnv() []string {
+	return hooks.Env(r.cfg, hooks.Request{
+		Transport: hooks.TransportSSH,
+		Repo:      r.name,
+		User:      r.user,
+		PublicKey: sshutils.PublicKeyFromContext(r.ctx),
+		Protocol:  r.protocol,
+	})
 }
 
 // newGitRequest looks up the repository args[0] names for the session's
 // caller and prepares the service command: its directory, its input and
-// output, and the environment the hooks read.
+// output, and GIT_PROTOCOL. runReceivePack adds the hook environment.
 func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 	ctx := cmd.Context()
 	cfg := config.FromContext(ctx)
@@ -281,23 +295,21 @@ func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 			}
 		}
 	}
-	envs := hooks.Env(cfg, hooks.Request{
-		Transport: hooks.TransportSSH,
-		Repo:      name,
-		User:      user,
-		PublicKey: sshutils.PublicKeyFromContext(ctx),
-		Protocol:  protocol,
-	})
+	// Only receive-pack runs hooks, so only it gets their environment (see
+	// runReceivePack).
+	envs := hooks.ProtocolEnv(protocol)
 
 	return &gitRequest{
-		ctx:    ctx,
-		be:     be,
-		logger: logger,
-		start:  start,
-		name:   name,
-		user:   user,
-		repo:   repo,
-		level:  level,
+		cfg:      cfg,
+		protocol: protocol,
+		ctx:      ctx,
+		be:       be,
+		logger:   logger,
+		start:    start,
+		name:     name,
+		user:     user,
+		repo:     repo,
+		level:    level,
 		// As in denyRead, a server admin is never anonymous: nothing is
 		// hidden from them.
 		anonymous: user == nil && !isServerAdmin(ctx),
@@ -420,6 +432,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		receivePackSeconds.Add(time.Since(r.start).Seconds())
 	}()
 
+	r.scmd.Env = r.hookEnv()
 	if err := git.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
 		if created != nil {
 			// The push may have failed because the session ended, so the
