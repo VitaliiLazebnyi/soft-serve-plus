@@ -59,4 +59,14 @@ var (
 	ErrCollaboratorNotFound = errors.New("collaborator not found")
 	// ErrCollaboratorExist is returned when a collaborator already exists.
 	ErrCollaboratorExist = errors.New("collaborator already exists")
+	// ErrWebhookNotFound is returned when a repository has no webhook with
+	// the given ID.
+	ErrWebhookNotFound = errors.New("webhook not found")
+	// ErrDeliveryNotFound is returned when a webhook has no delivery with
+	// the given ID.
+	ErrDeliveryNotFound = errors.New("webhook delivery not found")
+	// ErrServerFault replaces an unexpected failure, such as a database
+	// error, of a change a client asked for. The cause stays in the server
+	// log; the client is told only that the change failed.
+	ErrServerFault = errors.New("the server could not complete the request; try again later")
 )

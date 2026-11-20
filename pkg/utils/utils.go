@@ -234,6 +234,27 @@ func ValidateRepo(repo string) error {
 // of its subpackages.
 const MaxRepoSegments = 32
 
+// ErrInvalidRepo matches every error ValidateRepo, ValidateRepoSegments and
+// ValidateExistingRepo return, so a caller can tell a refused name from a
+// server fault. The errors keep their own messages.
+var ErrInvalidRepo = errors.New("invalid repository name")
+
+// invalidRepoError is a repository name refused by validation.
+type invalidRepoError struct {
+	msg string
+}
+
+func (e *invalidRepoError) Error() string { return e.msg }
+
+// Is reports whether target is ErrInvalidRepo.
+func (e *invalidRepoError) Is(target error) bool { return target == ErrInvalidRepo }
+
+// invalidRepo returns an error matching ErrInvalidRepo with the message
+// fmt.Sprintf(format, args...).
+func invalidRepo(format string, args ...any) error {
+	return &invalidRepoError{msg: fmt.Sprintf(format, args...)}
+}
+
 // ValidateRepoSegments rejects repo path segments that start with a hyphen,
 // which a git command would read as an option, or consist only of periods,
 // such as "...", which Windows does not keep as a directory name. It also
@@ -241,14 +262,14 @@ const MaxRepoSegments = 32
 func ValidateRepoSegments(repo string) error {
 	segments := strings.Split(repo, "/")
 	if len(segments) > MaxRepoSegments {
-		return fmt.Errorf("repo name cannot have more than %d path segments", MaxRepoSegments)
+		return invalidRepo("repo name cannot have more than %d path segments", MaxRepoSegments)
 	}
 	for _, segment := range segments {
 		if strings.HasPrefix(segment, "-") {
-			return fmt.Errorf("repo path segments cannot start with a hyphen")
+			return invalidRepo("repo path segments cannot start with a hyphen")
 		}
 		if strings.Trim(segment, ".") == "" {
-			return fmt.Errorf("repo path segments cannot consist only of periods")
+			return invalidRepo("repo path segments cannot consist only of periods")
 		}
 	}
 	return nil
@@ -260,22 +281,22 @@ func ValidateRepoSegments(repo string) error {
 // renamed.
 func ValidateExistingRepo(repo string) error {
 	if repo == "" {
-		return fmt.Errorf("repo cannot be empty")
+		return invalidRepo("repo cannot be empty")
 	}
 
 	for _, r := range repo {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' && r != '.' && r != '/' {
-			return fmt.Errorf("repo can only contain letters, numbers, hyphens, underscores, periods, and slashes")
+			return invalidRepo("repo can only contain letters, numbers, hyphens, underscores, periods, and slashes")
 		}
 	}
 
 	if SanitizeRepo(repo) != repo {
-		return fmt.Errorf("repo name is not in its canonical form")
+		return invalidRepo("repo name is not in its canonical form")
 	}
 
 	for _, segment := range strings.Split(repo, "/") {
 		if strings.HasSuffix(strings.ToLower(segment), ".git") {
-			return fmt.Errorf("repo path segments cannot end in .git")
+			return invalidRepo("repo path segments cannot end in .git")
 		}
 	}
 
