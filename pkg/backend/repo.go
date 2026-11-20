@@ -297,11 +297,9 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
+	// The callers log a failure: CreateRepository through clientError, and
+	// openRepoError the case it maps.
 	if _, err := git.Init(rp, true); err != nil {
-		if !errors.Is(err, git.ErrNotAGitRepository) {
-			// openRepoError logs the other case.
-			d.logger.Debug("failed to create repository", "err", err)
-		}
 		d.removeRepoDir(rp) //nolint:errcheck
 		return nil, openRepoError(d.logger, err, rp)
 	}
@@ -491,7 +489,8 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 
 		return hooks.GenerateHooks(ctx, d.cfg, name)
 	}); err != nil {
-		d.logger.Debug("failed to create repository in database", "err", err)
+		// The callers log the failure: CreateRepository through
+		// clientError, an import where it registers.
 		d.removeRepoDir(rp) //nolint:errcheck
 		if errors.Is(err, db.ErrDuplicateKey) {
 			return nil, proto.ErrRepoExist
@@ -1186,7 +1185,9 @@ var refusals = []error{
 // repository name, for the client: a refusal (see refusals) unchanged, and
 // anything else, such as a failed insert, logged with its cause and
 // replaced by proto.ErrServerFault, whose text says nothing about the
-// server.
+// server. A failure that came with ctx ending, such as a statement the
+// client's disconnect cancelled, is logged at Debug: it is not a fault of
+// the server.
 func (d *Backend) clientError(ctx context.Context, op, name string, err error) error {
 	if err == nil {
 		return nil
@@ -1196,7 +1197,12 @@ func (d *Backend) clientError(ctx context.Context, op, name string, err error) e
 			return err
 		}
 	}
-	d.logger.Error("failed to "+op+" repository", "repo", name, "err", err)
+	msg := "failed to " + op + " repository"
+	if ctx.Err() != nil {
+		d.logger.Debug(msg, "repo", name, "err", err)
+	} else {
+		d.logger.Error(msg, "repo", name, "err", err)
+	}
 	return proto.ErrServerFault
 }
 

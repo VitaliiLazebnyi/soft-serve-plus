@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -102,4 +103,51 @@ func TestRepositoryChangesHideServerFaults(t *testing.T) {
 	is.True(errors.Is(err, utils.ErrInvalidRepo))
 	is.Equal(err.Error(), "repo path segments cannot start with a hyphen")
 	is.True(errors.Is(be.RenameRepository(asAdmin(t, be, ctx), "missing", "other"), proto.ErrRepoNotFound))
+}
+
+// cancellingCreateStore fails the repository insert with err after ending
+// the caller's context, as a statement the client's disconnect cancelled
+// does.
+type cancellingCreateStore struct {
+	store.Store
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s cancellingCreateStore) CreateRepo(context.Context, db.Handler, models.Repo) (models.Repo, error) {
+	s.cancel()
+	return models.Repo{}, s.err
+}
+
+// A fault that came with the caller's context ending is the client going
+// away, not a server fault: it is logged at Debug, not Error.
+func TestRepositoryChangesCancelledNotLoggedAsFault(t *testing.T) {
+	is := is.New(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
+	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
+	defer cancel()
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	be.store = cancellingCreateStore{Store: be.store, cancel: cancel, err: errors.New("pq: canceling statement due to user request")}
+
+	_, err = be.CreateRepository(ctx, "new", alice, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrServerFault))
+	is.True(!strings.Contains(logs.String(), "failed to create repository"))
+}
+
+// The cause of a failed create is logged once.
+func TestCreateRepositoryFaultLoggedOnce(t *testing.T) {
+	is := is.New(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
+	be.logger.SetLevel(log.DebugLevel)
+	ctx := backendTestContext(be, cfg)
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	is.NoErr(err)
+	be.store = failingCreateStore{Store: be.store, err: errors.New("pq: connection to 10.0.0.7:5432 reset")}
+
+	_, err = be.CreateRepository(ctx, "new", alice, proto.RepositoryOptions{})
+	is.True(errors.Is(err, proto.ErrServerFault))
+	is.Equal(strings.Count(logs.String(), "10.0.0.7"), 1)
 }
