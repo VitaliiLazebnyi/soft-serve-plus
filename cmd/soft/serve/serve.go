@@ -19,130 +19,141 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	syncHooks bool
-
-	// Command is the serve command.
-	Command = &cobra.Command{
+// NewCommand returns a new serve command.
+//
+// Each call builds a new command, so its flags start from their defaults:
+// cobra does not reset a flag a previous run set.
+func NewCommand() *cobra.Command {
+	var syncHooks bool
+	command := &cobra.Command{
 		Use:                "serve",
 		Short:              "Start the server",
 		Args:               cobra.NoArgs,
 		PersistentPreRunE:  cmd.InitBackendContext,
 		PersistentPostRunE: cmd.CloseDBContext,
 		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
-			ctx := c.Context()
-			// Use the config the database and backend were set up with,
-			// so hooks and directories land under the same data path.
-			cfg := config.FromContext(ctx)
-			for _, k := range cfg.UnknownKeys() {
-				log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
-			}
-			if !cfg.Exist() {
-				// Write the defaults, not cfg, so environment overrides
-				// are not saved to the file.
-				def := config.DefaultConfig()
-				def.DataPath = cfg.DataPath
-				if err := def.WriteConfig(); err != nil {
-					return fmt.Errorf("write config file: %w", err)
-				}
-			}
-
-			// Create custom hooks directory if it doesn't exist
-			customHooksPath := filepath.Join(cfg.DataPath, "hooks")
-			if _, err := os.Stat(customHooksPath); err != nil && os.IsNotExist(err) {
-				if err := os.MkdirAll(customHooksPath, 0o700); err != nil {
-					return fmt.Errorf("create hooks directory: %w", err)
-				}
-				// Generate update hook example without executable permissions
-				hookPath := filepath.Join(customHooksPath, "update.sample")
-				//nolint: gosec
-				if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil {
-					return fmt.Errorf("failed to generate update hook example: %w", err)
-				}
-			}
-
-			// Create log directory if it doesn't exist
-			logPath := filepath.Join(cfg.DataPath, "log")
-			if err := os.MkdirAll(logPath, 0o700); err != nil {
-				return fmt.Errorf("create log directory: %w", err)
-			}
-
-			db := db.FromContext(ctx)
-			if err := migrate.Migrate(ctx, db); err != nil {
-				return fmt.Errorf("migration error: %w", err)
-			}
-			// Reconcile initial_admin_keys on every start, not only on the
-			// first migration, so keys added to the config later become
-			// admin keys. "soft admin migrate" does not do this.
-			if err := migrate.SyncAdminKeys(ctx, db); err != nil {
-				return fmt.Errorf("sync initial admin keys: %w", err)
-			}
-
-			s, err := NewServer(ctx)
-			if err != nil {
-				return fmt.Errorf("start server: %w", err)
-			}
-
-			if syncHooks {
-				be := backend.FromContext(ctx)
-				if err := cmd.InitializeHooks(ctx, cfg, be); err != nil {
-					_ = s.Close()
-					return fmt.Errorf("initialize hooks: %w", err)
-				}
-			}
-
-			lch := make(chan error, 1)
-			done := make(chan os.Signal, 1)
-			testStop := make(chan struct{})
-
-			signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-
-			// Test builds add an endpoint that stops the server, since
-			// Windows doesn't support signals. Release builds don't have it.
-			s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
-
-			go func() {
-				lch <- s.Start()
-			}()
-
-			// serverErr is the error the server stopped with. It is returned
-			// only after the shutdown, which runs either way.
-			var serverErr error
-			for {
-				select {
-				case err := <-lch:
-					if err != nil {
-						serverErr = fmt.Errorf("server error: %w", err)
-					}
-					// Server exited; shut down
-					goto shutdown
-				case sig := <-done:
-					if sig == syscall.SIGHUP {
-						s.logger.Info("received SIGHUP signal, reloading TLS certificates if enabled")
-						if err := s.ReloadCertificates(); err != nil {
-							s.logger.Error("failed to reload TLS certificates", "err", err)
-						}
-						continue
-					}
-					// Real signal received; shut down
-					goto shutdown
-				case <-testStop:
-					// Test hook triggered; shut down
-					goto shutdown
-				}
-			}
-
-		shutdown:
-			// Waiting for webhook deliveries can take up to a minute; a
-			// second interrupt or terminate signal stops that wait.
-			abort, stopWaiting := abortOnSignal(done, s.logger)
-			defer stopWaiting()
-			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			return errors.Join(serverErr, s.Shutdown(ctx, abort))
+			return run(c, syncHooks)
 		}),
 	}
-)
+	command.Flags().BoolVarP(&syncHooks, "sync-hooks", "", false, "synchronize hooks for all repositories before running the server")
+
+	return command
+}
+
+// run starts the server and serves until it stops or a signal stops it.
+// With syncHooks it first regenerates the hooks of every repository.
+func run(c *cobra.Command, syncHooks bool) error {
+	ctx := c.Context()
+	// Use the config the database and backend were set up with,
+	// so hooks and directories land under the same data path.
+	cfg := config.FromContext(ctx)
+	for _, k := range cfg.UnknownKeys() {
+		log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+	}
+	if !cfg.Exist() {
+		// Write the defaults, not cfg, so environment overrides
+		// are not saved to the file.
+		def := config.DefaultConfig()
+		def.DataPath = cfg.DataPath
+		if err := def.WriteConfig(); err != nil {
+			return fmt.Errorf("write config file: %w", err)
+		}
+	}
+
+	// Create custom hooks directory if it doesn't exist
+	customHooksPath := filepath.Join(cfg.DataPath, "hooks")
+	if _, err := os.Stat(customHooksPath); err != nil && os.IsNotExist(err) {
+		if err := os.MkdirAll(customHooksPath, 0o700); err != nil {
+			return fmt.Errorf("create hooks directory: %w", err)
+		}
+		// Generate update hook example without executable permissions
+		hookPath := filepath.Join(customHooksPath, "update.sample")
+		//nolint: gosec
+		if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil {
+			return fmt.Errorf("failed to generate update hook example: %w", err)
+		}
+	}
+
+	// Create log directory if it doesn't exist
+	logPath := filepath.Join(cfg.DataPath, "log")
+	if err := os.MkdirAll(logPath, 0o700); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+
+	db := db.FromContext(ctx)
+	if err := migrate.Migrate(ctx, db); err != nil {
+		return fmt.Errorf("migration error: %w", err)
+	}
+	// Reconcile initial_admin_keys on every start, not only on the
+	// first migration, so keys added to the config later become
+	// admin keys. "soft admin migrate" does not do this.
+	if err := migrate.SyncAdminKeys(ctx, db); err != nil {
+		return fmt.Errorf("sync initial admin keys: %w", err)
+	}
+
+	s, err := NewServer(ctx)
+	if err != nil {
+		return fmt.Errorf("start server: %w", err)
+	}
+
+	if syncHooks {
+		be := backend.FromContext(ctx)
+		if err := cmd.InitializeHooks(ctx, cfg, be); err != nil {
+			_ = s.Close()
+			return fmt.Errorf("initialize hooks: %w", err)
+		}
+	}
+
+	lch := make(chan error, 1)
+	done := make(chan os.Signal, 1)
+	testStop := make(chan struct{})
+
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+
+	// Test builds add an endpoint that stops the server, since
+	// Windows doesn't support signals. Release builds don't have it.
+	s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
+
+	go func() {
+		lch <- s.Start()
+	}()
+
+	// serverErr is the error the server stopped with. It is returned
+	// only after the shutdown, which runs either way.
+	var serverErr error
+	for {
+		select {
+		case err := <-lch:
+			if err != nil {
+				serverErr = fmt.Errorf("server error: %w", err)
+			}
+			// Server exited; shut down
+			goto shutdown
+		case sig := <-done:
+			if sig == syscall.SIGHUP {
+				s.logger.Info("received SIGHUP signal, reloading TLS certificates if enabled")
+				if err := s.ReloadCertificates(); err != nil {
+					s.logger.Error("failed to reload TLS certificates", "err", err)
+				}
+				continue
+			}
+			// Real signal received; shut down
+			goto shutdown
+		case <-testStop:
+			// Test hook triggered; shut down
+			goto shutdown
+		}
+	}
+
+shutdown:
+	// Waiting for webhook deliveries can take up to a minute; a
+	// second interrupt or terminate signal stops that wait.
+	abort, stopWaiting := abortOnSignal(done, s.logger)
+	defer stopWaiting()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return errors.Join(serverErr, s.Shutdown(ctx, abort))
+}
 
 // abortOnSignal returns a context that is cancelled when sigs delivers an
 // interrupt or terminate signal. SIGHUP keeps its reload meaning and is
@@ -165,10 +176,6 @@ func abortOnSignal(sigs <-chan os.Signal, logger *log.Logger) (context.Context, 
 		}
 	}()
 	return ctx, cancel
-}
-
-func init() {
-	Command.Flags().BoolVarP(&syncHooks, "sync-hooks", "", false, "synchronize hooks for all repositories before running the server")
 }
 
 const updateHookExample = `#!/bin/sh

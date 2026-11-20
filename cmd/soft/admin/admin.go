@@ -18,12 +18,14 @@ import (
 // confirmed.
 var errRollbackNotConfirmed = errors.New("rollback not confirmed")
 
-var (
-	// rollbackYes skips the rollback confirmation prompt.
-	rollbackYes bool
-
-	// Command is the admin command.
-	Command = &cobra.Command{
+// NewCommand returns a new admin command with its subcommands.
+//
+// Each call builds a new command tree. Cobra keeps a subcommand's context
+// from its first run, and InitBackendContext stores the database and
+// backend in it, so a tree run twice would run the second time with the
+// first run's config and closed database.
+func NewCommand() *cobra.Command {
+	command := &cobra.Command{
 		Use:   "admin",
 		Short: "Administrate the server",
 		// A command without RunE shows its help for any arguments, so an
@@ -34,7 +36,7 @@ var (
 		},
 	}
 
-	migrateCmd = &cobra.Command{
+	migrateCmd := &cobra.Command{
 		Use:                "migrate",
 		Short:              "Migrate the database to the latest version",
 		Args:               cobra.NoArgs,
@@ -51,7 +53,9 @@ var (
 		}),
 	}
 
-	rollbackCmd = &cobra.Command{
+	// rollbackYes skips the rollback confirmation prompt.
+	var rollbackYes bool
+	rollbackCmd := &cobra.Command{
 		Use:   "rollback",
 		Short: "Rollback the database to the previous version",
 		Long: "Rollback the database to the previous version.\n\n" +
@@ -74,8 +78,9 @@ var (
 			return nil
 		}),
 	}
+	rollbackCmd.Flags().BoolVarP(&rollbackYes, "yes", "y", false, "roll back without asking for confirmation")
 
-	syncHooksCmd = &cobra.Command{
+	syncHooksCmd := &cobra.Command{
 		Use:                "sync-hooks",
 		Short:              "Update repository hooks",
 		Args:               cobra.NoArgs,
@@ -92,7 +97,15 @@ var (
 			return nil
 		}),
 	}
-)
+
+	command.AddCommand(
+		syncHooksCmd,
+		migrateCmd,
+		rollbackCmd,
+	)
+
+	return command
+}
 
 // confirm writes prompt to c's error output and reports whether the line
 // read from c's input is "y" or "yes". No input, as when stdin is not a
@@ -106,13 +119,4 @@ func confirm(c *cobra.Command, prompt string) bool {
 	default:
 		return false
 	}
-}
-
-func init() {
-	rollbackCmd.Flags().BoolVarP(&rollbackYes, "yes", "y", false, "roll back without asking for confirmation")
-	Command.AddCommand(
-		syncHooksCmd,
-		migrateCmd,
-		rollbackCmd,
-	)
 }
