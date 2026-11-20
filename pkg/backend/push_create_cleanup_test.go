@@ -224,3 +224,89 @@ func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
 	is.NoErr(err) // the pushed ref is kept
 	is.True(strings.Contains(logs.String(), "wrote refs to the repository after its row was deleted"))
 }
+
+// chmodOnFailureLog is a log sink that makes dir writable again when the
+// delete logs that it could not remove the repository directory, before the
+// log call returns, so the retry that follows can succeed.
+type chmodOnFailureLog struct {
+	syncBuffer
+	dir  string
+	once sync.Once
+}
+
+func (w *chmodOnFailureLog) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "failed to delete repository directory") {
+		w.once.Do(func() { os.Chmod(w.dir, 0o755) }) //nolint:errcheck
+	}
+	return w.syncBuffer.Write(p)
+}
+
+// A reftable repository always has a file at refs/heads and a table, since
+// HEAD lives in the reftable, whether or not anything was pushed. That is
+// not a ref written after the delete: the retry goes on and removes the
+// directory. It used to stop at once and log that a push wrote refs.
+func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not prevent removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove the directory regardless of its mode")
+	}
+	probe := filepath.Join(t.TempDir(), "probe.git")
+	if err := exec.CommandContext(t.Context(), "git", "init", "--quiet", "--bare", "--ref-format=reftable", probe).Run(); err != nil {
+		t.Skipf("git cannot create reftable repositories: %v", err)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "init.defaultRefFormat")
+	t.Setenv("GIT_CONFIG_VALUE_0", "reftable")
+
+	is := is.New(t)
+	logs := &chmodOnFailureLog{}
+	be, cfg := newTestBackendWithLog(t, logs)
+	be.pushCreatedRetry = retryPolicy{first: time.Millisecond, total: time.Hour}
+	ctx := backendTestContext(be, cfg)
+	r, err := be.CreateRepository(ctx, "tables", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	dir := be.repoPath("tables")
+	_, err = os.Stat(filepath.Join(dir, "reftable", "tables.list"))
+	is.NoErr(err) // the repository is a reftable one
+	logs.dir = filepath.Join(dir, "objects")
+	is.NoErr(os.Chmod(logs.dir, 0o555))
+	t.Cleanup(func() { os.Chmod(logs.dir, 0o755) }) //nolint:errcheck
+
+	removed, err := be.RemovePushCreatedRepository(ctx, r)
+	is.NoErr(err)
+	is.True(removed)
+	_, err = os.Stat(dir)
+	is.True(os.IsNotExist(err)) // removed by the retry
+	is.True(!strings.Contains(logs.String(), "wrote refs"))
+}
+
+// refsWritten counts what was added or changed since the snapshot, never
+// what a removal took away.
+func TestRefsWritten(t *testing.T) {
+	loose := func(kv ...string) map[string]string {
+		m := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	before := refState{loose: loose("refs/heads", "reftable stub"), tables: "0x1.ref\n"}
+	for name, tc := range map[string]struct {
+		now  refState
+		want bool
+	}{
+		"unchanged":         {refState{loose: loose("refs/heads", "reftable stub"), tables: "0x1.ref\n"}, false},
+		"half removed":      {refState{loose: loose()}, false},
+		"new table":         {refState{loose: loose("refs/heads", "reftable stub"), tables: "0x1.ref\n0x2.ref\n"}, true},
+		"new loose ref":     {refState{loose: loose("refs/heads", "reftable stub", "refs/heads/main", "abc")}, true},
+		"changed loose ref": {refState{loose: loose("refs/heads", "other")}, true},
+		"packed-refs":       {refState{loose: loose(), packed: "abc refs/heads/main\n"}, true},
+		"unreadable":        {refState{loose: loose(), unreadable: true}, true},
+	} {
+		if got := refsWritten(before, tc.now); got != tc.want {
+			t.Errorf("%s: refsWritten = %v, want %v", name, got, tc.want)
+		}
+	}
+}

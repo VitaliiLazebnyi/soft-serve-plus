@@ -137,6 +137,10 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 		return false, nil
 	}
 
+	// What the refs look like before the delete, so the retry below can
+	// tell a ref written since from what was always there.
+	refs := readRefState(rp)
+
 	if testHookBeforePushCreatedDelete != nil {
 		testHookBeforePushCreatedDelete()
 	}
@@ -153,7 +157,7 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	case err != nil:
 		return false, err
 	}
-	d.removePushCreatedDir(name, rp)
+	d.removePushCreatedDir(name, rp, refs)
 	return true, nil
 }
 
@@ -189,16 +193,17 @@ var pushCreatedDirRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * 
 // after the push ended. Nothing else uses the directory meanwhile: while it
 // is there, its name can be neither created, imported nor renamed onto, and
 // a delete needs a row. That lingering git process can still write refs,
-// though, so a directory that has refs is left in place, without a row, and
-// reported at start-up rather than removed with what was pushed.
-func (d *Backend) removePushCreatedDir(name, rp string) {
+// though, so a directory whose refs changed since refs, read before the
+// delete, is left in place, without a row, and reported at start-up rather
+// than removed with what was pushed.
+func (d *Backend) removePushCreatedDir(name, rp string, refs refState) {
 	policy := d.pushCreatedRetry
 	var waited time.Duration
 	for wait := policy.first; ; wait *= 2 {
 		if _, err := os.Lstat(rp); errors.Is(err, fs.ErrNotExist) {
 			return
 		}
-		if refFilesLeft(rp) {
+		if refsWritten(refs, readRefState(rp)) {
 			d.logger.Error("a failed push wrote refs to the repository after its row was deleted; leaving its directory, which is reported at start-up", "repo", name, "path", rp)
 			return
 		}
@@ -214,33 +219,69 @@ func (d *Backend) removePushCreatedDir(name, rp string) {
 	}
 }
 
-// refFilesLeft reports whether the directory rp, of a repository partly
-// removed, still holds a ref: a file under refs or reftable, or a ref line
-// in packed-refs. It reads the files, not git, which would fail on a
-// directory half gone. Anything it cannot read counts as a ref.
-func refFilesLeft(rp string) bool {
-	for _, dir := range []string{"refs", "reftable"} {
-		found := false
-		err := filepath.WalkDir(filepath.Join(rp, dir), func(_ string, de fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !de.IsDir() {
-				found = true
-				return fs.SkipAll
+// refState is what a repository's ref storage holds on disk: the loose ref
+// files and their contents, packed-refs, and, for a reftable repository,
+// reftable/tables.list. A reftable repository always has a file at
+// refs/heads and a table, since HEAD lives in the reftable, so whether
+// refs exist cannot be told from the files alone; whether they changed
+// can.
+type refState struct {
+	loose  map[string]string
+	packed string
+	tables string
+	// unreadable is set when part of it could not be read.
+	unreadable bool
+}
+
+// readRefState reads the ref storage of the repository at rp. A file that
+// is gone is left out.
+func readRefState(rp string) refState {
+	st := refState{loose: map[string]string{}}
+	read := func(p string) string {
+		data, err := os.ReadFile(p)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			st.unreadable = true
+		}
+		return string(data)
+	}
+	st.packed = read(filepath.Join(rp, "packed-refs"))
+	st.tables = read(filepath.Join(rp, "reftable", "tables.list"))
+	err := filepath.WalkDir(filepath.Join(rp, "refs"), func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				st.unreadable = true
 			}
 			return nil
-		})
-		if found || (err != nil && !errors.Is(err, fs.ErrNotExist)) {
-			return true
 		}
+		if !de.IsDir() {
+			st.loose[p] = read(p)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		st.unreadable = true
 	}
-	data, err := os.ReadFile(filepath.Join(rp, "packed-refs"))
-	if err != nil {
-		return !errors.Is(err, fs.ErrNotExist)
+	return st
+}
+
+// refsWritten reports whether the ref storage now holds something it did not
+// at before: a loose ref that is new or changed, or a packed-refs or
+// tables.list that differs. What a removal took away does not count, so a
+// directory half removed is not mistaken for one written to. Anything that
+// cannot be read counts as written, so pushed refs are never removed by
+// mistake.
+func refsWritten(before, now refState) bool {
+	if now.unreadable {
+		return true
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "^") {
+	if now.packed != "" && now.packed != before.packed {
+		return true
+	}
+	if now.tables != "" && now.tables != before.tables {
+		return true
+	}
+	for p, content := range now.loose {
+		if old, ok := before.loose[p]; !ok || old != content {
 			return true
 		}
 	}
