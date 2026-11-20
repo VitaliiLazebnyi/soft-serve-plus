@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -38,19 +39,18 @@ func TestRemoveDaemonExportFiles(t *testing.T) {
 	}
 	is.NoErr(be.SetPrivate(ctx, "made-private", true))
 
-	scan, err := be.scanRepoDirs(ctx)
-	is.NoErr(err)
-	dirs := append(scan.repos, scan.orphans...)
-	n, err := removeDaemonExportFiles(dirs)
-	is.NoErr(err)
-	is.Equal(n, 3)
+	// Through the start-up check itself, so the orphans' files are seen to
+	// go too, and nothing is left for a second run.
+	var logs syncBuffer
+	be.logger = log.New(&logs)
+	be.CheckRepositoryDirs(ctx)
 	for _, f := range files {
 		_, err := os.Stat(f)
 		is.True(os.IsNotExist(err))
 	}
+	is.True(strings.Contains(logs.String(), "removed=3"))
 
-	// Nothing left: a second run removes nothing and fails nothing.
-	n, err = removeDaemonExportFiles(dirs)
+	n, err := removeDaemonExportFiles([]string{be.repoPath("public"), be.repoPath("orphan")})
 	is.NoErr(err)
 	is.Equal(n, 0)
 }

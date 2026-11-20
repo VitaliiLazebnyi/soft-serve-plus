@@ -21,7 +21,7 @@ const maxReportedOrphans = 20
 func (d *Backend) CheckRepositoryDirs(ctx context.Context) {
 	scan, err := d.scanRepoDirs(ctx)
 	if err != nil {
-		d.logger.Error("failed to scan the repository directories", "err", err)
+		d.logger.Error("failed to scan the repository directories; orphans are not reported, and git-daemon-export-ok files are not removed, so a stock git daemon or cgit may export repositories that are now private", "err", err)
 		return
 	}
 	d.reportOrphans(scan.orphans)
