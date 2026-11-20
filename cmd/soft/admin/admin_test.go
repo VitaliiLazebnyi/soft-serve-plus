@@ -15,7 +15,18 @@ import (
 // When an admin command fails, it still closes the database: cobra skips
 // the command's PersistentPostRunE, which closes it otherwise.
 func TestAdminErrorClosesDB(t *testing.T) {
-	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+	// Run twice, each with its own data path. Regression: the admin command
+	// tree was package-level, and cobra keeps a subcommand's context from
+	// its first run, so a second run used the first run's config and data
+	// path.
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, testAdminErrorClosesDB)
+	}
+}
+
+func testAdminErrorClosesDB(t *testing.T) {
+	dataPath := t.TempDir()
+	t.Setenv("SOFT_SERVE_DATA_PATH", dataPath)
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
@@ -33,6 +44,9 @@ func TestAdminErrorClosesDB(t *testing.T) {
 		t.Fatalf("admin rollback returned %v, want a rollback error", err)
 	}
 
+	if got := config.FromContext(rollback.Context()).DataPath; got != dataPath {
+		t.Errorf("rollback ran with data path %s, want this run's %s", got, dataPath)
+	}
 	dbx := db.FromContext(rollback.Context())
 	if dbx == nil {
 		t.Fatal("no database in the command context")
