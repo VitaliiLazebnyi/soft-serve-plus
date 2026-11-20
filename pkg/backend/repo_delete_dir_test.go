@@ -58,7 +58,7 @@ func TestDeleteRepositoryCommitFailureKeepsDirectory(t *testing.T) {
 
 // Once the row is gone the delete has happened: a directory that cannot be
 // removed is logged rather than reported as a failed delete, and nothing can
-// take the leftover directory over. Deleting the repository again removes it.
+// take the leftover directory over. It is an orphan, reported at start-up.
 func TestDeleteRepositoryDirectoryRemovalFailure(t *testing.T) {
 	// As in os/removeall_test.go: on Windows a mode only sets the read-only
 	// attribute, which does not stop removal, and root ignores the mode.
@@ -102,17 +102,22 @@ func TestDeleteRepositoryDirectoryRemovalFailure(t *testing.T) {
 		t.Errorf("CreateRepository over the leftover directory => %v, want ErrRepoExist", err)
 	}
 
-	// Retrying the delete removes it, and the name is free again.
+	// A delete needs the row, so deleting again leaves the directory; it
+	// is reported at start-up as an orphan.
 	if err := os.Chmod(objects, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := be.DeleteRepository(ctx, "delrepo"); err != nil {
-		t.Fatalf("retry DeleteRepository => %v", err)
+	if err := be.DeleteRepository(ctx, "delrepo"); !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatalf("second DeleteRepository => %v, want ErrRepoNotFound", err)
 	}
-	if _, err := os.Stat(rp); !os.IsNotExist(err) {
-		t.Errorf("leftover directory still there after retry (stat err: %v)", err)
+	if _, err := os.Stat(rp); err != nil {
+		t.Errorf("leftover directory removed by a delete without a row: %v", err)
 	}
-	if _, err := be.CreateRepository(ctx, "delrepo", owner, proto.RepositoryOptions{}); err != nil {
-		t.Errorf("CreateRepository after cleanup => %v", err)
+	orphans, err := be.OrphanRepositoryDirs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != rp {
+		t.Errorf("OrphanRepositoryDirs => %q, want [%q]", orphans, rp)
 	}
 }

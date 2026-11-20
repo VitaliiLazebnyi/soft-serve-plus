@@ -282,15 +282,9 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 		return nil, err
 	}
 
-	// The directory has no row until registerRepository records it.
-	defer d.repoDirs.hold(name)()
-
 	rp := d.repoPath(name)
 	if err := claimRepoPath(rp); err != nil {
 		return nil, err
-	}
-	if testHookRepoDirUnrecorded != nil {
-		testHookRepoDirUnrecorded(name)
 	}
 
 	if _, err := git.Init(rp, true); err != nil {
@@ -653,17 +647,10 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 		imp.lfsEndpoint, imp.lfs = lfsEndpoint, lfs.NewClient(ep)
 	}
 
-	// The directory has no row until importRepository records it, which
-	// is after the clone.
-	defer d.repoDirs.hold(name)()
-
 	// Claiming the directory is what serializes concurrent imports of one
 	// name: the second one fails here with ErrRepoExist.
 	if err := claimRepoPath(imp.path); err != nil {
 		return nil, err
-	}
-	if testHookRepoDirUnrecorded != nil {
-		testHookRepoDirUnrecorded(name)
 	}
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
@@ -813,19 +800,14 @@ var errRepoKept = errors.New("repository kept")
 // holds off collaborator, webhook and LFS rows for the repository and
 // changes to the row itself until the transaction ends, so none of those
 // can land between the check and the delete. Anything not in the database,
-// such as refs, is the caller's to order. With
-// keep set, a directory with no row is left alone rather than removed as an
-// orphan: the row the caller meant is gone, and the directory may belong to
-// a repository being created.
+// such as refs, is the caller's to order.
+//
+// A name with no row is proto.ErrRepoNotFound, whatever is on disk: a
+// directory without a row is left alone, and reported when the server
+// starts (see OrphanRepositoryDirs).
 func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(tx *db.Tx, m models.Repo) (bool, error)) error {
 	name = utils.SanitizeRepo(name)
 	rp := d.repoPath(name)
-
-	// Once the row is gone the directory is still there until it is removed
-	// below; the hold keeps a concurrent delete from taking it for an orphan
-	// and reporting a second successful delete. It is taken before the
-	// transaction: see removeOrphanRepoDir.
-	defer d.repoDirs.hold(name)()
 
 	// Build the webhook event before deleting. A repository whose directory is
 	// gone has no event, but its database row still has to go. An event that
@@ -864,8 +846,6 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// rowDeleted is set once the repository's row is deleted, and says the
 	// directory is to be removed after the commit.
 	var rowDeleted bool
-	// noRow is set when no row has the name.
-	var noRow bool
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The row is locked before anything is deleted. A rename that
 		// commits first then leaves no row with the name, rather than the
@@ -875,7 +855,6 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		// row by ON DELETE CASCADE.
 		repom, dberr := d.store.GetRepoByNameForUpdate(ctx, tx, name)
 		if dberr != nil {
-			noRow = errors.Is(dberr, db.ErrRecordNotFound)
 			return dberr
 		}
 		if keep != nil {
@@ -900,12 +879,6 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 		rowDeleted = true
 		return nil
 	}); err != nil {
-		// A directory with no row is an orphan; remove it. Only a missing
-		// row says so: on any other error, such as a cancelled context,
-		// the repository may well exist.
-		if noRow && keep == nil && d.repoPathExists(name) {
-			return d.removeOrphanRepoDir(ctx, name, 1)
-		}
 		return wrapRepoError(err)
 	}
 
@@ -915,11 +888,8 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 	// when the commit failed. The delete has happened once the row is gone,
 	// so a failure here is logged rather than returned. The leftover
 	// directory has no row: it cannot be created, imported or renamed over,
-	// and deleting the repository again removes it.
+	// and it is reported when the server starts.
 	if rowDeleted {
-		if testHookRepoDirUnrecorded != nil {
-			testHookRepoDirUnrecorded(name)
-		}
 		if err := d.removeRepoDir(rp); err != nil {
 			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 		}
@@ -974,10 +944,6 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		return err
 	}
 
-	// The moved directory has the new name before the row does, which is
-	// only once the transaction commits.
-	defer d.repoDirs.hold(newName)()
-
 	op := d.repoPath(oldName)
 	np := d.repoPath(newName)
 	if !d.repoPathExists(oldName) {
@@ -1015,9 +981,6 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 		if err := renameOntoClaim(op, np, &claimed); err != nil {
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
-		}
-		if testHookRepoDirUnrecorded != nil {
-			testHookRepoDirUnrecorded(newName)
 		}
 
 		return nil
@@ -1514,30 +1477,6 @@ func (d *Backend) repoPath(name string) string {
 	name = utils.SanitizeRepo(name)
 	rn := strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	return filepath.Join(filepath.Join(d.cfg.DataPath, "repos"), rn+".git")
-}
-
-// isOrphanRepoPath reports whether the directory of the repository named name,
-// which has no row, exists and is not the directory of any repository with a
-// row. A filesystem can lead the path of a different name to a repository's
-// directory: one that ignores case (macOS, Windows) or Unicode normalization
-// (APFS). Which names match depends on the filesystem, so every repository's
-// directory is compared, not only those of names that look alike.
-func (d *Backend) isOrphanRepoPath(ctx context.Context, tx *db.Tx, name string) (bool, error) {
-	fi, err := os.Lstat(d.repoPath(name))
-	if err != nil {
-		return false, nil //nolint:nilerr // no directory, nothing to remove
-	}
-	repos, err := d.store.GetAllRepos(ctx, tx)
-	if err != nil {
-		return false, err
-	}
-	for _, r := range repos {
-		rfi, err := os.Lstat(d.repoPath(r.Name))
-		if err == nil && os.SameFile(fi, rfi) {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // repoPathExists reports whether anything occupies the repository's directory,

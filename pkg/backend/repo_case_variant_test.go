@@ -97,9 +97,10 @@ func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 	is.True(!be.repoPathExists("other"))
 }
 
-// A directory with no row is still removed by a delete, so a leftover
-// directory can be cleaned up.
-func TestDeleteRepositoryRemovesOrphanDirectory(t *testing.T) {
+// A delete needs the row: a directory with no row is left in place and the
+// name reported as not found. It is reported when the server starts (see
+// OrphanRepositoryDirs). The delete used to remove it.
+func TestDeleteRepositoryLeavesOrphanDirectory(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -107,10 +108,9 @@ func TestDeleteRepositoryRemovesOrphanDirectory(t *testing.T) {
 	orphan := be.repoPath("orphan")
 	is.NoErr(os.MkdirAll(orphan, 0o755))
 
-	is.NoErr(be.DeleteRepository(ctx, "orphan"))
-	_, err := os.Stat(orphan)
-	is.True(os.IsNotExist(err))
 	is.True(errors.Is(be.DeleteRepository(ctx, "orphan"), proto.ErrRepoNotFound))
+	_, err := os.Stat(orphan)
+	is.NoErr(err)
 }
 
 // APFS ignores Unicode normalization as well as case, so the decomposed form
