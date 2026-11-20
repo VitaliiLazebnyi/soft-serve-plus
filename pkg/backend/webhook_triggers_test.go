@@ -125,7 +125,7 @@ func TestPostReceiveHookSendsBranchTagCreate(t *testing.T) {
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -139,7 +139,7 @@ func TestPostReceiveHookSendsBranchTagDelete(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: someSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 
@@ -153,7 +153,7 @@ func TestPostReceiveHookPlainUpdateSendsNoBranchTag(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: someSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -170,7 +170,7 @@ func TestPostReceiveHookSurvivesSendFailure(t *testing.T) {
 	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhooks")
 	is.NoErr(err)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -184,7 +184,7 @@ func TestPostReceiveHookUnknownUser(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "nobody")
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -304,7 +304,7 @@ func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
@@ -406,7 +406,7 @@ func TestPostReceiveHookSendsPushEvent(t *testing.T) {
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -422,7 +422,7 @@ func TestPostReceiveHookSendsBranchTagThenPush(t *testing.T) {
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -438,7 +438,7 @@ func TestPostReceiveHookSendsEventsForEachRef(t *testing.T) {
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
 	})
@@ -447,22 +447,6 @@ func TestPostReceiveHookSendsEventsForEachRef(t *testing.T) {
 		webhook.EventBranchTagCreate, webhook.EventPush,
 		webhook.EventBranchTagCreate, webhook.EventPush,
 	})
-}
-
-// The update hook sends no events: git runs it before it writes the ref, and
-// the ref may still be rejected, by git itself or by a later hook.
-func TestUpdateHookSendsNoEvents(t *testing.T) {
-	is := is.New(t)
-	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
-	commit := makeCommit(t, e.be.repoPath("repo"))
-
-	e.be.Update(e.ctx, io.Discard, io.Discard, "repo", hooks.HookArg{
-		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
-	})
-
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
 }
 
 // A push that deletes a branch sends branch_tag_delete and then a push event
@@ -474,7 +458,7 @@ func TestPostReceiveHookDeleteSendsBranchTagThenPush(t *testing.T) {
 	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
 		OldSha: commit, NewSha: zeroSha, RefName: "refs/heads/main",
 	}})
 
@@ -492,7 +476,7 @@ func TestPostReceiveHookSurvivesPushSendFailure(t *testing.T) {
 	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhooks")
 	is.NoErr(err)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -506,7 +490,7 @@ func TestPostReceiveHookUnknownRepository(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "missing", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "missing", []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -526,7 +510,7 @@ func TestPostReceiveHookIdentifiesUserByPublicKey(t *testing.T) {
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", string(ssh.MarshalAuthorizedKey(pub)))
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -541,7 +525,7 @@ func TestPostReceiveHookInvalidPublicKey(t *testing.T) {
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "not a key")
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -557,7 +541,7 @@ func TestPostReceiveHookUnknownPublicKey(t *testing.T) {
 	t.Setenv("SOFT_SERVE_PUBLIC_KEY", string(ssh.MarshalAuthorizedKey(whTestKey(t))))
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
@@ -575,7 +559,7 @@ func TestPostReceiveHookAnonymousPush(t *testing.T) {
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, "repo", []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, "repo", []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
@@ -622,7 +606,7 @@ func TestPostReceiveHookBothShasZeroIsCreate(t *testing.T) {
 	t.Setenv("SOFT_SERVE_USERNAME", "admin")
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 

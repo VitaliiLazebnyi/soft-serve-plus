@@ -2,7 +2,6 @@ package backend
 
 import (
 	"errors"
-	"io"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -58,7 +57,7 @@ func TestInactiveWebhookGetsNoEvents(t *testing.T) {
 	active := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
 	inactive := e.seedInactiveHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
 
-	e.be.PostReceive(e.ctx, io.Discard, io.Discard, e.repo.Name(), []hooks.HookArg{{
+	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))

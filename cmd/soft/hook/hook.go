@@ -32,9 +32,13 @@ var (
 	// hooksRunE runs a git hook. Git hooks read the config from the
 	// environment, based on $SOFT_SERVE_DATA_PATH, which the binary parses
 	// when it starts.
+	//
+	// The hooks generated now run pre-receive and update without this
+	// command (see hooks.GenerateHooks); repositories whose hooks were
+	// generated earlier still call it until "soft admin sync-hooks". For
+	// them it only runs the custom hook, and opens no database.
 	hooksRunE = cmd.CloseDBOnError(func(c *cobra.Command, args []string) error {
 		ctx := c.Context()
-		hks := backend.FromContext(ctx)
 		cfg := config.FromContext(ctx)
 
 		// This is set in the server before invoking git-receive-pack/git-upload-pack
@@ -77,21 +81,11 @@ var (
 				return fmt.Errorf("read %s hook input: %w", cmdName, err)
 			}
 
-			switch cmdName {
-			case hooks.PreReceiveHook:
-				hks.PreReceive(ctx, stdout, stderr, repoName, opts)
-			case hooks.PostReceiveHook:
-				hks.PostReceive(ctx, stdout, stderr, repoName, opts)
+			if cmdName == hooks.PostReceiveHook {
+				backend.FromContext(ctx).PostReceive(ctx, repoName, opts)
 			}
-		case hooks.UpdateHook:
-			// updateCmd takes exactly three arguments.
-			hks.Update(ctx, stdout, stderr, repoName, hooks.HookArg{
-				RefName: args[0],
-				OldSha:  args[1],
-				NewSha:  args[2],
-			})
 		case hooks.PostUpdateHook:
-			hks.PostUpdate(ctx, stdout, stderr, repoName, args...)
+			backend.FromContext(ctx).PostUpdate(ctx, repoName)
 		}
 
 		// Custom hooks
@@ -103,6 +97,16 @@ var (
 		return nil
 	})
 )
+
+// initBackend opens the database and the backend for the hooks that use
+// them, post-receive and post-update.
+func initBackend(c *cobra.Command, args []string) error {
+	if err := cmd.InitBackendContext(c, args); err != nil {
+		log.FromContext(c.Context()).Error("failed to initialize backend context", "err", err)
+		return errInternalServerError
+	}
+	return nil
+}
 
 // NewCommand returns a new hook command with its subcommands.
 //
@@ -116,21 +120,16 @@ func NewCommand() *cobra.Command {
 		Short:  "Run git server hooks",
 		Long:   "Handles Soft Serve Plus git server hooks.",
 		Hidden: true,
-		PersistentPreRunE: func(c *cobra.Command, args []string) error {
-			logger := log.FromContext(c.Context())
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
 			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
 			// in the working directory, which for a hook is the repository:
 			// opening the backend would create a data directory and an
-			// empty database inside it. The server always sets it.
+			// empty database inside it, and a custom hook would be looked
+			// for there. The server always sets it.
 			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
-				logger.Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
+				log.FromContext(c.Context()).Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
 				return ErrNoDataPath
 			}
-			if err := cmd.InitBackendContext(c, args); err != nil {
-				logger.Error("failed to initialize backend context", "err", err)
-				return errInternalServerError
-			}
-
 			return nil
 		},
 		PersistentPostRunE: func(c *cobra.Command, args []string) error {
@@ -164,14 +163,16 @@ func NewCommand() *cobra.Command {
 			RunE:  hooksRunE,
 		},
 		&cobra.Command{
-			Use:   hooks.PostReceiveHook,
-			Short: "Run git post-receive hook",
-			RunE:  hooksRunE,
+			Use:     hooks.PostReceiveHook,
+			Short:   "Run git post-receive hook",
+			PreRunE: initBackend,
+			RunE:    hooksRunE,
 		},
 		&cobra.Command{
-			Use:   hooks.PostUpdateHook,
-			Short: "Run git post-update hook",
-			RunE:  hooksRunE,
+			Use:     hooks.PostUpdateHook,
+			Short:   "Run git post-update hook",
+			PreRunE: initBackend,
+			RunE:    hooksRunE,
 		},
 	)
 

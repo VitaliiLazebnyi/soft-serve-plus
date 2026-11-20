@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 
 	"github.com/charmbracelet/soft-serve/git"
@@ -13,16 +12,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
-var _ hooks.Hooks = (*Backend)(nil)
-
 // PostReceive is called by the git post-receive hook.
 //
 // It sends the push and branch/tag webhooks. Git runs post-receive after it
 // writes the refs and passes it only the refs it actually updated, so a ref
 // that git or another hook rejected sends no events.
-//
-// It implements Hooks.
-func (d *Backend) PostReceive(ctx context.Context, _ io.Writer, _ io.Writer, repo string, args []hooks.HookArg) {
+func (d *Backend) PostReceive(ctx context.Context, repo string, args []hooks.HookArg) {
 	d.logger.Debug("post-receive hook called", "repo", repo, "args", args)
 	if len(args) == 0 {
 		return
@@ -100,28 +95,9 @@ func (d *Backend) pushUser(ctx context.Context) (proto.User, bool) {
 	return nil, true
 }
 
-// PreReceive is called by the git pre-receive hook.
-//
-// It implements Hooks.
-func (d *Backend) PreReceive(_ context.Context, _ io.Writer, _ io.Writer, repo string, args []hooks.HookArg) {
-	d.logger.Debug("pre-receive hook called", "repo", repo, "args", args)
-}
-
-// Update is called by the git update hook.
-//
-// It sends no webhooks: git runs it before it writes the ref, and the ref
-// may still be rejected. PostReceive sends them.
-//
-// It implements Hooks.
-func (d *Backend) Update(_ context.Context, _ io.Writer, _ io.Writer, repo string, arg hooks.HookArg) {
-	d.logger.Debug("update hook called", "repo", repo, "arg", arg)
-}
-
 // PostUpdate is called by the git post-update hook.
-//
-// It implements Hooks.
-func (d *Backend) PostUpdate(ctx context.Context, _ io.Writer, _ io.Writer, repo string, args ...string) {
-	d.logger.Debug("post-update hook called", "repo", repo, "args", args)
+func (d *Backend) PostUpdate(ctx context.Context, repo string) {
+	d.logger.Debug("post-update hook called", "repo", repo)
 
 	// Populate last-modified file.
 	if err := d.populateLastModified(ctx, repo); err != nil {
