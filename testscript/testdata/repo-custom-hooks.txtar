@@ -5,6 +5,12 @@
 # the stdin, arguments and environment git gives them. A failing pre-receive
 # or update hook refuses the push.
 
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# script and the expected outputs below. The hooks write LF, as git gives
+# them their input, so the files from here are made LF, and the hooks'
+# output is compared as written.
+[windows] dos2unix record.sh ssh-pre-receive.txt ssh-update.txt ssh-repo-update.txt ssh-post-update.txt http-pre-receive.txt http-update.txt http-post-update.txt
+
 mkdir out
 env HOOK_OUT=$WORK/out
 
@@ -45,7 +51,6 @@ exec git -C repo1 rev-parse HEAD
 cp stdout head1
 envfile HEAD1=head1
 
-[windows] dos2unix out/pre-receive out/update out/post-receive out/post-update out/repo-pre-receive out/repo-update
 cmpenv out/pre-receive ssh-pre-receive.txt
 cmpenv out/update ssh-update.txt
 cmpenv out/post-receive ssh-pre-receive.txt
@@ -62,7 +67,6 @@ exec git -C repo1 rev-parse HEAD
 cp stdout head2
 envfile HEAD2=head2
 git -C repo1 push http://user1:$UTOKEN@localhost:$HTTP_PORT/repo1 HEAD:master
-[windows] dos2unix out/pre-receive out/update out/post-receive out/post-update
 cmpenv out/pre-receive http-pre-receive.txt
 cmpenv out/update http-update.txt
 cmpenv out/post-receive http-pre-receive.txt
