@@ -131,15 +131,16 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 
 	// Checked with the gate held: no push can start until the repository
 	// is gone, so none can write a ref after this check.
+	// What the refs look like before the check for refs, so the retry
+	// below can tell a ref written since from what was always there: a
+	// lingering git process that writes one after the check is then still
+	// seen.
 	rp := d.repoPath(name)
+	refs := readRefState(rp)
 	if hasRefs(rp) {
 		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
 	}
-
-	// What the refs look like before the delete, so the retry below can
-	// tell a ref written since from what was always there.
-	refs := readRefState(rp)
 
 	if testHookBeforePushCreatedDelete != nil {
 		testHookBeforePushCreatedDelete()

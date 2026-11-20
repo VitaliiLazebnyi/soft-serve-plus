@@ -312,3 +312,45 @@ func TestRefsWritten(t *testing.T) {
 		}
 	}
 }
+
+// A ref file, or a directory of refs, that cannot be read counts as a ref
+// written: the retry must not remove what it could not check.
+func TestReadRefStateUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not prevent reading on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of their mode")
+	}
+	for name, path := range map[string]string{
+		"file":      filepath.Join("refs", "heads", "main"),
+		"directory": filepath.Join("refs", "heads", "team"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rp := t.TempDir()
+			p := filepath.Join(rp, path)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if name == "file" {
+				if err := os.WriteFile(p, []byte("abc\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.MkdirAll(filepath.Join(p, "x"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(p, 0o000); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(p, 0o755) }) //nolint:errcheck
+
+			st := readRefState(rp)
+			if !st.unreadable {
+				t.Errorf("readRefState of a repository with an unreadable %s: unreadable = false", name)
+			}
+			if !refsWritten(refState{loose: map[string]string{}}, st) {
+				t.Errorf("an unreadable %s does not count as a ref written", name)
+			}
+		})
+	}
+}
