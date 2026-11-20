@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -160,6 +161,70 @@ func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 	}
 
 	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+}
+
+// A push whose job does not fit in the repository's share of the queue
+// records each of its events as undelivered, with the reason, so they can
+// be redelivered.
+func TestAfterPushQueueFullRecordsUndelivered(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	release := make(chan struct{})
+	for range maxRepoDeliveries {
+		is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+	}
+	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() {}), enqueueRepoFull)
+
+	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
+	// Recorded before AfterPush returns: the blockers still hold the queue.
+	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
+	is.NoErr(err)
+	var got []webhook.Event
+	for _, d := range list {
+		full, err := e.be.WebhookDelivery(e.ctx, e.repo, id, d.ID)
+		is.NoErr(err)
+		is.Equal(full.RequestError.String, errRepoDeliveriesFull.Error())
+		is.Equal(full.ResponseStatus, 0)
+		got = append(got, d.Event)
+	}
+	is.Equal(got, []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+
+	close(release)
+	e.drainDeliveries(t)
+}
+
+// forEachPushEvent stops at the first ref once its context is done and says
+// how far it got, so the queue-full path can log what it left unrecorded.
+func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+	subs := pushSubscribers{webhook.EventPush: {{ID: 1}}}
+	refs := []hooks.HookArg{
+		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
+		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
+	}
+	ctx := e.be.webhookContext(e.ctx)
+
+	calls := 0
+	is.Equal(e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
+		calls++
+		return true
+	}), 2)
+	is.Equal(calls, 2)
+
+	cctx, cancel := context.WithCancel(ctx)
+	calls = 0
+	is.Equal(e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
+		calls++
+		cancel()
+		return true
+	}), 1)
+	is.Equal(calls, 1)
+	is.True(!strings.Contains(e.logs.String(), "error creating push webhook"))
 }
 
 // A push to a repository without webhooks for its events builds no payload

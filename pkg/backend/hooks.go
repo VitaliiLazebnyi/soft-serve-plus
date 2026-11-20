@@ -85,13 +85,20 @@ func (d *Backend) queuePushEvents(ctx context.Context, repo proto.Repository, us
 	}
 	if reason != nil {
 		// As for other events, a dropped event is recorded so it can be
-		// redelivered. ctx bounds the time spent building them.
-		d.forEachPushEvent(ctx, repo, user, refs, subs, func(whs []models.Webhook, ev webhook.EventPayload) bool {
+		// redelivered. ctx bounds the time spent building them, in the
+		// request path; the refs left when it runs out are logged.
+		done := d.forEachPushEvent(ctx, repo, user, refs, subs, func(whs []models.Webhook, ev webhook.EventPayload) bool {
+			if ctx.Err() != nil {
+				return false
+			}
 			if err := webhook.RecordUndelivered(bg, whs, ev, reason); err != nil {
 				d.logger.Error("dropped webhook event not recorded", "event", ev.Event(), "repo_id", ev.RepositoryID(), "err", err)
 			}
-			return ctx.Err() == nil
+			return true
 		})
+		if left := len(refs) - done; left > 0 {
+			d.logger.Error("dropped push webhook events not recorded: out of time", "repo_id", repo.ID(), "refs", len(refs), "refs_not_recorded", left, "err", ctx.Err())
+		}
 	}
 }
 
@@ -122,11 +129,14 @@ func (d *Backend) sendPushEvents(ctx context.Context, id int64, user proto.User,
 
 // forEachPushEvent builds, for each ref in order, the branch/tag event of a
 // created or deleted ref and then the push event, each only when it has
-// subscribers, and calls fn with them. It stops when fn returns false, and
-// returns how many refs it went through to the end. A payload that cannot
-// be built is logged and skipped.
+// subscribers, and calls fn with them. It stops when fn returns false or
+// ctx is done, and returns how many refs it went through to the end. A
+// payload that cannot be built is logged and skipped.
 func (d *Backend) forEachPushEvent(ctx context.Context, repo proto.Repository, user proto.User, refs []hooks.HookArg, subs pushSubscribers, fn func([]models.Webhook, webhook.EventPayload) bool) int {
 	for i, ref := range refs {
+		if ctx.Err() != nil {
+			return i
+		}
 		var ev webhook.Event
 		switch {
 		case git.IsZeroHash(ref.OldSha):
