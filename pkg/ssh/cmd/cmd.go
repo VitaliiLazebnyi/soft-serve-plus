@@ -203,6 +203,24 @@ func lookupFailed(ctx context.Context, logger *log.Logger, what string, err erro
 	return errLookupFailed
 }
 
+// errGitFailed is returned to the client when git failed on the server
+// reading or changing a repository, as when its refs are corrupt. The
+// cause stays in the server log: git's message can name server paths.
+var errGitFailed = errors.New("git failed on the server; the cause is in the server log")
+
+// gitFailed logs err, git's failure to do what in repository repo, and
+// returns errGitFailed for the client, as lookupFailed does for a failed
+// lookup. A git run the client canceled by going away is logged at Debug.
+func gitFailed(ctx context.Context, what, repo string, err error) error {
+	logger := log.FromContext(ctx)
+	if ctx.Err() != nil {
+		logger.Debug("git canceled", "what", what, "repo", repo, "err", err)
+	} else {
+		logger.Error("git failed", "what", what, "repo", repo, "err", err)
+	}
+	return errGitFailed
+}
+
 // checkIfServerAdmin is the authorization gate for global (non-repo-scoped)
 // commands such as `user` and `settings`. It allows server admins only.
 //

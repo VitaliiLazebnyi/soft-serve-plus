@@ -40,7 +40,7 @@ func tagListCommand() *cobra.Command {
 
 			tags, err := r.Tags()
 			if err != nil {
-				return err
+				return gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
 			for _, t := range tags {
 				// A ref name cannot hold C0 controls, but it can hold
@@ -78,7 +78,7 @@ func tagDeleteCommand() *cobra.Command {
 			tag := args[1]
 			tags, err := r.Tags()
 			if err != nil {
-				return err
+				return gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
 			var exists bool
 			for _, t := range tags {
@@ -95,15 +95,16 @@ func tagDeleteCommand() *cobra.Command {
 			// The event needs only the ID the ref holds. Reading the
 			// tagged commit would fail for a tag on a tree or a blob, or
 			// on a commit git cannot parse, and such a tag must still be
-			// deletable. Failures are returned, not logged: they are the
-			// client's to see.
+			// deletable. The tag was just listed, so a failure to read
+			// or delete it is the server's: it is logged, and the client
+			// gets a generic error.
 			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
-				return err
+				return gitFailed(ctx, "read tag", rr.Name(), err)
 			}
 
 			if err := r.DeleteTag(tag); err != nil {
-				return err
+				return gitFailed(ctx, "delete tag", rr.Name(), err)
 			}
 
 			// The tag is already deleted, so a failed event is logged rather

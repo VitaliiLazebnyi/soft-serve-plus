@@ -50,7 +50,7 @@ func blobCommand() *cobra.Command {
 			r = r.WithContext(ctx)
 
 			if ref == "" {
-				head, err := repoHead(r)
+				head, err := repoHead(cmd.Context(), repo, r)
 				if err != nil {
 					return err
 				}

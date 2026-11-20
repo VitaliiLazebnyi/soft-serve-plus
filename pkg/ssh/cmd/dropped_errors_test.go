@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -14,13 +18,17 @@ import (
 )
 
 // TestRefListingFailureIsReported breaks a repository's refs so that git
-// cannot list them. The commands that list branches or tags report git's
+// cannot list them. The commands that list branches or tags report a
 // failure instead of taking it for a repository without any: `branch
 // list` printed nothing, `branch delete` answered "reference does not
-// exist", and `branch default` refused the branch the same way.
+// exist", and `branch default` refused the branch the same way. The
+// client gets the generic errGitFailed; git's own message, which names
+// server paths, goes to the server log at Error, once.
 func TestRefListingFailureIsReported(t *testing.T) {
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
+	var logs bytes.Buffer
+	ctx = log.WithContext(ctx, log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel}))
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "r", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
@@ -41,9 +49,17 @@ func TestRefListingFailureIsReported(t *testing.T) {
 		{"tag", "delete", "r", "v1"},
 		{"info", "r"},
 	} {
-		out, _, err := runRepoOutput(t, ownerCtx, args...)
-		if err == nil || errors.Is(err, git.ErrReferenceNotExist) {
-			t.Errorf("%v: err = %v, output %q; want git's failure", args, err, out)
+		logs.Reset()
+		out, stderr, err := runRepoOutput(t, ownerCtx, args...)
+		if !errors.Is(err, errGitFailed) {
+			t.Errorf("%v: err = %v, output %q; want %v", args, err, out, errGitFailed)
+		}
+		// git reports "unexpected line in ./packed-refs".
+		if client := out + stderr + fmt.Sprint(err); strings.Contains(client, "unexpected line in") {
+			t.Errorf("%v: git's message reached the client: %q", args, client)
+		}
+		if n := strings.Count(logs.String(), "unexpected line in"); n != 1 || !strings.Contains(logs.String(), "ERRO") {
+			t.Errorf("%v: want git's message logged once at Error, got %d, log:\n%q", args, n, logs.String())
 		}
 	}
 }

@@ -43,7 +43,7 @@ func branchListCommand() *cobra.Command {
 
 			branches, err := r.Branches()
 			if err != nil {
-				return err
+				return gitFailed(cmd.Context(), "list branches", rr.Name(), err)
 			}
 			for _, b := range branches {
 				// A ref name cannot hold C0 controls, but it can hold
@@ -73,7 +73,7 @@ func branchDefaultCommand() *cobra.Command {
 
 			switch len(args) {
 			case 1:
-				head, err := repoHead(r)
+				head, err := repoHead(cmd.Context(), rr, r)
 				if err != nil {
 					return err
 				}
@@ -91,7 +91,7 @@ func branchDefaultCommand() *cobra.Command {
 				branch := args[1]
 				branches, err := r.Branches()
 				if err != nil {
-					return err
+					return gitFailed(ctx, "list branches", rr.Name(), err)
 				}
 				var exists bool
 				for _, b := range branches {
@@ -168,7 +168,7 @@ func branchDeleteCommand() *cobra.Command {
 			branch := args[1]
 			branches, err := r.Branches()
 			if err != nil {
-				return err
+				return gitFailed(ctx, "list branches", rr.Name(), err)
 			}
 			var exists bool
 			for _, b := range branches {

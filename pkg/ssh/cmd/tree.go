@@ -37,7 +37,7 @@ func treeCommand() *cobra.Command {
 			r = r.WithContext(ctx)
 
 			if ref == "" {
-				head, err := repoHead(r)
+				head, err := repoHead(cmd.Context(), rr, r)
 				if err != nil {
 					return err
 				}

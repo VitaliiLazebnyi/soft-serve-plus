@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -60,7 +61,7 @@ func RepoCommand() *cobra.Command {
 				// that does not exist, has no default branch to show.
 				head, err := r.HEAD()
 				if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
-					return err
+					return gitFailed(ctx, "read HEAD", rr.Name(), err)
 				}
 
 				var owner proto.User
@@ -73,11 +74,11 @@ func RepoCommand() *cobra.Command {
 
 				branches, err := r.Branches()
 				if err != nil {
-					return err
+					return gitFailed(ctx, "list branches", rr.Name(), err)
 				}
 				tags, err := r.Tags()
 				if err != nil {
-					return err
+					return gitFailed(ctx, "list tags", rr.Name(), err)
 				}
 
 				// project name and description are optional, handle trailing
@@ -133,18 +134,18 @@ func RepoCommand() *cobra.Command {
 // default branch.
 var errRepoEmpty = errors.New("repository is empty")
 
-// repoHead returns the repository's HEAD reference, the default branch. An
+// repoHead returns the repository r of rr's HEAD reference, the default branch. An
 // empty repository, or a HEAD that names a branch that does not exist, such
 // as in a mirror whose remote renamed its default branch, gets an error that
 // says so rather than "reference does not exist".
-func repoHead(r *git.Repository) (*git.Reference, error) {
+func repoHead(ctx context.Context, rr proto.Repository, r *git.Repository) (*git.Reference, error) {
 	head, err := r.HEAD()
 	if !errors.Is(err, git.ErrReferenceNotExist) {
 		return head, err
 	}
 	switch bs, err := r.Branches(); {
 	case err != nil:
-		return nil, err
+		return nil, gitFailed(ctx, "list branches", rr.Name(), err)
 	case len(bs) == 0:
 		return nil, errRepoEmpty
 	}
