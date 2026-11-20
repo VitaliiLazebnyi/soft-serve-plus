@@ -76,10 +76,25 @@ func TestPushRefs(t *testing.T) {
 }
 
 // Refs files a stopped server left behind are removed at the next start;
-// other files in the directory are not.
+// other files in the directory are not. A data path with glob characters in
+// its name is a plain path. Regression (review round 2): the sweep globbed
+// the whole path, so a data path containing "[x]" matched nothing.
 func TestRemoveStalePushRefs(t *testing.T) {
+	glob := "data [x] *?"
+	if runtime.GOOS == "windows" {
+		// Windows file names cannot hold * or ?.
+		glob = "data [x]"
+	}
+	for name, dir := range map[string]string{"plain": "data", "glob characters": glob} {
+		t.Run(name, func(t *testing.T) {
+			testRemoveStalePushRefs(t, filepath.Join(t.TempDir(), dir))
+		})
+	}
+}
+
+func testRemoveStalePushRefs(t *testing.T, dataPath string) {
 	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
+	cfg.DataPath = dataPath
 	if n, err := RemoveStalePushRefs(cfg); n != 0 || err != nil {
 		t.Fatalf("RemoveStalePushRefs without a directory = %d, %v", n, err)
 	}
@@ -106,6 +121,35 @@ func TestRemoveStalePushRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Errorf("other file removed: %v", err)
+	}
+}
+
+// A push refs directory that already exists with wider permissions, from an
+// older server or an operator, is made private to the server's user again.
+func TestNewPushRefsTightensDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes mean nothing on Windows")
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	dir := PushRefsDir(cfg)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewPushRefs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Remove() //nolint: errcheck
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("push refs directory mode %v, want 0700", fi.Mode().Perm())
 	}
 }
 

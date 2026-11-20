@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -48,6 +49,14 @@ func NewPushRefs(cfg *config.Config) (*PushRefs, error) {
 	dir := PushRefsDir(cfg)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create push refs directory: %w", err)
+	}
+	// MkdirAll leaves an existing directory's mode alone; one made wider,
+	// by an older server or by hand, is made private again. Windows has
+	// no such modes.
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("make push refs directory private: %w", err)
+		}
 	}
 	f, err := os.CreateTemp(dir, pushRefsPattern)
 	if err != nil {
@@ -92,14 +101,23 @@ func (p *PushRefs) Remove() error {
 // that stopped before it could remove them, and returns how many it
 // removed. The server calls it at start, before any push can create one.
 func RemoveStalePushRefs(cfg *config.Config) (int, error) {
-	paths, err := filepath.Glob(filepath.Join(PushRefsDir(cfg), pushRefsPattern))
+	// The names are matched, not the whole path: the data path is a plain
+	// path, whatever characters it has.
+	dir := PushRefsDir(cfg)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("find stale push refs files: %w", err)
 	}
 	var errs []error
 	n := 0
-	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, e := range entries {
+		if ok, _ := filepath.Match(pushRefsPattern, e.Name()); !ok || e.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 			continue
 		}
