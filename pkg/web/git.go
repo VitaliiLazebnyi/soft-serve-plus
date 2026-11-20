@@ -867,7 +867,7 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 	cmd.JoinStdin = true
 	cmd.Stdout = w
 
-	err := service.Handler(ctx, cmd)
+	err := runService(ctx, service, cmd)
 	if service == git.ReceivePackService {
 		if err == nil {
 			if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
@@ -890,6 +890,13 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		}
 		return
 	}
+}
+
+// runService runs a service RPC's git. It is a variable so a test can stand
+// in for git, as for a push whose client went away after its refs were
+// updated.
+var runService = func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
+	return service.Handler(ctx, cmd)
 }
 
 // newPushRefs returns the file a push's post-receive hook writes its refs
