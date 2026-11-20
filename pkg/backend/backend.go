@@ -56,8 +56,9 @@ const noReplaceObjectsEnv = "GIT_NO_REPLACE_OBJECTS"
 
 // New returns a new Soft Serve backend.
 //
-// It sets GIT_NO_REPLACE_OBJECTS for the process, so every git process the
-// server and its hooks start reads objects as they are stored. A
+// New sets GIT_NO_REPLACE_OBJECTS=1 in the environment of the whole
+// process, a side effect beyond the backend it returns, so every git
+// process the server and its hooks start reads objects as they are stored. A
 // refs/replace ref, which anyone who may push can push and a --mirror
 // import fetches, would otherwise change what the server shows of a
 // repository (trees, blobs, logs, READMEs, webhook payloads), while

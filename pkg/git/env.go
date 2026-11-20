@@ -2,6 +2,9 @@ package git
 
 import "strings"
 
+// noReplaceObjects makes git ignore refs/replace (see serviceEnv).
+const noReplaceObjects = "GIT_NO_REPLACE_OBJECTS=1"
+
 // softServeEnvPrefix is the prefix of the variables Soft Serve passes to git
 // and its hooks.
 const softServeEnvPrefix = "SOFT_SERVE_"
@@ -28,19 +31,25 @@ var inheritedSoftServeEnvPrefixes = []string{
 
 // serviceEnv returns the environment for a git service process: the server's
 // environment without the SOFT_SERVE_* variables a caller is meant to set,
-// followed by extra.
+// then GIT_NO_REPLACE_OBJECTS=1, then extra.
+//
+// GIT_NO_REPLACE_OBJECTS makes the service and its hooks read objects as
+// they are stored, ignoring refs/replace, whether or not the server's own
+// environment has it yet (backend.New sets it for the process): a hook
+// builds webhook payloads from commits a pusher could otherwise replace.
 //
 // Without this, a SOFT_SERVE_USERNAME or SOFT_SERVE_PUBLIC_KEY left in the
 // server's environment would reach the hooks whenever the request does not
 // set it itself (an anonymous or keyless push), and the push would be
 // attributed to that user.
 func serviceEnv(environ, extra []string) []string {
-	env := make([]string, 0, len(environ)+len(extra))
+	env := make([]string, 0, len(environ)+1+len(extra))
 	for _, kv := range environ {
 		if keepInheritedEnv(kv) {
 			env = append(env, kv)
 		}
 	}
+	env = append(env, noReplaceObjects)
 	return append(env, extra...)
 }
 
