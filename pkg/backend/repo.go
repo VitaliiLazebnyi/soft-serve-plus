@@ -1044,14 +1044,17 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	// renamed is the row of the repository renamed, read and locked in the
 	// transaction.
 	var renamed models.Repo
+	// moved is set once the directory is at np.
+	moved := false
 
-	// The directory is moved inside the transaction, and the move is not
-	// undone if the transaction fails. Cancelling ctx after the move, as a
-	// client disconnecting does, would roll the new name back under the moved
-	// directory, so the rename and its event run to the end once started.
+	// The directory is moved inside the transaction, and moved back if the
+	// transaction fails, as when the commit does. Cancelling ctx after the
+	// move, as a client disconnecting does, would roll the new name back
+	// under the moved directory, so the rename and its event run to the end
+	// once started.
 	ctx = context.WithoutCancel(ctx)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The directory checks above find a repository whose name differs
 		// only in case on a case-insensitive filesystem, so the row decides:
 		// with no row named oldName this fails before the directory moves.
@@ -1068,9 +1071,36 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 			d.logger.Error("failed to move repository", "repo", oldName, "err", err)
 			return errRepoUpdate
 		}
+		moved = true
 
 		return nil
-	}); err != nil {
+	})
+	if d.renameTxDone != nil {
+		err = d.renameTxDone(err)
+	}
+	if err != nil && moved {
+		// A COMMIT whose answer was lost, as when the connection drops
+		// during it, can have committed. The row decides where the
+		// directory belongs.
+		switch name, cerr := d.renamedRowName(ctx, renamed.ID); {
+		case cerr != nil:
+			d.logger.Error("rename failed and its outcome is unknown; leaving the repository directory where it is, it is reported at start-up if it has no row",
+				"repo", oldName, "path", np, "err", err, "lookup_err", cerr)
+			return wrapRepoError(err)
+		case name == newName:
+			d.logger.Warn("rename committed although its transaction reported an error", "repo", oldName, "new", newName, "err", err)
+			err = nil
+		case name == oldName:
+			d.moveRepoDirBack(oldName, op, np)
+		default:
+			// Renamed again by another session since: the directory
+			// belongs with neither name this call knows of.
+			d.logger.Error("rename failed and the repository now has another name; leaving its directory where it is, it is reported at start-up",
+				"repo", oldName, "row_name", name, "path", np, "err", err)
+			return wrapRepoError(err)
+		}
+	}
+	if err != nil {
 		if claimed {
 			os.Remove(np) //nolint:errcheck
 		}
@@ -1107,6 +1137,62 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 
 	d.sendAfterChange(ctx, wh)
 	return nil
+}
+
+// renamedRowCheckTimeout bounds how long renamedRowName takes: on Postgres
+// the wait for the row's lock and the locked read, on SQLite the plain read.
+const renamedRowCheckTimeout = time.Minute
+
+// renamedRowName returns the name in the row of the repository id, after a
+// rename whose transaction reported an error, to tell whether it committed
+// after all. The row is read locked, in a transaction of its own: on
+// Postgres a COMMIT still in flight on the lost connection, waiting on
+// synchronous replication say, holds the row's lock and is invisible to a
+// plain read until it ends; the locked read waits for it, so it sees the
+// row as that COMMIT leaves it.
+//
+// On SQLite the row is read plainly. A SQLite rename fails at its COMMIT or
+// not at all, and has nothing in flight to wait for once it returned; a
+// write transaction would only take the database's write lock, and another
+// writer holding it past busy_timeout would turn a move back into leaving
+// the directory.
+func (d *Backend) renamedRowName(ctx context.Context, id int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, renamedRowCheckTimeout)
+	defer cancel()
+	if d.db.DriverName() != "postgres" {
+		m, err := d.store.GetRepoByID(ctx, d.db, id)
+		return m.Name, err
+	}
+	var name string
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		m, err := d.store.GetRepoByIDForUpdate(ctx, tx, id)
+		name = m.Name
+		return err
+	})
+	return name, err
+}
+
+// moveBackAttempts bounds how often moveRepoDirBack tries to move a
+// directory back on Windows, where a rename fails while any file in the
+// directory is open, as a git process still running can keep one.
+const moveBackAttempts = 5
+
+// moveRepoDirBack moves the directory of the repository oldName from np,
+// where a rename whose transaction then failed moved it, back to op, where
+// its row says it is. If that fails too, the directory stays at np without
+// a row: it is not served, it is reported when the server starts, and
+// nothing removes it.
+func (d *Backend) moveRepoDirBack(oldName, op, np string) {
+	move := func() error { return withRepoParent(op, func() error { return os.Rename(np, op) }) }
+	err := move()
+	for wait, i := 50*time.Millisecond, 1; err != nil && runtime.GOOS == "windows" && i < moveBackAttempts; wait, i = wait*2, i+1 {
+		time.Sleep(wait)
+		err = move()
+	}
+	if err != nil {
+		d.logger.Error("rename failed and the repository directory could not be moved back; move it back by hand",
+			"repo", oldName, "path", np, "want", op, "err", err)
+	}
 }
 
 // Repositories returns every repository.

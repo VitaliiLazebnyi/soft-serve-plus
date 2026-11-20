@@ -11,6 +11,11 @@ import (
 type RepositoryStore interface {
 	GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error)
 	GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
+	// GetRepoByIDForUpdate is GetRepoByID that also locks the row until the
+	// transaction ends, on Postgres, as GetRepoByNameForUpdate does. It
+	// waits for a transaction that holds the row's lock to end, so it reads
+	// the row as that transaction leaves it.
+	GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
 	// GetRepoByNameForUpdate is GetRepoByName that also locks the row until
 	// the transaction ends, on Postgres, with FOR UPDATE: the only row lock
 	// that also holds off the key-share lock a foreign key check takes, so
