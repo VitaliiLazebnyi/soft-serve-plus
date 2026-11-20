@@ -1139,8 +1139,8 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	return nil
 }
 
-// renamedRowCheckTimeout bounds how long renamedRowName waits for the
-// row's lock.
+// renamedRowCheckTimeout bounds how long renamedRowName takes: on Postgres
+// the wait for the row's lock and the locked read, on SQLite the plain read.
 const renamedRowCheckTimeout = time.Minute
 
 // renamedRowName returns the name in the row of the repository id, after a

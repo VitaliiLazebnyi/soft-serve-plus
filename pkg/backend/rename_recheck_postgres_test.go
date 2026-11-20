@@ -74,3 +74,25 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 	_, err = r.Open()
 	is.NoErr(err)
 }
+
+// On Postgres too, when the outcome of a rename cannot be read either, the
+// directory stays where it is rather than risk moving it away from its row.
+// The re-check's locked lookup fails here; newTestBackend is SQLite only
+// and never reaches it.
+func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectoryPostgres(t *testing.T) {
+	is := is.New(t)
+	e := newPostgresWebhookEnv(t)
+	e.be.store = failingByIDStore{Store: e.be.store}
+	e.be.renameTxDone = func(err error) error {
+		if err == nil {
+			return errors.New("driver: bad connection")
+		}
+		return err
+	}
+
+	is.True(e.be.RenameRepository(e.ctx, "repo", "new") != nil)
+	_, err := os.Stat(filepath.Join(e.be.repoPath("new"), "HEAD"))
+	is.NoErr(err) // where the committed row puts it
+	_, err = os.Lstat(e.be.repoPath("repo"))
+	is.True(os.IsNotExist(err))
+}
