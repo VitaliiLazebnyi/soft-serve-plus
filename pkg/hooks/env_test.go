@@ -63,6 +63,7 @@ func TestEnv(t *testing.T) {
 	cfg.DataPath = filepath.Join(t.TempDir(), "data")
 	repoPath := "SOFT_SERVE_REPO_PATH=" + filepath.Join(cfg.DataPath, "repos", "repo.git")
 	logPath := "SOFT_SERVE_LOG_PATH=" + filepath.Join(cfg.DataPath, "log", "hooks.log")
+	hookConfig := "SOFT_SERVE_HOOK_CONFIG=" + filepath.Join(cfg.DataPath, "hook-config.yaml")
 
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -81,23 +82,23 @@ func TestEnv(t *testing.T) {
 	}{{
 		name: "ssh",
 		req:  Request{Transport: TransportSSH, Repo: "repo", User: testUser{}, PublicKey: pk, Protocol: "version=2"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUBLIC_KEY=" + key, "SOFT_SERVE_USERNAME=alice", "GIT_PROTOCOL=version=2"},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUBLIC_KEY=" + key, "SOFT_SERVE_USERNAME=alice", hookConfig, "GIT_PROTOCOL=version=2"},
 	}, {
 		name: "ssh keyless anonymous",
 		req:  Request{Transport: TransportSSH, Repo: "repo"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUBLIC_KEY="},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUBLIC_KEY=", hookConfig},
 	}, {
 		name: "http",
 		req:  Request{Transport: TransportHTTP, Repo: "repo", User: testUser{}, Protocol: "version=2:foo"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_USERNAME=alice", "GIT_PROTOCOL=version=2:foo"},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_USERNAME=alice", hookConfig, "GIT_PROTOCOL=version=2:foo"},
 	}, {
 		name: "http anonymous",
 		req:  Request{Transport: TransportHTTP, Repo: "repo"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, hookConfig},
 	}, {
 		name: "refs",
 		req:  Request{Transport: TransportHTTP, Repo: "repo", Refs: &PushRefs{path: "/tmp/refs"}},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUSH_REFS=/tmp/refs"},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_PUSH_REFS=/tmp/refs", hookConfig},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := withoutServerConfig(t, cfg, Env(cfg, tc.req))

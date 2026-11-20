@@ -140,8 +140,9 @@ func NewCommand() *cobra.Command {
 		},
 	}
 
-	// The --config flag is deprecated and ignored: git hooks read the
-	// config from the environment, based on $SOFT_SERVE_DATA_PATH.
+	// The --config flag is deprecated and ignored: a hook reads the
+	// server's config from the file $SOFT_SERVE_HOOK_CONFIG names (see
+	// hooks.WriteConfig).
 	var configPath string
 	command.PersistentFlags().StringVar(&configPath, "config", "", "path to config file (deprecated)")
 	_ = command.PersistentFlags().MarkDeprecated("config", "it is ignored; run \"soft admin sync-hooks\" to regenerate the hooks without it")
