@@ -109,25 +109,23 @@ func (*Store) SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name stri
 	return affected(h.ExecContext(ctx, query, isMirror, name))
 }
 
-// SetRepoMirrorSyncByName implements store.Store. It leaves
+// SetRepoMirrorSyncByID implements store.Store. It leaves
 // updated_at alone: a sync is not a change made to the repository's settings.
 //
 // The error is text git and the remote wrote, so it is stored as valid UTF-8
 // without NUL bytes, which Postgres refuses in a TEXT column: bytes that are
 // not UTF-8 become U+FFFD and NULs are dropped.
-func (*Store) SetRepoMirrorSyncByName(ctx context.Context, h db.Handler, name string, syncErr string) error {
-	name = utils.SanitizeRepo(name)
-	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE name = ?;"
+func (*Store) SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64, syncErr string) error {
+	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE id = ?;"
 	if syncErr != "" {
-		query = "UPDATE repos SET mirror_error = ? WHERE name = ?;"
+		query = "UPDATE repos SET mirror_error = ? WHERE id = ?;"
 		syncErr = utils.StorableText(syncErr)
 		if syncErr == "" {
 			// Still a failure, though nothing of its text was kept.
 			syncErr = "\uFFFD"
 		}
 	}
-	_, err := h.ExecContext(ctx, h.Rebind(query), syncErr, name)
-	return err
+	return affected(h.ExecContext(ctx, h.Rebind(query), syncErr, id))
 }
 
 // SetRepoDescriptionByName implements store.Store.

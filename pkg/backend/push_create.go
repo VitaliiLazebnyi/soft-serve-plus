@@ -155,7 +155,7 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	// The rest is checked in the transaction that deletes the row, so a
 	// setting, collaborator or webhook added meanwhile, or another
 	// repository now under the name, is seen.
-	err := d.deleteRepository(ctx, name, func(tx *db.Tx, m models.Repo) (bool, error) {
+	err := d.deleteRepository(ctx, name, 0, func(tx *db.Tx, m models.Repo) (bool, error) {
 		return d.pushCreatedRepositoryUsed(ctx, tx, m, created)
 	})
 	switch {

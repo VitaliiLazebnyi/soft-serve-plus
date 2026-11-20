@@ -247,7 +247,11 @@ func TestSyncMirrorWorkerAfterStop(t *testing.T) {
 	var logs syncBuffer
 	stopped, stop := context.WithCancel(ctx)
 	stop()
-	syncMirrorWorker(stopped, config.FromContext(ctx), log.New(&logs), be, "m")
+	m, err := be.Repository(ctx, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncMirrorWorker(stopped, config.FromContext(ctx), log.New(&logs), be, m)
 
 	if fetched {
 		t.Error("a worker started after the stop fetched")

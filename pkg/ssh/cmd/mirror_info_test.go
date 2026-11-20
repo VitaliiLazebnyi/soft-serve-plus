@@ -32,7 +32,9 @@ func TestRepoInfoMirrorSync(t *testing.T) {
 		t.Errorf("a mirror never synced shows a sync: %q", out)
 	}
 
-	is.NoErr(be.RecordMirrorSync(ctx, "m", errors.New("fetch failed:\nremote: boom"+escapes)))
+	m, err := be.Repository(ctx, "m")
+	is.NoErr(err)
+	is.NoErr(be.RecordMirrorSync(ctx, m, errors.New("fetch failed:\nremote: boom"+escapes)))
 	out := info(ownerCtx)
 	assertNoControls(t, out)
 	if !strings.Contains(out, "Last Sync Error: fetch failed: remote: boom") {
@@ -42,7 +44,7 @@ func TestRepoInfoMirrorSync(t *testing.T) {
 		t.Errorf("a reader sees the error: %q", out)
 	}
 
-	is.NoErr(be.RecordMirrorSync(ctx, "m", nil))
+	is.NoErr(be.RecordMirrorSync(ctx, m, nil))
 	out = info(ownerCtx)
 	if !strings.Contains(out, "Last Sync: ") || strings.Contains(out, "Last Sync Error") {
 		t.Errorf("after a sync that succeeded: %q", out)
