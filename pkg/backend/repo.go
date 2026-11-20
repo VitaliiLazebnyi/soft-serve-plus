@@ -480,18 +480,6 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		if err := os.WriteFile(filepath.Join(rp, "description"), []byte(opts.Description), fs.ModePerm); err != nil {
-			d.logger.Error("failed to write description", "repo", name, "err", err)
-			return err
-		}
-
-		if !opts.Private {
-			if err := os.WriteFile(filepath.Join(rp, "git-daemon-export-ok"), []byte{}, fs.ModePerm); err != nil {
-				d.logger.Error("failed to write git-daemon-export-ok", "repo", name, "err", err)
-				return err
-			}
-		}
-
 		return hooks.GenerateHooks(ctx, d.cfg, name)
 	}); err != nil {
 		d.logger.Debug("failed to create repository in database", "err", err)
@@ -1364,41 +1352,15 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg re
 func (d *Backend) SetDescription(ctx context.Context, name string, desc string) error {
 	name = utils.SanitizeRepo(name)
 	desc = utils.Sanitize(desc)
-	rp := d.repoPath(name)
-
-	// The description file is written inside the transaction and is not
-	// restored if the transaction fails, so cancelling ctx, as a client
-	// disconnecting does, must not roll the row back once the file is written.
-	ctx = context.WithoutCancel(ctx)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		// The row is written first and the file last, so a failure writing
-		// the file rolls the row back and the two stay in step. A
-		// repository with no row has its file left alone.
-		if err := d.store.SetRepoDescriptionByName(ctx, tx, name, desc); err != nil {
-			return err
-		}
-
-		// The raw error carries the server data path, so log it and return
-		// a generic one.
-		if err := os.WriteFile(filepath.Join(rp, "description"), []byte(desc), fs.ModePerm); err != nil {
-			d.logger.Error("failed to write description", "repo", name, "err", err)
-			return errRepoUpdate
-		}
-		return nil
+		return d.store.SetRepoDescriptionByName(ctx, tx, name, desc)
 	}))
 }
 
 // SetPrivate sets the private flag of a repository.
 func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) error {
 	name = utils.SanitizeRepo(name)
-	rp := d.repoPath(name)
-
-	// git-daemon-export-ok is changed inside the transaction and is not
-	// restored if the transaction fails. Cancelling ctx, as a client
-	// disconnecting does, must not roll the flag back once the file is
-	// changed, so the change and its event run to the end once started.
-	ctx = context.WithoutCancel(ctx)
 
 	var changed bool
 	if err := wrapRepoError(
@@ -1409,29 +1371,7 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 				return err
 			}
 			changed = m.Private != private
-
-			// The flag is written first and the file last, so a failure
-			// writing the file rolls the flag back and the two stay in step.
-			if err := d.store.SetRepoIsPrivateByName(ctx, tx, name, private); err != nil {
-				return err
-			}
-
-			fp := filepath.Join(rp, "git-daemon-export-ok")
-			if !private {
-				if err := os.WriteFile(fp, []byte{}, fs.ModePerm); err != nil {
-					d.logger.Error("failed to write git-daemon-export-ok", "repo", name, "err", err)
-					return errRepoUpdate
-				}
-			} else {
-				if _, err := os.Stat(fp); err == nil {
-					if err := os.Remove(fp); err != nil {
-						d.logger.Error("failed to remove git-daemon-export-ok", "repo", name, "err", err)
-						return errRepoUpdate
-					}
-				}
-			}
-
-			return nil
+			return d.store.SetRepoIsPrivateByName(ctx, tx, name, private)
 		}),
 	); err != nil {
 		return err
@@ -1441,7 +1381,8 @@ func (d *Backend) SetPrivate(ctx context.Context, name string, private bool) err
 		return nil
 	}
 
-	// The change is committed, so an event problem is logged, not returned.
+	// The change is committed, so its event is sent even if ctx ends
+	// meanwhile, and an event problem is logged, not returned.
 	ctx, cancel := AfterChangeContext(ctx)
 	defer cancel()
 	repo, err := d.Repository(ctx, name)

@@ -1,64 +1,43 @@
 package backend
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/matryer/is"
 )
 
-// The repository's description file, which gitweb-style tools and the git
-// daemon read, must follow the description stored in the database: written
-// on create, rewritten on update.
-func TestRepositoryDescriptionFile(t *testing.T) {
-	be, _ := newTestBackend(t)
-	ctx := context.Background()
+// The description and the visibility live in the database only. The
+// repository's description and git-daemon-export-ok files, which nothing in
+// the server reads, are no longer written: creating a repository or
+// changing either setting does no file I/O inside the transaction.
+func TestRepositorySettingsWriteNoFiles(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
 
-	readDesc := func(name string) string {
-		t.Helper()
-		b, err := os.ReadFile(filepath.Join(be.repoPath(name), "description"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
+	_, err := be.CreateRepository(ctx, "described", defaultAdmin(t, be), proto.RepositoryOptions{Description: "first words"})
+	is.NoErr(err)
+	dir := be.repoPath("described")
+	template, err := os.ReadFile(filepath.Join(dir, "description"))
+	is.NoErr(err) // git init's own template
+	is.True(string(template) != "first words")
+	_, err = os.Stat(filepath.Join(dir, "git-daemon-export-ok"))
+	is.True(os.IsNotExist(err))
 
-	if _, err := be.CreateRepository(ctx, "described", defaultAdmin(t, be), proto.RepositoryOptions{Description: "first words"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := readDesc("described"); got != "first words" {
-		t.Errorf("description file after create = %q, want %q", got, "first words")
-	}
+	is.NoErr(be.SetDescription(ctx, "described", "second words"))
+	is.NoErr(be.SetPrivate(ctx, "described", true))
+	is.NoErr(be.SetPrivate(ctx, "described", false))
+	r, err := be.Repository(ctx, "described")
+	is.NoErr(err)
+	is.Equal(r.Description(), "second words")
+	is.True(!r.IsPrivate())
 
-	if err := be.SetDescription(ctx, "described", "second words"); err != nil {
-		t.Fatal(err)
-	}
-	if got := readDesc("described"); got != "second words" {
-		t.Errorf("description file after SetDescription = %q, want %q", got, "second words")
-	}
-	desc, err := be.Description(ctx, "described")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if desc != "second words" {
-		t.Errorf("Description() = %q, want %q", desc, "second words")
-	}
-
-	// A repository created without one still gets an empty description
-	// file, so git does not fall back to its "Unnamed repository" template.
-	if _, err := be.CreateRepository(ctx, "plain", defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if got := readDesc("plain"); got != "" {
-		t.Errorf("description file of a repository created without one = %q, want empty", got)
-	}
-
-	if err := be.SetDescription(ctx, "plain", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := readDesc("plain"); got != "" {
-		t.Errorf("description file after clearing = %q, want empty", got)
-	}
+	got, err := os.ReadFile(filepath.Join(dir, "description"))
+	is.NoErr(err)
+	is.Equal(string(got), string(template))
+	_, err = os.Stat(filepath.Join(dir, "git-daemon-export-ok"))
+	is.True(os.IsNotExist(err))
 }
