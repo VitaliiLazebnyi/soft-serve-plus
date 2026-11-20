@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,8 +14,11 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -153,5 +159,145 @@ func TestLoadConfig(t *testing.T) {
 	c.SetContext(context.Background())
 	if err := LoadConfig(c); err == nil || !strings.Contains(err.Error(), "log.format") {
 		t.Errorf("LoadConfig() = %v, want a log.format error", err)
+	}
+}
+
+// testConfig returns a validated default config whose data path is dp.
+func testConfig(t *testing.T, dp string) *config.Config {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	cfg.DataPath = dp
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// The maintenance commands refuse a data directory or SQLite database that
+// does not exist, and create neither, where they used to create an empty
+// one and act on it (R46, CFG-7). serve still creates them.
+func TestOpenBackendContextRefusesMissingDataPath(t *testing.T) {
+	dp := filepath.Join(t.TempDir(), "data")
+	c := &cobra.Command{}
+	c.SetContext(config.WithContext(context.Background(), testConfig(t, dp)))
+	err := OpenBackendContext(c, nil)
+	if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_DATA_PATH") || !strings.Contains(err.Error(), dp) {
+		t.Fatalf("OpenBackendContext() = %v, want an error naming the data directory and SOFT_SERVE_DATA_PATH", err)
+	}
+	if _, err := os.Stat(dp); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the missing data directory was created: %v", err)
+	}
+}
+
+func TestOpenBackendContextRefusesMissingDatabase(t *testing.T) {
+	dp := t.TempDir()
+	cfg := testConfig(t, dp)
+	file := filepath.Join(dp, "soft-serve.db")
+	c := &cobra.Command{}
+	c.SetContext(config.WithContext(context.Background(), cfg))
+	err := OpenBackendContext(c, nil)
+	if err == nil || !strings.Contains(err.Error(), file) {
+		t.Fatalf("OpenBackendContext() = %v, want an error naming %s", err, file)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the missing database was created: %v", err)
+	}
+
+	// Once serve has created it, a maintenance command opens it.
+	c = &cobra.Command{}
+	c.SetContext(config.WithContext(context.Background(), cfg))
+	if err := InitBackendContext(c, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := CloseDBContext(c, nil); err != nil {
+		t.Fatal(err)
+	}
+	c = &cobra.Command{}
+	c.SetContext(config.WithContext(context.Background(), cfg))
+	if err := OpenBackendContext(c, nil); err != nil {
+		t.Fatalf("OpenBackendContext() on an existing database = %v", err)
+	}
+	if err := CloseDBContext(c, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSqliteFile(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "soft serve.db")
+	slash := filepath.ToSlash(abs)
+	if !strings.HasPrefix(slash, "/") {
+		slash = "/" + slash // file:///C:/...
+	}
+	for _, tc := range []struct{ dsn, want string }{
+		{abs, abs},
+		{abs + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", abs},
+		{"file:" + (&url.URL{Path: slash}).EscapedPath() + "?cache=shared", abs},
+		{"file://" + (&url.URL{Path: slash}).EscapedPath(), abs},
+		{":memory:", ""},
+		{"file::memory:?cache=shared", ""},
+		{"file:" + slash + "?mode=memory", ""},
+	} {
+		if got := sqliteFile(tc.dsn); got != tc.want {
+			t.Errorf("sqliteFile(%q) = %q, want %q", tc.dsn, got, tc.want)
+		}
+	}
+}
+
+// sync-hooks skips a repository whose directory is missing, rather than
+// leave a hooks-only directory the server takes for the repository, and a
+// repository whose hooks cannot be written does not stop the others; the
+// errors are returned together (R47, CFG-8).
+func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
+	cfg := testConfig(t, t.TempDir())
+	c := &cobra.Command{}
+	var logs bytes.Buffer
+	ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(&logs))
+	c.SetContext(ctx)
+	if err := InitBackendContext(c, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = CloseDBContext(c, nil) })
+	ctx = c.Context()
+	if err := migrate.Migrate(ctx, db.FromContext(ctx)); err != nil {
+		t.Fatal(err)
+	}
+	be := backend.FromContext(ctx)
+	owner, err := be.DefaultAdmin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a-broken", "b-gone", "c-ok"} {
+		if _, err := be.CreateSystemRepository(ctx, name, owner, proto.RepositoryOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := func(name string) string { return filepath.Join(cfg.DataPath, "repos", name+".git") }
+	// a-broken's hooks directory is a file, so its hooks cannot be written.
+	if err := os.RemoveAll(filepath.Join(repo("a-broken"), "hooks")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo("a-broken"), "hooks"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(repo("b-gone")); err != nil {
+		t.Fatal(err)
+	}
+	okHook := filepath.Join(repo("c-ok"), "hooks", "update")
+	if err := os.Remove(okHook); err != nil {
+		t.Fatal(err)
+	}
+
+	err = InitializeHooks(ctx, cfg, be)
+	if err == nil || !strings.Contains(err.Error(), "a-broken") || strings.Contains(err.Error(), "c-ok") {
+		t.Errorf("InitializeHooks() = %v, want only a-broken's error", err)
+	}
+	if _, err := os.Stat(repo("b-gone")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("b-gone's directory was created: %v", err)
+	}
+	if !strings.Contains(logs.String(), "b-gone") {
+		t.Errorf("no warning about b-gone: %q", logs.String())
+	}
+	if _, err := os.Stat(okHook); err != nil {
+		t.Errorf("c-ok's hooks were not written after a-broken failed: %v", err)
 	}
 }

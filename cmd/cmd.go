@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,20 +110,38 @@ func closeLogFile(ctx context.Context) {
 }
 
 // InitBackendContext loads the config (see LoadConfig) and opens the
-// database, store and backend into the command's context.
+// database, store and backend into the command's context, creating the
+// data directory and the database when they do not exist yet. Only serve
+// creates them; the maintenance commands use OpenBackendContext.
 func InitBackendContext(cmd *cobra.Command, _ []string) error {
+	return initBackend(cmd, true)
+}
+
+// OpenBackendContext is InitBackendContext for the maintenance commands
+// (admin migrate, rollback and sync-hooks): it refuses to run when the data
+// directory or the SQLite database does not exist, rather than create an
+// empty one and act on it while the server's real one is elsewhere (R46).
+func OpenBackendContext(cmd *cobra.Command, _ []string) error {
+	return initBackend(cmd, false)
+}
+
+// initBackend is InitBackendContext, or OpenBackendContext when create is
+// false.
+func initBackend(cmd *cobra.Command, create bool) error {
 	if err := LoadConfig(cmd); err != nil {
 		return err
 	}
 	ctx := cmd.Context()
 	cfg := config.FromContext(ctx)
-	if _, err := os.Stat(cfg.DataPath); errors.Is(err, fs.ErrNotExist) {
-		// The data directory holds private repositories, the database and
-		// secrets, so keep it to the server's user whatever the umask.
-		if err := os.MkdirAll(cfg.DataPath, 0o700); err != nil {
-			closeLogFile(ctx)
-			return fmt.Errorf("create data directory: %w", err)
-		}
+	var err error
+	if create {
+		err = createDataPath(cfg)
+	} else {
+		err = checkDataPath(cfg)
+	}
+	if err != nil {
+		closeLogFile(ctx)
+		return err
 	}
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
 	if err != nil {
@@ -140,6 +159,77 @@ func InitBackendContext(cmd *cobra.Command, _ []string) error {
 	cmd.SetContext(ctx)
 
 	return nil
+}
+
+// createDataPath creates the data directory if it does not exist.
+func createDataPath(cfg *config.Config) error {
+	if _, err := os.Stat(cfg.DataPath); errors.Is(err, fs.ErrNotExist) {
+		// The data directory holds private repositories, the database and
+		// secrets, so keep it to the server's user whatever the umask.
+		if err := os.MkdirAll(cfg.DataPath, 0o700); err != nil {
+			return fmt.Errorf("create data directory: %w", err)
+		}
+	}
+	return nil
+}
+
+// checkDataPath returns an error when the data directory, or the SQLite
+// database file, does not exist. The error names SOFT_SERVE_DATA_PATH,
+// since a shell without it, unlike the service, uses ./data.
+func checkDataPath(cfg *config.Config) error {
+	if _, err := os.Stat(cfg.DataPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("data directory %s does not exist; set SOFT_SERVE_DATA_PATH to the server's data directory (only soft serve creates it)", cfg.DataPath)
+		}
+		return fmt.Errorf("data directory: %w", err)
+	}
+	if cfg.DB.Driver != "sqlite" {
+		return nil
+	}
+	file := sqliteFile(cfg.DB.DataSource)
+	if file == "" {
+		return nil
+	}
+	if _, err := os.Stat(file); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("database %s does not exist; check SOFT_SERVE_DATA_PATH and db.data_source (only soft serve creates it)", file)
+		}
+		return fmt.Errorf("database: %w", err)
+	}
+	return nil
+}
+
+// sqliteFile returns the database file a SQLite data source names, as
+// Validate resolved it, or "" for an in-memory database.
+func sqliteFile(dsn string) string {
+	name, query, _ := strings.Cut(dsn, "?")
+	rest, isURI := strings.CutPrefix(name, "file:")
+	if !isURI {
+		if name == ":memory:" {
+			return ""
+		}
+		return name
+	}
+	if q, err := url.ParseQuery(query); err == nil && q.Get("mode") == "memory" {
+		return ""
+	}
+	path := rest
+	if u, err := url.Parse(name); err == nil {
+		path = u.Path
+		if u.Opaque != "" {
+			if p, err := url.PathUnescape(u.Opaque); err == nil {
+				path = p
+			}
+		}
+	}
+	if path == "" || path == ":memory:" {
+		return ""
+	}
+	// file:///C:/data/soft-serve.db has the path /C:/data/soft-serve.db.
+	if len(path) >= 3 && path[0] == '/' && path[2] == ':' && filepath.VolumeName(path[1:]) != "" {
+		path = path[1:]
+	}
+	return filepath.FromSlash(path)
 }
 
 // CloseDBContext closes the database, and the log file LoadConfig opened.
@@ -169,18 +259,31 @@ func CloseDBOnError(run func(*cobra.Command, []string) error) func(*cobra.Comman
 	}
 }
 
-// InitializeHooks initializes the hooks.
+// InitializeHooks writes the hooks of every repository. A repository whose
+// directory is missing is skipped with a warning: writing its hooks would
+// create a directory holding only hooks/, which the server then takes for
+// the repository (R47). A repository whose hooks cannot be written does not
+// stop the others; the errors are returned together.
 func InitializeHooks(ctx context.Context, cfg *config.Config, be *backend.Backend) error {
 	repos, err := be.Repositories(ctx)
 	if err != nil {
 		return err
 	}
 
+	logger := log.FromContext(ctx)
+	var errs []error
 	for _, repo := range repos {
+		dir := hooks.RepoPath(cfg, repo.Name())
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			logger.Warn("skipping the hooks of a repository whose directory is missing", "repo", repo.Name(), "path", dir)
+			continue
+		} else if err != nil {
+			errs = append(errs, fmt.Errorf("hooks of %s: %w", repo.Name(), err))
+			continue
+		}
 		if err := hooks.GenerateHooks(ctx, cfg, repo.Name()); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("hooks of %s: %w", repo.Name(), err))
 		}
 	}
-
-	return nil
+	return errors.Join(errs...)
 }
