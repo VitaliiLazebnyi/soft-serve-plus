@@ -39,8 +39,12 @@ type Backend struct {
 	afterRegister func()
 
 	// pushGates orders pushes against the removal of repositories created
-	// by an HTTP push; see BeginPush and RemovePushCreatedRepository.
+	// by a push; see BeginPush and RemovePushCreatedRepository.
 	pushGates pushGates
+
+	// pushCreatedRetry is how RemovePushCreatedRepository retries removing
+	// a directory left behind; see removePushCreatedDir.
+	pushCreatedRetry retryPolicy
 }
 
 // New returns a new Soft Serve backend.
@@ -53,8 +57,9 @@ func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Ba
 		store:  st,
 		logger: logger,
 
-		deliveries: newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
-		imports:    newImportTracker(ctx),
+		deliveries:       newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
+		imports:          newImportTracker(ctx),
+		pushCreatedRetry: pushCreatedDirRetry,
 	}
 	return b
 }

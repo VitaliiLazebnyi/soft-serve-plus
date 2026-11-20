@@ -3,18 +3,23 @@ package backend
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	gitsvc "github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // pushGates orders pushes to a repository against the removal of a
-// repository created by an HTTP push that never sent refs. A push holds its
+// repository created by a push that never sent refs. A push holds its
 // repository's gate shared while it runs (BeginPush), and the removal holds
 // it exclusively from its last check for refs until the repository is gone
 // (RemovePushCreatedRepository). Without it, a push over SSH could write
@@ -66,6 +71,11 @@ func (p *pushGates) release(name string, g *pushGate) {
 // repository's gate held.
 var testHookBeforePushCreatedDelete func()
 
+// testHookAfterRefSnapshot, when set, runs in pushCreatedRefSnapshot with
+// the repository's directory rp, right after the snapshot of its refs, so
+// it follows the snapshot wherever RemovePushCreatedRepository takes it.
+var testHookAfterRefSnapshot func(rp string)
+
 // BeginPush marks a push to the existing repository repo as running until
 // the returned function is called; RemovePushCreatedRepository does not
 // remove a repository while a push to it runs. If a removal of the
@@ -93,20 +103,28 @@ func (d *Backend) BeginPush(ctx context.Context, repo proto.Repository) (func(),
 	return done, nil
 }
 
-// RemovePushCreatedRepository deletes created, a repository an HTTP push
-// created, if it was never used, and reports whether it did. It is kept if:
+// RemovePushCreatedRepository deletes created, a repository a push to a
+// missing name created, if it was never used, and reports whether it did.
+// It is the one cleanup of push-to-create for both transports: HTTP calls it
+// when the push failed, or never arrived, without any ref (see pkg/web), and
+// SSH when the push that created the repository failed. It is kept if:
 //
 //   - a push to it is running (see BeginPush);
-//   - it has a ref;
+//   - it has a ref, in which case its HEAD is pointed at a pushed branch, as
+//     after a push that succeeded: receive-pack writes the refs before the
+//     hooks run, so a push can fail after its refs landed;
 //   - its name now belongs to another repository;
 //   - its project name, description, visibility, hidden or mirror flag or
 //     owner differ from when it was created;
 //   - it has a collaborator, a webhook, an LFS object or an LFS lock;
 //   - any of this cannot be checked.
 //
-// The repository's settings are compared with created, rather than through
-// repos.updated_at, because the setters do not update that column and its
-// one-second resolution could not tell a change from the creation anyway.
+// The repository's settings are compared with created field by field: the
+// one-second resolution of repos.updated_at could not tell a change from
+// the creation.
+//
+// Once the row is gone, a directory the delete could not remove is tried
+// again for a few seconds (see removePushCreatedDir).
 func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto.Repository) (bool, error) {
 	name := utils.SanitizeRepo(created.Name())
 	g := d.pushGates.acquire(name)
@@ -116,9 +134,17 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	}
 	defer g.rw.Unlock()
 
-	// Checked with the gate held: no push can start until the repository
-	// is gone, so none can write a ref after this check.
-	if hasRefs(d.repoPath(name)) {
+	// With the gate held no push can start until the repository is gone,
+	// but a lingering git process can still write a ref. So the refs are
+	// first snapshotted and only then checked: a ref written before the
+	// check keeps the repository, and one written after it differs from
+	// the snapshot, so the retry in removePushCreatedDir does not remove
+	// it. A snapshot taken after the check would miss a ref written
+	// between the two.
+	rp := d.repoPath(name)
+	refs := pushCreatedRefSnapshot(rp)
+	if hasRefs(rp) {
+		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
 	}
 
@@ -138,7 +164,152 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	case err != nil:
 		return false, err
 	}
+	d.removePushCreatedDir(name, rp, refs)
 	return true, nil
+}
+
+// pushCreatedRefSnapshot is readRefState for RemovePushCreatedRepository,
+// followed by testHookAfterRefSnapshot.
+func pushCreatedRefSnapshot(rp string) refState {
+	st := readRefState(rp)
+	if testHookAfterRefSnapshot != nil {
+		testHookAfterRefSnapshot(rp)
+	}
+	return st
+}
+
+// headOnPushedBranch points the HEAD of created, kept because a failed push
+// wrote refs to it, at a pushed branch, as after a push that succeeded. It
+// does so only while the name still belongs to created: another repository
+// renamed or created under it meanwhile is not touched.
+func (d *Backend) headOnPushedBranch(ctx context.Context, name string, created proto.Repository) {
+	m, err := d.store.GetRepoByName(ctx, d.db, name)
+	if err != nil || m.ID != created.ID() {
+		return
+	}
+	if err := gitsvc.EnsureDefaultBranch(ctx, d.repoPath(name)); err != nil {
+		d.logger.Warn("failed to set the default branch of a repository created by a push", "repo", name, "err", err)
+	}
+}
+
+// retryPolicy waits first, doubles the wait after each attempt, and gives up
+// once the sum of the waits would go past total. Only the waits count, not
+// the time the attempts take, so the number of attempts is the same however
+// slow the host is.
+type retryPolicy struct {
+	first, total time.Duration
+}
+
+// pushCreatedDirRetry is how removePushCreatedDir retries by default: waits
+// of 100ms to 1.6s, 3.1s in all.
+var pushCreatedDirRetry = retryPolicy{first: 100 * time.Millisecond, total: 5 * time.Second}
+
+// removePushCreatedDir removes rp, the directory of the push-created
+// repository name whose row is gone, if the delete could not. On Windows the
+// git process of the failed push can hold the directory open for a moment
+// after the push ended. Nothing else uses the directory meanwhile: while it
+// is there, its name can be neither created, imported nor renamed onto, and
+// a delete needs a row. That lingering git process can still write refs,
+// though, so a directory whose refs changed since refs, read before the
+// delete, is left in place, without a row, and reported at start-up rather
+// than removed with what was pushed.
+func (d *Backend) removePushCreatedDir(name, rp string, refs refState) {
+	policy := d.pushCreatedRetry
+	var waited time.Duration
+	for wait := policy.first; ; wait *= 2 {
+		if _, err := os.Lstat(rp); errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		if refsWritten(refs, readRefState(rp)) {
+			d.logger.Error("a failed push wrote refs to the repository after its row was deleted; leaving its directory, which is reported at start-up", "repo", name, "path", rp)
+			return
+		}
+		if waited+wait > policy.total {
+			d.logger.Error("failed to remove the directory of a repository created by a failed push; it is reported at start-up", "repo", name, "path", rp)
+			return
+		}
+		time.Sleep(wait)
+		waited += wait
+		if err := d.removeRepoDir(rp); err != nil {
+			d.logger.Debug("failed to remove the directory of a repository created by a failed push, retrying", "repo", name, "err", err)
+		}
+	}
+}
+
+// refState is what a repository's ref storage holds on disk: the loose ref
+// files and their contents, packed-refs, and, for a reftable repository,
+// reftable/tables.list. A reftable repository always has a file at
+// refs/heads and a table, since HEAD lives in the reftable, so whether
+// refs exist cannot be told from the files alone; whether they changed
+// can.
+type refState struct {
+	loose  map[string]string
+	packed string
+	tables string
+	// unreadable is set when part of it could not be read.
+	unreadable bool
+}
+
+// readRefState reads the ref storage of the repository at rp. A file that
+// is gone is left out.
+func readRefState(rp string) refState {
+	st := refState{loose: map[string]string{}}
+	read := func(p string) string {
+		data, err := os.ReadFile(p)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			st.unreadable = true
+		}
+		return string(data)
+	}
+	st.packed = read(filepath.Join(rp, "packed-refs"))
+	st.tables = read(filepath.Join(rp, "reftable", "tables.list"))
+	err := filepath.WalkDir(filepath.Join(rp, "refs"), func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				st.unreadable = true
+			}
+			return nil
+		}
+		if !de.IsDir() {
+			st.loose[p] = read(p)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		st.unreadable = true
+	}
+	return st
+}
+
+// refsWritten reports whether the ref storage now holds something it did not
+// at before: a loose ref that is new or changed, or a packed-refs or
+// tables.list that differs. What a removal took away does not count, so a
+// directory half removed is not mistaken for one written to. Anything that
+// cannot be read counts as written, so pushed refs are never removed by
+// mistake.
+func refsWritten(before, now refState) bool {
+	if now.unreadable {
+		return true
+	}
+	if now.packed != "" && now.packed != before.packed {
+		return true
+	}
+	if now.tables != "" && now.tables != before.tables {
+		return true
+	}
+	for p, content := range now.loose {
+		if old, ok := before.loose[p]; !ok || old != content {
+			return true
+		}
+	}
+	return false
+}
+
+// RepositoryHasRefs reports whether the repository r has any ref. A
+// repository that cannot be read counts as having refs, so a push-created
+// repository is never removed by mistake.
+func (d *Backend) RepositoryHasRefs(r proto.Repository) bool {
+	return hasRefs(d.repoPath(r.Name()))
 }
 
 // pushCreatedRepositoryUsed reports whether m, the row now under created's
