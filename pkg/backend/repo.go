@@ -786,58 +786,79 @@ var errRepoKept = errors.New("repository kept")
 // starts (see OrphanRepositoryDirs).
 func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(tx *db.Tx, m models.Repo) (bool, error)) error {
 	name = utils.SanitizeRepo(name)
-	rp := d.repoPath(name)
 
-	// Build the webhook event before deleting. A repository whose directory is
-	// gone has no event, but its database row still has to go. An event that
-	// cannot be built (its owner lookup failed) is logged and skipped rather
-	// than stopping the delete.
-	var wh *webhook.RepositoryEvent
-	r, err := d.Repository(ctx, name)
-	switch {
-	case err == nil:
-		ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
-		if err != nil {
-			d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
-			break
-		}
-		wh = &ev
-	case !errors.Is(err, proto.ErrRepoNotFound):
+	ev, err := d.deleteEvent(ctx, name)
+	if err != nil {
 		return err
 	}
-
-	// The subscribers must be read before the rows are removed: the webhooks
-	// are gone after the delete. A failure to read them is logged and does not
-	// stop the delete.
-	var hooks []models.Webhook
-	if wh != nil {
-		subs, subErr := webhook.Subscribers(ctx, *wh)
-		if subErr != nil {
-			d.logEventNotDelivered(*wh, subErr)
-		} else {
-			hooks = subs
-		}
+	repoID, err := d.deleteRepoRow(ctx, name, keep)
+	if err != nil {
+		return wrapRepoError(err)
 	}
+	d.removeRepoFiles(name, repoID)
 
-	// repoID is set once the repository's row is found, and names its LFS
-	// directory.
+	// The repository is gone, so its event is delivered without recording
+	// deliveries: they would refer to webhooks that no longer exist. The
+	// receiver's outcome is only logged, not returned, so it cannot undo the
+	// delete.
+	if ev != nil {
+		d.deliverAfterChange(ctx, ev.hooks, ev.event, false)
+	}
+	return nil
+}
+
+// repoDeleteEvent is the webhook event of a repository's deletion and the
+// webhooks it goes to.
+type repoDeleteEvent struct {
+	event webhook.RepositoryEvent
+	hooks []models.Webhook
+}
+
+// deleteEvent builds the event of deleting the repository name, and reads
+// its subscribers, before anything is deleted: the webhooks go with the
+// row. A repository whose directory is gone has no event, but its row still
+// has to go, so it returns nil. An event that cannot be built (its owner
+// lookup failed) is logged and skipped, and subscribers that cannot be read
+// are logged, rather than stopping the delete. The error is set only when
+// the repository could not be looked up.
+func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEvent, error) {
+	r, err := d.Repository(ctx, name)
+	switch {
+	case errors.Is(err, proto.ErrRepoNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
+	if err != nil {
+		d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
+		return nil, nil
+	}
+	hooks, err := webhook.Subscribers(ctx, ev)
+	if err != nil {
+		d.logEventNotDelivered(ev, err)
+		return nil, nil
+	}
+	return &repoDeleteEvent{event: ev, hooks: hooks}, nil
+}
+
+// deleteRepoRow deletes the row of the repository name, unless keep (see
+// deleteRepository) keeps it, and returns the deleted row's ID.
+func (d *Backend) deleteRepoRow(ctx context.Context, name string, keep func(tx *db.Tx, m models.Repo) (bool, error)) (int64, error) {
 	var repoID int64
-	// rowDeleted is set once the repository's row is deleted, and says the
-	// directory is to be removed after the commit.
-	var rowDeleted bool
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The row is locked before anything is deleted. A rename that
 		// commits first then leaves no row with the name, rather than the
 		// webhooks of the renamed repository deleted and its LFS directory
-		// removed below. With a keep check, nothing can be added for the
+		// removed. With a keep check, nothing can be added for the
 		// repository between the check and the delete, only to go with the
 		// row by ON DELETE CASCADE.
-		repom, dberr := d.store.GetRepoByNameForUpdate(ctx, tx, name)
-		if dberr != nil {
-			return dberr
+		m, err := d.store.GetRepoByNameForUpdate(ctx, tx, name)
+		if err != nil {
+			return err
 		}
 		if keep != nil {
-			kept, err := keep(tx, repom)
+			kept, err := keep(tx, m)
 			if err != nil {
 				return err
 			}
@@ -846,58 +867,44 @@ func (d *Backend) deleteRepository(ctx context.Context, name string, keep func(t
 			}
 		}
 
-		repoID = repom.ID
-
 		// The repository's webhooks, with their events and deliveries, its
 		// collaborators and its LFS objects and locks go with the row by
 		// ON DELETE CASCADE: db.Open enforces foreign keys.
 		if err := d.store.DeleteRepoByName(ctx, tx, name); err != nil {
 			return err
 		}
-
-		rowDeleted = true
+		repoID = m.ID
 		return nil
-	}); err != nil {
-		return wrapRepoError(err)
-	}
+	})
+	return repoID, err
+}
 
-	// Remove the directory only now that the row is gone. Removing it inside
-	// the transaction could leave a repository with a row but a partly
-	// removed directory when the removal failed, or a row with no directory
-	// when the commit failed. The delete has happened once the row is gone,
-	// so a failure here is logged rather than returned. The leftover
-	// directory has no row: it cannot be created, imported or renamed over,
-	// and it is reported when the server starts.
-	if rowDeleted {
-		if err := d.removeRepoDir(rp); err != nil {
-			d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
-		}
+// removeRepoFiles removes the directory and the LFS storage of the
+// repository name, with ID repoID, whose row is gone. The delete has
+// happened once the row is gone, so a failure here is logged rather than
+// returned.
+//
+// The files are removed only now that the row is gone. Removing the
+// directory inside the transaction could leave a repository with a row but a
+// partly removed directory when the removal failed, or a row with no
+// directory when the commit failed, and a failed delete leaves the LFS
+// objects in place. A leftover directory has no row: it cannot be created,
+// imported or renamed over, and it is reported when the server starts.
+//
+// The LFS storage goes with the temporary files of unfinished uploads and
+// objects without a row. Repository IDs are never reused, so no other
+// repository can have written there. An LFS upload, import or mirror sync
+// still running for this repository can recreate the directory after it is
+// removed, leaving an orphan that no other repository can reach.
+func (d *Backend) removeRepoFiles(name string, repoID int64) {
+	rp := d.repoPath(name)
+	if err := d.removeRepoDir(rp); err != nil {
+		d.logger.Error("failed to delete repository directory", "repo", name, "path", rp, "err", err)
 	}
-
-	// Remove the repository's LFS storage only now that its row is gone, so
-	// a failed delete leaves its objects in place. This takes the temporary
-	// files of unfinished uploads and objects without a row along with the
-	// recorded ones. Repository ids are never reused, so no other repository
-	// can have written here. The row is already gone, so a failure is logged
-	// rather than returned. An LFS upload, import or mirror sync still running
-	// for this repository can recreate the directory after it is removed,
-	// leaving an orphan; since the id is not reused, no other repository can
-	// reach it.
-	if repoID != 0 {
-		lfsPath := filepath.Join(d.cfg.DataPath, "lfs", strconv.FormatInt(repoID, 10))
-		if err := os.RemoveAll(lfsPath); err != nil {
-			d.logger.Error("failed to delete lfs objects", "repo", name, "path", lfsPath, "err", err)
-		}
+	lfsPath := filepath.Join(d.cfg.DataPath, "lfs", strconv.FormatInt(repoID, 10))
+	if err := os.RemoveAll(lfsPath); err != nil {
+		d.logger.Error("failed to delete lfs objects", "repo", name, "path", lfsPath, "err", err)
 	}
-
-	// The repository is gone, so its event is delivered without recording
-	// deliveries: they would refer to webhooks that no longer exist. The
-	// receiver's outcome is only logged, not returned, so it cannot undo the delete.
-	if wh != nil {
-		d.deliverAfterChange(ctx, hooks, *wh, false)
-	}
-
-	return nil
 }
 
 // RenameRepository renames a repository.
