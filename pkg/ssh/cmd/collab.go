@@ -59,9 +59,9 @@ func collabAddCommand() *cobra.Command {
 			username := args[1]
 			level := access.ReadWriteAccess
 			if len(args) > 2 {
-				level = access.ParseAccessLevel(args[2])
-				if level < 0 {
-					return access.ErrInvalidAccessLevel
+				var err error
+				if level, err = access.ParseAccessLevel(args[2]); err != nil {
+					return err
 				}
 			}
 

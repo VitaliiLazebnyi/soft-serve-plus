@@ -10,19 +10,21 @@ func TestParseAccessLevel(t *testing.T) {
 	cases := []struct {
 		in  string
 		out AccessLevel
+		err error
 	}{
-		{"", -1},
-		{"foo", -1},
-		{AdminAccess.String(), AdminAccess},
-		{ReadOnlyAccess.String(), ReadOnlyAccess},
-		{ReadWriteAccess.String(), ReadWriteAccess},
-		{NoAccess.String(), NoAccess},
+		{"", NoAccess, ErrInvalidAccessLevel},
+		{"foo", NoAccess, ErrInvalidAccessLevel},
+		{"unknown", NoAccess, ErrInvalidAccessLevel},
+		{AdminAccess.String(), AdminAccess, nil},
+		{ReadOnlyAccess.String(), ReadOnlyAccess, nil},
+		{ReadWriteAccess.String(), ReadWriteAccess, nil},
+		{NoAccess.String(), NoAccess, nil},
 	}
 
 	for _, c := range cases {
-		out := ParseAccessLevel(c.in)
-		if out != c.out {
-			t.Errorf("ParseAccessLevel(%q) => %d, want %d", c.in, out, c.out)
+		out, err := ParseAccessLevel(c.in)
+		if out != c.out || !errors.Is(err, c.err) || (err == nil) != (c.err == nil) {
+			t.Errorf("ParseAccessLevel(%q) => (%d, %v), want (%d, %v)", c.in, out, err, c.out, c.err)
 		}
 	}
 }

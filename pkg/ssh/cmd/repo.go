@@ -71,8 +71,14 @@ func RepoCommand() *cobra.Command {
 					}
 				}
 
-				branches, _ := r.Branches()
-				tags, _ := r.Tags()
+				branches, err := r.Branches()
+				if err != nil {
+					return err
+				}
+				tags, err := r.Tags()
+				if err != nil {
+					return err
+				}
 
 				// project name and description are optional, handle trailing
 				// whitespace to avoid breaking tests.
@@ -136,7 +142,10 @@ func repoHead(r *git.Repository) (*git.Reference, error) {
 	if !errors.Is(err, git.ErrReferenceNotExist) {
 		return head, err
 	}
-	if bs, _ := r.Branches(); len(bs) == 0 {
+	switch bs, err := r.Branches(); {
+	case err != nil:
+		return nil, err
+	case len(bs) == 0:
 		return nil, errRepoEmpty
 	}
 	name, err := r.SymbolicRef(git.HEAD, "")

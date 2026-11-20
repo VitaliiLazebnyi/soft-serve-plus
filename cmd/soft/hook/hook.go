@@ -69,6 +69,13 @@ var (
 					RefName: fields[2],
 				})
 			}
+			// A line longer than the scanner takes, or a failed read, ends
+			// the loop early. The hook then fails rather than acting, and
+			// running the custom hook, on part of the refs.
+			if err := scanner.Err(); err != nil {
+				logger.Error(fmt.Sprintf("failed to read %s hook input", cmdName), "err", err)
+				return fmt.Errorf("read %s hook input: %w", cmdName, err)
+			}
 
 			switch cmdName {
 			case hooks.PreReceiveHook:

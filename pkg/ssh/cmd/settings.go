@@ -73,8 +73,8 @@ func SettingsCommand() *cobra.Command {
 					}
 					cmd.Println(level)
 				case 1:
-					al := access.ParseAccessLevel(args[0])
-					if al < 0 {
+					al, err := access.ParseAccessLevel(args[0])
+					if err != nil {
 						return fmt.Errorf("invalid access level: %s. Please choose one of the following: %s", args[0], als)
 					}
 					if err := be.SetAnonAccess(ctx, al); err != nil {

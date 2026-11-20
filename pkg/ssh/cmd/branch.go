@@ -41,7 +41,10 @@ func branchListCommand() *cobra.Command {
 				return err
 			}
 
-			branches, _ := r.Branches()
+			branches, err := r.Branches()
+			if err != nil {
+				return err
+			}
 			for _, b := range branches {
 				// A ref name cannot hold C0 controls, but it can hold
 				// C1 ones encoded as UTF-8.
@@ -86,7 +89,10 @@ func branchDefaultCommand() *cobra.Command {
 				}
 
 				branch := args[1]
-				branches, _ := r.Branches()
+				branches, err := r.Branches()
+				if err != nil {
+					return err
+				}
 				var exists bool
 				for _, b := range branches {
 					if branch == b {
@@ -160,7 +166,10 @@ func branchDeleteCommand() *cobra.Command {
 			}
 
 			branch := args[1]
-			branches, _ := r.Branches()
+			branches, err := r.Branches()
+			if err != nil {
+				return err
+			}
 			var exists bool
 			for _, b := range branches {
 				if branch == b {

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -25,7 +26,11 @@ func (*Store) GetAnonAccess(ctx context.Context, h db.Handler) (access.AccessLev
 	if err := h.GetContext(ctx, &level, query); err != nil {
 		return access.NoAccess, err
 	}
-	return access.ParseAccessLevel(level), nil
+	l, err := access.ParseAccessLevel(level)
+	if err != nil {
+		return access.NoAccess, fmt.Errorf("anon_access setting %q: %w", level, err)
+	}
+	return l, nil
 }
 
 // SetAllowKeylessAccess implements store.Store.

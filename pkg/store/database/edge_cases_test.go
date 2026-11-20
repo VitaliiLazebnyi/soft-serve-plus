@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/google/uuid"
@@ -96,6 +98,18 @@ func TestAllowKeylessStoredAsText(t *testing.T) {
 		is.NoErr(err)
 		is.Equal(got, allow)
 	}
+}
+
+// An anon_access value that is no access level is an error, not a level
+// below no-access that the access checks would have to know about.
+func TestAnonAccessInvalidValue(t *testing.T) {
+	is := is.New(t)
+	ctx, dbx := newWebhookTestDB(t)
+	s := &Store{}
+	_, err := dbx.ExecContext(ctx, dbx.Rebind(`UPDATE settings SET value = ? WHERE "key" = 'anon_access'`), "everyone")
+	is.NoErr(err)
+	_, err = s.GetAnonAccess(ctx, dbx)
+	is.True(errors.Is(err, access.ErrInvalidAccessLevel))
 }
 
 // lfs_locks.refname is nullable; a lock without one can still be read.

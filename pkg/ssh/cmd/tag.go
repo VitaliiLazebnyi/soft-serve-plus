@@ -38,7 +38,10 @@ func tagListCommand() *cobra.Command {
 				return err
 			}
 
-			tags, _ := r.Tags()
+			tags, err := r.Tags()
+			if err != nil {
+				return err
+			}
 			for _, t := range tags {
 				// A ref name cannot hold C0 controls, but it can hold
 				// C1 ones encoded as UTF-8.
@@ -73,7 +76,10 @@ func tagDeleteCommand() *cobra.Command {
 			}
 
 			tag := args[1]
-			tags, _ := r.Tags()
+			tags, err := r.Tags()
+			if err != nil {
+				return err
+			}
 			var exists bool
 			for _, t := range tags {
 				if tag == t {
