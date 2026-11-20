@@ -149,8 +149,8 @@ func TestHarnessCommands(t *testing.T) {
 		{"negated ensureservernotrunning", "! ensureservernotrunning DOWN_PORT\n", false},
 		{"ensureservernotrunning on a closed port", "ensureservernotrunning DOWN_PORT\n", true},
 		{"ensureservernotrunning on a listening port", "ensureservernotrunning UP_PORT\n", false},
-		{"negated ui without a server", "! ui '\"q\"'\n", true},
-		{"ui without a server", "ui '\"q\"'\n", false},
+		{"negated ui without a server", "! ui -wait x '\"q\"'\n", true},
+		{"ui without a server", "ui -wait x '\"q\"'\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

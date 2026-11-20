@@ -14,13 +14,13 @@ stdout 'repo1'
 ! stdout 'Repositories'
 
 # a single word is still a repository to open the TUI on
-ui '"    q"' repo1
+ui -wait 'first repo' '"q"' repo1
 cp stdout tui-repo1.txt
 grep 'first repo' tui-repo1.txt
 ! grep 'missing repo' tui-repo1.txt
 
 # a deep link to a missing repository says so
-ui '"    q"' nope
+ui -wait 'missing repo' '"q"' nope
 cp stdout tui-nope.txt
 grep 'missing repo' tui-nope.txt
 
@@ -37,7 +37,7 @@ stdout 'Usage:'
 
 # unless a readable repository has that name: then it opens the TUI on it
 soft repo create info -d '"info repo"'
-ui '"    q"' info
+ui -wait 'info repo' '"q"' info
 cp stdout tui-info.txt
 grep 'info repo' tui-info.txt
 ! grep 'Username:' tui-info.txt
@@ -49,7 +49,7 @@ soft repo create help -p -d '"private help"'
 uui '""' help
 stdout 'Usage:'
 ! stdout 'private help'
-uui '"    q"' info
+uui -wait 'info repo' '"q"' info
 cp stdout tui-info-user1.txt
 grep 'info repo' tui-info-user1.txt
 soft repo private info true
