@@ -43,7 +43,7 @@ func (d *Backend) reportOrphans(dirs []string) {
 			d.logger.Warn("more repository directories have no database row", "more", len(dirs)-i)
 			return
 		}
-		d.logger.Warn("repository directory has no database row; it is not served, and its name stays taken until the directory is moved away or removed", "path", dir)
+		d.logger.Warn("repository directory has no database row; it is not served, and its name stays taken until the directory is moved away or removed. A crash, a failed removal or a rename whose transaction failed leave one behind; a repository whose rename failed can be moved back by hand", "path", dir)
 	}
 }
 

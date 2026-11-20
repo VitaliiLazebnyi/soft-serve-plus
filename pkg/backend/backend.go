@@ -43,6 +43,10 @@ type Backend struct {
 	// pushCreatedRetry is how RemovePushCreatedRepository retries removing
 	// a directory left behind; see removePushCreatedDir.
 	pushCreatedRetry retryPolicy
+
+	// renameTxDone, when a test sets it, replaces the result of a rename's
+	// transaction, as a COMMIT whose answer was lost would.
+	renameTxDone func(error) error
 }
 
 // New returns a new Soft Serve backend.

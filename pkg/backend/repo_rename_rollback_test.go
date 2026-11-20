@@ -2,11 +2,13 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
@@ -52,4 +54,61 @@ func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 	is.True(os.IsNotExist(err)) // no empty group left behind
 	_, err = r.Open()
 	is.NoErr(err)
+}
+
+// A COMMIT whose answer is lost, as when the connection drops during it,
+// reports an error although the rename committed. The row then names the
+// new name, so the directory stays there and the rename succeeds. The
+// directory used to be moved back under the old name, away from its row.
+func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	be.renameTxDone = func(err error) error {
+		if err == nil {
+			return errors.New("driver: bad connection")
+		}
+		return err
+	}
+
+	is.NoErr(be.RenameRepository(ctx, "old", "new"))
+	r, err := be.Repository(ctx, "new")
+	is.NoErr(err) // the row and the directory are under the new name
+	_, err = r.Open()
+	is.NoErr(err)
+	_, err = os.Lstat(be.repoPath("old"))
+	is.True(os.IsNotExist(err))
+}
+
+// failingByIDStore fails every lookup by ID, as a database that went away
+// with the connection would.
+type failingByIDStore struct {
+	store.Store
+}
+
+func (failingByIDStore) GetRepoByID(context.Context, db.Handler, int64) (models.Repo, error) {
+	return models.Repo{}, errors.New("driver: bad connection")
+}
+
+// When the outcome cannot be read either, the directory stays where it is
+// rather than risk moving it away from its row.
+func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := asAdmin(t, be, backendTestContext(be, cfg))
+	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	be.store = failingByIDStore{Store: be.store}
+	be.renameTxDone = func(err error) error {
+		if err == nil {
+			return errors.New("driver: bad connection")
+		}
+		return err
+	}
+
+	is.True(be.RenameRepository(ctx, "old", "new") != nil)
+	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
+	is.NoErr(err) // where the committed row puts it
 }

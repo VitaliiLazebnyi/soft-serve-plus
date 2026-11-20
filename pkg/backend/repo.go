@@ -1054,7 +1054,7 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	// once started.
 	ctx = context.WithoutCancel(ctx)
 
-	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The directory checks above find a repository whose name differs
 		// only in case on a case-insensitive filesystem, so the row decides:
 		// with no row named oldName this fails before the directory moves.
@@ -1074,12 +1074,29 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 		moved = true
 
 		return nil
-	}); err != nil {
+	})
+	if d.renameTxDone != nil {
+		err = d.renameTxDone(err)
+	}
+	if err != nil && moved {
+		// A COMMIT whose answer was lost, as when the connection drops
+		// during it, can have committed. The row decides where the
+		// directory belongs.
+		switch committed, cerr := d.renameCommitted(ctx, renamed.ID, newName); {
+		case cerr != nil:
+			d.logger.Error("rename failed and its outcome is unknown; leaving the repository directory where it is, it is reported at start-up if it has no row",
+				"repo", oldName, "path", np, "err", err, "lookup_err", cerr)
+			return wrapRepoError(err)
+		case committed:
+			d.logger.Warn("rename committed although its transaction reported an error", "repo", oldName, "new", newName, "err", err)
+			err = nil
+		default:
+			d.moveRepoDirBack(oldName, op, np)
+		}
+	}
+	if err != nil {
 		if claimed {
 			os.Remove(np) //nolint:errcheck
-		}
-		if moved {
-			d.moveRepoDirBack(oldName, op, np)
 		}
 		// claimRepoPath may have created the new name's group
 		// directories; do not leave them behind empty. Only empty
@@ -1116,13 +1133,34 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	return nil
 }
 
+// renameCommitted reports whether the row of the repository id is named
+// newName, read afresh: whether a rename whose transaction reported an
+// error committed after all.
+func (d *Backend) renameCommitted(ctx context.Context, id int64, newName string) (bool, error) {
+	m, err := d.store.GetRepoByID(ctx, d.db, id)
+	if err != nil {
+		return false, err
+	}
+	return m.Name == newName, nil
+}
+
+// moveBackAttempts bounds how often moveRepoDirBack tries to move a
+// directory back on Windows, where a rename fails while any file in the
+// directory is open, as a git process still running can keep one.
+const moveBackAttempts = 5
+
 // moveRepoDirBack moves the directory of the repository oldName from np,
 // where a rename whose transaction then failed moved it, back to op, where
 // its row says it is. If that fails too, the directory stays at np without
 // a row: it is not served, it is reported when the server starts, and
 // nothing removes it.
 func (d *Backend) moveRepoDirBack(oldName, op, np string) {
-	err := withRepoParent(op, func() error { return os.Rename(np, op) })
+	move := func() error { return withRepoParent(op, func() error { return os.Rename(np, op) }) }
+	err := move()
+	for wait, i := 50*time.Millisecond, 1; err != nil && runtime.GOOS == "windows" && i < moveBackAttempts; wait, i = wait*2, i+1 {
+		time.Sleep(wait)
+		err = move()
+	}
 	if err != nil {
 		d.logger.Error("rename failed and the repository directory could not be moved back; move it back by hand",
 			"repo", oldName, "path", np, "want", op, "err", err)
