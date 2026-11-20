@@ -13,11 +13,14 @@ var testNet testdial.Network
 
 // TestMain keeps pkg/ssrf off the network in this package's tests. Every
 // connection an SSRF-protected client would open goes to testNet, where only
-// a test's own receiver listens: the webhooks the tests create have public
-// test addresses, and a send to one fails at once. Tests that need a recorded failure point the webhook at loopback,
-// which the SSRF checks refuse before any connection (see
-// whPointAtLoopback). A hostname pkg/ssrf looks up, such as an import
-// remote's, resolves from the hosts file only and otherwise fails at once.
+// a test's own receiver listens (newMemServer): the webhooks the tests create
+// have public test addresses, and a send to one fails at once. A test that
+// needs a recorded failure points the webhook at loopback, which the SSRF
+// checks refuse before any connection unless webhook.allowed_hosts covers it
+// (see whPointAtLoopback); a test that receives the webhooks allows
+// 127.0.0.0/8 and listens on testNet. A hostname pkg/ssrf looks up, such as
+// an import remote's, resolves from the hosts file only and otherwise fails
+// at once.
 func TestMain(m *testing.M) {
 	restoreDial := testdial.Set(testNet.Dial)
 	restoreResolver := testdial.SetResolver(testdial.NoDNS())
