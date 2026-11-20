@@ -15,7 +15,7 @@ new-webhook WH_REPO1
 soft repo webhook create repo1 $WH_REPO1 -e branch_tag_create -e push
 
 # push anonymously over HTTP
-git clone http://localhost:$HTTP_PORT/repo1 repo1
+git clone http://127.0.0.1:$HTTP_PORT/repo1 repo1
 mkfile ./repo1/README.md 'foobar'
 git -C repo1 add -A
 git -C repo1 commit -m 'first'

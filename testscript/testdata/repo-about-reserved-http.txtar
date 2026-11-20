@@ -43,11 +43,11 @@ mkfile ./work/README.md '# Admin Banner'
 git -c init.defaultBranch=main -C work init
 git -C work add -A
 git -C work commit -m 'first'
-! ugit -C work push http://user1:$UTOKEN@localhost:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
+! ugit -C work push http://user1:$UTOKEN@127.0.0.1:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
 stderr 'only an admin can create the .soft-serve repository'
 soft repo list
 ! stdout '.soft-serve'
-git -C work push http://admin:$ATOKEN@localhost:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
+git -C work push http://admin:$ATOKEN@127.0.0.1:$HTTP_PORT/.soft-serve HEAD:refs/heads/main
 soft repo info .soft-serve
 stdout 'Owner: admin'
 
