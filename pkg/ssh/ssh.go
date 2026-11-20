@@ -2,11 +2,7 @@ package ssh
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"io/fs"
 	"net"
-	"os"
 	"strconv"
 	"time"
 
@@ -14,7 +10,6 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	rm "charm.land/wish/v2/recover"
-	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -139,16 +134,6 @@ func newSSHServer(ctx context.Context, lim serverLimits) (*SSHServer, error) {
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
 	s.srv.ConnCallback = connCallback(s.limiter, logger, noAccountLifetime)
 	setSessionHandlers(s.srv, lim.maxSessions)
-
-	// Create client ssh key
-	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
-		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
-		if err != nil {
-			return nil, fmt.Errorf("client ssh key: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("client ssh key: %w", err)
-	}
 
 	return s, nil
 }

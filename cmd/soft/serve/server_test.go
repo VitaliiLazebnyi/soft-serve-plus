@@ -3,6 +3,8 @@ package serve
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"io"
 	"net"
@@ -31,6 +33,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/matryer/is"
+	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -319,28 +322,15 @@ func TestEnsureDefaultRepoCreateErrorSkipped(t *testing.T) {
 }
 
 // During shutdown, a second interrupt or terminate signal ends the wait for
-// webhook deliveries. SIGHUP keeps meaning "reload" and does not.
+// webhook deliveries. SIGHUP comes on another channel (see notifySignals).
 func TestAbortOnSignal(t *testing.T) {
 	is := is.New(t)
 	var logs bytes.Buffer
-	// Unbuffered, so that a send returns only once the loop has taken the
-	// signal.
 	sigs := make(chan os.Signal)
 	abort, stop := abortOnSignal(sigs, log.New(&logs))
 	defer stop()
-
-	sigs <- syscall.SIGHUP
-	// The loop takes another signal only once it is done with the SIGHUP:
-	// had that aborted the wait, the loop would have ended instead.
-	select {
-	case sigs <- syscall.SIGHUP:
-	case <-abort.Done():
-		t.Fatal("SIGHUP aborted the wait")
-	case <-time.After(time.Minute):
-		t.Fatal("the loop did not take a signal after SIGHUP")
-	}
 	if abort.Err() != nil {
-		t.Fatal("SIGHUP aborted the wait")
+		t.Fatal("the wait was aborted before a signal")
 	}
 
 	select {
@@ -354,6 +344,35 @@ func TestAbortOnSignal(t *testing.T) {
 		t.Fatal("SIGTERM did not abort the wait")
 	}
 	is.True(strings.Contains(logs.String(), "not waiting for webhook deliveries"))
+}
+
+// ensureClientKey creates a missing client key, keeps an existing one, and
+// reports a path it cannot check, here because a file stands where its
+// directory should be, rather than leave the server without a key.
+func TestEnsureClientKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ssh", "client_ed25519")
+	if err := ensureClientKey(path); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no client key written: %v", err)
+	}
+	if err := ensureClientKey(path); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, first) {
+		t.Errorf("ensureClientKey replaced the existing key (%v)", err)
+	}
+
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClientKey(filepath.Join(file, "client_ed25519")); err == nil || !strings.Contains(err.Error(), "client ssh key") {
+		t.Errorf("ensureClientKey() = %v, want a client key error", err)
+	}
 }
 
 // newStartTestServer returns a server whose four listeners are on the given
@@ -726,5 +745,89 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	}
 	if err := waitStart(t, errc, "after Shutdown"); err != nil {
 		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
+}
+
+// When the drain runs out, Shutdown cuts off what still runs, and the stop
+// is not an error: an ordinary stop during a long transfer used to make
+// soft serve exit with status 1 (R59, CFG-17).
+func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
+	errc := startAsync(s)
+
+	// An authenticated SSH connection with no session: the SSH server
+	// keeps it, and so its drain, until the idle timeout.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var client *gossh.Client
+	deadline := time.Now().Add(time.Minute)
+	for {
+		client, err = gossh.Dial("tcp", sshAddr, &gossh.ClientConfig{
+			User:            "test",
+			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+			HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec // test server
+			Timeout:         time.Minute,
+		})
+		if err == nil {
+			break
+		}
+		select {
+		case err := <-errc:
+			t.Fatalf("Start returned %v before the SSH server accepted connections", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cannot connect to the SSH server: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer client.Close() //nolint: errcheck
+	closed := make(chan struct{})
+	go func() {
+		_ = client.Wait()
+		close(closed)
+	}()
+
+	// The drain is over before it starts.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Shutdown(ctx, ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil when only the drain ran out", err)
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH connection is still open a minute after Shutdown")
+	}
+}
+
+// NewServer creates the client key, and reads the host key once: a bearer
+// request does not read the file, and the key stays the one the SSH server
+// serves until a restart (tracker 343(a), CFG-16).
+func TestNewServerLoadsKeys(t *testing.T) {
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	if _, err := os.Stat(s.Config.SSH.ClientKeyPath); err != nil {
+		t.Errorf("no client key: %v", err)
+	}
+	want, err := config.KeyPair(s.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.Config.SSH.KeyPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.KeyPair(s.Config)
+	if err != nil || got != want {
+		t.Errorf("KeyPair() after the key file went = %p, %v; want the key read at start %p", got, err, want)
 	}
 }

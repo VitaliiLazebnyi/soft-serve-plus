@@ -7,10 +7,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"sync"
-	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -39,63 +36,42 @@ func (k *HostKey) CryptoPublicKey() crypto.PublicKey {
 	return k.priv.Public()
 }
 
-// keyPairCache holds the last host key loaded per path, so callers on a hot
-// path (every bearer-authenticated HTTP request) do not read and parse the
-// key file each time. An entry is reused while the file's size and
-// modification time are unchanged. That is a cheap check, not a content
-// one: a key replaced with the same size and mtime (a restore that keeps
-// timestamps, or a coarse-mtime filesystem) is not noticed until restart,
-// which is also when the SSH server reloads its host key.
-var keyPairCache = struct {
-	sync.Mutex
-	entries map[string]keyPairCacheEntry
-}{entries: map[string]keyPairCacheEntry{}}
-
-type keyPairCacheEntry struct {
-	modTime time.Time
-	size    int64
-	key     *HostKey
+// LoadHostKey reads the SSH host key once, for KeyPair to return from then
+// on, error included. The server calls it at start, after the SSH server
+// has created the key, so a bearer-authenticated request does not read the
+// file. A key replaced on disk is used from the next start, as it is by
+// the SSH server.
+func (c *Config) LoadHostKey() error {
+	c.hostKey, c.hostKeyErr = readHostKey(c.SSH.KeyPath)
+	c.hostKeyLoaded = true
+	return c.hostKeyErr
 }
 
-// KeyPair returns the server's SSH host key, read from ssh.key_path. The
+// KeyPair returns the server's SSH host key: the one LoadHostKey read, or,
+// for a config whose key was not loaded, the one at ssh.key_path now. The
 // file must exist and hold an unencrypted Ed25519, RSA or ECDSA key: the
 // SSH server writes it on first start, and a key generated in memory here
 // would differ on every call, so tokens signed with it could never be
-// verified. The path is used as is, without expanding "~" or environment
-// variables.
+// verified.
 func KeyPair(cfg *Config) (*HostKey, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig
 	}
+	if cfg.hostKeyLoaded {
+		return cfg.hostKey, cfg.hostKeyErr
+	}
+	return readHostKey(cfg.SSH.KeyPath)
+}
 
-	path := cfg.SSH.KeyPath
+// readHostKey reads the host key at path. The path is used as is, without
+// expanding "~" or environment variables.
+func readHostKey(path string) (*HostKey, error) {
 	if path == "" {
 		return nil, ErrEmptySSHKeyPath
 	}
-
-	// Stat and read the same open file, so the cached key always matches
-	// the size and mtime it is stored under.
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("ssh host key: %w", err)
-	}
-	defer f.Close() //nolint:errcheck
-
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("ssh host key: %w", err)
-	}
-
-	keyPairCache.Lock()
-	defer keyPairCache.Unlock()
-
-	if e, ok := keyPairCache.entries[path]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
-		return e.key, nil
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("ssh host key %s: %w", path, err)
 	}
 	raw, err := gossh.ParseRawPrivateKey(data)
 	if err != nil {
@@ -115,8 +91,5 @@ func KeyPair(cfg *Config) (*HostKey, error) {
 	default:
 		return nil, fmt.Errorf("ssh host key %s: unsupported key type %T, want ed25519, rsa or ecdsa", path, raw)
 	}
-
-	key := &HostKey{priv: priv}
-	keyPairCache.entries[path] = keyPairCacheEntry{modTime: fi.ModTime(), size: fi.Size(), key: key}
-	return key, nil
+	return &HostKey{priv: priv}, nil
 }

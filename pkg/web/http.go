@@ -29,7 +29,7 @@ type HTTPServer struct {
 const maxHeaderBytes = 64 << 10
 
 // NewHTTPServer creates a new HTTP server.
-func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
+func NewHTTPServer(ctx context.Context) *HTTPServer {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx)
 	pending := newPushCreates()
@@ -45,7 +45,7 @@ func NewHTTPServer(ctx context.Context) (*HTTPServer, error) {
 		},
 	}
 
-	return s, nil
+	return s
 }
 
 // serverErrorLog is the error log of the HTTP server. Clients cause most

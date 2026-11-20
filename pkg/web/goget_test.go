@@ -139,8 +139,7 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 func TestHTTPServerHeaderLimit(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)
-	s, err := NewHTTPServer(f.ctx)
-	is.NoErr(err)
+	s := NewHTTPServer(f.ctx)
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	is.NoErr(err)
 	go func() { _ = s.Serve(l) }()
