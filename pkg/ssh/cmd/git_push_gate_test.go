@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -118,8 +119,10 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	is.NoErr(err)
 
 	// The removal runs after this push looked the repository up and
-	// before it starts.
+	// before it starts. The hook runs again for the push that creates
+	// the repository anew; only the first run removes.
 	testHookBeforeBeginPush = func() {
+		testHookBeforeBeginPush = nil
 		removed, err := be.RemovePushCreatedRepository(ctx, repo)
 		is.NoErr(err)
 		is.True(removed)
@@ -171,4 +174,74 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	head, err := r.HEAD()
 	is.NoErr(err)
 	is.Equal(head.ID, commit) // with the pushed commit
+}
+
+// A push to a missing name creates the repository and then pushes to its
+// directory, found by name. If an admin deletes the new repository before
+// git starts and someone else creates another under the same name, the push
+// must not write to that one, which it was never checked against.
+func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
+	is := is.New(t)
+	ctx, be := newAuthTestContext(t)
+	pusherCtx := withUser(t, ctx, be, "boss", true)
+	otherCtx := withUser(t, ctx, be, "other", true)
+
+	var replacement proto.Repository
+	testHookBeforeBeginPush = func() {
+		testHookBeforeBeginPush = nil
+		is.NoErr(be.DeleteRepository(ctx, "fresh"))
+		var err error
+		replacement, err = be.CreateRepository(ctx, "fresh", proto.UserFromContext(otherCtx), proto.RepositoryOptions{Private: true})
+		is.NoErr(err)
+	}
+	t.Cleanup(func() { testHookBeforeBeginPush = nil })
+
+	// The repository's hooks run the server binary, which is the test
+	// binary here; point git at no hooks instead.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", t.TempDir())
+
+	// A commit to push, and its pack.
+	work := t.TempDir()
+	gitCmd := func(stdin string, args ...string) []byte {
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", work}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		out, err := cmd.Output()
+		is.NoErr(err)
+		return out
+	}
+	gitCmd("", "init", "-q", "--bare")
+	tree := strings.TrimSpace(string(gitCmd("", "mktree")))
+	commit := strings.TrimSpace(string(gitCmd("", "commit-tree", tree, "-m", "pushed")))
+	pack := gitCmd(commit+"\n", "pack-objects", "--stdout", "--revs")
+	line := fmt.Sprintf("%s %s refs/heads/main\x00report-status\n", strings.Repeat("0", 40), commit)
+	req := fmt.Sprintf("%04x%s0000", len(line)+4, line) + string(pack)
+
+	var out bytes.Buffer
+	c := GitReceivePackCommand()
+	c.SilenceUsage = true
+	c.SilenceErrors = true
+	c.SetIn(strings.NewReader(req))
+	c.SetOut(&out)
+	c.SetErr(io.Discard)
+	c.SetArgs([]string{"fresh"})
+	err := c.ExecuteContext(pusherCtx)
+	is.True(errors.Is(err, proto.ErrRepoNotFound)) // the repository it created is gone
+	is.True(replacement != nil)                    // the hook ran
+
+	cur, err := be.Repository(ctx, "fresh")
+	is.NoErr(err)
+	is.Equal(cur.ID(), replacement.ID()) // the other repository is still there
+	r, err := cur.Open()
+	is.NoErr(err)
+	if _, err := r.HEAD(); err == nil {
+		t.Fatal("the push wrote to the repository that replaced the one it created")
+	}
+	is.True(!strings.Contains(out.String(), "refs/heads/main")) // and git never ran on it
 }

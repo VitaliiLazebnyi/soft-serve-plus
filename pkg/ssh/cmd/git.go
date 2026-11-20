@@ -384,12 +384,14 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		if created, err = createByPush(r); err != nil {
 			return err
 		}
-		// The push holds off the removal of the repository it created,
-		// as any push does, so a failed push to it in another session
-		// cannot remove it while this one may still write refs.
-		done, err := be.BeginPush(r.ctx, created)
+		// git writes to the repository's directory, found by name. Before
+		// it does, BeginPush confirms that the name still belongs to the
+		// row just created: an admin may have deleted the repository
+		// since, and someone else created another under the same name,
+		// which this push was never checked against.
+		done, err := beginPush(r.ctx, be, created)
 		if err != nil {
-			// Deleted already, by an admin or that removal.
+			// Deleted, and perhaps replaced, already.
 			return err
 		}
 		endPush = done
@@ -544,7 +546,8 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 }
 
 // testHookBeforeBeginPush, when set, runs in beginPush before the push is
-// marked as running.
+// marked as running: for a push to a missing name, right after the push
+// created the repository.
 var testHookBeforeBeginPush func()
 
 // beginPush marks a push or LFS upload to repo as running; see
