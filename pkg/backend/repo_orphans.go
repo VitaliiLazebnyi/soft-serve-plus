@@ -9,13 +9,27 @@ import (
 	"strings"
 )
 
-// maxReportedOrphans bounds how many orphan directories
-// ReportOrphanRepositories names one by one.
+// maxReportedOrphans bounds how many orphan directories reportOrphans
+// names one by one.
 const maxReportedOrphans = 20
 
-// ReportOrphanRepositories logs each repository directory that has no
-// database row (see OrphanRepositoryDirs). The server runs it once at
-// start-up, before it serves anything.
+// CheckRepositoryDirs runs the start-up checks of the repository
+// directories, from one scan of the rows and of the repos directory: it
+// reports the directories without a row (see reportOrphans) and removes the
+// git-daemon-export-ok files (see removeDaemonExportFiles). The server runs
+// it once at start-up, before it serves anything.
+func (d *Backend) CheckRepositoryDirs(ctx context.Context) {
+	scan, err := d.scanRepoDirs(ctx)
+	if err != nil {
+		d.logger.Error("failed to scan the repository directories", "err", err)
+		return
+	}
+	d.reportOrphans(scan.orphans)
+	d.reportDaemonExportFiles(append(scan.repos, scan.orphans...))
+}
+
+// reportOrphans logs each of orphans, repository directories that have no
+// database row (see OrphanRepositoryDirs).
 //
 // The directories are reported, not removed. A crash or a failed removal
 // leaves one behind, but so does a database restored from an older backup,
@@ -23,12 +37,7 @@ const maxReportedOrphans = 20
 // repository would look like an orphan. An orphan is never served, and its
 // name cannot be created, imported or renamed onto until an operator moves
 // the directory away or removes it.
-func (d *Backend) ReportOrphanRepositories(ctx context.Context) {
-	dirs, err := d.OrphanRepositoryDirs(ctx)
-	if err != nil {
-		d.logger.Error("failed to look for repository directories without a database row", "err", err)
-		return
-	}
+func (d *Backend) reportOrphans(dirs []string) {
 	for i, dir := range dirs {
 		if i == maxReportedOrphans {
 			d.logger.Warn("more repository directories have no database row", "more", len(dirs)-i)
@@ -52,21 +61,32 @@ func (d *Backend) ReportOrphanRepositories(ctx context.Context) {
 // Nothing may create, rename or delete repositories meanwhile: a create or
 // import in progress has its directory before its row.
 func (d *Backend) OrphanRepositoryDirs(ctx context.Context) ([]string, error) {
-	orphans, _, err := d.orphanRepositoryDirs(ctx)
-	return orphans, err
+	scan, err := d.scanRepoDirs(ctx)
+	return scan.orphans, err
 }
 
-// orphanRepositoryDirs is OrphanRepositoryDirs that also returns how many
-// identity comparisons it made. Every directory whose path is a row's, or a
-// group's above one, is matched by path alone, so a data directory with no
-// orphans and no variant spellings costs none, however many repositories
-// and groups it has.
-func (d *Backend) orphanRepositoryDirs(ctx context.Context) ([]string, int, error) {
+// repoDirScan is what scanRepoDirs found.
+type repoDirScan struct {
+	// repos are the directories of the repositories in the database, and
+	// orphans the ones without a row (see OrphanRepositoryDirs).
+	repos, orphans []string
+	// compares is how many identity comparisons the scan made.
+	compares int
+}
+
+// scanRepoDirs reads every repository row and walks the repos directory
+// once, for OrphanRepositoryDirs and the other start-up checks. Every
+// directory whose path is a row's, or a group's above one, is matched by
+// path alone, so a data directory with no orphans and no variant spellings
+// costs no identity comparison, however many repositories and groups it
+// has.
+func (d *Backend) scanRepoDirs(ctx context.Context) (repoDirScan, error) {
 	root := filepath.Join(d.cfg.DataPath, "repos")
 	rows, err := d.store.GetAllRepos(ctx, d.db)
 	if err != nil {
-		return nil, 0, err
+		return repoDirScan{}, err
 	}
+	scan := repoDirScan{repos: make([]string, 0, len(rows))}
 
 	// The rows' directories, and the group directories above them, by
 	// path and by identity.
@@ -74,6 +94,7 @@ func (d *Backend) orphanRepositoryDirs(ctx context.Context) ([]string, int, erro
 	repos, groups := newDirSet(&compares), newDirSet(&compares)
 	for _, m := range rows {
 		rp := d.repoPath(m.Name)
+		scan.repos = append(scan.repos, rp)
 		repos.add(rp)
 		for dir := filepath.Dir(rp); dir != root && filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
 			if groups.paths[dir] {
@@ -132,9 +153,10 @@ func (d *Backend) orphanRepositoryDirs(ctx context.Context) ([]string, int, erro
 		}
 	})
 	if err != nil {
-		return nil, 0, err
+		return repoDirScan{}, err
 	}
-	return orphans, compares, nil
+	scan.orphans, scan.compares = orphans, compares
+	return scan, nil
 }
 
 // dirSet is a set of directories, matched by path and, failing that, by

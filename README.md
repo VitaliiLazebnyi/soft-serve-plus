@@ -1331,9 +1331,10 @@ ssh -p 23231 localhost repo private icecream true
 
 Upgrading: Soft Serve Plus no longer writes a repository's `description` and
 `git-daemon-export-ok` files; the description and the visibility live in the
-database only. At start-up the server removes every `git-daemon-export-ok`
-that an older version left behind, so a stock `git daemon` or cgit pointed at
-the data directory exports nothing on its own any more: give it
+database only. At every start-up the server removes every
+`git-daemon-export-ok` file in its repository directories, whether an older
+version or an operator made it, so a stock `git daemon` or cgit pointed at the
+data directory exports nothing on its own any more: give it
 `--export-all` or its own configuration if you rely on it, keeping in mind
 that it does not know which repositories are private. The `description` file
 of a new repository keeps git's template text.
