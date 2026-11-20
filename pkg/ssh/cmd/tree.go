@@ -29,7 +29,7 @@ func treeCommand() *cobra.Command {
 				path = args[2]
 			}
 
-			r, err := rr.Open()
+			r, err := openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -37,7 +37,7 @@ func treeCommand() *cobra.Command {
 			r = r.WithContext(ctx)
 
 			if ref == "" {
-				head, err := repoHead(r)
+				head, err := repoHead(cmd.Context(), rr, r)
 				if err != nil {
 					return err
 				}
@@ -45,7 +45,7 @@ func treeCommand() *cobra.Command {
 				ref = head.ID
 			}
 
-			tree, err := r.LsTree(ref)
+			tree, err := readTree(ctx, rr, r, ref)
 			if err != nil {
 				return err
 			}
@@ -55,13 +55,21 @@ func treeCommand() *cobra.Command {
 				if errors.Is(err, git.ErrRevisionNotExist) {
 					return proto.ErrFileNotFound
 				}
-				if err != nil {
+				// A tree git lists but this server will not, as with a
+				// name too long for any file system, is the repository
+				// content's, as for the listing below.
+				if errors.Is(err, git.ErrMalformedTree) {
 					return err
+				}
+				if err != nil {
+					return gitFailed(ctx, "read tree", rr.Name(), err)
 				}
 				if !te.IsTree() {
 					printEntries(cmd, git.Entries{te})
 					return nil
 				}
+				// It fails only for an entry that is not a directory,
+				// which IsTree ruled out; it reads nothing.
 				tree, err = te.Tree()
 				if err != nil {
 					return err
@@ -71,8 +79,11 @@ func treeCommand() *cobra.Command {
 			// A directory with too many entries is listed in part, and
 			// says so after the listing.
 			truncated := errors.Is(err, git.ErrTreeTruncated)
-			if err != nil && !truncated {
+			if errors.Is(err, git.ErrMalformedTree) {
 				return err
+			}
+			if err != nil && !truncated {
+				return gitFailed(ctx, "read tree", rr.Name(), err)
 			}
 			printEntries(cmd, ents)
 			if truncated {

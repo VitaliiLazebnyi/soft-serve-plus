@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"errors"
+	"os/exec"
 	"strings"
 
 	"github.com/aymanbagabas/git-module"
@@ -52,10 +54,17 @@ func (r *Repository) withCtx(o git.CommandOptions) git.CommandOptions {
 	return o
 }
 
-// Branches returns the names of the repository's branches.
+// Branches returns the names of the repository's branches, none for a
+// repository without any.
 func (r *Repository) Branches() ([]string, error) {
 	heads, err := r.ShowRef(git.ShowRefOptions{Heads: true, CommandOptions: r.cmdOpts()})
 	if err != nil {
+		// As in References: git show-ref exits with status 1 and prints
+		// nothing when nothing matches.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 	branches := make([]string, len(heads))

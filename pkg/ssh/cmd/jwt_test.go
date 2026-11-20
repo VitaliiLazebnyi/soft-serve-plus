@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -50,4 +53,23 @@ func TestJWTChecksUserBeforeKey(t *testing.T) {
 
 	_, err = runJWT(ctx, "repo")
 	is.True(errors.Is(err, proto.ErrUserNotFound))
+}
+
+// A host key the server cannot read fails jwt on the server: the client
+// gets the generic error, not the key's path, which is logged.
+func TestJWTHostKeyFailureIsLogged(t *testing.T) {
+	is := is.New(t)
+	keyPath := filepath.Join(t.TempDir(), "missing_host_key")
+	ctx, be := newAuthTestContextWith(t, func(c *config.Config) {
+		c.SSH.KeyPath = keyPath
+	})
+	var logs bytes.Buffer
+	ctx = log.WithContext(ctx, log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel}))
+	ctx = withUser(t, ctx, be, "alice", false)
+
+	_, err := runJWT(ctx, "repo")
+	is.True(errors.Is(err, errLookupFailed))
+	is.True(!strings.Contains(err.Error(), keyPath))
+	is.Equal(strings.Count(logs.String(), "ERROR"), 1)
+	is.True(strings.Contains(logs.String(), "missing_host_key"))
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -201,6 +202,41 @@ func lookupFailed(ctx context.Context, logger *log.Logger, what string, err erro
 		logger.Error("lookup failed", "what", what, "err", err)
 	}
 	return errLookupFailed
+}
+
+// errGitFailed is returned to the client when git failed on the server
+// reading or changing a repository, as when its refs are corrupt. The
+// cause stays in the server log: git's message can name server paths.
+var errGitFailed = errors.New("git failed on the server; the cause is in the server log")
+
+// gitFailed logs err, git's failure to do what in repository repo, and
+// returns errGitFailed for the client, as lookupFailed does for a failed
+// lookup. A git run the client canceled by going away is logged at Debug.
+func gitFailed(ctx context.Context, what, repo string, err error) error {
+	logger := log.FromContext(ctx)
+	if ctx.Err() != nil {
+		logger.Debug("git canceled", "what", what, "repo", repo, "err", err)
+	} else {
+		logger.Error("git failed", "what", what, "repo", repo, "err", err)
+	}
+	return errGitFailed
+}
+
+// openRepository opens rr's git repository for a command. Opening fails
+// only for a reason of the server's, such as a directory git does not
+// accept ("detected dubious ownership", which names the server path), so
+// the client gets errGitFailed. The backend has already logged a directory
+// git does not accept; any other failure is logged here.
+func openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, error) {
+	r, err := rr.Open()
+	switch {
+	case err == nil:
+		return r, nil
+	case errors.Is(err, git.ErrNotAGitRepository):
+		return nil, errGitFailed
+	default:
+		return nil, gitFailed(ctx, "open repository", rr.Name(), err)
+	}
 }
 
 // checkIfServerAdmin is the authorization gate for global (non-repo-scoped)

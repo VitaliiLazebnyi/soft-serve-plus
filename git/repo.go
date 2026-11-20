@@ -191,11 +191,14 @@ func (r *Repository) treeID(ref string) (string, error) {
 	var out, stderr bytes.Buffer
 	cmd := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--end-of-options", ref+"^{tree}")
 	if err := cmd.RunInDirPipeline(&out, &stderr, r.Path); err != nil {
-		// git exits with 128 when it cannot resolve the revision. The
-		// error is read directly, not through RunInDir, which folds
-		// stderr into a new error that is no longer an *exec.ExitError.
+		// git exits with 128 when it cannot resolve the revision, but
+		// also when it cannot read the repository, such as one with
+		// corrupt refs. Only a revision "rev-parse --verify --quiet"
+		// also finds missing is a missing revision. The error is read
+		// directly, not through RunInDir, which folds stderr into a new
+		// error that is no longer an *exec.ExitError.
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 {
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && r.treeMissing(ref) {
 			return "", ErrRevisionNotExist
 		}
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
@@ -208,6 +211,57 @@ func (r *Repository) treeID(ref string) (string, error) {
 		return "", ErrRevisionNotExist
 	}
 	return id.String(), nil
+}
+
+// treeMissing reports whether ref names no tree, as the client may ask for:
+// "rev-parse --verify --quiet" exits with 1 for ref^{tree}, and ref is not
+// a commit git can read either. It exits with 128 for a fatal error such as
+// a repository it cannot read, and a commit whose tree cannot be read is a
+// tree missing from the repository, not a revision the client got wrong.
+func (r *Repository) treeMissing(ref string) bool {
+	resolves := func(rev string) (bool, bool) {
+		cmd := NewCommandWithContext(r.Context(), "rev-parse", "--verify", "--quiet", "--end-of-options", rev)
+		err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
+		var exitErr *exec.ExitError
+		return err == nil, errors.As(err, &exitErr) && exitErr.ExitCode() == 1
+	}
+	if _, missing := resolves(ref + "^{tree}"); !missing {
+		return false
+	}
+	isCommit, _ := resolves(ref + "^{commit}")
+	return !isCommit && !r.refUnreadable(git.CommandOptions{}, ref)
+}
+
+// refUnreadable reports whether rev is a ref that exists but whose object
+// git cannot read, which is the repository's fault rather than a revision
+// the client got wrong. That is so when rev names a ref (namesRef) and the
+// ref does not peel ("rev-parse --verify --quiet REV^{}" fails): a ref to a
+// blob, for example a tag on one, peels, and is the client asking for a
+// tree or commit where there is none. A raw object ID that names nothing
+// and an unknown name are no refs. It runs under opts' context and timeout,
+// or r's context.
+func (r *Repository) refUnreadable(opts git.CommandOptions, rev string) bool {
+	if !r.namesRef(opts, rev) {
+		return false
+	}
+	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{}").
+		AddOptions(r.withCtx(opts))
+	return cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path) != nil
+}
+
+// namesRef reports whether rev names a ref that exists, such as a branch
+// or a detached HEAD, whatever its object: "rev-parse --symbolic-full-name"
+// prints the ref's full name for it, or HEAD for a detached HEAD, and
+// nothing for a raw object ID or an expression such as main~1.
+func (r *Repository) namesRef(opts git.CommandOptions, rev string) bool {
+	var out bytes.Buffer
+	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", rev).
+		AddOptions(r.withCtx(opts))
+	if err := cmd.RunInDirPipeline(&out, io.Discard, r.Path); err != nil {
+		return false
+	}
+	name := strings.TrimSpace(out.String())
+	return strings.HasPrefix(name, "refs/") || name == "HEAD"
 }
 
 // LsTree returns the root tree of the given reference. It only resolves

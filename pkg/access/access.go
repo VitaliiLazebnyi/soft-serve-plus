@@ -38,19 +38,20 @@ func (a AccessLevel) String() string {
 	}
 }
 
-// ParseAccessLevel parses an access level string.
-func ParseAccessLevel(s string) AccessLevel {
+// ParseAccessLevel parses an access level string: no-access, read-only,
+// read-write or admin-access. Anything else is ErrInvalidAccessLevel.
+func ParseAccessLevel(s string) (AccessLevel, error) {
 	switch s {
 	case "no-access":
-		return NoAccess
+		return NoAccess, nil
 	case "read-only":
-		return ReadOnlyAccess
+		return ReadOnlyAccess, nil
 	case "read-write":
-		return ReadWriteAccess
+		return ReadWriteAccess, nil
 	case "admin-access":
-		return AdminAccess
+		return AdminAccess, nil
 	default:
-		return AccessLevel(-1)
+		return NoAccess, ErrInvalidAccessLevel
 	}
 }
 
@@ -64,9 +65,9 @@ var ErrInvalidAccessLevel = errors.New("invalid access level")
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (a *AccessLevel) UnmarshalText(text []byte) error {
-	l := ParseAccessLevel(string(text))
-	if l < 0 {
-		return ErrInvalidAccessLevel
+	l, err := ParseAccessLevel(string(text))
+	if err != nil {
+		return err
 	}
 
 	*a = l

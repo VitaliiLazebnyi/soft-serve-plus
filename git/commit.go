@@ -154,7 +154,8 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 
 // revisionMissing reports whether git says rev names no commit. "rev-parse
 // --verify --quiet" exits with 1 for that, and with 128 for a fatal error
-// such as a repository it cannot read, which is not a missing revision.
+// such as a repository it cannot read, which is not a missing revision; nor
+// is an existing ref whose object is gone (see refUnreadable).
 // It runs under the caller's context and timeout.
 func (r *Repository) revisionMissing(rev string, opt git.CommitByRevisionOptions) bool {
 	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}").
@@ -167,7 +168,17 @@ func (r *Repository) revisionMissing(rev string, opt git.CommitByRevisionOptions
 	}
 	err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
 	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return false
+	}
+	// A ref whose object is gone does not resolve either; that is the
+	// repository's fault. It is checked under the same timeout: opt.Timeout,
+	// when set, overrides opt.CommandOptions.Timeout as above.
+	timeout := opt.CommandOptions.Timeout
+	if opt.Timeout != 0 {
+		timeout = opt.Timeout
+	}
+	return !r.refUnreadable(git.CommandOptions{Context: opt.Context, Timeout: timeout}, rev)
 }
 
 // isParseError reports whether err is one of the errors git-module's commit

@@ -165,6 +165,56 @@ func testHookErrorClosesDB(t *testing.T) {
 	}
 }
 
+// A pre-receive or post-receive input line too long to read fails the hook,
+// before it acts or runs the custom hook on the refs read so far: reading
+// stopped at that line, and the refs after it would be left out without a
+// word.
+func TestHookFailsOnUnreadableInput(t *testing.T) {
+	sh := runtime.GOOS != "windows"
+	if _, err := exec.LookPath("sh"); err != nil {
+		sh = false
+	}
+	for _, name := range []string{"pre-receive", "post-receive"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+			cfg := config.DefaultConfig()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(t.TempDir(), "ran")
+			if sh {
+				hooksPath := filepath.Join(cfg.DataPath, "hooks")
+				if err := os.MkdirAll(hooksPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				//nolint: gosec
+				if err := os.WriteFile(filepath.Join(hooksPath, name), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := config.WithContext(context.Background(), cfg)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+
+			zero := strings.Repeat("0", 40)
+			one := strings.Repeat("1", 40)
+			input := zero + " " + one + " refs/heads/a\n" +
+				zero + " " + one + " refs/heads/" + strings.Repeat("b", 70<<10) + "\n" +
+				zero + " " + one + " refs/heads/c\n"
+			command := NewCommand()
+			command.SetArgs([]string{name})
+			command.SetIn(strings.NewReader(input))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "hook input") {
+				t.Fatalf("hook returned %v for input it could not read", err)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Error("the custom hook ran on part of the input")
+			}
+		})
+	}
+}
+
 // The ignored --config flag is marked deprecated, so cobra hides it and says
 // so when it is used.
 func TestConfigFlagDeprecated(t *testing.T) {

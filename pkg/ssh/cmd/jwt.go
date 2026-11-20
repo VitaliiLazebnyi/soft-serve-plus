@@ -3,6 +3,8 @@ package cmd
 import (
 	"time"
 
+	"charm.land/log/v2"
+
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -31,9 +33,11 @@ func JWTCommand() *cobra.Command {
 				audience[i] = utils.SanitizeRepo(arg)
 			}
 
+			// Signing fails only for the server's host key, whose error
+			// names its path on the server.
 			j, err := jwk.Sign(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
 			if err != nil {
-				return err
+				return lookupFailed(ctx, log.FromContext(ctx), "read the host key", err)
 			}
 
 			cmd.Println(j)
