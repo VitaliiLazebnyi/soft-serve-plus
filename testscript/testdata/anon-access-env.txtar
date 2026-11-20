@@ -30,12 +30,12 @@ stderr 'Created repository keyless-repo'
 mkdir httprepo
 git -c init.defaultBranch=main -C httprepo init
 mkfile ./httprepo/README.md '# hello'
-git -C httprepo remote add origin http://localhost:$HTTP_PORT/httprepo
+git -C httprepo remote add origin http://127.0.0.1:$HTTP_PORT/httprepo
 git -C httprepo add -A
 git -C httprepo commit -m 'first'
 git -C httprepo push origin HEAD
 
-git clone http://localhost:$HTTP_PORT/httprepo httprepo_clone
+git clone http://127.0.0.1:$HTTP_PORT/httprepo httprepo_clone
 cmp httprepo_clone/README.md httprepo/README.md
 
 # both repos -- the one created via keyless SSH and the one auto-created by
