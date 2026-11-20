@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/matryer/is"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // gitTestTimeout bounds the waits in these tests, so a handler that never
@@ -133,25 +134,38 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 	is.Equal(strings.TrimSpace(string(out)), "refs/heads/trunk") // HEAD points at the pushed branch
 }
 
-// A push the caller may not make must not add a metric series for the name it
-// asked for: anyone can ask for any name, so labelling refused requests would
-// let clients grow the metrics without limit.
-func TestRefusedPushAddsNoMetricLabel(t *testing.T) {
+// No git service adds a metric series for the repository it serves. A
+// caller who may create repositories can push to any new name, and a push
+// that fails removes the repository it created again, so per-name series
+// would grow without limit; so would series of repositories deleted or
+// renamed since. Here a push creates a repository and fails, and a refused
+// push asks for another name.
+func TestPushAddsNoRepositorySeries(t *testing.T) {
 	is := is.New(t)
-	ctx, _ := newAuthTestContext(t)
+	cancelledPushToCreate(t, nil)
 
-	const name = "refused-push-metric-label"
+	ctx, _ := newAuthTestContext(t)
+	const refused = "refused-push-metric-label"
 	c := GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(strings.NewReader(""))
 	c.SetOut(io.Discard)
 	c.SetErr(io.Discard)
-	c.SetArgs([]string{name})
+	c.SetArgs([]string{refused})
 	is.True(c.ExecuteContext(ctx) != nil) // anonymous callers may not push
 
-	is.True(!receivePackCounter.DeleteLabelValues(name)) // no push counter series
-	is.True(!receivePackSeconds.DeleteLabelValues(name)) // no push duration series
+	families, err := prometheus.DefaultGatherer.Gather()
+	is.NoErr(err)
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if v := l.GetValue(); v == "fresh" || v == refused {
+					t.Errorf("%s has a series labelled %s=%q", f.GetName(), l.GetName(), v)
+				}
+			}
+		}
+	}
 }
 
 // A push that created a repository and failed must not remove it while

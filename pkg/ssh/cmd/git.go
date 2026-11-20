@@ -22,83 +22,86 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// The git service metrics carry no repository label: anyone who may create
+// repositories could otherwise add series without limit, for names that
+// are deleted or renamed and never come back.
 var (
-	uploadPackCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	uploadPackCounter = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "upload_pack_total",
 		Help:      "The total number of git-upload-pack requests",
-	}, []string{"repo"})
+	})
 
-	receivePackCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	receivePackCounter = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "receive_pack_total",
 		Help:      "The total number of git-receive-pack requests",
-	}, []string{"repo"})
+	})
 
-	uploadArchiveCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	uploadArchiveCounter = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "upload_archive_total",
 		Help:      "The total number of git-upload-archive requests",
-	}, []string{"repo"})
+	})
 
 	lfsAuthenticateCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "lfs_authenticate_total",
 		Help:      "The total number of git-lfs-authenticate requests",
-	}, []string{"repo", "operation"})
+	}, []string{"operation"})
 
 	lfsTransferCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "lfs_transfer_total",
 		Help:      "The total number of git-lfs-transfer requests",
-	}, []string{"repo", "operation"})
+	}, []string{"operation"})
 
-	uploadPackSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
+	uploadPackSeconds = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "upload_pack_seconds_total",
 		Help:      "The total time spent on git-upload-pack requests",
-	}, []string{"repo"})
+	})
 
-	receivePackSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
+	receivePackSeconds = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "receive_pack_seconds_total",
 		Help:      "The total time spent on git-receive-pack requests",
-	}, []string{"repo"})
+	})
 
-	uploadArchiveSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
+	uploadArchiveSeconds = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "upload_archive_seconds_total",
 		Help:      "The total time spent on git-upload-archive requests",
-	}, []string{"repo"})
+	})
 
 	lfsAuthenticateSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "lfs_authenticate_seconds_total",
 		Help:      "The total time spent on git-lfs-authenticate requests",
-	}, []string{"repo", "operation"})
+	}, []string{"operation"})
 
 	lfsTransferSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "git",
 		Name:      "lfs_transfer_seconds_total",
 		Help:      "The total time spent on git-lfs-transfer requests",
-	}, []string{"repo", "operation"})
+	}, []string{"operation"})
 
-	createRepoCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	createRepoCounter = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "ssh",
 		Name:      "create_repo_total",
 		Help:      "The total number of create repo requests",
-	}, []string{"repo"})
+	})
 )
 
 // GitUploadPackCommand returns a cobra command for git-upload-pack.
@@ -339,9 +342,9 @@ func runUploadPack(cmd *cobra.Command, args []string, service git.Service) error
 	if service == git.UploadArchiveService {
 		counter, seconds = uploadArchiveCounter, uploadArchiveSeconds
 	}
-	counter.WithLabelValues(r.name).Inc()
+	counter.Inc()
 	defer func() {
-		seconds.WithLabelValues(r.name).Add(time.Since(r.start).Seconds())
+		seconds.Add(time.Since(r.start).Seconds())
 	}()
 
 	if err := service.Handler(r.ctx, r.scmd); err != nil {
@@ -421,11 +424,9 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		r.setRepo(created, r.level)
 	}
 
-	// Count only pushes that passed the access check, so a refused name
-	// never becomes a metric label.
-	receivePackCounter.WithLabelValues(r.name).Inc()
+	receivePackCounter.Inc()
 	defer func() {
-		receivePackSeconds.WithLabelValues(r.name).Add(time.Since(r.start).Seconds())
+		receivePackSeconds.Add(time.Since(r.start).Seconds())
 	}()
 
 	if err := git.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
@@ -467,7 +468,7 @@ func createByPush(r *gitRequest) (proto.Repository, error) {
 		r.logger.Debug("failed to create repo", "err", err, "repo", r.name)
 		return nil, err
 	}
-	createRepoCounter.WithLabelValues(r.name).Inc()
+	createRepoCounter.Inc()
 	return created, nil
 }
 
@@ -557,9 +558,9 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 		defer done()
 	}
 
-	counter.WithLabelValues(r.name, operation).Inc()
+	counter.WithLabelValues(operation).Inc()
 	defer func() {
-		seconds.WithLabelValues(r.name, operation).Add(time.Since(r.start).Seconds())
+		seconds.WithLabelValues(operation).Add(time.Since(r.start).Seconds())
 	}()
 
 	if err := run(r.ctx, r.scmd); err != nil {
