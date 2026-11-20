@@ -204,6 +204,61 @@ func TestSoftServeHookWindows(t *testing.T) {
 	}
 }
 
+// The README's rules for which custom hooks run, outside Windows: a hook
+// only other users may execute is skipped, and an executable hook without a
+// #! line runs with sh.
+func TestSoftServeHookExecutableRules(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root may execute any file with an execute bit")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not found")
+	}
+	for _, tc := range []struct {
+		name   string
+		body   string
+		mode   os.FileMode
+		status int
+	}{
+		{"others only", "#!/bin/sh\nexit 3\n", 0o601, 0},
+		{"no shebang", "exit 3\n", 0o700, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(tmp, "hooks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			hook := filepath.Join(tmp, "hooks", UpdateHook)
+			if err := os.WriteFile(hook, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(hook, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			script := filepath.Join(tmp, "soft-serve")
+			if err := os.WriteFile(script, []byte(softServeHook(runtime.GOOS, UpdateHook)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), "sh", script, "refs/heads/main", "old", "new")
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "SOFT_SERVE_DATA_PATH=" + tmp, "SOFT_SERVE_REPO_NAME=repo"}
+			err := cmd.Run()
+			status := 0
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				status = exitErr.ExitCode()
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if status != tc.status {
+				t.Errorf("exit status %d, want %d", status, tc.status)
+			}
+		})
+	}
+}
+
 // Without SOFT_SERVE_DATA_PATH a custom hook cannot be found, and the hook
 // refuses the push, as `soft hook` did, rather than look for one elsewhere.
 func TestSoftServeHookNeedsDataPath(t *testing.T) {
