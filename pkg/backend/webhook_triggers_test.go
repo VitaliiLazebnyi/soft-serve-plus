@@ -831,23 +831,49 @@ func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 	q := newDeliveryQueue(2, 100, charmlog.New(io.Discard))
 	var mu sync.Mutex
 	running, peak, ran := 0, 0, 0
+	// Every job runs until release, so the first ones are still running
+	// when the rest are enqueued.
+	release := make(chan struct{})
 	for i := 0; i < 50; i++ {
 		is.Equal(q.enqueue(int64(i), func() {
 			mu.Lock()
 			running++
 			peak = max(peak, running)
 			mu.Unlock()
-			time.Sleep(time.Millisecond)
+			<-release
 			mu.Lock()
 			running--
 			ran++
 			mu.Unlock()
 		}), enqueued)
 	}
+	// enqueue starts a job's goroutine or queues it before it returns.
+	q.mu.Lock()
+	workers, queued := q.workers, q.queued
+	q.mu.Unlock()
+	if workers != 2 || queued != 48 {
+		close(release)
+		t.Fatalf("with 50 jobs running until released: %d workers and %d queued, want 2 and 48", workers, queued)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		mu.Lock()
+		r := running
+		mu.Unlock()
+		if r == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("%d jobs running a minute after they were enqueued, want 2", r)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
 	_, finished := q.close()
 	<-finished
 	is.Equal(ran, 50)
-	is.True(peak <= 2)
+	is.Equal(peak, 2)
 	is.Equal(q.enqueue(1, func() {}), enqueueClosed)
 }
 
