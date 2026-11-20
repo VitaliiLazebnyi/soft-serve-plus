@@ -52,7 +52,6 @@ func TestJWTChecksUserBeforeKey(t *testing.T) {
 	ctx = context.WithValue(ctx, ssh.ContextKeyPublicKey, kp.PublicKey())
 
 	_, err = runJWT(ctx, "repo")
-	t.Logf("err=%v", err)
 	is.True(errors.Is(err, proto.ErrUserNotFound))
 }
 

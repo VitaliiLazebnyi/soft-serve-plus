@@ -88,6 +88,13 @@ func (l *syncLog) String() string {
 	return l.buf.String()
 }
 
+// reset empties the log.
+func (l *syncLog) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf.Reset()
+}
+
 // count returns how many lines of the log hold level.
 func (l *syncLog) count(level string) int {
 	n := 0

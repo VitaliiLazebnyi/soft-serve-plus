@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -118,6 +119,12 @@ func TestMissingObjectIsServerFailure(t *testing.T) {
 		{"tree subtree", func(g gitFailureRepo) string { return g.subtree }, []string{"tree", "r", "d"}},
 		{"tree in subtree", func(g gitFailureRepo) string { return g.subtree }, []string{"tree", "r", "d/g"}},
 		{"blob in subtree", func(g gitFailureRepo) string { return g.subtree }, []string{"blob", "r", "d/g"}},
+		// The branch still resolves to its name; its commit object is gone.
+		{"commit of branch", func(g gitFailureRepo) string { return g.commit }, []string{"commit", "r", "main"}},
+		{"commit patch of branch", func(g gitFailureRepo) string { return g.commit }, []string{"commit", "-p", "r", "main"}},
+		{"tree of branch", func(g gitFailureRepo) string { return g.commit }, []string{"tree", "r", "main", "f"}},
+		{"blob of branch", func(g gitFailureRepo) string { return g.commit }, []string{"blob", "r", "main", "f"}},
+		{"blob raw of branch", func(g gitFailureRepo) string { return g.commit }, []string{"blob", "-r", "r", "main", "f"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newGitFailureRepo(t, nil)
@@ -155,7 +162,18 @@ func TestOpenFailureIsServerFailure(t *testing.T) {
 		if err := os.WriteFile(g.dir, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		g.wantGitFailed(t, "open repository", []string{g.dir, "does not exist"}, "branch", "list", "r")
+		// One command of each file that opens the repository.
+		for _, args := range [][]string{
+			{"branch", "list", "r"},
+			{"tag", "list", "r"},
+			{"tree", "r"},
+			{"commit", "r", "main"},
+			{"blob", "r", "f"},
+			{"info", "r"},
+		} {
+			g.logs.reset()
+			g.wantGitFailed(t, "open repository", []string{g.dir, "does not exist"}, args...)
+		}
 	})
 }
 
@@ -193,5 +211,53 @@ func TestInfoMirrorSyncStatusLookupFailure(t *testing.T) {
 	}
 	if n := g.logs.count("ERRO"); n != 1 || !strings.Contains(g.logs.String(), "/server/path") {
 		t.Errorf("want the failure logged once at Error, got %d:\n%s", n, g.logs.String())
+	}
+}
+
+// A tree this server will not list, here one with a name longer than any
+// file system takes, is the repository content's: the client gets
+// git.ErrMalformedTree, from the listing and from a lookup of that name
+// alike.
+func TestMalformedTreeIsReported(t *testing.T) {
+	g := newGitFailureRepo(t, nil)
+	blob := gittest.Git(t, g.dir, []byte("x\n"), "hash-object", "-w", "--stdin")
+	long := strings.Repeat("n", 5000)
+	tree := gittest.Git(t, g.dir, fmt.Appendf(nil, "100644 blob %s\tf\n100644 blob %s\t%s\n", blob, blob, long), "mktree")
+	commit := gittest.Commit(t, g.dir, gittest.Valid, tree, "long name")
+	gittest.Git(t, g.dir, nil, "update-ref", "refs/heads/main", commit)
+
+	// A lookup lists only the path asked for, so it meets the long name
+	// only when asked for it.
+	for _, args := range [][]string{
+		{"tree", "r"},
+		{"tree", "r", long},
+		{"blob", "r", long},
+	} {
+		_, _, err := runRepoOutput(t, g.ctx, args...)
+		if !errors.Is(err, git.ErrMalformedTree) {
+			t.Errorf("%v: err = %v, want %v", args, err, git.ErrMalformedTree)
+		}
+	}
+	if n := g.logs.count("ERRO"); n != 0 {
+		t.Errorf("a malformed tree was logged as a server failure:\n%s", g.logs.String())
+	}
+}
+
+// With a detached HEAD, reading the default branch before the change, which
+// only feeds the event, fails; the change still goes on and the failure is
+// logged at Warn.
+func TestBranchDefaultFromDetachedHEAD(t *testing.T) {
+	g := newGitFailureRepo(t, nil)
+	if err := os.WriteFile(filepath.Join(g.dir, "HEAD"), []byte(g.commit+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runRepoOutput(t, g.ctx, "branch", "default", "r", "other"); err != nil {
+		t.Fatalf("branch default from a detached HEAD: %v", err)
+	}
+	if head := gittest.Git(t, g.dir, nil, "symbolic-ref", "HEAD"); head != "refs/heads/other" {
+		t.Errorf("HEAD = %q, want refs/heads/other", head)
+	}
+	if n := g.logs.count("WARN"); n != 1 || g.logs.count("ERRO") != 0 {
+		t.Errorf("want the old default branch read logged once at Warn, log:\n%s", g.logs.String())
 	}
 }

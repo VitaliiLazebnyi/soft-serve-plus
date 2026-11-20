@@ -229,7 +229,23 @@ func (r *Repository) treeMissing(ref string) bool {
 		return false
 	}
 	isCommit, _ := resolves(ref + "^{commit}")
-	return !isCommit
+	return !isCommit && !r.namesRef(git.CommandOptions{}, ref)
+}
+
+// namesRef reports whether rev names a ref that exists, such as a branch,
+// whatever its object: "rev-parse --symbolic-full-name" prints the ref's
+// full name for it, and nothing for a raw object ID or an expression such
+// as main~1. A ref whose object cannot be read is then the repository's
+// fault, not a revision the client got wrong. It runs under opts' context
+// and timeout, or r's context.
+func (r *Repository) namesRef(opts git.CommandOptions, rev string) bool {
+	var out bytes.Buffer
+	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", rev).
+		AddOptions(r.withCtx(opts))
+	if err := cmd.RunInDirPipeline(&out, io.Discard, r.Path); err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(out.String()), "refs/")
 }
 
 // LsTree returns the root tree of the given reference. It only resolves

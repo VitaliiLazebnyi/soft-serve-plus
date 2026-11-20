@@ -75,3 +75,39 @@ func TestLsTreeMissingTreeIsNotMissingRevision(t *testing.T) {
 		t.Fatalf("LsTree(blob) error = %v, want ErrRevisionNotExist", err)
 	}
 }
+
+// TestMissingCommitObjectOfRef checks that a branch whose commit object is
+// gone is the repository failing, for both the tree and the commit lookup,
+// while a raw object ID that names nothing still is a missing revision.
+func TestMissingCommitObjectOfRef(t *testing.T) {
+	t.Parallel()
+	bare := filepath.Join(t.TempDir(), "r.git")
+	gittest.Git(t, filepath.Dir(bare), nil, "init", "-q", "--bare", bare)
+	root := gittest.Commit(t, bare, gittest.Valid, gittest.Tree(t, bare, "f", "root\n"), "root")
+	gittest.Git(t, bare, nil, "update-ref", "refs/heads/main", root)
+	gittest.Git(t, bare, nil, "symbolic-ref", "HEAD", "refs/heads/main")
+	if err := os.Remove(filepath.Join(bare, "objects", root[:2], root[2:])); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := Open(bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{"main", "refs/heads/main", "HEAD"} {
+		if _, err := repo.LsTree(ref); err == nil || errors.Is(err, ErrRevisionNotExist) {
+			t.Errorf("LsTree(%q): err = %v, want git's failure", ref, err)
+		}
+		if _, err := repo.CommitByRevision(ref); err == nil || errors.Is(err, ErrRevisionNotExist) {
+			t.Errorf("CommitByRevision(%q): err = %v, want git's failure", ref, err)
+		}
+	}
+	for _, rev := range []string{root, "nope", "main~1"} {
+		if _, err := repo.LsTree(rev); !errors.Is(err, ErrRevisionNotExist) {
+			t.Errorf("LsTree(%q): err = %v, want ErrRevisionNotExist", rev, err)
+		}
+		if _, err := repo.CommitByRevision(rev); !errors.Is(err, ErrRevisionNotExist) {
+			t.Errorf("CommitByRevision(%q): err = %v, want ErrRevisionNotExist", rev, err)
+		}
+	}
+}

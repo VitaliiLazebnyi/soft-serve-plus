@@ -55,6 +55,12 @@ func treeCommand() *cobra.Command {
 				if errors.Is(err, git.ErrRevisionNotExist) {
 					return proto.ErrFileNotFound
 				}
+				// A tree git lists but this server will not, as with a
+				// name too long for any file system, is the repository
+				// content's, as for the listing below.
+				if errors.Is(err, git.ErrMalformedTree) {
+					return err
+				}
 				if err != nil {
 					return gitFailed(ctx, "read tree", rr.Name(), err)
 				}

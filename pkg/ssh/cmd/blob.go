@@ -66,6 +66,11 @@ func blobCommand() *cobra.Command {
 			if errors.Is(err, git.ErrRevisionNotExist) {
 				return proto.ErrFileNotFound
 			}
+			// A tree this server will not list is the repository
+			// content's, as in `repo tree`.
+			if errors.Is(err, git.ErrMalformedTree) {
+				return err
+			}
 			if err != nil {
 				return gitFailed(ctx, "read tree", repo.Name(), err)
 			}
