@@ -71,59 +71,21 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
-  # The number of seconds a client has to finish the SSH handshake and
-  # authenticate before the connection is closed, like OpenSSH's
-  # LoginGraceTime. A value of 0 means no limit.
-  handshake_timeout: 120
-
   # The maximum number of SSH connections open at once, in total and from
   # one client address (one IPv4 address or one IPv6 /64). Connections over
   # a limit are closed straight away. A connection holds its place from the
-  # moment it is accepted, so handshake_timeout bounds how long a client
-  # that never authenticates can keep one. A value of 0 means no limit.
+  # moment it is accepted until it authenticates, which a client has 2
+  # minutes to do. A value of 0 means no limit.
   # Many clients behind one NAT or CI egress address share the per-address
   # limit; raise max_connections_per_ip, or set it to 0, for such setups.
   max_connections: 256
   max_connections_per_ip: 32
 
-  # The maximum number of sessions open at once on one SSH connection, like
-  # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
-  # value of 0 means no limit.
-  max_sessions: 10
-
-  # The key exchange algorithms, ciphers and MACs the SSH server offers, in
-  # order of preference. When a list is empty, the server offers every
-  # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
-  # SHA-1 based diffie-hellman-group14-sha1, diffie-hellman-group1-sha1,
-  # diffie-hellman-group-exchange-sha1, hmac-sha1 and hmac-sha1-96. Names
-  # x/crypto does not implement are rejected at startup. A list replaces the
-  # default, so to let an old client that only speaks SHA-1 connect, copy the
-  # full default list and append the legacy algorithm. Listing fewer would
-  # drop the rest, such as the post-quantum mlkem768x25519-sha256:
-  #   kex_algorithms:
-  #     - "mlkem768x25519-sha256"
-  #     - "curve25519-sha256"
-  #     - "ecdh-sha2-nistp256"
-  #     - "ecdh-sha2-nistp384"
-  #     - "ecdh-sha2-nistp521"
-  #     - "diffie-hellman-group14-sha256"
-  #     - "diffie-hellman-group16-sha512"
-  #     - "diffie-hellman-group-exchange-sha256"
-  #     - "diffie-hellman-group14-sha1" # legacy, appended
-  #   macs:
-  #     - "hmac-sha2-256-etm@openssh.com"
-  #     - "hmac-sha2-512-etm@openssh.com"
-  #     - "hmac-sha2-256"
-  #     - "hmac-sha2-512"
-  #     - "hmac-sha1" # legacy, appended
-  kex_algorithms: []
-  ciphers: []
-  macs: []
-
   # The signature algorithms the SSH server accepts for client public key
   # authentication. When empty, the server accepts every algorithm
   # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
-  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # ssh-rsa and ssh-dss. (The key exchanges, ciphers and MACs are always the
+  # ones x/crypto considers secure, without hmac-sha1.) RSA keys still work through rsa-sha2-256 and
   # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
   # implement are rejected at startup. A list replaces the default, so to let
   # an old client that only signs with ssh-rsa authenticate, copy the default
@@ -279,16 +241,11 @@ db:
   # are used as written.
   data_source: "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 
-  # Connection pool limits. 0 keeps the database/sql default: no limit on
-  # open connections, 2 idle connections, and no limit on how long a
-  # connection is reused or may sit idle. With Postgres, set max_open_conns
-  # below the server's max_connections (minus what other clients use) so a
-  # burst of requests waits for a free connection instead of failing.
-  # Durations are in seconds.
+  # The maximum number of open database connections. 0 means no limit.
+  # With Postgres, set it below the server's max_connections (minus what
+  # other clients use) so a burst of requests waits for a free connection
+  # instead of failing.
   max_open_conns: 0
-  max_idle_conns: 0
-  conn_max_lifetime: 0
-  conn_max_idle_time: 0
 
 # Git LFS configuration.
 lfs:
@@ -304,9 +261,6 @@ jobs:
   # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
   # it; it keeps this value.
   mirror_pull: "@every 10m"
-  # Remove temporary files that interrupted LFS uploads and mirror
-  # downloads left behind for more than a day.
-  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
@@ -362,14 +316,6 @@ webhook:
 # limit is refused; existing repositories are kept. Imports still running
 # count against the limit. 0 means no limit.
 #max_repos_per_user: 0
-
-# Largest file, in bytes, that the TUI and "repo blob" read into memory to
-# display. Larger files are refused ("repo blob --raw" streams them instead),
-# and a larger README is not shown. The TUI highlights and wraps a file
-# while handling input, so this limit is also what keeps one file view from
-# stalling a session: raising it, or 0 for no limit, makes large files slow
-# to open and costly in memory. Defaults to 1048576 (1 MiB).
-max_blob_size: 1048576
 
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without

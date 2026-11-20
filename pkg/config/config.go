@@ -73,13 +73,6 @@ type SSHConfig struct {
 	// IdleTimeout is the number of seconds a connection can be idle before it is closed.
 	IdleTimeout int `env:"IDLE_TIMEOUT" yaml:"idle_timeout"`
 
-	// HandshakeTimeout is the number of seconds a client has to finish the
-	// SSH handshake and authenticate, like OpenSSH's LoginGraceTime. Until
-	// then the connection holds a place under MaxConnections and
-	// MaxConnectionsPerIP, so this bounds how long an idle, unauthenticated
-	// client can keep one. Zero means no limit.
-	HandshakeTimeout int `env:"HANDSHAKE_TIMEOUT" yaml:"handshake_timeout"`
-
 	// MaxConnections is the maximum number of SSH connections open at once.
 	// Zero means no limit.
 	MaxConnections int `env:"MAX_CONNECTIONS" yaml:"max_connections"`
@@ -88,22 +81,6 @@ type SSHConfig struct {
 	// once from one client address (one IPv4 address, or one IPv6 /64).
 	// Zero means no limit.
 	MaxConnectionsPerIP int `env:"MAX_CONNECTIONS_PER_IP" yaml:"max_connections_per_ip"`
-
-	// MaxSessions is the maximum number of sessions open at once on one SSH
-	// connection, like OpenSSH's MaxSessions. Zero means no limit.
-	MaxSessions int `env:"MAX_SESSIONS" yaml:"max_sessions"`
-
-	// KexAlgorithms lists the key exchange algorithms the SSH server offers,
-	// in order of preference. When empty, DefaultSSHKexAlgorithms is used.
-	KexAlgorithms []string `env:"KEX_ALGORITHMS" yaml:"kex_algorithms"`
-
-	// Ciphers lists the ciphers the SSH server offers, in order of
-	// preference. When empty, DefaultSSHCiphers is used.
-	Ciphers []string `env:"CIPHERS" yaml:"ciphers"`
-
-	// MACs lists the message authentication codes the SSH server offers, in
-	// order of preference. When empty, DefaultSSHMACs is used.
-	MACs []string `env:"MACS" yaml:"macs"`
 
 	// PublicKeyAuthAlgorithms lists the signature algorithms the SSH server
 	// accepts for client public key authentication. When empty,
@@ -233,21 +210,9 @@ type DBConfig struct {
 	DataSource string `env:"DATA_SOURCE" yaml:"data_source"`
 
 	// MaxOpenConns is the maximum number of open connections to the
-	// database. 0 (the default) means no limit.
+	// database. 0 (the default) means no limit. The pool keeps up to 2 idle
+	// connections, database/sql's default, and fewer when this is lower.
 	MaxOpenConns int `env:"MAX_OPEN_CONNS" yaml:"max_open_conns"`
-
-	// MaxIdleConns is the maximum number of idle connections kept in the
-	// pool. 0 (the default) keeps the database/sql default of 2. It is
-	// capped at MaxOpenConns when that is set.
-	MaxIdleConns int `env:"MAX_IDLE_CONNS" yaml:"max_idle_conns"`
-
-	// ConnMaxLifetime is the maximum number of seconds a connection may be
-	// reused. 0 (the default) means no limit.
-	ConnMaxLifetime int `env:"CONN_MAX_LIFETIME" yaml:"conn_max_lifetime"`
-
-	// ConnMaxIdleTime is the maximum number of seconds a connection may sit
-	// idle before it is closed. 0 (the default) means no limit.
-	ConnMaxIdleTime int `env:"CONN_MAX_IDLE_TIME" yaml:"conn_max_idle_time"`
 }
 
 // LFSConfig is the configuration for Git LFS.
@@ -266,11 +231,6 @@ type JobsConfig struct {
 	// in the config file disables mirror syncing. An empty environment
 	// variable leaves the config file's value in place.
 	MirrorPull string `env:"MIRROR_PULL" yaml:"mirror_pull"`
-
-	// LFSSweep is the schedule for removing temporary files that
-	// interrupted LFS uploads and mirror downloads left behind for more
-	// than a day.
-	LFSSweep string `env:"LFS_SWEEP" yaml:"lfs_sweep"`
 }
 
 // WebhookConfig is the configuration for repository webhooks.
@@ -368,14 +328,6 @@ type Config struct {
 	// against the limit. 0 (the default) means no limit.
 	MaxReposPerUser int `env:"MAX_REPOS_PER_USER" yaml:"max_repos_per_user"`
 
-	// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
-	// "repo blob" command read into memory to display. Larger files are
-	// refused ("repo blob --raw" streams them instead), and a larger README
-	// is not shown. 0 means no limit. The TUI renders a file synchronously,
-	// so this limit is also what bounds the time and memory one file view
-	// takes.
-	MaxBlobSize int64 `env:"MAX_BLOB_SIZE" yaml:"max_blob_size"`
-
 	// DefaultPrivate makes repositories created without an explicit
 	// visibility private: push-to-create over SSH and HTTP, repo create and
 	// repo import without --private, and default_repo on boot. An explicit
@@ -409,8 +361,10 @@ type Config struct {
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
 
-	// unknownKeys records the config file keys no setting is read from.
+	// unknownKeys records the config file keys no setting is read from,
+	// and removed the removed settings the file or the environment sets.
 	unknownKeys []UnknownKey
+	removed     []RemovedSetting
 }
 
 // UnknownKey is a key in the config file that no setting is read from,
@@ -449,13 +403,8 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=%s", strings.Join(c.SSH.ClientAllowedHosts, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_TIMEOUT=%d", c.SSH.MaxTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_IDLE_TIMEOUT=%d", c.SSH.IdleTimeout),
-		fmt.Sprintf("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=%d", c.SSH.HandshakeTimeout),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS=%d", c.SSH.MaxConnections),
 		fmt.Sprintf("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=%d", c.SSH.MaxConnectionsPerIP),
-		fmt.Sprintf("SOFT_SERVE_SSH_MAX_SESSIONS=%d", c.SSH.MaxSessions),
-		fmt.Sprintf("SOFT_SERVE_SSH_KEX_ALGORITHMS=%s", strings.Join(c.SSH.KexAlgorithms, ",")),
-		fmt.Sprintf("SOFT_SERVE_SSH_CIPHERS=%s", strings.Join(c.SSH.Ciphers, ",")),
-		fmt.Sprintf("SOFT_SERVE_SSH_MACS=%s", strings.Join(c.SSH.MACs, ",")),
 		fmt.Sprintf("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=%s", strings.Join(c.SSH.PublicKeyAuthAlgorithms, ",")),
 		fmt.Sprintf("SOFT_SERVE_GIT_ENABLED=%t", c.Git.Enabled),
 		fmt.Sprintf("SOFT_SERVE_GIT_LISTEN_ADDR=%s", c.Git.ListenAddr),
@@ -483,13 +432,9 @@ func (c *Config) Environ() []string {
 		fmt.Sprintf("SOFT_SERVE_DB_DRIVER=%s", c.DB.Driver),
 		fmt.Sprintf("SOFT_SERVE_DB_DATA_SOURCE=%s", c.DB.DataSource),
 		fmt.Sprintf("SOFT_SERVE_DB_MAX_OPEN_CONNS=%d", c.DB.MaxOpenConns),
-		fmt.Sprintf("SOFT_SERVE_DB_MAX_IDLE_CONNS=%d", c.DB.MaxIdleConns),
-		fmt.Sprintf("SOFT_SERVE_DB_CONN_MAX_LIFETIME=%d", c.DB.ConnMaxLifetime),
-		fmt.Sprintf("SOFT_SERVE_DB_CONN_MAX_IDLE_TIME=%d", c.DB.ConnMaxIdleTime),
 		fmt.Sprintf("SOFT_SERVE_LFS_ENABLED=%t", c.LFS.Enabled),
 		fmt.Sprintf("SOFT_SERVE_LFS_SSH_ENABLED=%t", c.LFS.SSHEnabled),
 		fmt.Sprintf("SOFT_SERVE_JOBS_MIRROR_PULL=%s", c.Jobs.MirrorPull),
-		fmt.Sprintf("SOFT_SERVE_JOBS_LFS_SWEEP=%s", c.Jobs.LFSSweep),
 		fmt.Sprintf("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS=%s", strings.Join(c.Webhook.AllowedHosts, ",")),
 	}...)
 
@@ -506,7 +451,6 @@ func (c *Config) Environ() []string {
 
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_ADMIN_ONLY_CREATE=%t", c.AdminOnlyCreate))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_REPOS_PER_USER=%d", c.MaxReposPerUser))
-	envs = append(envs, fmt.Sprintf("SOFT_SERVE_MAX_BLOB_SIZE=%d", c.MaxBlobSize))
 	envs = append(envs, fmt.Sprintf("SOFT_SERVE_DEFAULT_PRIVATE=%t", c.DefaultPrivate))
 
 	return envs
@@ -547,6 +491,7 @@ func (c *Config) readFile(path string) error {
 		return fmt.Errorf("decode config: %w", err)
 	}
 	c.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
+	c.takeRemovedKeys()
 	return nil
 }
 
@@ -614,9 +559,74 @@ func findUnknownKeys(n *yaml.Node, t reflect.Type, prefix string) []UnknownKey {
 }
 
 // UnknownKeys returns the keys of the parsed config file that no setting is
-// read from, in file order. They are ignored.
+// read from, in file order. They are ignored. A removed setting is not
+// among them; see RemovedSettings.
 func (c *Config) UnknownKeys() []UnknownKey {
 	return slices.Clone(c.unknownKeys)
+}
+
+// removedSetting is a setting this version no longer reads. A config that
+// still sets one loads as before, and the server warns about it, saying
+// what it does instead.
+type removedSetting struct {
+	key, env, now string
+}
+
+// removedSettings are the settings removed in favour of fixed values,
+// because no realistic operator tunes them (R68).
+var removedSettings = []removedSetting{
+	{"ssh.kex_algorithms", "SOFT_SERVE_SSH_KEX_ALGORITHMS", "the server offers the key exchanges golang.org/x/crypto/ssh considers secure"},
+	{"ssh.ciphers", "SOFT_SERVE_SSH_CIPHERS", "the server offers the ciphers golang.org/x/crypto/ssh considers secure"},
+	{"ssh.macs", "SOFT_SERVE_SSH_MACS", "the server offers the MACs golang.org/x/crypto/ssh considers secure, except hmac-sha1"},
+	{"ssh.max_sessions", "SOFT_SERVE_SSH_MAX_SESSIONS", fmt.Sprintf("a connection may have %d sessions open at once", SSHMaxSessions)},
+	{"ssh.handshake_timeout", "SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT", fmt.Sprintf("a client has %s to finish the SSH handshake and authenticate", SSHHandshakeTimeout)},
+	{"db.max_idle_conns", "SOFT_SERVE_DB_MAX_IDLE_CONNS", "the pool keeps database/sql's default of 2 idle connections"},
+	{"db.conn_max_lifetime", "SOFT_SERVE_DB_CONN_MAX_LIFETIME", "database connections are reused without a time limit"},
+	{"db.conn_max_idle_time", "SOFT_SERVE_DB_CONN_MAX_IDLE_TIME", "idle database connections are kept without a time limit"},
+	{"jobs.lfs_sweep", "SOFT_SERVE_JOBS_LFS_SWEEP", "the LFS temporary file sweep runs hourly"},
+	{"max_blob_size", "SOFT_SERVE_MAX_BLOB_SIZE", fmt.Sprintf("files over %d bytes are not read into memory to display", MaxBlobSize)},
+}
+
+// RemovedSetting is a setting the config file or the environment still
+// sets that this version no longer reads. It is ignored.
+type RemovedSetting struct {
+	// Key is the setting's config file key, such as "ssh.macs".
+	Key string
+	// Source is where it is set: "line 12" of the config file, or the
+	// environment variable.
+	Source string
+	// Now says what the server does instead.
+	Now string
+}
+
+// RemovedSettings returns the removed settings the config file, in file
+// order, and then the environment still set. They are ignored.
+func (c *Config) RemovedSettings() []RemovedSetting {
+	return slices.Clone(c.removed)
+}
+
+// takeRemovedKeys moves the removed settings out of the unknown keys of
+// the config file.
+func (c *Config) takeRemovedKeys() {
+	c.unknownKeys = slices.DeleteFunc(c.unknownKeys, func(k UnknownKey) bool {
+		for _, r := range removedSettings {
+			if k.Key == r.key {
+				c.removed = append(c.removed, RemovedSetting{Key: r.key, Source: fmt.Sprintf("line %d", k.Line), Now: r.now})
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// readRemovedEnv records the removed settings the environment sets. An
+// empty variable sets nothing, as for the other settings.
+func (c *Config) readRemovedEnv() {
+	for _, r := range removedSettings {
+		if os.Getenv(r.env) != "" {
+			c.removed = append(c.removed, RemovedSetting{Key: r.key, Source: r.env, Now: r.now})
+		}
+	}
 }
 
 // readEnv applies the SOFT_SERVE_* environment variables to c, over the
@@ -642,6 +652,7 @@ func (c *Config) readEnv() error {
 	// replaces it otherwise. Either way, the env keys come first, followed
 	// by each file key not already listed.
 	c.InitialAdminKeys = mergeAdminKeys(c.InitialAdminKeys, fileAdminKeys)
+	c.readRemovedEnv()
 	return nil
 }
 
@@ -820,10 +831,8 @@ func DefaultConfig() *Config {
 			ClientStrictHostKeyChecking: StrictHostKeyCheckingAcceptNew,
 			MaxTimeout:                  DefaultMaxTimeout,
 			IdleTimeout:                 10 * 60, // 10 minutes
-			HandshakeTimeout:            2 * 60,  // 2 minutes, as OpenSSH's LoginGraceTime
 			MaxConnections:              256,
 			MaxConnectionsPerIP:         32,
-			MaxSessions:                 10,
 		},
 		Git: GitConfig{
 			Enabled:             true,
@@ -866,22 +875,27 @@ func DefaultConfig() *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 10m",
-			LFSSweep:   "@every 1h",
 		},
-		MaxBlobSize: DefaultMaxBlobSize,
 	}
 }
 
-// DefaultMaxBlobSize is the default MaxBlobSize: 1 MiB.
-const DefaultMaxBlobSize = 1 << 20
+// MaxBlobSize is the largest file, in bytes, that the TUI and the SSH
+// "repo blob" command read into memory to display: 1 MiB. Larger files are
+// refused ("repo blob --raw" streams them instead), and a larger README is
+// not shown. The TUI renders a file synchronously, so this is also what
+// bounds the time and memory one file view takes.
+const MaxBlobSize = 1 << 20
 
-// BlobSizeLimit returns MaxBlobSize, or DefaultMaxBlobSize for a nil config.
-func (c *Config) BlobSizeLimit() int64 {
-	if c == nil {
-		return DefaultMaxBlobSize
-	}
-	return c.MaxBlobSize
-}
+// SSHMaxSessions is the largest number of sessions one SSH connection may
+// have open at once, as OpenSSH's MaxSessions. Further sessions are refused
+// until one ends.
+const SSHMaxSessions = 10
+
+// SSHHandshakeTimeout is how long an SSH client has to finish the handshake
+// and authenticate, as OpenSSH's LoginGraceTime. Until then the connection
+// holds a place under ssh.max_connections and ssh.max_connections_per_ip,
+// so this bounds how long an idle, unauthenticated client keeps one.
+const SSHHandshakeTimeout = 2 * time.Minute
 
 // Validate checks the configuration and resolves it: relative paths become
 // absolute under the data path, lists lose blank entries, and the
@@ -971,17 +985,11 @@ func (c *Config) check() error {
 	}
 
 	// The scheduler uses the standard parser; a spec it rejects would leave
-	// the job never running behind a startup warning. An empty spec
-	// disables mirror syncing, and runs the LFS sweep hourly.
-	for _, j := range []struct{ key, spec string }{
-		{"jobs.mirror_pull", c.Jobs.MirrorPull},
-		{"jobs.lfs_sweep", c.Jobs.LFSSweep},
-	} {
-		if j.spec == "" {
-			continue
-		}
-		if _, err := cron.ParseStandard(j.spec); err != nil {
-			return fmt.Errorf("%s: %q: %w", j.key, j.spec, err)
+	// mirrors never syncing behind a startup warning. An empty spec
+	// disables mirror syncing.
+	if spec := c.Jobs.MirrorPull; spec != "" {
+		if _, err := cron.ParseStandard(spec); err != nil {
+			return fmt.Errorf("jobs.mirror_pull: %q: %w", spec, err)
 		}
 	}
 
@@ -1020,9 +1028,6 @@ func (c *Config) checkNotNegative() error {
 		zero  string
 	}{
 		{"db.max_open_conns", int64(c.DB.MaxOpenConns), dbDefault},
-		{"db.max_idle_conns", int64(c.DB.MaxIdleConns), dbDefault},
-		{"db.conn_max_lifetime", int64(c.DB.ConnMaxLifetime), dbDefault},
-		{"db.conn_max_idle_time", int64(c.DB.ConnMaxIdleTime), dbDefault},
 		{"ssh.max_timeout", int64(c.SSH.MaxTimeout), noTimeout},
 		{"ssh.idle_timeout", int64(c.SSH.IdleTimeout), noTimeout},
 		{"git.max_timeout", int64(c.Git.MaxTimeout), noTimeout},
@@ -1033,11 +1038,8 @@ func (c *Config) checkNotNegative() error {
 		{"http.max_connections", int64(c.HTTP.MaxConnections), noLimit},
 		{"http.max_connections_per_ip", int64(c.HTTP.MaxConnectionsPerIP), noLimit},
 		{"max_repos_per_user", int64(c.MaxReposPerUser), noLimit},
-		{"max_blob_size", c.MaxBlobSize, noLimit},
-		{"ssh.handshake_timeout", int64(c.SSH.HandshakeTimeout), noLimit},
 		{"ssh.max_connections", int64(c.SSH.MaxConnections), noLimit},
 		{"ssh.max_connections_per_ip", int64(c.SSH.MaxConnectionsPerIP), noLimit},
-		{"ssh.max_sessions", int64(c.SSH.MaxSessions), noLimit},
 	} {
 		if v.value < 0 {
 			return fmt.Errorf("%s: %d is negative; %s", v.name, v.value, v.zero)

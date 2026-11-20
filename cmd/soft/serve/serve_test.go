@@ -272,3 +272,31 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 		})
 	}
 }
+
+// The server warns about each setting it ignores: a misspelt key and a
+// removed setting, from the file or the environment (R68, Q3).
+func TestWarnIgnoredSettings(t *testing.T) {
+	dp := t.TempDir()
+	t.Setenv("SOFT_SERVE_DATA_PATH", dp)
+	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", "")
+	t.Setenv("SOFT_SERVE_JOBS_LFS_SWEEP", "@daily")
+	if err := os.WriteFile(filepath.Join(dp, "config.yaml"), []byte("ssh:\n  max_sessions: 3\n  listen_adr: \":1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	warnIgnoredSettings(log.New(&buf), cfg)
+	out := buf.String()
+	for _, want := range []string{
+		`ignoring unknown config key key=ssh.listen_adr line=3`,
+		`ignoring removed setting setting=ssh.max_sessions set_by="line 2"`,
+		`ignoring removed setting setting=jobs.lfs_sweep set_by=SOFT_SERVE_JOBS_LFS_SWEEP`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q:\n%s", want, out)
+		}
+	}
+}

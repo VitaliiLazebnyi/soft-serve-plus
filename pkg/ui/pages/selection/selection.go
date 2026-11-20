@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -257,7 +258,7 @@ func loadRepos(c common.Common) tea.Msg {
 	for _, r := range repos {
 		// Every repository here is readable by the caller.
 		if r.Name() == backend.AboutRepo && be.AboutRepoOwnedByAdmin(ctx, r) {
-			readme, path, err := backend.Readme(ctx, r, nil, c.Config().BlobSizeLimit())
+			readme, path, err := backend.Readme(ctx, r, nil, config.MaxBlobSize)
 			if err != nil {
 				c.Logger.Debugf("failed to read the about readme: %v", err)
 			} else {

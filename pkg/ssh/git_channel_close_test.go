@@ -142,8 +142,7 @@ func copyBlockedOnWindow() bool {
 func TestSSHFetchChannelClosedFreesSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.MaxSessions = 1
-	addr, ctx := startTestServer(t, cfg)
+	addr, ctx := startTestServer(t, cfg, withMaxSessions(1))
 
 	be := backend.FromContext(ctx)
 	if _, err := be.CreateRepository(ctx, "big", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {

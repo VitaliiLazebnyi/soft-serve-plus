@@ -85,7 +85,7 @@ func blobCommand() *cobra.Command {
 				return nil
 			}
 
-			bts, err := te.File().ContentsLimit(config.FromContext(ctx).BlobSizeLimit())
+			bts, err := te.File().ContentsLimit(config.MaxBlobSize)
 			if errors.Is(err, git.ErrFileTooLarge) {
 				return fmt.Errorf("%w: use --raw to print", err)
 			}

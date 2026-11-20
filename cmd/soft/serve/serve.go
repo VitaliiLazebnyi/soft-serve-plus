@@ -48,9 +48,7 @@ func run(c *cobra.Command, syncHooks bool) error {
 	// Use the config the database and backend were set up with,
 	// so hooks and directories land under the same data path.
 	cfg := config.FromContext(ctx)
-	for _, k := range cfg.UnknownKeys() {
-		log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
-	}
+	warnIgnoredSettings(log.FromContext(ctx), cfg)
 	if !cfg.Exist() {
 		if err := cfg.WriteDefaultFile(); err != nil {
 			return fmt.Errorf("write config file: %w", err)
@@ -163,6 +161,19 @@ shutdown:
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return errors.Join(serverErr, s.Shutdown(ctx, abort))
+}
+
+// warnIgnoredSettings warns about each setting cfg's file or environment
+// sets that the server ignores: a config file key no setting is read from,
+// such as a misspelt one, and a removed setting, with what the server does
+// instead.
+func warnIgnoredSettings(logger *log.Logger, cfg *config.Config) {
+	for _, k := range cfg.UnknownKeys() {
+		logger.Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+	}
+	for _, r := range cfg.RemovedSettings() {
+		logger.Warn("ignoring removed setting", "setting", r.Key, "set_by", r.Source, "now", r.Now)
+	}
 }
 
 // abortOnSignal returns a context that is cancelled when sigs delivers an

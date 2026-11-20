@@ -266,22 +266,12 @@ func postgresUTCConfig(dsn string) (pq.Config, error) {
 	return cfg, nil
 }
 
-// SetPoolLimits applies the connection pool settings in c. A zero value
-// leaves the database/sql default for that setting: no limit on open
-// connections, two idle connections, and no limit on a connection's
-// lifetime or idle time.
+// SetPoolLimits applies db.max_open_conns from c. Zero leaves
+// database/sql's default of no limit. The pool keeps database/sql's default
+// of two idle connections, or fewer when the limit is lower.
 func (d *DB) SetPoolLimits(c config.DBConfig) {
 	if c.MaxOpenConns > 0 {
 		d.SetMaxOpenConns(c.MaxOpenConns)
-	}
-	if c.MaxIdleConns > 0 {
-		d.SetMaxIdleConns(c.MaxIdleConns)
-	}
-	if c.ConnMaxLifetime > 0 {
-		d.SetConnMaxLifetime(time.Duration(c.ConnMaxLifetime) * time.Second)
-	}
-	if c.ConnMaxIdleTime > 0 {
-		d.SetConnMaxIdleTime(time.Duration(c.ConnMaxIdleTime) * time.Second)
 	}
 }
 

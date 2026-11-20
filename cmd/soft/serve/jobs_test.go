@@ -40,26 +40,24 @@ func (r *recordingScheduler) AddFunc(name, spec string, fn func()) error {
 }
 
 // An empty jobs.mirror_pull leaves the mirror job unscheduled, and a spec
-// schedules it. lfs-sweep is scheduled either way, hourly when its spec is
-// empty.
+// schedules it. lfs-sweep is scheduled hourly either way.
 func TestScheduleJobs(t *testing.T) {
 	for _, c := range []struct {
-		mirror, sweep string
-		want          map[string]string
+		mirror string
+		want   map[string]string
 	}{
-		{"", "", map[string]string{"lfs-sweep": "@every 1h"}},
-		{"@every 1h", "@daily", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@daily"}},
-		{"*/5 * * * *", "", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
+		{"", map[string]string{"lfs-sweep": "@every 1h"}},
+		{"@every 1h", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@every 1h"}},
+		{"*/5 * * * *", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
 	} {
 		cfg := config.DefaultConfig()
 		cfg.Jobs.MirrorPull = c.mirror
-		cfg.Jobs.LFSSweep = c.sweep
 		var buf bytes.Buffer
 		var sched recordingScheduler
 		scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
 
 		if !maps.Equal(sched.specs, c.want) {
-			t.Errorf("mirror_pull %q, lfs_sweep %q: scheduled %v, want %v", c.mirror, c.sweep, sched.specs, c.want)
+			t.Errorf("mirror_pull %q: scheduled %v, want %v", c.mirror, sched.specs, c.want)
 		}
 		if disabled := strings.Contains(buf.String(), "cron job disabled"); disabled != (c.mirror == "") {
 			t.Errorf("mirror_pull %q: disabled message logged %v: %q", c.mirror, disabled, buf.String())

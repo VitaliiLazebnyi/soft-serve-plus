@@ -261,59 +261,21 @@ ssh:
   # A value of 0 means no timeout.
   idle_timeout: 600
 
-  # The number of seconds a client has to finish the SSH handshake and
-  # authenticate before the connection is closed, like OpenSSH's
-  # LoginGraceTime. A value of 0 means no limit.
-  handshake_timeout: 120
-
   # The maximum number of SSH connections open at once, in total and from
   # one client address (one IPv4 address or one IPv6 /64). Connections over
   # a limit are closed straight away. A connection holds its place from the
-  # moment it is accepted, so handshake_timeout bounds how long a client
-  # that never authenticates can keep one. A value of 0 means no limit.
+  # moment it is accepted until it authenticates, which a client has 2
+  # minutes to do. A value of 0 means no limit.
   # Many clients behind one NAT or CI egress address share the per-address
   # limit; raise max_connections_per_ip, or set it to 0, for such setups.
   max_connections: 256
   max_connections_per_ip: 32
 
-  # The maximum number of sessions open at once on one SSH connection, like
-  # OpenSSH's MaxSessions. Further sessions are refused until one ends. A
-  # value of 0 means no limit.
-  max_sessions: 10
-
-  # The key exchange algorithms, ciphers and MACs the SSH server offers, in
-  # order of preference. When a list is empty, the server offers every
-  # algorithm golang.org/x/crypto/ssh considers secure, which leaves out the
-  # SHA-1 based diffie-hellman-group14-sha1, diffie-hellman-group1-sha1,
-  # diffie-hellman-group-exchange-sha1, hmac-sha1 and hmac-sha1-96. Names
-  # x/crypto does not implement are rejected at startup. A list replaces the
-  # default, so to let an old client that only speaks SHA-1 connect, copy the
-  # full default list and append the legacy algorithm. Listing fewer would
-  # drop the rest, such as the post-quantum mlkem768x25519-sha256:
-  #   kex_algorithms:
-  #     - "mlkem768x25519-sha256"
-  #     - "curve25519-sha256"
-  #     - "ecdh-sha2-nistp256"
-  #     - "ecdh-sha2-nistp384"
-  #     - "ecdh-sha2-nistp521"
-  #     - "diffie-hellman-group14-sha256"
-  #     - "diffie-hellman-group16-sha512"
-  #     - "diffie-hellman-group-exchange-sha256"
-  #     - "diffie-hellman-group14-sha1" # legacy, appended
-  #   macs:
-  #     - "hmac-sha2-256-etm@openssh.com"
-  #     - "hmac-sha2-512-etm@openssh.com"
-  #     - "hmac-sha2-256"
-  #     - "hmac-sha2-512"
-  #     - "hmac-sha1" # legacy, appended
-  kex_algorithms: []
-  ciphers: []
-  macs: []
-
   # The signature algorithms the SSH server accepts for client public key
   # authentication. When empty, the server accepts every algorithm
   # golang.org/x/crypto/ssh considers secure, which leaves out the SHA-1 based
-  # ssh-rsa and ssh-dss. RSA keys still work through rsa-sha2-256 and
+  # ssh-rsa and ssh-dss. (The key exchanges, ciphers and MACs are always the
+  # ones x/crypto considers secure, without hmac-sha1.) RSA keys still work through rsa-sha2-256 and
   # rsa-sha2-512, which OpenSSH 7.2 and later use. Names x/crypto does not
   # implement are rejected at startup. A list replaces the default, so to let
   # an old client that only signs with ssh-rsa authenticate, copy the default
@@ -469,16 +431,11 @@ db:
   # are used as written.
   data_source: "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 
-  # Connection pool limits. 0 keeps the database/sql default: no limit on
-  # open connections, 2 idle connections, and no limit on how long a
-  # connection is reused or may sit idle. With Postgres, set max_open_conns
-  # below the server's max_connections (minus what other clients use) so a
-  # burst of requests waits for a free connection instead of failing.
-  # Durations are in seconds.
+  # The maximum number of open database connections. 0 means no limit.
+  # With Postgres, set it below the server's max_connections (minus what
+  # other clients use) so a burst of requests waits for a free connection
+  # instead of failing.
   max_open_conns: 0
-  max_idle_conns: 0
-  conn_max_lifetime: 0
-  conn_max_idle_time: 0
 
 # Git LFS configuration.
 lfs:
@@ -494,9 +451,6 @@ jobs:
   # mirror syncing. An empty SOFT_SERVE_JOBS_MIRROR_PULL does not disable
   # it; it keeps this value.
   mirror_pull: "@every 10m"
-  # Remove temporary files that interrupted LFS uploads and mirror
-  # downloads left behind for more than a day.
-  lfs_sweep: "@every 1h"
 
 # Repository webhook configuration.
 webhook:
@@ -553,14 +507,6 @@ webhook:
 # count against the limit. 0 means no limit.
 #max_repos_per_user: 0
 
-# Largest file, in bytes, that the TUI and "repo blob" read into memory to
-# display. Larger files are refused ("repo blob --raw" streams them instead),
-# and a larger README is not shown. The TUI highlights and wraps a file
-# while handling input, so this limit is also what keeps one file view from
-# stalling a session: raising it, or 0 for no limit, makes large files slow
-# to open and costly in memory. Defaults to 1048576 (1 MiB).
-max_blob_size: 1048576
-
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without
 # --private, and default_repo. "repo create --private=false" still creates a
@@ -598,13 +544,10 @@ name all in uppercase. Here are some examples:
 - `SOFT_SERVE_ALLOW_KEYLESS`: Overrides the `allow-keyless` setting (see [Authentication](#authentication))
 - `SOFT_SERVE_ADMIN_ONLY_CREATE`: Only server admins may create repositories. Owners and admin-access collaborators can no longer rename repositories, and anonymous access to names that do not exist yet is capped at read-only. Defaults to `false`. Access to existing repositories is not affected.
 - `SOFT_SERVE_MAX_REPOS_PER_USER`: Maximum number of repositories each user may create. Server admins are exempt, and repositories created without an account count together as one user. Defaults to `0` (no limit).
-- `SOFT_SERVE_MAX_BLOB_SIZE`: Largest file, in bytes, that the TUI and `repo blob` read into memory to display. Larger files are refused (`repo blob --raw` streams them instead), and a larger README is not shown. Defaults to `1048576` (1 MiB); `0` means no limit.
 - `SOFT_SERVE_DEFAULT_PRIVATE`: Make repositories created without an explicit visibility (push-to-create, `repo create` and `repo import` without `--private`, `default_repo`) private. Defaults to `false`. When set, anonymous push-to-create is refused, and anonymous `repo create` and `repo import` need `--private=false`, since an anonymous user could not access the private repository.
 - `SOFT_SERVE_DEFAULT_REPO`: Repository name to create on boot if missing
-- `SOFT_SERVE_SSH_KEX_ALGORITHMS`, `SOFT_SERVE_SSH_CIPHERS`, `SOFT_SERVE_SSH_MACS`: Comma-separated lists of the SSH key exchange algorithms, ciphers and MACs to offer. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
 - `SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS`: Comma-separated list of the signature algorithms accepted for client public key authentication. Empty means the secure defaults (see [SSH Algorithms](#ssh-algorithms))
-- `SOFT_SERVE_DB_MAX_OPEN_CONNS`, `SOFT_SERVE_DB_MAX_IDLE_CONNS`: Database connection pool limits. `0` (the default) keeps the database/sql defaults: no limit on open connections and 2 idle connections
-- `SOFT_SERVE_DB_CONN_MAX_LIFETIME`, `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME`: Seconds a database connection may be reused, or may sit idle, before it is closed. `0` (the default) means no limit
+- `SOFT_SERVE_DB_MAX_OPEN_CONNS`: The maximum number of open database connections. `0` (the default) means no limit. The pool keeps up to 2 idle connections
 - `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`: Comma-separated private or internal hosts, IP addresses or CIDR ranges (each with an optional port) that webhooks may be sent to (see [Repository webhooks](#repository-webhooks)). Defaults to empty: public addresses only.
 - `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS`: Comma-separated ssh hosts, IP addresses or CIDR ranges (each with an optional port) that repositories may be imported from or mirrored (see `client_allowed_hosts` above). Defaults to empty: only server admins may import from or mirror ssh remotes.
 - Upgrading: an entry of `ssh.client_allowed_hosts` or `webhook.allowed_hosts` (and of `SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS` or `SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS`) that ends in a colon with no port, such as `host:` or `[fd00::1]:`, or that has anything but a port after a bracketed address, such as `[fd00::1]x`, used to be read as the host alone. It is now an error and the server does not start. Drop the `:` to allow any port, or add the port.
@@ -623,6 +566,28 @@ A few environment variables have no `config.yaml` setting:
 - `SOFT_SERVE_DEBUG`: Set to `true` to log at debug level, including SSH authentication attempts
 - `SOFT_SERVE_VERBOSE`: Set to `true`, together with `SOFT_SERVE_DEBUG`, to also log the caller, database queries, and each SSH session's client key and environment
 - `SOFT_SERVE_NO_COLOR`: Set to `1` to turn off colors in the `soft` command's output and syntax coloring in `repo blob -c`
+
+#### Removed settings
+
+These settings are no longer read. A `config.yaml` or an environment that
+still sets one works as before, except that the value is ignored, and the
+server logs a warning at start naming the setting and what it does instead:
+
+| Setting | Environment variable | What the server does now |
+|---|---|---|
+| `ssh.kex_algorithms` | `SOFT_SERVE_SSH_KEX_ALGORITHMS` | offers the key exchanges x/crypto considers secure (see [SSH Algorithms](#ssh-algorithms)) |
+| `ssh.ciphers` | `SOFT_SERVE_SSH_CIPHERS` | offers the ciphers x/crypto considers secure |
+| `ssh.macs` | `SOFT_SERVE_SSH_MACS` | offers the MACs x/crypto considers secure, except `hmac-sha1` |
+| `ssh.max_sessions` | `SOFT_SERVE_SSH_MAX_SESSIONS` | allows 10 sessions open at once on one connection, as OpenSSH's `MaxSessions` |
+| `ssh.handshake_timeout` | `SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT` | gives a client 2 minutes to finish the handshake and authenticate, as OpenSSH's `LoginGraceTime` |
+| `db.max_idle_conns` | `SOFT_SERVE_DB_MAX_IDLE_CONNS` | keeps up to 2 idle database connections (database/sql's default) |
+| `db.conn_max_lifetime` | `SOFT_SERVE_DB_CONN_MAX_LIFETIME` | reuses database connections without a time limit |
+| `db.conn_max_idle_time` | `SOFT_SERVE_DB_CONN_MAX_IDLE_TIME` | keeps idle database connections without a time limit |
+| `jobs.lfs_sweep` | `SOFT_SERVE_JOBS_LFS_SWEEP` | removes stale LFS temporary files hourly |
+| `max_blob_size` | `SOFT_SERVE_MAX_BLOB_SIZE` | reads files up to 1 MiB into memory to display; `repo blob --raw` streams larger ones |
+
+A server that set `ssh.kex_algorithms` or `ssh.macs` to let a client limited
+to SHA-1 key exchange or MACs connect now refuses that client.
 
 #### SSH Algorithms
 
@@ -643,12 +608,12 @@ based `diffie-hellman-group14-sha1`, `hmac-sha1` and `hmac-sha1-96`, and
 accepted SHA-1 `ssh-rsa` and `ssh-dss` signatures for public key
 authentication. RSA keys still work: clients sign with `rsa-sha2-256` or
 `rsa-sha2-512`, as OpenSSH has done since 7.2 (and OpenSSH 8.8 itself
-refuses `ssh-rsa`). DSA keys can no longer authenticate. To restrict the
-server further, for example to drop the NIST curves, set
-`ssh.kex_algorithms`, `ssh.ciphers`, `ssh.macs` or
-`ssh.public_key_auth_algorithms` (or the environment variables above). A
-list replaces the default rather than adding to it, and a name x/crypto does
-not implement stops the server at startup.
+refuses `ssh-rsa`). DSA keys can no longer authenticate. The key
+exchanges, ciphers and MACs are fixed. The signature algorithms accepted for
+public key authentication can be set with `ssh.public_key_auth_algorithms`
+(or `SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS`). That list replaces the
+default rather than adding to it, and a name x/crypto does not implement
+stops the server at startup.
 
 **Older clients.** The host key Soft Serve Plus generates by default is
 Ed25519, and the clients we checked that can verify an Ed25519 host key all
@@ -672,29 +637,13 @@ later, and the maintained JSch fork. Older clients, such as libssh2 before
 key they need `ssh-rsa` appended as below, or a key of another type they
 support.
 
-A client limited to SHA-1 key exchange, MACs or `ssh-rsa` signatures is
-refused. To let one in, copy the default list above and append the legacy
-algorithm. Listing only a few algorithms would drop the rest, including the
-post-quantum `mlkem768x25519-sha256`, for every client:
+A client limited to SHA-1 key exchange or MACs is refused. A client limited
+to `ssh-rsa` signatures is refused too, unless `ssh-rsa` is appended to the
+default list of public key authentication algorithms. Listing only a few
+algorithms would drop the rest for every client:
 
 ```yaml
 ssh:
-  kex_algorithms:
-    - "mlkem768x25519-sha256"
-    - "curve25519-sha256"
-    - "ecdh-sha2-nistp256"
-    - "ecdh-sha2-nistp384"
-    - "ecdh-sha2-nistp521"
-    - "diffie-hellman-group14-sha256"
-    - "diffie-hellman-group16-sha512"
-    - "diffie-hellman-group-exchange-sha256"
-    - "diffie-hellman-group14-sha1" # legacy, appended
-  macs:
-    - "hmac-sha2-256-etm@openssh.com"
-    - "hmac-sha2-512-etm@openssh.com"
-    - "hmac-sha2-256"
-    - "hmac-sha2-512"
-    - "hmac-sha1" # legacy, appended
   public_key_auth_algorithms:
     - "ssh-ed25519"
     - "sk-ssh-ed25519@openssh.com"
@@ -753,20 +702,16 @@ version on.
 
 By default the connection pool has no limit on open connections, so a burst
 of requests can use up Postgres' `max_connections`. Set `db.max_open_conns`
-(and optionally `db.max_idle_conns`, `db.conn_max_lifetime` and
-`db.conn_max_idle_time`) to bound it; requests beyond the limit wait for a
-free connection:
+to bound it; requests beyond the limit wait for a free connection:
 
 ```
 db:
   driver: "postgres"
   data_source: "postgres://postgres@localhost:5432/soft_serve?sslmode=disable"
   max_open_conns: 20
-  max_idle_conns: 5
-  conn_max_lifetime: 1800
 ```
 
-The same settings apply to SQLite, whose defaults are unchanged: writers
+The same setting applies to SQLite, whose default is unchanged: writers
 already take turns through `BEGIN IMMEDIATE` and `busy_timeout`, so SQLite
 needs no limit.
 

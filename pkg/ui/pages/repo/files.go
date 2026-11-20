@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -550,7 +551,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd {
 	repo, ref, load, gen := f.repo, f.ref, f.load, f.gen
 	ctx := f.fileLoad.Start(f.common.Context())
-	limit := f.common.Config().BlobSizeLimit()
+	limit := int64(config.MaxBlobSize)
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.

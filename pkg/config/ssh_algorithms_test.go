@@ -13,19 +13,11 @@ import (
 )
 
 func TestSSHAlgorithmDefaultsExcludeSHA1(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.SSH.KexAlgorithms)+len(cfg.SSH.Ciphers)+len(cfg.SSH.MACs) != 0 {
-		t.Fatalf("algorithm lists set by default: %v %v %v", cfg.SSH.KexAlgorithms, cfg.SSH.Ciphers, cfg.SSH.MACs)
-	}
 	sha1 := []string{
 		ssh.InsecureKeyExchangeDH14SHA1, ssh.InsecureKeyExchangeDH1SHA1, ssh.InsecureKeyExchangeDHGEXSHA1,
 		ssh.HMACSHA1, ssh.InsecureHMACSHA196,
 	}
-	for _, list := range [][]string{cfg.SSH.SSHKexAlgorithms(), cfg.SSH.SSHCiphers(), cfg.SSH.SSHMACs()} {
+	for _, list := range [][]string{DefaultSSHKexAlgorithms(), DefaultSSHCiphers(), DefaultSSHMACs()} {
 		if len(list) == 0 {
 			t.Error("empty default algorithm list")
 		}
@@ -35,8 +27,8 @@ func TestSSHAlgorithmDefaultsExcludeSHA1(t *testing.T) {
 			}
 		}
 	}
-	if !slices.Equal(cfg.SSH.SSHCiphers(), ssh.SupportedAlgorithms().Ciphers) {
-		t.Errorf("default ciphers = %v, want x/crypto's supported ciphers", cfg.SSH.SSHCiphers())
+	if !slices.Equal(DefaultSSHCiphers(), ssh.SupportedAlgorithms().Ciphers) {
+		t.Errorf("default ciphers = %v, want x/crypto's supported ciphers", DefaultSSHCiphers())
 	}
 }
 
@@ -64,59 +56,30 @@ func TestSSHPublicKeyAuthDefaultsExcludeSHA1(t *testing.T) {
 
 func TestParseSSHAlgorithms(t *testing.T) {
 	is := is.New(t)
-	for _, k := range []string{
-		"SOFT_SERVE_SSH_KEX_ALGORITHMS", "SOFT_SERVE_SSH_CIPHERS", "SOFT_SERVE_SSH_MACS",
-		"SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS",
-	} {
-		t.Setenv(k, "")
-		is.NoErr(os.Unsetenv(k))
-	}
+	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
+	is.NoErr(os.Unsetenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS"))
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	is.NoErr(os.WriteFile(path, []byte(`ssh:
-  kex_algorithms: ["curve25519-sha256", "diffie-hellman-group14-sha1"]
-  ciphers: ["aes256-gcm@openssh.com"]
-  macs: ["hmac-sha2-512", "hmac-sha1"]
   public_key_auth_algorithms: ["ssh-ed25519", "ssh-rsa"]
 `), 0o600))
 	cfg := DefaultConfig()
 	cfg.DataPath = dir
 	is.NoErr(parseFile(cfg, path))
-	is.Equal(cfg.SSH.KexAlgorithms, []string{"curve25519-sha256", "diffie-hellman-group14-sha1"})
-	is.Equal(cfg.SSH.SSHKexAlgorithms(), []string{"curve25519-sha256", "diffie-hellman-group14-sha1"})
-	is.Equal(cfg.SSH.SSHCiphers(), []string{"aes256-gcm@openssh.com"})
-	is.Equal(cfg.SSH.SSHMACs(), []string{"hmac-sha2-512", "hmac-sha1"})
 	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"ssh-ed25519", "ssh-rsa"})
 
-	t.Setenv("SOFT_SERVE_SSH_KEX_ALGORITHMS", "curve25519-sha256@libssh.org, curve25519-sha256")
-	t.Setenv("SOFT_SERVE_SSH_CIPHERS", "aes128-ctr,aes256-ctr")
-	t.Setenv("SOFT_SERVE_SSH_MACS", "hmac-sha2-256-etm@openssh.com")
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "rsa-sha2-512, ssh-dss")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
 	is.NoErr(parseEnv(cfg))
-	is.Equal(cfg.SSH.SSHKexAlgorithms(), []string{"curve25519-sha256@libssh.org", "curve25519-sha256"})
-	is.Equal(cfg.SSH.SSHCiphers(), []string{"aes128-ctr", "aes256-ctr"})
-	is.Equal(cfg.SSH.SSHMACs(), []string{"hmac-sha2-256-etm@openssh.com"})
 	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"rsa-sha2-512", "ssh-dss"})
 
 	// Hooks re-read the config from the environment.
-	env := cfg.Environ()
-	is.True(slices.Contains(env, "SOFT_SERVE_SSH_KEX_ALGORITHMS=curve25519-sha256@libssh.org,curve25519-sha256"))
-	is.True(slices.Contains(env, "SOFT_SERVE_SSH_CIPHERS=aes128-ctr,aes256-ctr"))
-	is.True(slices.Contains(env, "SOFT_SERVE_SSH_MACS=hmac-sha2-256-etm@openssh.com"))
-	is.True(slices.Contains(env, "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss"))
+	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss"))
 
 	// An empty variable, as Environ writes for an unset list, keeps the
 	// default rather than reading as one empty name.
-	t.Setenv("SOFT_SERVE_SSH_MACS", "")
-	cfg = DefaultConfig()
-	cfg.DataPath = dir
-	is.NoErr(parseEnv(cfg))
-	is.Equal(len(cfg.SSH.MACs), 0)
-	is.Equal(cfg.SSH.SSHMACs(), DefaultSSHMACs())
-
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
@@ -126,31 +89,23 @@ func TestParseSSHAlgorithms(t *testing.T) {
 }
 
 func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
-	for _, tt := range []struct {
-		field string
-		set   func(*SSHConfig)
-	}{
-		{"ssh.kex_algorithms", func(c *SSHConfig) { c.KexAlgorithms = []string{"curve25519-sha256", "curve25519-sha512"} }},
-		{"ssh.ciphers", func(c *SSHConfig) { c.Ciphers = []string{"aes128-gmc@openssh.com"} }},
-		{"ssh.macs", func(c *SSHConfig) { c.MACs = []string{"hmac-md5"} }},
-		// A name valid in one list is not valid in another.
-		{"ssh.macs", func(c *SSHConfig) { c.MACs = []string{"aes128-ctr"} }},
-		{"ssh.public_key_auth_algorithms", func(c *SSHConfig) { c.PublicKeyAuthAlgorithms = []string{"rsa-sha2-384"} }},
+	for _, algos := range [][]string{
+		{"rsa-sha2-384"},
+		// A name valid in another list is not valid here.
+		{"aes128-ctr"},
 		// Certificate algorithms are checked by their underlying key.
-		{"ssh.public_key_auth_algorithms", func(c *SSHConfig) {
-			c.PublicKeyAuthAlgorithms = []string{ssh.CertAlgoED25519v01}
-		}},
+		{ssh.CertAlgoED25519v01},
 	} {
 		cfg := DefaultConfig()
 		cfg.DataPath = t.TempDir()
-		tt.set(&cfg.SSH)
+		cfg.SSH.PublicKeyAuthAlgorithms = algos
 		err := cfg.Validate()
 		if err == nil {
-			t.Errorf("%s: Validate accepted an unknown algorithm", tt.field)
+			t.Errorf("%v: Validate accepted an unknown algorithm", algos)
 			continue
 		}
-		if !strings.Contains(err.Error(), tt.field) || !strings.Contains(err.Error(), "unknown algorithm") {
-			t.Errorf("%s: unclear error %q", tt.field, err)
+		if !strings.Contains(err.Error(), "ssh.public_key_auth_algorithms") || !strings.Contains(err.Error(), "unknown algorithm") {
+			t.Errorf("%v: unclear error %q", algos, err)
 		}
 	}
 
@@ -158,34 +113,9 @@ func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
 	// operators who must re-enable them.
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.KexAlgorithms = ssh.InsecureAlgorithms().KeyExchanges
-	cfg.SSH.Ciphers = ssh.InsecureAlgorithms().Ciphers
-	cfg.SSH.MACs = ssh.InsecureAlgorithms().MACs
 	cfg.SSH.PublicKeyAuthAlgorithms = ssh.InsecureAlgorithms().PublicKeyAuths
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate rejected legacy algorithms: %v", err)
-	}
-}
-
-func TestSSHAlgorithmsConfigFileRoundTrip(t *testing.T) {
-	is := is.New(t)
-	for _, want := range [][]string{nil, {"hmac-sha2-256", "hmac-sha1"}} {
-		cfg := DefaultConfig()
-		cfg.DataPath = t.TempDir()
-		cfg.SSH.MACs = want
-		path := filepath.Join(cfg.DataPath, "config.yaml")
-		is.NoErr(writeConfig(cfg, path))
-
-		got := DefaultConfig()
-		got.DataPath = cfg.DataPath
-		is.NoErr(parseFile(got, path))
-		is.Equal(len(got.SSH.KexAlgorithms), 0)
-		is.Equal(len(got.SSH.Ciphers), 0)
-		is.Equal(len(got.SSH.PublicKeyAuthAlgorithms), 0)
-		is.Equal(len(got.SSH.MACs), len(want))
-		if len(want) > 0 {
-			is.Equal(got.SSH.MACs, want)
-		}
 	}
 }
 
@@ -227,22 +157,7 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 		}
 	}
 
-	wantKex := append(DefaultSSHKexAlgorithms(), ssh.InsecureKeyExchangeDH14SHA1)
-	wantMACs := append(DefaultSSHMACs(), ssh.HMACSHA1)
 	wantPubKeyAuths := append(withoutMLDSA(DefaultSSHPublicKeyAuthAlgorithms()), ssh.KeyAlgoRSA)
-	check := func(name, example string) {
-		t.Helper()
-		var cfg Config
-		if err := yaml.Unmarshal([]byte(example), &cfg); err != nil {
-			t.Fatalf("%s legacy example: %v", name, err)
-		}
-		if !slices.Equal(cfg.SSH.KexAlgorithms, wantKex) {
-			t.Errorf("%s legacy example kex_algorithms = %v, want %v", name, cfg.SSH.KexAlgorithms, wantKex)
-		}
-		if !slices.Equal(cfg.SSH.MACs, wantMACs) {
-			t.Errorf("%s legacy example macs = %v, want %v", name, cfg.SSH.MACs, wantMACs)
-		}
-	}
 	checkPubKeyAuths := func(name, example string) {
 		t.Helper()
 		var cfg Config
@@ -259,28 +174,14 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 	rest := doc[strings.Index(doc, "**Older clients.**"):]
 	start := strings.Index(rest, "```yaml\n") + len("```yaml\n")
 	readmeExample := rest[start : start+strings.Index(rest[start:], "```")]
-	check("README", readmeExample)
 	checkPubKeyAuths("README", readmeExample)
 
-	// The generated config file has it as comment lines after
-	// "append the legacy algorithm".
+	// The config file has the public key authentication example as comment
+	// lines after "only signs with ssh-rsa".
 	file := string(defaultConfigFile)
 	var b strings.Builder
 	b.WriteString("ssh:\n")
-	lines := strings.Split(file[strings.Index(file, "append the legacy algorithm"):], "\n")[2:]
-	for _, l := range lines {
-		if !strings.HasPrefix(l, "  #   ") {
-			break
-		}
-		b.WriteString("  " + strings.TrimPrefix(l, "  #   ") + "\n")
-	}
-	check("config file", b.String())
-
-	// And the public key authentication example after "only signs with
-	// ssh-rsa".
-	b.Reset()
-	b.WriteString("ssh:\n")
-	lines = strings.Split(file[strings.Index(file, "only signs with ssh-rsa"):], "\n")
+	lines := strings.Split(file[strings.Index(file, "only signs with ssh-rsa"):], "\n")
 	for len(lines) > 0 && !strings.HasPrefix(lines[0], "  #   ") {
 		lines = lines[1:]
 	}
