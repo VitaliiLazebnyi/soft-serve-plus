@@ -379,7 +379,7 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 
 // A key listed in initial_admin_keys that a non-admin account owns does not
 // resolve to that account: the owner may have claimed it with `pubkey add`
-// before it was listed. The lookup returns ErrAdminKeyNonAdminOwner naming
+// before it was listed. The lookup returns AdminKeyNonAdminOwnerError naming
 // the account (the SSH server refuses the session with it), and the warning
 // is logged on every such lookup. A listed key owned by an admin account resolves
 // as before, and so does the owner once promoted or once the key is
@@ -408,7 +408,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	for range 3 {
 		_, err = be.UserByPublicKey(ctx, claimed)
 		is.True(errors.Is(err, proto.ErrUserNotFound))
-		var owned *ErrAdminKeyNonAdminOwner
+		var owned *AdminKeyNonAdminOwnerError
 		is.True(errors.As(err, &owned))
 		is.Equal(owned.Username, "mallory")
 		is.True(strings.Contains(err.Error(), "user set-admin mallory true"))
@@ -477,7 +477,7 @@ func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 		t.Helper()
 		for range 2 {
 			_, err := be.UserByPublicKey(ctx, key)
-			var owned *ErrAdminKeyNonAdminOwner
+			var owned *AdminKeyNonAdminOwnerError
 			is.True(errors.As(err, &owned))
 			is.Equal(owned.Username, owner)
 		}

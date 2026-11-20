@@ -124,33 +124,7 @@ func (d *Backend) PostUpdate(ctx context.Context, _ io.Writer, _ io.Writer, repo
 	d.logger.Debug("post-update hook called", "repo", repo, "args", args)
 
 	// Populate last-modified file.
-	if err := populateLastModified(ctx, d, repo); err != nil {
+	if err := d.populateLastModified(ctx, repo); err != nil {
 		d.logger.Error("error populating last-modified", "repo", repo, "err", err)
 	}
-}
-
-func populateLastModified(ctx context.Context, d *Backend, name string) error {
-	var rr *repo
-	_rr, err := d.Repository(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if r, ok := _rr.(*repo); ok {
-		rr = r
-	} else {
-		return proto.ErrRepoNotFound
-	}
-
-	r, err := rr.Open()
-	if err != nil {
-		return err
-	}
-
-	c, err := r.LatestCommitTime()
-	if err != nil {
-		return err
-	}
-
-	return rr.writeLastModified(c)
 }

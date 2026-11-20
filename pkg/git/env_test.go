@@ -42,6 +42,7 @@ func TestServiceEnv(t *testing.T) {
 		"SOFT_SERVE_TEST_WEBHOOK_ADDR=127.0.0.1:1",
 		"SOFT_SERVEX=kept",
 		"NOEQUALS",
+		"GIT_NO_REPLACE_OBJECTS=1",
 		"SOFT_SERVE_REPO_NAME=repo",
 		"SOFT_SERVE_DATA_PATH=/data",
 	}

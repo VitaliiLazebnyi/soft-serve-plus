@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,15 +39,16 @@ func TestServeStartErrorShutsDown(t *testing.T) {
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	Command.SetArgs([]string{})
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	err = Command.ExecuteContext(ctx)
+	command := NewCommand()
+	command.SetArgs([]string{})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	err = command.ExecuteContext(ctx)
 	if err == nil || !strings.Contains(err.Error(), "HTTP server") {
 		t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
 	}
 
-	dbx := db.FromContext(Command.Context())
+	dbx := db.FromContext(command.Context())
 	is.True(dbx != nil)
 	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("database ping returned %v, want it closed", err)
@@ -122,16 +124,16 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 			ctx := config.WithContext(context.Background(), cfg)
 			ctx = log.WithContext(ctx, log.New(io.Discard))
 
-			t.Cleanup(func() { syncHooks = false })
-			Command.SetArgs(append([]string{}, tc.args...))
-			Command.SetOut(io.Discard)
-			Command.SetErr(io.Discard)
-			err := Command.ExecuteContext(ctx)
+			command := NewCommand()
+			command.SetArgs(append([]string{}, tc.args...))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			err := command.ExecuteContext(ctx)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("serve returned %v, want a %q error", err, tc.want)
 			}
 
-			dbx := db.FromContext(Command.Context())
+			dbx := db.FromContext(command.Context())
 			if dbx == nil {
 				t.Fatal("no database in the command context")
 			}
@@ -178,11 +180,11 @@ func TestServeUsesContextConfig(t *testing.T) {
 
 	// Starting the HTTP server fails, after the directories and hooks are
 	// set up.
-	t.Cleanup(func() { syncHooks = false })
-	Command.SetArgs([]string{"--sync-hooks"})
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	err = Command.ExecuteContext(ctx)
+	command := NewCommand()
+	command.SetArgs([]string{"--sync-hooks"})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	err = command.ExecuteContext(ctx)
 	if err == nil || !strings.Contains(err.Error(), "HTTP server") {
 		t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
 	}
@@ -206,5 +208,67 @@ func TestServeUsesContextConfig(t *testing.T) {
 	is.NoErr(err)
 	for _, e := range entries {
 		t.Errorf("%s created under the environment data path", e.Name())
+	}
+}
+
+// Each "soft serve" command starts with its flags at their defaults: a
+// --sync-hooks given to one run does not carry over to the next. Regression:
+// the command was package-level, so a flag one run set stayed set.
+func TestServeFlagsDoNotCarryOver(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		syncHooks bool
+	}{
+		{"sync hooks", []string{"--sync-hooks"}, true},
+		{"no flags", []string{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+
+			taken, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+			is.NoErr(err)
+			defer taken.Close() //nolint: errcheck
+
+			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+			cfg := config.DefaultConfig()
+			is.NoErr(cfg.Validate())
+			cfg.SSH.ListenAddr = loopbackAddr()
+			cfg.Git.ListenAddr = loopbackAddr()
+			cfg.HTTP.ListenAddr = taken.Addr().String()
+			cfg.Stats.ListenAddr = loopbackAddr()
+
+			ctx := config.WithContext(context.Background(), cfg)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+
+			// A repository to generate hooks for.
+			dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+			is.NoErr(err)
+			is.NoErr(migrate.Migrate(ctx, dbx))
+			_, err = dbx.ExecContext(ctx, `INSERT INTO repos
+				(name, project_name, description, private, mirror, hidden, user_id, updated_at)
+				VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
+			is.NoErr(err)
+			is.NoErr(dbx.Close())
+
+			// Starting the HTTP server fails, after the hooks are synced.
+			command := NewCommand()
+			command.SetArgs(tc.args)
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			err = command.ExecuteContext(ctx)
+			if err == nil || !strings.Contains(err.Error(), "HTTP server") {
+				t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
+			}
+
+			want := strconv.FormatBool(tc.syncHooks)
+			if got := command.Flags().Lookup("sync-hooks").Value.String(); got != want {
+				t.Errorf("--sync-hooks = %s, want %s", got, want)
+			}
+			_, err = os.Stat(filepath.Join(cfg.DataPath, "repos", "repo1.git", "hooks", "update"))
+			if synced := err == nil; synced != tc.syncHooks {
+				t.Errorf("repository hooks synced = %v, want %v (stat: %v)", synced, tc.syncHooks, err)
+			}
+		})
 	}
 }

@@ -120,6 +120,16 @@ func TestHookErrorClosesDB(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil && runtime.GOOS == "windows" {
 		t.Skip("custom hook is a shell script and sh is not found")
 	}
+	// Run twice, each with its own data path. Regression: the hook command
+	// tree was package-level, and cobra keeps a subcommand's context from
+	// its first run, so a second run used the first run's config and found
+	// no custom hook in the first run's (deleted) data path.
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, testHookErrorClosesDB)
+	}
+}
+
+func testHookErrorClosesDB(t *testing.T) {
 	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {
@@ -136,15 +146,17 @@ func TestHookErrorClosesDB(t *testing.T) {
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	Command.SetArgs([]string{"post-update"})
-	Command.SetIn(strings.NewReader(""))
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	if err := Command.ExecuteContext(ctx); err == nil {
+	command := NewCommand()
+	command.SetArgs([]string{"post-update"})
+	command.SetIn(strings.NewReader(""))
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	postUpdate, err := command.ExecuteContextC(ctx)
+	if err == nil {
 		t.Fatal("hook returned nil for a failing custom hook")
 	}
 
-	dbx := db.FromContext(postUpdateCmd.Context())
+	dbx := db.FromContext(postUpdate.Context())
 	if dbx == nil {
 		t.Fatal("no database in the command context")
 	}
@@ -156,7 +168,7 @@ func TestHookErrorClosesDB(t *testing.T) {
 // The ignored --config flag is marked deprecated, so cobra hides it and says
 // so when it is used.
 func TestConfigFlagDeprecated(t *testing.T) {
-	f := Command.PersistentFlags().Lookup("config")
+	f := NewCommand().PersistentFlags().Lookup("config")
 	if f == nil {
 		t.Fatal("no --config flag")
 	}
@@ -179,11 +191,12 @@ func TestHookRefusesWithoutDataPath(t *testing.T) {
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	Command.SetArgs([]string{"pre-receive"})
-	Command.SetIn(strings.NewReader(""))
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
-	if err := Command.ExecuteContext(ctx); !errors.Is(err, ErrNoDataPath) {
+	command := NewCommand()
+	command.SetArgs([]string{"pre-receive"})
+	command.SetIn(strings.NewReader(""))
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	if err := command.ExecuteContext(ctx); !errors.Is(err, ErrNoDataPath) {
 		t.Fatalf("hook returned %v, want %v", err, ErrNoDataPath)
 	}
 

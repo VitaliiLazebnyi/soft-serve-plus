@@ -5,6 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
@@ -21,9 +22,18 @@ type MirrorSync struct {
 	Error string
 }
 
-// RecordMirrorSync records the outcome of a sync of the mirror name: syncErr
-// is its error, or nil for a sync that succeeded.
-func (d *Backend) RecordMirrorSync(ctx context.Context, name string, syncErr error) error {
+// RecordMirrorSync records the outcome of a sync of the mirror r: syncErr
+// is its error, or nil for a sync that succeeded. It records it on r's row,
+// by ID, wherever r is now; a mirror deleted meanwhile is
+// proto.ErrRepoNotFound. After a sync that succeeded it also records when
+// the mirrored history last changed (see UpdatedAt): git fetch runs no
+// hooks.
+func (d *Backend) RecordMirrorSync(ctx context.Context, r proto.Repository, syncErr error) error {
+	if syncErr == nil {
+		if err := d.populateLastModified(ctx, r.Name()); err != nil {
+			d.logger.Warn("failed to record the last change of a mirror", "repo", r.Name(), "err", err)
+		}
+	}
 	msg := ""
 	if syncErr != nil {
 		// Valid UTF-8 first, so the cut below lands between characters;
@@ -40,7 +50,7 @@ func (d *Backend) RecordMirrorSync(ctx context.Context, name string, syncErr err
 			msg = msg[:cut] + "... (truncated)"
 		}
 	}
-	return wrapRepoError(d.store.SetRepoMirrorSyncByName(ctx, d.db, utils.SanitizeRepo(name), msg))
+	return wrapRepoError(d.store.SetRepoMirrorSyncByID(ctx, d.db, r.ID(), msg))
 }
 
 // MirrorSyncStatus returns the outcome of the syncs of the mirror name.

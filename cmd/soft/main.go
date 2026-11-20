@@ -53,6 +53,9 @@ var (
 		},
 	}
 
+	// hookCmd is the hook command in rootCmd's tree.
+	hookCmd = hook.NewCommand()
+
 	manCmd = &cobra.Command{
 		Use:    "man",
 		Short:  "Generate man pages",
@@ -134,9 +137,9 @@ func init() {
 
 	rootCmd.AddCommand(
 		manCmd,
-		serve.Command,
-		hook.Command,
-		admin.Command,
+		serve.NewCommand(),
+		hookCmd,
+		admin.NewCommand(),
 		browse.Command,
 	)
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
@@ -212,7 +215,7 @@ func isHookCommand(args []string) bool {
 		return false
 	}
 	for ; c != nil; c = c.Parent() {
-		if c == hook.Command {
+		if c == hookCmd {
 			return true
 		}
 	}

@@ -2,8 +2,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
+	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -82,10 +84,38 @@ func (*Store) GetRepoByName(ctx context.Context, h db.Handler, name string) (mod
 	return repo, err
 }
 
+// GetRepoWithCollabByName implements store.Store.
+func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.AccessLevel, bool, error) {
+	var row struct {
+		models.Repo
+		CollabLevel sql.NullInt64 `db:"collab_access_level"`
+	}
+	name = utils.SanitizeRepo(name)
+	query := h.Rebind(`SELECT repos.*, collabs.access_level AS collab_access_level
+		FROM repos LEFT JOIN collabs ON collabs.repo_id = repos.id AND collabs.user_id = ?
+		WHERE repos.name = ?;`)
+	if err := h.GetContext(ctx, &row, query, userID, name); err != nil {
+		return models.Repo{}, 0, false, err
+	}
+	return row.Repo, access.AccessLevel(row.CollabLevel.Int64), row.CollabLevel.Valid, nil
+}
+
 // GetRepoByID implements store.Store.
 func (*Store) GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
 	var repo models.Repo
 	query := h.Rebind("SELECT * FROM repos WHERE id = ?;")
+	err := h.GetContext(ctx, &repo, query, id)
+	return repo, err
+}
+
+// GetRepoByIDForUpdate implements store.Store. See LockUserRepos for the
+// driver switch.
+func (*Store) GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
+	query := "SELECT * FROM repos WHERE id = ?;"
+	if h.DriverName() == "postgres" {
+		query = "SELECT * FROM repos WHERE id = $1 FOR UPDATE;"
+	}
+	var repo models.Repo
 	err := h.GetContext(ctx, &repo, query, id)
 	return repo, err
 }
@@ -109,25 +139,23 @@ func (*Store) SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name stri
 	return affected(h.ExecContext(ctx, query, isMirror, name))
 }
 
-// SetRepoMirrorSyncByName implements store.Store. It leaves
+// SetRepoMirrorSyncByID implements store.Store. It leaves
 // updated_at alone: a sync is not a change made to the repository's settings.
 //
 // The error is text git and the remote wrote, so it is stored as valid UTF-8
 // without NUL bytes, which Postgres refuses in a TEXT column: bytes that are
 // not UTF-8 become U+FFFD and NULs are dropped.
-func (*Store) SetRepoMirrorSyncByName(ctx context.Context, h db.Handler, name string, syncErr string) error {
-	name = utils.SanitizeRepo(name)
-	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE name = ?;"
+func (*Store) SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64, syncErr string) error {
+	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE id = ?;"
 	if syncErr != "" {
-		query = "UPDATE repos SET mirror_error = ? WHERE name = ?;"
+		query = "UPDATE repos SET mirror_error = ? WHERE id = ?;"
 		syncErr = utils.StorableText(syncErr)
 		if syncErr == "" {
 			// Still a failure, though nothing of its text was kept.
 			syncErr = "\uFFFD"
 		}
 	}
-	_, err := h.ExecContext(ctx, h.Rebind(query), syncErr, name)
-	return err
+	return affected(h.ExecContext(ctx, h.Rebind(query), syncErr, id))
 }
 
 // SetRepoDescriptionByName implements store.Store.

@@ -21,13 +21,32 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		return err
 	}
 
-	repo = utils.SanitizeRepo(repo)
-	r, err := d.Repository(ctx, repo)
+	r, err := d.Repository(ctx, utils.SanitizeRepo(repo))
 	if err != nil {
 		return err
 	}
+	return d.addCollaborator(ctx, r, username, level)
+}
 
+// AddResolvedCollaborator is AddCollaborator for r, a repository the caller
+// looked up and authorized before: see lockResolved.
+func (d *Backend) AddResolvedCollaborator(ctx context.Context, r proto.Repository, username string, level access.AccessLevel) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+	return d.addCollaborator(ctx, r, username, level)
+}
+
+// addCollaborator adds username, valid and lowercase, as a collaborator of
+// r, and announces it. The row is added only while r still has its name:
+// the event names r, so the row must be r's.
+func (d *Backend) addCollaborator(ctx context.Context, r proto.Repository, username string, level access.AccessLevel) error {
+	repo := r.Name()
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		if _, err := d.lockResolved(ctx, tx, repo, r.ID()); err != nil {
+			return err
+		}
 		// Without the user, the insert fails on a NOT NULL constraint. The
 		// row lock keeps the user from being deleted before the insert.
 		if _, err := d.store.FindUserByUsernameForUpdate(ctx, tx, username); err != nil {
@@ -35,9 +54,8 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 		}
 		return d.store.AddCollabByUsernameAndRepo(ctx, tx, username, repo, level)
 	}); err != nil {
-		// A repository deleted meanwhile fails the insert on a
-		// constraint; report it as gone.
-		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), err); errors.Is(err, proto.ErrRepoNotFound) {
+		// A repository deleted or renamed meanwhile is gone.
+		if err := store.RepoGoneError(ctx, d.store, d.db, r.ID(), wrapRepoError(err)); errors.Is(err, proto.ErrRepoNotFound) {
 			return err
 		}
 		if errors.Is(err, db.ErrDuplicateKey) {
@@ -142,11 +160,28 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 		return err
 	}
 
-	repo = utils.SanitizeRepo(repo)
-	r, err := d.Repository(ctx, repo)
+	r, err := d.Repository(ctx, utils.SanitizeRepo(repo))
 	if err != nil {
 		return err
 	}
+	return d.removeCollaborator(ctx, r, username)
+}
+
+// RemoveResolvedCollaborator is RemoveCollaborator for r, a repository the
+// caller looked up and authorized before: see lockResolved.
+func (d *Backend) RemoveResolvedCollaborator(ctx context.Context, r proto.Repository, username string) error {
+	username = strings.ToLower(username)
+	if err := utils.ValidateUsername(username); err != nil {
+		return err
+	}
+	return d.removeCollaborator(ctx, r, username)
+}
+
+// removeCollaborator removes username, valid and lowercase, as a
+// collaborator of r, and announces it. The row is removed only while r
+// still has its name.
+func (d *Backend) removeCollaborator(ctx context.Context, r proto.Repository, username string) error {
+	repo := r.Name()
 
 	// The event reads the collaborator row, so it is built before the
 	// removal. Failing to build it does not stop the removal: a missing
@@ -155,6 +190,9 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 	wh, whErr := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
+		if _, err := d.lockResolved(ctx, tx, repo, r.ID()); err != nil {
+			return wrapRepoError(err)
+		}
 		return d.store.RemoveCollabByUsernameAndRepo(ctx, tx, username, repo)
 	}); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {

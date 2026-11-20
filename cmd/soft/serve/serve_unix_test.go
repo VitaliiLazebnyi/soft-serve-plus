@@ -96,14 +96,15 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	Command.SetArgs([]string{})
-	Command.SetOut(io.Discard)
-	Command.SetErr(io.Discard)
+	command := NewCommand()
+	command.SetArgs([]string{})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
 	serveErr := make(chan error, 1)
 	exited := make(chan struct{})
 	go func() {
 		defer close(exited)
-		serveErr <- Command.ExecuteContext(ctx)
+		serveErr <- command.ExecuteContext(ctx)
 	}()
 	t.Cleanup(func() {
 		// Stop "soft serve" if the test failed while it was running.

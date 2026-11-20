@@ -162,12 +162,14 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 		is.True(r == nil)
 		is.Equal(level, access.NoAccess)
 	}
-	// The owner and admins need no collaborator row.
-	r, level := noLookupError(t)(be.Readable(ctx, "private", admin))
-	is.True(r != nil)
-	is.Equal(level, access.AdminAccess)
+	// The repository and the caller's collaborator row are read in one
+	// query, so the lookup fails for its owner and admins too.
+	r, level, err := be.Readable(ctx, "private", admin)
+	is.True(err != nil)
+	is.True(r == nil)
+	is.Equal(level, access.NoAccess)
 
-	// Without the repositories table, the lookup fails for admins too.
+	// So it does without the repositories table.
 	breakTable(t, be, "repos")
 	r, level, err = be.ReadableForUser(ctx, "private", admin)
 	is.True(err != nil)

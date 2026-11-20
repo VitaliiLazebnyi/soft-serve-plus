@@ -69,7 +69,7 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			// a promoted owner. The error says how an admin fixes it.
 			// Auth already succeeded with this key, so the session cannot
 			// fall back to another key or to keyless access.
-			var owned *backend.ErrAdminKeyNonAdminOwner
+			var owned *backend.AdminKeyNonAdminOwnerError
 			if errors.As(err, &owned) {
 				wish.Fatalln(s, owned)
 				return

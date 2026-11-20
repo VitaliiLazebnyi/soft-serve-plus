@@ -60,7 +60,7 @@ func TestRenameRepositoryFailureReleasesClaim(t *testing.T) {
 
 	failed := errors.New("store failure")
 	be.store = failingRenameStore{Store: be.store, err: failed}
-	is.True(errors.Is(be.RenameRepository(ctx, "a", "c"), failed))
+	is.True(errors.Is(be.RenameRepository(ctx, "a", "c"), proto.ErrServerFault)) // the cause is logged, not returned
 
 	_, err = os.Lstat(be.repoPath("c"))
 	is.True(errors.Is(err, os.ErrNotExist)) // the claim was given up

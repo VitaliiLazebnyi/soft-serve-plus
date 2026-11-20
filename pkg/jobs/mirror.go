@@ -174,18 +174,19 @@ func SyncMirrors(ctx context.Context) {
 		if ctx.Err() != nil {
 			break
 		}
-		name := repo.Name()
 		g.Go(func() error {
-			syncMirrorWorker(ctx, cfg, logger, b, name)
+			syncMirrorWorker(ctx, cfg, logger, b, repo)
 			return nil
 		})
 	}
 	_ = g.Wait()
 }
 
-// syncMirrorWorker syncs the mirror name in a worker of SyncMirrors and
-// records the outcome. A panic is logged with the repository's name.
-func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, name string) {
+// syncMirrorWorker syncs the mirror repo in a worker of SyncMirrors and
+// records the outcome on its row. A panic is logged with the repository's
+// name.
+func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
+	name := repo.Name()
 	// The worker's slot may have come free only after the server began
 	// to stop.
 	if ctx.Err() != nil {
@@ -200,7 +201,7 @@ func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logge
 	if errors.Is(err, errNotMirror) || ctx.Err() != nil {
 		return
 	}
-	if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), name, err); rerr != nil {
+	if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), repo, err); rerr != nil {
 		logger.Warn("failed to record the mirror sync", "repo", name, "err", rerr)
 	}
 }
