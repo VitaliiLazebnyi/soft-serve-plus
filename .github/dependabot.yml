@@ -1,10 +1,25 @@
 version: 2
 
+# Every ecosystem waits a week before proposing a new version, so a release
+# that is pulled or found compromised within days never reaches a pull
+# request. Security updates are not delayed by the cooldown.
+#
+# Not covered here, so bumped by hand: the golangci-lint and GoReleaser
+# versions given to their actions (lint.yml, build.yml, goreleaser.yml) and
+# the Postgres service image (coverage.yml). Dependabot reads only `uses:`
+# lines in workflows and only Dockerfiles for images.
+
 updates:
   - package-ecosystem: "gomod"
-    directory: "/"
+    # The module, and the tools CI and Taskfile.yaml run with `go tool
+    # -modfile=.github/tools/go.mod` (govulncheck, svu).
+    directories:
+      - "/"
+      - "/.github/tools"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     commit-message:
@@ -19,6 +34,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     commit-message:
@@ -33,6 +50,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     commit-message:

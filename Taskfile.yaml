@@ -36,7 +36,8 @@ tasks:
       # Task evaluates this before any command runs, so the tags are
       # fetched here: with stale local tags svu would compute an old version.
       NEXT:
-        sh: git fetch --quiet --tags && { svu next --always || go run github.com/caarlos0/svu/v3@v3.4.4 next --always; }
+        # svu is pinned in .github/tools/go.mod, where Dependabot updates it.
+        sh: git fetch --quiet --tags && go tool -modfile=.github/tools/go.mod svu next --always
     prompt: "This will release {{.NEXT}}. Continue?"
     preconditions:
       - sh: '[ $(git symbolic-ref --short HEAD) = "main" ]'

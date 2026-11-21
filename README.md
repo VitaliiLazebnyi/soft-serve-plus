@@ -795,6 +795,16 @@ These commands refuse to run when the data directory, or the SQLite database,
 does not exist: only `soft serve` creates them. Run them with the same
 `SOFT_SERVE_DATA_PATH` as the server; a shell without it uses `./data`.
 
+#### Health checks
+
+The HTTP server answers two paths with no authentication, for load
+balancers, Kubernetes probes and the image's health check (see
+[docker.md](https://github.com/VitaliiLazebnyi/soft-serve-plus/blob/main/docker.md#health-check)):
+
+- `/livez`: `200` while the HTTP server is running;
+- `/readyz`: `200` when the database also answers a ping, `503` when it
+  does not.
+
 #### Stopping the server
 
 On SIGINT or SIGTERM, `soft serve` stops accepting connections and gives
@@ -953,6 +963,12 @@ ss_1234abc56789012345678901234de246d798fghi
 # Or with an expiry date
 ssh -p 23231 localhost token create --expires-in 1y 'my other token'
 ss_98fghi1234abc56789012345678901234de246d7
+
+# List your tokens: ID, name, when each was created and when it expires
+ssh -p 23231 localhost token list
+
+# Delete one by its ID
+ssh -p 23231 localhost token delete 2
 ```
 
 Now you can access repos that require `read-write` access. Give git the token
@@ -964,6 +980,15 @@ git clone http://localhost:23232/my-private-repo.git my-private-repo
 # When prompted, enter any username and the token as the password.
 # Your credential helper (e.g. osxkeychain, manager, libsecret) remembers it.
 # Make changes and push
+```
+
+`ssh … jwt REPOSITORY...` prints a JSON Web Token instead: signed with the
+server's SSH host key, valid for one hour and only for the repositories it
+names. Send it as `Authorization: Bearer <token>`; git-lfs gets one the same
+way over SSH (`git-lfs-authenticate`).
+
+```sh
+ssh -p 23231 localhost jwt my-private-repo
 ```
 
 You can also put the token in the URL as the username
@@ -1034,6 +1059,9 @@ ssh -p 23231 localhost pubkey list
 printf %s USERNAME | ssh-keygen -Y sign -n pubkey-add@soft-serve-plus -f ~/.ssh/id_new |
   ssh -p 23231 localhost pubkey add "$(cat ~/.ssh/id_new.pub)"
 
+# Remove a key
+ssh -p 23231 localhost pubkey remove "$(cat ~/.ssh/id_old.pub)"
+
 # Wanna change your username?
 ssh -p 23231 localhost set-username yolo
 
@@ -1066,6 +1094,10 @@ own keys or with `user add-pubkey` for others. A key already attached to an
 account, yours or another one, is refused with the same error, which does not
 say whose it is. `pubkey add` also fails once the key your session signed in
 with has been removed from your account.
+
+`pubkey remove` refuses to remove the key your session signed in with
+(connect with another of your keys to remove it) and your last key (add
+another first, or ask an admin to remove the account).
 
 Keys listed in `initial_admin_keys` get extra care:
 
@@ -1107,7 +1139,7 @@ Available Commands:
   blob         Print out the contents of file at path
   branch       Manage repository branches
   collab       Manage collaborators
-  commit       Print out the contents of a diff
+  commit       Print out a commit and its diff
   create       Create a new repository
   delete       Delete a repository
   description  Set or get the description for a repository
@@ -1217,6 +1249,19 @@ resolves a `go get` path only within its first 32 segments, so a repository
 nested deeper, created before this limit, is found only when the import path
 names the repository itself; a bearer token for such a repository gets 403 on
 the `go get` paths of its subpackages.
+
+### Go modules
+
+The HTTP server answers `go get` (requests with `?go-get=1`), so a repository
+can hold a Go module whose import path is the host and path of
+`http.public_url` followed by the repository name, for example
+`git.example.com/my-team/icecream` with `public_url: https://git.example.com`.
+The answer points the go command at the repository over HTTP, and a package
+path inside it (`git.example.com/my-team/icecream/cone`) resolves to the
+closest repository above it that the caller can read. Private repositories
+need credentials, as for git (for example in `~/.netrc`), and `GOPRIVATE` set
+to the host, so the go command does not ask the public proxy and checksum
+database.
 
 ### Mirrors
 
@@ -1612,14 +1657,18 @@ Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
 No other git command the server runs, such as a fetch or a clone over any of
 SSH, HTTP or `git://`, gets these variables.
 
-Here's an example of sending a message after receiving a push event. Create an
-executable file `<data path>/hooks/update`:
+Here's an example of sending a message after receiving a push event. The
+server writes it to `<data path>/hooks/update.sample` when it creates the
+global hooks directory; rename it to `<data path>/hooks/update` and make it
+executable to try it:
 
 ```sh
 #!/bin/sh
 #
 # An example hook script to echo information about the push
 # and send it to the client.
+#
+# To enable this hook, rename this file to "update" and make it executable.
 
 refname="$1"
 oldrev="$2"
@@ -1649,6 +1698,7 @@ fi
 
 echo "Hi from Soft Serve Plus update hook!"
 echo
+echo "Repository: $SOFT_SERVE_REPO_NAME"
 echo "RefName: $refname"
 echo "Change Type: $newrev_type"
 echo "Old SHA1: $oldrev"

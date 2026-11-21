@@ -83,3 +83,33 @@ func TestReleaseWorkflowDoesNotTrustSharedState(t *testing.T) {
 		t.Error("no GoReleaser step found; update this test")
 	}
 }
+
+// TestCheckoutsDoNotPersistCredentials checks that no workflow leaves the
+// job's token in .git/config, where every later step, third-party actions
+// and the code under test included, could read it. No workflow pushes with
+// git.
+func TestCheckoutsDoNotPersistCredentials(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob(filepath.Join(repoRoot, ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkouts int
+	for _, f := range files {
+		name := filepath.Base(f)
+		for jobName, job := range readWorkflow(t, name).Jobs {
+			for i, step := range job.Steps {
+				if !strings.HasPrefix(step.Uses, "actions/checkout@") {
+					continue
+				}
+				checkouts++
+				if v, ok := step.With["persist-credentials"]; !ok || v != false {
+					t.Errorf("%s: job %s step %d (checkout): persist-credentials must be false, got %v", name, jobName, i, v)
+				}
+			}
+		}
+	}
+	if checkouts == 0 {
+		t.Error("no actions/checkout step found; update this test")
+	}
+}

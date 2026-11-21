@@ -18,9 +18,13 @@ permissions:
 
 jobs:
   coverage:
+    # One entry on purpose: Postgres runs as a service container, which only
+    # Linux runners have, and macOS and Windows already run the suite in
+    # build.yml. The matrix stays so the job keeps the name
+    # "coverage (ubuntu-latest)" that the main ruleset requires.
     strategy:
       matrix:
-        os: [ubuntu-latest] # TODO: add macos & windows
+        os: [ubuntu-latest]
     services:
       postgres:
         # Pinned by digest so a new Postgres release cannot change CI
@@ -56,6 +60,8 @@ jobs:
         ./pkg/test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
