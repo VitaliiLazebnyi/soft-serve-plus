@@ -153,7 +153,9 @@ type MirrorPull struct {
 	// endpoints that trickle data just fast enough.
 	timeout time.Duration
 
-	// workers is how many mirrors sync at once.
+	// workers is how many mirrors sync at once; 0, the default, means
+	// GOMAXPROCS as it is when the job runs, which follows the CPU limit
+	// of the server's cgroup.
 	workers int
 
 	// runGit runs one git command of a mirror sync in dir with env
@@ -188,7 +190,6 @@ func NewMirrorPull(cfg *config.Config, be *backend.Backend, logger *log.Logger) 
 		be:      be,
 		logger:  logger.WithPrefix("jobs.mirror"),
 		timeout: mirrorSyncTimeout,
-		workers: runtime.GOMAXPROCS(0),
 		runGit:  backend.RunRemoteGit,
 		syncLFS: be.SyncRepoLFSObjects,
 	}, nil
@@ -199,9 +200,8 @@ var errNilBackend = errors.New("jobs: nil backend")
 
 // Run fetches every pull mirror from its remotes, and their LFS objects when
 // LFS is enabled, and records the outcome of each sync (see
-// Backend.RecordMirrorSync). Up to GOMAXPROCS mirrors (as many as there
-// were when NewMirrorPull ran) sync at once; it returns when all of them are
-// done. Once ctx is done no further mirror
+// Backend.RecordMirrorSync). Up to GOMAXPROCS mirrors sync at once; it
+// returns when all of them are done. Once ctx is done no further mirror
 // starts; see syncMirror for what happens to one already running. A mirror
 // whose sync panics is logged and does not stop the others.
 func (m *MirrorPull) Run(ctx context.Context) {
@@ -225,7 +225,7 @@ func (m *MirrorPull) Run(ctx context.Context) {
 
 	logger.Debug("updating mirror repos")
 	var g errgroup.Group
-	g.SetLimit(max(m.workers, 1))
+	g.SetLimit(m.workerLimit())
 	for _, repo := range repos {
 		if !repo.IsMirror() {
 			continue
@@ -241,6 +241,15 @@ func (m *MirrorPull) Run(ctx context.Context) {
 		})
 	}
 	_ = g.Wait()
+}
+
+// workerLimit returns how many mirrors a run syncs at once: workers, or
+// GOMAXPROCS when it is 0.
+func (m *MirrorPull) workerLimit() int {
+	if m.workers > 0 {
+		return m.workers
+	}
+	return max(runtime.GOMAXPROCS(0), 1)
 }
 
 // syncMirrorWorker syncs the mirror repo in a worker of Run and records the

@@ -16,10 +16,13 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
+
+// untouchedStore is a Store whose every method panics, for a session that
+// must not reach the database.
+type untouchedStore struct{ Store }
 
 // lfsTestRepo is a proto.Repository with just an ID and a name. Anything
 // else panics, which is what a refused command must never reach.
@@ -50,10 +53,12 @@ func TestLFSTransferDownloadSessionRefusesWrites(t *testing.T) {
 	in.WriteString(pkt("lock\n") + pkt("path=foo.png\n") + pkt("refname=refs/heads/main\n") + "0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
+	tr, deps := newLFSUploadTransfer(t)
+	cfg := tr.cfg
+	// Nothing a refused command does reaches the store.
+	deps.Store = untouchedStore{}
+	deps.Logger = log.New(io.Discard)
 	var out bytes.Buffer
-	deps := TransferDeps{Config: cfg, Logger: log.New(io.Discard)}
 	if err := Transfer(t.Context(), strings.NewReader(in.String()), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationDownload); err != nil {
 		t.Fatalf("Transfer: %v", err)
 	}

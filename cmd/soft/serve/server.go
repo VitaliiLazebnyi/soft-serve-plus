@@ -91,7 +91,8 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 
 	// Add cron jobs.
 	sched := cron.NewScheduler(baseLogger)
-	if err := scheduleJobs(jobCtx, cfg, be, sched, baseLogger); err != nil {
+	// The jobs set prefixes of their own; scheduleJobs logs as the server.
+	if err := scheduleJobs(jobCtx, cfg, be, sched, logger); err != nil {
 		return nil, err
 	}
 

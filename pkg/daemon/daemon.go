@@ -97,8 +97,9 @@ type GitDaemon struct {
 // testHooks are called by the daemon while it serves, for tests to inject
 // delays and faults. They are nil outside tests.
 type testHooks struct {
-	// beforeAuthorize runs before the access checks of a request.
-	beforeAuthorize func()
+	// beforeAuthorize runs before the access checks of a request, with
+	// the request's context.
+	beforeAuthorize func(ctx context.Context)
 	// now, if set, is the clock refuse reads the time from, so that a
 	// test can have a refusal come after a deadline without waiting
 	// for it to pass.
@@ -421,7 +422,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.logger.Debugf("git: protocol version %s", req.version)
 	}
 	if d.testHooks.beforeAuthorize != nil {
-		d.testHooks.beforeAuthorize()
+		d.testHooks.beforeAuthorize(ctx)
 	}
 	if err := d.authorize(ctx, req); err != nil {
 		d.refuse(c, err, until)

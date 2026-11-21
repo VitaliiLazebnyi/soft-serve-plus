@@ -78,6 +78,10 @@ var _ transfer.Backend = &lfsTransfer{}
 // so callers can still test for the cause.
 var errInvalidOid = fmt.Errorf("%w: %w", transfer.ErrParseError, lfs.ErrInvalidOIDFormat)
 
+// errNilDeps is returned by Transfer when TransferDeps has no database or
+// no store.
+var errNilDeps = errors.New("lfs transfer: nil database or store")
+
 // errReadOnlySession is returned for a write command (put-object, lock,
 // unlock) sent in a download session, which needs only read access.
 var errReadOnlySession = fmt.Errorf("%w: not allowed in a download session", transfer.ErrForbidden)
@@ -93,6 +97,9 @@ func Transfer(ctx context.Context, in io.Reader, out io.Writer, deps TransferDep
 	}
 	if deps.Config == nil {
 		return config.ErrNilConfig
+	}
+	if deps.DB == nil || deps.Store == nil {
+		return errNilDeps
 	}
 
 	logger := deps.Logger

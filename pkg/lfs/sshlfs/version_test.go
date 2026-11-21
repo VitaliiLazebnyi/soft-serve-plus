@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 )
 
@@ -20,11 +19,11 @@ func TestLFSTransferBareVersion(t *testing.T) {
 	in.WriteString(pkt("version 1\n") + "0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
+	_, deps := newLFSUploadTransfer(t)
+	deps.Store = untouchedStore{}
 	var logs bytes.Buffer
+	deps.Logger = log.New(&logs)
 	var out bytes.Buffer
-	deps := TransferDeps{Config: cfg, Logger: log.New(&logs)}
 	err := Transfer(t.Context(), strings.NewReader(in.String()), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationDownload)
 	if err == nil || !strings.Contains(err.Error(), "panicked") {
 		t.Fatalf("Transfer => %v, want the processor's panic as an error", err)
