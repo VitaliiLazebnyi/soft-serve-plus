@@ -92,9 +92,9 @@ type SSHConfig struct {
 }
 
 // AllowedHosts returns the parsed ssh allowlist. It is empty until Validate
-// has run.
+// has run. The slice is a copy, so a caller may change it.
 func (c *SSHConfig) AllowedHosts() ssrf.AllowedHosts {
-	return c.allowedHosts
+	return slices.Clone(c.allowedHosts)
 }
 
 // GitConfig is the Git daemon configuration for the server.
@@ -251,9 +251,9 @@ type WebhookConfig struct {
 }
 
 // ParsedAllowedHosts returns the parsed webhook allowlist. It is empty until
-// Validate has run.
+// Validate has run. The slice is a copy, so a caller may change it.
 func (c *WebhookConfig) ParsedAllowedHosts() ssrf.AllowedHosts {
-	return c.allowedHosts
+	return slices.Clone(c.allowedHosts)
 }
 
 // Config is the configuration for Soft Serve.

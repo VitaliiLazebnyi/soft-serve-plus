@@ -97,6 +97,37 @@ func TestAdminKeysReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestAllowedHostsReturnCopies checks that changing the allowlists
+// AllowedHosts and ParsedAllowedHosts return leaves the config's own alone,
+// as AdminKeys does.
+func TestAllowedHostsReturnCopies(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.SSH.ClientAllowedHosts = []string{"git.internal.example", "10.0.0.0/8:2222"}
+	cfg.Webhook.AllowedHosts = []string{"hooks.internal", "10.0.0.0/8:8080"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		get  func() ssrf.AllowedHosts
+	}{
+		{"ssh", cfg.SSH.AllowedHosts},
+		{"webhook", cfg.Webhook.ParsedAllowedHosts},
+	} {
+		want := slices.Clone(tc.get())
+		if len(want) != 2 {
+			t.Fatalf("%s allowed hosts = %d, want 2", tc.name, len(want))
+		}
+		got := tc.get()
+		got[0], got[1] = got[1], got[0]
+		if !reflect.DeepEqual(tc.get(), want) {
+			t.Errorf("changing the returned %s allowlist changed the config's", tc.name)
+		}
+	}
+}
+
 func TestUnreadableAdminKeyFiles(t *testing.T) {
 	is := is.New(t)
 	missing := filepath.Join(t.TempDir(), "not-mounted-yet.pub")

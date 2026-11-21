@@ -742,7 +742,8 @@ func TestAdminKeysInsertedInSortedOrder(t *testing.T) {
 // as concurrent boots in one process do, each on its own database so that
 // nothing orders one sync's work before the other's. The keys are listed in
 // reverse order, so sorting them in place would write to the config's own
-// slice, which the race detector reports, and which the test then sees.
+// slice, which the race detector may report, and which the test sees by the
+// changed order.
 func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
 	ctx := context.TODO()
 
