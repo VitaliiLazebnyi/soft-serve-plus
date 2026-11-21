@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -758,6 +760,29 @@ func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 
 	// An authenticated SSH connection with no session: the SSH server
 	// keeps it, and so its drain, until the idle timeout.
+	closed := dialIdleSSH(t, sshAddr, errc)
+	// The drain is over before it starts.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Shutdown(ctx, ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil when only the drain ran out", err)
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH connection is still open a minute after Shutdown")
+	}
+}
+
+// dialIdleSSH opens an authenticated SSH connection with no session to the
+// server at addr, which Start, reporting on errc, is starting. The SSH
+// server holds it, and with it its drain, until its idle timeout. The
+// returned channel is closed when the server closes the connection.
+func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
+	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -769,7 +794,7 @@ func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 	var client *gossh.Client
 	deadline := time.Now().Add(time.Minute)
 	for {
-		client, err = gossh.Dial("tcp", sshAddr, &gossh.ClientConfig{
+		client, err = gossh.Dial("tcp", addr, &gossh.ClientConfig{
 			User:            "test",
 			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 			HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec // test server
@@ -788,26 +813,89 @@ func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	defer client.Close() //nolint: errcheck
+	t.Cleanup(func() { _ = client.Close() })
 	closed := make(chan struct{})
 	go func() {
 		_ = client.Wait()
 		close(closed)
 	}()
+	return closed
+}
 
-	// The drain is over before it starts.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := s.Shutdown(ctx, ctx); err != nil {
-		t.Fatalf("Shutdown = %v, want nil when only the drain ran out", err)
+// Close is Shutdown with contexts that are already done: with a connection
+// that would hold a drain until its idle timeout, it returns at once and
+// cuts the connection off. It does not warn that a drain ran out, since
+// there was none (S14 round-1 review notes 10 and 11).
+func TestCloseCutsOffWithoutDraining(t *testing.T) {
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
+	var logs syncBuffer
+	s.logger = log.New(&logs)
+	errc := startAsync(s)
+	closed := dialIdleSSH(t, sshAddr, errc)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("Close still waits a minute later: it drained instead of cutting off")
 	}
-	if err := waitStart(t, errc, "after Shutdown"); err != nil {
-		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	if err := waitStart(t, errc, "after Close"); err != nil {
+		t.Fatalf("Start returned %v after Close, want nil", err)
 	}
 	select {
 	case <-closed:
 	case <-time.After(time.Minute):
-		t.Fatal("the SSH connection is still open a minute after Shutdown")
+		t.Fatal("the SSH connection is still open a minute after Close")
+	}
+	if out := logs.String(); strings.Contains(out, "stopping with connections still open") {
+		t.Errorf("Close warned about a drain it did not run: %s", out)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the goroutines of a logger.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitAtLeast waits until the caller's deadline, or for at least d when
+// that comes sooner or the caller has none, and a cancelled caller does not
+// end it (S14 round-1 review note 9).
+func TestWaitAtLeast(t *testing.T) {
+	far, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	ctx, stop := waitAtLeast(far, time.Millisecond)
+	defer stop()
+	if dl, _ := ctx.Deadline(); dl.Before(time.Now().Add(59 * time.Minute)) {
+		t.Errorf("deadline %v, want the caller's, an hour away", dl)
+	}
+
+	cancelled, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	ctx, stop = waitAtLeast(cancelled, time.Hour)
+	defer stop()
+	if ctx.Err() != nil {
+		t.Error("a cancelled caller ended the wait")
+	}
+	if dl, ok := ctx.Deadline(); !ok || dl.Before(time.Now().Add(59*time.Minute)) {
+		t.Errorf("deadline %v, %v; want an hour away", dl, ok)
 	}
 }
 
@@ -829,5 +917,32 @@ func TestNewServerLoadsKeys(t *testing.T) {
 	got, err := config.KeyPair(s.Config)
 	if err != nil || got != want {
 		t.Errorf("KeyPair() after the key file went = %p, %v; want the key read at start %p", got, err, want)
+	}
+}
+
+// The README's "Stopping the server" says how long the drain is and that
+// the stop succeeds (S14 round-1 review note 12).
+func TestReadmeStopMatchesDrain(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	i := strings.Index(doc, "#### Stopping the server")
+	if i < 0 {
+		t.Fatal("README has no Stopping the server section")
+	}
+	section := strings.Join(strings.Fields(doc[i:i+strings.Index(doc[i+1:], "\n#")+1]), " ")
+	if drainTimeout%time.Second != 0 || backend.ShutdownDeliveryTimeout != time.Minute {
+		t.Fatal("the README states the drain in seconds and the delivery wait as a minute")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("%d seconds to finish", drainTimeout/time.Second),
+		"exits with status 0",
+		"up to a minute more",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("Stopping the server does not say %q:\n%s", want, section)
+		}
 	}
 }

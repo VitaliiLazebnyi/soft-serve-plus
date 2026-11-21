@@ -795,6 +795,16 @@ These commands refuse to run when the data directory, or the SQLite database,
 does not exist: only `soft serve` creates them. Run them with the same
 `SOFT_SERVE_DATA_PATH` as the server; a shell without it uses `./data`.
 
+#### Stopping the server
+
+On SIGINT or SIGTERM, `soft serve` stops accepting connections and gives
+the clones, pushes and SSH sessions in flight 5 seconds to finish. It then
+cuts off whatever is still running and exits with status 0: a transfer cut
+off this way is not an error of the server. Webhook deliveries already
+queued get up to a minute more; a second SIGINT or SIGTERM stops that
+wait. SIGHUP does not stop the server: it reloads the TLS certificate, if
+one is set.
+
 ## Server Access
 
 Soft Serve Plus at its core manages your server authentication and authorization. Authentication verifies the identity of a user, while authorization determines their access rights to a repository.

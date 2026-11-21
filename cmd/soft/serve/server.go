@@ -372,17 +372,29 @@ func (s *Server) Start() error {
 // backend.ShutdownDeliveryTimeout, and cancelled cron jobs jobsTimeout.
 const drainTimeout = 5 * time.Second
 
-// jobsTimeout bounds how long Shutdown waits for the cancelled cron jobs to
-// end, so none uses the database once the caller closes it.
+// jobsTimeout is how long Shutdown waits at least for the cancelled cron
+// jobs to end, so none uses the database once the caller closes it: until
+// the caller's deadline, or this long from then on if that is later.
 const jobsTimeout = 10 * time.Second
+
+// waitAtLeast returns a context that ends at ctx's deadline or d from now,
+// whichever is later, and not when ctx is cancelled before that.
+func waitAtLeast(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(d)
+	if dl, ok := ctx.Deadline(); ok && dl.After(deadline) {
+		deadline = dl
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+}
 
 // Shutdown stops the server. Imports in flight are cancelled, and the
 // servers drain within ctx; what still runs when ctx is done is closed, which
-// is logged but not an error. The cancelled cron jobs are waited for within
-// jobsTimeout. The cancelled imports' cleanup and the background webhook
-// deliveries are then waited for within their own budget,
-// backend.ShutdownDeliveryTimeout, or until abort is done, whichever comes
-// first. Each server's error is logged; they are returned joined. The
+// is logged but not an error. The cancelled cron jobs are waited for until
+// ctx's deadline, and for at least jobsTimeout. The cancelled imports'
+// cleanup and the background webhook deliveries are then waited for within
+// their own budget, backend.ShutdownDeliveryTimeout, or until abort is done,
+// whichever comes first; with abort already done, as for Close, they are
+// not waited for. Each server's error is logged; they are returned joined. The
 // servers that were never built are skipped, so it also stops a server
 // NewServer failed to finish.
 func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
@@ -427,7 +439,11 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 			err := shutdown(ctx)
 			if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				// Only the drain ran out: cut off what still runs.
-				logger.Warn("stopping with connections still open", "server", name, "drain", drainTimeout)
+				if errors.Is(err, context.DeadlineExceeded) {
+					// Not for Close, whose context is cancelled
+					// before any drain.
+					logger.Warn("stopping with connections still open", "server", name, "drain", drainTimeout)
+				}
 				err = closeNow()
 				if errors.Is(err, daemon.ErrServerClosed) || errors.Is(err, http.ErrServerClosed) || errors.Is(err, ssh.ErrServerClosed) {
 					// The shutdown had closed it already; Close cut
@@ -460,7 +476,7 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	}
 	if s.Cron != nil {
 		errg.Go(func() error {
-			jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobsTimeout)
+			jctx, cancel := waitAtLeast(ctx, jobsTimeout)
 			defer cancel()
 			if err := s.Cron.Shutdown(jctx); err != nil {
 				fail(fmt.Errorf("wait for cron jobs: %w", err))
@@ -476,7 +492,8 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	// the caller's drain deadline for the HTTP and SSH servers. The stopped
 	// imports are waited for first, within the same budget, since cleaning
 	// up a registered one queues a repository delete event.
-	if s.Backend != nil {
+	// An abort that is already done, as Close's, waits for nothing.
+	if s.Backend != nil && abort.Err() == nil {
 		dctx, cancel := context.WithTimeout(abort, backend.ShutdownDeliveryTimeout)
 		defer cancel()
 		s.Backend.WaitForImports(dctx)

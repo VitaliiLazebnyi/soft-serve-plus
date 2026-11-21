@@ -200,7 +200,7 @@ func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
 	t.Cleanup(func() { signal.Stop(probe) })
 	sigs := notifySignals()
 	t.Cleanup(sigs.stop)
-	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGHUP, syscall.SIGTERM} {
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGTERM} {
 		if err := syscall.Kill(os.Getpid(), sig); err != nil {
 			t.Fatal(err)
 		}
@@ -209,6 +209,11 @@ func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
 		case <-time.After(time.Minute):
 			t.Fatalf("%v did not arrive within a minute", sig)
 		}
+	}
+	// The stop and the second one, which aborts the shutdown's wait, both
+	// fit before either is read.
+	if n := len(sigs.term); n != 2 {
+		t.Fatalf("the stop channel holds %d signals, want both SIGTERMs", n)
 	}
 	select {
 	case sig := <-sigs.term:
