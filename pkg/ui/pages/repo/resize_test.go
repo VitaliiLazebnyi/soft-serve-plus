@@ -174,12 +174,15 @@ func TestResizeKeepsEveryTabsSize(t *testing.T) {
 	p.r.SetSize(100, 30)
 	type size struct{ w, h int }
 	tabs := map[string]func() size{
-		"Readme":   func() size { return size{p.readme.code.Width(), p.readme.code.Height()} },
-		"Files":    func() size { return size{p.files.selector.Width(), p.files.selector.Height()} },
-		"Commits":  func() size { return size{p.log.selector.Width(), p.log.selector.Height()} },
-		"Stash":    func() size { return size{p.stash.list.Width(), p.stash.list.Height()} },
-		"Branches": func() size { return size{p.branches.selector.Width(), p.branches.selector.Height()} },
-		"Tags":     func() size { return size{p.tags.selector.Width(), p.tags.selector.Height()} },
+		"Readme":       func() size { return size{p.readme.code.Width(), p.readme.code.Height()} },
+		"Files":        func() size { return size{p.files.selector.Width(), p.files.selector.Height()} },
+		"Files code":   func() size { return size{p.files.code.Width(), p.files.code.Height()} },
+		"Commits":      func() size { return size{p.log.selector.Width(), p.log.selector.Height()} },
+		"Commits diff": func() size { return size{p.log.vp.Width(), p.log.vp.Height()} },
+		"Stash":        func() size { return size{p.stash.list.Width(), p.stash.list.Height()} },
+		"Stash patch":  func() size { return size{p.stash.vp.Width(), p.stash.vp.Height()} },
+		"Branches":     func() size { return size{p.branches.selector.Width(), p.branches.selector.Height()} },
+		"Tags":         func() size { return size{p.tags.selector.Width(), p.tags.selector.Height()} },
 	}
 	want := map[string]size{}
 	for name, tabSize := range tabs {
