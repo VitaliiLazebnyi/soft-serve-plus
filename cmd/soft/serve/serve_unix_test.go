@@ -144,32 +144,66 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 	}
 }
 
+// signalProbe is a channel registered for SIGHUP, SIGTERM and SIGUSR1 next
+// to the ones under test. It keeps those signals from killing the test binary, and
+// it tells when the runtime has handed a signal to the channels under test.
+//
+// os/signal hands each signal to the registered channels in a loop over a
+// map, so the probe can receive a signal before the loop reaches another
+// channel: the probe having a signal does not mean the others have it yet.
+// But one goroutine hands out the signals one after another, and finishes
+// the loop for one before it starts the next. So once the probe has a later
+// signal, every channel has been offered the earlier ones; fence sends such
+// a signal. It is a SIGUSR1, which soft serve does not handle: the channels
+// under test do not get it, so the fence is not itself still on its way to
+// them when it returns.
+type signalProbe struct {
+	t *testing.T
+	c chan os.Signal
+}
+
+func newSignalProbe(t *testing.T) *signalProbe {
+	t.Helper()
+	p := &signalProbe{t: t, c: make(chan os.Signal, 1)}
+	signal.Notify(p.c, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGUSR1)
+	t.Cleanup(func() { signal.Stop(p.c) })
+	return p
+}
+
+// send sends sig to this process and waits until the probe receives it. The
+// next signal sent is then a new one, not merged into sig while it is
+// pending.
+func (p *signalProbe) send(sig syscall.Signal) {
+	p.t.Helper()
+	if err := syscall.Kill(os.Getpid(), sig); err != nil {
+		p.t.Fatal(err)
+	}
+	select {
+	case got := <-p.c:
+		if got != sig {
+			p.t.Fatalf("the probe got %v, want %v", got, sig)
+		}
+	case <-time.After(time.Minute):
+		p.t.Fatalf("%v did not arrive within a minute", sig)
+	}
+}
+
+// fence returns once every channel registered for the signals sent before it
+// has been offered them.
+func (p *signalProbe) fence() {
+	p.t.Helper()
+	p.send(syscall.SIGUSR1)
+}
+
 // stop ends the delivery to the channels notifySignals registered, so a
 // soft serve run again in the same process, as tests do, leaves no handler
 // behind (tracker 312).
 func TestSignalsStop(t *testing.T) {
-	// The probe keeps a signal from killing the test binary and fences the
-	// check: the runtime hands signals to the registered channels one
-	// signal at a time, so once the probe has a second signal, delivering
-	// the first one to every channel is over.
-	probe := make(chan os.Signal, 1)
-	signal.Notify(probe, syscall.SIGHUP, syscall.SIGTERM)
-	t.Cleanup(func() { signal.Stop(probe) })
-	send := func(sig syscall.Signal) {
-		t.Helper()
-		if err := syscall.Kill(os.Getpid(), sig); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-probe:
-		case <-time.After(time.Minute):
-			t.Fatalf("%v did not arrive within a minute", sig)
-		}
-	}
-
+	probe := newSignalProbe(t)
 	sigs := notifySignals()
-	send(syscall.SIGHUP)
-	send(syscall.SIGTERM)
+	probe.send(syscall.SIGHUP)
+	probe.send(syscall.SIGTERM)
+	probe.fence()
 	for name, c := range map[string]chan os.Signal{"hup": sigs.hup, "term": sigs.term} {
 		select {
 		case <-c:
@@ -179,9 +213,9 @@ func TestSignalsStop(t *testing.T) {
 	}
 
 	sigs.stop()
-	send(syscall.SIGHUP)
-	send(syscall.SIGTERM)
-	send(syscall.SIGHUP) // fences the SIGTERM
+	probe.send(syscall.SIGHUP)
+	probe.send(syscall.SIGTERM)
+	probe.fence()
 	select {
 	case sig := <-sigs.hup:
 		t.Errorf("the hup channel got %v after stop", sig)
@@ -195,32 +229,21 @@ func TestSignalsStop(t *testing.T) {
 // channel of one slot for all three signals, signal.Notify dropped it
 // (CFG-21).
 func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
-	probe := make(chan os.Signal, 1)
-	signal.Notify(probe, syscall.SIGHUP, syscall.SIGTERM)
-	t.Cleanup(func() { signal.Stop(probe) })
+	probe := newSignalProbe(t)
 	sigs := notifySignals()
 	t.Cleanup(sigs.stop)
 	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGTERM} {
-		if err := syscall.Kill(os.Getpid(), sig); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-probe:
-		case <-time.After(time.Minute):
-			t.Fatalf("%v did not arrive within a minute", sig)
-		}
+		probe.send(sig)
 	}
+	probe.fence()
 	// The stop and the second one, which aborts the shutdown's wait, both
 	// fit before either is read.
 	if n := len(sigs.term); n != 2 {
 		t.Fatalf("the stop channel holds %d signals, want both SIGTERMs", n)
 	}
-	select {
-	case sig := <-sigs.term:
-		if sig != syscall.SIGTERM {
+	for range 2 {
+		if sig := <-sigs.term; sig != syscall.SIGTERM {
 			t.Fatalf("the stop channel got %v, want SIGTERM", sig)
 		}
-	case <-time.After(time.Minute):
-		t.Fatal("SIGTERM was lost behind the unread SIGHUPs")
 	}
 }
