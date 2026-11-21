@@ -164,23 +164,24 @@ func main() {
 	superviseIfInit()
 
 	ctx := context.Background()
-	cfg := config.DefaultConfig()
-	if err := cfg.CheckConfigLocation(); err != nil {
-		log.Fatal(err)
-	}
-	// Parse reads the file and then the environment.
-	parse := cfg.ParseEnv
-	if cfg.Exist() {
-		parse = cfg.Parse
-	}
-	if err := parse(); err != nil {
-		log.Fatal(err)
+	isHook := isHookCommand(os.Args[1:])
+	var cfg *config.Config
+	// cfgErr is a hook's failure to load the config, reported once its
+	// logger is open.
+	var cfgErr error
+	if isHook {
+		cfg, cfgErr = loadHookConfig()
+	} else {
+		cfg = config.DefaultConfig()
+		if err := loadConfig(cfg); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	ctx = config.WithContext(ctx, cfg)
 	logger, f, err := logr.NewLogger(cfg)
 	if err != nil {
-		if isHookCommand(os.Args[1:]) {
+		if isHook {
 			// A hook's stderr is relayed to the git client as "remote:"
 			// lines. Don't send it server paths or server logs; drop the
 			// hook logs instead.
@@ -198,6 +199,18 @@ func main() {
 
 	// Set global logger
 	log.SetDefault(logger)
+
+	if cfgErr != nil {
+		// A hook's stderr goes to whoever pushes, and a config error can
+		// quote config values. The error goes to the hook log; the client
+		// is told only that the server failed.
+		logger.Error("hook: failed to load the server config", "err", cfgErr)
+		fmt.Fprintln(os.Stderr, errHookInternal)
+		if f != nil {
+			f.Close() //nolint: errcheck
+		}
+		os.Exit(1)
+	}
 
 	// GOMAXPROCS is left to the Go runtime: since Go 1.25 it follows the
 	// container's cgroup CPU limit and updates it when the limit changes.
