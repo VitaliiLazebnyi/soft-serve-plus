@@ -372,9 +372,10 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 // challenge; a 403 would end a push from a user whose token is in a
 // credential helper. A signed-in caller without write access still gets 403.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	env := newTestEnv(t)
 	ctx, be := env.ctx, env.be
 

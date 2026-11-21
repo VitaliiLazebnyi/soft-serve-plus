@@ -386,9 +386,10 @@ func TestHTTPPushCreateInvalidName(t *testing.T) {
 // authorized for the repository now there, rather than failing as a
 // server error.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestHTTPPushCreateRace(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	stranger, err := f.be.User(f.ctx, "stranger")

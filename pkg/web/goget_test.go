@@ -27,9 +27,10 @@ import (
 // The backend and the server log on the test's logger, so backend lookups
 // are covered too.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestGoGetLongPath(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestGoGetLongPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)

@@ -112,7 +112,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	// for the tokens it signs, rather than on every bearer request.
 	tokens, kerr := tokenSigner(cfg)
 	if kerr != nil {
-		logger.Warn("cannot read the SSH host key; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused", "err", kerr)
+		logger.Warn(hostKeyWarning(kerr), "err", kerr)
 	}
 
 	srv.GitDaemon, err = daemon.NewGitDaemon(ctx)
@@ -161,6 +161,18 @@ func tokenSigner(cfg *config.Config) (*jwk.Signer, error) {
 		return nil, err
 	}
 	return jwk.NewSigner(kp, cfg.HTTP.PublicURL)
+}
+
+// hostKeyWarning is the start-up warning for err, the error of tokenSigner:
+// the host key file could not be read, or it was read but holds no key
+// tokens can be signed with.
+func hostKeyWarning(err error) string {
+	const refused = "; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused"
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) || errors.Is(err, config.ErrEmptySSHKeyPath) {
+		return "cannot read the SSH host key" + refused
+	}
+	return "the SSH host key cannot sign tokens" + refused
 }
 
 // ensureClientKey creates the key the server presents to the ssh remotes it

@@ -165,9 +165,10 @@ func TestGoImportRoot(t *testing.T) {
 // A lock is refused for a path that does not name one file in the working
 // tree, and nothing is stored for it.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSLockCreateRejectsInvalidPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	f := newLocksFixture(t)
 	ctx, rc := f.ctx, f.owner
 	rc.level = access.ReadWriteAccess

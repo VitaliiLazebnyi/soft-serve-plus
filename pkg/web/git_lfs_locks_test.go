@@ -140,9 +140,10 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 // checks on the verify endpoint, where an invalid cursor used to be read as
 // the first page.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	f := newLocksFixture(t)
 	ctx, rc := f.ctx, f.owner
 
@@ -195,9 +196,10 @@ func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) {
 // created or deleted between pages shifted the others: some were listed
 // twice and others never, and verify could leave out another user's lock.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestLFSLocksPagingIsStable(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSLocksPagingIsStable(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	f := newLocksFixture(t)
 	ctx, rc := f.ctx, f.owner
 	dbx := f.env.dbx

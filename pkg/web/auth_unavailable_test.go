@@ -23,9 +23,10 @@ import (
 // git discards the stored credential) nor as a failed login. The fault is
 // logged at error level.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestAuthDatabaseErrorIsUnavailable(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestAuthDatabaseErrorIsUnavailable(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)

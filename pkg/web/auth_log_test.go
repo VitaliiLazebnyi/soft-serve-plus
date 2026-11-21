@@ -22,9 +22,10 @@ import (
 // The backend and the server log on the test's logger, so backend lookups
 // are covered too.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestAuthDoesNotLogCredentials(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
@@ -113,9 +114,10 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 // A failed login is the client's mistake, not a server error, so none of
 // them is logged at error level: anyone could otherwise flood the error log.
 //
-// Its subtests run in order on one fixture, so neither they nor it run in
-// parallel.
-func TestFailedAuthNotLoggedAsError(t *testing.T) {
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
