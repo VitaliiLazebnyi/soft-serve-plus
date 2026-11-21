@@ -765,6 +765,12 @@ func (q *deliveryQueue) pending() (int, <-chan struct{}) {
 	return q.count, finished
 }
 
+// StopDeliveries stops new webhook deliveries from starting, as
+// WaitForDeliveries does, without waiting for the queued and running ones.
+func (d *Backend) StopDeliveries() {
+	d.deliveries.close()
+}
+
 // WaitForDeliveries stops new webhook deliveries from starting and waits for
 // the queued and running ones to finish. It gives up when ctx is done and logs
 // a warning, since the remaining deliveries are then abandoned. Call it after

@@ -29,11 +29,13 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
+	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
@@ -707,7 +709,11 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 // next.
 func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	started := make(chan struct{}, 1)
-	var finished atomic.Bool
+	// The job holds until it is cancelled, or until the test ends: a
+	// Shutdown that does not cancel it runs into its deadline.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var cancelled, finished atomic.Bool
 	hook := func(ctx context.Context) {
 		select {
 		case started <- struct{}{}:
@@ -716,7 +722,9 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(30 * time.Second): // how long the job holds, not a wait
+			cancelled.Store(true)
+		case <-release:
+			return
 		}
 		// Still busy for a moment after the cancellation, as a job
 		// stopping its git processes is.
@@ -741,6 +749,9 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	defer cancel()
 	if err := s.Shutdown(ctx, ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+	if !cancelled.Load() {
+		t.Fatal("Shutdown did not cancel the cron job")
 	}
 	if !finished.Load() {
 		t.Fatal("Shutdown returned while the cron job was still running")
@@ -873,6 +884,47 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// Close, which waits for no delivery, still closes the delivery queue, so
+// no new delivery starts: a push afterwards to a repository with a push
+// webhook is skipped, not sent (S14 round-2 review note 2).
+func TestCloseStopsDeliveries(t *testing.T) {
+	// The backend logs to the default logger it finds when it is built.
+	old := log.Default()
+	t.Cleanup(func() { log.SetDefault(old) })
+	var logs syncBuffer
+	log.SetDefault(log.New(&logs))
+
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	// The webhook points at a closed loopback port, which the allowlist
+	// lets it name; nothing must be sent to it.
+	s.Config.Webhook.AllowedHosts = []string{"127.0.0.1"}
+	if err := s.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(context.Background(), s.Config)
+	owner, err := s.Backend.DefaultAdmin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := s.Backend.CreateSystemRepository(ctx, "hooked", owner, proto.RepositoryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Backend.CreateWebhook(ctx, repo, "http://127.0.0.1:1/hook", webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.Backend.AfterPush(ctx, repo, owner, []hooks.HookArg{{
+		OldSha: strings.Repeat("0", 40), NewSha: strings.Repeat("1", 40), RefName: "refs/heads/main",
+	}})
+	if out := logs.String(); !strings.Contains(out, "push webhook events skipped: server is shutting down") {
+		t.Errorf("a push after Close was not skipped: the delivery queue is open:\n%s", out)
+	}
 }
 
 // waitAtLeast waits until the caller's deadline, or for at least d when

@@ -941,6 +941,30 @@ func TestWaitForDeliveriesLogsPendingAndStopsOnCancel(t *testing.T) {
 	is.True(strings.Contains(logs, "shutting down with webhook deliveries still running"))
 }
 
+// StopDeliveries closes the queue, so no new delivery starts, without
+// waiting for the ones queued or running.
+func TestStopDeliveriesClosesWithoutWaiting(t *testing.T) {
+	is := is.New(t)
+	e := newWebhookEnv(t)
+	blockDeliveries(t, e, 1)
+	is.Equal(e.be.deliveries.enqueue(1, func() {}), enqueued)
+
+	// The deliveries stay blocked until the test ends, so StopDeliveries
+	// returns only if it does not wait for them.
+	returned := make(chan struct{})
+	go func() {
+		e.be.StopDeliveries()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Minute):
+		t.Fatal("StopDeliveries waited for blocked deliveries")
+	}
+	is.True(e.be.deliveries.closedForTest())
+	is.Equal(e.be.deliveries.enqueue(2, func() {}), enqueueClosed)
+}
+
 // A change made without a user in the context, as by an initial admin key
 // that has no user row, still sends its event, with an empty sender.
 func TestEventsWithoutUserHaveEmptySender(t *testing.T) {

@@ -492,8 +492,11 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	// the caller's drain deadline for the HTTP and SSH servers. The stopped
 	// imports are waited for first, within the same budget, since cleaning
 	// up a registered one queues a repository delete event.
-	// An abort that is already done, as Close's, waits for nothing.
-	if s.Backend != nil && abort.Err() == nil {
+	// An abort that is already done, as Close's, waits for nothing; the
+	// queue is still closed, so no new delivery starts.
+	if s.Backend != nil && abort.Err() != nil {
+		s.Backend.StopDeliveries()
+	} else if s.Backend != nil {
 		dctx, cancel := context.WithTimeout(abort, backend.ShutdownDeliveryTimeout)
 		defer cancel()
 		s.Backend.WaitForImports(dctx)
