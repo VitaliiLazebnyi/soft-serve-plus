@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -17,8 +18,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// blobCommand returns a command that prints the contents of a file.
-func blobCommand() *cobra.Command {
+// blobCommand returns a command that prints the contents of a file. budget,
+// when set, gives --color its highlighting budget in place of
+// common.HighlightBudget: the budget ends when the channel it returns
+// receives, or never when that is nil. Tests set it, so that what they check
+// does not depend on how fast the machine is.
+func blobCommand(budget func() <-chan time.Time) *cobra.Command {
 	var linenumber bool
 	var color bool
 	var raw bool
@@ -109,7 +114,11 @@ func blobCommand() *cobra.Command {
 				c = utils.Sanitize(c)
 			}
 			if color && !noColor {
-				c, err = common.FormatHighlight(fp, c)
+				if budget != nil {
+					c, err = common.FormatHighlightUntil(fp, c, budget())
+				} else {
+					c, err = common.FormatHighlight(fp, c)
+				}
 				if err != nil {
 					return err
 				}

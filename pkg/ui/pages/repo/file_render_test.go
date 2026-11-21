@@ -106,10 +106,14 @@ func TestFileWithLongLineNotHighlighted(t *testing.T) {
 	}
 }
 
-// Ordinary files are highlighted; files over 256 KiB are not.
+// Ordinary files are highlighted; files over 256 KiB are not. The renders
+// have no highlighting budget, so that a loaded machine does not show the
+// small file plain.
 func TestFileHighlightLimit(t *testing.T) {
+	unbounded := func() <-chan time.Time { return nil }
 	small := "package main\n\nfunc main() {}\n"
 	f := newRenderFiles(120)
+	f.code.HighlightBudget = unbounded
 	deliverAll(f, openFile(t, f, small, "main.go"))
 	if !strings.Contains(f.code.GetContent(), "\x1b[") {
 		t.Fatal("a small Go file was not highlighted")
@@ -117,6 +121,7 @@ func TestFileHighlightLimit(t *testing.T) {
 
 	large := strings.Repeat("func f() {}\n", (256<<10)/12+1)
 	f = newRenderFiles(120)
+	f.code.HighlightBudget = unbounded
 	deliverAll(f, openFile(t, f, large, "large.go"))
 	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "func f() {}") {
 		t.Fatal("a Go file over 256 KiB was highlighted, or is missing")

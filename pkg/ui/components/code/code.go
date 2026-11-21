@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -122,6 +123,11 @@ type Code struct {
 	ShowLineNumber  bool
 	NoContentStyle  lipgloss.Style
 	UseGlamour      bool
+	// HighlightBudget, when set, gives each render its highlighting budget
+	// in place of common.HighlightBudget: the budget ends when the channel
+	// it returns receives, or never when that is nil. Tests set it, so that
+	// what they check does not depend on how fast the machine is.
+	HighlightBudget func() <-chan time.Time
 }
 
 // New returns a new Code.
@@ -232,6 +238,7 @@ func (r *Code) startRender(epoch int) tea.Cmd {
 		width:         r.common.Width - r.common.Styles.App.GetHorizontalFrameSize(),
 		tabWidth:      r.TabWidth,
 		styleConfig:   r.styleConfig,
+		budget:        r.HighlightBudget,
 	}
 	id, render := r.id, r.render
 	return func() tea.Msg {
@@ -361,6 +368,8 @@ type renderJob struct {
 	width       int
 	tabWidth    int
 	styleConfig gansi.StyleConfig
+	// budget is the Code's HighlightBudget, called once per render.
+	budget func() <-chan time.Time
 }
 
 // run renders the content: sanitised, highlighted or rendered as markdown
@@ -429,7 +438,16 @@ func (j renderJob) run() RenderedMsg {
 	}
 	highlighted := false
 	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
-		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers); ok {
+		var (
+			out string
+			ok  bool
+		)
+		if j.budget != nil {
+			out, ok = common.HighlightUntil(j.styleConfig, j.extension, content, j.lineNumbers, j.budget())
+		} else {
+			out, ok = common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers)
+		}
+		if ok {
 			content, highlighted = out, true
 		}
 	}

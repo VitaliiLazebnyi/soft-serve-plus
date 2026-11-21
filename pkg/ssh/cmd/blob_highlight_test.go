@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
@@ -39,14 +41,34 @@ func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 	git("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
 }
 
+// runBlobUnbounded runs `repo blob` with args, as runRepoOutput does, with
+// no highlighting budget.
+func runBlobUnbounded(t *testing.T, ctx context.Context, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	c := RepoCommand()
+	for _, sub := range c.Commands() {
+		if sub.Name() == "blob" {
+			c.RemoveCommand(sub)
+		}
+	}
+	c.AddCommand(blobCommand(func() <-chan time.Time { return nil }))
+	c.SilenceUsage = true
+	var outBuf, errBuf bytes.Buffer
+	c.SetOut(&outBuf)
+	c.SetErr(&errBuf)
+	c.SetArgs(append([]string{"blob"}, args...))
+	err = c.ExecuteContext(ctx)
+	return outBuf.String(), errBuf.String(), err
+}
+
 // blob --color highlights within the same bounds as the TUI: a file whose
 // lexer would take seconds, or panics, is printed as plain text.
 //
-// The command is not timed. Plain text is what the bounds leave: the Svelte
-// file is refused by the cap on lexers the budget cannot stop, and would be
-// cut off by the budget without the cap; with neither it comes back
-// highlighted a minute or more later. The YANG file is plain because its
-// lexer's panic is caught.
+// The command is not timed, and has no highlighting budget, so that a
+// loaded machine does not print main.go plain. Plain text is what the
+// bounds leave: the Svelte file is refused by the cap on lexers the budget
+// cannot stop; without the cap it comes back highlighted a minute or more
+// later. The YANG file is plain because its lexer's panic is caught.
 func TestBlobColorBounded(t *testing.T) {
 	t.Setenv("SOFT_SERVE_NO_COLOR", "")
 	ctx, be := newAuthTestContext(t)
@@ -61,7 +83,7 @@ func TestBlobColorBounded(t *testing.T) {
 	})
 
 	for _, name := range []string{"app.svelte", "a.yang"} {
-		stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", name)
+		stdout, _, err := runBlobUnbounded(t, ownerCtx, "--color", "hooks", name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -69,7 +91,7 @@ func TestBlobColorBounded(t *testing.T) {
 			t.Fatalf("%s: printed highlighted; want plain text", name)
 		}
 	}
-	stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", "main.go")
+	stdout, _, err := runBlobUnbounded(t, ownerCtx, "--color", "hooks", "main.go")
 	if err != nil || !strings.Contains(stdout, "\x1b[") {
 		t.Fatalf("main.go: blob --color = %v; want it highlighted", err)
 	}

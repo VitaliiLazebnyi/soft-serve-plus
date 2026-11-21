@@ -71,7 +71,7 @@ func probeAnalysers(t *testing.T) *atomic.Int64 {
 // The output matches what glamour's code block renderer produced.
 func TestHighlightMatchesGlamour(t *testing.T) {
 	waitSlots(t)
-	got, ok := Highlight(StyleConfig(), "main.go", "package main\n\nfunc main() {}\n", false)
+	got, ok := HighlightUntil(StyleConfig(), "main.go", "package main\n\nfunc main() {}\n", false, nil)
 	if !ok {
 		t.Fatal("a small Go file was not highlighted")
 	}
@@ -88,12 +88,12 @@ func TestHighlightMatchesGlamour(t *testing.T) {
 func TestHighlightByContent(t *testing.T) {
 	waitSlots(t)
 	script := "#!/bin/sh\nset -e\necho hi\n"
-	out, ok := Highlight(StyleConfig(), "setup", script, false)
+	out, ok := HighlightUntil(StyleConfig(), "setup", script, false, nil)
 	if !ok {
 		t.Fatal("a shell script without an extension was not highlighted")
 	}
 	// Plain text gets the text colour throughout.
-	if plain, _ := Highlight(StyleConfig(), "setup.txt", script, false); out == plain {
+	if plain, _ := HighlightUntil(StyleConfig(), "setup.txt", script, false, nil); out == plain {
 		t.Fatal("a shell script without an extension was highlighted as plain text")
 	}
 
@@ -110,7 +110,7 @@ func TestHighlightByContent(t *testing.T) {
 		t.Fatalf("analyseMax = %d; analysing more than 4 KiB was not measured to be quick", analyseMax)
 	}
 	most := probeAnalysers(t)
-	Highlight(StyleConfig(), "noext", long, false)
+	HighlightUntil(StyleConfig(), "noext", long, false, nil)
 	if n := most.Load(); n == 0 || n > analyseMax {
 		t.Fatalf("the analysers were given %d bytes of a file of %d; want at most %d", n, len(long), analyseMax)
 	}
@@ -188,13 +188,13 @@ func TestEagerLexers(t *testing.T) {
 func TestEagerLexersCapped(t *testing.T) {
 	waitSlots(t)
 	small := "<script>\nlet a = 1;\n</script>\n<p>{a}</p>\n"
-	if out, ok := Highlight(StyleConfig(), "app.svelte", small, false); !ok || !strings.Contains(out, "\x1b[") {
+	if out, ok := HighlightUntil(StyleConfig(), "app.svelte", small, false, nil); !ok || !strings.Contains(out, "\x1b[") {
 		t.Fatal("a small Svelte file was not highlighted")
 	}
 	// The large one never takes a slot.
 	waitSlots(t)
 	large := strings.Repeat("{a}", EagerHighlightMax/3+1)
-	if _, ok := Highlight(StyleConfig(), "app.svelte", large, false); ok || tokenising.Load() != 0 {
+	if _, ok := HighlightUntil(StyleConfig(), "app.svelte", large, false, nil); ok || tokenising.Load() != 0 {
 		t.Fatalf("a Svelte file of %d bytes: highlighted %v, %d slots taken after", len(large), ok, tokenising.Load())
 	}
 }
@@ -246,7 +246,7 @@ func (l pausingLexer) Tokenise(options *chroma.TokeniseOptions, text string) (ch
 	if err != nil {
 		return nil, err
 	}
-	// Only tokens that are not empty are counted to pauseAt: tokenise
+	// Only tokens that are not empty are counted to pauseAt: tokeniseUntil
 	// skips empty ones without looking at the budget.
 	n := 0
 	return func() chroma.Token {
@@ -351,6 +351,49 @@ func TestTokensMerged(t *testing.T) {
 	}
 }
 
+// Lexers that look embedded languages up, about 2.4 ms a block, take 7 s
+// (x.rst) to 15 s (x.art) over 10,000 lines of these blocks. They tokenise
+// as their iterator is read, so the budget stops them where it ends: no
+// tokens are read after.
+func TestBudgetStopsEmbeddedLanguages(t *testing.T) {
+	// fill repeats block, whole lines, up to 10,000 lines.
+	fill := func(block string) string {
+		return strings.Repeat(block, 10000/strings.Count(block, "\n"))
+	}
+	cases := map[string]string{
+		"x.gmi":  fill("```zzz\nx\n```\n"),
+		"x.rst":  fill(".. code-block:: zzz\n\n   x\n\n"),
+		"x.org":  fill("#+begin_src zzz\nx\n#+end_src\n"),
+		"x.raku": fill("=begin code :lang<zzz>\nx\n=end code\n"),
+		"x.art":  fill("{!zzz x }\n"),
+		"x.md":   fill("```zzz\nx\n```\n"),
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			lexer := lexers.Match(name)
+			if eager(lexer) {
+				t.Fatalf("the %s lexer tokenises up front: the budget cannot stop it", lexer.Config().Name)
+			}
+			waitSlots(t)
+			l := pausingLexer{
+				Lexer:   lexer,
+				pauseAt: 100,
+				budget:  make(chan time.Time),
+				resume:  make(chan struct{}),
+				after:   new(atomic.Int64),
+			}
+			if _, ok := tokeniseUntil(l, content, l.budget); ok {
+				t.Fatal("the file was tokenised before the budget ended")
+			}
+			close(l.resume)
+			waitSlots(t)
+			if n := l.after.Load(); n > 0 {
+				t.Fatalf("%d tokens were read after the budget ended; want none", n)
+			}
+		})
+	}
+}
+
 // fakeLexer is a chroma lexer whose Tokenise runs tokenise.
 type fakeLexer struct {
 	tokenise func() (chroma.Iterator, error)
@@ -426,11 +469,11 @@ func TestTokenisingSlotsBounded(t *testing.T) {
 func TestTokenisePanicShowsPlain(t *testing.T) {
 	waitSlots(t)
 	boom := fakeLexer{tokenise: func() (chroma.Iterator, error) { panic("boom") }}
-	if _, ok := tokenise(boom, "x"); ok {
+	if _, ok := tokeniseUntil(boom, "x", nil); ok {
 		t.Fatal("a panicking lexer gave tokens")
 	}
 	waitSlots(t)
-	if _, ok := Highlight(StyleConfig(), "a.yang", strings.Repeat("/*\n", 100), false); ok {
+	if _, ok := HighlightUntil(StyleConfig(), "a.yang", strings.Repeat("/*\n", 100), false, nil); ok {
 		t.Fatal("the YANG file that makes the lexer panic was highlighted")
 	}
 	waitSlots(t)
