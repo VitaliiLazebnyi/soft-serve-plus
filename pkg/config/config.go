@@ -491,7 +491,7 @@ func (c *Config) readFile(path string) error {
 		return fmt.Errorf("decode config: %w", err)
 	}
 	c.unknownKeys = findUnknownKeys(&doc, reflect.TypeFor[Config](), "")
-	c.takeRemovedKeys()
+	c.takeRemovedKeys(&doc)
 	return nil
 }
 
@@ -567,24 +567,29 @@ func (c *Config) UnknownKeys() []UnknownKey {
 
 // removedSetting is a setting this version no longer reads. A config that
 // still sets one loads as before, and the server warns about it, saying
-// what it does instead.
+// what it does instead. A config file that holds the value the server used
+// to write there, oldDefault, gets no warning: the server does what that
+// value said.
 type removedSetting struct {
 	key, env, now string
+	// oldDefault is the value earlier versions wrote to config.yaml: a
+	// scalar's text, or "[]" for an empty list.
+	oldDefault []string
 }
 
 // removedSettings are the settings removed in favour of fixed values,
 // because no realistic operator tunes them (R68).
 var removedSettings = []removedSetting{
-	{"ssh.kex_algorithms", "SOFT_SERVE_SSH_KEX_ALGORITHMS", "the server offers the key exchanges golang.org/x/crypto/ssh considers secure"},
-	{"ssh.ciphers", "SOFT_SERVE_SSH_CIPHERS", "the server offers the ciphers golang.org/x/crypto/ssh considers secure"},
-	{"ssh.macs", "SOFT_SERVE_SSH_MACS", "the server offers the MACs golang.org/x/crypto/ssh considers secure, except hmac-sha1"},
-	{"ssh.max_sessions", "SOFT_SERVE_SSH_MAX_SESSIONS", fmt.Sprintf("a connection may have %d sessions open at once", SSHMaxSessions)},
-	{"ssh.handshake_timeout", "SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT", fmt.Sprintf("a client has %s to finish the SSH handshake and authenticate", SSHHandshakeTimeout)},
-	{"db.max_idle_conns", "SOFT_SERVE_DB_MAX_IDLE_CONNS", "the pool keeps database/sql's default of 2 idle connections"},
-	{"db.conn_max_lifetime", "SOFT_SERVE_DB_CONN_MAX_LIFETIME", "database connections are reused without a time limit"},
-	{"db.conn_max_idle_time", "SOFT_SERVE_DB_CONN_MAX_IDLE_TIME", "idle database connections are kept without a time limit"},
-	{"jobs.lfs_sweep", "SOFT_SERVE_JOBS_LFS_SWEEP", "the LFS temporary file sweep runs hourly"},
-	{"max_blob_size", "SOFT_SERVE_MAX_BLOB_SIZE", fmt.Sprintf("files over %d bytes are not read into memory to display", MaxBlobSize)},
+	{"ssh.kex_algorithms", "SOFT_SERVE_SSH_KEX_ALGORITHMS", "the server offers the key exchanges golang.org/x/crypto/ssh considers secure", []string{"[]"}},
+	{"ssh.ciphers", "SOFT_SERVE_SSH_CIPHERS", "the server offers the ciphers golang.org/x/crypto/ssh considers secure", []string{"[]"}},
+	{"ssh.macs", "SOFT_SERVE_SSH_MACS", "the server offers the MACs golang.org/x/crypto/ssh considers secure, except hmac-sha1", []string{"[]"}},
+	{"ssh.max_sessions", "SOFT_SERVE_SSH_MAX_SESSIONS", fmt.Sprintf("a connection may have %d sessions open at once", SSHMaxSessions), []string{"10"}},
+	{"ssh.handshake_timeout", "SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT", fmt.Sprintf("a client has %s to finish the SSH handshake and authenticate", SSHHandshakeTimeout), []string{"120"}},
+	{"db.max_idle_conns", "SOFT_SERVE_DB_MAX_IDLE_CONNS", "the pool keeps database/sql's default of 2 idle connections", []string{"0"}},
+	{"db.conn_max_lifetime", "SOFT_SERVE_DB_CONN_MAX_LIFETIME", "database connections are reused without a time limit", []string{"0"}},
+	{"db.conn_max_idle_time", "SOFT_SERVE_DB_CONN_MAX_IDLE_TIME", "idle database connections are kept without a time limit", []string{"0"}},
+	{"jobs.lfs_sweep", "SOFT_SERVE_JOBS_LFS_SWEEP", "the LFS temporary file sweep runs hourly", []string{"@every 1h"}},
+	{"max_blob_size", "SOFT_SERVE_MAX_BLOB_SIZE", fmt.Sprintf("files over %d bytes are not read into memory to display", MaxBlobSize), []string{"1048576"}},
 }
 
 // RemovedSetting is a setting the config file or the environment still
@@ -597,6 +602,9 @@ type RemovedSetting struct {
 	Source string
 	// Now says what the server does instead.
 	Now string
+	// InFile is true for a key in the config file, which can be deleted,
+	// and false for an environment variable, which can be unset.
+	InFile bool
 }
 
 // RemovedSettings returns the removed settings the config file, in file
@@ -606,17 +614,68 @@ func (c *Config) RemovedSettings() []RemovedSetting {
 }
 
 // takeRemovedKeys moves the removed settings out of the unknown keys of
-// the config file.
-func (c *Config) takeRemovedKeys() {
+// the config file doc. One that holds the value earlier versions wrote
+// there is dropped without a record: every upgraded config.yaml has those,
+// and the server does what they say.
+func (c *Config) takeRemovedKeys(doc *yaml.Node) {
 	c.unknownKeys = slices.DeleteFunc(c.unknownKeys, func(k UnknownKey) bool {
 		for _, r := range removedSettings {
-			if k.Key == r.key {
-				c.removed = append(c.removed, RemovedSetting{Key: r.key, Source: fmt.Sprintf("line %d", k.Line), Now: r.now})
-				return true
+			if k.Key != r.key {
+				continue
 			}
+			if !isOldDefault(lookupKey(doc, strings.Split(r.key, ".")), r.oldDefault) {
+				c.removed = append(c.removed, RemovedSetting{Key: r.key, Source: fmt.Sprintf("line %d", k.Line), Now: r.now, InFile: true})
+			}
+			return true
 		}
 		return false
 	})
+}
+
+// lookupKey returns the value of the key at path in the mappings of n, or
+// nil. It follows aliases but not merges.
+func lookupKey(n *yaml.Node, path []string) *yaml.Node {
+	for n != nil && (n.Kind == yaml.DocumentNode || n.Kind == yaml.AliasNode) {
+		if n.Kind == yaml.AliasNode {
+			n = n.Alias
+		} else if len(n.Content) > 0 {
+			n = n.Content[0]
+		} else {
+			return nil
+		}
+	}
+	if len(path) == 0 {
+		return n
+	}
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == path[0] {
+			return lookupKey(n.Content[i+1], path[1:])
+		}
+	}
+	return nil
+}
+
+// isOldDefault reports whether v is one of defaults: a scalar's text, or
+// "[]" for an empty list.
+func isOldDefault(v *yaml.Node, defaults []string) bool {
+	for v != nil && v.Kind == yaml.AliasNode {
+		v = v.Alias
+	}
+	if v == nil {
+		return false
+	}
+	for _, d := range defaults {
+		switch {
+		case d == "[]" && v.Kind == yaml.SequenceNode && len(v.Content) == 0:
+			return true
+		case v.Kind == yaml.ScalarNode && v.Value == d:
+			return true
+		}
+	}
+	return false
 }
 
 // readRemovedEnv records the removed settings the environment sets. An

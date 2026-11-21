@@ -571,7 +571,10 @@ A few environment variables have no `config.yaml` setting:
 
 These settings are no longer read. A `config.yaml` or an environment that
 still sets one works as before, except that the value is ignored, and the
-server logs a warning at start naming the setting and what it does instead:
+server logs a warning at start naming the setting and what it does instead,
+so that you can delete the line or unset the variable. A `config.yaml`
+written by an earlier version holds most of them with their default values,
+which give no warning, since the server does what they say:
 
 | Setting | Environment variable | What the server does now |
 |---|---|---|

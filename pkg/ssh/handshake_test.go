@@ -1,19 +1,23 @@
 package ssh
 
 import (
+	"net"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // NewSSHServer bounds the handshake with config.SSHHandshakeTimeout and
-// the sessions per connection with config.SSHMaxSessions.
+// the sessions per connection with config.SSHMaxSessions: one connection
+// opens that many sessions, and the next is refused.
 func TestSSHServerFixedLimits(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	s, err := NewSSHServer(serverContext(t, cfg, log.Default()))
+	ctx := serverContext(t, cfg, log.Default())
+	s, err := NewSSHServer(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +26,31 @@ func TestSSHServerFixedLimits(t *testing.T) {
 		t.Errorf("handshake timeout = %s, want config.SSHHandshakeTimeout (%s)", s.srv.HandshakeTimeout, config.SSHHandshakeTimeout)
 	}
 	if config.SSHMaxSessions <= 0 {
-		t.Errorf("config.SSHMaxSessions = %d, want a limit", config.SSHMaxSessions)
+		t.Fatalf("config.SSHMaxSessions = %d, want a limit", config.SSHMaxSessions)
+	}
+
+	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve(l) //nolint: errcheck
+	c, err := dialClient(t, l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint: errcheck
+	for i := range config.SSHMaxSessions {
+		sess, err := c.NewSession()
+		if err != nil {
+			t.Fatalf("session %d of %d: %v", i+1, config.SSHMaxSessions, err)
+		}
+		defer sess.Close() //nolint: errcheck
+	}
+	if sess, err := c.NewSession(); err == nil {
+		_ = sess.Close()
+		t.Fatalf("session %d on one connection accepted, want refused", config.SSHMaxSessions+1)
+	} else if oce, ok := err.(*gossh.OpenChannelError); !ok || oce.Reason != gossh.ResourceShortage {
+		t.Fatalf("session %d: err = %v, want resource shortage", config.SSHMaxSessions+1, err)
 	}
 }
 

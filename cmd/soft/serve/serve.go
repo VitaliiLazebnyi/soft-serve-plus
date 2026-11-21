@@ -172,7 +172,11 @@ func warnIgnoredSettings(logger *log.Logger, cfg *config.Config) {
 		logger.Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
 	}
 	for _, r := range cfg.RemovedSettings() {
-		logger.Warn("ignoring removed setting", "setting", r.Key, "set_by", r.Source, "now", r.Now)
+		msg := "ignoring removed setting; unset the variable"
+		if r.InFile {
+			msg = "ignoring removed setting; delete it from the config file"
+		}
+		logger.Warn(msg, "setting", r.Key, "set_by", r.Source, "now", r.Now)
 	}
 }
 

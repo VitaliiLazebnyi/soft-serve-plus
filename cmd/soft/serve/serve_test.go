@@ -292,8 +292,8 @@ func TestWarnIgnoredSettings(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		`ignoring unknown config key key=ssh.listen_adr line=3`,
-		`ignoring removed setting setting=ssh.max_sessions set_by="line 2"`,
-		`ignoring removed setting setting=jobs.lfs_sweep set_by=SOFT_SERVE_JOBS_LFS_SWEEP`,
+		`ignoring removed setting; delete it from the config file setting=ssh.max_sessions set_by="line 2"`,
+		`ignoring removed setting; unset the variable setting=jobs.lfs_sweep set_by=SOFT_SERVE_JOBS_LFS_SWEEP`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)
