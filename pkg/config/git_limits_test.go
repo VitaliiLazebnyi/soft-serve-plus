@@ -16,14 +16,14 @@ func TestGitMaxConnectionsPerIP(t *testing.T) {
 	t.Setenv("SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP", "")
 	is.NoErr(os.Unsetenv("SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP"))
 	cfg := DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.Git.MaxConnectionsPerIP, 8)
 	// A share of the total, so that one address cannot take every slot.
 	is.True(cfg.Git.MaxConnectionsPerIP > 0 && cfg.Git.MaxConnectionsPerIP < cfg.Git.MaxConnections)
 
 	t.Setenv("SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP", "3")
 	cfg = DefaultConfig()
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.Git.MaxConnectionsPerIP, 3)
 	// Hooks re-read the config from the environment.
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_GIT_MAX_CONNECTIONS_PER_IP=3"))

@@ -158,19 +158,12 @@ func TestAdminKeyFileFallsBackToWorkingDirectory(t *testing.T) {
 	}
 }
 
-// TestNewConfigFileAnonAccessAllowKeylessCommented checks that the written
-// config documents anon_access and allow_keyless but leaves them commented
-// out, even when the running config sets them: they override the database
-// for as long as they are set, so a generated file must not persist them.
-func TestNewConfigFileAnonAccessAllowKeylessCommented(t *testing.T) {
-	cfg := DefaultConfig()
-	if err := yaml.Unmarshal([]byte("anon_access: admin-access\nallow_keyless: false\n"), cfg); err != nil {
-		t.Fatal(err)
-	}
-	s, err := newConfigFile(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestDefaultConfigFileAnonAccessAllowKeylessCommented checks that the
+// written config documents anon_access and allow_keyless but leaves them
+// commented out: they override the database for as long as they are set, so
+// a generated file must not set them.
+func TestDefaultConfigFileAnonAccessAllowKeylessCommented(t *testing.T) {
+	s := string(defaultConfigFile)
 	for _, want := range []string{"\n#anon_access: ", "\n#allow_keyless: "} {
 		if !strings.Contains(s, want) {
 			t.Errorf("written config lacks %q", want)
@@ -209,7 +202,7 @@ func TestParseEmptyMirrorPull(t *testing.T) {
 		// The written config keeps an empty spec empty.
 		var back Config
 		back.Jobs.MirrorPull = "@every 10m"
-		written, err := newConfigFile(cfg)
+		written, err := marshalConfig(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

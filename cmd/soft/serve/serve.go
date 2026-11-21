@@ -52,11 +52,7 @@ func run(c *cobra.Command, syncHooks bool) error {
 		log.FromContext(ctx).Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
 	}
 	if !cfg.Exist() {
-		// Write the defaults, not cfg, so environment overrides
-		// are not saved to the file.
-		def := config.DefaultConfig()
-		def.DataPath = cfg.DataPath
-		if err := def.WriteConfig(); err != nil {
+		if err := cfg.WriteDefaultFile(); err != nil {
 			return fmt.Errorf("write config file: %w", err)
 		}
 	}

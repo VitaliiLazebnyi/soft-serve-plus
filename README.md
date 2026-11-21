@@ -559,7 +559,7 @@ webhook:
 # while handling input, so this limit is also what keeps one file view from
 # stalling a session: raising it, or 0 for no limit, makes large files slow
 # to open and costly in memory. Defaults to 1048576 (1 MiB).
-#max_blob_size: 1048576
+max_blob_size: 1048576
 
 # Make repositories created without an explicit visibility private:
 # push-to-create over SSH and HTTP, repo create and repo import without

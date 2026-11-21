@@ -95,7 +95,7 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "rsa-sha2-512, ssh-dss")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(cfg.SSH.SSHKexAlgorithms(), []string{"curve25519-sha256@libssh.org", "curve25519-sha256"})
 	is.Equal(cfg.SSH.SSHCiphers(), []string{"aes128-ctr", "aes256-ctr"})
 	is.Equal(cfg.SSH.SSHMACs(), []string{"hmac-sha2-256-etm@openssh.com"})
@@ -113,14 +113,14 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	t.Setenv("SOFT_SERVE_SSH_MACS", "")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(len(cfg.SSH.MACs), 0)
 	is.Equal(cfg.SSH.SSHMACs(), DefaultSSHMACs())
 
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(cfg.ParseEnv())
+	is.NoErr(parseEnv(cfg))
 	is.Equal(len(cfg.SSH.PublicKeyAuthAlgorithms), 0)
 	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms())
 }
@@ -264,10 +264,7 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 
 	// The generated config file has it as comment lines after
 	// "append the legacy algorithm".
-	file, err := newConfigFile(DefaultConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	file := string(defaultConfigFile)
 	var b strings.Builder
 	b.WriteString("ssh:\n")
 	lines := strings.Split(file[strings.Index(file, "append the legacy algorithm"):], "\n")[2:]

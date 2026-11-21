@@ -12,20 +12,6 @@ import (
 // config; the details go to the hook log.
 var errHookInternal = errors.New("internal server error")
 
-// loadConfig loads cfg from the config file, if there is one, and then the
-// environment, validating each.
-func loadConfig(cfg *config.Config) error {
-	if err := cfg.CheckConfigLocation(); err != nil {
-		return err
-	}
-	// Parse reads the file and then the environment.
-	parse := cfg.ParseEnv
-	if cfg.Exist() {
-		parse = cfg.Parse
-	}
-	return parse()
-}
-
 // loadHookConfig returns the config a `soft hook` command runs with: the
 // settings the server wrote for hooks to the file it names in
 // SOFT_SERVE_HOOK_CONFIG (see hooks.WriteConfig), so neither an edit to
@@ -36,15 +22,15 @@ func loadConfig(cfg *config.Config) error {
 // On error it returns the error with a config that logs to the hook log,
 // for the caller to report it there rather than to the client.
 func loadHookConfig() (*config.Config, error) {
-	cfg := config.DefaultConfig()
 	if path := os.Getenv(hooks.ConfigEnv); path != "" && os.Getenv("SOFT_SERVE_DATA_PATH") != "" {
-		hc, err := hooks.ReadConfig(path, cfg.DataPath)
+		hc, err := hooks.ReadConfig(path, config.DefaultDataPath())
 		if err == nil {
 			return hc, nil
 		}
 		return hookLogConfig(), err
 	}
-	if err := loadConfig(cfg); err != nil {
+	cfg, err := config.Load()
+	if err != nil {
 		return hookLogConfig(), err
 	}
 	return cfg, nil

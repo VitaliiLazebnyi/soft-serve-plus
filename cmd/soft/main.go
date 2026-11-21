@@ -172,8 +172,8 @@ func main() {
 	if isHook {
 		cfg, cfgErr = loadHookConfig()
 	} else {
-		cfg = config.DefaultConfig()
-		if err := loadConfig(cfg); err != nil {
+		var err error
+		if cfg, err = config.Load(); err != nil {
 			log.Fatal(err)
 		}
 	}
