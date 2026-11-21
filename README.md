@@ -229,7 +229,9 @@ ssh:
   # This is the address that will be used to clone repositories.
   public_url: "ssh://localhost:23231"
 
-  # The path to the SSH server's private key.
+  # The path to the SSH server's private key, created as an Ed25519 key if
+  # missing. It must be an unencrypted Ed25519, RSA or ECDSA key, or
+  # `soft serve` refuses to start.
   key_path: "ssh/soft_serve_host_ed25519"
 
   # The path to the server's client private key. This key will be used to
@@ -646,8 +648,9 @@ an RSA host key (`ssh.key_path`), libssh2 1.8 and JSch 0.1.55 do connect
 with the defaults, using `diffie-hellman-group-exchange-sha256` (or ECDH for
 JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
 from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
-and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
-type. The server reads the host key at start, so a replaced key takes effect
+and ES256, ES384 or ES512 for ECDSA, so these keep working with any of the
+host key types the server accepts: an unencrypted Ed25519, RSA or ECDSA key;
+with any other, `soft serve` refuses to start. The server reads the host key at start, so a replaced key takes effect
 at the next start, for SSH and for tokens alike, and invalidates tokens
 issued before.
 

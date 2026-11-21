@@ -128,6 +128,9 @@ func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *common.Commo
 	uiCtx, cancel := context.WithCancel(ctx)
 	uiCtx = config.WithContext(uiCtx, srv.cfg)
 	uiCtx = backend.WithContext(uiCtx, be)
+	if srv.onUIContext != nil {
+		srv.onUIContext(uiCtx)
+	}
 
 	// The terminal size is the client's to choose, and Bubble Tea allocates
 	// width x height cells for the initial size without checking it. Later

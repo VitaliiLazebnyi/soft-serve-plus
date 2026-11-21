@@ -27,7 +27,9 @@ ssh:
   # This is the address that will be used to clone repositories.
   public_url: "ssh://localhost:23231"
 
-  # The path to the SSH server's private key.
+  # The path to the SSH server's private key, created as an Ed25519 key if
+  # missing. It must be an unencrypted Ed25519, RSA or ECDSA key, or
+  # `soft serve` refuses to start.
   key_path: "ssh/soft_serve_host_ed25519"
 
   # The path to the server's client private key. This key will be used to

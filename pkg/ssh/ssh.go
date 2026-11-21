@@ -49,6 +49,9 @@ type Server struct {
 	logger *log.Logger
 	// cmds builds the commands of each session.
 	cmds *cmd.Commands
+	// onUIContext, when a test sets it, gets the context of each TUI
+	// session's UI as newSessionProgram derives it.
+	onUIContext func(context.Context)
 
 	limiter *connLimiter
 	// live holds every connection accepted and not yet closed, the ones
@@ -68,9 +71,12 @@ type serverLimits struct {
 var errNilHostKey = errors.New("nil host key")
 
 // NewServer returns an SSH server for cfg and be, which presents hostKey
-// to clients and signs the tokens of `jwt` with tokens. dbx and st are for
-// the LFS transfer handler, which takes them from its context. A nil logger
-// means log.Default().
+// to clients and signs the tokens of `jwt` with tokens. tokens must be
+// the Signer the HTTP server verifies with, built from the key cfg loaded
+// (see config.Config.LoadHostKey): git-lfs-authenticate signs with cfg's
+// key, so another key would give `jwt` tokens the HTTP server refuses. dbx
+// and st are for the LFS transfer handler, which takes them from its
+// context. A nil logger means log.Default().
 func NewServer(cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, hostKey *config.HostKey, tokens *jwk.Signer, logger *log.Logger) (*Server, error) {
 	return newServer(cfg, dbx, st, be, hostKey, tokens, logger, serverLimits{
 		handshakeTimeout: config.SSHHandshakeTimeout,
