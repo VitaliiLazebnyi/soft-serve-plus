@@ -84,13 +84,14 @@ func samplePayload() BranchTagEvent {
 }
 
 func TestSendWebhookJSONDelivered(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, `{"ok":true}`)
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	is.Equal(rec.method, http.MethodPost)
 	is.Equal(rec.header.Get("Content-Type"), ContentTypeJSON.String())
@@ -121,13 +122,14 @@ func TestSendWebhookJSONDelivered(t *testing.T) {
 }
 
 func TestSendWebhookFormDelivered(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusNoContent, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	is.Equal(rec.header.Get("Content-Type"), ContentTypeForm.String())
 	form, err := url.ParseQuery(rec.body)
@@ -144,9 +146,10 @@ func TestSendWebhookFormDelivered(t *testing.T) {
 // A form-encoded push event gives each commit field its own key, in the same
 // bracket notation as the other nested fields, rather than a Go struct dump.
 func TestSendWebhookFormPushCommits(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusNoContent, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventPush)
 
@@ -179,7 +182,7 @@ func TestSendWebhookFormPushCommits(t *testing.T) {
 			},
 		},
 	}
-	is.NoErr(SendWebhook(e.ctx, w, EventPush, payload))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventPush, payload))
 
 	form, err := url.ParseQuery(rec.body)
 	is.NoErr(err)
@@ -199,55 +202,59 @@ func TestSendWebhookFormPushCommits(t *testing.T) {
 }
 
 func TestSendWebhookInvalidContentTypeRejected(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 	w.ContentType = 99
 
-	err := SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload())
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload())
 	is.True(errors.Is(err, ErrInvalidContentType))
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
 }
 
 func TestSendWebhookJSONEncodeErrorReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
 	// Channels cannot be encoded as JSON.
-	err := SendWebhook(e.ctx, w, EventBranchTagCreate, make(chan int))
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, make(chan int))
 	is.True(err != nil)
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
 }
 
 func TestSendWebhookFormEncodeErrorReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventBranchTagCreate)
 
 	// query.Values only accepts structs (or maps), not a bare int.
-	err := SendWebhook(e.ctx, w, EventBranchTagCreate, 5)
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, 5)
 	is.True(err != nil)
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
 }
 
 func TestSendWebhookSignatureMatchesBody(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	mac := hmac.New(sha256.New, []byte("s3cret"))
 	mac.Write([]byte(rec.body))
@@ -258,16 +265,16 @@ func TestSendWebhookSignatureMatchesBody(t *testing.T) {
 // The V2 signature covers the timestamp and delivery GUID as well as the
 // body, so a receiver can refuse a replayed request.
 func TestSendWebhookSignatureV2CoversTimestampAndDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	fixed := time.Unix(1731000000, 0)
-	now = func() time.Time { return fixed }
-	t.Cleanup(func() { now = time.Now })
+	e.s.now = func() time.Time { return fixed }
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ts := rec.header.Get(HeaderTimestamp)
 	is.Equal(ts, "1731000000")
@@ -284,13 +291,14 @@ func TestSendWebhookSignatureV2CoversTimestampAndDelivery(t *testing.T) {
 
 // Without a secret there is nothing to sign, but the timestamp is still sent.
 func TestSendWebhookTimestampWithoutSecret(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	is.True(rec.header.Get(HeaderTimestamp) != "")
 	is.Equal(rec.header.Get(HeaderSignatureV2), "")
@@ -299,17 +307,19 @@ func TestSendWebhookTimestampWithoutSecret(t *testing.T) {
 // A redelivery sends the GUID it is given, under a record of its own, and
 // signs it with a fresh timestamp.
 func TestRedeliverWebhookKeepsGUID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventBranchTagCreate)
 	guid := uuid.New()
 	fixed := time.Unix(1731000500, 0)
-	now = func() time.Time { return fixed }
-	t.Cleanup(func() { now = time.Now })
+	e.s.now = func() time.Time { return fixed }
 
-	is.NoErr(RedeliverWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), guid))
+	body, err := encode(ContentTypeJSON, samplePayload())
+	is.NoErr(err)
+	is.NoErr(e.s.Redeliver(e.ctx, w, EventBranchTagCreate, ContentTypeJSON, body, guid))
 
 	is.Equal(rec.header.Get(HeaderDelivery), guid.String())
 	is.Equal(rec.header.Get(HeaderTimestamp), "1731000500")
@@ -324,16 +334,17 @@ func TestRedeliverWebhookKeepsGUID(t *testing.T) {
 }
 
 func TestSendWebhookSignatureDependsOnSecret(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	a := e.newWebhook(t, srv.URL, "one", ContentTypeJSON, EventBranchTagCreate)
-	is.NoErr(SendWebhook(e.ctx, a, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, a, EventBranchTagCreate, samplePayload()))
 	sigOne := rec.header.Get("X-SoftServe-Signature")
 
 	b := e.newWebhook(t, srv.URL+"/two", "two", ContentTypeJSON, EventBranchTagCreate)
-	is.NoErr(SendWebhook(e.ctx, b, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, b, EventBranchTagCreate, samplePayload()))
 	sigTwo := rec.header.Get("X-SoftServe-Signature")
 
 	is.True(sigOne != "")
@@ -354,12 +365,13 @@ func closingServer(t *testing.T) string {
 }
 
 func TestSendWebhookNetworkErrorRecorded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	w := e.newWebhook(t, closingServer(t), "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -384,7 +396,7 @@ func waitingForWriteTurn() bool {
 		header, frames, _ := strings.Cut(g, "\n")
 		if strings.Contains(header, "[select") &&
 			strings.HasPrefix(frames, "github.com/charmbracelet/soft-serve/pkg/db.(*DB).transaction(") &&
-			strings.Contains(frames, "github.com/charmbracelet/soft-serve/pkg/webhook.recordDelivery(") {
+			strings.Contains(frames, "github.com/charmbracelet/soft-serve/pkg/webhook.(*Sender).recordDelivery(") {
 			return true
 		}
 	}
@@ -396,10 +408,13 @@ func waitingForWriteTurn() bool {
 // allow. The record waits for its turn, so the delivery is still in the
 // history. It used to give up after 5 seconds, which lost a delivery on a
 // loaded Windows runner.
+//
+// It stays serial: waitingForWriteTurn looks at every goroutine of the
+// process, and would see another test's record.
 func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
@@ -424,19 +439,20 @@ func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 	}()
 	<-held
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 	is.NoErr(<-done)
 	is.Equal(len(e.deliveries(t, w.ID)), 1)
 }
 
 func TestSendWebhookNonSuccessStatusRecorded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, http.StatusInternalServerError, "boom")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -446,12 +462,13 @@ func TestSendWebhookNonSuccessStatusRecorded(t *testing.T) {
 }
 
 func TestSendWebhookInvalidURLRecorded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	w := e.newWebhook(t, "http://[::1", "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -490,12 +507,13 @@ func truncatingServer(t *testing.T) string {
 // Regression for suspect (b): a body-read error used to return before the
 // delivery was recorded. The delivery must be recorded and the read error kept.
 func TestSendWebhookBodyReadErrorStillRecordsDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	w := e.newWebhook(t, truncatingServer(t), "", ContentTypeJSON, EventBranchTagCreate)
 
-	err := SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload())
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload())
 	is.NoErr(err)
 
 	ds := e.deliveries(t, w.ID)
@@ -506,32 +524,34 @@ func TestSendWebhookBodyReadErrorStillRecordsDelivery(t *testing.T) {
 
 // sendEvent sends payload to the repository's subscribers, as the server's
 // delivery queue does: Subscribers, then Deliver.
-func sendEvent(ctx context.Context, payload EventPayload) error {
-	hooks, err := Subscribers(ctx, payload)
+func (s *Sender) sendEvent(ctx context.Context, payload EventPayload) error {
+	hooks, err := s.Subscribers(ctx, payload)
 	if err != nil {
 		return err
 	}
-	return Deliver(ctx, hooks, payload)
+	return s.Deliver(ctx, hooks, payload)
 }
 
 func TestSendEventNoWebhooksIsNoop(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 
-	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(e.s.sendEvent(e.ctx, samplePayloadFor(e)))
 }
 
 func TestSendEventDeliversToSubscribedWebhooksOnly(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 
 	push := e.newWebhook(t, srv.URL+"/push", "", ContentTypeJSON, EventPush)
 	other := e.newWebhook(t, srv.URL+"/collab", "", ContentTypeJSON, EventCollaborator)
 
-	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(e.s.sendEvent(e.ctx, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 1)
 	is.Equal(len(e.deliveries(t, push.ID)), 1)
@@ -539,9 +559,10 @@ func TestSendEventDeliversToSubscribedWebhooksOnly(t *testing.T) {
 }
 
 func TestSendEventDeliversToEveryWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 
 	var ws []models.Webhook
@@ -549,7 +570,7 @@ func TestSendEventDeliversToEveryWebhook(t *testing.T) {
 		ws = append(ws, e.newWebhook(t, fmt.Sprintf("%s/%d", srv.URL, i), "", ContentTypeJSON, EventPush))
 	}
 
-	is.NoErr(sendEvent(e.ctx, samplePayloadFor(e)))
+	is.NoErr(e.s.sendEvent(e.ctx, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 3)
 	for _, w := range ws {
@@ -561,9 +582,10 @@ func TestSendEventDeliversToEveryWebhook(t *testing.T) {
 // webhooks after the failing one are never delivered. Every subscribed webhook
 // must be attempted, and the failure must still be reported.
 func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 
 	bad := e.newWebhook(t, srv.URL+"/bad", "", ContentTypeJSON, EventPush)
@@ -571,30 +593,32 @@ func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
 	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, e.repo.ID, bad.ID, bad.URL, "", 99, true))
 	good := e.newWebhook(t, srv.URL+"/good", "", ContentTypeJSON, EventPush)
 
-	err := sendEvent(e.ctx, samplePayloadFor(e))
+	err := e.s.sendEvent(e.ctx, samplePayloadFor(e))
 	is.True(err != nil)
 	is.Equal(len(e.deliveries(t, good.ID)), 1)
 	is.Equal(rec.calls, 1)
 }
 
 func TestSendEventWebhookLookupErrorReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	is.NoErr(e.dbx.Close())
 
-	is.True(sendEvent(e.ctx, samplePayloadFor(e)) != nil)
+	is.True(e.s.sendEvent(e.ctx, samplePayloadFor(e)) != nil)
 }
 
 func TestSendWebhookRecordErrorReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	is.NoErr(e.dbx.Close())
 
-	is.True(SendWebhook(e.ctx, w, EventPush, samplePayload()) != nil)
+	is.True(e.s.sendWebhook(e.ctx, w, EventPush, samplePayload()) != nil)
 }
 
 // samplePayloadFor is an event for the test repository, with the owner set.
@@ -613,9 +637,10 @@ func samplePayloadFor(e *testEnv) EventPayload {
 
 // Every request and response header must be recorded, not only the last one.
 func TestSendWebhookRecordsEveryHeader(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Receiver-A", "alpha")
 		w.Header().Set("X-Receiver-B", "beta")
@@ -623,7 +648,7 @@ func TestSendWebhookRecordsEveryHeader(t *testing.T) {
 	}))
 	w := e.newWebhook(t, srv.URL, "secret", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -664,16 +689,6 @@ func TestFormatHeadersKeepsEveryValue(t *testing.T) {
 	is.Equal(formatHeaders(nil), "")
 }
 
-// useSendTimeout shortens the per-webhook send timeout for the test. Like
-// useHTTPClient it swaps a package variable, so tests using it must not call
-// t.Parallel.
-func useSendTimeout(t *testing.T, d time.Duration) {
-	t.Helper()
-	orig := sendTimeout
-	sendTimeout = d
-	t.Cleanup(func() { sendTimeout = orig })
-}
-
 // hangingServer accepts requests and never answers them until the test ends.
 func hangingServer(t *testing.T) string {
 	t.Helper()
@@ -697,15 +712,16 @@ func hangingServer(t *testing.T) string {
 // loaded machine. A deadline shared between the webhooks would leave the
 // fast one no time at all, so the test still catches that.
 func TestDeliverSlowWebhookDoesNotStarveOthers(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
-	useSendTimeout(t, 2*time.Second)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.s.sendTimeout = 2 * time.Second
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	slow := e.newWebhook(t, hangingServer(t), "", ContentTypeJSON, EventPush)
 	fast := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
-	is.NoErr(Deliver(e.ctx, []models.Webhook{slow, fast}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{slow, fast}, samplePayloadFor(e)))
 
 	slowDs := e.deliveries(t, slow.ID)
 	is.Equal(len(slowDs), 1)
@@ -720,15 +736,16 @@ func TestDeliverSlowWebhookDoesNotStarveOthers(t *testing.T) {
 // recorded: the re-read before the send fails on the done context, so the
 // event is recorded as undelivered, with a context of its own.
 func TestDeliverRecordsUndeliveredWhenContextDoneBeforeSend(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
 
-	is.NoErr(Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -740,9 +757,10 @@ func TestDeliverRecordsUndeliveredWhenContextDoneBeforeSend(t *testing.T) {
 // still recorded, with the cancellation as its error: the row is written with
 // a context of its own.
 func TestDeliverRecordsAttemptWhenContextCancelledDuringSend(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	ctx, cancel := context.WithCancel(e.ctx)
 	defer cancel()
 	release := make(chan struct{})
@@ -757,7 +775,7 @@ func TestDeliverRecordsAttemptWhenContextCancelledDuringSend(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
-	is.NoErr(Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -768,18 +786,19 @@ func TestDeliverRecordsAttemptWhenContextCancelledDuringSend(t *testing.T) {
 // Unrecorded deliveries have no row to show a failed status, so a non-2xx
 // response is returned as an error for the caller to log.
 func TestDeliverUnrecordedReportsNonSuccessStatus(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	bad, _ := newReceiver(t, http.StatusInternalServerError, "boom")
 	good, _ := newReceiver(t, http.StatusNoContent, "")
 	badHook := e.newWebhook(t, bad.URL, "", ContentTypeJSON, EventPush)
 	goodHook := e.newWebhook(t, good.URL, "", ContentTypeJSON, EventPush)
 
-	err := DeliverUnrecorded(e.ctx, []models.Webhook{badHook}, samplePayloadFor(e))
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{badHook}, samplePayloadFor(e))
 	is.True(err != nil)
 	is.True(strings.Contains(err.Error(), "status 500"))
-	is.NoErr(DeliverUnrecorded(e.ctx, []models.Webhook{goodHook}, samplePayloadFor(e)))
+	is.NoErr(e.s.DeliverUnrecorded(e.ctx, []models.Webhook{goodHook}, samplePayloadFor(e)))
 
 	is.Equal(len(e.deliveries(t, badHook.ID)), 0)
 	is.Equal(len(e.deliveries(t, goodHook.ID)), 0)
@@ -788,14 +807,15 @@ func TestDeliverUnrecordedReportsNonSuccessStatus(t *testing.T) {
 // RecordUndelivered stores the request it would have sent, with the reason as
 // its error, and sends nothing.
 func TestRecordUndeliveredStoresRequestWithoutSending(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "s3cret", ContentTypeJSON, EventPush)
 	payload := samplePayloadFor(e)
 
-	is.NoErr(RecordUndelivered(e.ctx, []models.Webhook{w}, payload, errors.New("queue full")))
+	is.NoErr(e.s.RecordUndelivered(e.ctx, []models.Webhook{w}, payload, errors.New("queue full")))
 
 	is.Equal(rec.calls, 0)
 	ds := e.deliveries(t, w.ID)
@@ -809,37 +829,29 @@ func TestRecordUndeliveredStoresRequestWithoutSending(t *testing.T) {
 	is.True(strings.Contains(ds[0].RequestHeaders, "X-Softserve-Signature: sha256="))
 }
 
-// useRetention sets how many deliveries each webhook keeps for the test. It
-// swaps a package variable, so tests using it must not call t.Parallel.
-func useRetention(t *testing.T, keep int) {
-	t.Helper()
-	orig := maxDeliveries
-	maxDeliveries = keep
-	t.Cleanup(func() { maxDeliveries = orig })
-}
-
 // Undelivered events cost no network time, so they are the quickest way to
 // grow the deliveries table. Every record prunes, so a webhook never holds
 // more than the limit, and pruning one webhook leaves the others' deliveries
 // alone.
 func TestRecordedDeliveriesAreBoundedPerWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useRetention(t, 5)
 	e := newTestEnv(t)
+	e.s.maxDeliveries = 5
 	a := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
 	b := e.newWebhook(t, "https://93.184.216.34/b", "", ContentTypeJSON, EventPush)
 	payload := samplePayloadFor(e)
 
 	var recorded []uuid.UUID
 	for i := range 12 {
-		is.NoErr(RecordUndelivered(e.ctx, []models.Webhook{a}, payload, errors.New("queue full")))
+		is.NoErr(e.s.RecordUndelivered(e.ctx, []models.Webhook{a}, payload, errors.New("queue full")))
 		ds := e.deliveries(t, a.ID)
 		is.Equal(len(ds), min(i+1, 5))
 		// The delivery just recorded is always kept.
 		recorded = append(recorded, ds[len(ds)-1].ID)
 	}
 	for range 3 {
-		is.NoErr(RecordUndelivered(e.ctx, []models.Webhook{b}, payload, errors.New("queue full")))
+		is.NoErr(e.s.RecordUndelivered(e.ctx, []models.Webhook{b}, payload, errors.New("queue full")))
 	}
 
 	// The five kept are the five most recent, oldest first.
@@ -855,9 +867,10 @@ func TestRecordedDeliveriesAreBoundedPerWebhook(t *testing.T) {
 // not sort by time, so retention must not depend on them. Deliveries with
 // IDs in descending order are still pruned oldest first.
 func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useRetention(t, 2)
 	e := newTestEnv(t)
+	e.s.maxDeliveries = 2
 	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
 	ids := []uuid.UUID{
 		uuid.MustParse("ffffffff-0000-1000-8000-000000000000"),
@@ -865,10 +878,10 @@ func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
 		uuid.MustParse("00000000-0000-1000-8000-000000000000"),
 	}
 	for _, id := range ids {
-		req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
+		req, err := e.newRequest(w, EventPush, samplePayloadFor(e))
 		is.NoErr(err)
 		req.id = id
-		is.NoErr(recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
+		is.NoErr(e.s.recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
 	}
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 2)
@@ -883,20 +896,20 @@ func (failingPruneStore) PruneWebhookDeliveries(context.Context, db.Handler, int
 	return errors.New("prune failed")
 }
 
-// A failed prune rolls back the transaction it shares with the insert, but
-// must not lose the delivery: it is recorded again without pruning, and the
-// failure is logged through the context's logger.
+// A failed prune must not lose the delivery, which is recorded first, and is
+// logged through the Sender's logger.
 func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
 	var logs bytes.Buffer
-	ctx := store.WithContext(e.ctx, failingPruneStore{e.ds})
-	ctx = log.WithContext(ctx, log.New(&logs))
+	e.s.store = failingPruneStore{e.ds}
+	e.s.logger = log.New(&logs)
 
-	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
+	req, err := e.newRequest(w, EventPush, samplePayloadFor(e))
 	is.NoErr(err)
-	is.NoErr(recordDelivery(ctx, w, EventPush, req, nil, 200, "", ""))
+	is.NoErr(e.s.recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -922,41 +935,45 @@ func (hangingPruneStore) PruneWebhookDeliveries(ctx context.Context, _ db.Handle
 	return ctx.Err()
 }
 
-// A prune that fails because recordTimeout ran out is not followed by a
-// second insert: it would fail at once on the same expired context.
-func TestRecordDeliveryDoesNotRetryAfterTimeout(t *testing.T) {
+// A prune that runs out of recordTimeout keeps the delivery, which was
+// written before it, inserted once: the insert and the prune are separate
+// statements. The prune's failure is logged, not returned.
+func TestRecordDeliveryKeepsDeliveryWhenPruneTimesOut(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
-	orig := recordTimeout
-	recordTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { recordTimeout = orig })
+	e.s.recordTimeout = 200 * time.Millisecond
 	var creates atomic.Int32
 	var logs bytes.Buffer
-	ctx := store.WithContext(e.ctx, hangingPruneStore{e.ds, &creates})
-	ctx = log.WithContext(ctx, log.New(&logs))
+	e.s.store = hangingPruneStore{e.ds, &creates}
+	e.s.logger = log.New(&logs)
 
-	req, err := newRequest(w, EventPush, samplePayloadFor(e), uuid.Nil)
+	req, err := e.newRequest(w, EventPush, samplePayloadFor(e))
 	is.NoErr(err)
-	err = recordDelivery(ctx, w, EventPush, req, nil, 200, "", "")
-	is.True(errors.Is(err, context.DeadlineExceeded))
+	is.NoErr(e.s.recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
 	is.Equal(creates.Load(), int32(1))
-	is.True(!strings.Contains(logs.String(), "pruning webhook deliveries"))
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ID, req.id)
+	is.True(strings.Contains(logs.String(), "pruning webhook deliveries"))
+	is.True(strings.Contains(logs.String(), context.DeadlineExceeded.Error()))
 }
 
 // Deliver re-reads each webhook before sending, so an event that waited while
 // the webhook was changed goes to its current URL, signed with its current
 // secret, and not to the old receiver.
 func TestDeliverUsesCurrentWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	oldSrv, oldRec := newReceiver(t, http.StatusOK, "")
 	newSrv, newRec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, oldSrv.URL, "old-secret", ContentTypeJSON, EventPush)
 	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, e.repo.ID, w.ID, newSrv.URL, "new-secret", int(ContentTypeJSON), true))
 
-	is.NoErr(Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
 
 	is.Equal(oldRec.calls, 0)
 	is.Equal(newRec.calls, 1)
@@ -971,9 +988,10 @@ func TestDeliverUsesCurrentWebhook(t *testing.T) {
 // A webhook deleted, or no longer subscribed to the event, after the event was
 // read is not sent to.
 func TestDeliverSkipsRemovedOrUnsubscribedWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	deleted := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	unsubscribed := e.newWebhook(t, srv.URL+"/?other", "", ContentTypeJSON, EventPush)
@@ -987,7 +1005,7 @@ func TestDeliverSkipsRemovedOrUnsubscribedWebhook(t *testing.T) {
 	is.NoErr(e.ds.DeleteWebhookEventsByID(e.ctx, e.dbx, unsubscribed.ID, ids))
 	is.NoErr(e.ds.CreateWebhookEvents(e.ctx, e.dbx, unsubscribed.ID, []int{int(EventBranchTagCreate)}))
 
-	is.NoErr(Deliver(e.ctx, []models.Webhook{deleted, unsubscribed}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{deleted, unsubscribed}, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, unsubscribed.ID)), 0)
@@ -1012,34 +1030,33 @@ func (s countingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context,
 // Re-reading a webhook before its send reads only that webhook, not every
 // subscriber of the repository once per webhook.
 func TestDeliverRereadsEachWebhookAlone(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	var hooks []models.Webhook
 	for i := range 3 {
 		hooks = append(hooks, e.newWebhook(t, fmt.Sprintf("%s/?%d", srv.URL, i), "", ContentTypeJSON, EventPush))
 	}
 	cs := countingLookupStore{Store: e.ds, listCalls: new(atomic.Int32), hookCalls: new(atomic.Int32)}
-	ctx := store.WithContext(e.ctx, cs)
+	e.s.store = cs
+	ctx := e.ctx
 
-	is.NoErr(Deliver(ctx, hooks, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(ctx, hooks, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 3)
 	is.Equal(cs.listCalls.Load(), int32(0))
 	is.Equal(cs.hookCalls.Load(), int32(3))
 }
 
-// useRereadTiming sets the re-read timeout and retry delay for the test. A
-// test whose re-read must succeed keeps the production timeout (pass
-// rereadTimeout): a real database read on a loaded machine can be slow, and
-// only a re-read that is meant to run out of time gets a short one. It swaps
-// package variables, so tests using it must not call t.Parallel.
-func useRereadTiming(t *testing.T, timeout, delay time.Duration) {
-	t.Helper()
-	origTimeout, origDelay := rereadTimeout, rereadRetryDelay
-	rereadTimeout, rereadRetryDelay = timeout, delay
-	t.Cleanup(func() { rereadTimeout, rereadRetryDelay = origTimeout, origDelay })
+// useRereadTiming sets the re-read timeout and retry delay of the test's
+// Sender. A test whose re-read must succeed keeps the production timeout
+// (pass defaultRereadTimeout): a real database read on a loaded machine can
+// be slow, and only a re-read that is meant to run out of time gets a short
+// one.
+func (e *testEnv) useRereadTiming(timeout, delay time.Duration) {
+	e.s.rereadTimeout, e.s.rereadRetryDelay = timeout, delay
 }
 
 // failingLookupStore is a store whose event lookup fails, as during a database
@@ -1065,18 +1082,20 @@ func (s failingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, 
 // error is logged with the webhook, repository and event, and is not stored,
 // since repository admins can read the stored reason.
 func TestDeliverRecordsUndeliveredWhenRereadFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
-	useRereadTiming(t, rereadTimeout, time.Millisecond)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.useRereadTiming(defaultRereadTimeout, time.Millisecond)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	calls := new(atomic.Int32)
 	var logs strings.Builder
-	ctx := store.WithContext(e.ctx, failingLookupStore{Store: e.ds, calls: calls})
-	ctx = log.WithContext(ctx, log.New(&logs))
+	e.s.store = failingLookupStore{Store: e.ds, calls: calls}
+	e.s.logger = log.New(&logs)
+	ctx := e.ctx
 
-	is.NoErr(Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
 
 	is.Equal(rec.calls, 0)
 	is.Equal(calls.Load(), int32(2))
@@ -1097,16 +1116,18 @@ func TestDeliverRecordsUndeliveredWhenRereadFails(t *testing.T) {
 // A re-read that fails once is retried, and the webhook is sent to when the
 // retry works.
 func TestDeliverRetriesFailedReread(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
-	useRereadTiming(t, rereadTimeout, time.Millisecond)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.useRereadTiming(defaultRereadTimeout, time.Millisecond)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	calls := new(atomic.Int32)
-	ctx := store.WithContext(e.ctx, failingLookupStore{Store: e.ds, failures: 1, calls: calls})
+	e.s.store = failingLookupStore{Store: e.ds, failures: 1, calls: calls}
+	ctx := e.ctx
 
-	is.NoErr(Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)))
 
 	is.Equal(calls.Load(), int32(2))
 	is.Equal(rec.calls, 1)
@@ -1133,17 +1154,19 @@ func (s hangingLookupStore) GetActiveWebhookByIDWhereEvent(ctx context.Context, 
 // re-read is bounded on its own: a database that hangs does not hold the
 // sender, and the event is recorded as undelivered.
 func TestDeliverRereadIsBounded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
-	useRereadTiming(t, 50*time.Millisecond, time.Millisecond)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.useRereadTiming(50*time.Millisecond, time.Millisecond)
 	srv, rec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 	calls := new(atomic.Int32)
-	ctx := store.WithContext(context.WithoutCancel(e.ctx), hangingLookupStore{Store: e.ds, calls: calls})
+	e.s.store = hangingLookupStore{Store: e.ds, calls: calls}
+	ctx := context.WithoutCancel(e.ctx)
 
 	done := make(chan error, 1)
-	go func() { done <- Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)) }()
+	go func() { done <- e.s.Deliver(ctx, []models.Webhook{w}, samplePayloadFor(e)) }()
 	// Deliver returns after both re-reads run out of time and the event is
 	// recorded, which may itself take up to recordTimeout; the bound only
 	// tells a re-read that is not bounded from a slow machine.
@@ -1181,12 +1204,13 @@ func endlessServer(t *testing.T) string {
 // timeout: only maxResponseBody bytes are read and stored, marked as cut off,
 // and the delivery itself counts as a success.
 func TestSendWebhookResponseBodyIsCapped(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	w := e.newWebhook(t, endlessServer(t), "", ContentTypeJSON, EventPush)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -1197,14 +1221,15 @@ func TestSendWebhookResponseBodyIsCapped(t *testing.T) {
 
 // A body of exactly maxResponseBody bytes is stored whole and not marked.
 func TestSendWebhookResponseBodyAtLimitIsKept(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	body := strings.Repeat("y", maxResponseBody)
 	srv, _ := newReceiver(t, http.StatusOK, body)
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -1214,6 +1239,7 @@ func TestSendWebhookResponseBodyAtLimitIsKept(t *testing.T) {
 // A read that fails before the limit keeps what was read and reports the
 // error. A failure after the limit is never reached.
 func TestReadResponseBodyKeepsPartialReadOnError(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	boom := errors.New("boom")
 
@@ -1272,9 +1298,10 @@ func TestFormatHeaders(t *testing.T) {
 // accepts, about 40 KB, which come to about 80 KB as stored text, so the
 // stored copy must be cut off.
 func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	value := strings.Repeat("\xffa", 500)
 	const headers = 40
 	is.True(headers*len("X-Pad-000: \r\n"+value) < ssrf.MaxResponseHeaderBytes-1024)
@@ -1287,7 +1314,7 @@ func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
 	}))
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)

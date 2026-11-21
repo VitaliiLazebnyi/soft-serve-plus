@@ -52,8 +52,8 @@ type WebhookStore interface {
 	// status, event, creation time, and sequence number.
 	ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error)
 	// CreateWebhookDelivery creates a webhook delivery from d; d's CreatedAt
-	// and Seq are ignored and set by the database. It writes nothing if the
-	// webhook no longer exists.
+	// and Seq are ignored and set by the database. If the webhook no longer
+	// exists it writes nothing and returns an error matching db.ErrForeignKey.
 	CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error
 	// PruneWebhookDeliveries deletes all but the keep most recent deliveries
 	// of a webhook, in the order they were recorded (by seq).

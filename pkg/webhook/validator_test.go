@@ -12,6 +12,7 @@ import (
 // error aliases work across the package boundary. IP range coverage
 // is in pkg/ssrf/ssrf_test.go -- here we just confirm the plumbing.
 func TestValidateWebhookURL(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		url     string
@@ -41,6 +42,7 @@ func TestValidateWebhookURL(t *testing.T) {
 }
 
 func TestErrorAliases(t *testing.T) {
+	t.Parallel()
 	if ErrPrivateIP != ssrf.ErrPrivateIP {
 		t.Error("ErrPrivateIP should alias ssrf.ErrPrivateIP")
 	}

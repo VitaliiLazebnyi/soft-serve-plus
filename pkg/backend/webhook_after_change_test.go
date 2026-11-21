@@ -140,7 +140,7 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 			defer cancel()
 			st := &cancelAfterCommitStore{Store: e.be.store, cancel: cancel}
 			e.be.store = st
-			ctx = store.WithContext(ctx, st)
+			e.be.webhooks = webhook.NewSender(e.cfg, e.be.db, st, e.be.logger)
 
 			is.NoErr(tc.change(ctx, e))
 			is.True(ctx.Err() != nil) // the context ended after the commit

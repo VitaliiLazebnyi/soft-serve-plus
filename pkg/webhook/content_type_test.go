@@ -3,6 +3,7 @@ package webhook
 import "testing"
 
 func TestParseContentType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		s    string
@@ -70,6 +71,7 @@ func TestParseContentType(t *testing.T) {
 }
 
 func TestUnmarshalText(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		text    []byte
@@ -107,6 +109,7 @@ func TestUnmarshalText(t *testing.T) {
 }
 
 func TestMarshalText(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		c       ContentType

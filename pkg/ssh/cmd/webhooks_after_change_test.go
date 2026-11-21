@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
@@ -94,12 +95,15 @@ func TestBranchAndTagEventsSentWhenSessionEndsAfterRefChange(t *testing.T) {
 				changed: func() bool { return tc.changed(t, bare) },
 				cancel:  cancel,
 			}
-			sess = store.WithContext(sess, st)
+			// The event is built by the backend, so the session runs on one
+			// whose store is st.
+			stBe := backend.New(config.FromContext(ownerCtx), db.FromContext(ownerCtx), st, nil)
+			sess = backend.WithContext(store.WithContext(sess, st), stBe)
 
 			is.NoErr(runRepo(t, sess, tc.args...))
 			is.True(sess.Err() != nil) // the session ended after the ref change
 
-			be.WaitForDeliveries(context.Background())
+			stBe.WaitForDeliveries(context.Background())
 			r, err := be.Repository(ownerCtx, "hooks")
 			is.NoErr(err)
 			ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)

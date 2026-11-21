@@ -4,10 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // EventPayload is a webhook event payload.
@@ -78,10 +75,8 @@ type Repository struct {
 
 // newRepository builds the repository payload shared by every event: its
 // metadata, owner, default branch and public clone URLs.
-func newRepository(ctx context.Context, repo proto.Repository) (Repository, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	owner, err := datastore.GetUserByID(ctx, dbx, repo.UserID())
+func (s *Sender) newRepository(ctx context.Context, repo proto.Repository) (Repository, error) {
+	owner, err := s.store.GetUserByID(ctx, s.db, repo.UserID())
 	if err != nil {
 		return Repository{}, err
 	}
@@ -96,12 +91,11 @@ func newRepository(ctx context.Context, repo proto.Repository) (Repository, erro
 		CreatedAt:   repo.CreatedAt(),
 		UpdatedAt:   repo.UpdatedAt(),
 	}
-	r.DefaultBranch = defaultBranch(ctx, repo)
+	r.DefaultBranch = s.defaultBranch(repo)
 
-	cfg := config.FromContext(ctx)
-	r.HTTPURL = repoURL(cfg.HTTP.PublicURL, repo.Name())
-	r.SSHURL = repoURL(cfg.SSH.PublicURL, repo.Name())
-	r.GitURL = repoURL(cfg.Git.PublicURL, repo.Name())
+	r.HTTPURL = repoURL(s.httpURL, repo.Name())
+	r.SSHURL = repoURL(s.sshURL, repo.Name())
+	r.GitURL = repoURL(s.gitURL, repo.Name())
 
 	return r, nil
 }

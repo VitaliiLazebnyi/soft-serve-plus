@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/google/uuid"
 	"github.com/matryer/is"
 )
 
@@ -145,53 +144,6 @@ func TestGetWebhooksByRepoIDWhereEventReturnsEachOnce(t *testing.T) {
 	whs, err := s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{1, 2, 3})
 	is.NoErr(err)
 	is.Equal(idsOf(whs), []int64{id})
-}
-
-// A delivery whose webhook is deleted between the existence check and the
-// insert is skipped inside a transaction too, and the transaction can go on:
-// on Postgres the failed insert must not abort it.
-func TestCreateWebhookDeliveryForeignKeyViolationInTransaction(t *testing.T) {
-	is := is.New(t)
-	ctx, dbx := newWebhookTestDB(t)
-	s := &Store{}
-	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
-	is.NoErr(err)
-	keep, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 1, true)
-	is.NoErr(err)
-	vanishOnInsert(t, ctx, dbx, id)
-
-	is.NoErr(dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		if err := s.CreateWebhookDelivery(ctx, tx, models.WebhookDelivery{
-			ID:             uuid.New(),
-			WebhookID:      id,
-			Event:          1,
-			RequestURL:     "u",
-			RequestMethod:  "POST",
-			RequestBody:    "{}",
-			ResponseStatus: 200,
-		}); err != nil {
-			return err
-		}
-		if err := s.PruneWebhookDeliveries(ctx, tx, id, 10); err != nil {
-			return err
-		}
-		// Writes after the skipped insert are kept.
-		return s.CreateWebhookDelivery(ctx, tx, models.WebhookDelivery{
-			ID:             uuid.New(),
-			WebhookID:      keep,
-			Event:          1,
-			RequestURL:     "u",
-			RequestMethod:  "POST",
-			RequestBody:    "{}",
-			ResponseStatus: 200,
-		})
-	}))
-
-	var n int
-	is.NoErr(dbx.GetContext(ctx, &n, dbx.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), keep))
-	is.Equal(n, 1)
-	is.NoErr(dbx.GetContext(ctx, &n, dbx.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id))
-	is.Equal(n, 0)
 }
 
 // vanishOnInsert installs a trigger that deletes webhook id when a delivery

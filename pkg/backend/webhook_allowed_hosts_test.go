@@ -13,13 +13,15 @@ import (
 )
 
 // setWebhookAllowedHosts sets webhook.allowed_hosts and parses it the way the
-// server does at startup.
+// server does at startup, and rebuilds the backend's webhook sender with it.
 func (e whEnv) setWebhookAllowedHosts(t *testing.T, entries ...string) {
 	t.Helper()
 	e.cfg.Webhook.AllowedHosts = entries
 	if err := e.cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+	// The server reads the list once, when the backend builds its sender.
+	e.be.webhooks = webhook.NewSender(e.cfg, e.be.db, e.be.store, e.be.logger)
 }
 
 // With webhook.allowed_hosts covering a loopback receiver, a webhook to it can

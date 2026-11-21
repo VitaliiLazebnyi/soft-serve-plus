@@ -18,19 +18,39 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	"github.com/google/uuid"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
-// testEnv is a fresh, migrated SQLite database wired into a context the same
-// way the server wires it, plus the rows the tests need.
+// testEnv is a fresh, migrated SQLite database, a Sender on it built the way
+// the backend builds one, and the rows the tests need. Each test has its
+// own, so the tests can run in parallel.
 type testEnv struct {
 	ctx   context.Context
 	dbx   *db.DB
 	ds    store.Store
 	cfg   *config.Config
+	s     *Sender
 	owner models.User
 	repo  models.Repo
+}
+
+// newRequest encodes payload in w's content type and builds the request
+// that sends it, as a send does.
+func (e *testEnv) newRequest(w models.Webhook, event Event, payload any) (request, error) {
+	ct := ContentType(w.ContentType) //nolint:gosec
+	body, err := encode(ct, payload)
+	if err != nil {
+		return request{}, err
+	}
+	return e.s.newRequest(w.Secret, ct, event, body, uuid.Nil)
+}
+
+// sendWebhook encodes payload in w's content type, sends it and records the
+// attempt.
+func (s *Sender) sendWebhook(ctx context.Context, w models.Webhook, event Event, payload any) error {
+	return s.sendPayload(ctx, w, event, payload, true)
 }
 
 // newTestEnv builds a test environment. The owner user and a repository named
@@ -48,15 +68,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg.SSH.PublicURL = "ssh://127.0.0.1:23231"
 	cfg.Git.PublicURL = "git://127.0.0.1:9418"
 
-	ctx := config.WithContext(context.Background(), cfg)
+	ctx := context.Background()
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	ds := database.New()
-	ctx = db.WithContext(ctx, dbx)
-	ctx = store.WithContext(ctx, ds)
 
 	is.NoErr(ds.CreateUser(ctx, dbx, "alice", false, nil))
 	owner, err := ds.FindUserByUsername(ctx, dbx, "alice")
@@ -73,7 +91,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	repo, err := ds.GetRepoByName(ctx, dbx, "repo")
 	is.NoErr(err)
 
-	return &testEnv{ctx: ctx, dbx: dbx, ds: ds, cfg: cfg, owner: owner, repo: repo}
+	return &testEnv{ctx: ctx, dbx: dbx, ds: ds, cfg: cfg, s: NewSender(cfg, dbx, ds, nil), owner: owner, repo: repo}
 }
 
 // newWebhook stores an active webhook on the test repository that receives the
@@ -107,17 +125,15 @@ func (e *testEnv) deliveries(t *testing.T, webhookID int64) []models.WebhookDeli
 // is bounded by sendTimeout as in production, never by a tighter test value.
 const testClientTimeout = time.Minute
 
-// useHTTPClient replaces the SSRF-protected client for the duration of the
-// test with one that reaches the in-memory receivers newTestServer starts
-// (see memnet_test.go), and nothing else. Only test code calls this;
-// production always uses the protected client. Apart from the dialer and
-// the whole-request cap, it is configured like ssrf.NewSecureClient: the
-// same response header limits, and redirects are not followed. Each test
-// gets its own transport, so no connection outlives it. It swaps a package
-// variable, so tests that use it must not call t.Parallel.
-func useHTTPClient(t *testing.T) {
+// useHTTPClient gives the test's Sender, in place of the SSRF-protected
+// client, one that reaches the in-memory receivers newTestServer starts (see
+// memnet_test.go), and nothing else. Production always uses the protected
+// client. Apart from the dialer and the whole-request cap, it is configured
+// like ssrf.NewSecureClient: the same response header limits, and redirects
+// are not followed. Each test gets its own transport, so no connection
+// outlives it.
+func (e *testEnv) useHTTPClient(t *testing.T) {
 	t.Helper()
-	orig := secureHTTPClient
 	tr := &http.Transport{
 		DialContext:            dialMem,
 		MaxIdleConns:           100,
@@ -125,17 +141,14 @@ func useHTTPClient(t *testing.T) {
 		MaxResponseHeaderBytes: ssrf.MaxResponseHeaderBytes,
 		ResponseHeaderTimeout:  ssrf.ResponseHeaderTimeout,
 	}
-	secureHTTPClient = &http.Client{
+	e.s.client = &http.Client{
 		Timeout:   testClientTimeout,
 		Transport: tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	t.Cleanup(func() {
-		secureHTTPClient = orig
-		tr.CloseIdleConnections()
-	})
+	t.Cleanup(tr.CloseIdleConnections)
 }
 
 // fakeUser implements proto.User.

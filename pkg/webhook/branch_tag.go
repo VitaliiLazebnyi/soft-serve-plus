@@ -25,7 +25,7 @@ type BranchTagEvent struct {
 }
 
 // NewBranchTagEvent builds the payload for a branch or tag event.
-func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (BranchTagEvent, error) {
+func (s *Sender) NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (BranchTagEvent, error) {
 	var event Event
 	if git.IsZeroHash(before) {
 		event = EventBranchTagCreate
@@ -35,7 +35,7 @@ func NewBranchTagEvent(ctx context.Context, user proto.User, repo proto.Reposito
 		return BranchTagEvent{}, fmt.Errorf("invalid branch or tag event: before=%q after=%q", before, after)
 	}
 
-	repository, err := newRepository(ctx, repo)
+	repository, err := s.newRepository(ctx, repo)
 	if err != nil {
 		return BranchTagEvent{}, err
 	}

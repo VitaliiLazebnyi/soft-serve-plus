@@ -12,6 +12,7 @@ import (
 // A body cut off at maxResponseBody is cut before a character the limit
 // falls inside, so a UTF-8 body stays valid UTF-8.
 func TestReadResponseBodyCutsOnRuneBoundary(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	// "€" is three bytes and maxResponseBody is not a multiple of three, so
 	// the limit falls inside one.
@@ -46,9 +47,10 @@ func TestStorableText(t *testing.T) {
 // A response with a Latin-1 header and a body holding a NUL and invalid UTF-8
 // is still recorded, as text Postgres accepts.
 func TestSendWebhookStoresInvalidUTF8ResponseAsText(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Name", "caf\xe9")
 		w.WriteHeader(http.StatusOK)
@@ -56,7 +58,7 @@ func TestSendWebhookStoresInvalidUTF8ResponseAsText(t *testing.T) {
 	}))
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
 
-	is.NoErr(SendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
 
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)

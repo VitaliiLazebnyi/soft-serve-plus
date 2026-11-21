@@ -66,9 +66,9 @@ func (d *Backend) addCollaborator(ctx context.Context, r proto.Repository, usern
 	}
 
 	// The collaborator is committed, so an event problem is logged, not returned.
-	ctx, cancel := AfterChangeContext(ctx)
+	ctx, cancel := afterChangeContext(ctx)
 	defer cancel()
-	wh, err := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventAdded)
+	wh, err := d.webhooks.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventAdded)
 	if err != nil {
 		d.logger.Error("collaborator added but webhook event skipped", "repo", repo, "user", username, "err", err)
 		return nil
@@ -187,7 +187,7 @@ func (d *Backend) removeCollaborator(ctx context.Context, r proto.Repository, us
 	// removal. Failing to build it does not stop the removal: a missing
 	// collaborator is reported by the removal itself, and any other failure
 	// is logged once the removal is done.
-	wh, whErr := webhook.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
+	wh, whErr := d.webhooks.NewCollaboratorEvent(ctx, proto.UserFromContext(ctx), r, username, webhook.CollaboratorEventRemoved)
 
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.lockResolved(ctx, tx, repo, r.ID()); err != nil {

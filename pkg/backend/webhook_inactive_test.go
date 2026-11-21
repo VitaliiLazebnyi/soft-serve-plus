@@ -101,9 +101,9 @@ func TestWebhookDeactivatedWhileQueuedIsSkipped(t *testing.T) {
 	id := e.seedHook(t, webhook.EventRepository)
 	unblock := blockDeliveries(t, e, 10)
 
-	ev, err := webhook.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
+	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
-	subs, err := webhook.Subscribers(e.ctx, ev)
+	subs, err := e.be.webhooks.Subscribers(e.ctx, ev)
 	is.NoErr(err)
 	is.Equal(len(subs), 1)
 	e.be.deliverAfterChange(e.ctx, subs, ev, true)

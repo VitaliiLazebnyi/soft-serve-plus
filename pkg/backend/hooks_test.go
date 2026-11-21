@@ -213,7 +213,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
 	}
-	ctx := e.be.webhookContext(e.ctx)
+	ctx := e.ctx
 
 	calls := 0
 	is.Equal(e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {

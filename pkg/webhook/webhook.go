@@ -17,7 +17,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -34,11 +33,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// Hook is a repository webhook.
+// Hook is a repository webhook, with its content type and events.
 type Hook struct {
-	models.Webhook
+	ID          int64
+	RepoID      int64
+	URL         string
+	Secret      string
+	Active      bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	ContentType ContentType
 	Events      []Event
+}
+
+// NewHook returns the Hook of the stored webhook w, subscribed to events.
+func NewHook(w models.Webhook, events []Event) Hook {
+	return Hook{
+		ID:          w.ID,
+		RepoID:      w.RepoID,
+		URL:         w.URL,
+		Secret:      w.Secret,
+		Active:      w.Active,
+		CreatedAt:   w.CreatedAt,
+		UpdatedAt:   w.UpdatedAt,
+		ContentType: ContentType(w.ContentType), //nolint:gosec
+		Events:      events,
+	}
 }
 
 // Delivery is a webhook delivery.
@@ -55,65 +75,113 @@ var Version = ""
 // that is not active. Activate the webhook first to send to it again.
 var ErrWebhookInactive = errors.New("webhook is not active")
 
-// secureHTTPClient is an HTTP client with SSRF protection. It is used when
-// webhook.allowed_hosts is empty, and for every request when
-// useOnlySecureHTTPClient is set.
-var secureHTTPClient = ssrf.NewSecureClient()
+// Default limits of a Sender.
+const (
+	// defaultSendTimeout bounds the request to one webhook, so a slow
+	// receiver cannot use up the time of the other webhooks an event goes
+	// to. It matches the cap of the SSRF-protected client.
+	defaultSendTimeout = ssrf.ClientTimeout
 
-// useOnlySecureHTTPClient makes every request use secureHTTPClient, whatever
-// webhook.allowed_hosts says. Only the webhooktest build sets it.
-var useOnlySecureHTTPClient bool
+	// defaultRecordTimeout bounds writing one delivery row and pruning the
+	// older ones. On SQLite it covers the wait for this process's turn to
+	// write (see db.DB.TransactionContext) as well as the write itself, so
+	// it must be well above the time one write takes: a row that runs out
+	// of time is lost from the delivery history, and with it the chance to
+	// redeliver it. It was 5 seconds, and on a loaded Windows runner the
+	// turn plus the write ran past that. It stays short enough that one
+	// webhook's worst case, its re-read (rereadTimeout, rereadRetryDelay,
+	// rereadTimeout: 10.2 seconds), a send to its client's cap
+	// (ssrf.ClientTimeout, 30 seconds) and its record, fits in the shutdown
+	// wait (backend.ShutdownDeliveryTimeout, a minute).
+	defaultRecordTimeout = 15 * time.Second
 
-// allowingClient caches the client for the last non-empty webhook allowlist
-// seen, so deliveries share its connection pool. The allowlist only changes
-// when the config does, so one entry is enough.
-var allowingClient struct {
-	sync.Mutex
-	key    string
+	// defaultRereadTimeout bounds each try at re-reading a webhook before
+	// its send, so a database that does not answer cannot hold a background
+	// sender. A read does not wait for a turn to write.
+	defaultRereadTimeout = 5 * time.Second
+
+	// defaultRereadRetryDelay is the wait before the one retry of a failed
+	// re-read.
+	defaultRereadRetryDelay = 200 * time.Millisecond
+
+	// defaultMaxDeliveries is how many deliveries are kept per webhook.
+	// Every recorded delivery deletes the older ones, so events, including
+	// ones recorded without sending when the queue is full, cannot grow the
+	// deliveries table without limit. Migration 5
+	// (pkg/db/migrate/0005_webhook_delivery_retention_*.up.sql) trimmed
+	// existing tables once to the then value, 100; it is a snapshot and
+	// does not follow later changes here.
+	defaultMaxDeliveries = 100
+)
+
+// Sender builds webhook events and sends, records and redelivers them. The
+// backend builds one at start; its fields do not change afterwards.
+type Sender struct {
+	db     *db.DB
+	store  store.Store
+	logger *log.Logger
+	// client sends every request: SSRF-protected, letting through the
+	// private and internal destinations webhook.allowed_hosts permits. The
+	// list is read once, when the Sender is built, as the rest of the
+	// config is; a webhook saved under an older list is held to this one.
 	client *http.Client
+
+	// The public URLs repository payloads name.
+	httpURL, sshURL, gitURL string
+
+	sendTimeout      time.Duration
+	recordTimeout    time.Duration
+	rereadTimeout    time.Duration
+	rereadRetryDelay time.Duration
+	maxDeliveries    int
+	// now returns the current time, which signs requests.
+	now func() time.Time
 }
 
-// httpClient returns the client a webhook request is sent with: an
-// SSRF-protected client that also lets through the private and internal
-// destinations webhook.allowed_hosts permits, read from ctx's config at send
-// time. A webhook saved under an older allowlist is held to the current one.
-func httpClient(ctx context.Context) *http.Client {
-	if useOnlySecureHTTPClient {
-		return secureHTTPClient
+// NewSender returns a Sender that records deliveries in dbx through st, logs
+// to logger (the default logger when nil) and takes webhook.allowed_hosts and
+// the public URLs from cfg, which may be nil for none.
+func NewSender(cfg *config.Config, dbx *db.DB, st store.Store, logger *log.Logger) *Sender {
+	if logger == nil {
+		logger = log.Default()
 	}
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return secureHTTPClient
+	s := &Sender{
+		db:               dbx,
+		store:            st,
+		logger:           logger.WithPrefix("webhook"),
+		sendTimeout:      defaultSendTimeout,
+		recordTimeout:    defaultRecordTimeout,
+		rereadTimeout:    defaultRereadTimeout,
+		rereadRetryDelay: defaultRereadRetryDelay,
+		maxDeliveries:    testMaxDeliveries(defaultMaxDeliveries),
+		now:              time.Now,
 	}
-	allowed := cfg.Webhook.ParsedAllowedHosts()
+	var allowed ssrf.AllowedHosts
+	if cfg != nil {
+		allowed = cfg.Webhook.ParsedAllowedHosts()
+		s.httpURL, s.sshURL, s.gitURL = cfg.HTTP.PublicURL, cfg.SSH.PublicURL, cfg.Git.PublicURL
+	}
 	if len(allowed) == 0 {
-		return secureHTTPClient
+		s.client = ssrf.NewSecureClient()
+	} else {
+		s.client = ssrf.NewSecureClientAllowing(allowed)
 	}
-	key := allowed.String()
-	allowingClient.Lock()
-	defer allowingClient.Unlock()
-	if allowingClient.client == nil || allowingClient.key != key {
-		if allowingClient.client != nil {
-			allowingClient.client.CloseIdleConnections()
-		}
-		allowingClient.key = key
-		allowingClient.client = ssrf.NewSecureClientAllowing(allowed)
-	}
-	return allowingClient.client
+	s.client = testClient(s.client)
+	return s
 }
 
 // do sends a webhook request, a POST.
 // Caller must close the returned body.
 // A returned error never contains the webhook URL's path, query, fragment or
 // user info, which can hold secrets (see redactURL).
-func do(ctx context.Context, url string, headers http.Header, body io.Reader) (*http.Response, error) {
+func (s *Sender) do(ctx context.Context, url string, headers http.Header, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, utils.RedactURLError(err, redactURL)
 	}
 
 	req.Header = headers
-	res, err := httpClient(ctx).Do(req)
+	res, err := s.client.Do(req)
 	if err != nil {
 		return nil, utils.RedactURLError(err, redactURL)
 	}
@@ -145,44 +213,26 @@ func redactURL(rawURL string) string {
 	return redacted
 }
 
-// SendWebhook sends a webhook event and records the attempt.
-func SendWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}) error {
-	return sendWebhook(ctx, w, event, payload, uuid.Nil, true)
+// Redeliver sends a recorded delivery again and records the attempt as a new
+// delivery. body is the stored request body, sent as it is, and ct the
+// content type it was sent with. The request carries guid, the
+// X-SoftServe-Delivery value of the original delivery, so a receiver can tell
+// that it is the same event. The timestamp and signatures are computed
+// afresh.
+func (s *Sender) Redeliver(ctx context.Context, w models.Webhook, event Event, ct ContentType, body []byte, guid uuid.UUID) error {
+	return s.send(ctx, w, event, ct, body, guid, true)
 }
 
-// RedeliverWebhook sends a recorded delivery again and records the attempt
-// as a new delivery. The request carries guid, the X-SoftServe-Delivery value
-// of the original delivery, so a receiver can tell that it is the same event.
-// The timestamp and signatures are computed afresh.
-func RedeliverWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}, guid uuid.UUID) error {
-	return sendWebhook(ctx, w, event, payload, guid, true)
+// sendPayload encodes payload in w's content type and sends it, recording
+// the attempt when record is set.
+func (s *Sender) sendPayload(ctx context.Context, w models.Webhook, event Event, payload any, record bool) error {
+	ct := ContentType(w.ContentType) //nolint:gosec
+	body, err := encode(ct, payload)
+	if err != nil {
+		return err
+	}
+	return s.send(ctx, w, event, ct, body, uuid.Nil, record)
 }
-
-// sendTimeout bounds the request to one webhook, so a slow receiver cannot use
-// up the time of the other webhooks an event goes to. It matches the cap of
-// the SSRF-protected client. It is a variable so tests can shorten it.
-var sendTimeout = ssrf.ClientTimeout
-
-// recordTimeout bounds writing one delivery row. On SQLite it covers the wait
-// for this process's turn to write (see db.DB.TransactionContext) as well as
-// the write itself, so it must be well above the time one write takes: a row
-// that runs out of time is lost from the delivery history, and with it the
-// chance to redeliver it. It was 5 seconds, and on a loaded Windows runner the
-// turn plus the write ran past that. It stays short enough that one webhook's
-// worst case, its re-read (rereadTimeout, rereadRetryDelay, rereadTimeout:
-// 10.2 seconds), a send to its client's cap (ssrf.ClientTimeout, 30 seconds)
-// and its record, fits in the shutdown wait (backend.ShutdownDeliveryTimeout,
-// a minute). It is a variable so tests can shorten it.
-var recordTimeout = 15 * time.Second
-
-// rereadTimeout bounds each try at re-reading a webhook before its send, so a
-// database that does not answer cannot hold a background sender. A read does
-// not wait for a turn to write. It is a variable so tests can shorten it.
-var rereadTimeout = 5 * time.Second
-
-// rereadRetryDelay is the wait before the one retry of a failed re-read. It is
-// a variable so tests can shorten it.
-var rereadRetryDelay = 200 * time.Millisecond
 
 // errRereadFailed is the reason stored on a delivery that was not sent because
 // its webhook could not be re-read. The database error itself is only logged:
@@ -219,38 +269,37 @@ const (
 	HeaderSignatureV2 = "X-SoftServe-Signature-V2"
 )
 
-// now returns the current time. It is a variable so tests can fix it.
-var now = time.Now
-
-// newRequest encodes payload for w and builds the request headers, including
-// the signatures when w has a secret. The delivery GUID is guid, or the new
-// delivery's id when guid is uuid.Nil.
-func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UUID) (request, error) {
-	var buf bytes.Buffer
-	contentType := ContentType(w.ContentType) //nolint:gosec
-	switch contentType {
+// encode encodes the payload of a new event in content type ct: JSON, or a
+// form built from the payload's url tags.
+func encode(ct ContentType, payload any) ([]byte, error) {
+	switch ct {
 	case ContentTypeJSON:
+		var buf bytes.Buffer
 		if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-			return request{}, err
+			return nil, err
 		}
+		return buf.Bytes(), nil
 	case ContentTypeForm:
-		// Redeliveries pass the stored form body as url.Values, which is
-		// already encoded; query.Values only accepts structs.
-		if v, ok := payload.(neturl.Values); ok {
-			buf.WriteString(v.Encode())
-			break
-		}
 		v, err := query.Values(payload)
 		if err != nil {
-			return request{}, err
+			return nil, err
 		}
-		buf.WriteString(v.Encode())
+		return []byte(v.Encode()), nil
 	default:
+		return nil, ErrInvalidContentType
+	}
+}
+
+// newRequest builds the headers of a request that sends body, already
+// encoded in ct, including the signatures when secret is set. The delivery
+// GUID is guid, or the new delivery's id when guid is uuid.Nil.
+func (s *Sender) newRequest(secret string, ct ContentType, event Event, body []byte, guid uuid.UUID) (request, error) {
+	if ct.String() == "" {
 		return request{}, ErrInvalidContentType
 	}
 
 	headers := http.Header{}
-	headers.Add("Content-Type", contentType.String())
+	headers.Add("Content-Type", ct.String())
 	headers.Add("User-Agent", "SoftServe/"+Version)
 	headers.Add("X-SoftServe-Event", event.String())
 
@@ -263,17 +312,17 @@ func newRequest(w models.Webhook, event Event, payload interface{}, guid uuid.UU
 	if guid == uuid.Nil {
 		guid = id
 	}
-	timestamp := strconv.FormatInt(now().Unix(), 10)
+	timestamp := strconv.FormatInt(s.now().Unix(), 10)
 	headers.Add(HeaderDelivery, guid.String())
 	headers.Add(HeaderTimestamp, timestamp)
 
-	body := buf.String()
-	if w.Secret != "" {
-		headers.Add(HeaderSignature, sign(w.Secret, body))
-		headers.Add(HeaderSignatureV2, sign(w.Secret, timestamp+"."+guid.String()+"."+body))
+	b := string(body)
+	if secret != "" {
+		headers.Add(HeaderSignature, sign(secret, b))
+		headers.Add(HeaderSignatureV2, sign(secret, timestamp+"."+guid.String()+"."+b))
 	}
 
-	return request{id: id, headers: headers, body: body}, nil
+	return request{id: id, headers: headers, body: b}, nil
 }
 
 // sign returns "sha256=" and the hex HMAC-SHA256 of content keyed with secret.
@@ -283,19 +332,19 @@ func sign(secret, content string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// sendWebhook sends a webhook event. The request gets its own sendTimeout.
-// When record is false the attempt is not written to the deliveries table,
-// and a transport error or a non-2xx response is returned so the caller can
-// log it.
-func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload interface{}, guid uuid.UUID, record bool) error {
-	req, err := newRequest(w, event, payload, guid)
+// send sends body, encoded in ct, to w. The request gets its own
+// sendTimeout. When record is false the attempt is not written to the
+// deliveries table, and a transport error or a non-2xx response is returned
+// so the caller can log it.
+func (s *Sender) send(ctx context.Context, w models.Webhook, event Event, ct ContentType, body []byte, guid uuid.UUID, record bool) error {
+	req, err := s.newRequest(w.Secret, ct, event, body, guid)
 	if err != nil {
 		return err
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	sctx, cancel := context.WithTimeout(ctx, s.sendTimeout)
 	defer cancel()
-	res, reqErr := do(sctx, w.URL, req.headers, strings.NewReader(req.body))
+	res, reqErr := s.do(sctx, w.URL, req.headers, strings.NewReader(req.body))
 
 	resStatus := 0
 	resHeaders := ""
@@ -329,7 +378,7 @@ func sendWebhook(ctx context.Context, w models.Webhook, event Event, payload int
 		return nil
 	}
 
-	return recordDelivery(ctx, w, event, req, reqErr, resStatus, resHeaders, resBody)
+	return s.recordDelivery(ctx, w, event, req, reqErr, resStatus, resHeaders, resBody)
 }
 
 // maxResponseBody is how much of a receiver's response body is read and
@@ -404,13 +453,11 @@ func storableText(s string) string {
 	return utils.StorableText(s)
 }
 
-// recordDelivery writes one delivery row. It uses a fresh, short context that
-// keeps ctx's values but not its cancellation or deadline, so an attempt that
-// ran out of time or was cancelled is still recorded.
-func recordDelivery(ctx context.Context, w models.Webhook, event Event, req request, reqErr error, resStatus int, resHeaders, resBody string) error {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-
+// recordDelivery writes one delivery row, then prunes the webhook's older
+// deliveries. It uses a fresh, short context that keeps ctx's values but not
+// its cancellation or deadline, so an attempt that ran out of time or was
+// cancelled is still recorded.
+func (s *Sender) recordDelivery(ctx context.Context, w models.Webhook, event Event, req request, reqErr error, resStatus int, resHeaders, resBody string) error {
 	// formatHeaders already makes every key and value storable.
 	reqHeaders := formatHeaders(req.headers)
 
@@ -436,51 +483,45 @@ func recordDelivery(ctx context.Context, w models.Webhook, event Event, req requ
 		d.RequestError = sql.NullString{String: storableText(reqErr.Error()), Valid: true}
 	}
 
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.recordTimeout)
 	defer cancel()
-	create := func(h db.Handler) error {
-		return datastore.CreateWebhookDelivery(rctx, h, d)
-	}
 
-	// The delivery is recorded and the older ones pruned in one transaction,
-	// so SQLite takes its write lock and syncs once.
+	// The insert and the prune are two transactions of one statement each:
+	// they need not be atomic. Each takes this process's turn to write on
+	// SQLite (see db.DB.TransactionContext), so a record waits for other
+	// writers rather than fail with SQLITE_BUSY. A failed prune only leaves
+	// extra rows for the next delivery's prune, so it is logged and the
+	// delivery is kept. On SQLite this costs a second write, and sync, per
+	// delivery.
+	//
+	// A send that was in flight when its webhook was deleted fails the
+	// insert on its foreign key. Nothing is written then, and no error is
+	// returned: there is no webhook left whose history it would belong to.
 	//
 	// On Postgres seq is taken from its sequence when a row is inserted, not
 	// when it commits. Deliveries of one webhook can be recorded at once (a
-	// background delivery and a redelivery, say), so a delivery whose
-	// transaction commits late can already be older, by seq, than the
-	// newest maxDeliveries rows and be pruned by the next record. That needs
+	// background delivery and a redelivery, say), so a delivery whose insert
+	// commits late can already be older, by seq, than the newest
+	// maxDeliveries rows and be pruned by the next record. That needs
 	// maxDeliveries deliveries of the same webhook recorded while its insert
 	// is in flight; the cost is one delivery missing from the history, which
 	// pruning by seq accepts rather than ordering commits.
-	var pruneErr error
-	err := dbx.TransactionContext(rctx, func(tx *db.Tx) error {
-		if err := create(tx); err != nil {
-			return err
-		}
-		pruneErr = datastore.PruneWebhookDeliveries(rctx, tx, w.ID, maxDeliveries)
-		return pruneErr
+	err := s.db.TransactionContext(rctx, func(tx *db.Tx) error {
+		return s.store.CreateWebhookDelivery(rctx, tx, d)
 	})
-	if err != nil && pruneErr != nil && rctx.Err() == nil {
-		// A failed prune only leaves extra rows for the next delivery's
-		// prune, so it must not lose the delivery: the transaction was
-		// rolled back, and the delivery is recorded again without pruning.
-		// A prune that failed because recordTimeout ran out is not retried:
-		// the retry would fail at once on the same context, and a fresh one
-		// would take the record past its share of the shutdown wait.
-		log.FromContext(ctx).Warn("pruning webhook deliveries", "webhook", w.ID, "err", pruneErr)
-		err = create(dbx)
+	switch {
+	case errors.Is(err, db.ErrForeignKey):
+		return nil
+	case err != nil:
+		return err
 	}
-	return err
+	if err := s.db.TransactionContext(rctx, func(tx *db.Tx) error {
+		return s.store.PruneWebhookDeliveries(rctx, tx, w.ID, s.maxDeliveries)
+	}); err != nil {
+		s.logger.Warn("pruning webhook deliveries", "webhook", w.ID, "err", err)
+	}
+	return nil
 }
-
-// maxDeliveries is how many deliveries are kept per webhook. Every recorded
-// delivery deletes the older ones, so events, including ones recorded without
-// sending when the queue is full, cannot grow the deliveries table without
-// limit. Migration 5 (pkg/db/migrate/0005_webhook_delivery_retention_*.up.sql)
-// trimmed existing tables once to the then value, 100; it is a snapshot and
-// does not follow later changes here. It is a variable so tests can lower it.
-var maxDeliveries = 100
 
 // MaxWebhooksPerRepo is how many webhooks a repository can have. Each event
 // is sent to, recorded for and pruned for every subscribed webhook, and each
@@ -495,12 +536,17 @@ var ErrTooManyWebhooks = fmt.Errorf("a repository can have at most %d webhooks",
 // RecordUndelivered records a delivery of payload to each webhook without
 // sending it, with reason as the request error. Use it when an event cannot
 // be sent at all; the recorded request can be redelivered later.
-func RecordUndelivered(ctx context.Context, hooks []models.Webhook, payload EventPayload, reason error) error {
+func (s *Sender) RecordUndelivered(ctx context.Context, hooks []models.Webhook, payload EventPayload, reason error) error {
 	var errs []error
 	for _, w := range hooks {
-		req, err := newRequest(w, payload.Event(), payload, uuid.Nil)
+		ct := ContentType(w.ContentType) //nolint:gosec
+		body, err := encode(ct, payload)
+		var req request
 		if err == nil {
-			err = recordDelivery(ctx, w, payload.Event(), req, reason, 0, "", "")
+			req, err = s.newRequest(w.Secret, ct, payload.Event(), body, uuid.Nil)
+		}
+		if err == nil {
+			err = s.recordDelivery(ctx, w, payload.Event(), req, reason, 0, "", "")
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -513,10 +559,8 @@ func RecordUndelivered(ctx context.Context, hooks []models.Webhook, payload Even
 // subscribe to its event. Inactive webhooks are not sent events. Call it
 // before a change that removes those webhooks, since they cannot be found
 // afterwards.
-func Subscribers(ctx context.Context, payload EventPayload) ([]models.Webhook, error) {
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	webhooks, err := datastore.GetWebhooksByRepoIDWhereEvent(ctx, dbx, payload.RepositoryID(), []int{int(payload.Event())})
+func (s *Sender) Subscribers(ctx context.Context, payload EventPayload) ([]models.Webhook, error) {
+	webhooks, err := s.store.GetWebhooksByRepoIDWhereEvent(ctx, s.db, payload.RepositoryID(), []int{int(payload.Event())})
 	if err != nil {
 		return nil, err
 	}
@@ -529,18 +573,18 @@ func Subscribers(ctx context.Context, payload EventPayload) ([]models.Webhook, e
 // secret is used. A webhook that cannot be re-read is not sent to: the event
 // is recorded for it as undelivered, so it can be redelivered later, and a
 // warning with the error is logged.
-func Deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload) error {
-	return deliver(ctx, hooks, payload, true)
+func (s *Sender) Deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload) error {
+	return s.deliver(ctx, hooks, payload, true)
 }
 
 // DeliverUnrecorded sends the payload to each webhook without recording the
 // attempts. Use it when the webhooks are being removed, so no delivery row is
 // written that refers to a webhook that no longer exists.
-func DeliverUnrecorded(ctx context.Context, hooks []models.Webhook, payload EventPayload) error {
-	return deliver(ctx, hooks, payload, false)
+func (s *Sender) DeliverUnrecorded(ctx context.Context, hooks []models.Webhook, payload EventPayload) error {
+	return s.deliver(ctx, hooks, payload, false)
 }
 
-func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, record bool) error {
+func (s *Sender) deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, record bool) error {
 	// Every webhook is attempted even if an earlier one fails to send or
 	// record, so one bad webhook cannot stop the others from receiving the
 	// event. Each send has its own timeout, so a slow receiver does not use up
@@ -548,7 +592,7 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 	var errs []error
 	for _, w := range hooks {
 		if record {
-			cur, ok, err := currentHook(ctx, w, payload.Event())
+			cur, ok, err := s.currentHook(ctx, w, payload.Event())
 			if err != nil {
 				// Whether w may still be sent to is unknown, so it is not
 				// sent to. The event is recorded as undelivered instead, so
@@ -556,9 +600,9 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 				// error is logged here, since a recorded delivery is not
 				// returned as an error; the stored reason leaves out the
 				// database details. Only a failure to record is returned.
-				log.FromContext(ctx).WithPrefix("webhook").Warn("webhook not sent: re-reading it failed; recorded as undelivered",
+				s.logger.Warn("webhook not sent: re-reading it failed; recorded as undelivered",
 					"webhook_id", w.ID, "repo_id", w.RepoID, "event", payload.Event(), "err", err)
-				if err := RecordUndelivered(ctx, []models.Webhook{w}, payload, errRereadFailed); err != nil {
+				if err := s.RecordUndelivered(ctx, []models.Webhook{w}, payload, errRereadFailed); err != nil {
 					errs = append(errs, err)
 				}
 				continue
@@ -568,7 +612,7 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 			}
 			w = cur
 		}
-		if err := sendWebhook(ctx, w, payload.Event(), payload, uuid.Nil, record); err != nil {
+		if err := s.sendPayload(ctx, w, payload.Event(), payload, record); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -588,13 +632,13 @@ func deliver(ctx context.Context, hooks []models.Webhook, payload EventPayload, 
 //
 // Only w itself is read, so delivering to n webhooks costs n single-row
 // queries rather than n reads of every subscriber.
-func currentHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
-	cur, ok, err := lookupHook(ctx, w, event)
+func (s *Sender) currentHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
+	cur, ok, err := s.lookupHook(ctx, w, event)
 	if err != nil && ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
-		case <-time.After(rereadRetryDelay):
-			cur, ok, err = lookupHook(ctx, w, event)
+		case <-time.After(s.rereadRetryDelay):
+			cur, ok, err = s.lookupHook(ctx, w, event)
 		}
 	}
 	if err != nil {
@@ -605,10 +649,10 @@ func currentHook(ctx context.Context, w models.Webhook, event Event) (models.Web
 
 // lookupHook reads w as stored now if it is still active and subscribes to
 // event, giving up after rereadTimeout. It returns false when it is not.
-func lookupHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
-	lctx, cancel := context.WithTimeout(ctx, rereadTimeout)
+func (s *Sender) lookupHook(ctx context.Context, w models.Webhook, event Event) (models.Webhook, bool, error) {
+	lctx, cancel := context.WithTimeout(ctx, s.rereadTimeout)
 	defer cancel()
-	cur, err := store.FromContext(ctx).GetActiveWebhookByIDWhereEvent(lctx, db.FromContext(ctx), w.RepoID, w.ID, int(event))
+	cur, err := s.store.GetActiveWebhookByIDWhereEvent(lctx, s.db, w.RepoID, w.ID, int(event))
 	if errors.Is(err, db.ErrRecordNotFound) {
 		return models.Webhook{}, false, nil
 	}
@@ -625,10 +669,10 @@ func repoURL(publicURL string, repo string) string {
 // defaultBranch returns repo's default branch for an event payload. An error
 // is logged and leaves the branch empty: the event is still worth sending
 // without it.
-func defaultBranch(ctx context.Context, repo proto.Repository) string {
+func (s *Sender) defaultBranch(repo proto.Repository) string {
 	branch, err := getDefaultBranch(repo)
 	if err != nil {
-		log.FromContext(ctx).WithPrefix("webhook").Warn("cannot read the default branch for the webhook payload",
+		s.logger.Warn("cannot read the default branch for the webhook payload",
 			"repo", repo.Name(), "err", err)
 	}
 	return branch

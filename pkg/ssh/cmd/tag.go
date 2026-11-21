@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
-	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/spf13/cobra"
 )
 
@@ -110,19 +109,12 @@ func tagDeleteCommand() *cobra.Command {
 			}
 
 			// The tag is already deleted, so a failed event is logged rather
-			// than reported as a failed command. The event is built
-			// and sent even if the session ends now.
-			ctx, cancel := backend.AfterChangeContext(ctx)
-			defer cancel()
-			wh, err := webhook.NewBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID)
-			if err != nil {
+			// than reported as a failed command. The event is built and sent
+			// even if the session ends now, in the background like the
+			// backend's own events.
+			if err := backend.FromContext(ctx).SendBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID); err != nil {
 				log.FromContext(ctx).Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
-				return nil
 			}
-
-			// Sent in the background like the backend's own events, so the
-			// session neither waits on receivers nor cancels the delivery.
-			backend.FromContext(ctx).SendEventAfterChange(ctx, wh)
 			return nil
 		}),
 	}
