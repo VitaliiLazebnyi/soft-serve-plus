@@ -11,11 +11,13 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -105,35 +107,35 @@ var (
 )
 
 // GitUploadPackCommand returns a cobra command for git-upload-pack.
-func GitUploadPackCommand() *cobra.Command {
+func (cmds *Commands) GitUploadPackCommand() *cobra.Command {
 	return gitCommand("git-upload-pack REPO", "Git upload pack", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
-		return runUploadPack(cmd, args, git.UploadPackService)
+		return cmds.runUploadPack(cmd, args, git.UploadPackService)
 	})
 }
 
 // GitUploadArchiveCommand returns a cobra command for git-upload-archive.
-func GitUploadArchiveCommand() *cobra.Command {
+func (cmds *Commands) GitUploadArchiveCommand() *cobra.Command {
 	return gitCommand("git-upload-archive REPO", "Git upload archive", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
-		return runUploadPack(cmd, args, git.UploadArchiveService)
+		return cmds.runUploadPack(cmd, args, git.UploadArchiveService)
 	})
 }
 
 // GitReceivePackCommand returns a cobra command for git-receive-pack.
-func GitReceivePackCommand() *cobra.Command {
-	return gitCommand("git-receive-pack REPO", "Git receive pack", cobra.ExactArgs(1), runReceivePack)
+func (cmds *Commands) GitReceivePackCommand() *cobra.Command {
+	return gitCommand("git-receive-pack REPO", "Git receive pack", cobra.ExactArgs(1), cmds.runReceivePack)
 }
 
 // GitLFSAuthenticateCommand returns a cobra command for git-lfs-authenticate.
-func GitLFSAuthenticateCommand() *cobra.Command {
+func (cmds *Commands) GitLFSAuthenticateCommand() *cobra.Command {
 	return gitCommand("git-lfs-authenticate REPO OPERATION", "Git LFS authenticate", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
-		return runLFS(cmd, args, git.LFSAuthenticateService)
+		return cmds.runLFS(cmd, args, git.LFSAuthenticateService)
 	})
 }
 
 // GitLFSTransfer returns a cobra command for git-lfs-transfer.
-func GitLFSTransfer() *cobra.Command {
+func (cmds *Commands) GitLFSTransfer() *cobra.Command {
 	return gitCommand("git-lfs-transfer REPO OPERATION", "Git LFS transfer", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
-		return runLFS(cmd, args, git.LFSTransferService)
+		return cmds.runLFS(cmd, args, git.LFSTransferService)
 	})
 }
 
@@ -293,11 +295,9 @@ func (r *gitRequest) afterPush(refs *hooks.PushRefs) {
 // newGitRequest looks up the repository args[0] names for the session's
 // caller and prepares the service command: its directory, its input and
 // output, and GIT_PROTOCOL. runReceivePack adds the hook environment.
-func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
+func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 	ctx := cmd.Context()
-	cfg := config.FromContext(ctx)
-	be := backend.FromContext(ctx)
-	logger := log.FromContext(ctx)
+	cfg, be, logger := cmds.cfg, cmds.be, cmds.logger
 	start := time.Now()
 
 	// repo should be in the form of "repo.git"
@@ -344,7 +344,7 @@ func newGitRequest(cmd *cobra.Command, args []string) (*gitRequest, error) {
 		level:    level,
 		// As in denyRead, a server admin is never anonymous: nothing is
 		// hidden from them.
-		anonymous: user == nil && !isServerAdmin(ctx),
+		anonymous: user == nil && !cmds.isServerAdmin(ctx),
 		scmd: git.ServiceCommand{
 			Stdin:  cmd.InOrStdin(),
 			Stdout: cmd.OutOrStdout(),
@@ -364,8 +364,8 @@ func (r *gitRequest) setRepo(repo proto.Repository, level access.AccessLevel) {
 
 // runUploadPack runs git-upload-pack or git-upload-archive, which read the
 // repository.
-func runUploadPack(cmd *cobra.Command, args []string, service git.Service) error {
-	r, err := newGitRequest(cmd, args)
+func (cmds *Commands) runUploadPack(cmd *cobra.Command, args []string, service git.Service) error {
+	r, err := cmds.newGitRequest(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -392,8 +392,8 @@ func runUploadPack(cmd *cobra.Command, args []string, service git.Service) error
 // caller may write creates the repository; if the push then fails, the
 // backend removes the repository again unless it was used meanwhile (see
 // Backend.RemovePushCreatedRepository).
-func runReceivePack(cmd *cobra.Command, args []string) error {
-	r, err := newGitRequest(cmd, args)
+func (cmds *Commands) runReceivePack(cmd *cobra.Command, args []string) error {
+	r, err := cmds.newGitRequest(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -413,7 +413,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		}
 		// Hold off the removal of a repository a push created and left
 		// without refs while this push may write some.
-		done, err := beginPush(r.ctx, be, r.logger, r.repo)
+		done, err := cmds.beginPush(r, r.repo)
 		switch {
 		case err == nil:
 			endPush = done
@@ -450,7 +450,7 @@ func runReceivePack(cmd *cobra.Command, args []string) error {
 		// row just created: an admin may have deleted the repository
 		// since, and someone else created another under the same name,
 		// which this push was never checked against.
-		done, err := beginPush(r.ctx, be, r.logger, created)
+		done, err := cmds.beginPush(r, created)
 		if err != nil {
 			// Deleted, and perhaps replaced, already.
 			return err
@@ -535,8 +535,8 @@ func removePushCreated(ctx context.Context, r *gitRequest, created proto.Reposit
 
 // runLFS runs git-lfs-transfer or git-lfs-authenticate for the operation
 // args[1] names.
-func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
-	r, err := newGitRequest(cmd, args)
+func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Service) error {
+	r, err := cmds.newGitRequest(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -591,7 +591,7 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 	} else if operation == lfs.OperationUpload {
 		// An upload writes to the repository like a push, so it holds off
 		// the same removal.
-		done, err := beginPush(r.ctx, r.be, r.logger, r.repo)
+		done, err := cmds.beginPush(r, r.repo)
 		if err != nil {
 			return err
 		}
@@ -603,28 +603,28 @@ func runLFS(cmd *cobra.Command, args []string, service git.Service) error {
 		seconds.WithLabelValues(operation).Add(time.Since(r.start).Seconds())
 	}()
 
-	if err := run(r.ctx, r.scmd); err != nil {
+	// The handlers in pkg/git take the config, database and store from
+	// their context.
+	ctx := config.WithContext(r.ctx, cmds.cfg)
+	ctx = db.WithContext(ctx, cmds.db)
+	ctx = store.WithContext(ctx, cmds.store)
+	if err := run(ctx, r.scmd); err != nil {
 		return gitServiceError(r.ctx, r.logger, service, r.name, err)
 	}
 	return nil
 }
 
-// testHookBeforeBeginPush, when set, runs in beginPush before the push is
-// marked as running: for a push to a missing name, right after the push
-// created the repository.
-var testHookBeforeBeginPush func()
-
-// beginPush marks a push or LFS upload to repo as running; see
+// beginPush marks a push or LFS upload of r to repo as running; see
 // backend.BeginPush. A repository gone or replaced meanwhile is
 // proto.ErrRepoNotFound; a failed lookup of it is logged, and the client
 // gets git.ErrSystemMalfunction (see gitLookupFailed).
-func beginPush(ctx context.Context, be *backend.Backend, logger *log.Logger, repo proto.Repository) (func(), error) {
-	if testHookBeforeBeginPush != nil {
-		testHookBeforeBeginPush()
+func (cmds *Commands) beginPush(r *gitRequest, repo proto.Repository) (func(), error) {
+	if cmds.beforeBeginPush != nil {
+		cmds.beforeBeginPush()
 	}
-	done, err := be.BeginPush(ctx, repo)
+	done, err := r.be.BeginPush(r.ctx, repo)
 	if err != nil && !errors.Is(err, proto.ErrRepoNotFound) {
-		return nil, gitLookupFailed(ctx, logger, repo.Name(), err)
+		return nil, gitLookupFailed(r.ctx, r.logger, repo.Name(), err)
 	}
 	return done, err
 }

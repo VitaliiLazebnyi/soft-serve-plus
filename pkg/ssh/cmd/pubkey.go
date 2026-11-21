@@ -7,9 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -39,10 +37,10 @@ var errNoPubkeyProof = errors.New("pubkey add needs proof that you hold the key'
 
 // noPubkeyProof returns errNoPubkeyProof, with why the proof was refused
 // and the command that makes one for name, the caller's username.
-func noPubkeyProof(ctx context.Context, name string, why error) error {
+func (cmds *Commands) noPubkeyProof(ctx context.Context, name string, why error) error {
 	return fmt.Errorf("%w (%w); pipe in an SSH signature of your username made with that key, "+
 		"for example: printf %%s %s | ssh-keygen -Y sign -n %s -f PRIVATE_KEY | %s pubkey add \"$(cat PRIVATE_KEY.pub)\"",
-		errNoPubkeyProof, why, name, pubkeyProofNamespace, SSHCommand(config.FromContext(ctx)))
+		errNoPubkeyProof, why, name, pubkeyProofNamespace, SSHCommand(cmds.cfg))
 }
 
 // maxPubkeyProofSize bounds the signature `pubkey add` reads from its input.
@@ -61,22 +59,22 @@ var errProofTooLong = errors.New("the input is too long for one")
 // from the command's input and checks that it is pk's signature, in
 // pubkeyProofNamespace, over the account's username as it is now. The
 // message may end with one newline, as echo writes it.
-func checkPubkeyProof(cmd *cobra.Command, user proto.User, pk gossh.PublicKey) error {
+func (cmds *Commands) checkPubkeyProof(cmd *cobra.Command, user proto.User, pk gossh.PublicKey) error {
 	ctx := cmd.Context()
 	// The name is read again by ID: the account may have been renamed
 	// since the session started.
-	cur, err := backend.FromContext(ctx).UserByID(ctx, user.ID())
+	cur, err := cmds.be.UserByID(ctx, user.ID())
 	if err != nil {
 		if errors.Is(err, proto.ErrUserNotFound) {
 			return errUnknownKey(ctx)
 		}
-		return lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
+		return lookupFailed(ctx, cmds.logger, "look up the session's user", err)
 	}
 	name := cur.Username()
 
 	if s := sshutils.SessionFromContext(ctx); s != nil {
 		if _, _, isPty := s.Pty(); isPty {
-			return noPubkeyProof(ctx, name, errProofInTerminal)
+			return cmds.noPubkeyProof(ctx, name, errProofInTerminal)
 		}
 	}
 	proof, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxPubkeyProofSize+1))
@@ -84,14 +82,14 @@ func checkPubkeyProof(cmd *cobra.Command, user proto.User, pk gossh.PublicKey) e
 		return err
 	}
 	if len(proof) > maxPubkeyProofSize {
-		return noPubkeyProof(ctx, name, errProofTooLong)
+		return cmds.noPubkeyProof(ctx, name, errProofTooLong)
 	}
 	err = verifySSHSig(pk, pubkeyProofNamespace, []byte(name), proof)
 	if err != nil && verifySSHSig(pk, pubkeyProofNamespace, []byte(name+"\n"), proof) == nil {
 		err = nil
 	}
 	if err != nil {
-		return noPubkeyProof(ctx, name, err)
+		return cmds.noPubkeyProof(ctx, name, err)
 	}
 	return nil
 }
@@ -116,7 +114,7 @@ func checkRemovablePubkey(ctx context.Context, user proto.User, pk gossh.PublicK
 }
 
 // PubkeyCommand returns a command that manages user public keys.
-func PubkeyCommand() *cobra.Command {
+func (cmds *Commands) PubkeyCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "pubkey",
 		Aliases: []string{"pubkeys", "publickey", "publickeys"},
@@ -129,8 +127,8 @@ func PubkeyCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
-			user, err := userByPublicKey(ctx)
+			be := cmds.be
+			user, err := cmds.userByPublicKey(ctx)
 			if err != nil {
 				return err
 			}
@@ -147,7 +145,7 @@ func PubkeyCommand() *cobra.Command {
 			// knows to ask an admin rather than retry. That tells the
 			// caller the key is listed, which is harmless: it is a public
 			// key, and listing grants nothing without the private half.
-			admin := isServerAdmin(ctx)
+			admin := cmds.isServerAdmin(ctx)
 			if !admin && be.IsAdminKey(apk) {
 				return errListedAdminKey
 			}
@@ -156,7 +154,7 @@ func PubkeyCommand() *cobra.Command {
 			// published one, and later act for its holder. Admins attach
 			// keys for others anyway (user add-pubkey).
 			if !admin {
-				if err := checkPubkeyProof(cmd, user, apk); err != nil {
+				if err := cmds.checkPubkeyProof(cmd, user, apk); err != nil {
 					return err
 				}
 			}
@@ -177,8 +175,8 @@ func PubkeyCommand() *cobra.Command {
 		Short: "Remove a public key",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
-			user, err := userByPublicKey(ctx)
+			be := cmds.be
+			user, err := cmds.userByPublicKey(ctx)
 			if err != nil {
 				return err
 			}
@@ -211,7 +209,7 @@ func PubkeyCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			user, err := userByPublicKey(ctx)
+			user, err := cmds.userByPublicKey(ctx)
 			if err != nil {
 				return err
 			}

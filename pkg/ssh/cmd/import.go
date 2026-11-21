@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
 // importCommand is the command for importing a repository from a remote.
-func importCommand() *cobra.Command {
+func (cmds *Commands) importCommand() *cobra.Command {
 	var private bool
 	var description string
 	var projectName string
@@ -21,14 +19,14 @@ func importCommand() *cobra.Command {
 		Use:               "import REPOSITORY REMOTE",
 		Short:             "Import a new repository from remote",
 		Args:              cobra.ExactArgs(2),
-		PersistentPreRunE: checkIfRepoCollab,
+		PersistentPreRunE: cmds.checkIfRepoCollab,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			user := proto.UserFromContext(ctx)
 			name := args[0]
 			remote := args[1]
-			private, err := privateOrDefault(cmd, private)
+			private, err := cmds.privateOrDefault(cmd, private)
 			if err != nil {
 				return err
 			}
@@ -42,11 +40,11 @@ func importCommand() *cobra.Command {
 				LFSEndpoint: lfsEndpoint,
 			})
 			if err != nil {
-				return createFailed(ctx, "import repository", err)
+				return cmds.createFailed(ctx, "import repository", err)
 			}
 
 			// Like create: the clone URL on stdout, the rest on stderr.
-			cfg := config.FromContext(ctx)
+			cfg := cmds.cfg
 			cmd.PrintErrf("Imported repository %s\n", r.Name())
 			cmd.Printf("%s/%s.git\n", cfg.SSH.PublicURL, r.Name())
 

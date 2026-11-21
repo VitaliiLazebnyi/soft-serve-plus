@@ -34,7 +34,7 @@ func TestGitDenyReadAdminKeyIsNotAnonymous(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			is := is.New(t)
 			is.True(proto.UserFromContext(tc.ctx) == nil)
-			c := GitUploadPackCommand()
+			c := cmdsOf(tc.ctx).GitUploadPackCommand()
 			c.SetIn(&bytes.Buffer{})
 			c.SetOut(&bytes.Buffer{})
 			c.SetErr(&bytes.Buffer{})

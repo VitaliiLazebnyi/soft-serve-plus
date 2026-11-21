@@ -17,7 +17,7 @@ import (
 )
 
 // commitCommand returns a command that prints the contents of a commit.
-func commitCommand() *cobra.Command {
+func (cmds *Commands) commitCommand() *cobra.Command {
 	var color bool
 	var patchOnly bool
 
@@ -25,10 +25,10 @@ func commitCommand() *cobra.Command {
 		Use:   "commit REPOSITORY REVISION",
 		Short: "Print out a commit and its diff",
 		Args:  cobra.ExactArgs(2),
-		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			rev := args[1]
 
-			r, err := openRepository(cmd.Context(), rr)
+			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -41,7 +41,7 @@ func commitCommand() *cobra.Command {
 				return err
 			}
 			if err != nil {
-				return gitFailed(cmd.Context(), "read commit", rr.Name(), err)
+				return cmds.gitFailed(cmd.Context(), "read commit", rr.Name(), err)
 			}
 
 			// A plain --patch is meant for git apply and is printed byte
@@ -52,7 +52,7 @@ func commitCommand() *cobra.Command {
 			if patchOnly && !color {
 				p, err := r.Patch(commit)
 				if err != nil {
-					return gitFailed(cmd.Context(), "read diff", rr.Name(), err)
+					return cmds.gitFailed(cmd.Context(), "read diff", rr.Name(), err)
 				}
 				if p.Truncated {
 					return fmt.Errorf("patch truncated at %d bytes; not printed, as a cut patch could be applied in part: clone the repository and use git format-patch or git diff instead", git.PatchLimits().Bytes)
@@ -63,7 +63,7 @@ func commitCommand() *cobra.Command {
 
 			diff, err := r.Diff(commit)
 			if err != nil {
-				return gitFailed(cmd.Context(), "read diff", rr.Name(), err)
+				return cmds.gitFailed(cmd.Context(), "read diff", rr.Name(), err)
 			}
 			patch := diff.Patch
 

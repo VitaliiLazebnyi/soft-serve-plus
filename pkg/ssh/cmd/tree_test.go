@@ -15,7 +15,6 @@ import (
 	"time"
 
 	sgit "github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
@@ -88,7 +87,7 @@ func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
 func diffRepoOnMain(t *testing.T) (context.Context, func(stdin string, args ...string) string) {
 	t.Helper()
 	ctx, git := diffRepo(t)
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "diffs.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "diffs.git")
 	git("", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
 	return ctx, git
 }
@@ -97,6 +96,7 @@ func diffRepoOnMain(t *testing.T) (context.Context, func(stdin string, args ...s
 // lists the first ones and says on stderr that the listing is cut. Paths
 // past the cap can still be read.
 func TestRepoTreeTruncated(t *testing.T) {
+	t.Parallel()
 	ctx, git := diffRepoOnMain(t)
 	blob := git("x", "hash-object", "-w", "--stdin")
 	var in strings.Builder
@@ -160,6 +160,7 @@ func treeRepo(t *testing.T) func(args ...string) (string, string, error) {
 // TestRepoTreeOutputPinned pins the `repo tree` listing: directories and
 // submodules first, then files, each with its mode and size.
 func TestRepoTreeOutputPinned(t *testing.T) {
+	t.Parallel()
 	run := treeRepo(t)
 	root := "drwxrwxrwx\t-\t alpha\n" +
 		"?---------\t-\t mod\n" +

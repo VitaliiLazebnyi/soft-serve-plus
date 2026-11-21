@@ -19,7 +19,7 @@ import (
 // runPubkeyIn runs a `pubkey` subcommand with stdin as its input and returns
 // its error and its error output.
 func runPubkeyIn(ctx context.Context, stdin []byte, args ...string) (string, error) {
-	c := PubkeyCommand()
+	c := cmdsOf(ctx).PubkeyCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	var stderr bytes.Buffer
@@ -55,6 +55,7 @@ func proofFor(t *testing.T, signer gossh.Signer, name string) []byte {
 // an admin key. A non-admin now proves they hold the private half with an
 // SSHSIG signature of their username.
 func TestPubkeyAddNeedsProof(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	aliceCtx, _ := keySession(t, ctx, be, "alice", false)
@@ -107,6 +108,7 @@ func TestPubkeyAddNeedsProof(t *testing.T) {
 // The error for a key that is already attached says neither whose it is
 // nor whether it is the caller's own.
 func TestPubkeyAddTakenKeyIsGeneric(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	aliceCtx, aliceKey := keySession(t, ctx, be, "alice", false)
@@ -135,6 +137,7 @@ func TestPubkeyAddTakenKeyIsGeneric(t *testing.T) {
 // its place. The session resolved its account when it authenticated, so
 // only the check in the transaction that adds the key sees the removal.
 func TestPubkeyAddAfterSessionKeyRemoved(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	aliceCtx, _ := keySession(t, ctx, be, "alice", false)

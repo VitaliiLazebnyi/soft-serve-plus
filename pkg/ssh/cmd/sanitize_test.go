@@ -10,10 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
@@ -38,10 +35,11 @@ func assertNoControls(t *testing.T, out string) {
 // A description and project name stored before they were sanitised on
 // write must still not reach the terminal raw.
 func TestRepoDescriptionAndProjectNameSanitised(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
-	st, dbx := store.FromContext(ctx), db.FromContext(ctx)
+	st, dbx := cmdsOf(ctx).store, cmdsOf(ctx).db
 	is.NoErr(st.SetRepoDescriptionByName(ctx, dbx, "hooks", "desc"+escapes))
 	is.NoErr(st.SetRepoProjectNameByName(ctx, dbx, "hooks", "name"+escapes))
 
@@ -63,12 +61,13 @@ func TestRepoDescriptionAndProjectNameSanitised(t *testing.T) {
 // The response of a webhook receiver is shown to the admin inspecting a
 // delivery, so it must not carry escape sequences to their terminal.
 func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
 	delID := uuid.MustParse("00000000-0000-0000-0000-0000000000d2")
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              delID,
 		WebhookID:       id,
 		Event:           int(webhook.EventPush),
@@ -100,7 +99,7 @@ const hostile = escapes + "\x1b]8;;https:evil.example\x1b\\link\x1b]8;;\x1b\\" +
 // whose names hold a C1 control (the only kind git allows in a ref name).
 func pushHostileRepo(t *testing.T, ctx context.Context) {
 	t.Helper()
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git")
 	work := t.TempDir()
 	git := func(stdin string, args ...string) string {
 		t.Helper()
@@ -134,6 +133,7 @@ func pushHostileRepo(t *testing.T, ctx context.Context) {
 // Every command that shows git data for reading in a terminal strips what
 // the repository carries, while the text around it stays.
 func TestRepoGitDataSanitised(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)

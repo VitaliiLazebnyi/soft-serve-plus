@@ -32,7 +32,7 @@ func TestCommandLengthMiddleware(t *testing.T) {
 
 			var reached atomic.Bool
 			sess := testsession.New(t, &ssh.Server{
-				Handler: CommandLengthMiddleware(func(s ssh.Session) {
+				Handler: commandLengthMiddleware(func(s ssh.Session) {
 					reached.Store(true)
 					s.Exit(0) //nolint: errcheck
 				}),

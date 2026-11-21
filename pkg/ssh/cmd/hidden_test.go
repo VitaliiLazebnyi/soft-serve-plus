@@ -11,6 +11,7 @@ import (
 // repo hidden must reject a value that is not a boolean instead of reading it
 // as false, which would silently unhide the repository.
 func TestRepoHiddenParsesBool(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)

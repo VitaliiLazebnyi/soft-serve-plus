@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
@@ -17,7 +16,7 @@ import (
 // pushFiles pushes to repository "hooks" a commit that adds files.
 func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 	t.Helper()
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git")
 	work := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
@@ -52,13 +51,13 @@ func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 // plain because its lexer's panic is caught.
 func TestBlobColorBounded(t *testing.T) {
 	t.Setenv("SOFT_SERVE_NO_COLOR", "")
-	if testHookBlobBudget != nil {
+	ctx, be := newAuthTestContext(t)
+	cmds := cmdsOf(ctx)
+	if cmds.blobBudget != nil {
 		t.Fatal("repo blob does not have the default budget")
 	}
 	asked := false
-	testHookBlobBudget = func() <-chan time.Time { asked = true; return nil }
-	t.Cleanup(func() { testHookBlobBudget = nil })
-	ctx, be := newAuthTestContext(t)
+	cmds.blobBudget = func() <-chan time.Time { asked = true; return nil }
 	ownerCtx := whRepo(t, ctx, be)
 	pushFiles(t, ownerCtx, map[string]string{
 		// Svelte tokenises all of a file up front; 16 KiB of these took

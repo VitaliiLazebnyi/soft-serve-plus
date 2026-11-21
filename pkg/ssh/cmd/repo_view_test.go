@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -29,7 +28,7 @@ func viewRepo(t *testing.T) (context.Context, string) {
 	_, err := be.CreateRepository(ctx, "view", proto.UserFromContext(ctx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "view.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "view.git")
 	work := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -55,6 +54,7 @@ func viewRepo(t *testing.T) (context.Context, string) {
 }
 
 func TestBlobRawPrintsExactBytes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, _ := viewRepo(t)
 
@@ -64,6 +64,7 @@ func TestBlobRawPrintsExactBytes(t *testing.T) {
 }
 
 func TestBlobMissingPathIsFileNotFound(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, _ := viewRepo(t)
 
@@ -74,10 +75,36 @@ func TestBlobMissingPathIsFileNotFound(t *testing.T) {
 }
 
 func TestCommitPrintsHash(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, sha := viewRepo(t)
 
 	stdout, _, err := runRepoOutput(t, ctx, "commit", "view", "HEAD")
 	is.NoErr(err)
 	is.True(strings.HasPrefix(stdout, "commit "+sha+"\n"))
+}
+
+// The repo commands run git under the session's context: git started after
+// the session ended fails rather than running on (SSH-6, R57). The context
+// is canceled after the access check, so only git is left to notice.
+func TestRepoCommandsRunGitUnderSessionContext(t *testing.T) {
+	t.Parallel()
+	ctx, sha := viewRepo(t)
+	for _, args := range [][]string{
+		{"info", "view"},
+		{"tree", "view"},
+		{"blob", "view", "README.md"},
+		{"commit", "view", sha},
+		{"branch", "list", "view"},
+		{"branch", "default", "view"},
+		{"tag", "list", "view"},
+	} {
+		sessCtx, cancel := context.WithCancel(ctx)
+		afterGate(sessCtx, cancel)
+		out, _, err := runRepoOutput(t, sessCtx, args...)
+		cancel()
+		if err == nil {
+			t.Errorf("%v after the session ended: no error, output %q", args, out)
+		}
+	}
 }

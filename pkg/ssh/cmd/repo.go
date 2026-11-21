@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/log/v2"
+	gitm "github.com/aymanbagabas/git-module"
+
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
@@ -18,7 +18,7 @@ import (
 
 // RepoCommand returns a command for managing repositories. Each
 // repo-scoped leaf gates itself with withRepo.
-func RepoCommand() *cobra.Command {
+func (cmds *Commands) RepoCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "repo",
 		Aliases: []string{"repos", "repository", "repositories"},
@@ -26,21 +26,21 @@ func RepoCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		blobCommand(),
-		branchCommand(),
-		collabCommand(),
-		commitCommand(),
-		createCommand(),
-		deleteCommand(),
-		importCommand(),
-		listCommand(),
-		renameCommand(),
-		tagCommand(),
-		treeCommand(),
-		webhookCommand(),
+		cmds.blobCommand(),
+		cmds.branchCommand(),
+		cmds.collabCommand(),
+		cmds.commitCommand(),
+		cmds.createCommand(),
+		cmds.deleteCommand(),
+		cmds.importCommand(),
+		cmds.listCommand(),
+		cmds.renameCommand(),
+		cmds.tagCommand(),
+		cmds.treeCommand(),
+		cmds.webhookCommand(),
 	)
 	for _, p := range repoProperties {
-		cmd.AddCommand(p.command())
+		cmd.AddCommand(cmds.propertyCommand(p))
 	}
 
 	cmd.AddCommand(
@@ -48,11 +48,11 @@ func RepoCommand() *cobra.Command {
 			Use:   "info REPOSITORY",
 			Short: "Get information about a repository",
 			Args:  cobra.ExactArgs(1),
-			RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, level access.AccessLevel) error {
+			RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, level access.AccessLevel) error {
 				ctx := cmd.Context()
-				be := backend.FromContext(ctx)
+				be := cmds.be
 
-				r, err := openRepository(cmd.Context(), rr)
+				r, err := cmds.openRepository(cmd.Context(), rr)
 				if err != nil {
 					return err
 				}
@@ -61,24 +61,24 @@ func RepoCommand() *cobra.Command {
 				// that does not exist, has no default branch to show.
 				head, err := r.HEAD()
 				if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
-					return gitFailed(ctx, "read HEAD", rr.Name(), err)
+					return cmds.gitFailed(ctx, "read HEAD", rr.Name(), err)
 				}
 
 				var owner proto.User
 				if rr.UserID() > 0 {
 					owner, err = be.UserByID(ctx, rr.UserID())
 					if err != nil {
-						return lookupFailed(ctx, log.FromContext(ctx), "look up repository owner", err)
+						return lookupFailed(ctx, cmds.logger, "look up repository owner", err)
 					}
 				}
 
 				branches, err := r.Branches()
 				if err != nil {
-					return gitFailed(ctx, "list branches", rr.Name(), err)
+					return cmds.gitFailed(ctx, "list branches", rr.Name(), err)
 				}
-				tags, err := r.Tags()
+				tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
 				if err != nil {
-					return gitFailed(ctx, "list tags", rr.Name(), err)
+					return cmds.gitFailed(ctx, "list tags", rr.Name(), err)
 				}
 
 				// project name and description are optional, handle trailing
@@ -98,7 +98,7 @@ func RepoCommand() *cobra.Command {
 						return err
 					}
 					if err != nil {
-						return lookupFailed(ctx, log.FromContext(ctx), "read mirror sync status", err)
+						return lookupFailed(ctx, cmds.logger, "read mirror sync status", err)
 					}
 					if !st.SyncedAt.IsZero() {
 						cmd.Println("Last Sync:", st.SyncedAt.UTC().Format(time.RFC3339))
@@ -141,7 +141,7 @@ var errRepoEmpty = errors.New("repository is empty")
 // readTree returns the root tree of ref in r, rr's repository. A ref that
 // does not resolve is the client's to see, as git.ErrRevisionNotExist; any
 // other failure is git failing on the server.
-func readTree(ctx context.Context, rr proto.Repository, r *git.Repository, ref string) (*git.Tree, error) {
+func (cmds *Commands) readTree(ctx context.Context, rr proto.Repository, r *git.Repository, ref string) (*git.Tree, error) {
 	tree, err := r.LsTree(ref)
 	switch {
 	case err == nil:
@@ -149,7 +149,7 @@ func readTree(ctx context.Context, rr proto.Repository, r *git.Repository, ref s
 	case errors.Is(err, git.ErrRevisionNotExist):
 		return nil, err
 	default:
-		return nil, gitFailed(ctx, "read tree", rr.Name(), err)
+		return nil, cmds.gitFailed(ctx, "read tree", rr.Name(), err)
 	}
 }
 
@@ -157,23 +157,23 @@ func readTree(ctx context.Context, rr proto.Repository, r *git.Repository, ref s
 // empty repository, or a HEAD that names a branch that does not exist, such
 // as in a mirror whose remote renamed its default branch, gets an error that
 // says so rather than "reference does not exist".
-func repoHead(ctx context.Context, rr proto.Repository, r *git.Repository) (*git.Reference, error) {
+func (cmds *Commands) repoHead(ctx context.Context, rr proto.Repository, r *git.Repository) (*git.Reference, error) {
 	head, err := r.HEAD()
 	switch {
 	case err == nil:
 		return head, nil
 	case !errors.Is(err, git.ErrReferenceNotExist):
-		return nil, gitFailed(ctx, "read HEAD", rr.Name(), err)
+		return nil, cmds.gitFailed(ctx, "read HEAD", rr.Name(), err)
 	}
 	switch bs, err := r.Branches(); {
 	case err != nil:
-		return nil, gitFailed(ctx, "list branches", rr.Name(), err)
+		return nil, cmds.gitFailed(ctx, "list branches", rr.Name(), err)
 	case len(bs) == 0:
 		return nil, errRepoEmpty
 	}
 	name, err := r.SymbolicRef(git.HEAD, "")
 	if err != nil {
-		return nil, gitFailed(ctx, "read HEAD", rr.Name(), err)
+		return nil, cmds.gitFailed(ctx, "read HEAD", rr.Name(), err)
 	}
 	return nil, fmt.Errorf("default branch %q does not exist", git.ReferenceName(name).Short())
 }

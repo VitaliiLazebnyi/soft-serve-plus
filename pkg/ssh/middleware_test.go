@@ -15,17 +15,14 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 // The tests below run AuthenticationMiddleware behind a real SSH handshake
-// on a server built by NewSSHServer. They read the user a session runs as
+// on a server built by NewServer. They read the user a session runs as
 // from the access tokens `token create` makes, as that command acts as the
 // user AuthenticationMiddleware puts in the session context.
 
@@ -89,7 +86,7 @@ func runCommand(t *testing.T, addr string, command string, auth ...gossh.AuthMet
 // tokenCount returns how many access tokens user has.
 func tokenCount(ctx context.Context, t *testing.T, user proto.User) int {
 	t.Helper()
-	tokens, err := backend.FromContext(ctx).ListAccessTokens(ctx, user)
+	tokens, err := depsOf(ctx).be.ListAccessTokens(ctx, user)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +106,9 @@ func newAuthServer(t *testing.T) (string, context.Context, *config.Config) {
 // approves the offered key before the signature check fails, so the
 // session must take its user from the key that was signed with.
 func TestAuthenticationUsesSignedKey(t *testing.T) {
+	t.Parallel()
 	addr, ctx, _ := newAuthServer(t)
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 
 	adminKey := newSigner(t)
 	attackerKey := newSigner(t)
@@ -149,7 +147,7 @@ func TestAuthenticationUsesSignedKey(t *testing.T) {
 // key it could not sign with.
 func TestAuthenticationKeyless(t *testing.T) {
 	addr, ctx, _ := newAuthServer(t)
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 
 	adminKey := newSigner(t)
 	admin, err := be.CreateUser(ctx, "testadmin", proto.UserOptions{
@@ -201,12 +199,13 @@ func TestAuthenticationKeyless(t *testing.T) {
 // A key listed in initial_admin_keys that a non-admin account holds is
 // refused a session, with an error that says how to fix it.
 func TestAuthenticationRefusesClaimedAdminKey(t *testing.T) {
+	t.Parallel()
 	adminKey := newSigner(t)
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(adminKey.PublicKey())}
 	addr, ctx := startTestServer(t, cfg)
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 
 	// The listed key went to the admin account; hand it to a non-admin
 	// one, as `pubkey add` before the key was listed would have.
@@ -249,7 +248,7 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	ctx := serverContext(t, cfg, log.Default())
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 
 	alice, bob, stranger := newSigner(t), newSigner(t), newSigner(t)
 	for name, key := range map[string]gossh.Signer{"alice": alice, "bob": bob} {
@@ -262,7 +261,8 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 
 	var mu sync.Mutex
 	var approved []string
-	sshSrv := &SSHServer{be: be}
+	sshSrv := &Server{be: be}
+	hs := handlerServer(t, cfg, depsOf(ctx).dbx, depsOf(ctx).st, be, log.Default())
 	srv := &ssh.Server{
 		PublicKeyHandler: func(ctx ssh.Context, pk ssh.PublicKey) bool {
 			ok := sshSrv.PublicKeyHandler(ctx, pk)
@@ -275,7 +275,7 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 		},
 		// The handler prints the session's user, or "anon" without one,
 		// and the fingerprint of the session's key.
-		Handler: ContextMiddleware(cfg, db.FromContext(ctx), store.FromContext(ctx), be, log.Default())(AuthenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()

@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -16,13 +15,14 @@ import (
 // tag delete` refuse a mirror, even for a server admin: the next sync would
 // bring the ref back. Turning mirroring off lets them through again.
 func TestMirrorRefusesRefDeletes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 
 	_, err := be.CreateRepository(adminCtx, "m", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
-	r, err := git.Open(filepath.Join(config.FromContext(ctx).DataPath, "repos", "m.git"))
+	r, err := git.Open(filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "m.git"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	is.NoErr(be.SetMirror(adminCtx, "m", true))
@@ -53,6 +53,7 @@ func TestMirrorRefusesRefDeletes(t *testing.T) {
 // could otherwise turn mirroring off to push, or hide the repository from
 // everyone's listing. Reading the properties still needs only read access.
 func TestMirrorHiddenSettersNeedAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 

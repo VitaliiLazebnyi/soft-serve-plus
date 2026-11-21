@@ -6,14 +6,14 @@ import (
 )
 
 // InfoCommand returns a command that shows the user's info
-func InfoCommand() *cobra.Command {
+func (cmds *Commands) InfoCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "info",
 		Short: "Show your info",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			user, err := userByPublicKey(ctx)
+			user, err := cmds.userByPublicKey(ctx)
 			if err != nil {
 				return err
 			}

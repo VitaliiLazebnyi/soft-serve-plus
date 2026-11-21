@@ -1,20 +1,15 @@
 package cmd
 
 import (
-	"fmt"
 	"time"
 
-	"charm.land/log/v2"
-
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
 // JWTCommand returns a command that generates a JSON Web Token.
-func JWTCommand() *cobra.Command {
+func (cmds *Commands) JWTCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "jwt REPOSITORY...",
 		Short: "Generate a JSON Web Token",
@@ -36,9 +31,9 @@ func JWTCommand() *cobra.Command {
 
 			// Signing fails only for the server's host key, whose error
 			// names its path on the server.
-			j, err := signToken(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
+			j, err := cmds.tokens.Sign(user, audience, time.Now().Add(time.Hour))
 			if err != nil {
-				return lookupFailed(ctx, log.FromContext(ctx), "read the host key", err)
+				return lookupFailed(ctx, cmds.logger, "read the host key", err)
 			}
 
 			cmd.Println(j)
@@ -47,18 +42,4 @@ func JWTCommand() *cobra.Command {
 	}
 
 	return cmd
-}
-
-// signToken signs a token for user with the host key cfg loaded; see
-// jwk.Signer.Sign.
-func signToken(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
-	kp, err := config.KeyPair(cfg)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", jwk.ErrHostKey, err)
-	}
-	signer, err := jwk.NewSigner(kp, cfg.HTTP.PublicURL)
-	if err != nil {
-		return "", err
-	}
-	return signer.Sign(user, audience, expiresAt)
 }

@@ -15,6 +15,7 @@ import (
 // boolean ones, whose access check comes before the value is parsed. Any
 // reader may print every property.
 func TestRepoPropertyLevels(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -83,6 +84,7 @@ func wantInvalidBool(t *testing.T, err error) {
 // treating anything other than the exact string "true" as false: an
 // uppercase TRUE turned the property off and a typo was silently accepted.
 func TestRepoBoolArgs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
@@ -137,6 +139,7 @@ func TestRepoBoolArgs(t *testing.T) {
 // TestUserSetAdminBoolArg checks that `user set-admin alice True` promotes
 // alice instead of demoting her, and that a typo is rejected.
 func TestUserSetAdminBoolArg(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
@@ -160,6 +163,7 @@ func TestUserSetAdminBoolArg(t *testing.T) {
 // TestSettingsAllowKeylessBoolArg checks that an unparsable value is rejected
 // instead of disabling keyless access server-wide.
 func TestSettingsAllowKeylessBoolArg(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, _ := newSettingsTestContext(t)
 

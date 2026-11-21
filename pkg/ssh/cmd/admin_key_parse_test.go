@@ -47,12 +47,12 @@ func TestAdminKeysParsedOnce(t *testing.T) {
 	})
 
 	t.Chdir(t.TempDir())
-	is.True(isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, pub)))
+	is.True(cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, pub)))
 
 	other, otherAK := slashFreeKey(t)
 	is.NoErr(os.WriteFile(ak, []byte(otherAK), 0o600))
 
 	is.True(be.IsAdminKey(pub))    // still the listed key
 	is.True(!be.IsAdminKey(other)) // the file's key is not an admin
-	is.True(!isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, other)))
+	is.True(!cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, other)))
 }

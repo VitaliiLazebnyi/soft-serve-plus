@@ -45,12 +45,13 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 	logs := &syncBuffer{}
 
 	// Authentication lets every client in, so the session handlers decide.
+	hs := handlerServer(t, cfg, dbx, st, be, log.New(logs))
 	srv := &ssh.Server{
 		PublicKeyHandler: func(ssh.Context, ssh.PublicKey) bool { return true },
 		KeyboardInteractiveHandler: func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool {
 			return true
 		},
-		Handler: ContextMiddleware(cfg, dbx, st, be, log.New(logs))(AuthenticationMiddleware(BubbleTeaMiddleware(func(s ssh.Session) {
+		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
 			_ = s.Exit(0)
 		}))),
 	}
@@ -112,6 +113,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 
 // An access check canceled because the client went away is logged at Debug.
 func TestAccessCheckFailureCanceledLoggedAtDebug(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	logger.SetLevel(log.DebugLevel)

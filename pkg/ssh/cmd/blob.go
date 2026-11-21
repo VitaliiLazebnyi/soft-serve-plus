@@ -17,11 +17,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// testHookBlobBudget is blob --color's common.Budget, nil outside tests.
-var testHookBlobBudget common.Budget
-
 // blobCommand returns a command that prints the contents of a file.
-func blobCommand() *cobra.Command {
+func (cmds *Commands) blobCommand() *cobra.Command {
 	var linenumber bool
 	var color bool
 	var raw bool
@@ -30,7 +27,7 @@ func blobCommand() *cobra.Command {
 		Aliases: []string{"cat", "show"},
 		Short:   "Print out the contents of file at path",
 		Args:    cobra.RangeArgs(1, 3),
-		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			ref := ""
 			fp := ""
@@ -42,7 +39,7 @@ func blobCommand() *cobra.Command {
 				fp = args[2]
 			}
 
-			r, err := openRepository(cmd.Context(), repo)
+			r, err := cmds.openRepository(cmd.Context(), repo)
 			if err != nil {
 				return err
 			}
@@ -50,14 +47,14 @@ func blobCommand() *cobra.Command {
 			r = r.WithContext(ctx)
 
 			if ref == "" {
-				head, err := repoHead(cmd.Context(), repo, r)
+				head, err := cmds.repoHead(cmd.Context(), repo, r)
 				if err != nil {
 					return err
 				}
 				ref = head.ID
 			}
 
-			tree, err := readTree(ctx, repo, r, ref)
+			tree, err := cmds.readTree(ctx, repo, r, ref)
 			if err != nil {
 				return err
 			}
@@ -72,7 +69,7 @@ func blobCommand() *cobra.Command {
 				return err
 			}
 			if err != nil {
-				return gitFailed(ctx, "read tree", repo.Name(), err)
+				return cmds.gitFailed(ctx, "read tree", repo.Name(), err)
 			}
 
 			if te.Type() != "blob" {
@@ -83,7 +80,7 @@ func blobCommand() *cobra.Command {
 				// Stream the exact bytes: nothing is held in memory, so no
 				// size limit applies.
 				if err := r.WriteBlob(ctx, te.ID(), cmd.OutOrStdout()); err != nil {
-					return gitFailed(ctx, "read blob", repo.Name(), err)
+					return cmds.gitFailed(ctx, "read blob", repo.Name(), err)
 				}
 				return nil
 			}
@@ -93,7 +90,7 @@ func blobCommand() *cobra.Command {
 				return fmt.Errorf("%w: use --raw to print", err)
 			}
 			if err != nil {
-				return gitFailed(ctx, "read blob", repo.Name(), err)
+				return cmds.gitFailed(ctx, "read blob", repo.Name(), err)
 			}
 
 			if isBin, _ := git.IsBinary(bytes.NewReader(bts)); isBin {
@@ -112,7 +109,7 @@ func blobCommand() *cobra.Command {
 				c = utils.Sanitize(c)
 			}
 			if color && !noColor {
-				c, err = common.FormatHighlight(fp, c, testHookBlobBudget)
+				c, err = common.FormatHighlight(fp, c, cmds.blobBudget)
 				if err != nil {
 					return err
 				}

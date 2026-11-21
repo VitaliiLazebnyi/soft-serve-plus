@@ -4,14 +4,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
 // createCommand is the command for creating a new repository.
-func createCommand() *cobra.Command {
+func (cmds *Commands) createCommand() *cobra.Command {
 	var private bool
 	var description string
 	var projectName string
@@ -21,14 +19,14 @@ func createCommand() *cobra.Command {
 		Use:               "create REPOSITORY",
 		Short:             "Create a new repository",
 		Args:              cobra.ExactArgs(1),
-		PersistentPreRunE: checkIfRepoCollab,
+		PersistentPreRunE: cmds.checkIfRepoCollab,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			cfg := config.FromContext(ctx)
-			be := backend.FromContext(ctx)
+			cfg := cmds.cfg
+			be := cmds.be
 			user := proto.UserFromContext(ctx)
 			name := args[0]
-			private, err := privateOrDefault(cmd, private)
+			private, err := cmds.privateOrDefault(cmd, private)
 			if err != nil {
 				return err
 			}
@@ -39,7 +37,7 @@ func createCommand() *cobra.Command {
 				Hidden:      hidden,
 			})
 			if err != nil {
-				return createFailed(ctx, "create repository", err)
+				return cmds.createFailed(ctx, "create repository", err)
 			}
 
 			cloneurl := fmt.Sprintf("%s/%s.git", cfg.SSH.PublicURL, r.Name())
@@ -62,12 +60,12 @@ func createCommand() *cobra.Command {
 // the --private flag when it was given, and the server's default otherwise
 // (see Backend.DefaultPrivate). A bool flag alone cannot tell
 // "--private=false" from no flag.
-func privateOrDefault(cmd *cobra.Command, private bool) (bool, error) {
+func (cmds *Commands) privateOrDefault(cmd *cobra.Command, private bool) (bool, error) {
 	if cmd.Flags().Changed("private") {
 		return private, nil
 	}
 	ctx := cmd.Context()
-	private, err := backend.FromContext(ctx).DefaultPrivate(ctx, proto.UserFromContext(ctx))
+	private, err := cmds.be.DefaultPrivate(ctx, proto.UserFromContext(ctx))
 	if errors.Is(err, proto.ErrAnonymousPrivate) {
 		return false, fmt.Errorf("%w; use a key registered to an account, or pass --private=false to create a public repository", err)
 	}

@@ -4,12 +4,11 @@ import (
 	"context"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
-func collabCommand() *cobra.Command {
+func (cmds *Commands) collabCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "collab",
 		Aliases: []string{"collabs", "collaborator", "collaborators"},
@@ -17,9 +16,9 @@ func collabCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		collabAddCommand(),
-		collabRemoveCommand(),
-		collabListCommand(),
+		cmds.collabAddCommand(),
+		cmds.collabRemoveCommand(),
+		cmds.collabListCommand(),
 	)
 
 	return cmd
@@ -35,8 +34,8 @@ func collabCommand() *cobra.Command {
 // read-write collaborator could otherwise remove or demote peers, or, with
 // anon-access set to no-access, lock any registered user out of a public
 // repository by adding them as a no-access collaborator.
-func checkCollabManage(ctx context.Context) error {
-	if isServerAdmin(ctx) {
+func (cmds *Commands) checkCollabManage(ctx context.Context) error {
+	if cmds.isServerAdmin(ctx) {
 		return nil
 	}
 
@@ -47,15 +46,15 @@ func checkCollabManage(ctx context.Context) error {
 	return nil
 }
 
-func collabAddCommand() *cobra.Command {
+func (cmds *Commands) collabAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add REPOSITORY USERNAME [LEVEL]",
 		Short: "Add a collaborator to a repo",
 		Long:  "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
 		Args:  cobra.RangeArgs(2, 3),
-		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[1]
 			level := access.ReadWriteAccess
 			if len(args) > 2 {
@@ -65,10 +64,10 @@ func collabAddCommand() *cobra.Command {
 				}
 			}
 
-			if err := checkCollabManage(ctx); err != nil {
+			if err := cmds.checkCollabManage(ctx); err != nil {
 				return err
 			}
-			ctx, err := eventSenderContext(ctx)
+			ctx, err := cmds.eventSenderContext(ctx)
 			if err != nil {
 				return err
 			}
@@ -83,20 +82,20 @@ func collabAddCommand() *cobra.Command {
 	return cmd
 }
 
-func collabRemoveCommand() *cobra.Command {
+func (cmds *Commands) collabRemoveCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove REPOSITORY USERNAME",
 		Args:  cobra.ExactArgs(2),
 		Short: "Remove a collaborator from a repo",
-		RunE: withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[1]
 
-			if err := checkCollabManage(ctx); err != nil {
+			if err := cmds.checkCollabManage(ctx); err != nil {
 				return err
 			}
-			ctx, err := eventSenderContext(ctx)
+			ctx, err := cmds.eventSenderContext(ctx)
 			if err != nil {
 				return err
 			}
@@ -111,14 +110,14 @@ func collabRemoveCommand() *cobra.Command {
 	return cmd
 }
 
-func collabListCommand() *cobra.Command {
+func (cmds *Commands) collabListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list REPOSITORY",
 		Short: "List collaborators and their access levels for a repo",
 		Args:  cobra.ExactArgs(1),
-		RunE: withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			repo := repoArg(args)
 			collabs, err := be.Collaborators(ctx, repo)
 			if err != nil {

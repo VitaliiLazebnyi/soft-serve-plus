@@ -92,8 +92,8 @@ var repoProperties = []repoProperty{
 	},
 }
 
-// command returns the command that prints or changes p.
-func (p repoProperty) command() *cobra.Command {
+// propertyCommand returns the command that prints or changes p.
+func (cmds *Commands) propertyCommand(p repoProperty) *cobra.Command {
 	args := cobra.RangeArgs(1, 2)
 	if p.setText != nil {
 		args = cobra.MinimumNArgs(1)
@@ -103,7 +103,7 @@ func (p repoProperty) command() *cobra.Command {
 		Aliases: p.aliases,
 		Short:   p.short,
 		Args:    args,
-		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, level access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, level access.AccessLevel) error {
 			if len(args) == 1 {
 				cmd.Println(p.get(repo))
 				return nil
@@ -112,7 +112,7 @@ func (p repoProperty) command() *cobra.Command {
 				return proto.ErrUnauthorized
 			}
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			if p.setText != nil {
 				return p.setText(ctx, be, repo, strings.Join(args[1:], " "))
 			}

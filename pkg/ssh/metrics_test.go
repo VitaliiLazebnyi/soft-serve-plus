@@ -45,7 +45,7 @@ func TestPublicKeyCounterCountsKeyAuth(t *testing.T) {
 		values:      make(map[any]any),
 		permissions: &ssh.Permissions{Permissions: &gossh.Permissions{Extensions: make(map[string]string)}},
 	}
-	s := &SSHServer{}
+	s := &Server{}
 
 	allowed, refused := publicKeyCounts()
 	is.True(s.PublicKeyHandler(ctx, pk))
@@ -75,9 +75,10 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	is.True(be.AllowKeyless(ctx))
 
-	s := &SSHServer{be: be}
+	s := &Server{be: be}
+	hs := handlerServer(t, cfg, dbx, dbstore, be, log.Default())
 	srv := &ssh.Server{
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(AuthenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
 			s.Exit(0) //nolint:errcheck
 		})),
 	}
@@ -104,7 +105,8 @@ func TestCommandLabel(t *testing.T) {
 	newRoot := func() *cobra.Command {
 		root := &cobra.Command{SilenceUsage: true, SilenceErrors: true}
 		root.CompletionOptions.DisableDefaultCmd = true
-		root.AddCommand(cmd.RepoCommand(), cmd.GitReceivePackCommand())
+		cmds := new(cmd.Commands) // builds the tree only; nothing runs
+		root.AddCommand(cmds.RepoCommand(), cmds.GitReceivePackCommand())
 		return root
 	}
 
@@ -135,7 +137,7 @@ func TestCommandLabelKeepsHelp(t *testing.T) {
 	t.Parallel()
 	root := &cobra.Command{SilenceUsage: true, SilenceErrors: true}
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.AddCommand(cmd.RepoCommand())
+	root.AddCommand(new(cmd.Commands).RepoCommand())
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 

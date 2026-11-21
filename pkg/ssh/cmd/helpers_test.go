@@ -3,13 +3,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -18,10 +18,51 @@ import (
 	"github.com/matryer/is"
 )
 
-// newAuthTestContext returns a context wired with a config and a real
-// migrated backend on the test database dbtest opens (Postgres when
-// SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise), plus the backend
-// itself so tests can set up users and repositories.
+// commandsKey is the context key of the Commands a test's commands are
+// built with. The server passes its Commands explicitly; only these tests
+// carry them on the context, beside the session's user, so that each
+// context a test derives runs its commands with the same server.
+type commandsKey struct{}
+
+// withCommands returns ctx carrying c (see commandsKey).
+func withCommands(ctx context.Context, c *Commands) context.Context {
+	return context.WithValue(ctx, commandsKey{}, c)
+}
+
+// cmdsOf returns the Commands ctx carries. A test context always carries
+// them.
+func cmdsOf(ctx context.Context) *Commands {
+	return ctx.Value(commandsKey{}).(*Commands)
+}
+
+// withTestBackend returns ctx whose commands use be.
+func withTestBackend(ctx context.Context, be *backend.Backend) context.Context {
+	c := *cmdsOf(ctx)
+	c.be = be
+	return withCommands(ctx, &c)
+}
+
+// withTestStore returns ctx whose commands use st, which git-lfs-transfer
+// takes from its context.
+func withTestStore(ctx context.Context, st store.Store) context.Context {
+	c := *cmdsOf(ctx)
+	c.store = st
+	return withCommands(ctx, &c)
+}
+
+// withTestLogger returns ctx whose commands log to logger, as do the
+// packages they call that log with log.FromContext.
+func withTestLogger(ctx context.Context, logger *log.Logger) context.Context {
+	c := *cmdsOf(ctx)
+	c.logger = logger
+	return withCommands(log.WithContext(ctx, logger), &c)
+}
+
+// newAuthTestContext returns a context carrying the Commands of a server
+// with a config and a real migrated backend on the test database dbtest
+// opens (Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite
+// otherwise), plus the backend itself so tests can set up users and
+// repositories.
 //
 // No user is attached to the returned context; use withUser to authenticate
 // as somebody. AdminOnlyCreate is left at its default (off); use
@@ -34,6 +75,14 @@ func newAuthTestContext(t *testing.T) (context.Context, *backend.Backend) {
 // newAuthTestContextWith is newAuthTestContext with a hook to adjust the
 // config before the backend is built, for example to set a flag.
 func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.Context, *backend.Backend) {
+	t.Helper()
+	return newTestCommands(t, tweak, nil, nil)
+}
+
+// newTestCommands is newAuthTestContextWith with the backend's store
+// wrapped by wrap and the commands logging to logger, each when not nil.
+// The Commands have no token signer; a test of jwt sets one.
+func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.Store) store.Store, logger *log.Logger) (context.Context, *backend.Backend) {
 	t.Helper()
 	is := is.New(t)
 	ctx := context.Background()
@@ -50,15 +99,19 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	// Validate parses the admin keys a tweak may list.
 	is.NoErr(cfg.Validate())
 
-	ctx = config.WithContext(ctx, cfg)
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	ctx = db.WithContext(ctx, dbx)
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
+	var st store.Store = database.New()
+	if wrap != nil {
+		st = wrap(st)
+	}
+	if logger == nil {
+		logger = log.New(io.Discard)
+	}
+	be := backend.New(cfg, dbx, st, logger)
+	cmds, err := New(Deps{Config: cfg, Backend: be, DB: dbx, Store: st, Logger: logger})
+	is.NoErr(err)
 
-	return ctx, be
+	return withCommands(log.WithContext(ctx, logger), cmds), be
 }
 
 // levelOf is the access level Backend.Readable gives user's account on repo.
@@ -107,7 +160,7 @@ func runRepo(t *testing.T, ctx context.Context, args ...string) error {
 // printed even when a command fails.
 func runRepoOutput(t *testing.T, ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	c := RepoCommand()
+	c := cmdsOf(ctx).RepoCommand()
 	// The SSH root command silences usage, so errors are the only output.
 	c.SilenceUsage = true
 	var outBuf, errBuf bytes.Buffer
@@ -121,7 +174,7 @@ func runRepoOutput(t *testing.T, ctx context.Context, args ...string) (stdout, s
 // runUser runs a `user` subcommand and returns only its error.
 func runUser(t *testing.T, ctx context.Context, args ...string) error {
 	t.Helper()
-	c := UserCommand()
+	c := cmdsOf(ctx).UserCommand()
 	var outBuf, errBuf bytes.Buffer
 	c.SetOut(&outBuf)
 	c.SetErr(&errBuf)

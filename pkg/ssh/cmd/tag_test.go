@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/matryer/is"
 )
 
@@ -17,12 +16,13 @@ import (
 // the tagged commit for the event's old ID made the delete fail for them.
 // The event carries the ID the tag ref held.
 func TestDeleteTagNotOnCommit(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
 	whPointAtLoopback(t, ownerCtx, "hooks", id)
-	bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+	bare := filepath.Join(cmdsOf(ownerCtx).cfg.DataPath, "repos", "hooks.git")
 
 	tree := gittest.Tree(t, bare, "f", "content\n")
 	blob := strings.TrimSpace(gittest.Git(t, bare, []byte("blob\n"), "hash-object", "-w", "--stdin"))

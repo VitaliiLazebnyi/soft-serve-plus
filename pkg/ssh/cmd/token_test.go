@@ -31,7 +31,7 @@ func TestTokenCreateExpiresIn(t *testing.T) {
 			}
 			args = append(args, "tok")
 
-			c := TokenCommand()
+			c := cmdsOf(ctx).TokenCommand()
 			c.SilenceUsage = true
 			var outBuf, errBuf bytes.Buffer
 			c.SetOut(&outBuf)

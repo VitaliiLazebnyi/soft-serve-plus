@@ -14,11 +14,9 @@ import (
 	"charm.land/wish/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/spf13/cobra"
@@ -32,15 +30,15 @@ var ErrPermissionDenied = fmt.Errorf("permission denied")
 // is logged on the server.
 var ErrUserLookupFailed = errors.New("could not look up your account, try again later")
 
-// AuthenticationMiddleware handles authentication.
-func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
+// authenticationMiddleware handles authentication.
+func (srv *Server) authenticationMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		// charm.land/ssh gives the session the key that signed, parsed
 		// from the permissions x/crypto returned for that key, not the
 		// last key the client offered. TestAuthenticationAfterOfferedKey
 		// guards that.
 		ctx := s.Context()
-		be := backend.FromContext(ctx)
+		be := srv.be
 		pk := s.PublicKey()
 
 		// The keyless setting only matters without a key, so a keyed
@@ -48,7 +46,7 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 		if pk == nil {
 			allow, err := be.AllowKeylessSetting(ctx)
 			if err != nil {
-				logAccessCheckFailure(ctx, log.FromContext(ctx), err)
+				logAccessCheckFailure(ctx, srv.logger, err)
 				wish.Fatalln(s, ErrAccessCheckFailed)
 				return
 			}
@@ -81,7 +79,7 @@ func AuthenticationMiddleware(sh ssh.Handler) ssh.Handler {
 			// repositories owned by nobody. The cause is logged here, at
 			// Debug when the client went away and canceled the lookup.
 			if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
-				logUserLookupFailure(ctx, log.FromContext(ctx), err)
+				logUserLookupFailure(ctx, srv.logger, err)
 				wish.Fatalln(s, ErrUserLookupFailed)
 				return
 			}
@@ -131,9 +129,9 @@ const MaxCommandLength = 4 << 10
 // ErrCommandTooLong is returned when an exec command exceeds MaxCommandLength.
 var ErrCommandTooLong = fmt.Errorf("command too long: exceeds %d bytes", MaxCommandLength)
 
-// CommandLengthMiddleware refuses sessions whose exec command is longer than
+// commandLengthMiddleware refuses sessions whose exec command is longer than
 // MaxCommandLength, before any middleware or handler parses it.
-func CommandLengthMiddleware(sh ssh.Handler) ssh.Handler {
+func commandLengthMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		if len(s.RawCommand()) > MaxCommandLength {
 			wish.Fatalln(s, ErrCommandTooLong)
@@ -143,20 +141,17 @@ func CommandLengthMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
-// ContextMiddleware adds the config, backend, and logger to the session context.
-// The session context is shared by every session on the connection, so the
-// session itself is added per session by sessionContext instead.
-func ContextMiddleware(cfg *config.Config, dbx *db.DB, datastore store.Store, be *backend.Backend, logger *log.Logger) func(ssh.Handler) ssh.Handler {
-	return func(sh ssh.Handler) ssh.Handler {
-		return func(s ssh.Session) {
-			ctx := s.Context()
-			ctx.SetValue(config.ContextKey, cfg)
-			ctx.SetValue(db.ContextKey, dbx)
-			ctx.SetValue(store.ContextKey, datastore)
-			ctx.SetValue(backend.ContextKey, be)
-			ctx.SetValue(log.ContextKey, logger.WithPrefix("ssh"))
-			sh(s)
-		}
+// loggerMiddleware puts the server's logger on the session context, for
+// the packages the commands call that log with log.FromContext, such as
+// pkg/git and pkg/lfs. The server's other dependencies are its fields; the
+// session context carries only what belongs to the connection and the
+// session: the user, the key and cancellation. The session context is
+// shared by every session on the connection, so the session itself is
+// added per session by sessionContext instead.
+func (srv *Server) loggerMiddleware(sh ssh.Handler) ssh.Handler {
+	return func(s ssh.Session) {
+		s.Context().SetValue(log.ContextKey, srv.logger)
+		sh(s)
 	}
 }
 
@@ -171,21 +166,19 @@ var cliCommandCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Total times each command was called",
 }, []string{"command"})
 
-// CommandMiddleware handles git commands and CLI commands.
-// This middleware must be run after the ContextMiddleware.
-func CommandMiddleware(sh ssh.Handler) ssh.Handler {
+// commandMiddleware handles git commands and CLI commands.
+func (srv *Server) commandMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		ctx := sessionContext(s)
-		cfg := config.FromContext(ctx)
 
 		args := s.Command()
-		rootCmd := newRootCommand(cfg, args)
+		rootCmd := newRootCommand(srv.cfg, srv.cmds, args)
 
 		// A session with a pty opens the TUI unless its command is one to
 		// run (see runWithPty). A command has no TUI to read the window
 		// changes forwardWindowChanges forwards, so they are dropped
 		// there; nothing to do here.
-		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(ctx, rootCmd, args) {
+		if _, _, ptyReq := s.Pty(); ptyReq && !runWithPty(ctx, srv.be, srv.logger, rootCmd, args) {
 			sh(s)
 			return
 		}
@@ -219,7 +212,7 @@ func CommandMiddleware(sh ssh.Handler) ssh.Handler {
 // can read no repository of that name. A repository the caller cannot read
 // is treated as missing, so a private repository named like a command and a
 // missing one give the same answer.
-func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
+func runWithPty(ctx context.Context, be *backend.Backend, logger *log.Logger, root *cobra.Command, args []string) bool {
 	switch {
 	case len(args) == 0:
 		return false
@@ -232,24 +225,20 @@ func runWithPty(ctx context.Context, root *cobra.Command, args []string) bool {
 			return false
 		}
 	}
-	be := backend.FromContext(ctx)
-	if be == nil {
-		return true
-	}
 	// The auth middleware has already resolved the session user, so reuse
 	// it rather than looking the key up again (as the TUI does in openRepo).
 	// A lookup that fails runs the word as a command, which then reports
 	// its own error: this only chooses between the two.
 	r, _, err := be.ReadableForUser(ctx, word, proto.UserFromContext(ctx))
 	if err != nil {
-		log.FromContext(ctx).Debug("repository lookup failed, running the word as a command", "word", word, "err", err)
+		logger.Debug("repository lookup failed, running the word as a command", "word", word, "err", err)
 	}
 	return r == nil
 }
 
-// newRootCommand returns the CLI command tree for a session on a server
-// with cfg running args.
-func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
+// newRootCommand returns the CLI command tree, built by cmds, for a session
+// on a server with cfg running args.
+func newRootCommand(cfg *config.Config, cmds *cmd.Commands, args []string) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Short:        "Soft Serve Plus is a self-hostable Git server for the command line.",
 		SilenceUsage: true,
@@ -272,27 +261,27 @@ func newRootCommand(cfg *config.Config, args []string) *cobra.Command {
 	})
 
 	rootCmd.AddCommand(
-		cmd.GitUploadPackCommand(),
-		cmd.GitUploadArchiveCommand(),
-		cmd.GitReceivePackCommand(),
-		cmd.RepoCommand(),
-		cmd.SettingsCommand(),
-		cmd.UserCommand(),
-		cmd.InfoCommand(),
-		cmd.PubkeyCommand(),
-		cmd.SetUsernameCommand(),
-		cmd.JWTCommand(),
-		cmd.TokenCommand(),
+		cmds.GitUploadPackCommand(),
+		cmds.GitUploadArchiveCommand(),
+		cmds.GitReceivePackCommand(),
+		cmds.RepoCommand(),
+		cmds.SettingsCommand(),
+		cmds.UserCommand(),
+		cmds.InfoCommand(),
+		cmds.PubkeyCommand(),
+		cmds.SetUsernameCommand(),
+		cmds.JWTCommand(),
+		cmds.TokenCommand(),
 	)
 
 	if cfg.LFS.Enabled {
 		rootCmd.AddCommand(
-			cmd.GitLFSAuthenticateCommand(),
+			cmds.GitLFSAuthenticateCommand(),
 		)
 
 		if cfg.LFS.SSHEnabled {
 			rootCmd.AddCommand(
-				cmd.GitLFSTransfer(),
+				cmds.GitLFSTransfer(),
 			)
 		}
 	}
@@ -428,11 +417,11 @@ func commandLabel(root *cobra.Command, args []string) string {
 	return c.Name()
 }
 
-// LoggingMiddleware logs the ssh connection and command.
-func LoggingMiddleware(sh ssh.Handler) ssh.Handler {
+// loggingMiddleware logs the ssh connection and command.
+func (srv *Server) loggingMiddleware(sh ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		ctx := s.Context()
-		logger := log.FromContext(ctx).WithPrefix("ssh")
+		logger := srv.logger
 		if logger.GetLevel() > log.DebugLevel {
 			// Nothing below is logged, so skip parsing the command.
 			sh(s)

@@ -12,12 +12,79 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+// Deps are the server's dependencies that the commands use. Config and
+// Backend are required; a nil Logger means log.Default().
+type Deps struct {
+	Config  *config.Config
+	Backend *backend.Backend
+	// DB and Store are for git-lfs-transfer, whose handler in pkg/git still
+	// takes them, and the config, from its context.
+	DB    *db.DB
+	Store store.Store
+	// Tokens signs the tokens `jwt` issues. Without one, `jwt` fails as
+	// it does when the host key cannot be used.
+	Tokens *jwk.Signer
+	Logger *log.Logger
+}
+
+// Commands builds the commands of an SSH session with the server's
+// dependencies. One Commands serves every session of a server; the
+// session's user, key and cancellation come with the context each command
+// runs with.
+type Commands struct {
+	cfg    *config.Config
+	be     *backend.Backend
+	db     *db.DB
+	store  store.Store
+	tokens *jwk.Signer
+	logger *log.Logger
+
+	// afterGate, when a test sets it, runs once gateRepo has let a command
+	// through, before the command acts.
+	afterGate func()
+	// beforeBeginPush, when a test sets it, runs in beginPush before the
+	// push is marked as running: for a push to a missing name, right after
+	// the push created the repository.
+	beforeBeginPush func()
+	// blobBudget is blob --color's common.Budget, nil outside tests.
+	blobBudget common.Budget
+}
+
+// New returns the Commands for a server with d.
+func New(d Deps) (*Commands, error) {
+	if d.Config == nil {
+		return nil, config.ErrNilConfig
+	}
+	if d.Backend == nil {
+		return nil, errNilBackend
+	}
+	logger := d.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Commands{
+		cfg:    d.Config,
+		be:     d.Backend,
+		db:     d.DB,
+		store:  d.Store,
+		tokens: d.Tokens,
+		logger: logger,
+	}, nil
+}
+
+// errNilBackend is returned by New without a backend.
+var errNilBackend = errors.New("nil backend")
 
 // SSHCommand returns the ssh invocation that reaches the server, such as
 // "ssh -p 23231 localhost", for help and error output. The root command
@@ -50,8 +117,8 @@ func denyReadAs(anonymous bool, anon, registered error) error {
 
 // denyRead is denyReadAs for repo commands. Server admins always get
 // ErrRepoNotFound since nothing is hidden from them.
-func denyRead(ctx context.Context) error {
-	anonymous := proto.UserFromContext(ctx) == nil && !isServerAdmin(ctx)
+func (cmds *Commands) denyRead(ctx context.Context) error {
+	anonymous := proto.UserFromContext(ctx) == nil && !cmds.isServerAdmin(ctx)
 	return denyReadAs(anonymous, proto.ErrUnauthorized, proto.ErrRepoNotFound)
 }
 
@@ -65,14 +132,14 @@ type repoRunE func(cmd *cobra.Command, args []string, repo proto.Repository, lev
 // least need on it, and fn then runs with that repository. Readability is
 // decided before existence, so a caller who cannot read gets denyRead's
 // answer whether or not the repository exists.
-func withRepo(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
+func (cmds *Commands) withRepo(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		repo, level, err := gateRepo(cmd.Context(), args, need)
+		repo, level, err := cmds.gateRepo(cmd.Context(), args, need)
 		if err != nil {
 			return err
 		}
 		if repo == nil {
-			return denyRead(cmd.Context())
+			return cmds.denyRead(cmd.Context())
 		}
 		return fn(cmd, args, repo, level)
 	}
@@ -82,9 +149,9 @@ func withRepo(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []strin
 // on a name with a row but no repository directory (delete, rename and
 // collab), so they can act on such a row: fn then gets a nil repository
 // and acts on the name.
-func withRepoOrName(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
+func (cmds *Commands) withRepoOrName(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		repo, level, err := gateRepo(cmd.Context(), args, need)
+		repo, level, err := cmds.gateRepo(cmd.Context(), args, need)
 		if err != nil {
 			return err
 		}
@@ -95,44 +162,40 @@ func withRepoOrName(need access.AccessLevel, fn repoRunE) func(*cobra.Command, [
 // gateRepo looks up the repository named by args and checks that the
 // caller may read it and holds at least need on it. The repository is nil
 // only for a server admin and a name with no repository behind it.
-func gateRepo(ctx context.Context, args []string, need access.AccessLevel) (proto.Repository, access.AccessLevel, error) {
-	repo, level, err := backend.FromContext(ctx).ReadableForUser(ctx, repoArg(args), proto.UserFromContext(ctx))
+func (cmds *Commands) gateRepo(ctx context.Context, args []string, need access.AccessLevel) (proto.Repository, access.AccessLevel, error) {
+	repo, level, err := cmds.be.ReadableForUser(ctx, repoArg(args), proto.UserFromContext(ctx))
 	if err != nil {
-		return nil, level, lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
+		return nil, level, lookupFailed(ctx, cmds.logger, "look up repository", err)
 	}
-	if repo == nil && !isServerAdmin(ctx) {
-		return nil, level, denyRead(ctx)
+	if repo == nil && !cmds.isServerAdmin(ctx) {
+		return nil, level, cmds.denyRead(ctx)
 	}
 	if level < need {
 		return nil, level, proto.ErrUnauthorized
 	}
-	if testHookAfterGate != nil {
-		testHookAfterGate()
+	if cmds.afterGate != nil {
+		cmds.afterGate()
 	}
 	return repo, level, nil
 }
-
-// testHookAfterGate, when set, runs once gateRepo has let a command through,
-// before the command acts.
-var testHookAfterGate func()
 
 // eventSenderContext returns ctx with the session's user read again by its
 // ID, for the sender of the webhook event a command sends. The session
 // resolved its user when it authenticated, and the account may have been
 // renamed since; the ID is the same account. Without a session user, as for
 // a configured admin key no account holds, ctx is returned as it is.
-func eventSenderContext(ctx context.Context) (context.Context, error) {
+func (cmds *Commands) eventSenderContext(ctx context.Context) (context.Context, error) {
 	user := proto.UserFromContext(ctx)
 	if user == nil {
 		return ctx, nil
 	}
-	cur, err := backend.FromContext(ctx).UserByID(ctx, user.ID())
+	cur, err := cmds.be.UserByID(ctx, user.ID())
 	switch {
 	case errors.Is(err, proto.ErrUserNotFound):
 		// The account was deleted during the session.
 		return nil, errUnknownKey(ctx)
 	case err != nil:
-		return nil, lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
+		return nil, lookupFailed(ctx, cmds.logger, "look up the session's user", err)
 	}
 	return proto.WithUserContext(ctx, cur), nil
 }
@@ -140,9 +203,8 @@ func eventSenderContext(ctx context.Context) (context.Context, error) {
 // isServerAdmin reports whether the session's caller is a server admin,
 // by the backend's rule (Backend.IsServerAdmin): the session user has the
 // admin flag, or the session's key is a configured admin key.
-func isServerAdmin(ctx context.Context) bool {
-	be := backend.FromContext(ctx)
-	return be != nil && be.IsServerAdmin(ctx, proto.UserFromContext(ctx))
+func (cmds *Commands) isServerAdmin(ctx context.Context) bool {
+	return cmds.be.IsServerAdmin(ctx, proto.UserFromContext(ctx))
 }
 
 // parseBool parses a boolean command argument. It accepts the values
@@ -168,10 +230,10 @@ func repoArg(args []string) string {
 
 // repoAccessLevel returns the caller's access level for the sanitized name.
 // The error is lookupFailed's when the lookup failed.
-func repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, error) {
-	_, level, err := backend.FromContext(ctx).ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
+func (cmds *Commands) repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, error) {
+	_, level, err := cmds.be.ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
 	if err != nil {
-		return access.NoAccess, lookupFailed(ctx, log.FromContext(ctx), "look up repository", err)
+		return access.NoAccess, lookupFailed(ctx, cmds.logger, "look up repository", err)
 	}
 	return level, nil
 }
@@ -180,9 +242,9 @@ func repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, erro
 // repository, for the client: a failed lookup (proto.ErrLookupFailed) is
 // logged and answered with errLookupFailed, as by lookupFailed; anything
 // else is returned as it is.
-func createFailed(ctx context.Context, what string, err error) error {
+func (cmds *Commands) createFailed(ctx context.Context, what string, err error) error {
 	if errors.Is(err, proto.ErrLookupFailed) {
-		return lookupFailed(ctx, log.FromContext(ctx), what, err)
+		return lookupFailed(ctx, cmds.logger, what, err)
 	}
 	return err
 }
@@ -212,8 +274,8 @@ var errGitFailed = errors.New("git failed on the server; the cause is in the ser
 // gitFailed logs err, git's failure to do what in repository repo, and
 // returns errGitFailed for the client, as lookupFailed does for a failed
 // lookup. A git run the client canceled by going away is logged at Debug.
-func gitFailed(ctx context.Context, what, repo string, err error) error {
-	logger := log.FromContext(ctx)
+func (cmds *Commands) gitFailed(ctx context.Context, what, repo string, err error) error {
+	logger := cmds.logger
 	if ctx.Err() != nil {
 		logger.Debug("git canceled", "what", what, "repo", repo, "err", err)
 	} else {
@@ -222,20 +284,21 @@ func gitFailed(ctx context.Context, what, repo string, err error) error {
 	return errGitFailed
 }
 
-// openRepository opens rr's git repository for a command. Opening fails
+// openRepository opens rr's git repository for a command, bound to ctx, so
+// its git commands are killed when the session ends. Opening fails
 // only for a reason of the server's, such as a directory git does not
 // accept ("detected dubious ownership", which names the server path), so
 // the client gets errGitFailed. The backend has already logged a directory
 // git does not accept; any other failure is logged here.
-func openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, error) {
+func (cmds *Commands) openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, error) {
 	r, err := rr.Open()
 	switch {
 	case err == nil:
-		return r, nil
+		return r.WithContext(ctx), nil
 	case errors.Is(err, git.ErrNotAGitRepository):
 		return nil, errGitFailed
 	default:
-		return nil, gitFailed(ctx, "open repository", rr.Name(), err)
+		return nil, cmds.gitFailed(ctx, "open repository", rr.Name(), err)
 	}
 }
 
@@ -246,8 +309,8 @@ func openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, 
 // cannot be bypassed by creating a repository whose name matches the command
 // argument. Attach it to the parent command so that every subcommand,
 // including ones added later, is gated by default.
-func checkIfServerAdmin(cmd *cobra.Command, _ []string) error {
-	if !isServerAdmin(cmd.Context()) {
+func (cmds *Commands) checkIfServerAdmin(cmd *cobra.Command, _ []string) error {
+	if !cmds.isServerAdmin(cmd.Context()) {
 		return errNotServerAdmin(cmd.Context())
 	}
 	return nil
@@ -272,8 +335,8 @@ func errNotServerAdmin(ctx context.Context) error {
 // should not exist yet, on write access to that name. It cannot hide
 // whether the name is taken: with one flat namespace, "already exists" is
 // the answer either way.
-func checkIfRepoCollab(cmd *cobra.Command, args []string) error {
-	level, err := repoAccessLevel(cmd.Context(), repoArg(args))
+func (cmds *Commands) checkIfRepoCollab(cmd *cobra.Command, args []string) error {
+	level, err := cmds.repoAccessLevel(cmd.Context(), repoArg(args))
 	if err != nil {
 		return err
 	}
@@ -317,12 +380,11 @@ func sessionKeyError(ctx context.Context, base error, reason string) error {
 // when there is none (no key owner, a lookup error, or a context built
 // without the middleware) is the key looked up, which keeps the errors
 // below.
-func userByPublicKey(ctx context.Context) (proto.User, error) {
+func (cmds *Commands) userByPublicKey(ctx context.Context) (proto.User, error) {
 	if user := proto.UserFromContext(ctx); user != nil {
 		return user, nil
 	}
-	be := backend.FromContext(ctx)
-	user, err := be.UserByPublicKey(ctx, sshutils.PublicKeyFromContext(ctx))
+	user, err := cmds.be.UserByPublicKey(ctx, sshutils.PublicKeyFromContext(ctx))
 	// AdminKeyNonAdminOwnerError also matches proto.ErrUserNotFound, but the
 	// key does belong to a user, so it keeps its own message. Over SSH this
 	// is unreachable, since the auth middleware refuses those sessions
@@ -332,7 +394,7 @@ func userByPublicKey(ctx context.Context) (proto.User, error) {
 		return nil, errUnknownKey(ctx)
 	}
 	if err != nil && !errors.Is(err, proto.ErrUserNotFound) {
-		return nil, lookupFailed(ctx, log.FromContext(ctx), "look up the session's user", err)
+		return nil, lookupFailed(ctx, cmds.logger, "look up the session's user", err)
 	}
 	return user, err
 }

@@ -12,18 +12,16 @@ import (
 	"github.com/matryer/is"
 )
 
-// afterGate runs fn once, after the next command's access check and before
-// it acts.
-func afterGate(t *testing.T, fn func()) {
-	t.Helper()
+// afterGate runs fn once, after the next access check of ctx's commands and
+// before the command acts.
+func afterGate(ctx context.Context, fn func()) {
 	ran := false
-	testHookAfterGate = func() {
+	cmdsOf(ctx).afterGate = func() {
 		if !ran {
 			ran = true
 			fn()
 		}
 	}
-	t.Cleanup(func() { testHookAfterGate = nil })
 }
 
 // TestRepoCommandsActOnCheckedRepository runs each repository command that
@@ -33,6 +31,7 @@ func afterGate(t *testing.T, fn func()) {
 // command must not act on the other repository: the caller was authorized
 // for the first one only.
 func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -63,6 +62,7 @@ func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			aliceCtx := withUser(t, ctx, be, "alice", false)
@@ -75,7 +75,7 @@ func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
 			is.NoErr(err)
 			is.NoErr(be.AddCollaborator(aliceCtx, "r", "dave", access.ReadOnlyAccess))
 
-			afterGate(t, func() {
+			afterGate(ctx, func() {
 				is.NoErr(be.RenameRepository(aliceCtx, "r", "r-old"))
 				_, err := be.CreateRepository(bobCtx, "r", proto.UserFromContext(bobCtx), proto.RepositoryOptions{})
 				is.NoErr(err)
@@ -114,6 +114,7 @@ func isCollab(t *testing.T, ctx context.Context, be *backend.Backend, r proto.Re
 // session resolved it. The events the session's commands send name the
 // account as it is now, not the name it had when the session started.
 func TestEventSenderIsCurrentAccount(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be) // the session resolved "owner"

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	gossh "golang.org/x/crypto/ssh"
@@ -21,6 +20,7 @@ import (
 // command, which reads it from the session's input. In a session with a pty
 // the command refuses at once rather than wait for a terminal's input.
 func TestPubkeyAddProofOverSSH(t *testing.T) {
+	t.Parallel()
 	keygen, err := exec.LookPath("ssh-keygen")
 	if err != nil {
 		t.Skip("ssh-keygen not found")
@@ -28,7 +28,7 @@ func TestPubkeyAddProofOverSSH(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, ctx := startTestServer(t, cfg)
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

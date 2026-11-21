@@ -1,12 +1,16 @@
 package jwk
 
 import (
-	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -79,16 +83,29 @@ func TestNoHostKey(t *testing.T) {
 	}
 }
 
-// unsupportedKey is a host key of a type tokens cannot be signed with.
-type unsupportedKey struct{}
-
-func (unsupportedKey) PrivateKey() crypto.PrivateKey     { return "private" }
-func (unsupportedKey) CryptoPublicKey() crypto.PublicKey { return "public" }
-
+// A host key the server loads but tokens cannot be signed with, an ECDSA
+// key on P-224, is refused.
 func TestNewSignerUnsupportedKey(t *testing.T) {
 	t.Parallel()
-	if _, err := NewSigner(unsupportedKey{}, testIssuer); !errors.Is(err, ErrHostKey) {
-		t.Errorf("NewSigner(unsupported) => %v, want an error wrapping %v", err, ErrHostKey)
+	priv, err := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.SSH.KeyPath = filepath.Join(t.TempDir(), "host_key")
+	if err := os.WriteFile(cfg.SSH.KeyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kp, err := config.KeyPair(cfg)
+	if err != nil {
+		t.Fatalf("KeyPair: %v", err)
+	}
+	if _, err := NewSigner(kp, testIssuer); !errors.Is(err, ErrHostKey) {
+		t.Errorf("NewSigner(P-224) => %v, want an error wrapping %v", err, ErrHostKey)
 	}
 }
 

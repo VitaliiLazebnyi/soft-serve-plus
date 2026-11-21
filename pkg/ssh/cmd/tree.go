@@ -12,12 +12,12 @@ import (
 )
 
 // treeCommand returns a command that list file or directory at path.
-func treeCommand() *cobra.Command {
+func (cmds *Commands) treeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tree REPOSITORY [REFERENCE] [PATH]",
 		Short: "Print repository tree at path",
 		Args:  cobra.RangeArgs(1, 3),
-		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
 			path := ""
 			ref := ""
@@ -29,7 +29,7 @@ func treeCommand() *cobra.Command {
 				path = args[2]
 			}
 
-			r, err := openRepository(cmd.Context(), rr)
+			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
@@ -37,7 +37,7 @@ func treeCommand() *cobra.Command {
 			r = r.WithContext(ctx)
 
 			if ref == "" {
-				head, err := repoHead(cmd.Context(), rr, r)
+				head, err := cmds.repoHead(cmd.Context(), rr, r)
 				if err != nil {
 					return err
 				}
@@ -45,7 +45,7 @@ func treeCommand() *cobra.Command {
 				ref = head.ID
 			}
 
-			tree, err := readTree(ctx, rr, r, ref)
+			tree, err := cmds.readTree(ctx, rr, r, ref)
 			if err != nil {
 				return err
 			}
@@ -62,7 +62,7 @@ func treeCommand() *cobra.Command {
 					return err
 				}
 				if err != nil {
-					return gitFailed(ctx, "read tree", rr.Name(), err)
+					return cmds.gitFailed(ctx, "read tree", rr.Name(), err)
 				}
 				if !te.IsTree() {
 					printEntries(cmd, git.Entries{te})
@@ -83,7 +83,7 @@ func treeCommand() *cobra.Command {
 				return err
 			}
 			if err != nil && !truncated {
-				return gitFailed(ctx, "read tree", rr.Name(), err)
+				return cmds.gitFailed(ctx, "read tree", rr.Name(), err)
 			}
 			printEntries(cmd, ents)
 			if truncated {

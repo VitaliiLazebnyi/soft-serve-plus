@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -164,13 +163,14 @@ func TestReaderGetsUnauthorizedForWrites(t *testing.T) {
 // admin through to a repository whose directory is gone, so the leftover
 // database row can still be deleted.
 func TestAdminCanDeleteOrphanedRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "root", true)
 	_, err := be.CreateRepository(adminCtx, "orphan", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	cfg := config.FromContext(ctx)
+	cfg := cmdsOf(ctx).cfg
 	is.NoErr(os.RemoveAll(filepath.Join(cfg.DataPath, "repos", "orphan.git")))
 
 	// Reads still say not found, even to the admin.
@@ -190,6 +190,7 @@ func TestAdminCanDeleteOrphanedRepository(t *testing.T) {
 // TestRenameDestinationIsGatedLikeCreate verifies a writer cannot rename
 // onto a name they could not create, and gets the same answer create gives.
 func TestRenameDestinationIsGatedLikeCreate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -211,7 +212,7 @@ func TestRenameDestinationIsGatedLikeCreate(t *testing.T) {
 
 	// With admin-only creation on, a new name is one the owner could not
 	// create, so renaming onto it gets create's answer too.
-	config.FromContext(ctx).AdminOnlyCreate = true
+	cmdsOf(ctx).cfg.AdminOnlyCreate = true
 	renameErr = runRepo(t, ownerCtx, "rename", "renamed", "again")
 	createErr = runRepo(t, ownerCtx, "create", "again")
 	is.True(errors.Is(renameErr, proto.ErrUnauthorized))

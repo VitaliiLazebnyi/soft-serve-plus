@@ -13,7 +13,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -26,14 +25,15 @@ import (
 // client gets the generic errGitFailed; git's own message, which names
 // server paths, goes to the server log at Error, once.
 func TestRefListingFailureIsReported(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	var logs bytes.Buffer
-	ctx = log.WithContext(ctx, log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel}))
+	ctx = withTestLogger(ctx, log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel}))
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "r", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "r.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "r.git")
 	root := gittest.Commit(t, bare, gittest.Valid, gittest.Tree(t, bare, "f", "root\n"), "root")
 	gittest.Git(t, bare, nil, "update-ref", "refs/heads/main", root)
 	gittest.Git(t, bare, nil, "update-ref", "refs/heads/other", root)
@@ -74,6 +74,7 @@ func TestRefListingFailureIsReported(t *testing.T) {
 // TestBranchesEmpty checks that a repository without branches has none,
 // rather than failing as git show-ref does when nothing matches.
 func TestBranchesEmpty(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -95,11 +96,13 @@ func TestBranchesEmpty(t *testing.T) {
 // context canceled, at Debug and not at Error, and still answers
 // errGitFailed.
 func TestGitFailedCanceledLogsAtDebug(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
-	ctx, cancel := context.WithCancel(log.WithContext(t.Context(), log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})))
+	cmds := &Commands{logger: log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})}
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := gitFailed(ctx, "list branches", "r", errors.New("signal: killed"))
+	err := cmds.gitFailed(ctx, "list branches", "r", errors.New("signal: killed"))
 	if !errors.Is(err, errGitFailed) {
 		t.Fatalf("err = %v, want %v", err, errGitFailed)
 	}

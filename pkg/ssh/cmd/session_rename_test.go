@@ -23,6 +23,7 @@ import (
 // remove` must not remove the other account's keys, and `set-username`
 // must not rename the other account.
 func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	newKey := func() gossh.PublicKey {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -66,13 +67,13 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	is.Equal(len(keysOf(ctx, "alice")), 2)
 
 	// The other account's key is not the session's to remove.
-	err = run(sessCtx, PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(mk))
+	err = run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(mk))
 	is.True(errors.Is(err, proto.ErrPublicKeyNotFound))
 	is.Equal(len(keysOf(ctx, "alice")), 2)
-	is.NoErr(run(sessCtx, PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(k2)))
+	is.NoErr(run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(k2)))
 	is.Equal(len(keysOf(ctx, "carol")), 1)
 
-	is.NoErr(run(sessCtx, SetUsernameCommand(), "dave"))
+	is.NoErr(run(sessCtx, cmdsOf(sessCtx).SetUsernameCommand(), "dave"))
 	_, err = be.User(ctx, "dave")
 	is.NoErr(err)
 	_, err = be.User(ctx, "carol")

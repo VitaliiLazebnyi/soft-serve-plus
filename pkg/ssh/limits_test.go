@@ -33,6 +33,7 @@ func acquire(l *connLimiter, addr net.Addr) func() {
 }
 
 func TestConnLimiterReason(t *testing.T) {
+	t.Parallel()
 	l := newConnLimiter(2, 1)
 	if r, _ := l.acquire(tcpAddr("192.0.2.1:1")); r == nil {
 		t.Fatal("first connection refused")
@@ -49,6 +50,7 @@ func TestConnLimiterReason(t *testing.T) {
 }
 
 func TestConnLimiter(t *testing.T) {
+	t.Parallel()
 	l := newConnLimiter(3, 2)
 	a1 := acquire(l, tcpAddr("192.0.2.1:1000"))
 	a2 := acquire(l, tcpAddr("192.0.2.1:1001"))
@@ -81,6 +83,7 @@ func TestConnLimiter(t *testing.T) {
 }
 
 func TestConnLimiterGroupsIPv6By64(t *testing.T) {
+	t.Parallel()
 	l := newConnLimiter(0, 1)
 	if acquire(l, tcpAddr("[2001:db8:1:2::1]:22")) == nil {
 		t.Fatal("first IPv6 connection refused")
@@ -101,6 +104,7 @@ func TestConnLimiterGroupsIPv6By64(t *testing.T) {
 }
 
 func TestConnLimiterUnlimited(t *testing.T) {
+	t.Parallel()
 	l := newConnLimiter(0, 0)
 	for i := 0; i < 100; i++ {
 		if acquire(l, tcpAddr("192.0.2.1:1000")) == nil {
@@ -136,6 +140,7 @@ func clientConfig(t *testing.T) *gossh.ClientConfig {
 }
 
 func TestSSHServerMaxConnectionsPerIP(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxConnectionsPerIP = 2
@@ -172,6 +177,7 @@ func TestSSHServerMaxConnectionsPerIP(t *testing.T) {
 }
 
 func TestSSHServerMaxConnections(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.MaxConnections = 1
@@ -240,6 +246,7 @@ func TestSSHServerMaxSessions(t *testing.T) {
 // TestLimitHandlersWhileClosedSessionRuns covers a handler that outlives
 // its channel.
 func TestSSHServerClosedTUIFreesItsPlace(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, _ := startTestServer(t, cfg, withMaxSessions(1))
@@ -297,6 +304,7 @@ func TestSSHServerClosedTUIFreesItsPlace(t *testing.T) {
 // TestSSHServerMaxConnections checks the refusal. The server listens on a
 // Unix socket, so no loopback TCP connect can stall either.
 func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		send string
@@ -306,6 +314,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 		{"banner only", "SSH-2.0-test\r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := config.DefaultConfig()
 			cfg.DataPath = t.TempDir()
 			cfg.SSH.MaxConnections = 1
@@ -343,6 +352,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 // TestSSHServerHandshakeTimeoutKeepsAuthenticated checks that the handshake
 // timeout stops applying once a client has authenticated.
 func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.IdleTimeout = 0
@@ -384,7 +394,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// startUnixServer starts an SSH server built by NewSSHServer with cfg on a
+// startUnixServer starts an SSH server built by NewServer with cfg on a
 // Unix socket, and returns the socket's path and the server. A connection to
 // it has no TCP connect for a loaded machine to stall, which matters to a
 // test whose clients must finish a step within a short server timeout. (An
@@ -392,7 +402,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // version before reading, which an unbuffered pipe deadlocks.) Its
 // connections carry no IP address, so they count only towards
 // max_connections.
-func startUnixServer(t *testing.T, cfg *config.Config, lims ...limit) (string, *SSHServer) {
+func startUnixServer(t *testing.T, cfg *config.Config, lims ...limit) (string, *Server) {
 	t.Helper()
 	ctx := serverContext(t, cfg, log.Default())
 	s, err := newTestSSHServer(ctx, lims...)
@@ -606,6 +616,7 @@ func TestLimitHandlersWhileClosedSessionRuns(t *testing.T) {
 // starts a handler gives its place back when the client closes it, including
 // one whose subsystem request was refused.
 func TestLimitSessionsFreesPlaceWithoutHandler(t *testing.T) {
+	t.Parallel()
 	addr := startSessionLimitServer(t, 1, func(ssh.Session) {}, func(ssh.Session) {})
 	c, err := dialClient(t, addr)
 	if err != nil {

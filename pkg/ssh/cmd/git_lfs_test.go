@@ -17,13 +17,13 @@ import (
 
 // runLFSCommand runs an LFS command with stdin, writing its output to
 // stdout, and returns what it logged and its error.
-func runLFSCommand(ctx context.Context, newCmd func() *cobra.Command, stdin io.Reader, stdout io.Writer, args ...string) (string, error) {
+func runLFSCommand(ctx context.Context, newCmd func(*Commands) *cobra.Command, stdin io.Reader, stdout io.Writer, args ...string) (string, error) {
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	ctx = log.WithContext(ctx, logger)
+	ctx = withTestLogger(ctx, logger)
 
-	c := newCmd()
+	c := newCmd(cmdsOf(ctx))
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(stdin)
@@ -59,7 +59,7 @@ func TestSSHLFSAuthenticateWithoutAccount(t *testing.T) {
 	} {
 		t.Run(tc.repo+" "+tc.op, func(t *testing.T) {
 			var out bytes.Buffer
-			logs, err := runLFSCommand(ctx, GitLFSAuthenticateCommand, strings.NewReader(""), &out, tc.repo, tc.op)
+			logs, err := runLFSCommand(ctx, (*Commands).GitLFSAuthenticateCommand, strings.NewReader(""), &out, tc.repo, tc.op)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
@@ -82,13 +82,14 @@ func (errWriter) Write([]byte) (int, error) { return 0, io.EOF }
 // An LFS transfer whose client goes away is not a server failure, so it is
 // reported as cancelled and logged at Debug, as a git service is.
 func TestSSHLFSTransferClientGone(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	logs, err := runLFSCommand(adminCtx, GitLFSTransfer, strings.NewReader(""), errWriter{}, "shared", "download")
+	logs, err := runLFSCommand(adminCtx, (*Commands).GitLFSTransfer, strings.NewReader(""), errWriter{}, "shared", "download")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
