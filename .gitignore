@@ -1,10 +1,16 @@
+# Binaries `go build ./cmd/soft` writes, in the root or in cmd/soft.
+/soft
+/soft.exe
 cmd/soft/soft
-./soft
-.ssh
-.repos
+cmd/soft/soft.exe
+# Coverage: coverage/ and coverage.txt, as the coverage job writes them.
+/coverage*
+# GoReleaser output and before-hooks.
 dist
-data/
 completions/
 manpages/
-soft_serve_ed25519*
+# A data directory for a local `soft serve`.
+data/
+# The binaries a local `docker build` of the Dockerfile copies
+# ($TARGETPLATFORM/soft).
 /linux/
