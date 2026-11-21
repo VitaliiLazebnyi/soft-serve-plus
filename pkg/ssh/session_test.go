@@ -35,7 +35,7 @@ func TestSession(t *testing.T) {
 	is := is.New(t)
 	t.Run("authorized repo access", func(t *testing.T) {
 		t.Log("setting up")
-		s, close := setup(t)
+		s := setup(t)
 		s.Stderr = os.Stderr
 		t.Log("requesting pty")
 		err := s.RequestPty("xterm", 80, 40, nil)
@@ -57,7 +57,6 @@ func TestSession(t *testing.T) {
 		var ee *gossh.ExitMissingError
 		is.True(errors.As(err, &ee))
 		t.Log("session exited")
-		is.NoErr(close())
 	})
 }
 
@@ -73,15 +72,14 @@ func (w *firstWrite) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func setup(tb testing.TB) (*gossh.Session, func() error) {
+func setup(tb testing.TB) *gossh.Session {
 	tb.Helper()
-	srv, closeDB := setupServer(tb)
-	return testsession.New(tb, srv, nil), closeDB
+	return testsession.New(tb, setupServer(tb), nil)
 }
 
-// setupServer returns an SSH server running the TUI middleware, and a func
-// that closes its database.
-func setupServer(tb testing.TB) (*ssh.Server, func() error) {
+// setupServer returns an SSH server running the TUI middleware. Its database
+// is closed when the test ends, after the server: see closeTestDB.
+func setupServer(tb testing.TB) *ssh.Server {
 	tb.Helper()
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
@@ -94,6 +92,7 @@ func setupServer(tb testing.TB) (*ssh.Server, func() error) {
 	if err != nil {
 		tb.Fatal(err)
 	}
+	closeTestDB(tb, dbx)
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		tb.Fatal(err)
 	}
@@ -110,7 +109,7 @@ func setupServer(tb testing.TB) (*ssh.Server, func() error) {
 			}
 			_ = s.Exit(0)
 		})),
-	}, dbx.Close
+	}
 }
 
 // TestBubbleTeaMiddlewareClosesZoneManager checks that a TUI session that
@@ -121,8 +120,7 @@ func setupServer(tb testing.TB) (*ssh.Server, func() error) {
 // that is still shutting down cannot be mistaken for this session's.
 func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
 	before := zoneWorkers()
-	srv, closeDB := setupServer(t)
-	t.Cleanup(func() { _ = closeDB() })
+	srv := setupServer(t)
 	addr := testsession.Listen(t, srv)
 
 	var d net.Dialer
@@ -216,8 +214,7 @@ func zoneWorkers() map[string]bool {
 // The time spent in the TUI is counted when the TUI session ends, not when
 // the connection it ran on closes.
 func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
-	srv, closeDB := setupServer(t)
-	t.Cleanup(func() { _ = closeDB() })
+	srv := setupServer(t)
 	addr := testsession.Listen(t, srv)
 
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{

@@ -156,7 +156,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = dbx.Close() })
+	closeTestDB(t, dbx)
 	if err := migrate.Migrate(ctx, dbx); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +165,41 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)
 	return backend.WithContext(ctx, be)
+}
+
+// closeTestDB closes dbx when tb ends, and waits until its last connection
+// has closed. Call it after tb.TempDir and before starting a server, so that
+// it runs after the server is closed and before the temporary directory is
+// removed.
+//
+// The server's session goroutines may outlive the test: an ssh.Server's
+// Close does not wait for its handlers, and a TUI program leaves its
+// commands running when it exits, as Bubble Tea does not wait for them. One
+// of them, a command opening a repository say, can be in a query when the
+// test ends. sql.DB.Close closes only the idle connections; one in use is
+// closed when the query returns it. Until then the SQLite file stays open,
+// and Windows does not delete an open file, so the TempDir cleanup fails
+// with "The directory is not empty". A closed pool opens no new connection,
+// so once the count is zero it stays zero.
+func closeTestDB(tb testing.TB, dbx *db.DB) {
+	tb.Helper()
+	tb.Cleanup(func() {
+		if err := dbx.Close(); err != nil {
+			tb.Errorf("close database: %v", err)
+		}
+		deadline := time.Now().Add(sessionLoopsWait)
+		for {
+			n := dbx.Stats().OpenConnections
+			if n == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				tb.Errorf("%d database connections still open %s after the database was closed", n, sessionLoopsWait)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 }
 
 // dialWith connects to addr with a client limited to the given algorithms
