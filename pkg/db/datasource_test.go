@@ -26,6 +26,7 @@ func TestOpenResolvedSQLiteDataSource(t *testing.T) {
 		{"file::memory:?_pragma=foreign_keys(1)", ""},
 	} {
 		t.Run(c.dsn, func(t *testing.T) {
+			t.Parallel()
 			// A space and a '#' in the data path must survive a URI.
 			dp := filepath.Join(t.TempDir(), "data dir#1")
 			if err := os.MkdirAll(dp, 0o700); err != nil {

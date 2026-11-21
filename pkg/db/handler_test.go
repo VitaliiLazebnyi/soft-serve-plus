@@ -14,7 +14,6 @@ import (
 // TestHandlerMapsErrors checks that DB and Tx map driver errors with
 // WrapError, so callers need not wrap them again.
 func TestHandlerMapsErrors(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{})
 	if err != nil {
@@ -89,6 +88,37 @@ func TestHandlerLogsConstraintDetail(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "trace") {
 		t.Errorf("debug log = %q, want no query trace without Options.Trace", buf.String())
+	}
+}
+
+// Without Options.Logger, constraint violation detail goes to the default
+// logger, as it did when the handle took the context's logger. It changes
+// the default logger, so it does not run in parallel.
+func TestOpenNilLoggerUsesDefault(t *testing.T) {
+	var buf bytes.Buffer
+	l := log.New(&buf)
+	l.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(l)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, err = d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)")
+	}
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("duplicate insert: err = %v, want ErrDuplicateKey", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "constraint violation") {
+		t.Errorf("default logger = %q, want the constraint violation detail", out)
 	}
 }
 

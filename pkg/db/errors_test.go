@@ -55,7 +55,6 @@ func TestWrapErrorKeepsDriverError(t *testing.T) {
 // TestWrapErrorSqliteConstraints checks that each kind of SQLite constraint
 // violation maps to its own error, also when the driver error is wrapped.
 func TestWrapErrorSqliteConstraints(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=foreign_keys(1)"
 	dbx, err := Open(ctx, "sqlite", dsn, Options{})

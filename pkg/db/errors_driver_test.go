@@ -15,7 +15,6 @@ import (
 // and foreign key, check and not-null violations to their own errors, from
 // the driver that actually raised them, and leave other errors alone.
 func TestWrapErrorConstraintViolations(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dbx, err := test.Open(ctx, t)
 	if err != nil {

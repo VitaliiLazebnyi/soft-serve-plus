@@ -52,6 +52,7 @@ func TestMigrateConcurrent(t *testing.T) {
 			name = "default"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			testMigrateConcurrent(t, isolation)
 		})
 	}

@@ -161,7 +161,7 @@ func hasColumn(ctx context.Context, t *testing.T, dbx *db.DB, table, column stri
 func TestWebhookDeliverySeqVacuumHint(t *testing.T) {
 	t.Parallel()
 	all := migrations
-	list := all
+	var list []Migration
 	for _, withRows := range []bool{false, true} {
 		var buf bytes.Buffer
 		ctx, env := context.TODO(), testEnv(config.DefaultConfig())

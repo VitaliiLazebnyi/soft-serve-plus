@@ -23,7 +23,6 @@ func TestMirrorSyncStatus(t *testing.T) {
 
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	list := all
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -33,7 +32,7 @@ func TestMirrorSyncStatus(t *testing.T) {
 	}
 
 	// A repository from before the migration.
-	list = all[:mirrorSyncStatus.Version-1]
+	list := all[:mirrorSyncStatus.Version-1]
 	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() to %d => %v", mirrorSyncStatus.Version-1, err)
 	}

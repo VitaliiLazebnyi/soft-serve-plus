@@ -33,7 +33,8 @@ type DB struct {
 // source.
 type Options struct {
 	// Logger receives constraint violation detail at debug level (see
-	// mapError) and, with Trace, every query. A nil Logger logs nothing.
+	// mapError) and, with Trace, every query. A nil Logger is the default
+	// logger.
 	Logger *log.Logger
 	// Trace logs every query, and the number of its arguments, at debug
 	// level. The server sets it in verbose mode.
@@ -289,12 +290,13 @@ func (d *DB) Rebind(query string) string {
 // Open does not build, such as a test's. The handle must be a SQLite
 // ("sqlite") or Postgres ("postgres") one.
 func Wrap(x *sqlx.DB, opts Options) *DB {
-	d := &DB{x: x}
-	if opts.Logger != nil {
-		d.errLog = opts.Logger.WithPrefix("db")
-		if opts.Trace {
-			d.logger = d.errLog
-		}
+	logger := opts.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	d := &DB{x: x, errLog: logger.WithPrefix("db")}
+	if opts.Trace {
+		d.logger = d.errLog
 	}
 	if x.DriverName() == "sqlite" {
 		d.writeSlot = make(chan struct{}, 1)
