@@ -6,14 +6,16 @@ import (
 
 	"charm.land/bubbles/v2/key"
 
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // The Files pane decides glamour rendering and the preview key from the
 // markdown flag worked out when the file was loaded.
 func TestFilesUsesLoadedMarkdownFlag(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	f := NewFiles(c)
+	f.SetSize(80, 24)
 
 	f.Update(FileContentMsg{content: "# Title\n", ext: "README.md", isMarkdown: true, load: f.load})
 	if !f.code.UseGlamour {

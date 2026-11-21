@@ -10,9 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -63,9 +62,11 @@ func deliverAll(m interface{ Update(tea.Msg) tea.Cmd }, cmd tea.Cmd) int {
 
 // A commit's diff of several MiB is rendered in a command, not in Update, and
 // is not highlighted; a resize that keeps the width does not render it again.
+//
+// Not parallel: it measures the bytes the process allocates.
 func TestLogLargeDiffRendersOutsideUpdate(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	l := NewLog(common.NewCommon(ctx, 120, 40))
+	ctx := context.Background()
+	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(120, 40)
 	l.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
@@ -116,9 +117,11 @@ func TestLogLargeDiffRendersOutsideUpdate(t *testing.T) {
 
 // A stash patch of several MiB is rendered in a command, not in Update; a
 // resize that keeps the width does not render it again.
+//
+// Not parallel: it measures the bytes the process allocates.
 func TestStashLargePatchRendersOutsideUpdate(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	s := NewStash(common.NewCommon(ctx, 120, 40))
+	ctx := context.Background()
+	s := NewStash(uitest.NewCommon(t, ctx, nil, nil))
 	s.SetSize(120, 40)
 	s.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	s.Update(StashListMsg{stashes: []*gitm.Stash{{Message: "large-stash"}}})
@@ -143,6 +146,9 @@ func TestStashLargePatchRendersOutsideUpdate(t *testing.T) {
 }
 
 // A patch over diffHighlightMax is shown as plain text.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted.
 func TestLargeDiffNotHighlighted(t *testing.T) {
 	out := renderDiff(largeDiff(), 120)
 	if strings.Contains(out, "\x1b[") {

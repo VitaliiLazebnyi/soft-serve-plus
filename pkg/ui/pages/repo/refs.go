@@ -9,7 +9,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 )
@@ -35,9 +34,11 @@ func (m RefItemsMsg) pane() paneID { return refsPane(m.prefix) }
 
 // Refs is a component that displays a list of references.
 type Refs struct {
-	common    common.Common
+	common    *common.Common
+	width     int
+	height    int
 	selector  *selector.Selector
-	repo      proto.Repository
+	repo      Repository
 	ref       *git.Reference
 	activeRef *git.Reference
 	refPrefix string
@@ -52,13 +53,13 @@ type Refs struct {
 }
 
 // NewRefs creates a new Refs component.
-func NewRefs(common common.Common, refPrefix string) *Refs {
+func NewRefs(common *common.Common, refPrefix string) *Refs {
 	r := &Refs{
 		common:    common,
 		refPrefix: refPrefix,
 		isLoading: true,
 	}
-	s := selector.NewPane(common, RefItemDelegate{&common})
+	s := selector.NewPane(common, RefItemDelegate{common})
 	r.selector = s
 	return r
 }
@@ -81,7 +82,7 @@ func (r *Refs) TabName() string {
 
 // SetSize implements common.Component.
 func (r *Refs) SetSize(width, height int) {
-	r.common.SetSize(width, height)
+	r.width, r.height = common.ClampSize(width, height)
 	r.selector.SetSize(width, height)
 }
 
@@ -117,7 +118,7 @@ func (r *Refs) FullHelp() [][]key.Binding {
 	}
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (r *Refs) Init() tea.Cmd {
 	r.isLoading = true
 	return r.updateItemsCmd()
@@ -148,9 +149,8 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 	case RefItemsMsg:
 		if r.refPrefix == msg.prefix {
 			cmds = append(cmds, r.selector.SetItems(msg.items))
-			i := r.selector.SelectedItem()
-			if i != nil {
-				r.activeRef = i.(RefItem).Reference
+			if i, ok := r.selector.SelectedItem().(RefItem); ok {
+				r.activeRef = i.Reference
 			}
 			r.isLoading = false
 		}
@@ -182,7 +182,7 @@ func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (r *Refs) View() string {
 	return r.selector.View()
 }
@@ -194,7 +194,7 @@ func (r *Refs) Loading() (string, bool) {
 
 func (r *Refs) id() paneID { return refsPane(r.refPrefix) }
 
-// StatusBarValue implements statusbar.StatusBar.
+// StatusBarValue implements Pane.
 func (r *Refs) StatusBarValue() string {
 	if r.activeRef == nil {
 		return ""
@@ -202,7 +202,7 @@ func (r *Refs) StatusBarValue() string {
 	return r.activeRef.Name().String()
 }
 
-// StatusBarInfo implements statusbar.StatusBar.
+// StatusBarInfo implements Pane.
 func (r *Refs) StatusBarInfo() string {
 	totalPages := r.selector.TotalPages()
 	if totalPages <= 1 {
@@ -273,7 +273,7 @@ func switchRefCmd(ref *git.Reference, gen uint64) tea.Cmd {
 // defaultRef). It sends EmptyRepoMsg when the repository has no branches or
 // tags. gen is the generation the repository page started for repo. Its git
 // commands stop when ctx is done.
-func updateRefCmd(ctx context.Context, repo proto.Repository, gen uint64) tea.Cmd {
+func updateRefCmd(ctx context.Context, repo Repository, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.

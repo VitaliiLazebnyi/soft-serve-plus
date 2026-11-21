@@ -1,13 +1,22 @@
 package common
 
 import (
+	"os"
+	"strconv"
+
 	gansi "charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
 	"github.com/charmbracelet/colorprofile"
 )
 
-// DefaultColorProfile is the default color profile used by the SSH server.
-var DefaultColorProfile = colorprofile.ANSI256
+// ColorProfile returns the color profile of the TUI over SSH: 256 colors,
+// or none when SOFT_SERVE_NO_COLOR is true.
+func ColorProfile() colorprofile.Profile {
+	if noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR")); noColor {
+		return colorprofile.NoTTY
+	}
+	return colorprofile.ANSI256
+}
 
 func strptr(s string) *string {
 	return &s

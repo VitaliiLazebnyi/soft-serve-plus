@@ -9,6 +9,7 @@ import (
 // The TUI's git commands run under the session's context, so they stop when
 // the client disconnects.
 func TestOpenWithContext(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")

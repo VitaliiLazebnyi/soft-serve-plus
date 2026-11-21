@@ -7,10 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // Toggling the footer resizes the commit list only after the Log pane has
@@ -18,13 +18,14 @@ import (
 // the list has when it arrives, or the page shown after the resize has rows
 // that were never loaded.
 func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
+	t.Parallel()
 	repo := newDiskRepo(t, "r", "main", "# r\n")
 	for range 40 {
 		gitRun(t, repo.path, "commit", "-q", "--allow-empty", "-m", "c")
 	}
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	l := NewLog(c)
 	l.SetSize(80, 40)
 	l.Update(RepoMsg(repo))
@@ -96,8 +97,8 @@ func newTestLog(t *testing.T, dir string) *Log {
 		t.Fatal(err)
 	}
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	l := NewLog(common.NewCommon(ctx, 80, 40))
+	ctx := context.Background()
+	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(80, 40)
 	l.Update(RepoMsg(openRepo{path: dir}))
 	l.Update(RefMsg{Ref: ref})
@@ -119,6 +120,7 @@ func resizeLog(l *Log, width, height int) tea.Cmd {
 // Resizing the terminal, or toggling the footer, while a commit's diff is
 // loading or shown reloads the commit list behind it but keeps the diff.
 func TestLogResizeKeepsDiff(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	l := newTestLog(t, dir)
 
@@ -167,6 +169,7 @@ func TestLogResizeKeepsDiff(t *testing.T) {
 // A diff that fails to load returns to the commit list and reports the error,
 // so no spinner is left behind once the error is dismissed.
 func TestLogDiffErrorReturnsToCommits(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	l := newTestLog(t, dir)
 
@@ -206,7 +209,8 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 // The mouse wheel scrolls the commit list.
 func TestLogMouseWheel(t *testing.T) {
 	t.Parallel()
-	l := NewLog(common.NewCommon(context.Background(), 80, 24))
+	l := NewLog(uitest.NewCommon(t, context.Background(), nil, nil))
+	l.SetSize(80, 24)
 	l.selector.SetItems([]selector.IdentifiableItem{
 		LogItem{&git.Commit{Message: "one"}},
 		LogItem{&git.Commit{Message: "two"}},

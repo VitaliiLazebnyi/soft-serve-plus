@@ -11,15 +11,13 @@ import (
 
 // Viewport represents a viewport component.
 type Viewport struct {
-	common common.Common
+	common *common.Common
 	*viewport.Model
 }
 
 // New returns a new Viewport.
-func New(c common.Common) *Viewport {
+func New(c *common.Common) *Viewport {
 	vp := viewport.New()
-	vp.SetWidth(c.Width)
-	vp.SetHeight(c.Height)
 	vp.MouseWheelEnabled = true
 	return &Viewport{
 		common: c,
@@ -29,12 +27,11 @@ func New(c common.Common) *Viewport {
 
 // SetSize implements common.Component.
 func (v *Viewport) SetSize(width, height int) {
-	v.common.SetSize(width, height)
 	v.Model.SetWidth(width)
 	v.Model.SetHeight(height)
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (v *Viewport) Init() tea.Cmd {
 	return nil
 }
@@ -55,7 +52,7 @@ func (v *Viewport) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (v *Viewport) View() string {
 	return v.Model.View()
 }

@@ -13,7 +13,7 @@ const emptyLocalRepoMsg = `# Empty repository
 This repository has no commits yet.
 `
 
-func defaultEmptyRepoMsg(c common.Common, repo string) string {
+func defaultEmptyRepoMsg(c *common.Common, repo string) string {
 	if c.HideCloneCmd {
 		return emptyLocalRepoMsg
 	}
@@ -45,5 +45,5 @@ git push -u origin main
 git remote add origin %[1]s
 git push -u origin main
 `+"```"+`
-`, common.RepoURL(c.Config().SSH.PublicURL, repo))
+`, common.RepoURL(c.Config.SSH.PublicURL, repo))
 }

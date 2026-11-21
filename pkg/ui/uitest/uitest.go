@@ -2,63 +2,48 @@
 package uitest
 
 import (
-	"sync/atomic"
+	"context"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest/uiwait"
 )
 
 // HangGuard is how long a test waits for a command, or for the commands it
-// started to settle, before it fails as hung. The commands the TUI returns
-// load git data and finish however slow the machine is: a loaded Windows
-// runner takes seconds per git command. So a test runs each command to
-// completion, drops timers such as spinner ticks by their type, and never
-// skips a command for being slow; the guard only turns a hang into a
-// failure.
-const HangGuard = time.Minute
+// started to settle, before it fails as hung; see uiwait.HangGuard.
+const HangGuard = uiwait.HangGuard
 
-// WaitFor reports whether cond holds within HangGuard. It counts polls
-// rather than watch a deadline, which a pause of the process would use up.
-func WaitFor(cond func() bool) bool {
-	const poll = 10 * time.Millisecond
-	for range HangGuard / poll {
-		if cond() {
-			return true
-		}
-		time.Sleep(poll)
-	}
-	return cond()
-}
+// WaitFor reports whether cond holds within HangGuard; see uiwait.WaitFor.
+func WaitFor(cond func() bool) bool { return uiwait.WaitFor(cond) }
 
 // Receive returns what c gives, or false when WaitFor gives up on it.
-func Receive[T any](c <-chan T) (v T, ok bool) {
-	ok = WaitFor(func() bool {
-		select {
-		case v = <-c:
-			return true
-		default:
-			return false
-		}
-	})
-	return v, ok
-}
+func Receive[T any](c <-chan T) (v T, ok bool) { return uiwait.Receive(c) }
 
 // Unbounded is a highlighting budget that never ends.
-func Unbounded() <-chan time.Time { return nil }
+func Unbounded() <-chan time.Time { return uiwait.Unbounded() }
 
-// leaked is set once WaitIdle has failed.
-var leaked atomic.Bool
-
-// WaitIdle waits until running, package common's Tokenising, returns 0: a
-// tokenisation holds its slot until it ends, also past its budget, and
-// highlighting that finds no slot free shows plain text. A slot that is
-// never freed would cost every later test a HangGuard, so once a wait has
-// failed the following ones fail at once.
+// WaitIdle waits until running, package common's Tokenising, returns 0; see
+// uiwait.WaitIdle.
 func WaitIdle(t testing.TB, running func() int) {
 	t.Helper()
-	idle := func() bool { return running() == 0 }
-	if idle() || !leaked.Load() && WaitFor(idle) {
-		return
+	uiwait.WaitIdle(t, running)
+}
+
+// NewCommon returns the Common of a test's session: ctx is the session's
+// context, cfg its config (nil for config.DefaultConfig) and be its backend
+// (nil for none). Its zone manager is closed when the test ends.
+func NewCommon(tb testing.TB, ctx context.Context, cfg *config.Config, be *backend.Backend) *common.Common {
+	tb.Helper()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
 	}
-	leaked.Store(true)
-	t.Fatal("tokenisations of earlier tests never ended")
+	c, err := common.New(ctx, cfg, be, nil)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(c.Zone.Close)
+	return c
 }

@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,23 +15,29 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
-// newTestUIContext returns a context holding a config, store and backend
-// backed by a fresh database, for building a UI.
-func newTestUIContext(t *testing.T) context.Context {
+// newTestUIConfig returns a config whose data, and SQLite database, are in
+// a directory of the test's own.
+func newTestUIConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	return cfg
+}
 
-	ctx := config.WithContext(context.Background(), cfg)
+// newTestUIBackend returns a backend on a fresh database for cfg, for
+// building a UI.
+func newTestUIBackend(t *testing.T, cfg *config.Config) *backend.Backend {
+	t.Helper()
+	ctx := t.Context()
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -41,9 +46,7 @@ func newTestUIContext(t *testing.T) context.Context {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	return backend.WithContext(ctx, backend.New(cfg, dbx, dbstore, log.FromContext(ctx)))
+	return backend.New(cfg, dbx, database.New(), log.Default())
 }
 
 // The subtests run one at a time: building the UI pages writes the shared
@@ -73,8 +76,12 @@ func TestUIErrorScreenHidesInternalErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			ctx := log.WithContext(newTestUIContext(t), log.New(&buf))
-			ui := NewUI(common.NewCommon(ctx, 120, 40), "")
+			cfg := newTestUIConfig(t)
+			uc, err := common.New(t.Context(), cfg, newTestUIBackend(t, cfg), log.New(&buf))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ui := NewUI(uc, 120, 40, "")
 			t.Cleanup(ui.common.Zone.Close)
 			ui.Init()
 
@@ -111,11 +118,12 @@ func (p *filteringPage) IsFiltering() bool         { return true }
 
 func newFilteringUI(t *testing.T) (*UI, *filteringPage) {
 	t.Helper()
-	c := common.NewCommon(context.Background(), 80, 24)
-	t.Cleanup(c.Zone.Close)
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
 	page := &filteringPage{}
 	ui := &UI{
 		common:     c,
+		width:      80,
+		height:     24,
 		pages:      []common.Component{page, page},
 		activePage: selectionPage,
 		state:      readyState,
@@ -207,11 +215,12 @@ func (p *recordingPage) inputs() (n int) {
 
 func newTestUI(t *testing.T, active page) (*UI, *recordingPage) {
 	t.Helper()
-	c := common.NewCommon(context.Background(), 80, 24)
-	t.Cleanup(c.Zone.Close)
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
 	p := &recordingPage{}
 	ui := &UI{
 		common:     c,
+		width:      80,
+		height:     24,
 		pages:      []common.Component{&recordingPage{}, &recordingPage{}},
 		activePage: active,
 		state:      readyState,
@@ -308,10 +317,9 @@ func (p *resizeCountingPage) SetSize(int, int)          {}
 
 // A resize reaches every page once, the active page included.
 func TestUIDeliversResizeOnce(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 40)
-	t.Cleanup(c.Zone.Close)
-	ui := NewUI(c, "")
+	t.Parallel()
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
+	ui := NewUI(c, 80, 40, "")
 	sel, rp := &resizeCountingPage{}, &resizeCountingPage{}
 	ui.pages = []common.Component{sel, rp}
 	ui.state = readyState
@@ -332,10 +340,9 @@ func TestUIDeliversResizeOnce(t *testing.T) {
 // is closed blocks forever once the view has more zones than its worker
 // buffers, which a tall terminal on a long list reaches.
 func TestUIQuitKeepsZoneManagerRunning(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 24)
-	t.Cleanup(c.Zone.Close)
-	ui := NewUI(c, "")
+	t.Parallel()
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
+	ui := NewUI(c, 80, 24, "")
 
 	_, cmd := ui.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {

@@ -11,9 +11,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // renameRepo makes a repository at dir whose HEAD renames from to to, with
@@ -55,6 +54,7 @@ func renameRepo(t *testing.T, dir, from, to string) {
 // crashed the server from the diff parser's goroutine. The Log page must
 // show the diff with the rename.
 func TestLogDiffRenameQuotedName(t *testing.T) {
+	t.Parallel()
 	names := []string{"café.txt"}
 	if runtime.GOOS != "windows" {
 		names = append(names, "tab\there.txt", `quo"te.txt`, `back\slash.txt`)
@@ -62,6 +62,7 @@ func TestLogDiffRenameQuotedName(t *testing.T) {
 	for _, name := range names {
 		for _, d := range []struct{ from, to string }{{"plain.txt", name}, {name, "plain.txt"}} {
 			t.Run(fmt.Sprintf("%q to %q", d.from, d.to), func(t *testing.T) {
+				t.Parallel()
 				dir := filepath.Join(t.TempDir(), "repo")
 				renameRepo(t, dir, d.from, d.to)
 				r, err := git.Open(dir)
@@ -72,8 +73,8 @@ func TestLogDiffRenameQuotedName(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ctx := config.WithContext(context.Background(), config.DefaultConfig())
-				l := NewLog(common.NewCommon(ctx, 120, 60))
+				ctx := context.Background()
+				l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 				l.SetSize(120, 60)
 				l.Update(RepoMsg(openRepo{path: dir}))
 				l.Update(RefMsg{Ref: ref})

@@ -6,13 +6,16 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // A resize re-renders the content only when the width changes.
 func TestCodeRerendersOnlyOnWidthChange(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 80, 20), "", "")
+	t.Parallel()
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(80, 20)
+	deliver(c, c.Update(tea.WindowSizeMsg{Width: 80, Height: 20}))
 	deliver(c, c.SetContent("before", ".txt"))
 
 	// Swap the content behind the renderer's back, so that the view shows
@@ -51,7 +54,9 @@ func deliver(c *Code, cmd tea.Cmd) {
 // A line wider than the view wraps; only its first part is numbered, and no
 // line is padded to the width.
 func TestCodeNumbersWrappedLines(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 40, 20), "", "")
+	t.Parallel()
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(40, 20)
 	c.ShowLineNumber = true
 	deliver(c, c.SetContent("short\n"+strings.Repeat("word ", 20)+"\nlast\n", ".txt"))
 	for _, line := range strings.Split(ansi.Strip(c.GetContent()), "\n") {
@@ -79,7 +84,9 @@ func TestCodeNumbersWrappedLines(t *testing.T) {
 // A view that was never given content shows its NoContentStyle once it is
 // sized, even when the width did not change.
 func TestCodeShowsNoContentOnFirstResize(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 80, 20), "", "")
+	t.Parallel()
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(80, 20)
 	c.NoContentStyle = c.NoContentStyle.SetString("nothing-here")
 	deliver(c, c.Update(tea.WindowSizeMsg{Width: 80, Height: 20}))
 	if v := ansi.Strip(c.View()); !strings.Contains(v, "nothing-here") {
@@ -89,7 +96,9 @@ func TestCodeShowsNoContentOnFirstResize(t *testing.T) {
 
 // A render that finishes after a newer one started is dropped.
 func TestCodeDropsStaleRender(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 80, 20), "", "")
+	t.Parallel()
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(80, 20)
 	first := c.SetContent("first-content", ".txt")
 	second := c.SetContent("second-content", ".txt")
 	deliver(c, second)

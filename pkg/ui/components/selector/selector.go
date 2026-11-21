@@ -14,7 +14,7 @@ import (
 // Selector is a list of items that can be selected.
 type Selector struct {
 	*list.Model
-	common     common.Common
+	common     *common.Common
 	zonePrefix string
 	active     int
 }
@@ -36,7 +36,7 @@ type ItemDelegate interface {
 // collide with the zone IDs of other components.
 type zoneDelegate struct {
 	ItemDelegate
-	common common.Common
+	common *common.Common
 	prefix string
 }
 
@@ -59,20 +59,19 @@ type SelectMsg struct{ IdentifiableItem }
 type ActiveMsg struct{ IdentifiableItem }
 
 // New creates a new selector.
-func New(common common.Common, items []IdentifiableItem, delegate ItemDelegate) *Selector {
+func New(common *common.Common, items []IdentifiableItem, delegate ItemDelegate) *Selector {
 	itms := make([]list.Item, len(items))
 	for i, item := range items {
 		itms[i] = item
 	}
 	prefix := common.Zone.NewPrefix()
-	l := list.New(itms, zoneDelegate{delegate, common, prefix}, common.Width, common.Height)
+	l := list.New(itms, zoneDelegate{delegate, common, prefix}, 0, 0)
 	l.Styles.NoItems = common.Styles.NoContent
 	s := &Selector{
 		Model:      &l,
 		common:     common,
 		zonePrefix: prefix,
 	}
-	s.SetSize(common.Width, common.Height)
 	return s
 }
 
@@ -103,7 +102,6 @@ func (s *Selector) SelectedItem() IdentifiableItem {
 
 // SetSize implements common.Component.
 func (s *Selector) SetSize(width, height int) {
-	s.common.SetSize(width, height)
 	s.Model.SetSize(width, height)
 }
 
@@ -116,7 +114,7 @@ func (s *Selector) SetItems(items []IdentifiableItem) tea.Cmd {
 	return s.Model.SetItems(its)
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (s *Selector) Init() tea.Cmd {
 	return s.activeCmd()
 }
@@ -174,7 +172,7 @@ func (s *Selector) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (s *Selector) View() string {
 	return s.Model.View()
 }
@@ -199,7 +197,7 @@ func (s *Selector) activeCmd() tea.Cmd {
 // NewPane returns a selector for a list inside a repository pane: no title,
 // filter, help, pagination or status bar of its own, filtering and the quit
 // keys disabled, and the shared page keys so every pane pages the same way.
-func NewPane(c common.Common, delegate ItemDelegate) *Selector {
+func NewPane(c *common.Common, delegate ItemDelegate) *Selector {
 	s := New(c, []IdentifiableItem{}, delegate)
 	s.SetShowFilter(false)
 	s.SetShowHelp(false)

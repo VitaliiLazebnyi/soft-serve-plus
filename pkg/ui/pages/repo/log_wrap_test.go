@@ -10,6 +10,7 @@ import (
 // TestWrapTextMeasuresLikeLipgloss checks that commit text wraps at the width
 // lipgloss measures, so wide characters such as emoji never overflow the pane.
 func TestWrapTextMeasuresLikeLipgloss(t *testing.T) {
+	t.Parallel()
 	const width = 9
 	in := "fix: 🎉🎉🎉 ship it 🚀🚀🚀🚀 now\nsecond\tline 👍🏽👍🏽👍🏽👍🏽"
 	out := wrapText(in, width)

@@ -11,14 +11,14 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest/uiwait"
 )
 
 // waitSlots waits for tokenisations left running by an earlier test, which
 // hold tokenising slots.
 func waitSlots(t *testing.T) {
 	t.Helper()
-	uitest.WaitIdle(t, Tokenising)
+	uiwait.WaitIdle(t, Tokenising)
 }
 
 // register adds lexer to chroma's registry for the rest of the test.
@@ -79,7 +79,7 @@ func probeAnalysers(t *testing.T) *atomic.Int64 {
 // The output matches what glamour's code block renderer produced.
 func TestHighlightMatchesGlamour(t *testing.T) {
 	waitSlots(t)
-	got, ok := Highlight(StyleConfig(), "main.go", "package main\n\nfunc main() {}\n", false, uitest.Unbounded)
+	got, ok := Highlight(StyleConfig(), "main.go", "package main\n\nfunc main() {}\n", false, uiwait.Unbounded)
 	if !ok {
 		t.Fatal("a small Go file was not highlighted")
 	}
@@ -96,12 +96,12 @@ func TestHighlightMatchesGlamour(t *testing.T) {
 func TestHighlightByContent(t *testing.T) {
 	waitSlots(t)
 	script := "#!/bin/sh\nset -e\necho hi\n"
-	out, ok := Highlight(StyleConfig(), "setup", script, false, uitest.Unbounded)
+	out, ok := Highlight(StyleConfig(), "setup", script, false, uiwait.Unbounded)
 	if !ok {
 		t.Fatal("a shell script without an extension was not highlighted")
 	}
 	// Plain text gets the text colour throughout.
-	if plain, _ := Highlight(StyleConfig(), "setup.txt", script, false, uitest.Unbounded); out == plain {
+	if plain, _ := Highlight(StyleConfig(), "setup.txt", script, false, uiwait.Unbounded); out == plain {
 		t.Fatal("a shell script without an extension was highlighted as plain text")
 	}
 
@@ -118,7 +118,7 @@ func TestHighlightByContent(t *testing.T) {
 		t.Fatalf("analyseMax = %d; analysing more than 4 KiB was not measured to be quick", analyseMax)
 	}
 	most := probeAnalysers(t)
-	Highlight(StyleConfig(), "noext", long, false, uitest.Unbounded)
+	Highlight(StyleConfig(), "noext", long, false, uiwait.Unbounded)
 	if n := most.Load(); n == 0 || n > analyseMax {
 		t.Fatalf("the analysers were given %d bytes of a file of %d; want at most %d", n, len(long), analyseMax)
 	}
@@ -181,9 +181,9 @@ func TestFormatHighlightDefaultBudget(t *testing.T) {
 		took = time.Since(chosen)
 		done <- out
 	}()
-	out, ok := uitest.Receive(done)
+	out, ok := uiwait.Receive(done)
 	if !ok {
-		t.Fatalf("FormatHighlight had not returned after %v; want it back once HighlightBudget ended", uitest.HangGuard)
+		t.Fatalf("FormatHighlight had not returned after %v; want it back once HighlightBudget ended", uiwait.HangGuard)
 	}
 	if out != content || Tokenising() == 0 {
 		t.Fatalf("FormatHighlight = %q; want the content as it is, with the lexer still running", out)
@@ -249,13 +249,13 @@ func TestEagerLexers(t *testing.T) {
 func TestEagerLexersCapped(t *testing.T) {
 	waitSlots(t)
 	small := "<script>\nlet a = 1;\n</script>\n<p>{a}</p>\n"
-	if out, ok := Highlight(StyleConfig(), "app.svelte", small, false, uitest.Unbounded); !ok || !strings.Contains(out, "\x1b[") {
+	if out, ok := Highlight(StyleConfig(), "app.svelte", small, false, uiwait.Unbounded); !ok || !strings.Contains(out, "\x1b[") {
 		t.Fatal("a small Svelte file was not highlighted")
 	}
 	// The large one never takes a slot.
 	waitSlots(t)
 	large := strings.Repeat("{a}", EagerHighlightMax/3+1)
-	if _, ok := Highlight(StyleConfig(), "app.svelte", large, false, uitest.Unbounded); ok || tokenising.Load() != 0 {
+	if _, ok := Highlight(StyleConfig(), "app.svelte", large, false, uiwait.Unbounded); ok || tokenising.Load() != 0 {
 		t.Fatalf("a Svelte file of %d bytes: highlighted %v, %d slots taken after", len(large), ok, tokenising.Load())
 	}
 }
@@ -352,8 +352,8 @@ func budgetStops(t *testing.T, lexer chroma.Lexer, content string) {
 	case ok = <-done:
 	case <-l.budget:
 		var returned bool
-		if ok, returned = uitest.Receive(done); !returned {
-			t.Fatalf("tokenising had not returned %v after the budget ended", uitest.HangGuard)
+		if ok, returned = uiwait.Receive(done); !returned {
+			t.Fatalf("tokenising had not returned %v after the budget ended", uiwait.HangGuard)
 		}
 	}
 	select {
@@ -528,15 +528,15 @@ func TestTokenisingSlotsBounded(t *testing.T) {
 		}()
 	}
 	// Each call is refused or runs the lexer.
-	if !uitest.WaitFor(func() bool { return running.Load()+refused.Load() >= calls }) {
-		t.Fatalf("after %v, %d calls ran and %d were refused, of %d", uitest.HangGuard, running.Load(), refused.Load(), calls)
+	if !uiwait.WaitFor(func() bool { return running.Load()+refused.Load() >= calls }) {
+		t.Fatalf("after %v, %d calls ran and %d were refused, of %d", uiwait.HangGuard, running.Load(), refused.Load(), calls)
 	}
 	ended.Store(true)
 	close(budget)
 	returned := make(chan struct{})
 	go func() { wg.Wait(); close(returned) }()
-	if _, ok := uitest.Receive(returned); !ok {
-		t.Fatalf("the calls had not returned %v after the budget ended", uitest.HangGuard)
+	if _, ok := uiwait.Receive(returned); !ok {
+		t.Fatalf("the calls had not returned %v after the budget ended", uiwait.HangGuard)
 	}
 	if n := most.Load(); n > maxTokenising {
 		t.Fatalf("%d tokenisations ran at once; want at most %d", n, maxTokenising)
@@ -551,11 +551,11 @@ func TestTokenisingSlotsBounded(t *testing.T) {
 func TestTokenisePanicShowsPlain(t *testing.T) {
 	waitSlots(t)
 	boom := fakeLexer{tokenise: func() (chroma.Iterator, error) { panic("boom") }}
-	if _, ok := tokenise(boom, "x", uitest.Unbounded); ok {
+	if _, ok := tokenise(boom, "x", uiwait.Unbounded); ok {
 		t.Fatal("a panicking lexer gave tokens")
 	}
 	waitSlots(t)
-	if _, ok := Highlight(StyleConfig(), "a.yang", strings.Repeat("/*\n", 100), false, uitest.Unbounded); ok {
+	if _, ok := Highlight(StyleConfig(), "a.yang", strings.Repeat("/*\n", 100), false, uiwait.Unbounded); ok {
 		t.Fatal("the YANG file that makes the lexer panic was highlighted")
 	}
 	waitSlots(t)

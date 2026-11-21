@@ -14,7 +14,6 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
@@ -178,16 +177,23 @@ func (d *driver) run(cmd tea.Cmd) tea.Msg {
 // it may reach the terminal as an escape sequence or control character, while
 // the text around the sequences stays visible.
 func TestEveryPaneSanitisesRepositoryData(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 200, 60)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	rr := newEscapedRepo(t)
 
 	readme := NewReadme(c)
+	readme.SetSize(200, 60)
 	files := NewFiles(c)
+	files.SetSize(200, 60)
 	log := NewLog(c)
+	log.SetSize(200, 60)
 	branches := NewRefs(c, git.RefsHeads)
+	branches.SetSize(200, 60)
 	tags := NewRefs(c, git.RefsTags)
+	tags.SetSize(200, 60)
 	stash := NewStash(c)
+	stash.SetSize(200, 60)
 	r := New(c, readme, files, log, branches, tags, stash)
 	r.SetSize(200, 60)
 	d := &driver{t: t, m: r}

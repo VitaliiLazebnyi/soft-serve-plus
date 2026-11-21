@@ -69,7 +69,8 @@ func init() {
 func render(t *testing.T, content, name string, glamour bool, budget common.Budget) string {
 	t.Helper()
 	uitest.WaitIdle(t, common.Tokenising)
-	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(120, 40)
 	c.UseGlamour = glamour
 	c.HighlightBudget = budget
 	cmd := c.SetContent(content, name)
@@ -144,7 +145,8 @@ func renderStalled(t *testing.T, budget common.Budget) <-chan string {
 		close(release)
 		uitest.WaitIdle(t, common.Tokenising)
 	})
-	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(120, 40)
 	if budget != nil { // nil leaves New's
 		c.HighlightBudget = budget
 	}

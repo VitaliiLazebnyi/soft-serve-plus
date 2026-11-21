@@ -1,7 +1,6 @@
 package browse
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
@@ -70,6 +68,7 @@ func hasRefMsg(ms []tea.Msg) bool {
 // concurrently, so a RefMsg sent alongside RepoMsg could reach the tabs before
 // they have a repository to read from.
 func TestRefAfterRepo(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main", dir},
@@ -89,7 +88,10 @@ func TestRefAfterRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newModel(t.Context(), r)
+	m, err := newModel(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	started := msgs(t, m.Init())
 	if hasRefMsg(started) {
 		t.Fatal("Init sends a RefMsg alongside RepoMsg")
@@ -114,9 +116,9 @@ func TestRefAfterRepo(t *testing.T) {
 // manager running for the program's last render, which blocks forever after
 // the manager is closed once the view has more zones than its worker buffers.
 func TestQuitKeepsZoneManagerRunning(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
-	t.Cleanup(c.Zone.Close)
-	m := &model{common: c}
+	t.Parallel()
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
+	m := &model{common: c, width: 80, height: 24}
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
@@ -145,8 +147,8 @@ func TestQuitKeepsZoneManagerRunning(t *testing.T) {
 // The help footer of soft browse shows how to quit and toggle help.
 func TestBrowseHelpShowsQuitAndHelp(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
-	m := &model{model: repo.New(c, repo.NewLog(c)), common: c}
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
+	m := &model{model: repo.New(c, repo.NewLog(c)), common: c, width: 80, height: 24}
 	short := m.ShortHelp()
 	var full []key.Binding
 	for _, g := range m.FullHelp() {
@@ -166,8 +168,11 @@ func TestBrowseHelpShowsQuitAndHelp(t *testing.T) {
 // repository: no escape sequence or bidirectional control reaches the
 // terminal.
 func TestBrowseErrorSanitised(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	m := newModel(ctx, newDriveRepo(t))
+	t.Parallel()
+	m, err := newModel(t.Context(), newDriveRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(m.common.Zone.Close)
 	m.SetSize(80, 24)
 	m.Update(common.ErrorMsg{Err: errors.New("bad \x1b]0;title\x07ref \u202edetails")})
@@ -178,4 +183,22 @@ func TestBrowseErrorSanitised(t *testing.T) {
 	if !strings.Contains(ansi.Strip(v), "bad ref details") {
 		t.Fatalf("the error screen lacks the error:\n%s", ansi.Strip(v))
 	}
+}
+
+// soft browse copies to the clipboard: copying needs no server.
+func TestBrowseCopySetsClipboard(t *testing.T) {
+	t.Parallel()
+	m, err := newModel(t.Context(), newDriveRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSize(80, 24)
+	_, cmd := m.Update(repo.CopyMsg{Text: "abc1234", Message: "Commit hash copied"})
+	want := tea.SetClipboard("abc1234")()
+	for _, msg := range msgs(t, cmd) {
+		if msg == want {
+			return
+		}
+	}
+	t.Fatal("copying did not set the clipboard")
 }

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"charm.land/ssh"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	gossh "golang.org/x/crypto/ssh"
@@ -18,7 +17,9 @@ import (
 // resolved it. A lookup of the session's key that fails no longer turns the
 // list into what an anonymous caller sees.
 func TestSelectionListsSessionUserRepos(t *testing.T) {
-	ctx, be := newTestBackend(t)
+	t.Parallel()
+	srv := newTestBackend(t)
+	ctx, be := t.Context(), srv.be
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -37,13 +38,12 @@ func TestSelectionListsSessionUserRepos(t *testing.T) {
 	}
 
 	// Key lookups now fail; the session's user was resolved before.
-	if _, err := db.FromContext(ctx).ExecContext(ctx, "ALTER TABLE public_keys RENAME TO public_keys_gone"); err != nil {
+	if _, err := srv.db.ExecContext(ctx, "ALTER TABLE public_keys RENAME TO public_keys_gone"); err != nil {
 		t.Fatal(err)
 	}
 
 	sessCtx := context.WithValue(proto.WithUserContext(ctx, owner), ssh.ContextKeyPublicKey, pk)
-	c := common.NewCommon(sessCtx, 80, 40)
-	t.Cleanup(c.Zone.Close)
+	c := srv.common(t, sessCtx)
 	s := New(c)
 	s.SetSize(80, 40)
 	if !runLoad(t, s, s.Init()) {
@@ -57,13 +57,14 @@ func TestSelectionListsSessionUserRepos(t *testing.T) {
 // A keyless session whose keyless setting cannot be read gets the error
 // screen, not an empty list as if there were nothing to show.
 func TestSelectionKeylessSettingLookupFailure(t *testing.T) {
-	ctx, _ := newTestBackend(t)
-	if _, err := db.FromContext(ctx).ExecContext(ctx, "ALTER TABLE settings RENAME TO settings_gone"); err != nil {
+	t.Parallel()
+	srv := newTestBackend(t)
+	ctx := t.Context()
+	if _, err := srv.db.ExecContext(ctx, "ALTER TABLE settings RENAME TO settings_gone"); err != nil {
 		t.Fatal(err)
 	}
-	c := common.NewCommon(ctx, 80, 40)
-	t.Cleanup(c.Zone.Close)
-	msg, ok := loadRepos(c).(common.ErrorMsg)
+	c := srv.common(t, ctx)
+	msg, ok := loadRepos(ctx, c).(common.ErrorMsg)
 	if !ok || msg.Err == nil {
 		t.Fatalf("loadRepos = %#v, want an error message", msg)
 	}

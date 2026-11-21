@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 type fakeRepo struct {
@@ -34,6 +34,7 @@ var _ proto.Repository = fakeRepo{}
 // The repository page header shows the repository's visibility next to its
 // name, public as well as private.
 func TestHeaderVisibilityMarker(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		private      bool
 		want, absent string
@@ -42,7 +43,9 @@ func TestHeaderVisibilityMarker(t *testing.T) {
 		{private: false, want: "🌐", absent: "🔒"},
 	} {
 		r := &Repo{
-			common:       common.NewCommon(context.Background(), 80, 24),
+			common:       uitest.NewCommon(t, context.Background(), nil, nil),
+			width:        80,
+			height:       24,
 			selectedRepo: fakeRepo{private: tc.private},
 		}
 		header := r.headerView()
@@ -59,8 +62,10 @@ func TestHeaderVisibilityMarker(t *testing.T) {
 // not keep the previous tab's status value, and a copy notice must go away
 // once the status is refreshed.
 func TestStatusBarDoesNotKeepStaleValues(t *testing.T) {
-	c := common.NewCommon(context.Background(), 120, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	r := New(c, NewLog(c), NewRefs(c, git.RefsTags))
+	r.SetSize(120, 24)
 	r.selectedRepo = fakeRepo{}
 	r.state = readyState
 

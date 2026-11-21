@@ -81,6 +81,12 @@ func setup(tb testing.TB) *gossh.Session {
 // is closed when the test ends, after the server: see closeTestDB.
 func setupServer(tb testing.TB) *ssh.Server {
 	tb.Helper()
+	return setupServerWith(tb, func(hs *Server) func(ssh.Handler) ssh.Handler { return hs.bubbleTeaMiddleware })
+}
+
+// setupServerWith is setupServer with tui as the TUI middleware.
+func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Handler) *ssh.Server {
+	tb.Helper()
 	ctx := context.TODO()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tb.TempDir()
@@ -101,7 +107,7 @@ func setupServer(tb testing.TB) *ssh.Server {
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
 	return &ssh.Server{
-		Handler: hs.loggerMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
+		Handler: hs.loggerMiddleware(tui(hs)(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
 				tb.Error("session has no pty")
@@ -424,15 +430,15 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
 	srv := &ssh.Server{
 		Handler: hs.loggerMiddleware(func(s ssh.Session) {
-			p, c, cancel := hs.newSessionProgram(s)
+			p, ui, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
 				return
 			}
-			defer c.Zone.Close()
-			before := c.Context().Err()
+			defer ui.common.Zone.Close()
+			before := ui.common.Context().Err()
 			cancel()
-			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, c.Context().Err(), s.Context().Err())
+			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, ui.common.Context().Err(), s.Context().Err())
 			_ = s.Exit(0)
 		}),
 	}
@@ -539,14 +545,14 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 	hs := handlerServer(t, cfg, depsOf(ctx).dbx, depsOf(ctx).st, depsOf(ctx).be, log.Default())
 	srv := &ssh.Server{
 		Handler: hs.loggerMiddleware(func(s ssh.Session) {
-			p, c, cancel := hs.newSessionProgram(s)
-			defer cancel()
+			p, ui, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
 				return
 			}
-			c.Zone.Close()
-			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", c.Width, c.Height)
+			cancel()
+			ui.common.Zone.Close()
+			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", ui.width, ui.height)
 			_ = s.Exit(0)
 		}),
 	}
@@ -587,5 +593,87 @@ func TestSessionFilter(t *testing.T) {
 	}
 	if got := sessionFilter(nil, tea.QuitMsg{}); got != (tea.QuitMsg{}) {
 		t.Errorf("sessionFilter(QuitMsg) = %#v, want it unchanged", got)
+	}
+}
+
+// The TUI's git work belongs to the session, not to the connection: once the
+// program has exited, its context is done although the client keeps the
+// connection open, as a multiplexing client does.
+func TestTUIContextEndsWithSession(t *testing.T) {
+	uiCtx := make(chan context.Context, 1)
+	srv := setupServerWith(t, func(hs *Server) func(ssh.Handler) ssh.Handler {
+		return tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
+			p, ui, cancel := hs.newSessionProgram(s)
+			if ui != nil {
+				uiCtx <- ui.common.Context()
+			}
+			return p, ui, cancel
+		})
+	})
+	addr := testsession.Listen(t, srv)
+
+	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		User:            "test",
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+
+	var ctx context.Context
+	select {
+	case ctx = <-uiCtx:
+	case <-time.After(sessionLoopsWait):
+		t.Fatal("the TUI did not start")
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("the TUI's context is done while it runs: %v", err)
+	}
+
+	// Quit the TUI, retrying until the program reads the key.
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(sessionLoopsWait)
+wait:
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("session: %v", err)
+			}
+			break wait
+		case <-tick.C:
+			_, _ = io.WriteString(stdin, "q")
+		case <-timeout:
+			t.Fatal("TUI did not quit")
+		}
+	}
+
+	// The session has ended and the connection is still open: a new
+	// session on it works.
+	if _, err := client.NewSession(); err != nil {
+		t.Fatalf("the connection did not stay open: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(sessionLoopsWait):
+		t.Fatal("the TUI's context is not done after its session ended")
 	}
 }

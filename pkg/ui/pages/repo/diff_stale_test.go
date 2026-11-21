@@ -10,10 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // diffPane is a Log or a Stash pane showing a diff, for the render tests.
@@ -38,9 +37,9 @@ func (p diffPane) resize(width, height int) tea.Cmd {
 
 func newDiffPanes(t *testing.T) map[string]diffPane {
 	t.Helper()
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	ctx := context.Background()
 
-	l := NewLog(common.NewCommon(ctx, 120, 40))
+	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(120, 40)
 	l.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	sig := &gitm.Signature{Name: "a", Email: "a@b", When: time.Now()}
@@ -50,7 +49,7 @@ func newDiffPanes(t *testing.T) map[string]diffPane {
 		Message: "subject\n",
 	}
 
-	s := NewStash(common.NewCommon(ctx, 120, 40))
+	s := NewStash(uitest.NewCommon(t, ctx, nil, nil))
 	s.SetSize(120, 40)
 	s.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	s.Update(StashListMsg{stashes: []*gitm.Stash{{Message: "stash"}}})
@@ -88,8 +87,10 @@ func renders(cmd tea.Cmd) []diffRenderedMsg {
 // A render that finishes after the width changed, or after the user left
 // the diff, is dropped, and the current width is rendered once.
 func TestDiffRenderDropsStaleResults(t *testing.T) {
+	t.Parallel()
 	for name, p := range newDiffPanes(t) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			diff := &git.Diff{Patch: "+" + strings.Repeat("y", 200) + "\n"}
 			updateRendered(p.m, findMsg[diffRenderedMsg](t, runCmd(p.open(diff))))
 			if !p.shown() {
@@ -144,8 +145,10 @@ func TestDiffRenderDropsStaleResults(t *testing.T) {
 // while it ran, does not keep the next diff from rendering once the pane
 // is reset.
 func TestDiffRenderLostResult(t *testing.T) {
+	t.Parallel()
 	for name, p := range newDiffPanes(t) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			updateRendered(p.m, findMsg[diffRenderedMsg](t, runCmd(p.open(&git.Diff{Patch: "+one\n"}))))
 			// A width change starts a render; its result is lost.
 			if n := len(renders(p.resize(90, 40))); n != 1 {
@@ -170,8 +173,10 @@ func TestDiffRenderLostResult(t *testing.T) {
 // a client that resizes over and over costs at most two renders, the one in
 // flight and one for the width it ends at.
 func TestDiffRenderOneInFlight(t *testing.T) {
+	t.Parallel()
 	for name, p := range newDiffPanes(t) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			first := p.open(&git.Diff{Patch: "+line\n"})
 			total := 0
 			for i := range 64 {

@@ -11,6 +11,7 @@ import (
 // tab, which then shows it and leaves it with esc rather than spinning for
 // ever.
 func TestBlameAfterTabSwitch(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
@@ -37,6 +38,7 @@ func TestBlameAfterTabSwitch(t *testing.T) {
 // A commit opened just before the user switched tabs still loads its diff in
 // the Commits tab.
 func TestCommitAfterTabSwitch(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(2)

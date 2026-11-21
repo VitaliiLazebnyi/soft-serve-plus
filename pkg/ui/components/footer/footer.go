@@ -13,14 +13,15 @@ type ToggleFooterMsg struct{}
 
 // Footer is a Bubble Tea model that displays help and other info.
 type Footer struct {
-	common     common.Common
+	common     *common.Common
 	zonePrefix string
+	width      int
 	help       help.Model
 	keymap     help.KeyMap
 }
 
 // New creates a new Footer.
-func New(c common.Common, keymap help.KeyMap) *Footer {
+func New(c *common.Common, keymap help.KeyMap) *Footer {
 	h := help.New()
 	h.Styles.ShortKey = c.Styles.HelpKey
 	h.Styles.ShortDesc = c.Styles.HelpValue
@@ -32,18 +33,17 @@ func New(c common.Common, keymap help.KeyMap) *Footer {
 		help:       h,
 		keymap:     keymap,
 	}
-	f.SetSize(c.Width, c.Height)
 	return f
 }
 
 // SetSize implements common.Component.
 func (f *Footer) SetSize(width, height int) {
-	f.common.SetSize(width, height)
+	f.width, _ = common.ClampSize(width, height)
 	f.help.SetWidth(width -
 		f.common.Styles.Footer.GetHorizontalFrameSize())
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (f *Footer) Init() tea.Cmd {
 	return nil
 }
@@ -53,13 +53,13 @@ func (f *Footer) Update(_ tea.Msg) tea.Cmd {
 	return nil
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (f *Footer) View() string {
 	if f.keymap == nil {
 		return ""
 	}
 	s := f.common.Styles.Footer.
-		Width(f.common.Width)
+		Width(f.width)
 	helpView := f.help.View(f.keymap)
 	return f.common.Zone.Mark(
 		f.ZoneID(),

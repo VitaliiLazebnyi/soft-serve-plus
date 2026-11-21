@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
@@ -43,11 +42,13 @@ func (m StashPatchMsg) pane() paneID { return paneStash }
 
 // Stash is the stash component page.
 type Stash struct {
-	common       common.Common
+	common       *common.Common
+	width        int
+	height       int
 	vp           *viewport.Viewport
 	ref          *git.Reference
 	gen          uint64
-	repo         proto.Repository
+	repo         Repository
 	list         *selector.Selector
 	state        stashState
 	currentPatch StashPatchMsg
@@ -66,9 +67,9 @@ type Stash struct {
 }
 
 // NewStash creates a new stash model.
-func NewStash(common common.Common) *Stash {
+func NewStash(common *common.Common) *Stash {
 	vp := viewport.New(common)
-	selector := selector.NewPane(common, StashItemDelegate{&common})
+	selector := selector.NewPane(common, StashItemDelegate{common})
 	return &Stash{
 		vp:     vp,
 		common: common,
@@ -88,7 +89,7 @@ func (s *Stash) TabName() string {
 
 // SetSize implements common.Component.
 func (s *Stash) SetSize(width, height int) {
-	s.common.SetSize(width, height)
+	s.width, s.height = common.ClampSize(width, height)
 	s.vp.SetSize(width, height)
 	s.list.SetSize(width, height)
 }
@@ -124,7 +125,7 @@ func (s *Stash) FullHelp() [][]key.Binding {
 	return b
 }
 
-// StatusBarValue implements common.Component.
+// StatusBarValue implements Pane.
 func (s *Stash) StatusBarValue() string {
 	item, ok := s.list.SelectedItem().(StashItem)
 	if !ok {
@@ -134,7 +135,7 @@ func (s *Stash) StatusBarValue() string {
 	return fmt.Sprintf("stash@{%d}: %s", idx, item.Title())
 }
 
-// StatusBarInfo implements common.Component.
+// StatusBarInfo implements Pane.
 func (s *Stash) StatusBarInfo() string {
 	switch s.state {
 	case stashStateList:
@@ -301,7 +302,7 @@ func (s *Stash) renderPatchCmd() tea.Cmd {
 		return nil
 	}
 	title := s.common.Styles.Stash.Title.Render(s.currentTitle) + "\n"
-	return renderDiffCmd(paneStash, s.render, epoch, s.common.Styles, s.common.Width, s.currentPatch.Diff, func() string {
+	return renderDiffCmd(paneStash, s.render, epoch, s.common.Styles, s.width, s.currentPatch.Diff, func() string {
 		return title
 	})
 }

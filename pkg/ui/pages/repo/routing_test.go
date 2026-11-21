@@ -8,8 +8,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // countingPane is a tab that counts the messages it receives by type.
@@ -45,12 +44,14 @@ var _ Pane = (*countingPane)(nil)
 // Every message reaches each pane it is meant for exactly once, the active
 // pane included.
 func TestRepoDeliversMessagesOnce(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	readme := newCountingPane(paneReadme, "Readme")
 	files := newCountingPane(paneFiles, "Files")
 	log := newCountingPane(paneLog, "Commits")
 	r := New(c, readme, files, log)
+	r.SetSize(80, 40)
 
 	// Each message is built for the generation that is current when it is
 	// sent, since the repository page drops messages from an older one.
@@ -91,8 +92,10 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 
 // A resize reaches the code view of the Files tab once while a file is open.
 func TestFilesDeliversResizeToContentOnce(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := context.Background()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.activeView = filesViewContent
 	f.currentContent = FileContentMsg{content: "hello", ext: ".txt"}
 	f.code.SetContent("hello", ".txt")

@@ -7,8 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // copyMsgs runs cmd and every command batched under it, and returns the
@@ -33,7 +32,8 @@ func copyMsgs(cmd tea.Cmd) []CopyMsg {
 // Pressing the copy key on the stash list copies the selected stash message
 // once, and does nothing when there are no stashes.
 func TestStashCopy(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
+	t.Parallel()
+	ctx := context.Background()
 	copyKey := tea.KeyPressMsg{Code: 'c', Text: "c"}
 
 	for _, tc := range []struct {
@@ -49,7 +49,9 @@ func TestStashCopy(t *testing.T) {
 		}}, want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewStash(common.NewCommon(ctx, 80, 40))
+			t.Parallel()
+			s := NewStash(uitest.NewCommon(t, ctx, nil, nil))
+			s.SetSize(80, 40)
 			s.Init()
 			s.Update(tc.stashes)
 
@@ -70,8 +72,10 @@ func TestStashCopy(t *testing.T) {
 // A patch arriving while no stash is selected renders without a title
 // instead of panicking.
 func TestStashPatchWithoutSelection(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	s := NewStash(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := context.Background()
+	s := NewStash(uitest.NewCommon(t, ctx, nil, nil))
+	s.SetSize(80, 40)
 	s.Init()
 	s.Update(StashListMsg{})
 	updateRendered(s, StashPatchMsg{Diff: &git.Diff{}})

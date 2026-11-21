@@ -12,14 +12,12 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/soft-serve/cmd"
 	"github.com/charmbracelet/soft-serve/cmd/soft/admin"
 	"github.com/charmbracelet/soft-serve/cmd/soft/browse"
 	"github.com/charmbracelet/soft-serve/cmd/soft/hook"
 	"github.com/charmbracelet/soft-serve/cmd/soft/serve"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
@@ -127,10 +125,6 @@ func rootArgs(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	if noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR")); noColor {
-		common.DefaultColorProfile = colorprofile.NoTTY
-	}
-
 	rootCmd.AddCommand(
 		manCmd,
 		serve.NewCommand(),

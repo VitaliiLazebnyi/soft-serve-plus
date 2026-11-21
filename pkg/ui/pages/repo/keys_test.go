@@ -7,13 +7,13 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
-func newTestCommon() common.Common {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	return common.NewCommon(ctx, 80, 20)
+func newTestCommon(t *testing.T) *common.Common {
+	t.Helper()
+	return uitest.NewCommon(t, context.Background(), nil, nil)
 }
 
 func helpKeys(bindings []key.Binding) []string {
@@ -28,7 +28,8 @@ func helpKeys(bindings []key.Binding) []string {
 // Turning the blame view off with "b" must not also page the file up.
 func TestFilesBlameKeyDoesNotScroll(t *testing.T) {
 	t.Parallel()
-	f := NewFiles(newTestCommon())
+	f := NewFiles(newTestCommon(t))
+	f.SetSize(80, 20)
 	f.Update(FileContentMsg{content: strings.Repeat("line\n", 200), ext: ".txt"})
 	f.code.GotoBottom()
 	f.blameView = true
@@ -53,7 +54,8 @@ func TestFilesBlameKeyDoesNotScroll(t *testing.T) {
 // The commit list has nothing to go back to, so its help does not offer it.
 func TestLogCommitListHelpHasNoBack(t *testing.T) {
 	t.Parallel()
-	l := NewLog(newTestCommon())
+	l := NewLog(newTestCommon(t))
+	l.SetSize(80, 20)
 	for _, group := range l.FullHelp() {
 		for _, k := range helpKeys(group) {
 			if strings.Contains(k, "back") {
@@ -80,7 +82,7 @@ func TestRepoBackHelp(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := newTestCommon()
+			c := newTestCommon(t)
 			l := NewLog(c)
 			if tc.inDiff {
 				l.activeView = logViewDiff

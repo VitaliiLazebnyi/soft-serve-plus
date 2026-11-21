@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 type fakeRepo struct {
@@ -42,10 +44,10 @@ var _ proto.Repository = fakeRepo{}
 
 func renderItem(t *testing.T, repo proto.Repository, width int) string {
 	t.Helper()
-	c := common.NewCommon(context.Background(), width, 20)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	item := NewItem(c, repo)
 	pane := selectorPane
-	d := NewItemDelegate(&c, &pane)
+	d := NewItemDelegate(c, &pane)
 	m := list.New([]list.Item{item}, d, width, 20)
 	var buf bytes.Buffer
 	d.Render(&buf, m, 0, item)
@@ -55,6 +57,7 @@ func renderItem(t *testing.T, repo proto.Repository, width int) string {
 // Every repository in the list shows its visibility, so a public one is
 // never mistaken for a private one.
 func TestItemVisibilityMarker(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		private      bool
 		want, absent string
@@ -76,6 +79,7 @@ func TestItemVisibilityMarker(t *testing.T) {
 // A long name is truncated to leave room for the marker, so the item is no
 // wider than one with a short name.
 func TestItemVisibilityMarkerLongName(t *testing.T) {
+	t.Parallel()
 	const width = 30
 	for _, private := range []bool{true, false} {
 		short := renderItem(t, fakeRepo{name: "repo", private: private}, width)
@@ -92,7 +96,7 @@ func TestItemVisibilityMarkerLongName(t *testing.T) {
 // Filtering matches the repository name as well as the project name.
 func TestItemFilterValue(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 20)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	for _, tc := range []struct {
 		repo proto.Repository
 		want []string
@@ -113,10 +117,10 @@ func TestItemFilterValue(t *testing.T) {
 // not shown, and the match must not spill onto the visibility marker.
 func TestItemFilterHighlightsTitleOnly(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 20)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	item := NewItem(c, fakeRepo{name: "zzz", projectName: "Project"})
 	pane := selectorPane
-	d := NewItemDelegate(&c, &pane)
+	d := NewItemDelegate(c, &pane)
 	m := list.New([]list.Item{item}, d, 80, 20)
 	m.SetFilterText("zzz")
 	var buf bytes.Buffer
@@ -147,5 +151,32 @@ func TestItemMultiLineFields(t *testing.T) {
 	}
 	if !strings.Contains(out, "first line second line third line") {
 		t.Errorf("item %q lacks the joined description", out)
+	}
+}
+
+// Copying a repository's clone command says so on its row until the next key
+// press, however often the row is drawn: drawing it changes nothing.
+func TestItemCopyNoticeLastsUntilNextKey(t *testing.T) {
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
+	item := NewItem(c, fakeRepo{name: "repo", projectName: "Project"})
+	pane := selectorPane
+	d := NewItemDelegate(c, &pane)
+	m := list.New([]list.Item{item}, d, 80, 20)
+	render := func() string {
+		var buf bytes.Buffer
+		d.Render(&buf, m, 0, item)
+		return buf.String()
+	}
+
+	d.Update(tea.KeyPressMsg{Code: 'c', Text: "c"}, &m)
+	for i := range 2 {
+		if got := render(); !strings.Contains(got, "copied to clipboard") {
+			t.Fatalf("render %d after the copy lacks the notice:\n%s", i+1, got)
+		}
+	}
+	d.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, &m)
+	if got := render(); strings.Contains(got, "copied to clipboard") {
+		t.Fatalf("the notice outlived the next key press:\n%s", got)
 	}
 }

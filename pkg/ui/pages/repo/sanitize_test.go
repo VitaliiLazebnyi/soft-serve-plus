@@ -11,8 +11,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // escapes holds sequences the bubbletea renderer would pass to the terminal:
@@ -51,23 +50,27 @@ func escapedCommit() *git.Commit {
 }
 
 func TestHeaderSanitisesProjectNameAndDescription(t *testing.T) {
+	t.Parallel()
 	r := &Repo{
-		common:       common.NewCommon(context.Background(), 120, 24),
+		common:       uitest.NewCommon(t, context.Background(), nil, nil),
+		width:        120,
+		height:       24,
 		selectedRepo: fakeRepo{projectName: "proj" + escapes, description: "desc" + escapes},
 	}
 	assertClean(t, r.headerView(), "proj", "desc")
 }
 
 func TestLogSanitisesCommit(t *testing.T) {
-	c := common.NewCommon(context.Background(), 120, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	commit := escapedCommit()
 
-	l := &Log{common: c, activeView: logViewCommits, activeCommit: commit}
+	l := &Log{common: c, width: 120, height: 24, activeView: logViewCommits, activeCommit: commit}
 	assertClean(t, l.renderCommit(commit), "subject", "body", "eve")
 	assertClean(t, l.StatusBarValue(), "eve")
 
 	item := LogItem{commit}
-	d := LogItemDelegate{&c}
+	d := LogItemDelegate{c}
 	m := list.New([]list.Item{item}, d, 120, 24)
 	var buf bytes.Buffer
 	d.Render(&buf, m, 0, item)
@@ -75,6 +78,7 @@ func TestLogSanitisesCommit(t *testing.T) {
 }
 
 func TestStashItemSanitisesMessage(t *testing.T) {
+	t.Parallel()
 	item := StashItem{&gitm.Stash{Message: "stash" + escapes}}
 	assertClean(t, item.Title(), "stash")
 }
@@ -82,8 +86,9 @@ func TestStashItemSanitisesMessage(t *testing.T) {
 // File contents and READMEs reach the terminal through chroma and glamour,
 // which keep DCS and APC strings.
 func TestCodeSanitisesContent(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 
 	f := NewFiles(c)
 	f.SetSize(120, 40)
@@ -103,8 +108,9 @@ func TestCodeSanitisesContent(t *testing.T) {
 // A stray 8-bit byte from a legacy-encoded file, or an unterminated string
 // sequence, must not hide the lines after it.
 func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	for _, content := range []string{
 		"line1 na\x9eve\nline2 VISIBLE_AFTER_C1\n",
 		"line1 \x90\nline2 VISIBLE_AFTER_C1\n",
@@ -126,8 +132,9 @@ func TestCodeKeepsContentAfterBrokenSequences(t *testing.T) {
 // summary must not colour the "-" of its "->" as a deletion. A text file's
 // graph still is coloured.
 func TestRenderSummaryBinaryStat(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	del := c.Styles.Log.CommitStatsDel.Render("-")
 	if del == "-" {
 		t.Skip("the renderer adds no styling")
@@ -145,8 +152,9 @@ func TestRenderSummaryBinaryStat(t *testing.T) {
 // The stash patch view is built from pieces the TUI has already styled
 // (and sanitised at their source); the code view must keep those styles.
 func TestStashPatchKeepsStyling(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 
 	diff := &git.Diff{
 		Stat: " a.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",

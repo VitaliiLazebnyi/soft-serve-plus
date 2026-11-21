@@ -10,10 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // openRepo is a proto.Repository that only opens a repository on disk.
@@ -41,6 +40,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 // remote renamed its default branch, falls back to an existing branch
 // rather than an error.
 func TestDefaultRef(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -83,13 +83,15 @@ func TestDefaultRef(t *testing.T) {
 // The Tags pane lists tags with their commits and tag subjects, and does not
 // list them again when the user switches branches.
 func TestRefsLoadsOncePerRepo(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
 	gitRun(t, dir, "tag", "-a", "-m", "release notes", "v1")
 	gitRun(t, dir, "tag", "v0")
 
-	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	r := NewRefs(uitest.NewCommon(t, t.Context(), nil, nil), git.RefsTags)
+	r.SetSize(80, 24)
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
 
@@ -144,12 +146,14 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 // new generation: the repository page drops the result of the running load,
 // which carries the previous one.
 func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
 	gitRun(t, dir, "tag", "v1")
 
-	r := NewRefs(common.NewCommon(t.Context(), 80, 24), git.RefsTags)
+	r := NewRefs(uitest.NewCommon(t, t.Context(), nil, nil), git.RefsTags)
+	r.SetSize(80, 24)
 	repo := openRepo{path: dir}
 	r.Update(RepoMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
@@ -183,6 +187,7 @@ func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
 // A detached HEAD, as in a checkout during a rebase or bisect, shows the
 // commit it points at rather than an error.
 func TestDefaultRefDetachedHEAD(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -217,6 +222,7 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 
 // A repository that only has tags is not empty: it shows the first tag.
 func TestUpdateRefCmdTagsOnly(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 
@@ -252,6 +258,7 @@ func refs(t *testing.T, r *git.Repository) []*git.Reference {
 // `l` and `→` open the highlighted branch or tag; they must not also turn
 // the page, which would open an item on the next page instead.
 func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -264,8 +271,9 @@ func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
 		{Code: tea.KeyRight},
 	} {
 		t.Run(k.String(), func(t *testing.T) {
-			ctx := config.WithContext(context.Background(), config.DefaultConfig())
-			r := NewRefs(common.NewCommon(ctx, 80, 10), git.RefsHeads)
+			t.Parallel()
+			ctx := context.Background()
+			r := NewRefs(uitest.NewCommon(t, ctx, nil, nil), git.RefsHeads)
 			r.SetSize(80, 10)
 			r.Update(RepoMsg(openRepo{path: dir}))
 			r.Update(r.updateItemsCmd()())

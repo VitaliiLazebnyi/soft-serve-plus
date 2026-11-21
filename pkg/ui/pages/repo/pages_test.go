@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // The commit view shows the author date, as git log does, not the
 // committer date.
 func TestRenderCommitShowsAuthorDate(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first", "--date", "2001-02-03T04:05:06Z")
@@ -33,7 +34,8 @@ func TestRenderCommitShowsAuthorDate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l := NewLog(common.NewCommon(context.Background(), 200, 40))
+	l := NewLog(uitest.NewCommon(t, context.Background(), nil, nil))
+	l.SetSize(200, 40)
 	out := l.renderCommit(c)
 	if want := c.Author.When.Format(time.UnixDate); !strings.Contains(out, want) {
 		t.Errorf("commit view %q lacks the author date %q", out, want)
@@ -63,7 +65,8 @@ func TestRefItemsSortByCommitterDate(t *testing.T) {
 // An empty directory shows no position rather than "# 1/0".
 func TestFilesStatusBarInfoEmpty(t *testing.T) {
 	t.Parallel()
-	f := NewFiles(common.NewCommon(context.Background(), 80, 24))
+	f := NewFiles(uitest.NewCommon(t, context.Background(), nil, nil))
+	f.SetSize(80, 24)
 	f.activeView = filesViewFiles
 	if got := f.StatusBarInfo(); got != "# 0/0" {
 		t.Errorf("StatusBarInfo for an empty directory = %q, want %q", got, "# 0/0")
@@ -71,6 +74,9 @@ func TestFilesStatusBarInfoEmpty(t *testing.T) {
 }
 
 // The stash patch is highlighted once, by renderDiff, and shown as is.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted.
 func TestStashPatchHighlightedOnce(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
@@ -82,7 +88,7 @@ func TestStashPatchHighlightedOnce(t *testing.T) {
 	gitRun(t, dir, "stash", "-q")
 
 	const width = 120
-	s := NewStash(common.NewCommon(context.Background(), width, 200))
+	s := NewStash(uitest.NewCommon(t, context.Background(), nil, nil))
 	s.SetSize(width, 200)
 	s.Update(RepoMsg(openRepo{path: dir}))
 	s.Update(s.fetchStashCmd()())

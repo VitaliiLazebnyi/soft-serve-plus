@@ -17,8 +17,9 @@ type ActiveTabMsg int
 
 // Tabs is bubbletea component that displays a list of tabs.
 type Tabs struct {
-	common       common.Common
+	common       *common.Common
 	zonePrefix   string
+	width        int
 	tabs         []string
 	activeTab    int
 	TabSeparator lipgloss.Style
@@ -29,7 +30,7 @@ type Tabs struct {
 }
 
 // New creates a new Tabs component.
-func New(c common.Common, tabs []string) *Tabs {
+func New(c *common.Common, tabs []string) *Tabs {
 	r := &Tabs{
 		common:       c,
 		zonePrefix:   c.Zone.NewPrefix(),
@@ -44,10 +45,10 @@ func New(c common.Common, tabs []string) *Tabs {
 
 // SetSize implements common.Component.
 func (t *Tabs) SetSize(width, height int) {
-	t.common.SetSize(width, height)
+	t.width, _ = common.ClampSize(width, height)
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (t *Tabs) Init() tea.Cmd {
 	t.activeTab = 0
 	return nil
@@ -85,7 +86,7 @@ func (t *Tabs) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (t *Tabs) View() string {
 	s := strings.Builder{}
 	sep := t.TabSeparator
@@ -110,7 +111,7 @@ func (t *Tabs) View() string {
 		}
 	}
 	return lipgloss.NewStyle().
-		MaxWidth(t.common.Width).
+		MaxWidth(t.width).
 		Render(s.String())
 }
 

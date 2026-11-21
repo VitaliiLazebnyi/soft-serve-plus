@@ -16,7 +16,8 @@ import (
 // returns the view's content without styles.
 func renderWithin(t *testing.T, content string) string {
 	t.Helper()
-	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(120, 40)
 	c.UseGlamour = true
 	done := make(chan struct{})
 	go func() {
@@ -52,6 +53,7 @@ func glamourPadded(out string) bool {
 // blocks and the nesting depth. A README past its limits is shown as plain
 // text, quickly.
 func TestGlamourBounded(t *testing.T) {
+	t.Parallel()
 	var nested strings.Builder
 	for range 100 {
 		for i := range 20 {
@@ -78,6 +80,7 @@ func TestGlamourBounded(t *testing.T) {
 	// render that hangs.
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			out := renderWithin(t, content)
 			first := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
 			if len(first) > 60 {
@@ -99,6 +102,8 @@ func TestGlamourBounded(t *testing.T) {
 // byte of it through the style-keeping wrap writer, which allocates once a
 // byte. The render of this README makes about 1.8 million allocations
 // wrapped per line and 3 million wrapped whole.
+//
+// Not parallel: it measures the bytes the process allocates.
 func TestGlamourOutputWrappedPerLine(t *testing.T) {
 	md := true
 	j := renderJob{
@@ -122,7 +127,9 @@ func TestGlamourOutputWrappedPerLine(t *testing.T) {
 // their own; one render, for what is wanted when the running one returns,
 // follows it.
 func TestCodeOneRenderInFlight(t *testing.T) {
-	c := New(common.NewCommon(context.Background(), 80, 20), "", "")
+	t.Parallel()
+	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
+	c.SetSize(80, 20)
 	c.ShowLineNumber = true
 	first := c.SetContent("line\n", ".txt")
 	if first == nil {

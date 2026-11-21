@@ -10,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
@@ -48,8 +47,19 @@ type genMsg interface {
 	generation() uint64
 }
 
+// Repository is a repository the page shows: the methods of
+// proto.Repository it calls, so that soft browse can give it a local
+// repository.
+type Repository interface {
+	Name() string
+	ProjectName() string
+	Description() string
+	IsPrivate() bool
+	Open() (*git.Repository, error)
+}
+
 // RepoMsg is a message that contains a repository.
-type RepoMsg proto.Repository //nolint:revive
+type RepoMsg Repository //nolint:revive
 
 // GoBackMsg is a message to go back to the previous view.
 type GoBackMsg struct{}
@@ -65,9 +75,11 @@ type SwitchTabMsg paneID
 
 // Repo is a view for a git repository.
 type Repo struct {
-	common       common.Common
+	common       *common.Common
+	width        int
+	height       int
 	zonePrefix   string
-	selectedRepo proto.Repository
+	selectedRepo Repository
 	activeTab    int
 	tabs         *tabs.Tabs
 	statusbar    *statusbar.Model
@@ -90,7 +102,7 @@ type Repo struct {
 }
 
 // New returns a new Repo.
-func New(c common.Common, comps ...Pane) *Repo {
+func New(c *common.Common, comps ...Pane) *Repo {
 	sb := statusbar.New(c)
 	ts := make([]string, 0)
 	for _, c := range comps {
@@ -129,7 +141,7 @@ func (r *Repo) getMargins() (int, int) {
 
 // SetSize implements common.Component.
 func (r *Repo) SetSize(width, height int) {
-	r.common.SetSize(width, height)
+	r.width, r.height = common.ClampSize(width, height)
 	_, hm := r.getMargins()
 	r.tabs.SetSize(width, height-hm)
 	r.statusbar.SetSize(width, height-hm)
@@ -140,7 +152,7 @@ func (r *Repo) SetSize(width, height int) {
 
 // Repository returns the repository the page shows, or nil before one is
 // selected.
-func (r *Repo) Repository() proto.Repository {
+func (r *Repo) Repository() Repository {
 	return r.selectedRepo
 }
 
@@ -195,7 +207,7 @@ func (r *Repo) FullHelp() [][]key.Binding {
 	return b
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (r *Repo) Init() tea.Cmd {
 	r.state = loadingState
 	r.activeTab = 0
@@ -307,10 +319,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 	case CopyMsg:
-		txt := msg.Text
-		if cfg := r.common.Config(); cfg != nil {
-			cmds = append(cmds, tea.SetClipboard(txt))
-		}
+		cmds = append(cmds, tea.SetClipboard(msg.Text))
 		r.statusbar.SetMessage(msg.Message)
 	case errorMsg:
 		routed = true
@@ -405,16 +414,16 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (r *Repo) View() string {
 	wm, hm := r.getMargins()
 	hm += r.common.Styles.Tabs.GetHeight() +
 		r.common.Styles.Tabs.GetVerticalFrameSize()
 	s := r.common.Styles.Repo.Base.
-		Width(r.common.Width - wm).
-		Height(r.common.Height - hm)
+		Width(r.width - wm).
+		Height(r.height - hm)
 	mainStyle := r.common.Styles.Repo.Body.
-		Height(r.common.Height - hm)
+		Height(r.height - hm)
 	var main string
 	var statusbar string
 	switch r.state {
@@ -428,7 +437,7 @@ func (r *Repo) View() string {
 			// The same height the tab is given in SetSize.
 			_, phm := r.getMargins()
 			main = r.common.Styles.SpinnerContainer.
-				Height(r.common.Height - phm).
+				Height(r.height - phm).
 				Render(r.spinner.View() + " " + text)
 		} else {
 			main = p.View()
@@ -456,7 +465,7 @@ func (r *Repo) headerView() string {
 	if r.selectedRepo == nil {
 		return ""
 	}
-	truncate := lipgloss.NewStyle().MaxWidth(r.common.Width)
+	truncate := lipgloss.NewStyle().MaxWidth(r.width)
 	header := common.SanitizeText(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
@@ -471,10 +480,10 @@ func (r *Repo) headerView() string {
 		)
 	}
 	urlStyle := r.common.Styles.URLStyle.
-		Width(r.common.Width - lipgloss.Width(header) - 1).
+		Width(r.width - lipgloss.Width(header) - 1).
 		Align(lipgloss.Right)
 	cmd := r.cloneCmd()
-	url := urlStyle.Render(common.TruncateString(cmd, r.common.Width-lipgloss.Width(header)-1))
+	url := urlStyle.Render(common.TruncateString(cmd, r.width-lipgloss.Width(header)-1))
 	if cmd != "" {
 		// A click copies the command. Without one, as in soft browse,
 		// the header's right half is blank and a click copies nothing.
@@ -483,21 +492,19 @@ func (r *Repo) headerView() string {
 
 	header = lipgloss.JoinHorizontal(lipgloss.Top, header, url)
 
-	style := r.common.Styles.Repo.Header.Width(r.common.Width)
+	style := r.common.Styles.Repo.Header.Width(r.width)
 	return style.Render(
 		truncate.Render(header),
 	)
 }
 
 // cloneCmd returns the command that clones the repository shown, or "" when
-// there is none: no repository, no server configuration, or the command is
-// hidden.
+// there is none: no repository, or the command is hidden.
 func (r *Repo) cloneCmd() string {
-	cfg := r.common.Config()
-	if r.selectedRepo == nil || cfg == nil {
+	if r.selectedRepo == nil {
 		return ""
 	}
-	return r.common.CloneCmd(cfg.SSH.PublicURL, r.selectedRepo.Name())
+	return r.common.CloneCmd(r.common.Config.SSH.PublicURL, r.selectedRepo.Name())
 }
 
 func (r *Repo) setStatusBarInfo() {

@@ -11,10 +11,10 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/tabs"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -82,12 +82,8 @@ func newPinPage(t *testing.T) *pinPage {
 	// load old enough on any clock: with a zero wait a load is not yet
 	// older than zero when the clock returns the same instant again, as
 	// Windows' does within its resolution.
-	old := waitBeforeLoading
-	waitBeforeLoading = -time.Hour
-	t.Cleanup(func() { waitBeforeLoading = old })
-
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	p := &pinPage{
 		t:        t,
 		repo:     newPinRepo(t),
@@ -98,6 +94,7 @@ func newPinPage(t *testing.T) *pinPage {
 		branches: NewRefs(c, git.RefsHeads),
 		tags:     NewRefs(c, git.RefsTags),
 	}
+	p.log.waitBeforeLoading = -time.Hour
 	p.r = New(c, p.readme, p.files, p.log, p.stash, p.branches, p.tags)
 	p.r.SetSize(120, 40)
 	return p
@@ -218,6 +215,7 @@ func nonTicks(msgs []tea.Msg) []tea.Msg {
 
 // Tab and shift+tab walk the tabs, and each tab shows its content.
 func TestPinTabSwitching(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 
@@ -244,6 +242,7 @@ func TestPinTabSwitching(t *testing.T) {
 
 // Opening and leaving items on each tab.
 func TestPinSelection(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 
@@ -308,6 +307,7 @@ func TestPinSelection(t *testing.T) {
 // Each tab shows a spinner while it loads; the spinner turns while it does
 // and stops once everything has loaded.
 func TestPinLoadingAndSpinner(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.r.Init()
 

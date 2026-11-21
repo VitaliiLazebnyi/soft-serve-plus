@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -18,8 +18,10 @@ func (readmeTestRepo) Name() string { return "empty-repo" }
 // An empty repository has no ref, so no readme is ever loaded. The Readme
 // tab must show the quick start text instead of spinning forever.
 func TestReadmeEmptyRepoStopsLoading(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	r := NewReadme(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := context.Background()
+	r := NewReadme(uitest.NewCommon(t, ctx, nil, nil))
+	r.SetSize(80, 40)
 
 	// A readme shown before, for example before the repository was emptied,
 	// must not leave its path behind.
@@ -43,11 +45,13 @@ func TestReadmeEmptyRepoStopsLoading(t *testing.T) {
 // "soft browse" hides clone commands, and an empty local repository has no
 // server to clone from, so its readme must not point at the server's URL.
 func TestReadmeEmptyRepoHidesCloneCmd(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
-	ctx := config.WithContext(context.Background(), cfg)
-	c := common.NewCommon(ctx, 80, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, cfg, nil)
 	c.HideCloneCmd = true
 	r := NewReadme(c)
+	r.SetSize(80, 40)
 
 	r.Update(RepoMsg(readmeTestRepo{}))
 	r.Init()

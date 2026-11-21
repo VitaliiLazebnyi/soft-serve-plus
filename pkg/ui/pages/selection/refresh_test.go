@@ -4,14 +4,15 @@ import (
 	"context"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // A refresh cancels the listing in flight, which then lists nothing.
 func TestRefreshCancelsListing(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	s := New(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := context.Background()
+	s := New(uitest.NewCommon(t, ctx, nil, nil))
+	s.SetSize(80, 40)
 	first := s.Init()
 	s.Init()
 	ran := func() (ran bool) {

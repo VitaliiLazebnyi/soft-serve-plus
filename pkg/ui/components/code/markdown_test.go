@@ -4,14 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // Whether the content is markdown is worked out once per SetContent, not on
 // every render, and is worked out again for new content.
 func TestMarkdownCachedPerContent(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	r := New(c, "", "")
+	r.SetSize(80, 24)
 	r.UseGlamour = true
 
 	deliver(r, r.SetContent("# Title\n\nbody\n", "README.md"))
@@ -34,8 +36,10 @@ func TestMarkdownCachedPerContent(t *testing.T) {
 // SetMarkdownContent takes the caller's answer and does not work it out
 // again, even on a re-render.
 func TestSetMarkdownContentUsesCallerFlag(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	r := New(c, "", "")
+	r.SetSize(80, 24)
 	r.UseGlamour = true
 
 	// README.md would be detected as markdown; the caller's false must win.

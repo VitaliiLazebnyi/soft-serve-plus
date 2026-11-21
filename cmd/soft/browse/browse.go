@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
@@ -38,7 +38,10 @@ var Command = &cobra.Command{
 			return fmt.Errorf("failed to open repository: %w", err)
 		}
 
-		m := newModel(cmd.Context(), r)
+		m, err := newModel(cmd.Context(), r)
+		if err != nil {
+			return err
+		}
 		// Stop the bubblezone worker once the program has exited, and not
 		// on quit: the program renders once more after the model quits.
 		defer m.common.Zone.Close()
@@ -50,8 +53,13 @@ var Command = &cobra.Command{
 }
 
 // newModel returns the browse model for the repository r.
-func newModel(ctx context.Context, r *git.Repository) *model {
-	c := common.NewCommon(ctx, 0, 0)
+func newModel(ctx context.Context, r *git.Repository) (*model, error) {
+	// soft browse runs without a server: there is no server config to
+	// clone from, so the clone command is hidden, and no backend.
+	c, err := common.New(ctx, &config.Config{}, nil, nil)
+	if err != nil {
+		return nil, err
+	}
 	c.HideCloneCmd = true
 	comps := []repo.Pane{
 		repo.NewReadme(c),
@@ -70,7 +78,7 @@ func newModel(ctx context.Context, r *git.Repository) *model {
 		common: c,
 	}
 	m.footer = footer.New(c, m)
-	return m
+	return m, nil
 }
 
 type state int
@@ -83,8 +91,10 @@ const (
 type model struct {
 	model      *repo.Repo
 	footer     *footer.Footer
-	repo       proto.Repository
-	common     common.Common
+	repo       repo.Repository
+	common     *common.Common
+	width      int
+	height     int
 	state      state
 	showFooter bool
 	error      error
@@ -93,7 +103,7 @@ type model struct {
 var _ tea.Model = &model{}
 
 func (m *model) SetSize(w, h int) {
-	m.common.SetSize(w, h)
+	m.width, m.height = common.ClampSize(w, h)
 	style := m.common.Styles.App
 	wm := style.GetHorizontalFrameSize()
 	hm := style.GetVerticalFrameSize()
@@ -106,7 +116,7 @@ func (m *model) SetSize(w, h int) {
 }
 
 // ShortHelp implements help.KeyMap.
-func (m model) ShortHelp() []key.Binding {
+func (m *model) ShortHelp() []key.Binding {
 	switch m.state {
 	case errorState:
 		return []key.Binding{
@@ -121,7 +131,7 @@ func (m model) ShortHelp() []key.Binding {
 }
 
 // FullHelp implements help.KeyMap.
-func (m model) FullHelp() [][]key.Binding {
+func (m *model) FullHelp() [][]key.Binding {
 	switch m.state {
 	case errorState:
 		return [][]key.Binding{
@@ -191,7 +201,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showFooter = !m.showFooter
 		// Size the repository page for the footer now, before it gets the
 		// message: the Commits tab loads its page by the size it has then.
-		m.SetSize(m.common.Width, m.common.Height)
+		m.SetSize(m.width, m.height)
 	case common.ErrorMsg:
 		m.error = msg.Err
 		if m.error == nil {
@@ -208,7 +218,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// This fixes determining the height margin of the footer.
-	m.SetSize(m.common.Width, m.common.Height)
+	m.SetSize(m.width, m.height)
 
 	return m, tea.Batch(cmds...)
 }
@@ -234,10 +244,10 @@ func (m *model) View() tea.View {
 		// A git error can carry bytes from the repository.
 		err += m.common.Styles.ErrorBody.Render(common.SanitizeText(m.error.Error()))
 		view = m.common.Styles.Error.
-			Width(m.common.Width -
+			Width(m.width -
 				wm -
 				m.common.Styles.ErrorBody.GetHorizontalFrameSize()).
-			Height(m.common.Height -
+			Height(m.height -
 				hm -
 				m.common.Styles.Error.GetVerticalFrameSize()).
 			Render(err)
@@ -251,35 +261,32 @@ func (m *model) View() tea.View {
 	return v
 }
 
-// repository is the repository soft browse shows. The repository page only
-// calls the methods defined here; the rest of proto.Repository is left to
-// the nil embedded interface, which panics if called.
+// repository is the repository soft browse shows.
 type repository struct {
-	proto.Repository
 	r *git.Repository
 }
 
-// Description implements proto.Repository.
+// Description implements repo.Repository.
 func (r repository) Description() string {
 	return ""
 }
 
-// IsPrivate implements proto.Repository.
+// IsPrivate implements repo.Repository.
 func (repository) IsPrivate() bool {
 	return false
 }
 
-// Name implements proto.Repository.
+// Name implements repo.Repository.
 func (r repository) Name() string {
 	return filepath.Base(r.r.Path)
 }
 
-// Open implements proto.Repository.
+// Open implements repo.Repository.
 func (r repository) Open() (*git.Repository, error) {
 	return r.r, nil
 }
 
-// ProjectName implements proto.Repository.
+// ProjectName implements repo.Repository.
 func (r repository) ProjectName() string {
 	return r.Name()
 }

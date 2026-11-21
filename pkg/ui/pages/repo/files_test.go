@@ -13,11 +13,13 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // R10: a directory with more than git.MaxTreeEntries entries is listed in
 // part, and the status bar says the listing is truncated.
 func TestFilesListingTruncated(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
 	out := func(stdin string, args ...string) string {
@@ -46,8 +48,9 @@ func TestFilesListingTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := t.Context()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.Update(RepoMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 
@@ -74,6 +77,7 @@ func TestFilesListingTruncated(t *testing.T) {
 // Opening a file larger than config.MaxBlobSize is refused without reading it,
 // and a file that fits is shown.
 func TestSelectFileSizeLimit(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
 	files := map[string]string{
@@ -104,8 +108,9 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	ctx := config.WithContext(t.Context(), cfg)
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := t.Context()
+	f := NewFiles(uitest.NewCommon(t, ctx, cfg, nil))
+	f.SetSize(80, 40)
 	f.repo = r
 	f.ref = ref
 
@@ -134,6 +139,7 @@ func TestSelectFileSizeLimit(t *testing.T) {
 // shown, rather than a tea.Cmd that nothing ever runs. Fed back to the pane,
 // that message must also take the pane off its loading spinner.
 func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -147,7 +153,7 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
+	ctx := t.Context()
 	cases := map[string]struct {
 		repo openRepo
 		path string
@@ -157,7 +163,9 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := NewFiles(common.NewCommon(ctx, 80, 40))
+			t.Parallel()
+			f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+			f.SetSize(80, 40)
 			f.Update(RepoMsg(tc.repo))
 			f.Update(RefMsg{Ref: ref})
 			if f.activeView != filesViewLoading {
@@ -179,8 +187,10 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 // A blame that fails to load must return the pane to the file content with
 // blame off, not leave it on the loading spinner.
 func TestFilesBlameErrorStopsLoading(t *testing.T) {
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := t.Context()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.activeView = filesViewLoading
 	f.blameView = true
 
@@ -196,10 +206,13 @@ func TestFilesBlameErrorStopsLoading(t *testing.T) {
 // The file listing usually loads while another tab is shown. Its error must
 // still reach the Files pane so that pane stops loading.
 func TestRepoErrorReachesInactiveFilesPane(t *testing.T) {
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 40)
+	t.Parallel()
+	ctx := t.Context()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	files := NewFiles(c)
+	files.SetSize(80, 40)
 	r := New(c, NewReadme(c), files)
+	r.SetSize(80, 40)
 	files.activeView = filesViewLoading
 
 	r.Update(errorMsg{err: errors.New("listing failed"), to: paneFiles, gen: r.gen})
@@ -211,6 +224,7 @@ func TestRepoErrorReachesInactiveFilesPane(t *testing.T) {
 // The Files pane is reused across repositories and refs. When a reload fails,
 // the pane must not show, or let the user open, the previous listing.
 func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o600); err != nil {
@@ -228,8 +242,9 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := t.Context()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.Update(RepoMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 	f.Update(f.updateFilesCmd()())
@@ -283,8 +298,9 @@ func TestFilesNonASCIIName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := config.WithContext(t.Context(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := t.Context()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.Update(RepoMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 

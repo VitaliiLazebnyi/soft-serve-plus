@@ -41,7 +41,9 @@ const (
 type UI struct {
 	serverName  string
 	initialRepo string
-	common      common.Common
+	common      *common.Common
+	width       int
+	height      int
 	pages       []common.Component
 	activePage  page
 	state       sessionState
@@ -61,10 +63,14 @@ type repoOpenedMsg struct {
 	err  error
 }
 
-// NewUI returns a new UI model.
-func NewUI(c common.Common, initialRepo string) *UI {
+// NewUI returns a new UI model of width x height cells, limited by
+// common.ClampSize.
+func NewUI(c *common.Common, width, height int, initialRepo string) *UI {
+	width, height = common.ClampSize(width, height)
 	ui := &UI{
-		serverName:  c.Config().Name,
+		serverName:  c.Config.Name,
+		width:       width,
+		height:      height,
 		common:      c,
 		pages:       make([]common.Component, 2), // selection & repo
 		activePage:  selectionPage,
@@ -130,7 +136,7 @@ func (ui *UI) FullHelp() [][]key.Binding {
 
 // SetSize implements common.Component.
 func (ui *UI) SetSize(width, height int) {
-	ui.common.SetSize(width, height)
+	ui.width, ui.height = common.ClampSize(width, height)
 	wm, hm := ui.getMargins()
 	ui.footer.SetSize(width-wm, height-hm)
 	for _, p := range ui.pages {
@@ -150,7 +156,7 @@ func (ui *UI) Init() tea.Cmd {
 		repo.NewRefs(ui.common, git.RefsHeads),
 		repo.NewRefs(ui.common, git.RefsTags),
 	)
-	ui.SetSize(ui.common.Width, ui.common.Height)
+	ui.SetSize(ui.width, ui.height)
 	cmds := make([]tea.Cmd, 0)
 	cmds = append(cmds,
 		ui.pages[selectionPage].Init(),
@@ -162,7 +168,7 @@ func (ui *UI) Init() tea.Cmd {
 		cmds = append(cmds, ui.openRepoCmd(ui.initialRepo))
 	}
 	ui.state = readyState
-	ui.SetSize(ui.common.Width, ui.common.Height)
+	ui.SetSize(ui.width, ui.height)
 	return tea.Batch(cmds...)
 }
 
@@ -246,7 +252,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Size the pages for the footer now, before they get the message:
 		// the Commits tab loads its page by the size it has then.
-		ui.SetSize(ui.common.Width, ui.common.Height)
+		ui.SetSize(ui.width, ui.height)
 	case repo.RenderedMsg:
 		// A render a tab started, which it waits for to start its next
 		// one, even after the user left the repository page.
@@ -296,7 +302,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, ui.pages[ui.activePage].Update(msg))
 	}
 	// This fixes determining the height margin of the footer.
-	ui.SetSize(ui.common.Width, ui.common.Height)
+	ui.SetSize(ui.width, ui.height)
 	return ui, tea.Batch(cmds...)
 }
 
@@ -315,10 +321,10 @@ func (ui *UI) View() tea.View {
 		err := ui.common.Styles.ErrorTitle.Render("Bummer")
 		err += ui.common.Styles.ErrorBody.Render(common.ErrorMessage(ui.error))
 		view = ui.common.Styles.Error.
-			Width(ui.common.Width -
+			Width(ui.width -
 				wm -
 				ui.common.Styles.ErrorBody.GetHorizontalFrameSize()).
-			Height(ui.common.Height -
+			Height(ui.height -
 				hm -
 				ui.common.Styles.Error.GetVerticalFrameSize()).
 			Render(err)
@@ -342,14 +348,13 @@ func (ui *UI) View() tea.View {
 }
 
 // openRepoCmd starts opening repository rn. It must be called from Init or
-// Update: it takes the next repoGen and copies the context, backend and session
-// user there, so the command never reads the UI, whose context Update replaces
-// when a repository is shown.
+// Update: it takes the next repoGen there, and the command reads only what
+// does not change, never the UI.
 func (ui *UI) openRepoCmd(rn string) tea.Cmd {
 	ui.repoGen++
 	gen := ui.repoGen
 	ctx := ui.common.Context()
-	be := ui.common.Backend()
+	be := ui.common.Backend
 	user := proto.UserFromContext(ctx)
 	return func() tea.Msg {
 		r, err := openRepo(ctx, be, user, rn)

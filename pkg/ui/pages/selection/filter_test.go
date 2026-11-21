@@ -9,7 +9,6 @@ import (
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
@@ -99,8 +98,8 @@ func (d *filterDriver) want(step string, state list.FilterState, selected string
 // the first enter applies it, the second opens the highlighted repository,
 // and esc clears the filter.
 func TestSelectionFilterFlow(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 40)
-	t.Cleanup(c.Zone.Close)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := New(c)
 	s.SetSize(80, 40)
 	its := make([]selector.IdentifiableItem, 0, 3)

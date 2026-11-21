@@ -9,8 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // newLogPage returns a repository page with only the Commits tab, over a
@@ -21,8 +21,8 @@ func newLogPage(t *testing.T) *pinPage {
 	repo := newDiskRepo(t, "r", "main", "# r\n")
 	gitRun(t, repo.path, "commit", "-q", "--allow-empty", "-m", strings.Repeat("x", 300))
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	p := &pinPage{t: t, repo: repo, log: NewLog(c)}
 	p.r = New(c, p.log)
 	p.r.SetSize(120, 40)
@@ -39,6 +39,7 @@ func newLogPage(t *testing.T) *pinPage {
 // the window size in the message: the commit page is loaded once, by the
 // size the list has, and the diff is wrapped to the tab's width.
 func TestResizeKeepsParentSize(t *testing.T) {
+	t.Parallel()
 	p := newLogPage(t)
 
 	// The parent takes 4 columns and 6 rows for itself. Like the top
@@ -46,7 +47,7 @@ func TestResizeKeepsParentSize(t *testing.T) {
 	p.r.SetSize(100, 30)
 	perPage := p.log.selector.PerPage()
 	queue := p.update(tea.WindowSizeMsg{Width: 104, Height: 36})
-	if w := p.log.common.Width; w != 100 {
+	if w := p.log.width; w != 100 {
 		t.Errorf("after the resize the Commits tab is %d columns wide; want the 100 the parent gave", w)
 	}
 	p.r.SetSize(100, 30)
@@ -90,9 +91,10 @@ func TestResizeKeepsParentSize(t *testing.T) {
 // is no click zone, and a click on it copies nothing: copying "" would clear
 // the clipboard. With the command shown, a click on it copies it.
 func TestHeaderClickWithoutCloneCmd(t *testing.T) {
+	t.Parallel()
 	for _, hide := range []bool{true, false} {
-		ctx := config.WithContext(context.Background(), config.DefaultConfig())
-		c := common.NewCommon(ctx, 80, 24)
+		ctx := context.Background()
+		c := uitest.NewCommon(t, ctx, nil, nil)
 		t.Cleanup(c.Zone.Close)
 		c.HideCloneCmd = hide
 		r := New(c, NewReadme(c))
@@ -136,8 +138,10 @@ func TestHeaderClickWithoutCloneCmd(t *testing.T) {
 // A diff rendered again on a resize is wrapped to the width the parent gave
 // the tab, not to the window's, in the Commits tab and in the Stash tab.
 func TestDiffResizeKeepsParentWidth(t *testing.T) {
+	t.Parallel()
 	for name, p := range newDiffPanes(t) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			diff := &git.Diff{Patch: "+" + strings.Repeat("y", 300) + "\n"}
 			updateRendered(p.m, findMsg[diffRenderedMsg](t, runCmd(p.open(diff))))
 			if !p.shown() {
@@ -163,25 +167,30 @@ func TestDiffResizeKeepsParentWidth(t *testing.T) {
 // Every tab of the repository page, and its status bar, keeps the size the
 // page gave it when the window size message reaches it.
 func TestResizeKeepsEveryTabsSize(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	// The parent takes 4 columns and 6 rows for itself.
 	p.r.SetSize(100, 30)
-	tabs := map[string]*common.Common{
-		"Readme": &p.readme.common, "Files": &p.files.common, "Commits": &p.log.common,
-		"Stash": &p.stash.common, "Branches": &p.branches.common, "Tags": &p.tags.common,
-	}
 	type size struct{ w, h int }
+	tabs := map[string]func() size{
+		"Readme":   func() size { return size{p.readme.width, p.readme.height} },
+		"Files":    func() size { return size{p.files.width, p.files.height} },
+		"Commits":  func() size { return size{p.log.width, p.log.height} },
+		"Stash":    func() size { return size{p.stash.width, p.stash.height} },
+		"Branches": func() size { return size{p.branches.width, p.branches.height} },
+		"Tags":     func() size { return size{p.tags.width, p.tags.height} },
+	}
 	want := map[string]size{}
-	for name, c := range tabs {
-		if c.Width != 100 {
-			t.Fatalf("%s tab is %d columns wide; want the page's 100", name, c.Width)
+	for name, tabSize := range tabs {
+		if w := tabSize().w; w != 100 {
+			t.Fatalf("%s tab is %d columns wide; want the page's 100", name, w)
 		}
-		want[name] = size{c.Width, c.Height}
+		want[name] = tabSize()
 	}
 	p.r.Update(tea.WindowSizeMsg{Width: 104, Height: 36})
-	for name, c := range tabs {
-		if got := (size{c.Width, c.Height}); got != want[name] {
+	for name, tabSize := range tabs {
+		if got := tabSize(); got != want[name] {
 			t.Errorf("%s tab is %dx%d after the resize; want the %dx%d the page gave it",
 				name, got.w, got.h, want[name].w, want[name].h)
 		}

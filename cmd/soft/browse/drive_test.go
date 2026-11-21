@@ -1,7 +1,6 @@
 package browse
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -64,8 +62,11 @@ func newDriveRepo(t *testing.T) *git.Repository {
 // leaves the rest to a nil interface, so driving every tab and rendering
 // after every message checks that no tab calls one of the others.
 func TestBrowseDrivesEveryTab(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	m := newModel(ctx, newDriveRepo(t))
+	t.Parallel()
+	m, err := newModel(t.Context(), newDriveRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(m.common.Zone.Close)
 
 	// send delivers msg and every message the commands produce, rendering

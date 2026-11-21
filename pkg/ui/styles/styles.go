@@ -6,9 +6,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// XXX: For now, this is in its own package so that it can be shared between
-// different packages without incurring an illegal import cycle.
-
 // Styles defines styles for the UI.
 type Styles struct {
 	InactiveBorderColor color.Color
