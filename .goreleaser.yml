@@ -204,7 +204,10 @@ dockers_v2:
     # attestation, which hold the build time and random IDs.
     # GoReleaser adds --push (or --load for a snapshot), which buildx applies
     # to this image output. A rebuild matches only while Alpine serves the
-    # same package versions: `apk add` installs the newest ones.
+    # same package versions (`apk add` installs the newest ones) and the
+    # BuildKit version is the same: setup-buildx-action takes the latest,
+    # and a newer one may lay out or compress layers differently. Checked for
+    # linux/amd64 and linux/arm64 (BuildKit 0.34), not linux/arm/v7.
     build_args:
       SOURCE_DATE_EPOCH: "{{ .CommitTimestamp }}"
     flags:
