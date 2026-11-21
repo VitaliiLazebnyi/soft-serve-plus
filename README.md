@@ -1449,6 +1449,16 @@ reusable, and `VACUUM FULL webhook_deliveries` returns it to the system.
 
 A repository can have at most 20 webhooks.
 
+The server sends every event in the background, push and branch/tag events
+included: a push does not wait for the receivers. A push's events are sent
+after the push has finished, one push at a time per repository and in order,
+behind the repository's other events. Each pushed ref sends its branch/tag
+event and its push event, if a webhook subscribes to them. The `sender` and
+`pusher` are the account that pushed, as it was signed in; they are empty for
+an anonymous push or a key with no account. When too many events are waiting,
+a push's events are dropped and recorded as undelivered, so they can be
+redelivered.
+
 A push event lists at most the 20 newest pushed commits. To keep its payload
 small, a commit message is cut to 4 KiB (ending in `[message truncated by Soft
 Serve]`), a title to 1 KiB and an author or committer name or email to 256
@@ -1597,11 +1607,13 @@ the generated scripts ran global hooks themselves, `soft hook` ran a hook with
 any execute bit set, and one it could not execute, or one without a `#!` line,
 failed and refused the push.)
 
-The generated `pre-receive` and `update` scripts run the global hook
-themselves and start no `soft` process, so a push of many refs costs a shell per
-ref, not a program that opens the database. Repositories whose hooks were
-written by an older version keep calling `soft hook` until you run
-`soft admin sync-hooks` (or start the server once with `--sync-hooks`).
+The generated scripts run the global hook themselves and start no `soft`
+process, so a push of many refs costs a shell per ref, not a program that opens
+the database. The server does the rest itself once the push has finished: it
+sends the push's webhooks and updates the repository's last-modified time.
+Repositories whose hooks were written by an older version keep calling
+`soft hook` until you run `soft admin sync-hooks` (or start the server once
+with `--sync-hooks`); they keep working meanwhile.
 
 Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
 `GIT_DIR` and `GIT_PUSH_OPTION_*`), they get:
@@ -1613,7 +1625,12 @@ Hooks run only for a push, over SSH or HTTP. Besides what git sets (such as
   for a keyless session);
 - `SOFT_SERVE_DATA_PATH`, `SOFT_SERVE_CONFIG_LOCATION` and the server's other
   settings as `SOFT_SERVE_*` variables (see [Server Configuration](#server-configuration)),
-  the database data source `SOFT_SERVE_DB_DATA_SOURCE` included.
+  except the database data source, `SOFT_SERVE_DB_DATA_SOURCE`, which may hold
+  a password;
+- `SOFT_SERVE_PUSH_REFS`: a file under `<data path>/tmp` that the server reads
+  to learn which refs the push updated; the generated `post-receive` script
+  writes to it. The server removes it after the push, and any left by a
+  server that stopped mid-push when it next starts.
 
 No other git command the server runs, such as a fetch or a clone over any of
 SSH, HTTP or `git://`, gets these variables.

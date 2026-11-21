@@ -23,8 +23,8 @@ webhook-received 2
 cmp stdout received-active.txt
 
 # the push delivery is the one whose redelivery is refused below, and the
-# branch_tag_create delivery the one redelivered at the end, as the fence
-soft repo webhook deliver list repo-inactive 1
+# branch_tag_create delivery the one redelivered at the end
+webhook-deliveries repo-inactive 1 2
 envmatch PUSH_ID stdout '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\W+push'
 envmatch CREATE_ID stdout '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\W+branch_tag_create'
 
@@ -40,7 +40,7 @@ soft repo webhook list repo-inactive
 stdout '1.*93.184.216.34/hooks/WH_INACTIVE.*false'
 
 # a push sends nothing and records no delivery. Nothing new has arrived yet;
-# the redelivery at the end is the fence that shows nothing ever does.
+# the push at the end is the fence that shows nothing ever does.
 mkfile ./repo-inactive/README.md 'second'
 git -C repo-inactive commit -am 'second'
 git -C repo-inactive push origin HEAD
@@ -56,15 +56,25 @@ stderr 'webhook is not active'
 webhook-received 2
 cmp stdout received-active.txt
 
-# once active again, a delivery can be redelivered. This one is the fence: it
-# is sent after anything the inactive push or the refused redelivery could
-# have sent, and both of those could only send a push, so the whole list
-# shows that they sent nothing.
+# once active again, a delivery can be redelivered. It is sent after
+# anything the refused redelivery could have sent, which could only be a
+# push, so the list shows that it sent nothing.
 soft repo webhook update repo-inactive 1 --active true
 soft repo webhook deliver redeliver repo-inactive 1 $CREATE_ID
 webhook-received 3
 [windows] dos2unix received-redelivered.txt
 cmp stdout received-redelivered.txt
+
+# and a push is delivered again. This is the fence for the inactive push: the
+# server sends a repository's push events one push at a time, in order, so
+# this push's event comes after anything the inactive push could have sent,
+# and the whole list shows that it sent nothing.
+mkfile ./repo-inactive/README.md 'third'
+git -C repo-inactive commit -am 'third'
+git -C repo-inactive push origin HEAD
+webhook-received 4
+[windows] dos2unix received-fenced.txt
+cmp stdout received-fenced.txt
 
 # stop the server
 [windows] stopserver
@@ -77,3 +87,8 @@ push /hooks/WH_INACTIVE
 branch_tag_create /hooks/WH_INACTIVE
 push /hooks/WH_INACTIVE
 branch_tag_create /hooks/WH_INACTIVE
+-- received-fenced.txt --
+branch_tag_create /hooks/WH_INACTIVE
+push /hooks/WH_INACTIVE
+branch_tag_create /hooks/WH_INACTIVE
+push /hooks/WH_INACTIVE

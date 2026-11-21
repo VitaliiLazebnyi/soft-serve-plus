@@ -11,109 +11,116 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/spf13/cobra"
 )
 
-var (
-	// errInternalServerError indicates that an internal server error occurred.
-	errInternalServerError = errors.New("internal server error")
+// ErrNoDataPath is returned when a hook runs without
+// SOFT_SERVE_DATA_PATH, i.e. not from a Soft Serve Plus server.
+var ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server")
 
-	// ErrNoDataPath is returned when a hook runs without
-	// SOFT_SERVE_DATA_PATH, i.e. not from a Soft Serve Plus server.
-	ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server")
+// The hook commands are run for a repository whose hooks were generated
+// before the generated scripts stopped calling soft (see
+// hooks.GenerateHooks); they call them until "soft admin sync-hooks". Each
+// does what the generated script does now: post-receive writes the ref
+// lines to $SOFT_SERVE_PUSH_REFS, so the server sends the push's webhooks,
+// and every hook runs the custom hook. The server does the rest once
+// receive-pack has exited, so none opens the database.
 
-	// hooksRunE runs a git hook. Git hooks read the config from the
-	// environment, based on $SOFT_SERVE_DATA_PATH, which the binary parses
-	// when it starts.
-	//
-	// The hooks generated now run pre-receive and update without this
-	// command (see hooks.GenerateHooks); repositories whose hooks were
-	// generated earlier still call it until "soft admin sync-hooks". For
-	// them it only runs the custom hook, and opens no database.
-	hooksRunE = cmd.CloseDBOnError(func(c *cobra.Command, args []string) error {
-		ctx := c.Context()
-		cfg := config.FromContext(ctx)
+// preReceiveRunE runs the custom pre-receive hook with the ref lines.
+func preReceiveRunE(c *cobra.Command, args []string) error {
+	refs, err := readRefLines(c, hooks.PreReceiveHook)
+	if err != nil {
+		return err
+	}
+	return runHookCommand(c, hooks.PreReceiveHook, refs, args)
+}
 
-		// This is set in the server before invoking git-receive-pack/git-upload-pack
-		repoName := os.Getenv("SOFT_SERVE_REPO_NAME")
+// updateRunE runs the custom update hook with its three arguments.
+func updateRunE(c *cobra.Command, args []string) error {
+	return runHookCommand(c, hooks.UpdateHook, nil, args)
+}
 
-		logger := log.FromContext(ctx).With("repo", repoName)
+// postReceiveRunE records the ref lines for the server and runs the custom
+// post-receive hook with them.
+func postReceiveRunE(c *cobra.Command, args []string) error {
+	refs, err := readRefLines(c, hooks.PostReceiveHook)
+	if err != nil {
+		return err
+	}
+	recordPushRefs(hookLogger(c), refs)
+	return runHookCommand(c, hooks.PostReceiveHook, refs, args)
+}
 
-		stdin := c.InOrStdin()
-		stdout := c.OutOrStdout()
-		stderr := c.ErrOrStderr()
+// postUpdateRunE runs the custom post-update hook with the ref names.
+func postUpdateRunE(c *cobra.Command, args []string) error {
+	return runHookCommand(c, hooks.PostUpdateHook, nil, args)
+}
 
-		cmdName := c.Name()
-		customHookPath := filepath.Join(cfg.DataPath, "hooks", cmdName)
+// hookLogger returns the command's logger, with the repository the server
+// runs the hook for.
+func hookLogger(c *cobra.Command) *log.Logger {
+	// This is set in the server before invoking git-receive-pack.
+	return log.FromContext(c.Context()).With("repo", os.Getenv("SOFT_SERVE_REPO_NAME"))
+}
 
-		var buf bytes.Buffer
-		opts := make([]hooks.HookArg, 0)
+// readRefLines reads the "<old> <new> <ref>" lines git gives hook on stdin.
+// A line longer than the scanner takes, or a failed read, fails the hook
+// rather than letting it act, and run the custom hook, on part of the refs.
+func readRefLines(c *cobra.Command, hook string) ([]byte, error) {
+	var buf bytes.Buffer
+	scanner := bufio.NewScanner(c.InOrStdin())
+	for scanner.Scan() {
+		buf.Write(scanner.Bytes())
+		buf.WriteByte('\n')
+	}
+	if err := scanner.Err(); err != nil {
+		hookLogger(c).Error(fmt.Sprintf("failed to read %s hook input", hook), "err", err)
+		return nil, fmt.Errorf("read %s hook input: %w", hook, err)
+	}
+	return buf.Bytes(), nil
+}
 
-		switch cmdName {
-		case hooks.PreReceiveHook, hooks.PostReceiveHook:
-			scanner := bufio.NewScanner(stdin)
-			for scanner.Scan() {
-				buf.Write(scanner.Bytes())
-				buf.WriteByte('\n')
-				fields := strings.Fields(scanner.Text())
-				if len(fields) != 3 {
-					logger.Error(fmt.Sprintf("invalid %s hook input", cmdName), "input", scanner.Text())
-					continue
-				}
-				opts = append(opts, hooks.HookArg{
-					OldSha:  fields[0],
-					NewSha:  fields[1],
-					RefName: fields[2],
-				})
-			}
-			// A line longer than the scanner takes, or a failed read, ends
-			// the loop early. The hook then fails rather than acting, and
-			// running the custom hook, on part of the refs.
-			if err := scanner.Err(); err != nil {
-				logger.Error(fmt.Sprintf("failed to read %s hook input", cmdName), "err", err)
-				return fmt.Errorf("read %s hook input: %w", cmdName, err)
-			}
-
-			if cmdName == hooks.PostReceiveHook {
-				backend.FromContext(ctx).PostReceive(ctx, repoName, opts)
-			}
-		case hooks.PostUpdateHook:
-			backend.FromContext(ctx).PostUpdate(ctx, repoName)
-		}
-
-		// Custom hooks
-		if err := runCustomHook(ctx, customHookPath, &buf, stdout, stderr, args...); err != nil {
-			logger.Error("failed to run custom hook", "err", err)
-			return err
-		}
-
-		return nil
-	})
-)
-
-// initBackend opens the database and the backend for the hooks that use
-// them, post-receive and post-update.
-func initBackend(c *cobra.Command, args []string) error {
-	if err := cmd.InitBackendContext(c, args); err != nil {
-		log.FromContext(c.Context()).Error("failed to initialize backend context", "err", err)
-		return errInternalServerError
+// runHookCommand runs the custom hook in the data path's hooks directory
+// with input on stdin and args, if there is one.
+func runHookCommand(c *cobra.Command, hook string, input []byte, args []string) error {
+	ctx := c.Context()
+	path := filepath.Join(config.FromContext(ctx).DataPath, "hooks", hook)
+	if err := runCustomHook(ctx, path, bytes.NewReader(input), c.OutOrStdout(), c.ErrOrStderr(), args...); err != nil {
+		hookLogger(c).Error("failed to run custom hook", "err", err)
+		return err
 	}
 	return nil
+}
+
+// recordPushRefs appends the post-receive input refs to the file
+// $SOFT_SERVE_PUSH_REFS names, as the generated post-receive script does. A
+// failure is logged: the push has happened, and only its webhooks are lost.
+func recordPushRefs(logger *log.Logger, refs []byte) {
+	path := os.Getenv(hooks.PushRefsEnv)
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err == nil {
+		_, err = f.Write(refs)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		logger.Error("failed to record the pushed refs for the server", "err", err)
+	}
 }
 
 // NewCommand returns a new hook command with its subcommands.
 //
 // Each call builds a new command tree. Cobra keeps a subcommand's context
-// from its first run, and InitBackendContext stores the database and
-// backend in it, so a tree run twice would run the second time with the
-// first run's config and closed database.
+// from its first run, so a tree run twice would run the second time with
+// the first run's config.
 func NewCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:    "hook",
@@ -122,24 +129,13 @@ func NewCommand() *cobra.Command {
 		Hidden: true,
 		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
 			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
-			// in the working directory, which for a hook is the repository:
-			// opening the backend would create a data directory and an
-			// empty database inside it, and a custom hook would be looked
-			// for there. The server always sets it.
+			// in the working directory, which for a hook is the repository,
+			// and a custom hook would be looked for there. The server always
+			// sets it.
 			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
 				log.FromContext(c.Context()).Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
 				return ErrNoDataPath
 			}
-			return nil
-		},
-		PersistentPostRunE: func(c *cobra.Command, args []string) error {
-			// The hook has done its work by now, so a failure to close the
-			// database is only logged: failing here would make git reject a
-			// push that pre-receive or update accepted.
-			if err := cmd.CloseDBContext(c, args); err != nil {
-				log.FromContext(c.Context()).Error("failed to close backend", "err", err)
-			}
-
 			return nil
 		},
 	}
@@ -154,25 +150,23 @@ func NewCommand() *cobra.Command {
 		&cobra.Command{
 			Use:   hooks.PreReceiveHook,
 			Short: "Run git pre-receive hook",
-			RunE:  hooksRunE,
+			RunE:  preReceiveRunE,
 		},
 		&cobra.Command{
 			Use:   hooks.UpdateHook,
 			Short: "Run git update hook",
 			Args:  cobra.ExactArgs(3),
-			RunE:  hooksRunE,
+			RunE:  updateRunE,
 		},
 		&cobra.Command{
-			Use:     hooks.PostReceiveHook,
-			Short:   "Run git post-receive hook",
-			PreRunE: initBackend,
-			RunE:    hooksRunE,
+			Use:   hooks.PostReceiveHook,
+			Short: "Run git post-receive hook",
+			RunE:  postReceiveRunE,
 		},
 		&cobra.Command{
-			Use:     hooks.PostUpdateHook,
-			Short:   "Run git post-update hook",
-			PreRunE: initBackend,
-			RunE:    hooksRunE,
+			Use:   hooks.PostUpdateHook,
+			Short: "Run git post-update hook",
+			RunE:  postUpdateRunE,
 		},
 	)
 

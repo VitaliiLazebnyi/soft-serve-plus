@@ -1,9 +1,9 @@
 # vi: set ft=conf
 
 # Only git receive-pack runs hooks, so only it gets the hook environment and
-# the server config. Every other service the server starts, over SSH, HTTP and
-# git://, gets GIT_PROTOCOL and none of it, so a fetch never carries the
-# database data source.
+# the server config, without the database data source. Every other service
+# the server starts, over SSH, HTTP and git://, gets GIT_PROTOCOL and none of
+# it.
 
 # A git on PATH, ahead of the real one, records the variables each git service
 # the server starts gets, apart from the process-wide switches every git child
@@ -18,10 +18,14 @@ chmod 0755 fakebin/git
 env SERVICE_ENV_OUT=$WORK/out
 env PATH=$WORK/fakebin${:}$PATH
 
+# a refs file a stopped server left behind is removed at start
+mkdir $DATA_PATH/tmp
+mkfile $DATA_PATH/tmp/soft-serve-push-stale.refs ''
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
 ensureserverrunning SSH_PORT
+! exists $DATA_PATH/tmp/soft-serve-push-stale.refs
 
 soft repo create repo1
 soft user create user1 --key "$USER1_AUTHORIZED_KEY"
@@ -39,10 +43,16 @@ git -C repo1 push origin HEAD
 grep '^SOFT_SERVE_REPO_NAME$' out/receive-pack
 grep '^SOFT_SERVE_DATA_PATH$' out/receive-pack
 grep '^SOFT_SERVE_PUBLIC_KEY$' out/receive-pack
+grep '^SOFT_SERVE_PUSH_REFS$' out/receive-pack
+# but not the database data source: no hook opens the database
+! grep '^SOFT_SERVE_DB_DATA_SOURCE$' out/receive-pack
 # the clone before it: upload-pack gets none of it
 exists out/upload-pack
 ! grep '^SOFT_SERVE_' out/upload-pack
 rm out/receive-pack out/upload-pack
+# and the push left no refs file behind
+exec ls -A $DATA_PATH/tmp
+! stdout .
 
 # a fetch and an archive over SSH
 git -C repo1 fetch origin
@@ -73,6 +83,8 @@ grep '^SOFT_SERVE_REPO_NAME$' out/receive-pack
 grep '^SOFT_SERVE_USERNAME$' out/receive-pack
 ! grep '^SOFT_SERVE_PUBLIC_KEY$' out/receive-pack
 rm out/receive-pack-advertise out/receive-pack
+exec ls -A $DATA_PATH/tmp
+! stdout .
 
 # a clone over git:// gets the protocol version and nothing else
 git clone git://127.0.0.1:$GIT_PORT/repo1 repo1-daemon

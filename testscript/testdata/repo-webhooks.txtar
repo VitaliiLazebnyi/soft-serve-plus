@@ -26,8 +26,9 @@ git -C repo-123 commit -m 'first'
 git -C repo-123 push origin HEAD
 
 # the first push creates the branch, so it sends branch_tag_create and push;
-# both reach the local receiver and are recorded as successful deliveries
-soft repo webhook deliver list repo-123 1
+# both reach the local receiver and are recorded as successful deliveries.
+# The server sends them after the push has returned.
+webhook-deliveries repo-123 1 2
 stdout '✅.*branch_tag_create'
 stdout '✅.*push'
 ! stdout '❌'

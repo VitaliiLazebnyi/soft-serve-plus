@@ -50,9 +50,9 @@ const recorder = "#!/bin/sh\n" +
 	"exit \"${EXIT:-0}\"\n"
 
 // The generated hooks are POSIX sh scripts that work from a repository whose
-// path contains spaces and pass stdin, arguments and exit codes through.
-// pre-receive and update run the server-wide custom hook themselves and start
-// no soft process (R55); post-receive and post-update run soft.
+// path contains spaces and pass stdin, arguments and exit codes through. They
+// run the server-wide custom hook themselves and start no soft process (R55),
+// and post-receive writes its refs to $SOFT_SERVE_PUSH_REFS for the server.
 func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hooks are run by git's sh")
@@ -84,13 +84,18 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	if err := os.MkdirAll(customDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, hn := range []string{PreReceiveHook, UpdateHook} {
+	allHooks := []string{PreReceiveHook, UpdateHook, PostReceiveHook, PostUpdateHook}
+	for _, hn := range allHooks {
 		if err := os.WriteFile(filepath.Join(customDir, hn), []byte(recorder), 0o755); err != nil { //nolint:gosec
 			t.Fatal(err)
 		}
 	}
+	refs := filepath.Join(t.TempDir(), "push refs")
+	if err := os.WriteFile(refs, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	for _, hn := range []string{PreReceiveHook, UpdateHook, PostReceiveHook, PostUpdateHook} {
+	for _, hn := range allHooks {
 		for _, p := range []string{
 			filepath.Join(repoPath, "hooks", hn),
 			filepath.Join(repoPath, "hooks", hn+".d", "soft-serve"),
@@ -107,10 +112,6 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 
 	run := func(hook, stdin, exit string, args ...string) error {
 		t.Helper()
-		out := binOut
-		if hook == PreReceiveHook || hook == UpdateHook {
-			out = hookOut
-		}
 		// Run the hook as git does: by path, with GIT_DIR unset.
 		cmd := exec.CommandContext(t.Context(), filepath.Join(repoPath, "hooks", hook), args...)
 		cmd.Dir = repoPath
@@ -120,7 +121,8 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 			"SOFT_SERVE_BIN_PATH=" + bin,
 			"SOFT_SERVE_DATA_PATH=" + tmp,
 			"SOFT_SERVE_REPO_NAME=my repo",
-			"OUT=" + out,
+			PushRefsEnv + "=" + refs,
+			"OUT=" + hookOut,
 			"EXIT=" + exit,
 		}
 		return cmd.Run()
@@ -132,32 +134,42 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	if err := run(UpdateHook, "", "0", "refs/heads/main", "old", "new"); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if err := run(PostUpdateHook, "", "0", "refs/heads/a", "refs/heads/b"); err != nil {
+	if err := run(PostReceiveHook, "a b refs/heads/main\nc d refs/tags/v1\n", "0"); err != nil {
+		t.Fatalf("post-receive: %v", err)
+	}
+	if err := run(PostUpdateHook, "", "0", "refs/heads/main", "refs/tags/v1"); err != nil {
 		t.Fatalf("post-update: %v", err)
 	}
 	for _, c := range []struct{ file, want string }{{
 		// The custom hooks get what `soft hook` gave them: the ref lines
-		// for pre-receive, the three arguments and no input for update.
+		// for pre-receive and post-receive, the arguments and no input for
+		// update and post-update.
 		file: hookOut,
 		want: "pre-receive args:\na b refs/heads/main\n" +
-			"update args: [refs/heads/main] [old] [new]\n",
+			"update args: [refs/heads/main] [old] [new]\n" +
+			"post-receive args:\na b refs/heads/main\nc d refs/tags/v1\n" +
+			"post-update args: [refs/heads/main] [refs/tags/v1]\n",
 	}, {
-		// soft runs only for post-update here, so pre-receive and update
-		// start no soft process.
-		file: binOut,
-		want: "soft bin args: [hook] [post-update] [refs/heads/a] [refs/heads/b]\n\n",
+		// post-receive told the server what the push updated.
+		file: refs,
+		want: "a b refs/heads/main\nc d refs/tags/v1\n",
 	}} {
 		got, err := os.ReadFile(c.file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(got) != c.want {
-			t.Errorf("calls:\n%q\nwant\n%q", got, c.want)
+			t.Errorf("%s:\n%q\nwant\n%q", filepath.Base(c.file), got, c.want)
 		}
 	}
+	// No hook started soft.
+	if _, err := os.Stat(binOut); !os.IsNotExist(err) {
+		b, _ := os.ReadFile(binOut)
+		t.Errorf("soft was run: %q", b)
+	}
 
-	// A failing custom hook or soft fails the git hook with its exit code.
-	for _, hn := range []string{UpdateHook, PostReceiveHook} {
+	// A failing custom hook fails the git hook with its exit code.
+	for _, hn := range allHooks {
 		err := run(hn, "a b refs/heads/main\n", "3", "refs/heads/main", "old", "new")
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
@@ -166,11 +178,13 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	}
 
 	// A custom hook that is not executable does not run.
-	if err := os.Chmod(filepath.Join(customDir, UpdateHook), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(UpdateHook, "", "3", "refs/heads/main", "old", "new"); err != nil {
-		t.Errorf("update with a non-executable custom hook: %v, want success", err)
+	for _, hn := range allHooks {
+		if err := os.Chmod(filepath.Join(customDir, hn), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := run(hn, "a b refs/heads/main\n", "3", "refs/heads/main", "old", "new"); err != nil {
+			t.Errorf("%s with a non-executable custom hook: %v, want success", hn, err)
+		}
 	}
 }
 
@@ -265,7 +279,7 @@ func TestSoftServeHookNeedsDataPath(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not found")
 	}
-	for _, hn := range []string{PreReceiveHook, UpdateHook} {
+	for _, hn := range []string{PreReceiveHook, UpdateHook, PostReceiveHook, PostUpdateHook} {
 		script := filepath.Join(t.TempDir(), "soft-serve")
 		if err := os.WriteFile(script, []byte(softServeHook(runtime.GOOS, hn)), 0o600); err != nil {
 			t.Fatal(err)

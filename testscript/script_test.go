@@ -169,6 +169,7 @@ func TestScript(t *testing.T) {
 			"dos2unix":               cmdDos2Unix,
 			"new-webhook":            cmdNewWebhook,
 			"webhook-received":       cmdWebhookReceived,
+			"webhook-deliveries":     cmdWebhookDeliveries("admin", admin1.Signer()),
 			"ensureserverrunning":    cmdEnsureServerRunning,
 			"ensureservernotrunning": cmdEnsureServerNotRunning,
 			"stopserver":             cmdStopserver,

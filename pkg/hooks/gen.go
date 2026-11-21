@@ -66,19 +66,21 @@ func GenerateHooks(_ context.Context, cfg *config.Config, repo string) error {
 // softServeHook returns the soft-serve script of hook, the one in
 // hooks/<hook>.d, for a server on goos.
 //
-// For pre-receive and update it runs the server-wide custom hook,
-// $SOFT_SERVE_DATA_PATH/hooks/<hook>, when there is one, and does nothing
-// else, so a push starts no soft process for them. The custom hook gets the
-// arguments and input `soft hook` gave it: for pre-receive the ref lines on
-// stdin, for update the three arguments and an empty stdin. Its exit status
-// is the script's.
+// It runs the server-wide custom hook, $SOFT_SERVE_DATA_PATH/hooks/<hook>,
+// when there is one, and starts no soft process: the server does the work
+// of post-receive and post-update itself once receive-pack has exited. The
+// custom hook gets the arguments and input `soft hook` gave it: the ref
+// lines on stdin for pre-receive and post-receive; the three arguments and
+// an empty stdin for update; the ref names as arguments and an empty stdin
+// for post-update. Its exit status is the script's.
+//
+// post-receive first appends its ref lines to the file $SOFT_SERVE_PUSH_REFS
+// names, which tells the server what the push updated (see PushRefs).
 //
 // As in `soft hook`, the custom hook runs only when it is executable, except
 // on Windows, which has no execute bit and cannot start an extensionless
 // script: there a hook file is run with sh, as git for Windows runs its
 // hooks.
-//
-// post-receive and post-update still run `soft hook <hook>`.
 func softServeHook(goos, hook string) string {
 	var b strings.Builder
 	b.WriteString(`#!/bin/sh
@@ -88,17 +90,21 @@ if [ -z "$SOFT_SERVE_REPO_NAME" ]; then
 	exit 0
 fi
 `)
-	var args, stdin string
+	// args are the custom hook's arguments, stdin redirects its input, and
+	// pipe feeds it the input read into $data.
+	var args, stdin, pipe string
 	switch hook {
-	case PreReceiveHook:
 	case UpdateHook:
 		args, stdin = ` "$1" "$2" "$3"`, " </dev/null"
-	case PostReceiveHook:
-		fmt.Fprintf(&b, "\"${SOFT_SERVE_BIN_PATH}\" hook %s\n", hook)
-		return b.String()
 	case PostUpdateHook:
-		fmt.Fprintf(&b, "\"${SOFT_SERVE_BIN_PATH}\" hook %s \"$@\"\n", hook)
-		return b.String()
+		args, stdin = ` "$@"`, " </dev/null"
+	case PostReceiveHook:
+		b.WriteString(`data=$(cat)
+if [ -n "$` + PushRefsEnv + `" ]; then
+	printf '%s\n' "$data" >>"$` + PushRefsEnv + `"
+fi
+`)
+		pipe = `printf '%s\n' "$data" | `
 	}
 	b.WriteString(`if [ -z "$SOFT_SERVE_DATA_PATH" ]; then
 	echo "SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server" >&2
@@ -106,13 +112,17 @@ fi
 fi
 `)
 	fmt.Fprintf(&b, "hook=\"$SOFT_SERVE_DATA_PATH/hooks/%s\"\n", hook)
+	run := `"$hook"`
 	if goos == "windows" {
 		b.WriteString("[ -f \"$hook\" ] || exit 0\n")
-		fmt.Fprintf(&b, "exec sh \"$hook\"%s%s\n", args, stdin)
+		run = `sh "$hook"`
 	} else {
 		b.WriteString("[ -f \"$hook\" ] && [ -x \"$hook\" ] || exit 0\n")
-		fmt.Fprintf(&b, "exec \"$hook\"%s%s\n", args, stdin)
 	}
+	if pipe == "" {
+		run = "exec " + run
+	}
+	fmt.Fprintf(&b, "%s%s%s%s\n", pipe, run, args, stdin)
 	return b.String()
 }
 

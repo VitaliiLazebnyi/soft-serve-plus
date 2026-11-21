@@ -55,7 +55,15 @@ type Request struct {
 	PublicKey gossh.PublicKey
 	// Protocol is the GIT_PROTOCOL value to pass to git, or "".
 	Protocol string
+	// Refs, if not nil, is where post-receive writes the refs the push
+	// updated.
+	Refs *PushRefs
 }
+
+// dataSourceEnv is the server config variable that holds the database data
+// source, with its password, if any. No hook opens the database, so it is
+// left out of their environment.
+const dataSourceEnv = "SOFT_SERVE_DB_DATA_SOURCE="
 
 // Env returns the environment git receive-pack and the hooks it runs get
 // for req, on top of the server's own (see pkg/git's serviceEnv):
@@ -63,7 +71,9 @@ type Request struct {
 //   - SOFT_SERVE_REPO_NAME, SOFT_SERVE_REPO_PATH and SOFT_SERVE_LOG_PATH;
 //   - SOFT_SERVE_PUBLIC_KEY over SSH, empty for a keyless session;
 //   - SOFT_SERVE_USERNAME when there is a user;
-//   - the server config, from cfg.Environ;
+//   - SOFT_SERVE_PUSH_REFS when req has Refs;
+//   - the server config, from cfg.Environ, without the database data
+//     source;
 //   - GIT_PROTOCOL when req has one.
 //
 // Only receive-pack runs hooks. Every other git service gets ProtocolEnv,
@@ -80,7 +90,14 @@ func Env(cfg *config.Config, req Request) []string {
 	if req.User != nil {
 		env = append(env, "SOFT_SERVE_USERNAME="+req.User.Username())
 	}
-	env = append(env, cfg.Environ()...)
+	if req.Refs != nil {
+		env = append(env, req.Refs.Env())
+	}
+	for _, kv := range cfg.Environ() {
+		if !strings.HasPrefix(kv, dataSourceEnv) {
+			env = append(env, kv)
+		}
+	}
 	return append(env, ProtocolEnv(req.Protocol)...)
 }
 

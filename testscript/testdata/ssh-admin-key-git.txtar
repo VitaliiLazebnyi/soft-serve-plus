@@ -96,7 +96,7 @@ mkfile ./apriv/NOACCT.md '# no account'
 git -C apriv add -A
 git -C apriv commit -m 'no account'
 git -C apriv push origin HEAD
-soft repo webhook deliver list upriv 1
+webhook-deliveries upriv 1 1
 stdout '✅.*push'
 ! stdout '❌'
 webhook-received 1

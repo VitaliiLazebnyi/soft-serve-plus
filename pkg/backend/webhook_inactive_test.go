@@ -52,12 +52,10 @@ func (e whEnv) seedInactiveHook(t *testing.T, events ...webhook.Event) int64 {
 func TestInactiveWebhookGetsNoEvents(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
-	t.Setenv("SOFT_SERVE_USERNAME", "admin")
-	t.Setenv("SOFT_SERVE_PUBLIC_KEY", "")
 	active := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
 	inactive := e.seedInactiveHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
 
-	e.be.PostReceive(e.ctx, e.repo.Name(), []hooks.HookArg{{
+	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))

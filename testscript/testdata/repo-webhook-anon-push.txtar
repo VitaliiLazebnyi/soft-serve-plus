@@ -21,7 +21,7 @@ git -C repo1 add -A
 git -C repo1 commit -m 'first'
 git -C repo1 push origin HEAD
 
-soft repo webhook deliver list repo1 1
+webhook-deliveries repo1 1 2
 stdout '✅.*branch_tag_create'
 stdout '✅.*push'
 webhook-received 2
