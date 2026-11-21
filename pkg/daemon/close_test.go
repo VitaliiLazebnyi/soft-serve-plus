@@ -8,13 +8,15 @@ import (
 )
 
 // startCloseTestDaemon serves a daemon like the test daemon whose request
-// and idle timeouts are ten minutes, far past the tests' one-minute wait, so
-// a request that ends within the wait can only have been ended by Close.
-// opts change the daemon before it serves.
+// and idle timeouts are ten minutes, far past the tests' one-minute wait,
+// and which has no total time limit on a connection, so a request that ends
+// within the wait can only have been ended by Close. opts change the daemon
+// before it serves.
 func startCloseTestDaemon(t *testing.T, opts ...func(*GitDaemon)) (*GitDaemon, string) {
 	t.Helper()
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 600
+	cfg.Git.MaxTimeout = 0
 	d, err := NewGitDaemon(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
