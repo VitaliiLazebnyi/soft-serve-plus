@@ -34,7 +34,7 @@ builds:
     flags:
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
-    ldflags: -s -w -X main.Version=v{{ .Version }} -X main.CommitSHA={{ .Commit }} -X main.CommitDate={{ .CommitDate }}
+    ldflags: -s -w -X main.Version=v{{ .Version }} -X main.CommitSHA={{ .Commit }}
     goos:
       - linux
       - darwin
@@ -195,6 +195,23 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
       - linux/arm/v7
+    # Reproducible per platform: BuildKit dates the image config and
+    # history by SOURCE_DATE_EPOCH, and rewrite-timestamp clamps the times of
+    # the files the RUN steps write to it, so a rebuild of a commit gives the
+    # same image manifest digest for each platform. The index, and so the tag
+    # digest, is not reproducible: it also lists the SBOM attestation
+    # (GoReleaser's default, --attest=type=sbom) and buildx's provenance
+    # attestation, which hold the build time and random IDs.
+    # GoReleaser adds --push (or --load for a snapshot), which buildx applies
+    # to this image output. A rebuild matches only while Alpine serves the
+    # same package versions (`apk add` installs the newest ones) and the
+    # BuildKit version is the same: setup-buildx-action takes the latest,
+    # and a newer one may lay out or compress layers differently. Checked for
+    # linux/amd64 and linux/arm64 (BuildKit 0.34), not linux/arm/v7.
+    build_args:
+      SOURCE_DATE_EPOCH: "{{ .CommitTimestamp }}"
+    flags:
+      - --output=type=image,rewrite-timestamp=true
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.description: "A tasty, self-hostable Git server for the command line (maintained fork of Soft Serve)"

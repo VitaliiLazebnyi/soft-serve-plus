@@ -2,6 +2,9 @@ package buildcheck
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"os"
 	"path"
@@ -22,7 +25,9 @@ type goreleaserConfig struct {
 	} `yaml:"before"`
 	Builds []struct {
 		Binary       string   `yaml:"binary"`
+		Main         string   `yaml:"main"`
 		Flags        []string `yaml:"flags"`
+		Ldflags      string   `yaml:"ldflags"`
 		ModTimestamp string   `yaml:"mod_timestamp"`
 	} `yaml:"builds"`
 	Archives []struct {
@@ -31,7 +36,9 @@ type goreleaserConfig struct {
 		Files []any `yaml:"files"`
 	} `yaml:"archives"`
 	DockersV2 []struct {
-		Labels map[string]string `yaml:"labels"`
+		Labels    map[string]string `yaml:"labels"`
+		BuildArgs map[string]string `yaml:"build_args"`
+		Flags     []string          `yaml:"flags"`
 	} `yaml:"dockers_v2"`
 	NFPMs []struct {
 		Dependencies []string `yaml:"dependencies"`
@@ -248,6 +255,103 @@ func TestImageLabelsAreReproducible(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestImageBuildIsReproducible checks what makes two builds of the image from
+// one commit give the same per-platform image manifest digest: BuildKit dates
+// the config and history by SOURCE_DATE_EPOCH, rewrite-timestamp clamps the
+// times of the files the RUN steps write, and the Dockerfile drops apk's log.
+// The index digest is not checked: its SBOM and provenance attestations hold
+// the build time and random IDs.
+func TestImageBuildIsReproducible(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	if len(c.DockersV2) == 0 {
+		t.Fatal("no dockers_v2 in .goreleaser.yml; update this test")
+	}
+	for i, d := range c.DockersV2 {
+		if got := d.BuildArgs["SOURCE_DATE_EPOCH"]; got != "{{ .CommitTimestamp }}" {
+			t.Errorf("dockers_v2[%d]: build arg SOURCE_DATE_EPOCH is %q, want {{ .CommitTimestamp }}", i, got)
+		}
+		rewrite := slices.ContainsFunc(d.Flags, func(f string) bool {
+			return strings.HasPrefix(f, "--output=type=image,") && strings.Contains(f, "rewrite-timestamp=true")
+		})
+		if !rewrite {
+			t.Errorf("dockers_v2[%d]: flags %q do not set rewrite-timestamp=true on the image output", i, d.Flags)
+		}
+	}
+	// apk writes the install time to /var/log/apk.log, the one file that
+	// differed between two builds of the package layer.
+	var removed bool
+	for _, ins := range dockerfileInstructions(t) {
+		if strings.Contains(ins, "apk add") && strings.Contains(ins, "rm -f /var/log/apk.log") {
+			removed = true
+		}
+	}
+	if !removed {
+		t.Error("the Dockerfile's apk add does not remove /var/log/apk.log")
+	}
+}
+
+// ldflagVar matches the variables an -X linker flag sets in package main.
+var ldflagVar = regexp.MustCompile(`-X main\.(\w+)=`)
+
+// TestLdflagsSetExistingVariables checks that every -X main.Name in the
+// release ldflags names a package-level variable of the main package: the
+// linker ignores one that does not exist, so a removed variable would leave
+// the flag behind, setting nothing.
+func TestLdflagsSetExistingVariables(t *testing.T) {
+	t.Parallel()
+	c := readGoreleaser(t)
+	for i, b := range c.Builds {
+		dir := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(b.Main, "./")))
+		vars := packageVars(t, dir)
+		matches := ldflagVar.FindAllStringSubmatch(b.Ldflags, -1)
+		if len(matches) == 0 {
+			t.Errorf("builds[%d] (%s): no -X main.* in ldflags %q; update this test", i, b.Binary, b.Ldflags)
+		}
+		for _, m := range matches {
+			if !vars[m[1]] {
+				t.Errorf("builds[%d] (%s): ldflags set main.%s, which %s does not declare", i, b.Binary, m[1], b.Main)
+			}
+		}
+	}
+}
+
+// packageVars returns the names of the package-level variables declared in
+// the non-test Go files of dir.
+func packageVars(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				for _, name := range spec.(*ast.ValueSpec).Names {
+					vars[name.Name] = true
+				}
+			}
+		}
+	}
+	if len(vars) == 0 {
+		t.Fatalf("no package-level variables in %s; update this test", dir)
+	}
+	return vars
 }
 
 // TestReleaseArtifactsAreReproducible checks that the archives and packages,

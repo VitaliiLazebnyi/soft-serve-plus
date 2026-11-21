@@ -1,8 +1,14 @@
+# The coverage job's merged profile (unit tests on SQLite and Postgres plus
+# the end-to-end scripts) covers about 90% of statements (measured 2026-11).
+# The checks fail a pull request that lowers the project's coverage by more
+# than one point, or whose new and changed lines are less than 80% covered.
+# Neither is a required check.
 coverage:
   status:
     project:
       default:
-        target: 50%
+        target: auto
+        threshold: 1%
     patch:
       default:
-        target: 30%
+        target: 80%

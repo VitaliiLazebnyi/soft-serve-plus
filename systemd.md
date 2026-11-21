@@ -144,6 +144,33 @@ specific setup. For more information on Systemd service files, refer to
 [systemd.service](https://www.freedesktop.org/software/systemd/man/systemd.service.html)
 and [systemd.exec](https://www.freedesktop.org/software/systemd/man/systemd.exec.html).
 
+### Hooks run in the same sandbox
+
+Git and the hooks it runs on a push, your global hooks in
+`<data path>/hooks` and the per-repository ones in `hooks/<name>.d/`, are
+processes of the service, so every setting above applies to them too. A hook
+that works from a shell can fail under the unit:
+
+- `ProtectSystem=strict` and `ProtectHome=true`: it can write only under the
+  data directory, and cannot read home directories;
+- `PrivateTmp=true`: its `/tmp` is the service's own, not the host's;
+- `MemoryDenyWriteExecute=true`: runtimes that compile code at run time,
+  such as Node.js, Java or .NET, fail to start;
+- `NoNewPrivileges=true`, `RestrictSUIDSGID=true` and the empty
+  `CapabilityBoundingSet=`: `sudo` and other setuid programs do not work;
+- `RestrictAddressFamilies=` and `SystemCallFilter=`: only IP and Unix
+  sockets, and no privileged system calls.
+
+To relax a setting for your hooks, override it with a drop-in rather than
+editing the packaged unit, for example `sudo systemctl edit soft-serve.service`
+with:
+
+```conf
+[Service]
+MemoryDenyWriteExecute=false
+ReadWritePaths=/srv/deploy
+```
+
 ## Start Soft Serve Plus on boot
 
 Now that we have our Soft Serve Plus Systemd service file in-place, let's go ahead
