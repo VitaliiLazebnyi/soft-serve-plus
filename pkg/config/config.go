@@ -923,7 +923,7 @@ func (c *Config) resolvePaths() {
 			*p = filepath.Join(c.DataPath, *p)
 		}
 	}
-	if c.DB.Driver == "sqlite" && strings.TrimSpace(c.DB.DataSource) != "" {
+	if c.DB.Driver == "sqlite" && sqliteName(c.DB.DataSource) != "" {
 		c.DB.DataSource = resolveSQLiteDataSource(c.DataPath, c.DB.DataSource)
 	}
 
@@ -939,11 +939,12 @@ func (c *Config) check() error {
 	if c.DB.Driver != "sqlite" && c.DB.Driver != "postgres" {
 		return fmt.Errorf("db.driver: %q is not sqlite or postgres", c.DB.Driver)
 	}
-	// An empty SQLite data source would name the data directory itself, or
-	// a file named after the options db.Open adds. An empty Postgres one is
-	// valid: lib/pq then reads the PG* environment variables.
-	if c.DB.Driver == "sqlite" && strings.TrimSpace(c.DB.DataSource) == "" {
-		return errors.New(`db.data_source: empty; with sqlite it names the database file, such as "soft-serve.db"`)
+	// A SQLite data source without a file name, empty or only options
+	// ("?_pragma=..."), would name the data directory itself, or a file
+	// named after the options. An empty Postgres one is valid: lib/pq then
+	// reads the PG* environment variables.
+	if c.DB.Driver == "sqlite" && sqliteName(c.DB.DataSource) == "" {
+		return fmt.Errorf(`db.data_source: %q names no database file; with sqlite it is a file name, such as "soft-serve.db", with options after "?"`, c.DB.DataSource)
 	}
 
 	// The HTTP public URL is the JWT issuer and the base of LFS hrefs, so a
@@ -1249,6 +1250,13 @@ func readKeyFile(path, dataPath string) ([]byte, error) {
 		}
 	}
 	return os.ReadFile(path)
+}
+
+// sqliteName returns the database name of a SQLite data source: the part
+// before its options ("?..."), without a "file:" scheme.
+func sqliteName(dsn string) string {
+	name, _, _ := strings.Cut(strings.TrimSpace(dsn), "?")
+	return strings.TrimSpace(strings.TrimPrefix(name, "file:"))
 }
 
 // resolveSQLiteDataSource makes a relative SQLite database path in dsn

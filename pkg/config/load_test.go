@@ -228,11 +228,12 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-// An empty SQLite data source is refused rather than opening the data
-// directory, or a file named "?_pragma=…" (tracker 323). Postgres reads
+// A SQLite data source with no file name, empty or only options, is refused
+// rather than opening the data directory, or a file named "?_pragma=…"
+// (tracker 323). Postgres reads
 // the PG* variables when it is empty, so it is allowed there.
 func TestValidateRejectsEmptySQLiteDataSource(t *testing.T) {
-	for _, ds := range []string{"", "  "} {
+	for _, ds := range []string{"", "  ", "?_pragma=busy_timeout(5000)", "file:?mode=rwc", " ?x=1"} {
 		cfg := DefaultConfig()
 		cfg.DataPath = t.TempDir()
 		cfg.DB.DataSource = ds
