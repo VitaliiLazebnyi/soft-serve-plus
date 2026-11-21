@@ -650,9 +650,9 @@ JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
 from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
 and ES256, ES384 or ES512 for ECDSA, so these keep working with any of the
 host key types the server accepts: an unencrypted Ed25519, RSA or ECDSA key;
-with any other, `soft serve` refuses to start. The server reads the host key at start, so a replaced key takes effect
-at the next start, for SSH and for tokens alike, and invalidates tokens
-issued before.
+with any other, `soft serve` refuses to start. The server reads the host
+key at start, so a replaced key takes effect at the next start, for SSH and
+for tokens alike, and invalidates tokens issued before.
 
 Authenticating with an RSA user key needs a client that signs with
 `rsa-sha2-256` or `rsa-sha2-512`: OpenSSH 7.2 and later, libssh2 1.11 and
