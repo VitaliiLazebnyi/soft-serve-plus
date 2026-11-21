@@ -1,12 +1,12 @@
-package git
+package sshlfs
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
@@ -37,6 +38,7 @@ func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
 // lock in any session. The store and database are left out of the context on
 // purpose: a refused command must not reach them.
 func TestLFSTransferDownloadSessionRefusesWrites(t *testing.T) {
+	t.Parallel()
 	data := "hello"
 	sum := sha256.Sum256([]byte(data))
 	oid := hex.EncodeToString(sum[:])
@@ -50,17 +52,10 @@ func TestLFSTransferDownloadSessionRefusesWrites(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
-	ctx = proto.WithUserContext(ctx, lfsTestUser{})
-
 	var out bytes.Buffer
-	if err := LFSTransfer(ctx, ServiceCommand{
-		Stdin:  strings.NewReader(in.String()),
-		Stdout: &out,
-		Args:   []string{"repo1", lfs.OperationDownload},
-	}); err != nil {
-		t.Fatalf("LFSTransfer: %v", err)
+	deps := TransferDeps{Config: cfg, Logger: log.New(io.Discard)}
+	if err := Transfer(t.Context(), strings.NewReader(in.String()), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationDownload); err != nil {
+		t.Fatalf("Transfer: %v", err)
 	}
 
 	var got []string
@@ -80,6 +75,7 @@ func TestLFSTransferDownloadSessionRefusesWrites(t *testing.T) {
 }
 
 func TestLFSLockBackendDownloadSessionRefusesWrites(t *testing.T) {
+	t.Parallel()
 	l := &lfsLockBackend{lfsTransfer: &lfsTransfer{op: lfs.OperationDownload}, user: lfsTestUser{}}
 	if _, err := l.Create("foo.png", "refs/heads/main"); !errors.Is(err, transfer.ErrForbidden) {
 		t.Errorf("Create: got %v, want ErrForbidden", err)
@@ -93,6 +89,7 @@ func TestLFSLockBackendDownloadSessionRefusesWrites(t *testing.T) {
 // before it reaches the database: the backend has no store or database here,
 // so a path that got through would panic instead of creating a lock row.
 func TestLFSLockBackendRejectsInvalidPath(t *testing.T) {
+	t.Parallel()
 	l := &lfsLockBackend{lfsTransfer: &lfsTransfer{op: lfs.OperationUpload}, user: lfsTestUser{}}
 	for _, p := range []string{
 		"",

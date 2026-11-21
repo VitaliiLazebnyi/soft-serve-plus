@@ -1,10 +1,10 @@
-package git
+package sshlfs
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"charm.land/log/v2"
@@ -14,22 +14,24 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
-// LFSAuthenticate implements the Git LFS SSH authentication command.
-// Context must have *config.Config, *log.Logger, proto.User.
-// cmd.Args should have the repo path and operation as arguments.
-func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
-	if len(cmd.Args) < 2 {
-		return errors.New("missing args")
+// Authenticate answers git-lfs-authenticate for user and repo on out: the
+// HTTP LFS endpoint of repo under cfg.HTTP.PublicURL, and a token for it
+// signed by tokens, the server's signer, valid for five minutes. operation
+// is lfs.OperationDownload or lfs.OperationUpload, which the caller has
+// authorized. It logs to logger, or to log.Default() when it is nil.
+func Authenticate(out io.Writer, cfg *config.Config, tokens *jwk.Signer, logger *log.Logger, repo proto.Repository, user proto.User, operation string) error {
+	if logger == nil {
+		logger = log.Default()
 	}
-
-	logger := log.FromContext(ctx).WithPrefix("ssh.lfs-authenticate")
-	operation := cmd.Args[1]
+	logger = logger.WithPrefix("ssh.lfs-authenticate")
 	if operation != lfs.OperationDownload && operation != lfs.OperationUpload {
 		logger.Errorf("invalid operation: %s", operation)
 		return errors.New("invalid operation")
 	}
+	if cfg == nil {
+		return config.ErrNilConfig
+	}
 
-	user := proto.UserFromContext(ctx)
 	if user == nil {
 		// The SSH command refuses a caller without an account before it
 		// gets here.
@@ -37,16 +39,14 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 		return proto.ErrUserNotFound
 	}
 
-	repo := proto.RepositoryFromContext(ctx)
 	if repo == nil {
 		logger.Errorf("missing repository")
 		return proto.ErrRepoNotFound
 	}
 
-	cfg := config.FromContext(ctx)
 	expiresIn := time.Minute * 5
 	expiresAt := time.Now().Add(expiresIn)
-	j, err := signToken(cfg, user, []string{repo.Name()}, expiresAt)
+	j, err := tokens.Sign(user, []string{repo.Name()}, expiresAt)
 	if err != nil {
 		logger.Error("failed to sign token", "err", err)
 		return err
@@ -56,7 +56,7 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 	// The signed token is a bearer credential, so it is not logged.
 	logger.Debug("generated token", "href", href, "expires_at", expiresAt)
 
-	return json.NewEncoder(cmd.Stdout).Encode(lfs.AuthenticateResponse{
+	return json.NewEncoder(out).Encode(lfs.AuthenticateResponse{
 		Header: map[string]string{
 			"Authorization": fmt.Sprintf("Bearer %s", j),
 		},
@@ -64,18 +64,4 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 		ExpiresAt: expiresAt,
 		ExpiresIn: int64(expiresIn / time.Second),
 	})
-}
-
-// signToken signs a token for user with the host key cfg loaded; see
-// jwk.Signer.Sign.
-func signToken(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
-	kp, err := config.KeyPair(cfg)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", jwk.ErrHostKey, err)
-	}
-	signer, err := jwk.NewSigner(kp, cfg.HTTP.PublicURL)
-	if err != nil {
-		return "", err
-	}
-	return signer.Sign(user, audience, expiresAt)
 }

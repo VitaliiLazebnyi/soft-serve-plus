@@ -1,6 +1,6 @@
 //go:build unix
 
-package git
+package sshlfs
 
 import (
 	"os"
@@ -15,6 +15,7 @@ import (
 // writer shows up, so the fallback after a failed rename must check the type
 // before it opens the file, and the upload must fail promptly.
 func TestLFSTransferUploadRenameOntoFIFO(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	oid := oidOf(content)
 	tr, _ := newLFSUploadTransfer(t)

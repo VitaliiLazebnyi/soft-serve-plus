@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
@@ -38,18 +37,15 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	logs := &syncBuffer{}
 	logger := log.New(logs)
 	logger.SetLevel(log.DebugLevel)
-	ctx = log.WithContext(config.WithContext(ctx, cfg), logger)
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	st := database.New()
-	ctx = store.WithContext(db.WithContext(ctx, dbx), st)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
+	be := backend.New(cfg, dbx, st, logger)
 	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(cfg, be, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

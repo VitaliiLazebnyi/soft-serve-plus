@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseLocksCursor(t *testing.T) {
+	t.Parallel()
 	for cursor, want := range map[string]int64{
 		"":                     0,
 		"1":                    1,
@@ -34,6 +35,7 @@ func TestParseLocksCursor(t *testing.T) {
 }
 
 func TestClampLocksLimit(t *testing.T) {
+	t.Parallel()
 	for limit, want := range map[int]int{
 		-1:                DefaultLocksLimit,
 		0:                 DefaultLocksLimit,
@@ -50,6 +52,7 @@ func TestClampLocksLimit(t *testing.T) {
 // TestNextLocksCursor checks that a full page hands out the ID of its last
 // lock, which ParseLocksCursor accepts, and a short page hands out none.
 func TestNextLocksCursor(t *testing.T) {
+	t.Parallel()
 	page := func(ids ...int64) []models.LFSLock {
 		locks := make([]models.LFSLock, len(ids))
 		for i, id := range ids {

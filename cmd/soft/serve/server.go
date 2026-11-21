@@ -64,7 +64,8 @@ type Server struct {
 func NewServer(ctx context.Context) (_ *Server, err error) {
 	cfg := config.FromContext(ctx)
 	be := backend.FromContext(ctx)
-	logger := log.FromContext(ctx).WithPrefix("server")
+	baseLogger := log.FromContext(ctx)
+	logger := baseLogger.WithPrefix("server")
 	// The cron jobs run with a context Shutdown and Close cancel, so a
 	// running mirror sync starts no further git command or lfs request and
 	// ends rather than outlive the server and the database. A git command
@@ -89,8 +90,10 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}()
 
 	// Add cron jobs.
-	sched := cron.NewScheduler(ctx)
-	scheduleJobs(jobCtx, cfg, sched, logger)
+	sched := cron.NewScheduler(baseLogger)
+	if err := scheduleJobs(jobCtx, cfg, be, sched, baseLogger); err != nil {
+		return nil, err
+	}
 
 	srv.Cron = sched
 
@@ -127,7 +130,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
 
-	srv.GitDaemon, err = daemon.NewGitDaemon(ctx)
+	srv.GitDaemon, err = daemon.NewGitDaemon(cfg, be, baseLogger)
 	if err != nil {
 		return nil, fmt.Errorf("create git daemon: %w", err)
 	}
@@ -601,12 +604,14 @@ type jobScheduler interface {
 	AddFunc(name, spec string, fn func()) error
 }
 
-// scheduleJobs adds the server's periodic jobs to sched: mirror-pull on
-// jobs.mirror_pull, which an empty value disables, and lfs-sweep hourly
-// (jobs.LFSSweepSpec). The jobs run with jobCtx, which
-// the server cancels when it stops. A tick that fires once jobCtx is done,
-// between the cancellation and the scheduler's stop, starts nothing.
-func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler, logger *log.Logger) {
+// scheduleJobs adds the server's periodic jobs, of cfg and be, to sched:
+// mirror-pull on jobs.mirror_pull, which an empty value disables, and
+// lfs-sweep hourly (jobs.LFSSweepSpec). The jobs log to logger, and run with
+// jobCtx, which the server cancels when it stops. A tick that fires once
+// jobCtx is done, between the cancellation and the scheduler's stop, starts
+// nothing. A job the scheduler refuses is logged; a job that cannot be made
+// is an error.
+func scheduleJobs(jobCtx context.Context, cfg *config.Config, be *backend.Backend, sched jobScheduler, logger *log.Logger) error {
 	add := func(name, spec string, fn func(context.Context)) {
 		run := func() {
 			if jobCtx.Err() != nil {
@@ -622,8 +627,17 @@ func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler
 	if cfg.Jobs.MirrorPull == "" {
 		logger.Info("cron job disabled", "job", "mirror-pull")
 	} else {
-		add("mirror-pull", cfg.Jobs.MirrorPull, jobs.SyncMirrors)
+		mirror, err := jobs.NewMirrorPull(cfg, be, logger)
+		if err != nil {
+			return fmt.Errorf("mirror-pull job: %w", err)
+		}
+		add("mirror-pull", cfg.Jobs.MirrorPull, mirror.Run)
 	}
 
-	add("lfs-sweep", jobs.LFSSweepSpec, jobs.SweepLFS)
+	sweep, err := jobs.NewLFSSweep(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("lfs-sweep job: %w", err)
+	}
+	add("lfs-sweep", jobs.LFSSweepSpec, sweep.Run)
+	return nil
 }

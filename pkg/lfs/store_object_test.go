@@ -59,6 +59,7 @@ func (m *memLFSStore) GetLFSObjectByOid(_ context.Context, _ db.Handler, _ int64
 // Not everything that writes objects/ verifies the content, so a file of the
 // right size alone is not enough.
 func TestStoreObjectRenameFailure(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	sum := sha256.Sum256([]byte(content))
 	oid := hex.EncodeToString(sum[:])
@@ -76,6 +77,7 @@ func TestStoreObjectRenameFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			local := storage.NewLocalStorage(root)
 			if tc.dest != "" {
@@ -116,6 +118,7 @@ func TestStoreObjectRenameFailure(t *testing.T) {
 // the pointer's size and content. A short file, such as one a failed write
 // left behind, must not be reported present, or it is never uploaded again.
 func TestHasObject(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	sum := sha256.Sum256([]byte(content))
 	p := Pointer{Oid: hex.EncodeToString(sum[:]), Size: int64(len(content))}
@@ -160,6 +163,7 @@ func TestHasObject(t *testing.T) {
 // reported as ErrObjectRead, apart from storage failures, and nothing is
 // stored.
 func TestStoreObjectReadFailure(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	sum := sha256.Sum256([]byte(content))
 	oid := hex.EncodeToString(sum[:])
@@ -292,6 +296,7 @@ func (w *windowsRenameStorage) Open(name string) (storage.Object, error) {
 // flight keeps the other upload from renaming onto or opening the object,
 // as on Windows.
 func TestStoreObjectConcurrentRename(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	sum := sha256.Sum256([]byte(content))
 	oid := hex.EncodeToString(sum[:])

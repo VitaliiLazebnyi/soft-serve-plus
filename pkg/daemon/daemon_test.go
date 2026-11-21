@@ -27,7 +27,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/prometheus/client_golang/prometheus"
@@ -79,11 +78,9 @@ func runTests(m *testing.M) int {
 		log.Fatal(err)
 	}
 	datastore := database.New()
-	ctx = store.WithContext(ctx, datastore)
 	be := backend.New(cfg, dbx, datastore, nil)
 	testBackend = be
-	ctx = backend.WithContext(ctx, be)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(cfg, be, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -149,8 +146,7 @@ func startIdleDaemon(t *testing.T) string {
 	t.Helper()
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 1
-	ctx := backend.WithContext(config.WithContext(context.Background(), &cfg), testBackend)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,6 +364,8 @@ func TestRefusalReleasesConnection(t *testing.T) {
 	}
 }
 
+// The daemon reads the protocol version as git reads GIT_PROTOCOL, which is
+// how SSH and HTTP read the client's value too.
 func TestProtocolVersion(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -383,8 +381,14 @@ func TestProtocolVersion(t *testing.T) {
 		{"\x00version=\x00", ""},
 		{"\x00version=two\x00", ""},
 		{"\x00version=-1\x00", ""},
-		{"\x00version=2:evil=1\x00", ""},
+		// git-daemon joins the parameters with colons into GIT_PROTOCOL,
+		// so git reads this one as version=2; evil=1 goes no further.
+		{"\x00version=2:evil=1\x00", "2"},
 		{"\x00version=99999\x00", ""},
+		// git ignores a version it does not know.
+		{"\x00version=3\x00", ""},
+		{"\x00version=1\x00version=3\x00", "1"},
+		{"\x00version=02\x00", ""},
 		{"\x00foo=bar\x00", ""},
 	}
 	for _, tc := range cases {
@@ -640,10 +644,8 @@ func TestGitFailureFixedMessage(t *testing.T) {
 // closed or is waited for. Serve used to start counting on the WaitGroup
 // that Shutdown might already be waiting on, which the race detector reports.
 func TestServeRacingShutdown(t *testing.T) {
-	ctx := config.WithContext(context.Background(), testDaemon.cfg)
-	ctx = backend.WithContext(ctx, testBackend)
 	for i := range 100 {
-		d, err := NewGitDaemon(ctx)
+		d, err := NewGitDaemon(testDaemon.cfg, testBackend, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -751,9 +753,7 @@ func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = backend.WithContext(ctx, testBackend)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,9 +949,7 @@ func TestRequestTimeout(t *testing.T) {
 	const requestTimeout = 2 * time.Second
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 600
-	ctx := config.WithContext(context.Background(), &cfg)
-	ctx = backend.WithContext(ctx, testBackend)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

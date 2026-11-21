@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"charm.land/log/v2"

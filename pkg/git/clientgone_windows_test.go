@@ -8,7 +8,7 @@ import (
 )
 
 // The Windows error codes clientGoneOn checks, spelled out as numbers, are
-// the ones syscall defines on Windows, and clientGone uses them there.
+// the ones syscall defines on Windows, and ClientGone uses them there.
 func TestWindowsErrnosMatchSyscall(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -21,11 +21,11 @@ func TestWindowsErrnosMatchSyscall(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
 		}
-		if !clientGone(tc.want) {
-			t.Errorf("clientGone(%s) = false, want true", tc.name)
+		if !ClientGone(tc.want) {
+			t.Errorf("ClientGone(%s) = false, want true", tc.name)
 		}
 	}
-	if !clientGone(windowsErrorNoData) {
-		t.Error("clientGone(ERROR_NO_DATA) = false, want true")
+	if !ClientGone(windowsErrorNoData) {
+		t.Error("ClientGone(ERROR_NO_DATA) = false, want true")
 	}
 }

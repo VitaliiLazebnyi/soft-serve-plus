@@ -121,30 +121,91 @@ const mirrorRefspec = "+refs/*:refs/*"
 // keeps git from choosing one that was not validated. A remote that fails to
 // fetch does not stop the others; their errors are joined. Once ctx is done
 // no further fetch starts, and one already running is stopped; see
-// runMirrorGit.
-func syncMirror(ctx context.Context, path string, names []string, env []string) error {
+// MirrorPull.runGit.
+func (m *MirrorPull) syncMirror(ctx context.Context, path string, names []string, env []string) error {
 	var errs []error
 	for _, name := range names {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := runMirrorGit(ctx, path, env, "fetch", "--prune", "--", name, mirrorRefspec); err != nil {
+		if err := m.runGit(ctx, path, env, "fetch", "--prune", "--", name, mirrorRefspec); err != nil {
 			errs = append(errs, fmt.Errorf("fetching remote %q: %w", name, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// SyncMirrors fetches every pull mirror from its remotes, and their LFS
-// objects when LFS is enabled, and records the outcome of each sync (see
-// Backend.RecordMirrorSync). Up to GOMAXPROCS mirrors sync at once; it
-// returns when all of them are done. Once ctx is done no further mirror
+// MirrorPull is the mirror-pull job: it fetches every pull mirror from its
+// remotes, and their LFS objects when LFS is enabled. Make one with
+// NewMirrorPull.
+type MirrorPull struct {
+	cfg    *config.Config
+	be     *backend.Backend
+	logger *log.Logger
+
+	// timeout bounds the whole sync of one mirror, its fetches and its
+	// LFS objects.
+	//
+	// Stalls are caught much sooner by the low-speed and keepalive
+	// settings in RemoteGitEnv and by the LFS client's stall timeout;
+	// this is the backstop for what those miss, such as git:// remotes,
+	// which git dials itself with no read timeout, and remotes or LFS
+	// endpoints that trickle data just fast enough.
+	timeout time.Duration
+
+	// workers is how many mirrors sync at once.
+	workers int
+
+	// runGit runs one git command of a mirror sync in dir with env
+	// applied: backend.RunRemoteGit, which an import's clone runs through
+	// too. It stops git with SIGTERM once ctx is done, at shutdown or
+	// when the sync runs out of time, and caps the output it keeps.
+	runGit func(ctx context.Context, dir string, env []string, args ...string) error
+
+	// syncLFS stores the LFS objects a mirror sync fetched pointers to:
+	// Backend.SyncRepoLFSObjects.
+	syncLFS func(ctx context.Context, repo proto.Repository, client backend.LFSClient) error
+}
+
+// mirrorSyncTimeout is the default MirrorPull.timeout.
+const mirrorSyncTimeout = time.Hour
+
+// NewMirrorPull returns the mirror-pull job of the server with cfg and be,
+// logging to logger, or log.Default() when it is nil. A nil cfg or be is an
+// error.
+func NewMirrorPull(cfg *config.Config, be *backend.Backend, logger *log.Logger) (*MirrorPull, error) {
+	if cfg == nil {
+		return nil, config.ErrNilConfig
+	}
+	if be == nil {
+		return nil, errNilBackend
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &MirrorPull{
+		cfg:     cfg,
+		be:      be,
+		logger:  logger.WithPrefix("jobs.mirror"),
+		timeout: mirrorSyncTimeout,
+		workers: runtime.GOMAXPROCS(0),
+		runGit:  backend.RunRemoteGit,
+		syncLFS: be.SyncRepoLFSObjects,
+	}, nil
+}
+
+// errNilBackend is returned by NewMirrorPull for a nil backend.
+var errNilBackend = errors.New("jobs: nil backend")
+
+// Run fetches every pull mirror from its remotes, and their LFS objects when
+// LFS is enabled, and records the outcome of each sync (see
+// Backend.RecordMirrorSync). Up to GOMAXPROCS mirrors (as many as there
+// were when NewMirrorPull ran) sync at once; it returns when all of them are
+// done. Once ctx is done no further mirror
 // starts; see syncMirror for what happens to one already running. A mirror
 // whose sync panics is logged and does not stop the others.
-func SyncMirrors(ctx context.Context) {
-	cfg := config.FromContext(ctx)
-	logger := log.FromContext(ctx).WithPrefix("jobs.mirror")
-	b := backend.FromContext(ctx)
+func (m *MirrorPull) Run(ctx context.Context) {
+	logger, b := m.logger, m.be
 
 	// The same guards that protect imports protect syncs, and the same
 	// too-old git ignores them.
@@ -164,7 +225,7 @@ func SyncMirrors(ctx context.Context) {
 
 	logger.Debug("updating mirror repos")
 	var g errgroup.Group
-	g.SetLimit(runtime.GOMAXPROCS(0))
+	g.SetLimit(max(m.workers, 1))
 	for _, repo := range repos {
 		if !repo.IsMirror() {
 			continue
@@ -175,17 +236,17 @@ func SyncMirrors(ctx context.Context) {
 			break
 		}
 		g.Go(func() error {
-			syncMirrorWorker(ctx, cfg, logger, b, repo)
+			m.syncMirrorWorker(ctx, repo)
 			return nil
 		})
 	}
 	_ = g.Wait()
 }
 
-// syncMirrorWorker syncs the mirror repo in a worker of SyncMirrors and
-// records the outcome on its row. A panic is logged with the repository's
-// name.
-func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, repo proto.Repository) {
+// syncMirrorWorker syncs the mirror repo in a worker of Run and records the
+// outcome on its row. A panic is logged with the repository's name.
+func (m *MirrorPull) syncMirrorWorker(ctx context.Context, repo proto.Repository) {
+	logger := m.logger
 	name := repo.Name()
 	// The worker's slot may have come free only after the server began
 	// to stop.
@@ -193,7 +254,7 @@ func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logge
 		return
 	}
 	var err error
-	if perr := safego.Run(logger.With("repo", name), func() { err = syncMirrorRepo(ctx, cfg, logger, b, name) }); perr != nil {
+	if perr := safego.Run(logger.With("repo", name), func() { err = m.syncMirrorRepo(ctx, name) }); perr != nil {
 		err = perr
 	}
 	// A sync the server stopped did not fail, and one of a repository
@@ -201,7 +262,7 @@ func syncMirrorWorker(ctx context.Context, cfg *config.Config, logger *log.Logge
 	if errors.Is(err, errNotMirror) || ctx.Err() != nil {
 		return
 	}
-	if rerr := b.RecordMirrorSync(context.WithoutCancel(ctx), repo, err); rerr != nil {
+	if rerr := m.be.RecordMirrorSync(context.WithoutCancel(ctx), repo, err); rerr != nil {
 		logger.Warn("failed to record the mirror sync", "repo", name, "err", rerr)
 	}
 }
@@ -221,18 +282,19 @@ var errNotMirror = errors.New("not a mirror")
 // syncMirrorRepo syncs one pull mirror: its remotes, then its LFS objects.
 // It logs what went wrong, and returns it so the job can record it: nil
 // once every step succeeded or had nothing to do.
-func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logger, b *backend.Backend, name string) (err error) {
+func (m *MirrorPull) syncMirrorRepo(jobCtx context.Context, name string) (err error) {
+	cfg, logger, b := m.cfg, m.logger, m.be
 	// One deadline for the whole sync: the job waits for every mirror, and
 	// cron skips its runs while one is still going, so a mirror whose
 	// remote or LFS endpoint keeps a transfer going for ever would stop
 	// every mirror from syncing. The steps below stop quietly once ctx is
 	// done, as at shutdown, so running out of time is logged here.
-	ctx, cancel := context.WithTimeout(jobCtx, mirrorSyncTimeout)
+	ctx, cancel := context.WithTimeout(jobCtx, m.timeout)
 	defer cancel()
 	defer func() {
 		if outOfTime(ctx, jobCtx, err) {
-			logger.Warn("mirror sync stopped, it ran out of time", "repo", name, "timeout", mirrorSyncTimeout)
-			err = fmt.Errorf("the sync ran out of time after %v", mirrorSyncTimeout)
+			logger.Warn("mirror sync stopped, it ran out of time", "repo", name, "timeout", m.timeout)
+			err = fmt.Errorf("the sync ran out of time after %v", m.timeout)
 		}
 	}()
 
@@ -277,7 +339,7 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	// When a fetch fails the LFS sync is skipped too; the next run tries
 	// both again.
 	syncEnv := backend.RemoteGitEnv(cfg, remotes.validated...)
-	if err := fetchMirror(ctx, logger, name, r.Path, remotes.names, syncEnv); err != nil {
+	if err := m.fetchMirror(ctx, name, r.Path, remotes.names, syncEnv); err != nil {
 		return err
 	}
 
@@ -315,7 +377,7 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 		return err
 	}
 
-	if err := syncRepoLFS(ctx, b, repo, lfs.NewClient(ep)); err != nil {
+	if err := m.syncLFS(ctx, repo, lfs.NewClient(ep, logger)); err != nil {
 		switch {
 		case errors.Is(err, backend.ErrLFSObjectsUnavailable):
 			// The next sync tries them again.
@@ -330,41 +392,18 @@ func syncMirrorRepo(jobCtx context.Context, cfg *config.Config, logger *log.Logg
 	return nil
 }
 
-// syncRepoLFS stores the LFS objects a mirror sync fetched pointers to.
-// Tests replace it.
-var syncRepoLFS = func(ctx context.Context, b *backend.Backend, repo proto.Repository, client backend.LFSClient) error {
-	return b.SyncRepoLFSObjects(ctx, repo, client)
-}
-
-// mirrorSyncTimeout bounds the whole sync of one mirror, its fetches and its
-// LFS objects. Tests lower it.
-//
-// Stalls are caught much sooner by the low-speed and keepalive settings in
-// RemoteGitEnv and by the LFS client's stall timeout; this is the backstop
-// for what those miss, such as git:// remotes, which git dials itself with no
-// read timeout, and remotes or LFS endpoints that trickle data just fast
-// enough.
-var mirrorSyncTimeout = time.Hour
-
-// runMirrorGit runs one git command of a mirror sync in dir with env
-// applied, through backend.RunRemoteGit, which an import's clone runs
-// through too: it stops git with SIGTERM once ctx is done, at shutdown or
-// when the sync runs out of time, and caps the output it keeps. Tests
-// replace it.
-var runMirrorGit = backend.RunRemoteGit
-
 // fetchMirror fetches the named remotes of the mirror in dir. It returns nil
 // when the sync should go on to the lfs objects, and otherwise the error,
 // after logging a failed fetch, so the lfs sync is skipped until the next
 // run. Once ctx is done it starts no further fetch and returns ctx's error
 // without logging: the server is stopping, or the sync ran out of time.
-func fetchMirror(ctx context.Context, logger *log.Logger, name, dir string, remotes []string, env []string) error {
-	err := syncMirror(ctx, dir, remotes, env)
+func (m *MirrorPull) fetchMirror(ctx context.Context, name, dir string, remotes []string, env []string) error {
+	err := m.syncMirror(ctx, dir, remotes, env)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
 	if err != nil {
-		logger.Error("error syncing mirror", "repo", name, "err", err)
+		m.logger.Error("error syncing mirror", "repo", name, "err", err)
 	}
 	return err
 }

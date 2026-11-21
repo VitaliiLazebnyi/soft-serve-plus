@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"bytes"
@@ -22,9 +22,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	_ "modernc.org/sqlite"
 )
@@ -32,12 +30,12 @@ import (
 // newLFSUploadTransfer returns an upload-session lfsTransfer backed by a
 // migrated SQLite database holding repository 1 ("repo1"), and the context
 // it was built from.
-func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, context.Context) {
+func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, TransferDeps) {
 	t.Helper()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
-	ctx := config.WithContext(context.Background(), cfg)
+	ctx := context.Background()
 	dbx, err := db.Open(ctx, "sqlite", dp+"/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -60,19 +58,19 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, context.Context) {
 	if r, err := datastore.GetRepoByName(ctx, dbx, "repo1"); err != nil || r.ID != (lfsTestRepo{}).ID() {
 		t.Fatalf("repo1 has id %d (err %v), want %d", r.ID, err, (lfsTestRepo{}).ID())
 	}
-	ctx = db.WithContext(ctx, dbx)
-	ctx = store.WithContext(ctx, datastore)
+	logger := log.New(&bytes.Buffer{})
+	deps := TransferDeps{Config: cfg, DB: dbx, Store: datastore, Logger: logger}
 
 	return &lfsTransfer{
 		ctx:     ctx,
 		cfg:     cfg,
 		dbx:     dbx,
 		store:   datastore,
-		logger:  log.New(&bytes.Buffer{}),
+		logger:  logger,
 		storage: storage.NewLocalStorage(filepath.Join(dp, "lfs", "1")),
 		repo:    lfsTestRepo{},
 		op:      lfs.OperationUpload,
-	}, ctx
+	}, deps
 }
 
 func lfsObjectPath(cfg *config.Config, oid string) string {
@@ -100,6 +98,7 @@ func oidOf(s string) string {
 // Upload must check the data against the oid and the declared size itself.
 // It used to store and record whatever it was given, trusting its caller.
 func TestLFSTransferUploadRejectsMismatchedContent(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	oid := oidOf(content)
 	cases := []struct {
@@ -114,6 +113,7 @@ func TestLFSTransferUploadRejectsMismatchedContent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tr, _ := newLFSUploadTransfer(t)
 			err := tr.Upload(tc.oid, tc.size, strings.NewReader(tc.data), nil)
 			if !errors.Is(err, transfer.ErrCorruptData) {
@@ -133,6 +133,7 @@ func TestLFSTransferUploadRejectsMismatchedContent(t *testing.T) {
 // Uploading an object that is already recorded succeeds. The insert used to
 // fail on the unique constraint and the client got an internal error.
 func TestLFSTransferUploadDuplicate(t *testing.T) {
+	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)
 	const content = "hello lfs"
 	oid := oidOf(content)
@@ -163,6 +164,7 @@ func TestLFSTransferUploadDuplicate(t *testing.T) {
 // A foreign key violation is not a duplicate upload, which Upload reports as
 // success.
 func TestLFSTransferUploadRepoDeleted(t *testing.T) {
+	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)
 	if err := tr.store.DeleteRepoByName(tr.ctx, tr.dbx, "repo1"); err != nil {
 		t.Fatal(err)
@@ -178,7 +180,8 @@ func TestLFSTransferUploadRepoDeleted(t *testing.T) {
 // declared size is refused with a 400, nothing is left on disk, and the
 // next command is still read from the right place in the stream.
 func TestLFSTransferPutObjectOversized(t *testing.T) {
-	tr, ctx := newLFSUploadTransfer(t)
+	t.Parallel()
+	tr, deps := newLFSUploadTransfer(t)
 	data := "hello"
 	oid := oidOf(data)
 
@@ -188,15 +191,9 @@ func TestLFSTransferPutObjectOversized(t *testing.T) {
 	in.WriteString(pkt(data) + "0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
-	ctx = proto.WithUserContext(ctx, lfsTestUser{})
 	var out bytes.Buffer
-	if err := LFSTransfer(ctx, ServiceCommand{
-		Stdin:  strings.NewReader(in.String()),
-		Stdout: &out,
-		Args:   []string{"repo1", lfs.OperationUpload},
-	}); err != nil {
-		t.Fatalf("LFSTransfer: %v", err)
+	if err := Transfer(t.Context(), strings.NewReader(in.String()), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationUpload); err != nil {
+		t.Fatalf("Transfer: %v", err)
 	}
 
 	var got []string
@@ -217,7 +214,8 @@ func TestLFSTransferPutObjectOversized(t *testing.T) {
 // drained, so the next command is still read from the right place in the
 // stream. The data packet and flush used to be read as commands.
 func TestLFSTransferPutObjectInvalidOid(t *testing.T) {
-	_, ctx := newLFSUploadTransfer(t)
+	t.Parallel()
+	_, deps := newLFSUploadTransfer(t)
 	data := "hello"
 
 	var in strings.Builder
@@ -226,15 +224,9 @@ func TestLFSTransferPutObjectInvalidOid(t *testing.T) {
 	in.WriteString(pkt(data) + "0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
-	ctx = proto.WithUserContext(ctx, lfsTestUser{})
 	var out bytes.Buffer
-	if err := LFSTransfer(ctx, ServiceCommand{
-		Stdin:  strings.NewReader(in.String()),
-		Stdout: &out,
-		Args:   []string{"repo1", lfs.OperationUpload},
-	}); err != nil {
-		t.Fatalf("LFSTransfer: %v", err)
+	if err := Transfer(t.Context(), strings.NewReader(in.String()), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationUpload); err != nil {
+		t.Fatalf("Transfer: %v", err)
 	}
 
 	var got []string
@@ -261,6 +253,7 @@ func (failRenameStorage) Rename(string, string) error {
 // destination that is not the object, even one of the same size, is not
 // accepted.
 func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	oid := oidOf(content)
 	objPath := path.Join("objects", oid[0:2], oid[2:4], oid)
@@ -277,6 +270,7 @@ func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tr, _ := newLFSUploadTransfer(t)
 			if tc.dest != "" {
 				if _, err := tr.storage.Put(objPath, strings.NewReader(tc.dest)); err != nil {
@@ -303,6 +297,7 @@ func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
 // to be reported present, so the client skipped the upload and downloads
 // served it short.
 func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
+	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)
 	const content = "hello lfs"
 	oid := oidOf(content)

@@ -23,7 +23,8 @@ func TestParseRequest(t *testing.T) {
 		{"git-upload-pack /a/../r\x00host=h:9418\x00", gitRequest{service: git.UploadPackService, name: "r", host: "h:9418"}, nil},
 		{"git-upload-archive /r.git\x00\x00", gitRequest{service: git.UploadArchiveService, name: "r"}, nil},
 		{"git-upload-pack /r.git\x00host=h\x00\x00version=2\x00", gitRequest{service: git.UploadPackService, name: "r", host: "h", version: "2"}, nil},
-		{"git-upload-pack /r.git\x00host=h\x00\x00version=2:x\x00", gitRequest{service: git.UploadPackService, name: "r", host: "h"}, nil},
+		{"git-upload-pack /r.git\x00host=h\x00\x00version=2:x\x00", gitRequest{service: git.UploadPackService, name: "r", host: "h", version: "2"}, nil},
+		{"git-upload-pack /r.git\x00host=h\x00\x00version=3\x00", gitRequest{service: git.UploadPackService, name: "r", host: "h"}, nil},
 	} {
 		got, err := parseRequest([]byte(tc.line))
 		if !errors.Is(err, tc.err) || got != tc.want {

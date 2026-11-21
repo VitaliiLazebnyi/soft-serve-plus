@@ -83,22 +83,6 @@ func TestShutdownCutsRefusalWait(t *testing.T) {
 	waitConns(t, d, 0, idleWait)
 }
 
-// TestServerContextCutsRefusalWait checks that a refusal stops waiting on
-// the client when the server's context ends.
-func TestServerContextCutsRefusalWait(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) {
-		d.refuseLinger = time.Hour
-		d.ctx = ctx
-	})
-	dialHeld(t, addr, pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported)
-	waitConns(t, d, 1, idleWait)
-	cancel()
-	waitConns(t, d, 0, idleWait)
-}
-
 // holdSlot dials addr and waits until d counts the connection, which then
 // holds one of d's slots until it is closed or the test ends.
 func holdSlot(t *testing.T, d *GitDaemon, addr string) net.Conn {

@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"errors"
@@ -14,6 +14,7 @@ import (
 // purpose: a guard that fires only after the store or filesystem is touched is
 // not a guard.
 func TestLFSTransferRejectsMalformedOid(t *testing.T) {
+	t.Parallel()
 	oids := []string{
 		"../../../../../../../../etc/passwd",
 		"../../ssh/soft_serve_host_ed25519",
@@ -29,6 +30,7 @@ func TestLFSTransferRejectsMalformedOid(t *testing.T) {
 	var backend lfsTransfer
 	for _, oid := range oids {
 		t.Run(oid, func(t *testing.T) {
+			t.Parallel()
 			if _, _, err := backend.Download(oid, nil); !errors.Is(err, errInvalidOid) {
 				t.Errorf("Download: got %v, want errInvalidOid", err)
 			}
@@ -55,6 +57,7 @@ func TestLFSTransferRejectsMalformedOid(t *testing.T) {
 // A malformed object ID is a client error, so the processor reports it as a
 // 400 rather than falling through to a generic internal error.
 func TestInvalidOidIsAParseError(t *testing.T) {
+	t.Parallel()
 	if !errors.Is(errInvalidOid, transfer.ErrParseError) {
 		t.Errorf("errInvalidOid does not wrap transfer.ErrParseError")
 	}

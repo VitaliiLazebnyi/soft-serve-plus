@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 )
 
 func TestCronLogger(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	logger.SetLevel(log.DebugLevel)
@@ -27,7 +29,8 @@ func TestCronLogger(t *testing.T) {
 }
 
 func TestSchedulerAddFunc(t *testing.T) {
-	s := NewScheduler(context.TODO())
+	t.Parallel()
+	s := NewScheduler(log.New(io.Discard))
 	if err := s.AddFunc("test", "* * * * *", func() {}); err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +56,9 @@ func onlyJob(t *testing.T, s *Scheduler) cron.Job {
 }
 
 func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
-	s := NewScheduler(log.WithContext(context.TODO(), log.New(&logs)))
+	s := NewScheduler(log.New(&logs))
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -106,7 +110,8 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 
 // Shutdown waits for a running job to end, and gives up when ctx is done.
 func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
-	s := NewScheduler(context.TODO())
+	t.Parallel()
+	s := NewScheduler(log.New(io.Discard))
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	if err := s.AddFunc("slow", "@every 1s", func() {
@@ -139,9 +144,10 @@ func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
 }
 
 func TestSchedulerRecoversPanic(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := log.New(&buf)
-	s := NewScheduler(log.WithContext(context.TODO(), logger))
+	s := NewScheduler(logger)
 	var runs atomic.Int32
 	err := s.AddFunc("panics", "* * * * *", func() {
 		if runs.Add(1) == 1 {

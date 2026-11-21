@@ -46,6 +46,7 @@ func newRepoWithRemotes(t *testing.T, remotes map[string]string) *git.Repository
 }
 
 func TestValidateMirrorRemotes(t *testing.T) {
+	t.Parallel()
 	allowed, err := ssrf.ParseAllowedHosts([]string{"git.internal.example"})
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +143,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			r := newRepoWithRemotes(t, tt.remotes)
 			remotes, err := validateMirrorRemotes(t.Context(), r, tt.policy)
 
@@ -170,6 +172,7 @@ func TestValidateMirrorRemotes(t *testing.T) {
 // TestValidateMirrorRemotesNoRemote verifies a mirror with no remote URL is
 // skipped rather than treated as valid.
 func TestValidateMirrorRemotesNoRemote(t *testing.T) {
+	t.Parallel()
 	r := newRepoWithRemotes(t, nil)
 	if _, err := validateMirrorRemotes(t.Context(), r, ssrf.GitRemotePolicy{}); err == nil {
 		t.Error("validateMirrorRemotes() accepted a repo with no remote")
@@ -182,6 +185,7 @@ func TestValidateMirrorRemotesNoRemote(t *testing.T) {
 // http helper git starts outlives git and holds its stderr, so this also
 // covers not waiting on it.
 func TestRunMirrorGitStalledRemote(t *testing.T) {
+	t.Parallel()
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -249,22 +253,23 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- runMirrorGit(ctx, r.Path, nil, "fetch", "--prune")
+		done <- backend.RunRemoteGit(ctx, r.Path, nil, "fetch", "--prune")
 	}()
 
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("runMirrorGit = %v, want a deadline error", err)
+			t.Fatalf("RunRemoteGit = %v, want a deadline error", err)
 		}
 	case <-time.After(backend.RemoteGitWaitDelay + time.Minute):
-		t.Fatal("runMirrorGit did not return for a stalled remote")
+		t.Fatal("RunRemoteGit did not return for a stalled remote")
 	}
 }
 
 // git keeps the query of a remote URL in its messages, and the query can hold
 // a token, so the error that gets logged must not carry it.
 func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
+	t.Parallel()
 	// A port nothing listens on, so the fetch fails at once.
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -277,9 +282,9 @@ func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
 		"origin": "http://user:secret@" + addr + "/x.git?token=abc",
 	})
 
-	err = runMirrorGit(t.Context(), r.Path, nil, "fetch", "--prune")
+	err = backend.RunRemoteGit(t.Context(), r.Path, nil, "fetch", "--prune")
 	if err == nil {
-		t.Fatal("runMirrorGit succeeded against a closed port")
+		t.Fatal("RunRemoteGit succeeded against a closed port")
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, addr) {
@@ -297,6 +302,7 @@ func TestRunMirrorGitRedactsRemoteURL(t *testing.T) {
 // urls, urls rewritten by insteadOf, and the legacy [remote.name] section all
 // reach validation.
 func TestValidateMirrorRemotesReadsLikeGit(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		config string
@@ -332,6 +338,7 @@ func TestValidateMirrorRemotesReadsLikeGit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			r := newRepoWithRemotes(t, nil)
 			appendConfig(t, r, tt.config)
 
@@ -362,6 +369,7 @@ func appendConfig(t *testing.T, r *git.Repository, config string) {
 // refused when git could be led to fetch from something validation does not
 // see, and that a remote git would fetch from as a local path fails.
 func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		config  string
@@ -403,6 +411,7 @@ func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			remotes := map[string]string{"origin": "https://1.1.1.1/x.git"}
 			if tt.noOrigin {
 				remotes = nil
@@ -422,6 +431,7 @@ func TestValidateMirrorRemotesRefusesUnlistedFetchSources(t *testing.T) {
 // branch.<HEAD>.remote, which a bare `git fetch` uses, nor the legacy file
 // remote in the remotes.default group, which `git remote update` uses.
 func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Each upstream holds one commit of its own on main, which its HEAD
@@ -454,7 +464,8 @@ func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := syncMirror(t.Context(), mirror, []string{"origin"}, nil); err != nil {
+	m := &MirrorPull{runGit: backend.RunRemoteGit}
+	if err := m.syncMirror(t.Context(), mirror, []string{"origin"}, nil); err != nil {
 		t.Fatalf("syncMirror() error = %v", err)
 	}
 
@@ -484,28 +495,29 @@ func TestSyncMirrorFetchesOnlyNamedRemotes(t *testing.T) {
 	}
 }
 
-// stubMirrorGit replaces runMirrorGit for the test and records the commands
-// it was asked to run.
-func stubMirrorGit(t *testing.T, fn func(args []string) error) *[][]string {
-	t.Helper()
+// stubMirrorGit returns a mirror-pull job, logging to w, whose git commands
+// run fn, and the commands it was asked to run.
+func stubMirrorGit(w io.Writer, fn func(args []string) error) (*MirrorPull, *[][]string) {
 	var calls [][]string
-	orig := runMirrorGit
-	runMirrorGit = func(_ context.Context, _ string, _ []string, args ...string) error {
-		calls = append(calls, args)
-		return fn(args)
+	m := &MirrorPull{
+		logger: log.New(w),
+		runGit: func(_ context.Context, _ string, _ []string, args ...string) error {
+			calls = append(calls, args)
+			return fn(args)
+		},
 	}
-	t.Cleanup(func() { runMirrorGit = orig })
-	return &calls
+	return m, &calls
 }
 
 // mirrorTestRemotes are the remotes the fetchMirror tests sync.
 var mirrorTestRemotes = []string{"origin", "backup"}
 
 func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
-	calls := stubMirrorGit(t, func([]string) error { return nil })
+	t.Parallel()
 	var logs bytes.Buffer
+	m, calls := stubMirrorGit(&logs, func([]string) error { return nil })
 
-	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err != nil {
+	if err := m.fetchMirror(t.Context(), "repo", t.TempDir(), mirrorTestRemotes, nil); err != nil {
 		t.Fatalf("fetchMirror stopped without being cancelled: %v", err)
 	}
 	want := [][]string{
@@ -523,15 +535,16 @@ func TestFetchMirrorFetchesEveryRemote(t *testing.T) {
 // A remote that fails to fetch is logged and does not stop the others,
 // but the lfs sync is skipped until the next run.
 func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
-	calls := stubMirrorGit(t, func(args []string) error {
+	t.Parallel()
+	var logs bytes.Buffer
+	m, calls := stubMirrorGit(&logs, func(args []string) error {
 		if slices.Contains(args, "origin") {
 			return errors.New("exit status 128")
 		}
 		return nil
 	})
-	var logs bytes.Buffer
 
-	if err := fetchMirror(t.Context(), log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); err == nil {
+	if err := m.fetchMirror(t.Context(), "repo", t.TempDir(), mirrorTestRemotes, nil); err == nil {
 		t.Fatal("fetchMirror went on to the lfs sync after a failed fetch")
 	}
 	if len(*calls) != len(mirrorTestRemotes) {
@@ -545,6 +558,7 @@ func TestFetchMirrorSkipsLFSAfterFailure(t *testing.T) {
 // A shutdown during a fetch lets it finish, then starts nothing else: not
 // the next remote's fetch and not the lfs sync. It logs nothing either way.
 func TestFetchMirrorStopsAfterCancel(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -553,15 +567,16 @@ func TestFetchMirrorStopsAfterCancel(t *testing.T) {
 		{"fetch failed", errors.New("exit status 128")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			calls := stubMirrorGit(t, func([]string) error {
+			var logs bytes.Buffer
+			m, calls := stubMirrorGit(&logs, func([]string) error {
 				cancel()
 				return tc.err
 			})
-			var logs bytes.Buffer
 
-			if err := fetchMirror(ctx, log.New(&logs), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+			if err := m.fetchMirror(ctx, "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
 				t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 			}
 			if len(*calls) != 1 {
@@ -575,11 +590,12 @@ func TestFetchMirrorStopsAfterCancel(t *testing.T) {
 }
 
 func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	calls := stubMirrorGit(t, func([]string) error { return nil })
+	m, calls := stubMirrorGit(io.Discard, func([]string) error { return nil })
 
-	if err := fetchMirror(ctx, log.New(io.Discard), "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
+	if err := m.fetchMirror(ctx, "repo", t.TempDir(), mirrorTestRemotes, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("fetchMirror = %v, want %v", err, context.Canceled)
 	}
 	if len(*calls) != 0 {
@@ -590,6 +606,7 @@ func TestFetchMirrorCancelledStartsNothing(t *testing.T) {
 // Only a sync that failed once its deadline passed, while the server keeps
 // running, ran out of time; one that succeeded just as it passed did not.
 func TestOutOfTime(t *testing.T) {
+	t.Parallel()
 	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 	stopping, stop := context.WithCancel(t.Context())

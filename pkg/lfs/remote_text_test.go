@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"charm.land/log/v2"
 )
 
 // longRemoteText is more text than the client keeps of anything a remote
@@ -32,6 +34,7 @@ func assertCapped(t *testing.T, what, s string) {
 // A per-object error message in the batch response is cut short before the
 // callback, which logs it, gets it.
 func TestDownloadCapsObjectErrorMessage(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		res := BatchResponse{Transfer: TransferBasic, Objects: []*ObjectResponse{{
 			Pointer: testPointer,
@@ -59,12 +62,13 @@ func TestDownloadCapsObjectErrorMessage(t *testing.T) {
 
 // The message of a failed transfer request is cut short too.
 func TestDownloadCapsErrorResponseMessage(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(ErrorResponse{Message: longRemoteText}) //nolint: errcheck,gosec
 	}))
 	t.Cleanup(srv.Close)
-	c := &HTTPClient{client: srv.Client()}
+	c := &HTTPClient{client: srv.Client(), logger: log.New(io.Discard)}
 
 	rc, err := c.download(t.Context(), &Link{Href: srv.URL + "/obj"})
 	if err == nil {
@@ -103,9 +107,11 @@ func rawStatusServer(t *testing.T, code int, reason string) string {
 
 // The reason phrase of a status line is the remote's text as well.
 func TestCapsRemoteStatus(t *testing.T) {
+	t.Parallel()
 	reason := longRemoteText[:32<<10]
 
 	t.Run("batch", func(t *testing.T) {
+		t.Parallel()
 		c := plainClient(t, rawStatusServer(t, http.StatusBadGateway, reason)+"/x.git")
 		_, err := c.batch(t.Context(), OperationDownload, []Pointer{testPointer})
 		if err == nil {
@@ -114,6 +120,7 @@ func TestCapsRemoteStatus(t *testing.T) {
 		assertCapped(t, "batch error", err.Error())
 	})
 	t.Run("download", func(t *testing.T) {
+		t.Parallel()
 		c := plainClient(t, "http://unused.invalid/x.git")
 		rc, err := c.download(t.Context(), &Link{Href: rawStatusServer(t, http.StatusNotFound, reason) + "/obj"})
 		if err == nil {
@@ -126,6 +133,7 @@ func TestCapsRemoteStatus(t *testing.T) {
 
 // remoteText cuts at a character boundary and marks the cut.
 func TestRemoteText(t *testing.T) {
+	t.Parallel()
 	if got := remoteText("short"); got != "short" {
 		t.Errorf("remoteText(short) = %q", got)
 	}
@@ -139,6 +147,7 @@ func TestRemoteText(t *testing.T) {
 // A batch response the client never needs, past 1 MiB, is refused: the
 // client asks for at most 20 objects at a time.
 func TestBatchResponseLimitIsOneMiB(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", MediaType)
 		io.WriteString(w, `{"transfer":"basic","objects":[]`+strings.Repeat(" ", 1<<20)+`}`) //nolint: errcheck,gosec
@@ -153,6 +162,7 @@ func TestBatchResponseLimitIsOneMiB(t *testing.T) {
 // remoteText escapes what a terminal would act on: control characters, an
 // escape sequence and bytes that are not UTF-8.
 func TestRemoteTextEscapes(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"clear \x1b[2J screen": `clear \x1b[2J screen`,
 		"bell\a and\r\n":       `bell\a and\r\n`,
@@ -169,6 +179,7 @@ func TestRemoteTextEscapes(t *testing.T) {
 // Text with no character boundary near the cut, such as continuation bytes
 // only, is still cut at maxRemoteText, not backed off to nothing.
 func TestRemoteTextNoBoundary(t *testing.T) {
+	t.Parallel()
 	got := remoteText(strings.Repeat("\x80", 4*maxRemoteText))
 	if want := strings.Repeat(`\x80`, maxRemoteText) + "... (truncated)"; got != want {
 		t.Errorf("remoteText = %.80q..., want %d escaped bytes and the mark", got, maxRemoteText)
@@ -178,8 +189,10 @@ func TestRemoteTextNoBoundary(t *testing.T) {
 // The transfer adapter and the hash algorithm a batch response names are
 // the remote's text too.
 func TestBatchCapsRemoteNames(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"transfer", "hash_algo"} {
 		t.Run(field, func(t *testing.T) {
+			t.Parallel()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", MediaType)
 				body := map[string]any{"objects": []any{}, field: longRemoteText[:64<<10] + "\x1b[2J"}
@@ -201,6 +214,7 @@ func TestBatchCapsRemoteNames(t *testing.T) {
 // logger drops ANSI escape sequences itself, but not other control
 // characters, nor the length.)
 func TestDownloadLogsUnrequestedOidEscaped(t *testing.T) {
+	t.Parallel()
 	oid := "\x07" + strings.Repeat("A", 64<<10) + "\x01"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		res := BatchResponse{Transfer: TransferBasic, Objects: []*ObjectResponse{{
@@ -210,10 +224,11 @@ func TestDownloadLogsUnrequestedOidEscaped(t *testing.T) {
 		json.NewEncoder(w).Encode(res) //nolint: errcheck,gosec
 	}))
 	t.Cleanup(srv.Close)
-	ctx, logs := debugContext(t)
+	logger, logs := debugLogger()
 	c := plainClient(t, srv.URL+"/x.git")
+	c.logger = logger
 
-	if err := c.Download(ctx, []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error { return nil }); err != nil {
+	if err := c.Download(t.Context(), []Pointer{testPointer}, func(Pointer, io.ReadCloser, error) error { return nil }); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	out := logs.String()

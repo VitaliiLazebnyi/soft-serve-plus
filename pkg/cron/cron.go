@@ -46,18 +46,22 @@ func (l skipLogger) Info(_ string, keysAndValues ...interface{}) {
 	l.logger.Info("skipping job run, the previous run is still in progress", keysAndValues...)
 }
 
-// NewScheduler returns a new Scheduler.
+// NewScheduler returns a new Scheduler that logs to logger, or to
+// log.Default() when it is nil.
 //
 // A job that panics is recovered and the panic logged, so it does not take
 // the server down, and the job still runs on its next tick. A job run is
 // skipped while the previous run of the same job is still going, so a job
 // that takes longer than its interval does not pile up runs. AddFunc applies
 // both to each job.
-func NewScheduler(ctx context.Context) *Scheduler {
-	logger := cronLogger{log.FromContext(ctx).WithPrefix("cron")}
+func NewScheduler(logger *log.Logger) *Scheduler {
+	if logger == nil {
+		logger = log.Default()
+	}
+	cl := cronLogger{logger.WithPrefix("cron")}
 	return &Scheduler{
-		cron:   cron.New(cron.WithLogger(logger)),
-		logger: logger,
+		cron:   cron.New(cron.WithLogger(cl)),
+		logger: cl,
 	}
 }
 

@@ -44,6 +44,8 @@ func scanBlockedOnSend() bool {
 // is canceled, even when nobody reads the remaining pointers, and reports
 // that it was canceled.
 func TestSearchPointerBlobsCancel(t *testing.T) {
+	// Not parallel: scanBlockedOnSend looks at every goroutine, and would
+	// also see other tests' scans.
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
@@ -85,7 +87,7 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 	{
 		pointerChan := make(chan PointerBlob)
 		errChan := make(chan error, 1)
-		go SearchPointerBlobs(context.Background(), repo, pointerChan, errChan)
+		go SearchPointerBlobs(context.Background(), nil, repo, pointerChan, errChan)
 		n := 0
 		for range pointerChan {
 			n++
@@ -104,7 +106,7 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 	errChan := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
-		SearchPointerBlobs(ctx, repo, pointerChan, errChan)
+		SearchPointerBlobs(ctx, nil, repo, pointerChan, errChan)
 		close(done)
 	}()
 
@@ -142,9 +144,8 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 // a blob that only has the first line of one, and not commits, trees or
 // tags, however large.
 func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
+	t.Parallel()
 	// The scan's own git commands must not read the host's configuration.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	work := t.TempDir()
 	run := func(stdin string, args ...string) string {
 		t.Helper()
@@ -227,6 +228,7 @@ func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
 // TestSearchPointerBlobsBetween verifies that the scan only finds the
 // pointers reachable from include but not from exclude.
 func TestSearchPointerBlobsBetween(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
@@ -271,7 +273,7 @@ func TestSearchPointerBlobsBetween(t *testing.T) {
 	scan := func(include, exclude []string) ([]string, error) {
 		pointerChan := make(chan PointerBlob)
 		errChan := make(chan error, 1)
-		go SearchPointerBlobsBetween(context.Background(), repo, include, exclude, pointerChan, errChan)
+		go SearchPointerBlobsBetween(context.Background(), nil, repo, include, exclude, pointerChan, errChan)
 		var oids []string
 		for p := range pointerChan {
 			oids = append(oids, p.Oid)
@@ -290,6 +292,7 @@ func TestSearchPointerBlobsBetween(t *testing.T) {
 		{"no include", nil, tips[:1], nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := scan(tc.include, tc.exclude)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

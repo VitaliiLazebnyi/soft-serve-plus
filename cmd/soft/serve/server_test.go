@@ -712,11 +712,11 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitDaemon, err := daemon.NewGitDaemon(ctx)
+	gitDaemon, err := daemon.NewGitDaemon(cfg, be, log.New(io.Discard))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Cron: cron.NewScheduler(ctx), SSHServer: sshSrv, GitDaemon: gitDaemon}
+	s := &Server{Cron: cron.NewScheduler(log.New(io.Discard)), SSHServer: sshSrv, GitDaemon: gitDaemon}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

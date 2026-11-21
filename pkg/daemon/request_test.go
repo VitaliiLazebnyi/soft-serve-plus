@@ -12,14 +12,10 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 )
-
-type ctxKey struct{}
 
 // syncBuffer is a bytes.Buffer safe for the daemon's goroutines to log to
 // while the test reads it.
@@ -42,15 +38,12 @@ func (b *syncBuffer) String() string {
 
 // newRequestTestDaemon serves a daemon that logs at Info level to the
 // returned buffer, on its own loopback listener.
-func newRequestTestDaemon(t *testing.T, ctx context.Context) (*GitDaemon, *syncBuffer) {
+func newRequestTestDaemon(t *testing.T) (*GitDaemon, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
 	logger := log.New(logs)
 	logger.SetLevel(log.InfoLevel)
-	ctx = config.WithContext(ctx, testDaemon.cfg)
-	ctx = backend.WithContext(ctx, testBackend)
-	ctx = log.WithContext(ctx, logger)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(testDaemon.cfg, testBackend, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,33 +99,13 @@ func sampleCount(t *testing.T, service git.Service) uint64 {
 	return 0
 }
 
-// The request context derives from the server's: it carries the server's
-// values and ends when the server's context does.
-func TestRequestContextDerivesFromServer(t *testing.T) {
-	sctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "server"))
-	d := &GitDaemon{ctx: sctx}
-	ctx, rcancel := d.requestContext()
-	defer rcancel()
-	if got := ctx.Value(ctxKey{}); got != "server" {
-		t.Fatalf("request context value = %v, want the server's", got)
-	}
-	cancel()
-	select {
-	case <-ctx.Done():
-	case <-time.After(idleWait):
-		t.Fatal("request context outlived the server's")
-	}
-}
-
 // The access checks run under accessTimeout: a database lookup that runs
 // out of time refuses the request instead of waiting on the database.
 func TestReadableAccessTimeout(t *testing.T) {
 	if _, err := testBackend.CreateRepository(context.Background(), "timeout-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	ctx := config.WithContext(context.Background(), testDaemon.cfg)
-	ctx = backend.WithContext(ctx, testBackend)
-	d, err := NewGitDaemon(ctx)
+	d, err := NewGitDaemon(testDaemon.cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +133,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	if _, err := testBackend.CreateRepository(context.Background(), "accepted-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	d, logs := newRequestTestDaemon(t, context.Background())
+	d, logs := newRequestTestDaemon(t)
 
 	before := sampleCount(t, git.UploadPackService)
 	if got := request(t, d, git.UploadPackService, "accepted-missing"); got != git.ErrNotAuthed.Error() {
@@ -187,44 +160,4 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	if strings.Contains(out, "accepted-missing") {
 		t.Errorf("refused request logged as accepted; logs:\n%s", out)
 	}
-}
-
-// A client still sending its request when the server's context ends gets
-// the timeout answer, and its handler returns without waiting for the idle
-// timeout.
-//
-// The daemon's request and idle timeouts are ten minutes, far past the
-// test's one-minute wait, so an answer within the wait can only come from
-// the server's context, and the test need not time it.
-func TestServerContextEndsRequestRead(t *testing.T) {
-	cfg := *testDaemon.cfg
-	cfg.Git.IdleTimeout = 600
-	sctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	d, err := NewGitDaemon(backend.WithContext(config.WithContext(sctx, &cfg), testBackend))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.requestTimeout = 10 * time.Minute
-	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go d.Serve(l) //nolint:errcheck
-	t.Cleanup(func() { _ = d.Close() })
-	c := dialDaemonAt(t, l.Addr().String())
-	// Wait until the daemon is reading the request before ending its context.
-	waitConns(t, d, 1, idleWait)
-	cancel()
-	_, err = readPktline(c)
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		t.Fatalf("no answer %s after the server's context ended", idleWait)
-	}
-	if err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
-		t.Errorf("expected %q, got %v", git.ErrTimeout, err)
-	}
-	// The handler has returned and given back its connection's slot,
-	// rather than waiting out the ten-minute idle timeout.
-	waitConns(t, d, 0, idleWait)
 }
