@@ -16,7 +16,7 @@ import (
 // git sends the push in a separate request after the ref advertisement that
 // created the repository, and git-lfs uploads objects in between, so the
 // repository cannot be removed when the advertisement ends.
-var pushCreateTimeout = 10 * time.Minute
+const pushCreateTimeout = 10 * time.Minute
 
 // pushCreates tracks repositories created by HTTP push-to-create that have
 // no refs yet. The SSH push creates and pushes in one session and removes
@@ -31,11 +31,17 @@ var pushCreateTimeout = 10 * time.Minute
 // than http.postBuffer, only restarts the timeout. A repository leaves the
 // list once a request to it ends and it has a ref.
 //
+// A removal runs after the request that created the repository has ended,
+// so it logs on the server's logger, not on that request's.
+//
 // The list is kept in memory, so a repository still on it when the server
 // stops, or when close is called, is kept, empty, until someone deletes it. That errs on the side of
 // keeping: nothing on disk tells such a repository apart from one created
 // empty on purpose.
 type pushCreates struct {
+	be     *backend.Backend
+	logger *log.Logger
+
 	// mu guards the map and the entries' fields. It is never held while
 	// running git or deleting a repository, since every HTTP git request
 	// takes it.
@@ -51,9 +57,9 @@ type pushCreates struct {
 
 // pushCreate is a repository created by an HTTP push that has no refs yet.
 type pushCreate struct {
-	// ctx is the creating request's context without its cancellation, used
-	// to delete the repository after that request has ended.
-	ctx context.Context
+	// user is the caller who created the repository, or nil for an
+	// anonymous one. Its removal is done as that caller.
+	user proto.User
 	// repo is the created repository as it was created. It is only deleted
 	// if the name still belongs to it, not to one renamed or created in its
 	// place since, and nothing about it changed.
@@ -70,54 +76,39 @@ type pushCreate struct {
 	removing chan struct{}
 }
 
-func newPushCreates() *pushCreates {
-	return &pushCreates{repos: make(map[string]*pushCreate)}
-}
-
-// pushOutcome records whether a receive-pack request failed. withAccess puts
-// one in the context of every request to a listed repository, and
-// serviceRpc marks it.
-type pushOutcome struct {
-	failed bool
-}
-
-type pushOutcomeKey struct{}
-
-// markPushFailed records in ctx that the receive-pack request failed.
-func markPushFailed(ctx context.Context) {
-	if o, ok := ctx.Value(pushOutcomeKey{}).(*pushOutcome); ok {
-		o.failed = true
+// newPushCreates returns an empty list whose repositories be removes,
+// logging on logger.
+func newPushCreates(be *backend.Backend, logger *log.Logger) *pushCreates {
+	return &pushCreates{
+		be:     be,
+		logger: logger,
+		repos:  make(map[string]*pushCreate),
 	}
 }
 
-// add records that the request in ctx created repo, under name.
-func (p *pushCreates) add(ctx context.Context, name string, repo proto.Repository) {
-	if p == nil {
-		return
-	}
+// add records that user (nil for an anonymous caller) created repo, under
+// name.
+func (p *pushCreates) add(name string, repo proto.Repository, user proto.User) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.repos[name] = &pushCreate{ctx: context.WithoutCancel(ctx), repo: repo}
+	p.repos[name] = &pushCreate{user: user, repo: repo}
 }
 
 // begin marks a request to the repository name as in flight, so it is not
-// removed under the request. It returns the request's context, carrying a
-// pushOutcome, and the function to call when the request ends, or ctx and
-// nil when name is not on the list.
+// removed under the request. It returns the function to call when the
+// request ends, saying whether it was a receive-pack request that failed,
+// or nil when name is not on the list.
 //
 // If the repository is being removed, begin waits for the removal to end
-// and returns waited true, with ctx and nil: the repository the caller
-// resolved before may be gone, so the caller must resolve it, and the
-// caller's access to it, again.
-func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context, done func(), waited bool) {
-	if p == nil {
-		return ctx, nil, false
-	}
+// and returns waited true, with nil: the repository the caller resolved
+// before may be gone, so the caller must resolve it, and the caller's
+// access to it, again.
+func (p *pushCreates) begin(name string) (done func(failed bool), waited bool) {
 	p.mu.Lock()
 	pc, ok := p.repos[name]
 	if !ok {
 		p.mu.Unlock()
-		return ctx, nil, false
+		return nil, false
 	}
 	if pc.removing != nil {
 		ch := pc.removing
@@ -127,7 +118,7 @@ func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context
 			waiting(name)
 		}
 		<-ch
-		return ctx, nil, true
+		return nil, true
 	}
 	pc.inflight++
 	pc.gen++
@@ -136,8 +127,7 @@ func (p *pushCreates) begin(ctx context.Context, name string) (_ context.Context
 		pc.timer = nil
 	}
 	p.mu.Unlock()
-	o := &pushOutcome{}
-	return context.WithValue(ctx, pushOutcomeKey{}, o), func() { p.end(name, pc, o.failed) }, false
+	return func(failed bool) { p.end(name, pc, failed) }, false
 }
 
 // end is called when a request to a listed repository ends. Once no
@@ -161,7 +151,7 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 		p.remove(name, pc, gen)
 		return
 	}
-	refs := backend.FromContext(pc.ctx).RepositoryHasRefs(pc.repo)
+	refs := p.be.RepositoryHasRefs(pc.repo)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -200,16 +190,15 @@ func (p *pushCreates) remove(name string, pc *pushCreate, gen int) {
 		p.mu.Unlock()
 	}()
 
-	logger := log.FromContext(pc.ctx)
-	be := backend.FromContext(pc.ctx)
-	removed, err := be.RemovePushCreatedRepository(pc.ctx, pc.repo)
+	ctx := proto.WithUserContext(context.Background(), pc.user)
+	removed, err := p.be.RemovePushCreatedRepository(ctx, pc.repo)
 	switch {
 	case errors.Is(err, proto.ErrRepoNotFound):
 		// Deleted, or renamed, meanwhile.
 	case err != nil:
-		logger.Error("failed to remove repository created by a push", "repo", name, "err", err)
+		p.logger.Error("failed to remove repository created by a push", "repo", name, "err", err)
 	case removed:
-		logger.Info("removed repository created by a push that sent no refs", "repo", name)
+		p.logger.Info("removed repository created by a push that sent no refs", "repo", name)
 	}
 }
 

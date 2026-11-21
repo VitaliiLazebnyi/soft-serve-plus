@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"time"
 
 	"charm.land/log/v2"
@@ -35,7 +36,7 @@ func JWTCommand() *cobra.Command {
 
 			// Signing fails only for the server's host key, whose error
 			// names its path on the server.
-			j, err := jwk.Sign(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
+			j, err := signToken(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
 			if err != nil {
 				return lookupFailed(ctx, log.FromContext(ctx), "read the host key", err)
 			}
@@ -46,4 +47,18 @@ func JWTCommand() *cobra.Command {
 	}
 
 	return cmd
+}
+
+// signToken signs a token for user with the host key cfg loaded; see
+// jwk.Signer.Sign.
+func signToken(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
+	kp, err := config.KeyPair(cfg)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", jwk.ErrHostKey, err)
+	}
+	signer, err := jwk.NewSigner(kp, cfg.HTTP.PublicURL)
+	if err != nil {
+		return "", err
+	}
+	return signer.Sign(user, audience, expiresAt)
 }

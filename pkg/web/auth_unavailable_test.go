@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
@@ -23,30 +22,28 @@ import (
 // challenge, not as an anonymous request (401 with a challenge, after which
 // git discards the stored credential) nor as a failed login. The fault is
 // logged at error level.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
+//
+// Its subtests run in order on one fixture, so neither they nor it run in
+// parallel.
 func TestAuthDatabaseErrorIsUnavailable(t *testing.T) {
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
+	f := newOracleFixtureLogging(t, logger)
 	stranger, err := f.be.User(f.ctx, "stranger")
 	is.NoErr(err)
 	_, err = f.be.CreateRepository(f.ctx, "mine", stranger, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
-	bearer := "Bearer " + mintJWT(f.ctx, t, stranger, "mine")
+	bearer := "Bearer " + f.mintJWT(t, stranger, "mine")
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 		r.SetBasicAuth(user, pass)
 		return r.Header.Get("Authorization")
 	}
 
-	is.NoErr(db.FromContext(f.ctx).Close())
+	is.NoErr(f.env.dbx.Close())
 
 	creds := map[string]string{
 		"token":             "Token " + f.token,
@@ -105,6 +102,7 @@ func TestAuthDatabaseErrorIsUnavailable(t *testing.T) {
 // Only a failed lookup is a server fault: a missing user or an unknown or
 // expired token is a failed login.
 func TestLookupFailed(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	is.True(!lookupFailed(nil))
 	is.True(!lookupFailed(proto.ErrUserNotFound))
@@ -116,6 +114,7 @@ func TestLookupFailed(t *testing.T) {
 // A lookup the client canceled by going away is not logged as a server
 // error, though it is still answered as unavailable.
 func TestAuthUnavailableCanceled(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
@@ -148,26 +147,22 @@ func hasLogLine(out, level, msg string) bool {
 // as for a user who does not exist, not an anonymous request: the user
 // lookup refuses such a name with an error that is not
 // proto.ErrUserNotFound, and that is not a server fault either.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
 func TestBearerInvalidSubjectUsername(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
+	f := newOracleFixtureLogging(t, logger)
 	for _, subject := range []string{"not_a_user#1", "1user#1", "#1"} {
-		claims := jwtTestClaims(f.ctx, "secret")
+		claims := jwtTestClaims(f.env, "secret")
 		claims.Subject = subject
-		bearer := "Bearer " + signJWT(f.ctx, t, claims)
+		bearer := "Bearer " + signJWT(t, f.env, claims)
 
 		req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", bearer)
-		user, _, err := authenticate(req, "secret")
+		user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
 		is.True(user == nil)
 		if !errors.Is(err, errInvalidToken) {
 			t.Errorf("subject %q: err = %v, want %v", subject, err, errInvalidToken)
@@ -189,22 +184,18 @@ func TestBearerInvalidSubjectUsername(t *testing.T) {
 // Retry-After and no credentials challenge, not 404 as for a repository the
 // caller may not read; LFS requests get the LFS error. A go-get lookup that
 // fails is answered the same way. The fault is logged at error level.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
 func TestRepositoryLookupErrorIsUnavailable(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
+	f := newOracleFixtureLogging(t, logger)
 	auth := "Token " + f.token
 	is.Equal(f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusNotFound)
 
-	dbx := db.FromContext(f.ctx)
+	dbx := f.env.dbx
 	_, err := dbx.ExecContext(f.ctx, "ALTER TABLE collabs RENAME TO collabs_gone")
 	is.NoErr(err)
 
@@ -234,11 +225,13 @@ func TestRepositoryLookupErrorIsUnavailable(t *testing.T) {
 // tell which private names exist. With the settings unreadable an anonymous
 // request is 503 too, not asked for credentials.
 func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			f := newOracleFixture(t)
-			dbx := db.FromContext(f.ctx)
+			dbx := f.env.dbx
 			_, err := dbx.ExecContext(f.ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone")
 			is.NoErr(err)
 			for _, auth := range []string{"", "Token " + f.token} {
@@ -255,6 +248,7 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 // A lookup the client canceled is logged at Debug, not as a server error,
 // and still answered as unavailable.
 func TestLookupUnavailableCanceled(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)

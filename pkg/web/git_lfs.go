@@ -52,13 +52,14 @@ type lfsActionAuth struct {
 //
 // The token is verified again for repo, the repository of the batch request,
 // so a credential is only ever forwarded when it is a valid token for repo.
-func lfsActionAuthFor(r *http.Request, repo string, now time.Time) lfsActionAuth {
+// logger is the request's logger.
+func (s *server) lfsActionAuthFor(r *http.Request, logger *log.Logger, repo string, now time.Time) lfsActionAuth {
 	scheme, credential, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "bearer") || credential == "" {
 		return lfsActionAuth{}
 	}
 
-	claims, err := parseJWT(r.Context(), credential, []string{utils.SanitizeRepo(repo)})
+	claims, err := s.parseJWT(logger, credential, []string{utils.SanitizeRepo(repo)})
 	if err != nil {
 		return lfsActionAuth{}
 	}
@@ -95,7 +96,7 @@ func lfsBodyTooLarge(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 		return false
 	}
 	logger.Warn("request body too large", "limit", maxErr.Limit)
-	renderJSON(w, r, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
+	renderJSON(w, logger, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
 		Message: "request too large",
 	})
 	return true
@@ -105,11 +106,11 @@ func lfsBodyTooLarge(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md
 // TODO: support refname
 // POST: /<repo>.git/info/lfs/objects/batch
-func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+func (s *server) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
-	logger := log.FromContext(ctx).WithPrefix("http.lfs")
+	logger := gr.logger.WithPrefix("http.lfs")
 
-	if !lfsMediaTypes(w, r) {
+	if !lfsMediaTypes(w, r, gr.logger) {
 		return
 	}
 
@@ -121,7 +122,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			return
 		}
 		logger.Info("error decoding json", "err", err)
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "validation error in request: " + err.Error(),
 		})
 		return
@@ -139,7 +140,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 		}
 
 		if !isBasic {
-			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 				Message: "unsupported transfer",
 			})
 			return
@@ -149,14 +150,14 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 	// Object IDs are SHA-256 hashes; the batch API answers 409 to any other
 	// hash algorithm.
 	if batchRequest.HashAlgo != "" && batchRequest.HashAlgo != lfs.HashAlgorithmSHA256 {
-		renderJSON(w, r, http.StatusConflict, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusConflict, lfs.ErrorResponse{
 			Message: "unsupported hash algorithm: " + batchRequest.HashAlgo,
 		})
 		return
 	}
 
 	if len(batchRequest.Objects) == 0 {
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "no objects found",
 		})
 		return
@@ -165,7 +166,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 	// The batch API answers 413 when a request has too many objects.
 	if len(batchRequest.Objects) > maxLfsBatchObjects {
 		logger.Warn("too many objects in batch request", "objects", len(batchRequest.Objects))
-		renderJSON(w, r, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusRequestEntityTooLarge, lfs.ErrorResponse{
 			Message: fmt.Sprintf("too many objects in batch request: %d, the maximum is %d", len(batchRequest.Objects), maxLfsBatchObjects),
 		})
 		return
@@ -197,7 +198,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 	found, err := datastore.GetLFSObjectsByOids(ctx, dbx, repo.ID(), oids)
 	if err != nil {
 		logger.Error("error getting objects from database", "repo", name, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -207,7 +208,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 		recorded[obj.Oid] = obj
 	}
 
-	actionAuth := lfsActionAuthFor(r, repo.Name(), time.Now())
+	actionAuth := s.lfsActionAuthFor(r, gr.logger, repo.Name(), time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
 	// XXX: We don't support objects TTL for now, probably implement that with
 	// S3 using object "expires_at" & "expires_in"
@@ -231,7 +232,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			stat, err := strg.Stat(path.Join("objects", o.RelativePath()))
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				logger.Error("error getting object stat", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
@@ -274,7 +275,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 	case lfs.OperationUpload:
 		// Check authorization
 		if gr.level < access.ReadWriteAccess {
-			denyLFSWrite(w, r)
+			denyLFSWrite(w, r, gr)
 			return
 		}
 
@@ -298,7 +299,7 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			present, err := lfsObjectPresent(strg, obj, ok, o)
 			if err != nil {
 				logger.Error("error checking object", "oid", o.Oid, "repo", name, "err", err)
-				renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+				renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 					Message: "internal server error",
 				})
 				return
@@ -325,14 +326,14 @@ func (s *gitServer) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *
 			}
 		}
 	default:
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "unsupported operation",
 		})
 		return
 	}
 
 	batchResponse.Objects = objects
-	renderJSON(w, r, http.StatusOK, batchResponse)
+	renderJSON(w, gr.logger, http.StatusOK, batchResponse)
 }
 
 // lfsObjectPresent reports whether the repository already stores the object
@@ -357,7 +358,7 @@ func lfsObjectPresent(strg storage.Storage, obj models.LFSObject, recorded bool,
 
 // serviceLfsBasic implements Git LFS basic transfer API
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md
-func (s *gitServer) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+func (s *server) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.serviceLfsBasicDownload(w, r, gr)
@@ -367,13 +368,12 @@ func (s *gitServer) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *
 }
 
 // GET: /<repo>.git/info/lfs/objects/basic/<oid>
-func (s *gitServer) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
-	ctx := r.Context()
+func (s *server) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	oid := mux.Vars(r)["oid"]
 	repo := gr.repo
 
 	cfg := s.cfg
-	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
+	logger := gr.logger.WithPrefix("http.lfs-basic")
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
 
@@ -386,13 +386,13 @@ func (s *gitServer) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			logger.Debug("object not found", "oid", oid, "repo", repo.Name())
-			renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+			renderJSON(w, gr.logger, http.StatusNotFound, lfs.ErrorResponse{
 				Message: "object not found",
 			})
 			return
 		}
 		logger.Error("error opening object", "oid", oid, "repo", repo.Name(), "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -406,9 +406,9 @@ func (s *gitServer) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Reque
 }
 
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
-func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+func (s *server) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !hasMediaType(r, "application/octet-stream") {
-		renderJSON(w, r, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
 			Message: "invalid content type",
 		})
 		return
@@ -420,7 +420,7 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 	cfg := s.cfg
 	dbx := s.dbx
 	datastore := s.datastore
-	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
+	logger := gr.logger.WithPrefix("http.lfs-basic")
 	repo := gr.repo
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
@@ -441,7 +441,7 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 		}
 	} else if !errors.Is(err, db.ErrRecordNotFound) {
 		logger.Error("error getting object", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -453,7 +453,7 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 	size := r.ContentLength
 	if size < 0 {
 		logger.Info("missing content length", "oid", oid)
-		renderJSON(w, r, http.StatusLengthRequired, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusLengthRequired, lfs.ErrorResponse{
 			Message: "content length required",
 		})
 		return
@@ -463,26 +463,26 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 	switch {
 	case errors.Is(err, lfs.ErrObjectSizeMismatch):
 		logger.Info("object size mismatch", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "object size does not match content length",
 		})
 		return
 	case errors.Is(err, lfs.ErrObjectOidMismatch):
 		logger.Info("object hash mismatch", "oid", oid)
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "object content does not match oid",
 		})
 		return
 	case errors.Is(err, lfs.ErrObjectRead):
 		// The client aborted or truncated the upload.
 		logger.Info("error reading object", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "error reading object",
 		})
 		return
 	case err != nil:
 		logger.Error("error storing object", "oid", oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -492,14 +492,14 @@ func (s *gitServer) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request
 }
 
 // POST: /<repo>.git/info/lfs/objects/basic/verify
-func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
-	if !lfsMediaTypes(w, r) {
+func (s *server) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+	if !lfsMediaTypes(w, r, gr.logger) {
 		return
 	}
 
 	var pointer lfs.Pointer
 	ctx := r.Context()
-	logger := log.FromContext(ctx).WithPrefix("http.lfs-basic")
+	logger := gr.logger.WithPrefix("http.lfs-basic")
 	repo := gr.repo
 
 	defer r.Body.Close() //nolint: errcheck
@@ -509,7 +509,7 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 			return
 		}
 		logger.Info("error decoding json", "err", err)
-		renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusBadRequest, lfs.ErrorResponse{
 			Message: "invalid request: " + err.Error(),
 		})
 		return
@@ -519,7 +519,7 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 	// filesystem.
 	if !pointer.IsValid() {
 		logger.Info("invalid object", "oid", pointer.Oid)
-		renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 			Message: "invalid object",
 		})
 		return
@@ -536,20 +536,20 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
 				logger.Info("object not found", "oid", pointer.Oid)
-				renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+				renderJSON(w, gr.logger, http.StatusNotFound, lfs.ErrorResponse{
 					Message: "object not found",
 				})
 				return
 			}
 			logger.Error("error getting object", "oid", pointer.Oid, "err", err)
-			renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+			renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 				Message: "internal server error",
 			})
 			return
 		}
 
 		if obj.Size != pointer.Size {
-			renderJSON(w, r, http.StatusBadRequest, lfs.ErrorResponse{
+			renderJSON(w, gr.logger, http.StatusBadRequest, lfs.ErrorResponse{
 				Message: "object size mismatch",
 			})
 			return
@@ -559,7 +559,7 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 			// The recorded size matches but the stored file does not: the
 			// object on disk is truncated or corrupt and must not verify.
 			logger.Error("stored object size mismatch", "oid", pointer.Oid, "size", pointer.Size, "stored", stat.Size())
-			renderJSON(w, r, http.StatusUnprocessableEntity, lfs.ErrorResponse{
+			renderJSON(w, gr.logger, http.StatusUnprocessableEntity, lfs.ErrorResponse{
 				Message: "object size mismatch",
 			})
 			return
@@ -568,13 +568,13 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 		renderStatus(w, http.StatusOK)
 	} else if errors.Is(err, fs.ErrNotExist) {
 		logger.Info("object not found", "oid", pointer.Oid)
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusNotFound, lfs.ErrorResponse{
 			Message: "object not found",
 		})
 		return
 	} else {
 		logger.Error("error getting object", "oid", pointer.Oid, "err", err)
-		renderJSON(w, r, http.StatusInternalServerError, lfs.ErrorResponse{
+		renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
 			Message: "internal server error",
 		})
 		return
@@ -582,21 +582,23 @@ func (s *gitServer) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request
 }
 
 // renderJSON renders a JSON response with the given status code and value. It
-// also sets the Content-Type header to the JSON LFS media type (application/vnd.git-lfs+json).
-func renderJSON(w http.ResponseWriter, r *http.Request, statusCode int, v interface{}) {
+// also sets the Content-Type header to the JSON LFS media type
+// (application/vnd.git-lfs+json). A failure to send it is logged on logger,
+// the request's.
+func renderJSON(w http.ResponseWriter, logger *log.Logger, statusCode int, v interface{}) {
 	w.Header().Set("Content-Type", lfs.MediaType)
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		// The client has most likely gone away.
-		log.FromContext(r.Context()).Debug("error encoding json", "err", err)
+		logger.Debug("error encoding json", "err", err)
 	}
 }
 
 // lfsAccepts answers 406 unless the client accepts the LFS media type, and
-// reports whether it does.
-func lfsAccepts(w http.ResponseWriter, r *http.Request) bool {
+// reports whether it does. logger is the request's logger.
+func lfsAccepts(w http.ResponseWriter, r *http.Request, logger *log.Logger) bool {
 	if !strings.HasPrefix(r.Header.Get("Accept"), lfs.MediaType) {
-		renderJSON(w, r, http.StatusNotAcceptable, lfs.ErrorResponse{
+		renderJSON(w, logger, http.StatusNotAcceptable, lfs.ErrorResponse{
 			Message: "Not Acceptable: the Accept header must be " + lfs.MediaType,
 		})
 		return false
@@ -606,12 +608,13 @@ func lfsAccepts(w http.ResponseWriter, r *http.Request) bool {
 
 // lfsMediaTypes answers 406 unless the client accepts the LFS media type,
 // and 415 unless it sends a body of that type, and reports whether both hold.
-func lfsMediaTypes(w http.ResponseWriter, r *http.Request) bool {
-	if !lfsAccepts(w, r) {
+// logger is the request's logger.
+func lfsMediaTypes(w http.ResponseWriter, r *http.Request, logger *log.Logger) bool {
+	if !lfsAccepts(w, r, logger) {
 		return false
 	}
 	if !hasMediaType(r, lfs.MediaType) {
-		renderJSON(w, r, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
+		renderJSON(w, logger, http.StatusUnsupportedMediaType, lfs.ErrorResponse{
 			Message: "Unsupported Media Type: the Content-Type header must be " + lfs.MediaType,
 		})
 		return false

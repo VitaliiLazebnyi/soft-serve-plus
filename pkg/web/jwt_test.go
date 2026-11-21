@@ -1,11 +1,9 @@
 package web
 
 import (
-	"context"
 	"crypto/elliptic"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -33,10 +31,10 @@ func TestParseJWTHostKeyTypes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ctx := jwtTestContext(t, tc.opts...)
-			token := signJWT(ctx, t, jwtTestClaims(ctx, "repo"))
+			e := jwtTestEnv(t, tc.opts...)
+			token := signJWT(t, e, jwtTestClaims(e, "repo"))
 
-			claims, err := parseJWT(ctx, token, []string{"repo"})
+			claims, err := e.parseJWT(t, token, []string{"repo"})
 			if err != nil {
 				t.Fatalf("parseJWT: %v", err)
 			}
@@ -60,49 +58,58 @@ func TestParseJWTHostKeyTypes(t *testing.T) {
 // key or algorithm does not verify.
 func TestParseJWTRejectsOtherAlgorithms(t *testing.T) {
 	t.Parallel()
-	rsaCtx := jwtTestContext(t, keygen.WithKeyType(keygen.RSA), keygen.WithBitSize(2048))
-	edCtx := jwtTestContext(t, keygen.WithKeyType(keygen.Ed25519))
+	rsaEnv := jwtTestEnv(t, keygen.WithKeyType(keygen.RSA), keygen.WithBitSize(2048))
+	edEnv := jwtTestEnv(t, keygen.WithKeyType(keygen.Ed25519))
 
-	if _, err := parseJWT(rsaCtx, signJWT(edCtx, t, jwtTestClaims(edCtx, "repo")), []string{"repo"}); err == nil {
+	if _, err := rsaEnv.parseJWT(t, signJWT(t, edEnv, jwtTestClaims(edEnv, "repo")), []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted an EdDSA token for an RSA host key")
 	}
-	if _, err := parseJWT(edCtx, signJWT(rsaCtx, t, jwtTestClaims(rsaCtx, "repo")), []string{"repo"}); err == nil {
+	if _, err := edEnv.parseJWT(t, signJWT(t, rsaEnv, jwtTestClaims(rsaEnv, "repo")), []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted an RS256 token for an Ed25519 host key")
 	}
 
 	// An RSA-PSS token from the same RSA key is not the expected RS256.
-	kp, err := config.KeyPair(config.FromContext(rsaCtx))
+	kp, err := config.KeyPair(rsaEnv.cfg)
 	if err != nil {
 		t.Fatalf("KeyPair: %v", err)
 	}
-	pss, err := jwt.NewWithClaims(jwt.SigningMethodPS256, jwtTestClaims(rsaCtx, "repo")).SignedString(kp.PrivateKey())
+	pss, err := jwt.NewWithClaims(jwt.SigningMethodPS256, jwtTestClaims(rsaEnv, "repo")).SignedString(kp.PrivateKey())
 	if err != nil {
 		t.Fatalf("SignedString: %v", err)
 	}
-	if _, err := parseJWT(rsaCtx, pss, []string{"repo"}); err == nil {
+	if _, err := rsaEnv.parseJWT(t, pss, []string{"repo"}); err == nil {
 		t.Error("parseJWT accepted a PS256 token for an RSA host key")
 	}
 }
 
-func jwtTestContext(t *testing.T, opts ...keygen.Option) context.Context {
+// jwtTestEnv returns an env with only a config, whose host key is made with
+// opts.
+func jwtTestEnv(t *testing.T, opts ...keygen.Option) *testEnv {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "ssh", "host_key")
-	if _, err := keygen.New(cfg.SSH.KeyPath, append(opts, keygen.WithWrite())...); err != nil {
-		t.Fatalf("keygen: %v", err)
-	}
-	return config.WithContext(context.Background(), cfg)
+	e := &testEnv{cfg: cfg}
+	e.writeHostKey(t, opts...)
+	return e
 }
 
-func jwtTestClaims(ctx context.Context, audience ...string) jwt.RegisteredClaims {
+// parseJWT is server.parseJWT on a server with e's host key.
+func (e *testEnv) parseJWT(t *testing.T, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
+	t.Helper()
+	s := newServer(e.cfg, nil, nil, nil, e.tokens(t), nil)
+	return s.parseJWT(s.logger, bearer, repos)
+}
+
+// jwtTestClaims returns valid claims for user#1, issued by e's server, for
+// the repositories in audience.
+func jwtTestClaims(e *testEnv, audience ...string) jwt.RegisteredClaims {
 	now := time.Now()
 	return jwt.RegisteredClaims{
 		Subject:   "user#1",
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		NotBefore: jwt.NewNumericDate(now),
 		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    config.FromContext(ctx).HTTP.PublicURL,
+		Issuer:    e.cfg.HTTP.PublicURL,
 		Audience:  audience,
 	}
 }
@@ -110,12 +117,13 @@ func jwtTestClaims(ctx context.Context, audience ...string) jwt.RegisteredClaims
 // TestBearerTokenWithKeyID checks a token minted before the "kid" header was
 // dropped, which carries one, still authenticates its user until it expires.
 func TestBearerTokenWithKeyID(t *testing.T) {
+	t.Parallel()
 	f := newOracleFixture(t)
-	kp, err := config.KeyPair(config.FromContext(f.ctx))
+	kp, err := config.KeyPair(f.env.cfg)
 	if err != nil {
 		t.Fatalf("KeyPair: %v", err)
 	}
-	claims := jwtTestClaims(f.ctx, "secret")
+	claims := jwtTestClaims(f.env, "secret")
 	claims.Subject = fmt.Sprintf("%s#%d", f.owner.Username(), f.owner.ID())
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
 	// An RFC 7638 thumbprint, as the old code put there.

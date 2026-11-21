@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -22,8 +21,46 @@ import (
 // not a bad token.
 var ErrHostKey = errors.New("no usable host key")
 
+// errNoHostKey is the error of a nil *Signer: the server has no host key it
+// can sign with.
+var errNoHostKey = fmt.Errorf("%w: the host key was not loaded", ErrHostKey)
+
 // errInvalid is wrapped by the error of a token that does not verify.
 var errInvalid = errors.New("invalid token")
+
+// HostKey is the key tokens are signed with: the server's SSH host key, as
+// *config.HostKey holds it.
+type HostKey interface {
+	PrivateKey() crypto.PrivateKey
+	CryptoPublicKey() crypto.PublicKey
+}
+
+// Signer signs and verifies the server's tokens with its host key. A nil
+// *Signer stands for a server without a usable host key: its methods return
+// an error wrapping ErrHostKey.
+type Signer struct {
+	priv   crypto.PrivateKey
+	pub    crypto.PublicKey
+	method jwt.SigningMethod
+	// issuer is the server's HTTP public URL, the issuer of its tokens.
+	issuer string
+}
+
+// NewSigner returns a Signer for key that issues tokens as issuer, the
+// server's HTTP public URL. The error wraps ErrHostKey when key is nil or of
+// a type tokens cannot be signed with. key must hold a key: pass nil, not a
+// nil *config.HostKey, for none.
+func NewSigner(key HostKey, issuer string) (*Signer, error) {
+	if key == nil {
+		return nil, errNoHostKey
+	}
+	pub := key.CryptoPublicKey()
+	method, err := signingMethodFor(pub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHostKey, err)
+	}
+	return &Signer{priv: key.PrivateKey(), pub: pub, method: method, issuer: issuer}, nil
+}
 
 // signingMethodFor returns the JSON Web Token signing method for a public
 // key: EdDSA for Ed25519, RS256 for RSA and ES256, ES384 or ES512 for ECDSA
@@ -50,19 +87,6 @@ func signingMethodFor(pub crypto.PublicKey) (jwt.SigningMethod, error) {
 	}
 }
 
-// hostKey returns the host key and the signing method for its type.
-func hostKey(cfg *config.Config) (*config.HostKey, jwt.SigningMethod, error) {
-	kp, err := config.KeyPair(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrHostKey, err)
-	}
-	method, err := signingMethodFor(kp.CryptoPublicKey())
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrHostKey, err)
-	}
-	return kp, method, nil
-}
-
 // Subject returns the subject of a token for user: the username and the
 // user ID, so a token does not carry over to a new account of the same name.
 func Subject(user proto.User) string {
@@ -70,18 +94,18 @@ func Subject(user proto.User) string {
 }
 
 // Sign returns a token for user that is valid from now until expiresAt, for
-// the repositories in audience, issued by the server at cfg.HTTP.PublicURL.
-func Sign(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
-	if cfg == nil {
-		return "", fmt.Errorf("%w: %w", ErrHostKey, config.ErrNilConfig)
+// the repositories in audience.
+func (s *Signer) Sign(user proto.User, audience []string, expiresAt time.Time) (string, error) {
+	if s == nil {
+		return "", errNoHostKey
 	}
 	now := time.Now()
-	return SignClaims(cfg, jwt.RegisteredClaims{
+	return s.SignClaims(jwt.RegisteredClaims{
 		Subject:   Subject(user),
 		ExpiresAt: jwt.NewNumericDate(expiresAt),
 		NotBefore: jwt.NewNumericDate(now),
 		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    cfg.HTTP.PublicURL,
+		Issuer:    s.issuer,
 		Audience:  audience,
 	})
 }
@@ -89,38 +113,34 @@ func Sign(cfg *config.Config, user proto.User, audience []string, expiresAt time
 // SignClaims signs claims with the host key, using the algorithm of its key
 // type. Sign is the way to issue a token; this is for callers, such as
 // tests, that need other claims.
-func SignClaims(cfg *config.Config, claims jwt.RegisteredClaims) (string, error) {
-	kp, method, err := hostKey(cfg)
-	if err != nil {
-		return "", err
+func (s *Signer) SignClaims(claims jwt.RegisteredClaims) (string, error) {
+	if s == nil {
+		return "", errNoHostKey
 	}
-	return jwt.NewWithClaims(method, claims).SignedString(kp.PrivateKey())
+	return jwt.NewWithClaims(s.method, claims).SignedString(s.priv)
 }
 
 // Verify checks a token signed with the host key, in the algorithm of its
-// key type, issued by the server at cfg.HTTP.PublicURL, with an expiry, and
-// with an audience that names one of audience. It returns the token's
-// claims. The error wraps ErrHostKey when the host key cannot be used;
-// otherwise the token does not verify.
+// key type, issued by s's issuer, with an expiry, and with an audience that
+// names one of audience. It returns the token's claims. The error wraps
+// ErrHostKey when s is nil; otherwise the token does not verify.
 //
 // Any "kid" header is ignored: tokens issued before it was dropped carry
 // one, and there is only one key to verify with.
-func Verify(cfg *config.Config, token string, audience []string) (*jwt.RegisteredClaims, error) {
+func (s *Signer) Verify(token string, audience []string) (*jwt.RegisteredClaims, error) {
 	if len(audience) == 0 {
 		// jwt.WithAudience checks nothing without an audience.
 		return nil, errInvalid
 	}
-	kp, method, err := hostKey(cfg)
-	if err != nil {
-		return nil, err
+	if s == nil {
+		return nil, errNoHostKey
 	}
 
-	pub := kp.CryptoPublicKey()
 	parsed, err := jwt.ParseWithClaims(token, &jwt.RegisteredClaims{}, func(*jwt.Token) (any, error) {
-		return pub, nil
+		return s.pub, nil
 	},
-		jwt.WithValidMethods([]string{method.Alg()}),
-		jwt.WithIssuer(cfg.HTTP.PublicURL),
+		jwt.WithValidMethods([]string{s.method.Alg()}),
+		jwt.WithIssuer(s.issuer),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),
 		jwt.WithAudience(audience...),

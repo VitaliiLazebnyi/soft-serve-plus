@@ -21,9 +21,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/cron"
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/jobs"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/web"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -107,8 +110,9 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 
 	// The SSH server created the host key if there was none. Read it once
 	// for the tokens it signs, rather than on every bearer request.
-	if err := cfg.LoadHostKey(); err != nil {
-		logger.Warn("cannot read the SSH host key; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused", "err", err)
+	tokens, kerr := tokenSigner(cfg)
+	if kerr != nil {
+		logger.Warn("cannot read the SSH host key; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused", "err", kerr)
 	}
 
 	srv.GitDaemon, err = daemon.NewGitDaemon(ctx)
@@ -116,7 +120,10 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, fmt.Errorf("create git daemon: %w", err)
 	}
 
-	srv.HTTPServer = web.NewHTTPServer(ctx)
+	srv.HTTPServer, err = web.NewHTTPServer(cfg, be, db.FromContext(ctx), store.FromContext(ctx), tokens, log.FromContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("create http server: %w", err)
+	}
 
 	srv.StatsServer = newStatsServer()
 
@@ -141,6 +148,19 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}
 
 	return srv, nil
+}
+
+// tokenSigner reads the SSH host key, once, and returns the signer of the
+// tokens the servers issue and the HTTP server verifies.
+func tokenSigner(cfg *config.Config) (*jwk.Signer, error) {
+	if err := cfg.LoadHostKey(); err != nil {
+		return nil, err
+	}
+	kp, err := config.KeyPair(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return jwk.NewSigner(kp, cfg.HTTP.PublicURL)
 }
 
 // ensureClientKey creates the key the server presents to the ssh remotes it

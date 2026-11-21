@@ -13,22 +13,29 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/gorilla/mux"
 	"github.com/matryer/is"
 )
 
-// newLocksParamsContext returns a request context for a user who owns a
-// repository holding two locks.
-func newLocksParamsContext(t *testing.T) context.Context {
+// locksFixture is a server, and a user who owns a repository holding two
+// locks.
+type locksFixture struct {
+	env *testEnv
+	ctx context.Context
+	s   *server
+	// owner is the owner as the caller of a request to the repository.
+	owner routeCaller
+}
+
+// newLocksFixture returns a new fixture.
+func newLocksFixture(t *testing.T) *locksFixture {
 	t.Helper()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -41,8 +48,7 @@ func newLocksParamsContext(t *testing.T) context.Context {
 		t.Fatal(err)
 	}
 
-	ctx = proto.WithUserContext(ctx, owner)
-	return proto.WithRepositoryContext(ctx, repo)
+	return &locksFixture{env: env, ctx: ctx, s: env.server(t), owner: routeCaller{user: owner, repo: repo}}
 }
 
 // TestLFSLocksGetRejectsInvalidParams checks that the lock list rejects an
@@ -50,7 +56,9 @@ func newLocksParamsContext(t *testing.T) context.Context {
 // errors ignored, so ?id=abc read as no id and listed every lock instead
 // of looking one up.
 func TestLFSLocksGetRejectsInvalidParams(t *testing.T) {
-	ctx := newLocksParamsContext(t)
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
 
 	for _, query := range []string{
 		"id=abc",
@@ -67,10 +75,11 @@ func TestLFSLocksGetRejectsInvalidParams(t *testing.T) {
 		"limit=99999999999999999999",
 	} {
 		t.Run(query, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocks, w, req)
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusBadRequest, w.Body)
@@ -86,7 +95,9 @@ func TestLFSLocksGetRejectsInvalidParams(t *testing.T) {
 // TestLFSLocksGetValidParams checks that valid paging still works, and that
 // a limit above the maximum is lowered rather than rejected.
 func TestLFSLocksGetValidParams(t *testing.T) {
-	ctx := newLocksParamsContext(t)
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
 
 	for query, want := range map[string]struct {
 		locks  int
@@ -105,10 +116,11 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 		"limit=1&cursor=01":          {locks: 1, cursor: "2"},
 	} {
 		t.Run(query, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocks, w, req)
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -127,15 +139,19 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 // TestLFSLocksVerifyRejectsInvalidParams covers the same cursor and limit
 // checks on the verify endpoint, where an invalid cursor used to be read as
 // the first page.
+//
+// Its subtests run in order on one fixture, so neither they nor it run in
+// parallel.
 func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) {
-	ctx := newLocksParamsContext(t)
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
 
 	verify := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks/verify", strings.NewReader(body))
 		req.Header.Set("Content-Type", lfs.MediaType)
 		req.Header.Set("Accept", lfs.MediaType)
 		w := httptest.NewRecorder()
-		serveRoute((*gitServer).serviceLfsLocksVerify, w, req)
+		f.s.serveRoute((*server).serviceLfsLocksVerify, w, req, rc)
 		return w
 	}
 
@@ -178,12 +194,16 @@ func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) {
 // one-second updated_at, so ties came back in no fixed order and a lock
 // created or deleted between pages shifted the others: some were listed
 // twice and others never, and verify could leave out another user's lock.
+//
+// Its subtests run in order on one fixture, so neither they nor it run in
+// parallel.
 func TestLFSLocksPagingIsStable(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	repo := proto.RepositoryFromContext(ctx)
-	owner := proto.UserFromContext(ctx)
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	dbx := f.env.dbx
+	datastore := f.env.datastore
+	repo := rc.repo
+	owner := rc.user
 
 	const n = 30
 	for i := range n {
@@ -239,7 +259,7 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?limit=4&cursor="+cursor, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocks, w, req)
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
 			}
@@ -283,7 +303,7 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 			req.Header.Set("Content-Type", lfs.MediaType)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocksVerify, w, req)
+			f.s.serveRoute((*server).serviceLfsLocksVerify, w, req, rc)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
 			}
@@ -313,7 +333,9 @@ func TestLFSLocksPagingIsStable(t *testing.T) {
 // The list used to be treated as a write, so `git lfs locks` failed for
 // readers over HTTP although it worked over SSH.
 func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
-	ctx, be, _ := newLFSTestContext(t)
+	t.Parallel()
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	if err != nil {
@@ -331,7 +353,7 @@ func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	for _, auth := range []string{"", "token " + token} {
 		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/public-repo.git/info/lfs/locks", nil)
 		req.Header.Set("Accept", lfs.MediaType)
@@ -357,14 +379,17 @@ func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
 // TestLFSLocksListFilterNoMatch checks that a path or id filter matching no
 // lock answers an empty list, not 404.
 func TestLFSLocksListFilterNoMatch(t *testing.T) {
-	ctx := newLocksParamsContext(t)
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
 
 	for _, query := range []string{"path=missing.bin", "id=12345"} {
 		t.Run(query, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocks, w, req)
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -385,19 +410,21 @@ func TestLFSLocksListFilterNoMatch(t *testing.T) {
 // lookup used to be scoped to the caller, so the response carried an empty
 // lock.
 func TestLFSLockCreateConflictReturnsLock(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	other, err := backend.FromContext(ctx).CreateUser(ctx, "other", proto.UserOptions{})
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	other, err := f.env.be.CreateUser(ctx, "other", proto.UserOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx = access.WithContext(proto.WithUserContext(ctx, other), access.ReadWriteAccess)
+	rc = routeCaller{user: other, repo: rc.repo, level: access.ReadWriteAccess}
 
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks",
 		strings.NewReader(`{"path":"a.bin","ref":{"name":"refs/heads/main"}}`))
 	req.Header.Set("Accept", lfs.MediaType)
 	req.Header.Set("Content-Type", lfs.MediaType)
 	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocks, w, req)
+	f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusConflict, w.Body)
@@ -414,18 +441,20 @@ func TestLFSLockCreateConflictReturnsLock(t *testing.T) {
 // TestLFSLockForceUnlockWrapsLock checks that a force unlock answers
 // {"lock": ...} like an ordinary unlock.
 func TestLFSLockForceUnlockWrapsLock(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	dbx := db.FromContext(ctx)
-	repo := proto.RepositoryFromContext(ctx)
-	lock, err := store.FromContext(ctx).GetLFSLockForPath(ctx, dbx, repo.ID(), "a.bin")
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	dbx := f.env.dbx
+	repo := rc.repo
+	lock, err := f.env.datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), "a.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin, err := backend.FromContext(ctx).CreateUser(ctx, "admin2", proto.UserOptions{Admin: true})
+	admin, err := f.env.be.CreateUser(ctx, "admin2", proto.UserOptions{Admin: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx = access.WithContext(proto.WithUserContext(ctx, admin), access.AdminAccess)
+	rc = routeCaller{user: admin, repo: rc.repo, level: access.AdminAccess}
 
 	id := strconv.FormatInt(lock.ID, 10)
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks/"+id+"/unlock",
@@ -434,7 +463,7 @@ func TestLFSLockForceUnlockWrapsLock(t *testing.T) {
 	req.Header.Set("Content-Type", lfs.MediaType)
 	req = mux.SetURLVars(req, map[string]string{"lock_id": id})
 	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocksDelete, w, req)
+	f.s.serveRoute((*server).serviceLfsLocksDelete, w, req, rc)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body)
@@ -454,10 +483,10 @@ func TestLFSLockForceUnlockWrapsLock(t *testing.T) {
 // used to answer 404 "user not found" and unlock a 401 without a challenge,
 // so git-lfs never offered credentials.
 func TestLFSLocksAnonymousWriterAsksForCredentials(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	repo := proto.RepositoryFromContext(ctx)
-	ctx = access.WithContext(proto.WithUserContext(ctx, nil), access.ReadWriteAccess)
-	ctx = proto.WithRepositoryContext(ctx, repo)
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	rc = routeCaller{repo: rc.repo, level: access.ReadWriteAccess}
 
 	create := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks",
 		strings.NewReader(`{"path":"c.bin","ref":{"name":"refs/heads/main"}}`))
@@ -469,14 +498,15 @@ func TestLFSLocksAnonymousWriterAsksForCredentials(t *testing.T) {
 		req     *http.Request
 		handler gitHandler
 	}{
-		"create": {create, (*gitServer).serviceLfsLocks},
-		"unlock": {unlock, (*gitServer).serviceLfsLocksDelete},
+		"create": {create, (*server).serviceLfsLocks},
+		"unlock": {unlock, (*server).serviceLfsLocksDelete},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			rq.req.Header.Set("Accept", lfs.MediaType)
 			rq.req.Header.Set("Content-Type", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute(rq.handler, w, rq.req)
+			f.s.serveRoute(rq.handler, w, rq.req, rc)
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusUnauthorized, w.Body)
 			}

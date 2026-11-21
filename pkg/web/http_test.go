@@ -20,6 +20,7 @@ import (
 // Serve speaks TLS on the given listener when a TLS configuration is set,
 // and plain HTTP otherwise.
 func TestHTTPServerServe(t *testing.T) {
+	t.Parallel()
 	cert := selfSignedCert(t)
 	for _, useTLS := range []bool{false, true} {
 		name := "plain"
@@ -27,6 +28,7 @@ func TestHTTPServerServe(t *testing.T) {
 			name = "tls"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			s := &HTTPServer{Server: &http.Server{
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = io.WriteString(w, "ok")

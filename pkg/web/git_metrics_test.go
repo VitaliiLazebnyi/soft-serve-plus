@@ -12,13 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// httpGitCounts returns the HTTP fetch and push counters for repo.
+// httpGitCounts returns the HTTP fetch and push counters for repo. The
+// counters are the process's, and other tests fetch the same names, so the
+// tests that read them do not run in parallel.
 func httpGitCounts(repo string) (fetches, pushes float64) {
 	return testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(repo, "info/refs")),
 		testutil.ToFloat64(gitHttpReceiveCounter.WithLabelValues(repo))
@@ -88,7 +89,7 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 	work := t.TempDir()
 	gitRun(t, "init", "-q", work)
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
-	bare := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", name+".git")
+	bare := filepath.Join(f.env.cfg.DataPath, "repos", name+".git")
 	gitRun(t, "-C", work, "-c", "core.hooksPath="+t.TempDir(), "push", "-q", bare, "HEAD:refs/heads/main")
 
 	srv := httptest.NewServer(f.handler)
@@ -126,7 +127,7 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 	is.NoErr(err)
 	// The repository's hooks run the server binary, which is the test binary
 	// here, and would refuse the push.
-	hooks := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", name+".git", "hooks")
+	hooks := filepath.Join(f.env.cfg.DataPath, "repos", name+".git", "hooks")
 	is.NoErr(os.RemoveAll(hooks))
 	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)

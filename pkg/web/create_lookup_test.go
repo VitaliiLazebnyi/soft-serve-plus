@@ -10,15 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 )
 
@@ -41,30 +36,20 @@ func (s anonFailsAfterStore) GetAnonAccess(ctx context.Context, h db.Handler) (a
 // answered 503 with Retry-After and no credentials challenge, as for any
 // failed lookup, not 500, and nothing is created.
 func TestPushCreateLookupFailureUnavailable(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx := context.Background()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { _ = dbx.Close() })
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+	env := newTestEnv(t)
+	ctx := env.ctx
 	ok, reads := &atomic.Int32{}, &atomic.Int32{}
 	ok.Store(math.MaxInt32)
-	st := anonFailsAfterStore{Store: database.New(), ok: ok, reads: reads}
-	ctx = store.WithContext(db.WithContext(ctx, dbx), st)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
+	env.useStore(anonFailsAfterStore{Store: env.datastore, ok: ok, reads: reads})
+	be := env.be
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)
 	token, err := be.CreateAccessToken(ctx, alice, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)
-	router := testRouter(t, ctx)
+	router := env.router(t)
 
 	// The request's access check reads the setting once; the create's
 	// check is the read that fails.

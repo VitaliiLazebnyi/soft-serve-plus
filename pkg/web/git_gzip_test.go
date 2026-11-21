@@ -28,6 +28,7 @@ func (f *oracleFixture) gzipRPC(t *testing.T, name, service, auth string, body [
 // is written, rather than a 200 result followed by an error page. A push
 // that sent such a body failed, so a repository it created is removed.
 func TestServiceRPCBadGzip(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token

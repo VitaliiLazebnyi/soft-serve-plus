@@ -15,7 +15,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
@@ -46,6 +45,7 @@ func (f *oracleFixture) send(method, path string, hdr map[string]string, body st
 
 // Auth-params of a challenge are separated by commas (RFC 7235).
 func TestCredentialsChallengeSyntax(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "")
@@ -57,6 +57,7 @@ func TestCredentialsChallengeSyntax(t *testing.T) {
 // A wrong method gets 405 with an Allow header whatever the protocol
 // version, and a route that answers GET answers HEAD too.
 func TestMethodNotAllowed(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
@@ -88,6 +89,7 @@ func TestMethodNotAllowed(t *testing.T) {
 // The RPC endpoints answer 415 to any body but the service's request type,
 // as git http-backend does, and their responses are not cached.
 func TestServiceRPCContentType(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
@@ -105,11 +107,11 @@ func TestServiceRPCContentType(t *testing.T) {
 	}
 }
 
-// signJWT signs claims with the server host key, using the algorithm of its
-// key type the way `soft jwt` does.
-func signJWT(ctx context.Context, t *testing.T, claims jwt.RegisteredClaims) string {
+// signJWT signs claims with e's host key, using the algorithm of its key
+// type the way `soft jwt` does.
+func signJWT(t *testing.T, e *testEnv, claims jwt.RegisteredClaims) string {
 	t.Helper()
-	signed, err := jwk.SignClaims(config.FromContext(ctx), claims)
+	signed, err := e.tokens(t).SignClaims(claims)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,36 +120,38 @@ func signJWT(ctx context.Context, t *testing.T, claims jwt.RegisteredClaims) str
 
 // A bearer token must expire.
 func TestBearerTokenRequiresExpiry(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
 		Subject:  fmt.Sprintf("%s#%d", f.owner.Username(), f.owner.ID()),
 		IssuedAt: jwt.NewNumericDate(now),
-		Issuer:   config.FromContext(f.ctx).HTTP.PublicURL,
+		Issuer:   f.env.cfg.HTTP.PublicURL,
 		Audience: []string{"secret"},
 	}
 	const path = "/secret.git/info/refs?service=git-upload-pack"
-	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(f.ctx, t, claims)).Code, http.StatusForbidden)
+	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code, http.StatusForbidden)
 
 	claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Hour))
-	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(f.ctx, t, claims)).Code, http.StatusOK)
+	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code, http.StatusOK)
 }
 
 // go get of a package inside a repository accepts a token minted for the
 // repository, but not one minted for another repository.
 func TestGoGetBearerTokenForParentRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 
 	for _, path := range []string{"/secret?go-get=1", "/secret/sub/pkg?go-get=1", "/secret.git/sub?go-get=1"} {
-		w := f.do(http.MethodGet, path, "Bearer "+mintJWT(f.ctx, t, f.owner, "secret"))
+		w := f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret"))
 		is.Equal(w.Code, http.StatusOK)
 		is.True(strings.Contains(w.Body.String(), `name="go-import"`))
 		is.True(strings.Contains(w.Body.String(), "https://pkg.go.dev/"))
 	}
-	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+mintJWT(f.ctx, t, f.owner, "other")).Code, http.StatusForbidden)
-	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+mintJWT(f.ctx, t, f.owner, "secret/sub/pkg")).Code, http.StatusForbidden)
+	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "other")).Code, http.StatusForbidden)
+	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "secret/sub/pkg")).Code, http.StatusForbidden)
 
 	// A token for "secret" does not reveal the nested repository
 	// "secret/sub", even to a caller who may read it: the walk skips it
@@ -155,18 +159,19 @@ func TestGoGetBearerTokenForParentRepository(t *testing.T) {
 	_, err := f.be.CreateRepository(f.ctx, "secret/sub", f.owner, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
 	for _, path := range []string{"/secret/sub?go-get=1", "/secret/sub/pkg?go-get=1"} {
-		w := f.do(http.MethodGet, path, "Bearer "+mintJWT(f.ctx, t, f.owner, "secret"))
+		w := f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret"))
 		is.Equal(w.Code, http.StatusOK)
 		is.True(strings.Contains(w.Body.String(), "/secret.git"))
 		is.True(!strings.Contains(w.Body.String(), "secret/sub"))
 
-		w = f.do(http.MethodGet, path, "Bearer "+mintJWT(f.ctx, t, f.owner, "secret/sub"))
+		w = f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret/sub"))
 		is.Equal(w.Code, http.StatusOK)
 		is.True(strings.Contains(w.Body.String(), "/secret/sub.git"))
 	}
 }
 
 func TestPathAncestors(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	is.Equal(pathAncestors("a"), []string{"a"})
 	is.Equal(pathAncestors("a.git/b/c"), []string{"a.git/b/c", "a.git/b", "a"})
@@ -176,6 +181,7 @@ func TestPathAncestors(t *testing.T) {
 // header and 415 for the Content-Type header. Responses carry no Accept
 // header.
 func TestLFSMediaTypes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
@@ -208,6 +214,7 @@ func TestLFSMediaTypes(t *testing.T) {
 
 // The batch API answers 409 to a hash algorithm other than SHA-256.
 func TestLFSBatchHashAlgo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
@@ -225,6 +232,7 @@ func TestLFSBatchHashAlgo(t *testing.T) {
 // Bad credentials get the same JSON 403 from LFS whether or not the caller
 // could read the repository anonymously.
 func TestLFSBadCredentialsAreJSON(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "public", f.owner, proto.RepositoryOptions{})
@@ -247,6 +255,7 @@ func TestLFSBadCredentialsAreJSON(t *testing.T) {
 // withParams leaves the request URL alone, so request logs show the path
 // the client asked for.
 func TestWithParamsKeepsURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	var inner string
@@ -264,13 +273,15 @@ func TestWithParamsKeepsURL(t *testing.T) {
 // A panic is answered with 500 and logged with its stack on the request
 // logger.
 func TestRecoverPanics(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
-	h := recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	s := newServer(config.DefaultConfig(), nil, nil, nil, nil, logger)
+	h := s.recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	}))
-	req := httptest.NewRequestWithContext(log.WithContext(context.Background(), logger.With("path", "/x")), http.MethodGet, "/x", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	is.Equal(w.Code, http.StatusInternalServerError)
@@ -280,7 +291,7 @@ func TestRecoverPanics(t *testing.T) {
 	is.True(strings.Contains(out, "TestRecoverPanics"))
 
 	// http.ErrAbortHandler still aborts the response.
-	abort := recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	abort := s.recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
 	defer func() {
@@ -292,6 +303,7 @@ func TestRecoverPanics(t *testing.T) {
 // Failed TLS handshakes are logged at debug level; other server errors
 // stay errors.
 func TestServerErrorLog(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)

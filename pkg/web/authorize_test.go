@@ -15,6 +15,7 @@ import (
 // missing one (!readable, whatever level the caller gets for a missing
 // name), so the level alone must not change the answer.
 func TestAuthorize(t *testing.T) {
+	t.Parallel()
 	type route struct {
 		name string
 		need routeAccess

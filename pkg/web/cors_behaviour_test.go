@@ -5,8 +5,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
-
-	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
 // corsCase is a request through the router and the CORS answer it gets.
@@ -30,6 +28,7 @@ type corsCase struct {
 // 200 to an OPTIONS request, no credentials, and Vary: Origin on every
 // answer.
 func TestCORSBehaviour(t *testing.T) {
+	t.Parallel()
 	const (
 		public = "https://git.example.com"
 		app    = "https://app.example.com"
@@ -125,8 +124,9 @@ func TestCORSBehaviour(t *testing.T) {
 		},
 	} {
 		t.Run(group.name, func(t *testing.T) {
-			ctx, _, _ := newLFSTestContext(t)
-			cfg := config.FromContext(ctx)
+			t.Parallel()
+			env := newTestEnv(t)
+			cfg := env.cfg
 			cfg.HTTP.PublicURL = group.public
 			cfg.HTTP.CORS.AllowedOrigins = group.origins
 			if group.headers != nil {
@@ -135,10 +135,11 @@ func TestCORSBehaviour(t *testing.T) {
 			if group.methods != nil {
 				cfg.HTTP.CORS.AllowedMethods = group.methods
 			}
-			h := testRouter(t, ctx)
+			h := env.router(t)
 
 			for _, tc := range group.cases {
 				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
 					req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 					if tc.origin != "" {
 						req.Header.Set("Origin", tc.origin)

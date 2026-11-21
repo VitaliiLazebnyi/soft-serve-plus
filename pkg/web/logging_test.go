@@ -18,6 +18,7 @@ import (
 // middleware on a real server and checks that full and ranged responses
 // arrive intact and are counted in the response log.
 func TestLoggingMiddlewareServeContent(t *testing.T) {
+	t.Parallel()
 	content := bytes.Repeat([]byte("0123456789"), 10000)
 	name := filepath.Join(t.TempDir(), "obj")
 	if err := os.WriteFile(name, content, 0o600); err != nil {

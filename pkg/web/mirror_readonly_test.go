@@ -8,7 +8,6 @@ import (
 
 	gitb "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -18,6 +17,7 @@ import (
 // the receive-pack RPC on a mirror, while upload-pack still serves it, and
 // that turning mirroring off lets the push advertisement through again.
 func TestHTTPMirrorRefusesPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -26,7 +26,7 @@ func TestHTTPMirrorRefusesPush(t *testing.T) {
 	_, err := f.be.CreateRepository(ownerCtx, "m", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 	is.NoErr(f.be.AddCollaborator(ownerCtx, "m", "stranger", access.ReadWriteAccess))
-	r, err := gitb.Open(filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "m.git"))
+	r, err := gitb.Open(filepath.Join(f.env.cfg.DataPath, "repos", "m.git"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	is.NoErr(f.be.SetMirror(ownerCtx, "m", true))
