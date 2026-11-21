@@ -145,6 +145,10 @@ func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger,
 
 // serverContext validates cfg and returns a context with what NewSSHServer
 // needs: the config, logger, and a migrated database, store and backend.
+//
+// The caller sets cfg.DataPath to a t.TempDir before calling it, and starts
+// the server after: closeTestDB, which closes the database, then runs after
+// the server is closed and before the directory is removed.
 func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context.Context {
 	t.Helper()
 	if err := cfg.Validate(); err != nil {
