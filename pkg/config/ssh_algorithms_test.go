@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -224,14 +225,19 @@ func checkRSANote(t *testing.T, doc string) {
 	if slices.Contains(defaults, ssh.KeyAlgoRSA) {
 		t.Fatal("ssh-rsa is accepted by default")
 	}
+	// Every sentence that names ssh-rsa must say, in these words, that it
+	// is refused unless added: a sentence that negates the refusal, or
+	// says it is accepted, does not match.
+	refused := regexp.MustCompile("^It refuses the SHA-1 `ssh-rsa` signatures of older clients unless `ssh-rsa` is appended to `ssh\\.public_key_auth_algorithms`")
 	var found bool
 	for _, s := range sentences {
+		s = strings.TrimSpace(s)
 		if !strings.Contains(s, "`"+ssh.KeyAlgoRSA+"`") {
 			continue
 		}
 		found = true
-		if !strings.Contains(s, "refuse") || !strings.Contains(s, "public_key_auth_algorithms") {
-			t.Errorf("the RSA note says of ssh-rsa %q; want that it is refused unless added to ssh.public_key_auth_algorithms", s)
+		if !refused.MatchString(s) {
+			t.Errorf("the RSA note says of ssh-rsa %q; want %q", s, refused)
 		}
 	}
 	if !found {
