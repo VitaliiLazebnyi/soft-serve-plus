@@ -301,3 +301,25 @@ func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
 		t.Errorf("c-ok's hooks were not written after a-broken failed: %v", err)
 	}
 }
+
+// With Postgres there is no database file to look for: a data directory
+// that exists is enough, whatever the data source names. Checking the data
+// source as a file would refuse every Postgres setup.
+func TestCheckDataPathPostgres(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.DB.Driver = "postgres"
+	cfg.DB.DataSource = "postgres://soft@127.0.0.1:5432/soft?sslmode=disable"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkDataPath(cfg); err != nil {
+		t.Errorf("checkDataPath() with Postgres and an existing data directory = %v, want nil", err)
+	}
+
+	// The data directory is still required.
+	cfg.DataPath = filepath.Join(cfg.DataPath, "missing")
+	if err := checkDataPath(cfg); err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_DATA_PATH") {
+		t.Errorf("checkDataPath() with Postgres and no data directory = %v, want the data directory error", err)
+	}
+}
