@@ -6,7 +6,8 @@ FROM alpine:3.24@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71
 # generates use /bin/sh, so no bash.
 #
 # apk.log is removed: it records the install time, the one file that made two
-# builds of this layer differ (see SOURCE_DATE_EPOCH in .goreleaser.yml).
+# builds of this layer, and so the per-platform image manifest, differ (see
+# SOURCE_DATE_EPOCH in .goreleaser.yml).
 RUN apk add --no-cache git openssh-client-default tini \
   && rm -f /var/log/apk.log
 

@@ -257,11 +257,12 @@ func TestImageLabelsAreReproducible(t *testing.T) {
 	}
 }
 
-// TestImageBuildIsReproducible checks that two builds of the image from one
-// commit give the same digest: BuildKit dates the config and history by
-// SOURCE_DATE_EPOCH, rewrite-timestamp clamps the times of the files the RUN
-// steps write, and buildx's provenance attestation, which records the build
-// time, is left out of the index.
+// TestImageBuildIsReproducible checks what makes two builds of the image from
+// one commit give the same per-platform image manifest digest: BuildKit dates
+// the config and history by SOURCE_DATE_EPOCH, rewrite-timestamp clamps the
+// times of the files the RUN steps write, and the Dockerfile drops apk's log.
+// The index digest is not checked: its SBOM and provenance attestations hold
+// the build time and random IDs.
 func TestImageBuildIsReproducible(t *testing.T) {
 	t.Parallel()
 	c := readGoreleaser(t)
@@ -277,9 +278,6 @@ func TestImageBuildIsReproducible(t *testing.T) {
 		})
 		if !rewrite {
 			t.Errorf("dockers_v2[%d]: flags %q do not set rewrite-timestamp=true on the image output", i, d.Flags)
-		}
-		if !slices.Contains(d.Flags, "--provenance=false") {
-			t.Errorf("dockers_v2[%d]: flags %q keep buildx's provenance attestation, which records the build time", i, d.Flags)
 		}
 	}
 	// apk writes the install time to /var/log/apk.log, the one file that

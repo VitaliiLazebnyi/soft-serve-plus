@@ -195,19 +195,20 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
       - linux/arm/v7
-    # Reproducible: BuildKit dates the image config and history by
-    # SOURCE_DATE_EPOCH, and rewrite-timestamp clamps the times of the files
-    # the RUN steps write to it. buildx's own provenance attestation records
-    # the build time, so it is left out of the index; the release workflow
-    # attests the image with actions/attest-build-provenance instead.
+    # Reproducible per platform: BuildKit dates the image config and
+    # history by SOURCE_DATE_EPOCH, and rewrite-timestamp clamps the times of
+    # the files the RUN steps write to it, so a rebuild of a commit gives the
+    # same image manifest digest for each platform. The index, and so the tag
+    # digest, is not reproducible: it also lists the SBOM attestation
+    # (GoReleaser's default, --attest=type=sbom) and buildx's provenance
+    # attestation, which hold the build time and random IDs.
     # GoReleaser adds --push (or --load for a snapshot), which buildx applies
-    # to this image output. A rebuild matches as long as Alpine serves the
+    # to this image output. A rebuild matches only while Alpine serves the
     # same package versions: `apk add` installs the newest ones.
     build_args:
       SOURCE_DATE_EPOCH: "{{ .CommitTimestamp }}"
     flags:
       - --output=type=image,rewrite-timestamp=true
-      - --provenance=false
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.description: "A tasty, self-hostable Git server for the command line (maintained fork of Soft Serve)"

@@ -60,6 +60,14 @@ Windows. The Linux packages include a Systemd service.
 
 [releases]: https://github.com/VitaliiLazebnyi/soft-serve-plus/releases
 
+Every release download and image has a build provenance attestation; check
+one with `gh attestation verify <file> --repo VitaliiLazebnyi/soft-serve-plus`
+(or `oci://ghcr.io/vitaliilazebnyi/soft-serve-plus:<tag>` for the image).
+Rebuilding a release from its tag gives the same `checksums.txt`, and the
+same image manifest digest for each platform as long as Alpine still serves
+the same package versions. The image's index (tag) digest differs on every
+build: it lists SBOM and provenance attestations that record the build time.
+
 A [Docker image][docker] is available as `ghcr.io/vitaliilazebnyi/soft-serve-plus`.
 
 [docker]: https://github.com/VitaliiLazebnyi/soft-serve-plus/blob/main/docker.md
