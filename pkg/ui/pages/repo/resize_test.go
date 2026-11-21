@@ -174,12 +174,12 @@ func TestResizeKeepsEveryTabsSize(t *testing.T) {
 	p.r.SetSize(100, 30)
 	type size struct{ w, h int }
 	tabs := map[string]func() size{
-		"Readme":   func() size { return size{p.readme.width, p.readme.height} },
-		"Files":    func() size { return size{p.files.width, p.files.height} },
-		"Commits":  func() size { return size{p.log.width, p.log.height} },
-		"Stash":    func() size { return size{p.stash.width, p.stash.height} },
-		"Branches": func() size { return size{p.branches.width, p.branches.height} },
-		"Tags":     func() size { return size{p.tags.width, p.tags.height} },
+		"Readme":   func() size { return size{p.readme.code.Width(), p.readme.code.Height()} },
+		"Files":    func() size { return size{p.files.selector.Width(), p.files.selector.Height()} },
+		"Commits":  func() size { return size{p.log.selector.Width(), p.log.selector.Height()} },
+		"Stash":    func() size { return size{p.stash.list.Width(), p.stash.list.Height()} },
+		"Branches": func() size { return size{p.branches.selector.Width(), p.branches.selector.Height()} },
+		"Tags":     func() size { return size{p.tags.selector.Width(), p.tags.selector.Height()} },
 	}
 	want := map[string]size{}
 	for name, tabSize := range tabs {

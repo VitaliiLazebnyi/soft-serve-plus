@@ -33,8 +33,8 @@ type Common struct {
 
 	// ctx is the session's context. Bubble Tea commands take no context,
 	// so the session's is kept here for them. It ends when the session's
-	// program exits, and carries only the session's own values: its user
-	// and key.
+	// program exits. The UI reads only the session's user and key, and
+	// its cancellation, from it.
 	ctx context.Context
 }
 

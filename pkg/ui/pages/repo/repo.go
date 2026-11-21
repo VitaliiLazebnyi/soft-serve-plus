@@ -108,7 +108,6 @@ func New(c *common.Common, comps ...Pane) *Repo {
 	for _, c := range comps {
 		ts = append(ts, c.TabName())
 	}
-	c.Logger = c.Logger.WithPrefix("ui.repo")
 	tb := tabs.New(c, ts)
 	s := c.NewSpinner()
 	r := &Repo{

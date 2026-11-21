@@ -93,8 +93,10 @@ func TestFileOfNewlinesRendersOutsideUpdate(t *testing.T) {
 
 // A JavaScript file that is one identifier of 1 MiB took minutes to
 // highlight. It is shown without highlighting, in a command.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted.
 func TestFileWithLongLineNotHighlighted(t *testing.T) {
-	t.Parallel()
 	f := newRenderFiles(t, 120)
 	done := make(chan tea.Cmd, 1)
 	go func() {

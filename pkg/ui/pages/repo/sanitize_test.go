@@ -65,7 +65,7 @@ func TestLogSanitisesCommit(t *testing.T) {
 	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	commit := escapedCommit()
 
-	l := &Log{common: c, width: 120, height: 24, activeView: logViewCommits, activeCommit: commit}
+	l := &Log{common: c, width: 120, activeView: logViewCommits, activeCommit: commit}
 	assertClean(t, l.renderCommit(commit), "subject", "body", "eve")
 	assertClean(t, l.StatusBarValue(), "eve")
 

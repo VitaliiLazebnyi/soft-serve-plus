@@ -84,7 +84,6 @@ func (m LogDiffErrorMsg) pane() paneID { return paneLog }
 type Log struct {
 	common     *common.Common
 	width      int
-	height     int
 	selector   *selector.Selector
 	vp         *viewport.Viewport
 	activeView logView
@@ -151,7 +150,7 @@ func (l *Log) TabName() string {
 
 // SetSize implements common.Component.
 func (l *Log) SetSize(width, height int) {
-	l.width, l.height = common.ClampSize(width, height)
+	l.width, _ = common.ClampSize(width, height)
 	l.selector.SetSize(width, height)
 	l.vp.SetSize(width, height)
 }

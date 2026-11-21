@@ -44,7 +44,6 @@ func (m StashPatchMsg) pane() paneID { return paneStash }
 type Stash struct {
 	common       *common.Common
 	width        int
-	height       int
 	vp           *viewport.Viewport
 	ref          *git.Reference
 	gen          uint64
@@ -89,7 +88,7 @@ func (s *Stash) TabName() string {
 
 // SetSize implements common.Component.
 func (s *Stash) SetSize(width, height int) {
-	s.width, s.height = common.ClampSize(width, height)
+	s.width, _ = common.ClampSize(width, height)
 	s.vp.SetSize(width, height)
 	s.list.SetSize(width, height)
 }

@@ -30,8 +30,6 @@ func (m ReadmeMsg) pane() paneID { return paneReadme }
 // Readme is the readme component page.
 type Readme struct {
 	common     *common.Common
-	width      int
-	height     int
 	code       *code.Code
 	ref        *git.Reference
 	repo       Repository
@@ -66,7 +64,6 @@ func (r *Readme) TabName() string {
 
 // SetSize implements common.Component.
 func (r *Readme) SetSize(width, height int) {
-	r.width, r.height = common.ClampSize(width, height)
 	r.code.SetSize(width, height)
 }
 

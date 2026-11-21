@@ -101,8 +101,6 @@ func (m FileBlameMsg) pane() paneID { return paneFiles }
 // Files is the model for the files view.
 type Files struct {
 	common         *common.Common
-	width          int
-	height         int
 	selector       *selector.Selector
 	ref            *git.Reference
 	activeView     filesView
@@ -186,7 +184,6 @@ func (f *Files) TabName() string {
 
 // SetSize implements common.Component.
 func (f *Files) SetSize(width, height int) {
-	f.width, f.height = common.ClampSize(width, height)
 	f.selector.SetSize(width, height)
 	f.code.SetSize(width, height)
 }

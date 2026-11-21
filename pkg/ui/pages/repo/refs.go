@@ -35,8 +35,6 @@ func (m RefItemsMsg) pane() paneID { return refsPane(m.prefix) }
 // Refs is a component that displays a list of references.
 type Refs struct {
 	common    *common.Common
-	width     int
-	height    int
 	selector  *selector.Selector
 	repo      Repository
 	ref       *git.Reference
@@ -82,7 +80,6 @@ func (r *Refs) TabName() string {
 
 // SetSize implements common.Component.
 func (r *Refs) SetSize(width, height int) {
-	r.width, r.height = common.ClampSize(width, height)
 	r.selector.SetSize(width, height)
 }
 
