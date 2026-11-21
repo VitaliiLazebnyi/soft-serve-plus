@@ -31,15 +31,25 @@ func waitSlots(t *testing.T) {
 // timeout.
 const hangGuard = time.Minute
 
-// tokeniseGuarded is tokeniseUntil, failing the test when it has not
-// returned within hangGuard, as when the budget no longer ends it.
-func tokeniseGuarded(t *testing.T, lexer chroma.Lexer, content string, budget <-chan time.Time) bool {
+// tokeniseGuarded is tokeniseUntil with a budget that the lexer closes,
+// failing the test when the call has not returned within hangGuard of the
+// budget's end, as when the budget no longer ends it. The time the lexer
+// takes to reach the end of the budget is left to the test binary's
+// timeout: on a loaded machine under the race detector, a case of
+// TestBudgetStopsLongRuns took up to 42 s in all (page.html), and notes.org
+// once took over a minute to reach its 100th token.
+func tokeniseGuarded(t *testing.T, lexer chroma.Lexer, content string, budget chan time.Time) bool {
 	t.Helper()
 	done := make(chan bool, 1)
 	go func() {
 		_, ok := tokeniseUntil(lexer, content, budget)
 		done <- ok
 	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-budget:
+	}
 	select {
 	case ok := <-done:
 		return ok
