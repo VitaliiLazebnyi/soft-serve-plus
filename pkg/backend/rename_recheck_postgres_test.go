@@ -19,6 +19,7 @@ import (
 // re-check waits for it. A plain read saw the old name, moved the directory
 // back, and left it away from its row.
 func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	_, err := e.be.db.ExecContext(e.ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
@@ -80,6 +81,7 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 // The re-check's locked lookup fails here; newTestBackend is SQLite only
 // and never reaches it.
 func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectoryPostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	e.be.store = failingByIDStore{Store: e.be.store}

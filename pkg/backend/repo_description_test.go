@@ -14,6 +14,7 @@ import (
 // the server reads, are no longer written: creating a repository or
 // changing either setting does no file I/O inside the transaction.
 func TestRepositorySettingsWriteNoFiles(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)

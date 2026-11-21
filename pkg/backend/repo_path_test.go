@@ -20,6 +20,7 @@ import (
 // filesystem "claim it" means becoming the owner of somebody else's
 // repository.
 func TestOrphanRepoDirectoryIsNotClaimable(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -49,6 +50,7 @@ func TestOrphanRepoDirectoryIsNotClaimable(t *testing.T) {
 // repositories and the variant is simply creatable; on a case-insensitive
 // one they share a directory and the variant must be refused.
 func TestCaseVariantOfExistingRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -98,6 +100,7 @@ func TestCaseVariantOfExistingRepo(t *testing.T) {
 // TestConcurrentCreateSameName verifies that racing creates of one name yield
 // exactly one repository; the directory claim is what arbitrates.
 func TestConcurrentCreateSameName(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -141,6 +144,7 @@ func TestConcurrentCreateSameName(t *testing.T) {
 // directory is claimed and filled before the database row exists, and
 // registering it must not refuse its own directory.
 func TestRegisterRepositoryAdoptsClaimedPath(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()

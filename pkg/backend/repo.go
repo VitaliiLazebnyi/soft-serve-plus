@@ -89,8 +89,8 @@ func (d *Backend) importRemotePolicy(ctx context.Context, user proto.User, mirro
 // to the errors the user sees: refused for want of privilege, or not a
 // usable remote. Render the result with RemoteGitEnv and apply it to the
 // clone subprocess, or the validation does not hold.
-func validateImportRemote(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
-	v, err := validateGitRemote(ctx, remote, policy)
+func (d *Backend) validateImportRemote(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
+	v, err := d.validateGitRemote(ctx, remote, policy)
 	switch {
 	case errors.Is(err, ssrf.ErrSSHRequiresAdmin):
 		return ssrf.ValidatedGitRemote{}, proto.ErrUnauthorized
@@ -99,10 +99,6 @@ func validateImportRemote(ctx context.Context, remote string, policy ssrf.GitRem
 	}
 	return v, nil
 }
-
-// validateGitRemote is ssrf.ValidateGitRemoteContext. Tests replace it to
-// stand in for a slow resolver.
-var validateGitRemote = ssrf.ValidateGitRemoteContext
 
 // redactRemote strips any user info and query from a remote URL so it can be
 // logged: either can hold a token. scp-style remotes pass through unchanged.
@@ -582,7 +578,7 @@ func (d *Backend) importUserRepository(ctx context.Context, name string, user pr
 	// checkRemote validates one user-supplied remote, explaining a refusal
 	// that only the mirror rule caused.
 	checkRemote := func(r string) (ssrf.ValidatedGitRemote, error) {
-		v, err := validateImportRemote(ctx, r, policy)
+		v, err := d.validateImportRemote(ctx, r, policy)
 		if mirrorRestricted && errors.Is(err, proto.ErrUnauthorized) {
 			d.logger.Warn("refusing ssh mirror import: owner is not an admin, so the mirror job could not sync it",
 				"name", name, "remote", redactRemote(r), "user", user.Username())
@@ -647,13 +643,22 @@ func (d *Backend) importUserRepository(ctx context.Context, name string, user pr
 
 	d.logger.Info("importing repository", "name", name, "remote", imp.logRemote, "path", imp.path)
 
-	// The import runs on the backend's context, for its values, but stops
-	// when the caller goes away, when the server shuts down, or after
+	// The import keeps the caller's values, but stops when the caller goes
+	// away, when the server shuts down (StopImports), or after
 	// importTimeout, whichever comes first. A stopped import removes what it
 	// had created.
-	importCtx, cancel := context.WithTimeout(proto.WithUserContext(d.imports.ctx, user), importTimeout)
+	importCtx, cancel := context.WithTimeout(proto.WithUserContext(context.WithoutCancel(ctx), user), d.importTimeout)
 	defer cancel()
 	defer context.AfterFunc(ctx, cancel)()
+	imported := make(chan struct{})
+	defer close(imported)
+	go func() {
+		select {
+		case <-d.imports.stop:
+			cancel()
+		case <-imported:
+		}
+	}()
 	r, err := d.importRepository(importCtx, user, imp)
 	if err != nil {
 		// A concurrent create can take the last slot while the clone runs.
@@ -1555,7 +1560,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg re
 	policy := RemotePolicy(d.cfg, owner)
 
 	for _, u := range rcfg.urls() {
-		_, err := validateImportRemote(ctx, u, policy)
+		_, err := d.validateImportRemote(ctx, u, policy)
 		if errors.Is(err, proto.ErrUnauthorized) {
 			d.logger.Warn("refusing to enable mirror: owner is not an admin, so the mirror job could not sync it",
 				"repo", m.Name, "remote", redactRemote(u))
@@ -1567,7 +1572,7 @@ func (d *Backend) checkMirrorRemotes(ctx context.Context, m models.Repo, rcfg re
 	}
 
 	if u := rcfg.lfsURL; d.cfg.LFS.Enabled && u != "" {
-		if _, err := validateImportRemote(ctx, u, policy); err != nil {
+		if _, err := d.validateImportRemote(ctx, u, policy); err != nil {
 			d.logger.Warn("enabling mirror, but the mirror job will skip LFS objects: endpoint failed validation",
 				"repo", m.Name, "endpoint", redactRemote(u), "err", err)
 		}

@@ -11,6 +11,7 @@ import (
 )
 
 func TestGitSSHCommandEnv(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		cfg  config.Config
@@ -93,6 +94,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 // remote guards and the ssh command, so a caller cannot pick up one without
 // the other.
 func TestRemoteGitEnv(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = "/srv/soft"
 	if err := cfg.Validate(); err != nil {

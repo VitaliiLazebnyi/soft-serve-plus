@@ -72,7 +72,7 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	is.True(be.AllowKeyless(ctx))
 
 	s := &SSHServer{be: be}

@@ -18,6 +18,7 @@ import (
 // collaborator is reported as such without an error, so callers do not have
 // to tell a missing row apart from a failed lookup.
 func TestIsCollaboratorNotCollaborator(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -52,6 +53,7 @@ func TestIsCollaboratorNotCollaborator(t *testing.T) {
 // TestUserByAccessToken verifies the token lookup finds the token's owner,
 // refuses an expired token and reports an unknown one as a missing user.
 func TestUserByAccessToken(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -80,6 +82,7 @@ func TestUserByAccessToken(t *testing.T) {
 // TestSettingsLookupFailureIsLogged verifies that when the settings cannot
 // be read, AnonAccess and AllowKeyless still fail closed and log why.
 func TestSettingsLookupFailureIsLogged(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	be, _ := newTestBackendWithLog(t, &logs)
@@ -100,6 +103,7 @@ func TestSettingsLookupFailureIsLogged(t *testing.T) {
 // collaborator rows and gets nothing from the other account's: Readable
 // looks collaborators up by user ID, as ReadableRepositories does.
 func TestCollaboratorLookedUpByUserID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -143,6 +147,7 @@ func breakTable(t *testing.T, be *Backend, table string) {
 // repository: Readable and ReadableForUser give the error with no
 // repository and no access, and leave logging it to the caller.
 func TestReadableReturnsLookupErrors(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
@@ -184,6 +189,7 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 // The user and token lookups leave logging a failure to their callers,
 // which know whether the client went away (item 259).
 func TestUserLookupErrorsNotLogged(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)

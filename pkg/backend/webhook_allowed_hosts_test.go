@@ -25,6 +25,7 @@ func (e whEnv) setWebhookAllowedHosts(t *testing.T, entries ...string) {
 // With webhook.allowed_hosts covering a loopback receiver, a webhook to it can
 // be created and is delivered to through the SSRF-protected client.
 func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -58,6 +59,7 @@ func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
 // Update validates the new URL against the list too, and the list does not
 // open metadata addresses.
 func TestWebhookAllowedHostsUpdate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -83,6 +85,7 @@ func TestWebhookAllowedHostsUpdate(t *testing.T) {
 // so a caller that has gone away is not held by the resolver, and nothing is
 // stored or changed.
 func TestWebhookCreateAndUpdateStopWhenCancelled(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)

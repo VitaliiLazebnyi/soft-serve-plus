@@ -15,6 +15,7 @@ import (
 // RemoveOwnPublicKey refuses the account's only key, removes any other, and
 // leaves the admin path (RemovePublicKey) free to remove the last key.
 func TestRemoveOwnPublicKey(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -47,6 +48,7 @@ func TestRemoveOwnPublicKey(t *testing.T) {
 // is the backend's locked count that must refuse one of them: the account
 // always keeps a key.
 func TestRemoveOwnPublicKeyConcurrent(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	testRemoveOwnPublicKeyConcurrent(t, be, backendTestContext(be, cfg))
 }
@@ -55,6 +57,7 @@ func TestRemoveOwnPublicKeyConcurrent(t *testing.T) {
 // on Postgres, whose READ COMMITTED transactions would both count two keys
 // without the row lock.
 func TestRemoveOwnPublicKeyConcurrentPostgres(t *testing.T) {
+	t.Parallel()
 	e := newPostgresWebhookEnv(t)
 	testRemoveOwnPublicKeyConcurrent(t, e.be, e.ctx)
 }

@@ -42,6 +42,7 @@ func commitLongAgo(t *testing.T, dir string) {
 // last changed, not the latest commit's. It used to run two git processes
 // for every repository nothing had been pushed to, on every TUI listing.
 func TestUpdatedAtFallsBackToRow(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -58,6 +59,7 @@ func TestUpdatedAtFallsBackToRow(t *testing.T) {
 // An import and a mirror sync run no hooks, so they record the time of the
 // latest commit themselves.
 func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -89,6 +91,7 @@ func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
 // An empty import, or a sync of an empty mirror, has no commit to record:
 // it is not a failure to warn about. Each used to log a warning.
 func TestEmptyImportRecordsNoLastModified(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)

@@ -20,6 +20,7 @@ import (
 // Unknown webhook and delivery IDs are reported with their own not-found
 // errors, not the driver's "sql: no rows in result set".
 func TestWebhookNotFoundSentinels(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	const missing = 424242
@@ -46,6 +47,7 @@ func TestWebhookNotFoundSentinels(t *testing.T) {
 // Renaming onto a name whose row exists without a directory says the name
 // is taken, as creating it does, not the driver's constraint error.
 func TestRenameOntoRowWithoutDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -82,6 +84,7 @@ func (s failingCreateStore) CountUserRepos(context.Context, db.Handler, int64) (
 // tells the client only that the server could not do it; the cause is
 // logged. The driver's error used to reach the SSH client unchanged.
 func TestRepositoryChangesHideServerFaults(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)
@@ -122,6 +125,7 @@ func (s cancellingCreateStore) CreateRepo(context.Context, db.Handler, models.Re
 // A fault that came with the caller's context ending is the client going
 // away, not a server fault: it is logged at Debug, not Error.
 func TestRepositoryChangesCancelledNotLoggedAsFault(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)
@@ -138,6 +142,7 @@ func TestRepositoryChangesCancelledNotLoggedAsFault(t *testing.T) {
 
 // The cause of a failed create is logged once.
 func TestCreateRepositoryFaultLoggedOnce(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)

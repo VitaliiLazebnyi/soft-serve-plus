@@ -14,6 +14,7 @@ import (
 // visibility change as soon as it is committed, whoever committed it
 // (GHSA-f3fj-9625-rv3m).
 func TestRepositoryReflectsDatabase(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()

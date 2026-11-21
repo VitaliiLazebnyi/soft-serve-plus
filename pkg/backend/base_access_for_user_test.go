@@ -18,6 +18,7 @@ import (
 // registered user, read-only under admin_only_create; the anonymous level
 // otherwise.
 func TestBaseAccessLevelForUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()

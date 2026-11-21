@@ -66,6 +66,7 @@ func collabNames(t *testing.T, be *Backend, ctx context.Context, name string) []
 // is refused as the repository is gone. It used to be added to the other
 // repository while the event named the first.
 func TestAddCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, ctx, _, replacement := swapFixture(t)
 	_, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
@@ -80,6 +81,7 @@ func TestAddCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
 // The same for a removal: the collaborator of the repository now under the
 // name stays.
 func TestRemoveCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -102,6 +104,7 @@ func TestRemoveCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
 // The resolved setters act on the repository the caller resolved, and
 // refuse when another has taken its name since.
 func TestResolvedSetters(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -148,6 +151,7 @@ func TestResolvedSetters(t *testing.T) {
 // mirror deleted meanwhile is not found. It used to be recorded on
 // whatever had the name, and a deleted one matched no row and succeeded.
 func TestRecordMirrorSyncByID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -172,6 +176,7 @@ func TestRecordMirrorSyncByID(t *testing.T) {
 // built: they go to that repository's webhooks. They used to be built from
 // a second lookup of the name.
 func TestChangeEventsNameTheChangedRepository(t *testing.T) {
+	t.Parallel()
 	t.Run("SetPrivate", func(t *testing.T) {
 		e := newWebhookEnv(t)
 		id := e.seedHook(t, webhook.EventRepositoryVisibilityChange)

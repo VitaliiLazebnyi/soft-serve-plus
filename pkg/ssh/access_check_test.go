@@ -41,7 +41,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 	}
 	st := database.New()
 	ctx = store.WithContext(ctx, st)
-	be := backend.New(ctx, cfg, dbx, st)
+	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	logs := &syncBuffer{}
 
 	// Authentication lets every client in, so the session handlers decide.

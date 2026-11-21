@@ -115,6 +115,7 @@ func (e whEnv) awaitLog(t *testing.T, text string) {
 
 // A branch or tag creation sends branch_tag_create.
 func TestAfterPushSendsBranchTagCreate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
@@ -128,6 +129,7 @@ func TestAfterPushSendsBranchTagCreate(t *testing.T) {
 
 // A branch or tag deletion sends branch_tag_delete.
 func TestAfterPushSendsBranchTagDelete(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagDelete)
@@ -141,6 +143,7 @@ func TestAfterPushSendsBranchTagDelete(t *testing.T) {
 
 // A plain ref update sends no branch_tag event.
 func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
@@ -153,6 +156,7 @@ func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
 }
 
 func TestRenameRepositorySendsRepositoryEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -173,6 +177,7 @@ func TestRenameRepositorySendsRepositoryEvent(t *testing.T) {
 
 // A failed event does not undo a committed rename, and the caller sees success.
 func TestRenameRepositoryKeepsChangeWhenEventFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
@@ -189,6 +194,7 @@ func TestRenameRepositoryKeepsChangeWhenEventFails(t *testing.T) {
 
 // A failed event does not undo a committed visibility change.
 func TestSetPrivateKeepsChangeWhenEventFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepositoryVisibilityChange)
@@ -206,6 +212,7 @@ func TestSetPrivateKeepsChangeWhenEventFails(t *testing.T) {
 // the rows were removed. The seeded receiver is a loopback address that the
 // SSRF-protected client refuses, so the attempt shows up as a logged failure.
 func TestDeleteRepositorySendsRepositoryEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
@@ -220,6 +227,7 @@ func TestDeleteRepositorySendsRepositoryEvent(t *testing.T) {
 // WaitForDeliveries returns only after the background sends have finished, so
 // the failed attempt is already logged when it returns, with no polling.
 func TestWaitForDeliveriesCompletesBackgroundSends(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
@@ -234,6 +242,7 @@ func TestWaitForDeliveriesCompletesBackgroundSends(t *testing.T) {
 // the shutdown budget, so the budget must exceed the cap the SSRF-protected
 // client puts on one request.
 func TestShutdownDeliveryBudgetCoversSendTimeout(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	is.True(ShutdownDeliveryTimeout > ssrf.ClientTimeout)
 }
@@ -242,6 +251,7 @@ func TestShutdownDeliveryBudgetCoversSendTimeout(t *testing.T) {
 // running is committed, but its event is skipped rather than added to the
 // deliveries being waited on.
 func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -260,6 +270,7 @@ func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
 // webhook is gone; the attempt is sent unrecorded, so its refusal is logged
 // instead.
 func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
@@ -284,6 +295,7 @@ func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 }
 
 func TestCollaboratorEventsAddAndRemove(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -299,6 +311,7 @@ func TestCollaboratorEventsAddAndRemove(t *testing.T) {
 
 // A failed event does not undo committed collaborator changes.
 func TestCollaboratorChangesKeepWhenEventFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	bob, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -323,6 +336,7 @@ func TestCollaboratorChangesKeepWhenEventFails(t *testing.T) {
 }
 
 func TestRemoveCollaboratorNotFound(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -359,6 +373,7 @@ func makeCommit(t *testing.T, path string) string {
 
 // A push that moves a branch sends a push event describing its commits.
 func TestAfterPushSendsPushEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
@@ -374,6 +389,7 @@ func TestAfterPushSendsPushEvent(t *testing.T) {
 // A new branch on a repository with commits sends both branch_tag_create and
 // push, in that order.
 func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -389,6 +405,7 @@ func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
 // A push that updates several refs sends the events of each ref, in the
 // order git lists them.
 func TestAfterPushSendsEventsForEachRef(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -408,6 +425,7 @@ func TestAfterPushSendsEventsForEachRef(t *testing.T) {
 // A push that deletes a branch sends branch_tag_delete and then a push event
 // with no commits, without logging an error.
 func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
@@ -425,6 +443,7 @@ func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
 // or keyless SSH push with anon-access read-write, still sends its events:
 // the server authorized the push.
 func TestAfterPushAnonymousPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -439,6 +458,7 @@ func TestAfterPushAnonymousPush(t *testing.T) {
 
 // Collaborator changes validate the username before anything is written.
 func TestAddCollaboratorRejectsInvalidUsername(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	is.True(e.be.AddCollaborator(e.ctx, "repo", "bad name!", access.ReadWriteAccess) != nil)
@@ -446,6 +466,7 @@ func TestAddCollaboratorRejectsInvalidUsername(t *testing.T) {
 
 // Adding a collaborator twice is refused, and no second event is sent.
 func TestAddCollaboratorTwice(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -461,6 +482,7 @@ func TestAddCollaboratorTwice(t *testing.T) {
 // With both SHAs zero the event is classified as a creation, because the old
 // SHA is checked first. This documents that classification.
 func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
@@ -476,6 +498,7 @@ func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
 // row being removed normally, so corruptOwner switches them off for the delete.
 // A rename whose event cannot be built is still committed.
 func TestRenameRepositoryKeepsChangeWhenEventBuildFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
@@ -489,6 +512,7 @@ func TestRenameRepositoryKeepsChangeWhenEventBuildFails(t *testing.T) {
 // A delete whose event cannot be built still removes the repository; the
 // skipped event is logged.
 func TestDeleteRepositoryKeepsGoingWhenEventBuildFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
@@ -519,6 +543,7 @@ func corruptOwner(t *testing.T, e whEnv) {
 // Adding or removing a collaborator whose event cannot be built still commits
 // and returns nil; the skipped event is logged.
 func TestCollaboratorEventBuildFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	bob, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -540,6 +565,7 @@ func TestCollaboratorEventBuildFailure(t *testing.T) {
 
 // A failing collaborator table makes both operations return the error.
 func TestCollaboratorStoreFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -553,6 +579,7 @@ func TestCollaboratorStoreFailure(t *testing.T) {
 
 // Removing a row that a trigger refuses to delete returns the database error.
 func TestRemoveCollaboratorDeleteFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -566,6 +593,7 @@ func TestRemoveCollaboratorDeleteFailure(t *testing.T) {
 // Changing visibility builds the event first; a failed owner lookup returns
 // the error.
 func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.db.ExecContext(e.ctx, "DELETE FROM users WHERE username = 'admin'")
@@ -578,6 +606,7 @@ func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
 // removal reports not found. A trigger deletes the row first, so the outer
 // delete matches nothing.
 func TestRemoveCollaboratorRowVanishes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -591,6 +620,7 @@ func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 
 // A visibility change whose event cannot be built still commits and returns nil.
 func TestSetPrivateKeepsChangeWhenEventBuildFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
@@ -624,6 +654,7 @@ func blockDeliveries(t *testing.T, e whEnv, maxPending int) func() {
 // When every sender is busy, the event waits in the queue: the caller returns
 // at once, and the event is sent once a sender is free.
 func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -647,6 +678,7 @@ func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
 // When the queue is full too, the event is dropped without blocking the
 // caller. The drop is logged and recorded as a failed delivery.
 func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -670,6 +702,7 @@ func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
 
 // The queue never runs more than its workers at once, and runs every job.
 func TestDeliveryQueueBoundsWorkers(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	q := newDeliveryQueue(2, 100, charmlog.New(io.Discard))
 	var mu sync.Mutex
@@ -732,6 +765,7 @@ func blocker(started chan<- struct{}, release <-chan struct{}) func() {
 // another repository's delivery starts at once even while the first one has
 // a backlog of deliveries that do not return.
 func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
 	q.maxRepoRunning = 2
@@ -763,6 +797,7 @@ func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 // queued, even while senders are free: a later event must not reach the
 // receiver before an earlier one, since each carries the state at its change.
 func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
 	started := make(chan struct{}, 1)
@@ -799,6 +834,7 @@ func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 // Once a repository has its cap of deliveries queued or running, its next
 // one is refused, while other repositories can still queue theirs.
 func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
 	q.maxRepo = 3
@@ -823,6 +859,7 @@ func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
 // Queued deliveries are taken from the repositories in turn, so a repository
 // with a long backlog does not hold back one that queued later.
 func TestDeliveryQueueTakesReposInTurn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
 	started := make(chan struct{}, 1)
@@ -845,6 +882,7 @@ func TestDeliveryQueueTakesReposInTurn(t *testing.T) {
 // delivery so it can be redelivered. Another repository's event is still
 // queued and sent.
 func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -901,6 +939,7 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 // A panicking delivery is logged and does not take the process down; the
 // queue keeps running later deliveries.
 func TestDeliveryPanicIsRecovered(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	is.Equal(e.be.deliveries.enqueue(1, func() { panic("boom") }), enqueued)
@@ -914,6 +953,7 @@ func TestDeliveryPanicIsRecovered(t *testing.T) {
 // Shutdown logs how many deliveries it waits for. When its context ends first,
 // as on a second signal, it returns at once and warns that some are left.
 func TestWaitForDeliveriesLogsPendingAndStopsOnCancel(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	blockDeliveries(t, e, 1)
@@ -968,6 +1008,7 @@ func TestStopDeliveriesClosesWithoutWaiting(t *testing.T) {
 // A change made without a user in the context, as by an initial admin key
 // that has no user row, still sends its event, with an empty sender.
 func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository, webhook.EventRepositoryVisibilityChange)
@@ -992,6 +1033,7 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 // A send whose webhook is deleted before it records must not leave a delivery
 // row behind for the removed webhook.
 func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -1016,6 +1058,7 @@ func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 // TestRenameRepositorySendsRepositoryEvent shows the same hook does receive
 // the event when a rename really happens.
 func TestRefusedCreateAndRenameSendNoRepositoryEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.cfg.AdminOnlyCreate = true

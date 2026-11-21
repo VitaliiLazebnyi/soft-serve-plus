@@ -88,6 +88,7 @@ func waitForLockWaiter(t *testing.T, e whEnv, op <-chan error, name string) {
 // the row without a lock, delete its webhooks, delete nothing and report
 // success, then remove the LFS directory of the repository's id.
 func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	e.createHook(t, whURL, webhook.EventPush)
@@ -117,6 +118,7 @@ func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
 // to look the repository up without a lock, update no row and report
 // success: "repo private" then left the renamed repository public.
 func TestRepoSettersRacingRenamePostgres(t *testing.T) {
+	t.Parallel()
 	for name, set := range map[string]func(e whEnv) error{
 		"SetPrivate":     func(e whEnv) error { return e.be.SetPrivate(e.ctx, "repo", true) },
 		"SetHidden":      func(e whEnv) error { return e.be.SetHidden(e.ctx, "repo", true) },

@@ -45,6 +45,7 @@ func (s *failingLookupStore) GetRepoByNameForUpdate(ctx context.Context, h db.Ha
 // lookup fails: a failure that is gone by the next lookup must still be
 // returned, not taken for an orphan and reported as not found.
 func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
+	t.Parallel()
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
 	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
@@ -73,6 +74,7 @@ func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {
 // repository's directory, which a case-insensitive filesystem resolves the
 // variant to.
 func TestDeleteRepositoryCaseVariantKeepsDirectory(t *testing.T) {
+	t.Parallel()
 	be, _ := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
 	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
@@ -91,6 +93,7 @@ func TestDeleteRepositoryCaseVariantKeepsDirectory(t *testing.T) {
 // A nested name with a directory and no row is not found either, whether
 // spelled as on disk or as a case variant, and its directory stays.
 func TestDeleteRepositoryLeavesNestedOrphan(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 

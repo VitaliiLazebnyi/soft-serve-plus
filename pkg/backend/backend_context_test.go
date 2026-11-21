@@ -19,6 +19,7 @@ import (
 // neither still works. db.FromContext returns nil for such a context, so
 // reading the database from it panicked.
 func TestWebhooksBareContext(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	ctx := context.Background()
@@ -56,6 +57,7 @@ func TestWebhooksBareContext(t *testing.T) {
 // that only webhook.allowed_hosts permits, and the new attempt must be
 // recorded; recording from the bare context used to panic.
 func TestRedeliverBareContext(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -88,6 +90,7 @@ func TestRedeliverBareContext(t *testing.T) {
 // TestStoreRepoMissingLFSObjectsBackendConfig verifies that LFS objects are
 // stored under the backend's data path, whatever config the context carries.
 func TestStoreRepoMissingLFSObjectsBackendConfig(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 

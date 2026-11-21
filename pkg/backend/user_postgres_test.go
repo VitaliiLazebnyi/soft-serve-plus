@@ -20,6 +20,7 @@ import (
 // must block on the creating transaction (checked with pg_blocking_pids)
 // and then refuse with proto.ErrUserOwnsRepos.
 func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	owner, err := e.be.CreateUser(e.ctx, "owner", proto.UserOptions{})

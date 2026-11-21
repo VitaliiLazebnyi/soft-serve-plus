@@ -65,17 +65,6 @@ func (p *pushGates) release(name string, g *pushGate) {
 	}
 }
 
-// testHookBeforePushCreatedDelete, when set, runs in
-// RemovePushCreatedRepository after the check for refs and before the
-// transaction that checks the rest and deletes the repository, with the
-// repository's gate held.
-var testHookBeforePushCreatedDelete func()
-
-// testHookAfterRefSnapshot, when set, runs in pushCreatedRefSnapshot with
-// the repository's directory rp, right after the snapshot of its refs, so
-// it follows the snapshot wherever RemovePushCreatedRepository takes it.
-var testHookAfterRefSnapshot func(rp string)
-
 // BeginPush marks a push to the existing repository repo as running until
 // the returned function is called; RemovePushCreatedRepository does not
 // remove a repository while a push to it runs. If a removal of the
@@ -142,14 +131,14 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	// it. A snapshot taken after the check would miss a ref written
 	// between the two.
 	rp := d.repoPath(name)
-	refs := pushCreatedRefSnapshot(rp)
+	refs := d.pushCreatedRefSnapshot(rp)
 	if hasRefs(rp) {
 		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
 	}
 
-	if testHookBeforePushCreatedDelete != nil {
-		testHookBeforePushCreatedDelete()
+	if d.beforePushCreatedDelete != nil {
+		d.beforePushCreatedDelete()
 	}
 
 	// The rest is checked in the transaction that deletes the row, so a
@@ -169,11 +158,11 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 }
 
 // pushCreatedRefSnapshot is readRefState for RemovePushCreatedRepository,
-// followed by testHookAfterRefSnapshot.
-func pushCreatedRefSnapshot(rp string) refState {
+// followed by afterRefSnapshot.
+func (d *Backend) pushCreatedRefSnapshot(rp string) refState {
 	st := readRefState(rp)
-	if testHookAfterRefSnapshot != nil {
-		testHookAfterRefSnapshot(rp)
+	if d.afterRefSnapshot != nil {
+		d.afterRefSnapshot(rp)
 	}
 	return st
 }

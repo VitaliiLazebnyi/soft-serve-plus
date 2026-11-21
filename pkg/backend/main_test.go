@@ -33,7 +33,12 @@ var testNet testdial.Network
 // TestMain keeps pkg/ssrf off the network: its clients connect through
 // testNet, and a hostname it looks up, such as a webhook's or an import
 // remote's, resolves from the hosts file only and otherwise fails at once.
+//
+// It also keeps git off the user's and the system's git config, so the
+// tests, which run in parallel, see the same git whatever the host has.
 func TestMain(m *testing.M) {
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	_ = os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	restoreDial := testdial.Set(testNet.Dial)
 	restoreResolver := testdial.SetResolver(testdial.NoDNS())
 	code := m.Run()

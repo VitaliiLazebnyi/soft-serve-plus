@@ -12,6 +12,7 @@ import (
 // A repository whose owner was deleted meanwhile fails on the owner's
 // foreign key, which is not the repository already existing.
 func TestCreateRepositoryOwnerGone(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)

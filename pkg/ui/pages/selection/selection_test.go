@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -44,7 +45,7 @@ func newTestBackend(t *testing.T) (context.Context, *backend.Backend) {
 	ctx = db.WithContext(ctx, dbx)
 	st := database.New()
 	ctx = store.WithContext(ctx, st)
-	be := backend.New(ctx, cfg, dbx, st)
+	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 	return ctx, be
 }

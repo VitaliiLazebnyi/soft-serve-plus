@@ -18,6 +18,7 @@ import (
 // floor does not raise a collaborator's explicit level on a private
 // repository, while still applying on public repositories.
 func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		private bool
@@ -58,6 +59,7 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 // TestAccessLevelPrivateRepoNonCollaborator verifies that a signed-in user
 // who is not a collaborator has no access to a private repository.
 func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -78,6 +80,7 @@ func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 // anonymous caller. Registered users keep read-only when the anonymous level
 // is lower.
 func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		anon access.AccessLevel
@@ -113,6 +116,7 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 // repositories is not deleted until those repositories are gone, and that
 // their repositories are left untouched by the refusal.
 func TestDeleteUserWithRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 
@@ -148,6 +152,7 @@ func TestDeleteUserWithRepositories(t *testing.T) {
 // directory is gone can still be deleted, and that deleting a repository
 // that does not exist at all reports it as not found.
 func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 
@@ -168,6 +173,7 @@ func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
 // exist, or removing a key the user does not have, reports it instead of
 // succeeding or leaking a raw SQL error.
 func TestMutationsOnMissingUserOrKey(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 

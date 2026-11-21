@@ -18,6 +18,7 @@ import (
 // A repository whose refs cannot be listed counts as having refs, so the
 // cleanup never removes one it could not check.
 func TestRepositoryHasRefsFailsSafe(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -52,6 +53,7 @@ func commitTo(t *testing.T, dir, ref string) {
 // after a push that succeeded, so it does not name a branch that does not
 // exist.
 func TestRemovePushCreatedRepositoryKeptWithRefsGetsHead(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -73,6 +75,7 @@ func TestRemovePushCreatedRepositoryKeptWithRefsGetsHead(t *testing.T) {
 // the snapshot taken after the check, the ref was in the snapshot and not
 // seen by the check, and the repository was removed with it.
 func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -80,11 +83,10 @@ func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
 	is.NoErr(err)
 	dir := be.repoPath("late")
 	wrote := false
-	testHookAfterRefSnapshot = func(rp string) {
+	be.afterRefSnapshot = func(rp string) {
 		commitTo(t, rp, "refs/heads/main")
 		wrote = true
 	}
-	t.Cleanup(func() { testHookAfterRefSnapshot = nil })
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
 	is.NoErr(err)
@@ -101,6 +103,7 @@ func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
 // is tried again. Here a directory without write permission stands in for
 // the open handle, and is made removable once the first attempt failed.
 func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")
 	}
@@ -147,6 +150,7 @@ func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
 
 // A directory that stays is given up on once the waits run out, and logged.
 func TestRemovePushCreatedRepositoryGivesUpOnDirectory(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")
 	}
@@ -176,6 +180,7 @@ func TestRemovePushCreatedRepositoryGivesUpOnDirectory(t *testing.T) {
 // created under the name since is left as it is. HEAD used to be pointed
 // at a branch of whatever had the name.
 func TestRemovePushCreatedRepositoryLeavesHeadOfAnother(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -223,6 +228,7 @@ func (w *refOnFailureLog) Write(p []byte) (int, error) {
 // receive-pack can on Windows, stops the retry: the directory stays, to be
 // reported at start-up, rather than being removed with what was pushed.
 func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")
 	}
@@ -315,6 +321,7 @@ func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
 // refsWritten counts what was added or changed since the snapshot, never
 // what a removal took away.
 func TestRefsWritten(t *testing.T) {
+	t.Parallel()
 	loose := func(kv ...string) map[string]string {
 		m := map[string]string{}
 		for i := 0; i < len(kv); i += 2 {
@@ -344,6 +351,7 @@ func TestRefsWritten(t *testing.T) {
 // A ref file, or a directory of refs, that cannot be read counts as a ref
 // written: the retry must not remove what it could not check.
 func TestReadRefStateUnreadable(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes do not prevent reading on Windows")
 	}

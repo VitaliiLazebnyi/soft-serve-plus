@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/lfs"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
@@ -48,6 +51,30 @@ type Backend struct {
 	// renameTxDone, when a test sets it, replaces the result of a rename's
 	// transaction, as a COMMIT whose answer was lost would.
 	renameTxDone func(error) error
+
+	// The fields below are set by New and replaced only by tests of this
+	// package, each on its own Backend.
+
+	// binVersion returns the installed git's version, for the import gate.
+	binVersion func() (git.Version, error)
+	// validateGitRemote validates an import or mirror remote.
+	validateGitRemote func(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error)
+	// searchPointerBlobs scans a repository for LFS pointers.
+	searchPointerBlobs func(ctx context.Context, r *git.Repository, include, exclude []string, pointerChan chan<- lfs.PointerBlob, errChan chan<- error)
+	// importTimeout bounds a whole import: the clone, and the LFS fetch
+	// when asked for. The low-speed limits in ssrf.GitEnv catch a stalled
+	// http remote sooner; this catches one that trickles just fast enough,
+	// and the ssh and git transports, which have no such limit.
+	importTimeout time.Duration
+	// beforePushCreatedDelete, when set, runs in
+	// RemovePushCreatedRepository after the check for refs and before the
+	// transaction that checks the rest and deletes the repository, with the
+	// repository's gate held.
+	beforePushCreatedDelete func()
+	// afterRefSnapshot, when set, runs in pushCreatedRefSnapshot with the
+	// repository's directory rp, right after the snapshot of its refs, so
+	// it follows the snapshot wherever RemovePushCreatedRepository takes it.
+	afterRefSnapshot func(rp string)
 }
 
 // noReplaceObjectsEnv is the variable that makes git read objects as they
@@ -63,9 +90,14 @@ const noReplaceObjectsEnv = "GIT_NO_REPLACE_OBJECTS"
 // import fetches, would otherwise change what the server shows of a
 // repository (trees, blobs, logs, READMEs, webhook payloads), while
 // upload-pack ignores it and clones get the original objects.
-func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Backend {
+//
+// It logs to logger, the default logger when nil.
+func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Backend {
 	_ = os.Setenv(noReplaceObjectsEnv, "1") // only fails for an invalid name
-	logger := log.FromContext(ctx).WithPrefix("backend")
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger = logger.WithPrefix("backend")
 	b := &Backend{
 		cfg:    cfg,
 		db:     db,
@@ -73,10 +105,17 @@ func New(ctx context.Context, cfg *config.Config, db *db.DB, st store.Store) *Ba
 		logger: logger,
 
 		deliveries:       newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
-		imports:          newImportTracker(ctx),
+		imports:          newImportTracker(),
 		pushCreatedRetry: pushCreatedDirRetry,
-		importsDisabled:  sync.OnceValue(checkGitVersion),
+
+		binVersion:         git.BinVersion,
+		validateGitRemote:  ssrf.ValidateGitRemoteContext,
+		searchPointerBlobs: lfs.SearchPointerBlobsBetween,
+		importTimeout:      time.Hour,
 	}
+	// The version is read through the field when first needed, so a test
+	// can replace binVersion after New.
+	b.importsDisabled = sync.OnceValue(func() string { return checkGitVersion(b.binVersion) })
 	return b
 }
 
@@ -95,15 +134,11 @@ func (d *Backend) ImportsDisabledReason() string {
 // dropped and the guard open to DNS rebinding.
 var minImportGitVersion = git.Version{Major: 2, Minor: 37}
 
-// binVersion is how the gate learns the installed git version. Tests swap it
-// out to exercise the disabled path without an old git on hand.
-var binVersion = git.BinVersion
-
-// checkGitVersion returns why imports must stay off, or "" if the installed
-// git is new enough. Running a clone under a git that ignores the guards
-// would be worse than refusing it, so an unreadable version also closes the
-// gate, until the server restarts.
-func checkGitVersion() string {
+// checkGitVersion returns why imports must stay off, or "" if the git whose
+// version binVersion returns is new enough. Running a clone under a git that
+// ignores the guards would be worse than refusing it, so an unreadable
+// version also closes the gate, until the server restarts.
+func checkGitVersion(binVersion func() (git.Version, error)) string {
 	v, err := binVersion()
 	if err != nil {
 		return fmt.Sprintf("cannot determine git version: %v", err)

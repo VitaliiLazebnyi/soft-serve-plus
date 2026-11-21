@@ -16,6 +16,7 @@ import (
 // webhook fires when visibility changes and not when it is set to the
 // value it already has.
 func TestSetPrivateWebhookOnlyOnChange(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 

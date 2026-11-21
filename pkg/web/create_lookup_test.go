@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -56,7 +57,7 @@ func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 	ok.Store(math.MaxInt32)
 	st := anonFailsAfterStore{Store: database.New(), ok: ok, reads: reads}
 	ctx = store.WithContext(db.WithContext(ctx, dbx), st)
-	be := backend.New(ctx, cfg, dbx, st)
+	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})

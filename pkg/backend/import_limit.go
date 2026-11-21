@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
@@ -19,18 +18,12 @@ const (
 	maxUserConcurrentImports = 2
 )
 
-// importTimeout bounds a whole import: the clone, and the LFS fetch when
-// asked for. The low-speed limits in ssrf.GitEnv catch a stalled http
-// remote sooner; this catches one that trickles just fast enough, and the
-// ssh and git transports, which have no such limit. Tests shorten it.
-var importTimeout = time.Hour
-
 // importTracker counts the imports in flight, so they can be capped, and
 // stops them at shutdown.
 type importTracker struct {
-	// ctx is the parent of every import's context. Stop cancels it.
-	ctx    context.Context
-	cancel context.CancelFunc
+	// stop is closed by StopImports; every import in flight is cancelled
+	// then.
+	stop chan struct{}
 
 	mu      sync.Mutex
 	stopped bool
@@ -41,9 +34,8 @@ type importTracker struct {
 	wg      sync.WaitGroup
 }
 
-func newImportTracker(ctx context.Context) *importTracker {
-	ctx, cancel := context.WithCancel(ctx)
-	return &importTracker{ctx: ctx, cancel: cancel, perUser: map[int64]int{}}
+func newImportTracker() *importTracker {
+	return &importTracker{stop: make(chan struct{}), perUser: map[int64]int{}}
 }
 
 // importUserKey is the key user's imports are counted under: callers
@@ -124,9 +116,11 @@ func (d *Backend) reserveImport(ctx context.Context, user proto.User, admin, lim
 // then remove what they had created. Call WaitForImports to wait for that.
 func (d *Backend) StopImports() {
 	d.imports.mu.Lock()
-	d.imports.stopped = true
-	d.imports.mu.Unlock()
-	d.imports.cancel()
+	defer d.imports.mu.Unlock()
+	if !d.imports.stopped {
+		d.imports.stopped = true
+		close(d.imports.stop)
+	}
 }
 
 // WaitForImports waits until every import in flight has finished, or until

@@ -44,7 +44,7 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	}
 	st := database.New()
 	ctx = store.WithContext(db.WithContext(ctx, dbx), st)
-	be := backend.New(ctx, cfg, dbx, st)
+	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)

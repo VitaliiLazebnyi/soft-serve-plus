@@ -28,6 +28,7 @@ func (s renameHookStore) SetRepoNameByName(ctx context.Context, h db.Handler, na
 // fails, instead of having its empty directory replaced by the renamed
 // repository and its cleanup then deleting that repository.
 func TestRenameRepositoryClaimsNewPath(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -51,6 +52,7 @@ func TestRenameRepositoryClaimsNewPath(t *testing.T) {
 // A rename that fails after claiming the new path gives the claim up and
 // leaves the repository where it was.
 func TestRenameRepositoryFailureReleasesClaim(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))

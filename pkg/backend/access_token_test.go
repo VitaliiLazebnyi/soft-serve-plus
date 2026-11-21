@@ -13,6 +13,7 @@ import (
 // TestDeleteAccessTokenOtherUser verifies that deleting another user's token
 // fails exactly like deleting a missing one and leaves the token in place.
 func TestDeleteAccessTokenOtherUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()

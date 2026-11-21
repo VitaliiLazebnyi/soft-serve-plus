@@ -17,6 +17,7 @@ import (
 // setter reports a missing repository as proto.ErrRepoNotFound rather than
 // leaking a database or filesystem error, or silently succeeding.
 func TestMissingRepositoryAccessors(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
@@ -60,6 +61,7 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 // hold, which comes straight from a request, is reported as a missing
 // repository without an error log line.
 func TestRepositoryInvalidNameNotLogged(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	be, _ := newTestBackendWithLog(t, &logs)
 	ctx := context.Background()

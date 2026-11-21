@@ -72,6 +72,7 @@ func readmeRepo(t *testing.T, files map[string]string) proto.Repository {
 // later directory is still shown. Readme used to return only the error of
 // the last directory it looked in.
 func TestReadmeTooLarge(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	big := strings.Repeat("x", 100)
 

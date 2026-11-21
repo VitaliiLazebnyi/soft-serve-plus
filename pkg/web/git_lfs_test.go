@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -49,7 +50,7 @@ func newLFSTestContext(t *testing.T) (context.Context, *backend.Backend, store.S
 	ctx = db.WithContext(ctx, dbx)
 	datastore := database.New()
 	ctx = store.WithContext(ctx, datastore)
-	be := backend.New(ctx, cfg, dbx, datastore)
+	be := backend.New(cfg, dbx, datastore, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 
 	return ctx, be, datastore

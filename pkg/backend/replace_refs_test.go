@@ -11,6 +11,7 @@ import (
 // so a clone gets the original objects, and the server's own views must
 // show the same. They used to show the replacement.
 func TestServerReadsIgnoreReplaceRefs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	r := readmeRepo(t, map[string]string{"README.md": "real"})
 	rr, err := r.Open()

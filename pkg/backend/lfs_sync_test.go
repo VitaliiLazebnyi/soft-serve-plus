@@ -33,6 +33,7 @@ func (c *batchRecorder) Download(_ context.Context, pointers []lfs.Pointer, cb l
 // Objects are asked for lfsBatchSize at a time, each oid once per batch: a
 // second pointer with an oid already in the batch waits for a later one.
 func TestLFSSyncBatches(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	client := &batchRecorder{}
 	s := &lfsSync{

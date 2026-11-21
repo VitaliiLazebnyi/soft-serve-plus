@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -38,7 +39,7 @@ func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 
 	// "admin" is already taken by the default user the migration seeds, so

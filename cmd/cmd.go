@@ -143,8 +143,9 @@ func initBackend(cmd *cobra.Command, create bool) error {
 		closeLogFile(ctx)
 		return err
 	}
+	logger := log.FromContext(ctx)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{
-		Logger:       log.FromContext(ctx),
+		Logger:       logger,
 		Trace:        config.IsVerbose(),
 		MaxOpenConns: cfg.DB.MaxOpenConns,
 	})
@@ -156,7 +157,7 @@ func initBackend(cmd *cobra.Command, create bool) error {
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, logger)
 	ctx = backend.WithContext(ctx, be)
 
 	cmd.SetContext(ctx)

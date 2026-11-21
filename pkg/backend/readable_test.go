@@ -15,6 +15,7 @@ import (
 // repository and a missing one look identical, while the level still says
 // whether a missing name may be created.
 func TestReadable(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -68,6 +69,7 @@ func TestReadable(t *testing.T) {
 // TestBaseAccessLevelForUserAnonymous verifies the baseline level does not
 // depend on any repository and matches the level for a missing name.
 func TestBaseAccessLevelForUserAnonymous(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -85,6 +87,7 @@ func TestBaseAccessLevelForUserAnonymous(t *testing.T) {
 // the rows and check each name, so falling back to the level for a missing
 // name would show a private repository to everyone.
 func TestAccessLevelRowWithoutDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()

@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -54,7 +55,7 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 
 	return ctx, be

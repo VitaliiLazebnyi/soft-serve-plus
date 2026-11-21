@@ -167,7 +167,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	return backend.WithContext(ctx, be)
 }
 

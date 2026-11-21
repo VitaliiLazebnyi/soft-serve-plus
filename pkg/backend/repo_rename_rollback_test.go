@@ -34,6 +34,7 @@ func (s unpinnableRenameStore) SetRepoNameByName(ctx context.Context, h db.Handl
 // so the row and the directory agree again. The directory used to stay at
 // the new name, without a row, while the row still named the old one.
 func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -62,6 +63,7 @@ func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 // new name, so the directory stays there and the rename succeeds. The
 // directory used to be moved back under the old name, away from its row.
 func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -100,6 +102,7 @@ func (failingByIDStore) GetRepoByID(context.Context, db.Handler, int64) (models.
 // When the outcome cannot be read either, the directory stays where it is
 // rather than risk moving it away from its row.
 func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -123,6 +126,7 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 // rename does not know of, so the directory stays where it is. It used to
 // be moved back whenever the row did not have the new name.
 func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -151,6 +155,7 @@ func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 // directory from going back to its row. The re-check used to take the
 // write lock and, past busy_timeout, leave the directory at the new name.
 func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	if be.db.DriverName() != "sqlite" {

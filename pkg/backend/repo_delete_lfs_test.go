@@ -53,6 +53,7 @@ func lfsDeleteFixture(t *testing.T, be *Backend) (dir string, files []string) {
 // only the object files that had a row, so objects without one and the
 // temporary files of unfinished uploads outlived the repository.
 func TestDeleteRepositoryRemovesLFSDirectory(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	dir, _ := lfsDeleteFixture(t, be)
 
@@ -75,6 +76,7 @@ func TestDeleteRepositoryRemovesLFSDirectory(t *testing.T) {
 // objects must stay too. They used to be removed inside the transaction,
 // before the row, and were lost when the transaction rolled back.
 func TestDeleteRepositoryFailureKeepsLFSObjects(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	_, files := lfsDeleteFixture(t, be)
 	ctx := backendTestContext(be, cfg)
@@ -99,6 +101,7 @@ func TestDeleteRepositoryFailureKeepsLFSObjects(t *testing.T) {
 // Once the row is gone the delete has happened, so a directory that cannot be
 // removed is logged rather than reported as a failed delete.
 func TestDeleteRepositoryLogsLFSRemovalFailure(t *testing.T) {
+	t.Parallel()
 	// As in os/removeall_test.go: on Windows a mode only sets the read-only
 	// attribute, which does not stop removal, and root ignores the mode.
 	if runtime.GOOS == "windows" {

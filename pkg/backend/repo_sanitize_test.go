@@ -12,6 +12,7 @@ import (
 // lists the repository, so it is stripped of escape sequences and control
 // characters just as when it is set later.
 func TestCreateRepositorySanitisesDescriptionAndProjectName(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()

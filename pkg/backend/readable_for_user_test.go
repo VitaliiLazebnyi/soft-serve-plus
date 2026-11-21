@@ -22,6 +22,7 @@ import (
 // private repository for anyone else. A missing name gives the level for a
 // new name. The repository is returned when it exists and the level reads.
 func TestReadableForUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -117,6 +118,7 @@ func expectReadable(repo, caller string, anon access.AccessLevel) access.AccessL
 // again: once the owner's key no longer maps to the account, a by-key
 // lookup loses the private repository, but the session user keeps it.
 func TestReadableForUserDoesNotLookUpKey(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()

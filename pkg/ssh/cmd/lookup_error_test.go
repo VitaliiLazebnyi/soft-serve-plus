@@ -65,7 +65,7 @@ func newLookupTestContextWith(t *testing.T, wrap func(store.Store) store.Store) 
 		st = wrap(st)
 	}
 	ctx = store.WithContext(ctx, st)
-	be := backend.New(ctx, cfg, dbx, st)
+	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	return backend.WithContext(ctx, be), be, logs
 }
 

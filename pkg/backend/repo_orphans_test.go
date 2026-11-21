@@ -46,6 +46,7 @@ func mkdirs(t *testing.T, be *Backend, dirs ...string) {
 // nested ones included; the repositories with rows, their groups, and
 // directories that do not look like repositories are not.
 func TestOrphanRepositoryDirs(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	for _, name := range []string{"kept", "org/team/kept"} {
@@ -73,6 +74,7 @@ func TestOrphanRepositoryDirs(t *testing.T) {
 
 // With no repos directory there is nothing to report.
 func TestOrphanRepositoryDirsNoReposDir(t *testing.T) {
+	t.Parallel()
 	be, _ := newTestBackend(t)
 	if err := os.RemoveAll(filepath.Join(be.cfg.DataPath, "repos")); err != nil {
 		t.Fatal(err)
@@ -85,6 +87,7 @@ func TestOrphanRepositoryDirsNoReposDir(t *testing.T) {
 // A link to a repository's directory is that repository, not an orphan; a
 // link to a directory with no row is one.
 func TestOrphanRepositoryDirsSymlinks(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	if _, err := be.CreateRepository(ctx, "real", defaultAdmin(t, be), proto.RepositoryOptions{}); err != nil {
@@ -112,6 +115,7 @@ func TestOrphanRepositoryDirsSymlinks(t *testing.T) {
 // its directory is spelled secret.git. That directory is the repository's,
 // not an orphan.
 func TestOrphanRepositoryDirsCaseVariant(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: Secret has its own directory")
@@ -128,6 +132,7 @@ func TestOrphanRepositoryDirsCaseVariant(t *testing.T) {
 // reportOrphans names each orphan, up to maxReportedOrphans, and
 // counts the rest.
 func TestReportOrphanRepositories(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	be, _ := newTestBackendWithLog(t, &logs)
 	for i := range maxReportedOrphans + 2 {
@@ -156,6 +161,7 @@ func TestReportOrphanRepositories(t *testing.T) {
 // decomposed form of its name while its directory is spelled precomposed
 // is not an orphan.
 func TestOrphanRepositoryDirsNormalizationVariant(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	const (
@@ -180,6 +186,7 @@ func TestOrphanRepositoryDirsNormalizationVariant(t *testing.T) {
 // rows name them is matched by path alone: the scan makes no identity
 // comparison, so its cost does not grow with groups times repositories.
 func TestOrphanRepositoryDirsMatchesByPathFirst(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	for _, name := range []string{"a/one", "a/two", "b/c/three", "four"} {
