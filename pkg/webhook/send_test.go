@@ -889,7 +889,6 @@ func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
 	is.Equal(ds[1].ID, ids[2])
 }
 
-// failingPruneStore is a store whose prune always fails.
 // countingPruneStore counts the prunes it is asked for.
 type countingPruneStore struct {
 	store.Store
@@ -938,6 +937,7 @@ func TestRecordDeliveryWebhookDeletedMidSend(t *testing.T) {
 	// webhook is still there; only the foreign key failure was seen.
 }
 
+// failingPruneStore is a store whose prune always fails.
 type failingPruneStore struct{ store.Store }
 
 func (failingPruneStore) PruneWebhookDeliveries(context.Context, db.Handler, int64, int) error {
