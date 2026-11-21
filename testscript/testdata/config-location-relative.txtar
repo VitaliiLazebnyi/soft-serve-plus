@@ -1,0 +1,46 @@
+# vi: set ft=conf
+
+# A relative SOFT_SERVE_CONFIG_LOCATION is resolved when the server starts,
+# so the hooks a push runs, which start in the repository's directory, are
+# told where the file is (R29). The server-wide pre-receive hook below
+# refuses the push when the location it gets names no file there.
+
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# script below; it is made LF, or sh would read "/bin/sh\r".
+[windows] dos2unix check-config.sh
+
+env SOFT_SERVE_CONFIG_LOCATION=conf.yaml
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+# the server took the relative file for its config, so it wrote no default
+! exists $DATA_PATH/config.yaml
+
+cp check-config.sh $DATA_PATH/hooks/pre-receive
+chmod 0755 $DATA_PATH/hooks/pre-receive
+
+soft repo create repo1
+git clone ssh://localhost:$SSH_PORT/repo1 repo1
+mkfile ./repo1/README.md 'hello'
+git -C repo1 add -A
+git -C repo1 commit -m 'first'
+git -C repo1 push origin HEAD
+! stderr 'not found'
+soft repo branch list repo1
+stdout '^master$'
+
+# stop the server
+[windows] stopserver
+
+-- conf.yaml --
+name: "Relative Config"
+-- check-config.sh --
+#!/bin/sh
+if [ ! -f "$SOFT_SERVE_CONFIG_LOCATION" ]; then
+	echo "config location $SOFT_SERVE_CONFIG_LOCATION not found from $(pwd)" >&2
+	exit 1
+fi
+cat >/dev/null
