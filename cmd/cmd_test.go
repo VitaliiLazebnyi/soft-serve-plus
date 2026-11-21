@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -121,6 +122,9 @@ func TestLoadConfig(t *testing.T) {
 	if cfg == nil || cfg.Name != "from env" || cfg.Log.Path != filepath.Join(dp, "soft.log") {
 		t.Fatalf("config in the context = %+v, want the file's log path and the environment's name", cfg)
 	}
+	// The context carries the logger: with the default one replaced, the
+	// command still logs to the file.
+	log.SetDefault(log.New(io.Discard))
 	log.FromContext(c.Context()).Info("logged to the file")
 	if err := CloseDBContext(c, nil); err != nil {
 		t.Fatal(err)
