@@ -36,6 +36,7 @@ func TestRedactURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			is.Equal(redactURL(c.in), c.want)
 		})

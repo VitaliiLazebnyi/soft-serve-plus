@@ -58,6 +58,7 @@ func TestParseContentType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ParseContentType(tt.s)
 			if err != tt.err {
 				t.Errorf("ParseContentType() error = %v, wantErr %v", err, tt.err)
@@ -97,6 +98,7 @@ func TestUnmarshalText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := new(ContentType)
 			if err := c.UnmarshalText(tt.text); (err != nil) != tt.wantErr {
 				t.Errorf("ContentType.UnmarshalText() error = %v, wantErr %v", err, tt.wantErr)
@@ -135,6 +137,7 @@ func TestMarshalText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			b, err := tt.c.MarshalText()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ContentType.MarshalText() error = %v, wantErr %v", err, tt.wantErr)

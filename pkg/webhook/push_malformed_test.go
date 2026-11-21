@@ -18,6 +18,7 @@ func TestNewPushEventSkipsMalformedCommits(t *testing.T) {
 	e := newTestEnv(t)
 	for _, kind := range gittest.Malformed {
 		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			dir := filepath.Join(t.TempDir(), "repo.git")
 			_, err := git.Init(dir, true)

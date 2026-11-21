@@ -890,6 +890,54 @@ func TestRecordedDeliveriesPruneIgnoresIDOrder(t *testing.T) {
 }
 
 // failingPruneStore is a store whose prune always fails.
+// countingPruneStore counts the prunes it is asked for.
+type countingPruneStore struct {
+	store.Store
+	prunes *atomic.Int32
+}
+
+func (s countingPruneStore) PruneWebhookDeliveries(ctx context.Context, h db.Handler, id int64, keep int) error {
+	s.prunes.Add(1)
+	return s.Store.PruneWebhookDeliveries(ctx, h, id, keep)
+}
+
+// A send that was in flight when its webhook was deleted records nothing and
+// returns no error: the insert fails on its foreign key, which the store
+// maps to db.ErrForeignKey, and there is nothing left to prune. A trigger
+// deletes the webhook as the delivery is inserted, on either driver.
+func TestRecordDeliveryWebhookDeletedMidSend(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnvOnEitherDriver(t)
+	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
+
+	triggers := []string{fmt.Sprintf(`CREATE TRIGGER vanish BEFORE INSERT ON webhook_deliveries
+		WHEN NEW.webhook_id = %d
+		BEGIN DELETE FROM webhooks WHERE id = NEW.webhook_id; END;`, w.ID)}
+	if e.dbx.DriverName() == "postgres" {
+		triggers = []string{
+			`CREATE FUNCTION vanish() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN DELETE FROM webhooks WHERE id = NEW.webhook_id; RETURN NEW; END $$;`,
+			fmt.Sprintf(`CREATE TRIGGER vanish BEFORE INSERT ON webhook_deliveries
+			FOR EACH ROW WHEN (NEW.webhook_id = %d) EXECUTE FUNCTION vanish();`, w.ID),
+		}
+	}
+	for _, q := range triggers {
+		_, err := e.dbx.ExecContext(e.ctx, q)
+		is.NoErr(err)
+	}
+	var prunes atomic.Int32
+	e.s.store = countingPruneStore{e.ds, &prunes}
+
+	req, err := e.newRequest(w, EventPush, samplePayloadFor(e))
+	is.NoErr(err)
+	is.NoErr(e.s.recordDelivery(e.ctx, w, EventPush, req, nil, 200, "", ""))
+	is.Equal(len(e.deliveries(t, w.ID)), 0) // nothing recorded
+	is.Equal(prunes.Load(), int32(0))       // and nothing pruned
+	// The failed insert rolls back the trigger's delete with it, so the
+	// webhook is still there; only the foreign key failure was seen.
+}
+
 type failingPruneStore struct{ store.Store }
 
 func (failingPruneStore) PruneWebhookDeliveries(context.Context, db.Handler, int64, int) error {
@@ -918,8 +966,8 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneFails(t *testing.T) {
 	is.True(strings.Contains(logs.String(), "prune failed"))
 }
 
-// hangingPruneStore is a store whose prune waits until its context ends, and
-// which counts the delivery rows it is asked to create.
+// hangingPruneStore is a store whose prune fails with the record timeout's
+// error, and which counts the delivery rows it is asked to create.
 type hangingPruneStore struct {
 	store.Store
 	creates *atomic.Int32
@@ -930,9 +978,12 @@ func (s hangingPruneStore) CreateWebhookDelivery(ctx context.Context, h db.Handl
 	return s.Store.CreateWebhookDelivery(ctx, h, d)
 }
 
-func (hangingPruneStore) PruneWebhookDeliveries(ctx context.Context, _ db.Handler, _ int64, _ int) error {
-	<-ctx.Done()
-	return ctx.Err()
+// PruneWebhookDeliveries fails as a prune that ran out of the record
+// timeout does. It fails at once rather than wait for a short timeout to
+// pass: the insert before it shares that timeout and, on a loaded machine,
+// can use all of it.
+func (hangingPruneStore) PruneWebhookDeliveries(context.Context, db.Handler, int64, int) error {
+	return fmt.Errorf("prune: %w", context.DeadlineExceeded)
 }
 
 // A prune that runs out of recordTimeout keeps the delivery, which was
@@ -943,7 +994,6 @@ func TestRecordDeliveryKeepsDeliveryWhenPruneTimesOut(t *testing.T) {
 	is := is.New(t)
 	e := newTestEnv(t)
 	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
-	e.s.recordTimeout = 200 * time.Millisecond
 	var creates atomic.Int32
 	var logs bytes.Buffer
 	e.s.store = hangingPruneStore{e.ds, &creates}

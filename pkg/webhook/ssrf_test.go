@@ -21,7 +21,6 @@ import (
 // pkg/ssrf, where the connection attempt can be stubbed; nothing here leaves
 // the machine.
 func TestSSRFProtection(t *testing.T) {
-	t.Parallel()
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)

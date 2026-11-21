@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -72,6 +73,30 @@ func newTestEnv(t *testing.T) *testEnv {
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
+	return newTestEnvOn(t, cfg, dbx)
+}
+
+// newTestEnvOnEitherDriver is newTestEnv on a database from dbtest.Open:
+// Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise.
+func newTestEnvOnEitherDriver(t *testing.T) *testEnv {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.HTTP.PublicURL = "http://127.0.0.1:23232"
+	cfg.SSH.PublicURL = "ssh://127.0.0.1:23231"
+	cfg.Git.PublicURL = "git://127.0.0.1:9418"
+	dbx, err := dbtest.Open(context.Background(), t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestEnvOn(t, cfg, dbx)
+}
+
+// newTestEnvOn migrates dbx and fills it with the rows of a testEnv.
+func newTestEnvOn(t *testing.T, cfg *config.Config, dbx *db.DB) *testEnv {
+	t.Helper()
+	is := is.New(t)
+	ctx := context.Background()
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	ds := database.New()
