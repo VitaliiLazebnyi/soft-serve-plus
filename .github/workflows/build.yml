@@ -40,6 +40,14 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test ./...
+      # cmd/soft/serve and pkg/webhook have files behind the webhooktest
+      # build tag, which only the testscript harness builds soft with: the
+      # test stop endpoint and its tests, and the webhook test dialer. One
+      # command per step, so a failure is not hidden by the Windows shell.
+      - name: Vet with the webhooktest tag
+        run: go vet -tags webhooktest ./cmd/soft/serve ./pkg/webhook
+      - name: Test with the webhooktest tag
+        run: go test -tags webhooktest ./cmd/soft/serve ./pkg/webhook
 
   govulncheck:
     runs-on: ubuntu-latest
