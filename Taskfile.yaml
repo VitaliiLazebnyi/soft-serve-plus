@@ -9,9 +9,10 @@ tasks:
       - golangci-lint fmt
 
   lint:
-    desc: Run base linters
+    desc: Run base linters, without and with the webhooktest build tag
     cmds:
       - golangci-lint run
+      - golangci-lint run --build-tags=webhooktest
 
   lint:fix:
     desc: Run linters and apply automatic fixes
@@ -22,6 +23,7 @@ tasks:
     desc: Run tests
     cmds:
       - go test -race ./... {{.CLI_ARGS}}
+      - go test -race -tags webhooktest ./cmd/soft/serve ./pkg/webhook {{.CLI_ARGS}}
 
   tidy:
     desc: Run go mod tidy
