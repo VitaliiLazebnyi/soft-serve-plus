@@ -114,6 +114,7 @@ func TestValidateImportRemote(t *testing.T) {
 	d := &Backend{validateGitRemote: ssrf.ValidateGitRemoteContext}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			v, err := d.validateImportRemote(context.Background(), tt.remote, tt.policy)
 
@@ -261,6 +262,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			name = "non-admin user"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
@@ -504,6 +506,7 @@ func TestImportRepositoryDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be, _ := newTestBackend(t)
 			be.binVersion = func() (git.Version, error) { return tt.version, tt.err }
@@ -551,7 +554,6 @@ func TestImportGateChecksOnce(t *testing.T) {
 // remote, is refused with a reason before anything is cloned, rather than
 // imported without its LFS objects and without a word.
 func TestImportRefusesSSHLFSEndpoint(t *testing.T) {
-	t.Parallel()
 	be, _ := newTestBackendWithLog(t, io.Discard)
 	ctx := context.Background()
 	admin, err := be.User(ctx, "admin")

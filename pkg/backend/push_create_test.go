@@ -18,7 +18,6 @@ import (
 // with it since: no ref, no changed setting, no collaborator, webhook, LFS
 // object or LFS lock.
 func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
-	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
@@ -184,7 +183,6 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 // transaction that deletes the row. A repository renamed away, with
 // another created under its name, in that gap is not the one deleted.
 func TestRemovePushCreatedRepositoryChecksWhenDeleting(t *testing.T) {
-	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})

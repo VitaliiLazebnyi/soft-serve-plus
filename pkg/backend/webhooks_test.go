@@ -593,6 +593,7 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 		{"form", webhook.ContentTypeForm, `a=%zz`, "error parsing webhook form body", "%zz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			e := newWebhookEnv(t)
 			id := e.createHook(t, whURL, webhook.EventPush)
@@ -810,6 +811,7 @@ func TestDeleteWebhookRollsBackOnStoreFailure(t *testing.T) {
 	t.Parallel()
 	for _, table := range []string{"webhook_deliveries", "webhook_events", "webhooks"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			e := newWebhookEnv(t)
 			id := e.createHook(t, whURL, webhook.EventPush)

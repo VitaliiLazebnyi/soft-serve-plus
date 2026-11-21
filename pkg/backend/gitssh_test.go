@@ -74,6 +74,7 @@ func TestGitSSHCommandEnv(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// known_hosts is joined with the platform separator; the key path
 			// is used as configured.
 			want := tt.want

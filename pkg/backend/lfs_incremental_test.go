@@ -198,6 +198,7 @@ func TestSyncRepoLFSObjectsIncremental(t *testing.T) {
 func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	t.Parallel()
 	t.Run("import", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
@@ -214,6 +215,7 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("old tip gone", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
@@ -239,6 +241,7 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("unreadable tips", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
@@ -253,6 +256,7 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("lfs directory removed", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 2)
 		scans := recordLFSScans(t, lt.be)
@@ -279,6 +283,7 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 	t.Parallel()
 	t.Run("first sync", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 2)
 		scans := recordLFSScans(t, lt.be)
@@ -298,6 +303,7 @@ func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 	})
 
 	t.Run("later sync", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
@@ -333,6 +339,7 @@ func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 	t.Parallel()
 	t.Run("full scan", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		p := lt.detachHead(t)
@@ -343,6 +350,7 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 	})
 
 	t.Run("new history", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)

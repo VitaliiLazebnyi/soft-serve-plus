@@ -363,6 +363,7 @@ func TestReadRefStateUnreadable(t *testing.T) {
 		"directory": filepath.Join("refs", "heads", "team"),
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			rp := t.TempDir()
 			p := filepath.Join(rp, path)
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

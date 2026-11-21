@@ -179,10 +179,12 @@ func TestMaxReposPerUserAnonymous(t *testing.T) {
 func TestMaxReposPerUserConcurrent(t *testing.T) {
 	t.Parallel()
 	t.Run("sqlite", func(t *testing.T) {
+		t.Parallel()
 		be, cfg := newTestBackend(t)
 		testMaxReposPerUserConcurrent(t, be, cfg, backendTestContext(be, cfg))
 	})
 	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
 		e := newPostgresWebhookEnv(t)
 		testMaxReposPerUserConcurrent(t, e.be, e.cfg, e.ctx)
 	})

@@ -200,6 +200,7 @@ func TestStoreRepoMissingLFSObjects(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{1, 21} {
 		t.Run(fmt.Sprintf("%d objects", n), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, n)
 
@@ -282,6 +283,7 @@ func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 	t.Parallel()
 	for _, onDisk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("on disk %v", onDisk), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 
@@ -373,6 +375,7 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 		"too long":   func(b []byte) []byte { return append(b, '!') },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
@@ -435,6 +438,7 @@ func TestStoreRepoMissingLFSObjectsTruncated(t *testing.T) {
 	t.Parallel()
 	for _, recorded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recorded %v", recorded), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
@@ -489,6 +493,7 @@ func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
 		{"bad pointer last", "z-bad.bin", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 				bad := lfs.Pointer{Oid: pointers[0].Oid, Size: pointers[0].Size + 1}
@@ -561,6 +566,7 @@ func TestStoreRepoMissingLFSObjectsWrongRecordedSize(t *testing.T) {
 		{"bad pointer last", "z-bad.bin", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			var bad lfs.Pointer
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {

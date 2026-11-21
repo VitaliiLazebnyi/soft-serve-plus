@@ -298,6 +298,7 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			name = "non-admin user"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)

@@ -13,7 +13,6 @@ import (
 // also when a character straddles the limit, and is valid UTF-8 without NUL
 // bytes whatever git wrote.
 func TestRecordMirrorSyncCapsError(t *testing.T) {
-	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	admin, err := be.User(ctx, "admin")

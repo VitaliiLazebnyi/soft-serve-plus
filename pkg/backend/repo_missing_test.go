@@ -41,6 +41,7 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 
 	for name, fn := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			err := fn()
 			if !errors.Is(err, proto.ErrRepoNotFound) {
 				t.Fatalf("expected ErrRepoNotFound, got %v", err)
@@ -61,7 +62,6 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 // hold, which comes straight from a request, is reported as a missing
 // repository without an error log line.
 func TestRepositoryInvalidNameNotLogged(t *testing.T) {
-	t.Parallel()
 	var logs bytes.Buffer
 	be, _ := newTestBackendWithLog(t, &logs)
 	ctx := context.Background()

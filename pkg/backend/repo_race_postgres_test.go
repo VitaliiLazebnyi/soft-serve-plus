@@ -126,6 +126,7 @@ func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 		"SetProjectName": func(e whEnv) error { return e.be.SetProjectName(e.ctx, "repo", "p") },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			e := newPostgresWebhookEnv(t)
 

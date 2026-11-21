@@ -56,10 +56,14 @@ func stallingRemote(t *testing.T) (remote, hostPort string, accepted <-chan stru
 }
 
 // waitAccepted waits for the stalling remote to be dialed.
-func waitAccepted(t *testing.T, accepted <-chan struct{}) {
+// An import that ends before it reaches the remote fails the test with its
+// error, rather than after the wait.
+func waitAccepted(t *testing.T, accepted <-chan struct{}, errc <-chan error) {
 	t.Helper()
 	select {
 	case <-accepted:
+	case err := <-errc:
+		t.Fatalf("the import ended before it reached the remote: %v", err)
 	case <-time.After(time.Minute):
 		t.Fatal("the import never reached the remote")
 	}
@@ -110,7 +114,7 @@ func TestImportRepositoryStopsWithCaller(t *testing.T) {
 	is.NoErr(err)
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted)
+	waitAccepted(t, accepted, errc)
 	cancel()
 	is.True(errors.Is(waitImport(t, errc), proto.ErrImportFailed))
 	assertNothingLeft(t, be, "stalled")
@@ -144,7 +148,7 @@ func TestStopImports(t *testing.T) {
 	is.NoErr(err)
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted)
+	waitAccepted(t, accepted, errc)
 	be.StopImports()
 	wctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()

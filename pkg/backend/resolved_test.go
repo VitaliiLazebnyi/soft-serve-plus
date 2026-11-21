@@ -178,6 +178,7 @@ func TestRecordMirrorSyncByID(t *testing.T) {
 func TestChangeEventsNameTheChangedRepository(t *testing.T) {
 	t.Parallel()
 	t.Run("SetPrivate", func(t *testing.T) {
+		t.Parallel()
 		e := newWebhookEnv(t)
 		id := e.seedHook(t, webhook.EventRepositoryVisibilityChange)
 		e.be.store = &swapBeforeLookupStore{Store: e.be.store, name: "repo", swap: func() {
@@ -187,6 +188,7 @@ func TestChangeEventsNameTheChangedRepository(t *testing.T) {
 		e.awaitDeliveries(t, id, webhook.EventRepositoryVisibilityChange)
 	})
 	t.Run("RenameRepository", func(t *testing.T) {
+		t.Parallel()
 		e := newWebhookEnv(t)
 		id := e.seedHook(t, webhook.EventRepository)
 		e.be.store = &swapBeforeLookupStore{Store: e.be.store, name: "renamed", swap: func() {

@@ -51,6 +51,7 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 	t.Parallel()
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be := newLookupBackend(t, nil)
 			ctx := context.Background()
