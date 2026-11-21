@@ -168,10 +168,10 @@ func TestPostgresConfigConnectTimeout(t *testing.T) {
 	}
 }
 
-// Connecting gives up on a Postgres server that accepts the connection but
-// never answers, instead of hanging startup, when the data source sets no
-// timeout. Open passes defaultPostgresConnectTimeout; the test passes a
-// shorter one.
+// Open gives up on a Postgres server that accepts the connection but never
+// answers, instead of hanging startup, when the data source sets no
+// timeout: it applies defaultPostgresConnectTimeout. The test goes through
+// Open itself, so it waits out the real default (10 s).
 func TestOpenPostgresSilentServer(t *testing.T) {
 	t.Setenv("PGCONNECT_TIMEOUT", "")
 	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
@@ -204,22 +204,22 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 		}
 	}()
 
-	// Without a connect timeout connectPostgres never returns, so the test
-	// waits for it without timing it: a loaded machine can take seconds past
-	// the timeout. The timeout's value is TestPostgresConfigConnectTimeout's
-	// check.
+	// Without a connect timeout Open never returns, so the test waits for
+	// it on a condition, for up to a minute, without timing it: a loaded
+	// machine can take seconds past the timeout. The timeout's value is
+	// TestPostgresConfigConnectTimeout's check.
 	done := make(chan error, 1)
 	go func() {
-		_, err := connectPostgres(context.Background(), "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable", 300*time.Millisecond)
+		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable", Options{})
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Fatal("connectPostgres on a silent server => nil error, want an error")
+			t.Fatal("Open on a silent server => nil error, want an error")
 		}
 	case <-time.After(time.Minute):
-		t.Fatal("connectPostgres on a silent server did not return")
+		t.Fatal("Open on a silent server did not return")
 	}
 }
 
