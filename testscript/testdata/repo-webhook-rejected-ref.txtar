@@ -4,9 +4,6 @@
 # ref that git rejects after the update hook ran, here for a refname conflict
 # with an existing branch, sends no events.
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
