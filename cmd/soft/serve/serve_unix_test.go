@@ -145,8 +145,9 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 }
 
 // signalProbe is a channel registered for SIGHUP, SIGTERM and SIGUSR1 next
-// to the ones under test. It keeps those signals from killing the test binary, and
-// it tells when the runtime has handed a signal to the channels under test.
+// to the ones under test. It keeps those signals from killing the test
+// binary, and it tells when the runtime has handed a signal to the channels
+// under test.
 //
 // os/signal hands each signal to the registered channels in a loop over a
 // map, so the probe can receive a signal before the loop reaches another
@@ -201,6 +202,7 @@ func (p *signalProbe) fence() {
 func TestSignalsStop(t *testing.T) {
 	probe := newSignalProbe(t)
 	sigs := notifySignals()
+	t.Cleanup(sigs.stop) // the test stops them itself too; a second stop does nothing
 	probe.send(syscall.SIGHUP)
 	probe.send(syscall.SIGTERM)
 	probe.fence()
