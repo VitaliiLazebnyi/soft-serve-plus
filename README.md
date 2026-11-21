@@ -631,7 +631,9 @@ with the defaults, using `diffie-hellman-group-exchange-sha256` (or ECDH for
 JSch), `aes128-ctr` and `hmac-sha2-256`. The host key also signs the tokens
 from `ssh … jwt` and git-lfs over SSH, as EdDSA for Ed25519, RS256 for RSA
 and ES256, ES384 or ES512 for ECDSA, so these keep working with any host key
-type. Replacing the host key invalidates tokens issued before.
+type. The server reads the host key at start, so a replaced key takes effect
+at the next start, for SSH and for tokens alike, and invalidates tokens
+issued before.
 
 Authenticating with an RSA user key needs a client that signs with
 `rsa-sha2-256` or `rsa-sha2-512`: OpenSSH 7.2 and later, libssh2 1.11 and
@@ -792,6 +794,16 @@ the same configuration as `soft serve`:
 These commands refuse to run when the data directory, or the SQLite database,
 does not exist: only `soft serve` creates them. Run them with the same
 `SOFT_SERVE_DATA_PATH` as the server; a shell without it uses `./data`.
+
+#### Stopping the server
+
+On SIGINT or SIGTERM, `soft serve` stops accepting connections and gives
+the clones, pushes and SSH sessions in flight 5 seconds to finish. It then
+cuts off whatever is still running and exits with status 0: a transfer cut
+off this way is not an error of the server. Webhook deliveries already
+queued get up to a minute more; a second SIGINT or SIGTERM stops that
+wait. SIGHUP does not stop the server: it reloads the TLS certificate, if
+one is set.
 
 ## Server Access
 

@@ -2,19 +2,15 @@ package ssh
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"io/fs"
 	"net"
-	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	rm "charm.land/wish/v2/recover"
-	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -46,6 +42,9 @@ type SSHServer struct { //nolint: revive
 	be  *backend.Backend
 
 	limiter *connLimiter
+	// live holds every connection accepted and not yet closed, the ones
+	// still in their handshake included (see liveConns).
+	live liveConns
 }
 
 // serverLimits are the fixed per-connection limits of the SSH server.
@@ -137,18 +136,8 @@ func newSSHServer(ctx context.Context, lim serverLimits) (*SSHServer, error) {
 	// hold. Session channels pass only the requests the server can afford
 	// (see filterSessionRequests).
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
-	s.srv.ConnCallback = connCallback(s.limiter, logger, noAccountLifetime)
+	s.srv.ConnCallback = s.live.track(connCallback(s.limiter, logger, noAccountLifetime))
 	setSessionHandlers(s.srv, lim.maxSessions)
-
-	// Create client ssh key
-	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
-		_, err := keygen.New(cfg.SSH.ClientKeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
-		if err != nil {
-			return nil, fmt.Errorf("client ssh key: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("client ssh key: %w", err)
-	}
 
 	return s, nil
 }
@@ -189,13 +178,121 @@ func (s *SSHServer) Serve(l net.Listener) error {
 }
 
 // Close closes the SSH server.
+//
+// It closes every connection, the ones still in their handshake included,
+// which the SSH library's Close does not know about yet.
 func (s *SSHServer) Close() error {
-	return s.srv.Close()
+	err := s.srv.Close()
+	s.live.closeAll()
+	return err
 }
 
-// Shutdown gracefully shuts down the SSH server.
+// Shutdown gracefully shuts down the SSH server: it stops accepting
+// connections, closes the ones still in their handshake, which have no work
+// in flight, and waits within ctx for the others to end.
 func (s *SSHServer) Shutdown(ctx context.Context) error {
+	s.live.closeUnestablished()
 	return s.srv.Shutdown(ctx)
+}
+
+// liveConns holds the connections an SSH server accepted and has not yet
+// closed. The SSH library tracks a connection, to close it on Close and wait
+// for it on Shutdown, only once its handshake is done, and does not check
+// then whether the server has stopped. So a connection whose handshake
+// finished just after a stop was authenticated afterwards and stayed open
+// until its idle timeout, the drain's cut-off included. Once the server
+// stops, liveConns refuses new connections and closes the ones it holds.
+// It is not reset, so an SSHServer that has stopped cannot serve again.
+type liveConns struct {
+	mu      sync.Mutex
+	conns   map[*liveConn]struct{}
+	stopped bool
+}
+
+// liveConn is a connection liveConns holds. ctx is its SSH context, which
+// the library gives the established connection once the handshake is done.
+type liveConn struct {
+	net.Conn
+	ctx   ssh.Context
+	owner *liveConns
+	once  sync.Once
+}
+
+// Close closes the connection and lets go of it.
+func (c *liveConn) Close() error {
+	c.once.Do(c.owner.remove(c))
+	return c.Conn.Close()
+}
+
+// established reports whether the connection has finished its handshake, so
+// that the SSH library tracks it.
+func (c *liveConn) established() bool {
+	return c.ctx.Value(ssh.ContextKeyConn) != nil
+}
+
+// track wraps next, the server's connection callback, so that every
+// connection it lets in is held, or refused once the server has stopped.
+func (l *liveConns) track(next ssh.ConnCallback) ssh.ConnCallback {
+	return func(ctx ssh.Context, conn net.Conn) net.Conn {
+		c := next(ctx, conn)
+		if c == nil {
+			return nil
+		}
+		lc := &liveConn{Conn: c, ctx: ctx, owner: l}
+		l.mu.Lock()
+		if l.stopped {
+			l.mu.Unlock()
+			_ = c.Close()
+			return nil
+		}
+		if l.conns == nil {
+			l.conns = make(map[*liveConn]struct{})
+		}
+		l.conns[lc] = struct{}{}
+		l.mu.Unlock()
+		return lc
+	}
+}
+
+// remove returns a function that lets go of c.
+func (l *liveConns) remove(c *liveConn) func() {
+	return func() {
+		l.mu.Lock()
+		delete(l.conns, c)
+		l.mu.Unlock()
+	}
+}
+
+// stop refuses new connections and returns the ones held that keep
+// reports true for.
+func (l *liveConns) stop(keep func(*liveConn) bool) []*liveConn {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stopped = true
+	var conns []*liveConn
+	for c := range l.conns {
+		if !keep(c) {
+			conns = append(conns, c)
+		}
+	}
+	return conns
+}
+
+// closeAll refuses new connections and closes every one held.
+func (l *liveConns) closeAll() {
+	for _, c := range l.stop(func(*liveConn) bool { return false }) {
+		_ = c.Close()
+	}
+}
+
+// closeUnestablished refuses new connections and closes the ones still in
+// their handshake. The established ones are the SSH library's to drain. A
+// connection the library has just tracked but not yet given its context
+// value counts as unestablished and is closed too; it has no channels yet.
+func (l *liveConns) closeUnestablished() {
+	for _, c := range l.stop((*liveConn).established) {
+		_ = c.Close()
+	}
 }
 
 // PublicKeyHandler handles public key authentication. It approves every key:

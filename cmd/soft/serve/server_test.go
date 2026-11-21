@@ -3,7 +3,10 @@ package serve
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -25,12 +29,15 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
+	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
+	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -319,28 +326,15 @@ func TestEnsureDefaultRepoCreateErrorSkipped(t *testing.T) {
 }
 
 // During shutdown, a second interrupt or terminate signal ends the wait for
-// webhook deliveries. SIGHUP keeps meaning "reload" and does not.
+// webhook deliveries. SIGHUP comes on another channel (see notifySignals).
 func TestAbortOnSignal(t *testing.T) {
 	is := is.New(t)
 	var logs bytes.Buffer
-	// Unbuffered, so that a send returns only once the loop has taken the
-	// signal.
 	sigs := make(chan os.Signal)
 	abort, stop := abortOnSignal(sigs, log.New(&logs))
 	defer stop()
-
-	sigs <- syscall.SIGHUP
-	// The loop takes another signal only once it is done with the SIGHUP:
-	// had that aborted the wait, the loop would have ended instead.
-	select {
-	case sigs <- syscall.SIGHUP:
-	case <-abort.Done():
-		t.Fatal("SIGHUP aborted the wait")
-	case <-time.After(time.Minute):
-		t.Fatal("the loop did not take a signal after SIGHUP")
-	}
 	if abort.Err() != nil {
-		t.Fatal("SIGHUP aborted the wait")
+		t.Fatal("the wait was aborted before a signal")
 	}
 
 	select {
@@ -354,6 +348,35 @@ func TestAbortOnSignal(t *testing.T) {
 		t.Fatal("SIGTERM did not abort the wait")
 	}
 	is.True(strings.Contains(logs.String(), "not waiting for webhook deliveries"))
+}
+
+// ensureClientKey creates a missing client key, keeps an existing one, and
+// reports a path it cannot check, here because a file stands where its
+// directory should be, rather than leave the server without a key.
+func TestEnsureClientKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ssh", "client_ed25519")
+	if err := ensureClientKey(path); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no client key written: %v", err)
+	}
+	if err := ensureClientKey(path); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, first) {
+		t.Errorf("ensureClientKey replaced the existing key (%v)", err)
+	}
+
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClientKey(filepath.Join(file, "client_ed25519")); err == nil || !strings.Contains(err.Error(), "client ssh key") {
+		t.Errorf("ensureClientKey() = %v, want a client key error", err)
+	}
 }
 
 // newStartTestServer returns a server whose four listeners are on the given
@@ -686,7 +709,11 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 // next.
 func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	started := make(chan struct{}, 1)
-	var finished atomic.Bool
+	// The job holds until it is cancelled, or until the test ends: a
+	// Shutdown that does not cancel it runs into its deadline.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var cancelled, finished atomic.Bool
 	hook := func(ctx context.Context) {
 		select {
 		case started <- struct{}{}:
@@ -695,7 +722,9 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(30 * time.Second): // how long the job holds, not a wait
+			cancelled.Store(true)
+		case <-release:
+			return
 		}
 		// Still busy for a moment after the cancellation, as a job
 		// stopping its git processes is.
@@ -721,10 +750,251 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 	if err := s.Shutdown(ctx, ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
+	if !cancelled.Load() {
+		t.Fatal("Shutdown did not cancel the cron job")
+	}
 	if !finished.Load() {
 		t.Fatal("Shutdown returned while the cron job was still running")
 	}
 	if err := waitStart(t, errc, "after Shutdown"); err != nil {
 		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
+}
+
+// When the drain runs out, Shutdown cuts off what still runs, and the stop
+// is not an error: an ordinary stop during a long transfer used to make
+// soft serve exit with status 1 (R59, CFG-17).
+func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
+	errc := startAsync(s)
+
+	// An authenticated SSH connection with no session: the SSH server
+	// keeps it, and so its drain, until the idle timeout.
+	closed := dialIdleSSH(t, sshAddr, errc)
+	// The drain is over before it starts.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Shutdown(ctx, ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil when only the drain ran out", err)
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH connection is still open a minute after Shutdown")
+	}
+}
+
+// dialIdleSSH opens an authenticated SSH connection with no session to the
+// server at addr, which Start, reporting on errc, is starting. The SSH
+// server holds it, and with it its drain, until its idle timeout. The
+// returned channel is closed when the server closes the connection.
+func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var client *gossh.Client
+	deadline := time.Now().Add(time.Minute)
+	for {
+		client, err = gossh.Dial("tcp", addr, &gossh.ClientConfig{
+			User:            "test",
+			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+			HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec // test server
+			Timeout:         time.Minute,
+		})
+		if err == nil {
+			break
+		}
+		select {
+		case err := <-errc:
+			t.Fatalf("Start returned %v before the SSH server accepted connections", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cannot connect to the SSH server: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	closed := make(chan struct{})
+	go func() {
+		_ = client.Wait()
+		close(closed)
+	}()
+	return closed
+}
+
+// Close is Shutdown with contexts that are already done: with a connection
+// that would hold a drain until its idle timeout, it returns at once and
+// cuts the connection off. It does not warn that a drain ran out, since
+// there was none (S14 round-1 review notes 10 and 11).
+func TestCloseCutsOffWithoutDraining(t *testing.T) {
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
+	var logs syncBuffer
+	s.logger = log.New(&logs)
+	errc := startAsync(s)
+	closed := dialIdleSSH(t, sshAddr, errc)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("Close still waits a minute later: it drained instead of cutting off")
+	}
+	if err := waitStart(t, errc, "after Close"); err != nil {
+		t.Fatalf("Start returned %v after Close, want nil", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH connection is still open a minute after Close")
+	}
+	if out := logs.String(); strings.Contains(out, "stopping with connections still open") {
+		t.Errorf("Close warned about a drain it did not run: %s", out)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the goroutines of a logger.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Close, which waits for no delivery, still closes the delivery queue, so
+// no new delivery starts: a push afterwards to a repository with a push
+// webhook is skipped, not sent (S14 round-2 review note 2).
+func TestCloseStopsDeliveries(t *testing.T) {
+	// The backend logs to the default logger it finds when it is built.
+	old := log.Default()
+	t.Cleanup(func() { log.SetDefault(old) })
+	var logs syncBuffer
+	log.SetDefault(log.New(&logs))
+
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	// The webhook points at a closed loopback port, which the allowlist
+	// lets it name; nothing must be sent to it.
+	s.Config.Webhook.AllowedHosts = []string{"127.0.0.1"}
+	if err := s.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := config.WithContext(context.Background(), s.Config)
+	owner, err := s.Backend.DefaultAdmin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := s.Backend.CreateSystemRepository(ctx, "hooked", owner, proto.RepositoryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Backend.CreateWebhook(ctx, repo, "http://127.0.0.1:1/hook", webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.Backend.AfterPush(ctx, repo, owner, []hooks.HookArg{{
+		OldSha: strings.Repeat("0", 40), NewSha: strings.Repeat("1", 40), RefName: "refs/heads/main",
+	}})
+	if out := logs.String(); !strings.Contains(out, "push webhook events skipped: server is shutting down") {
+		t.Errorf("a push after Close was not skipped: the delivery queue is open:\n%s", out)
+	}
+}
+
+// waitAtLeast waits until the caller's deadline, or for at least d when
+// that comes sooner or the caller has none, and a cancelled caller does not
+// end it (S14 round-1 review note 9).
+func TestWaitAtLeast(t *testing.T) {
+	far, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	ctx, stop := waitAtLeast(far, time.Millisecond)
+	defer stop()
+	if dl, _ := ctx.Deadline(); dl.Before(time.Now().Add(59 * time.Minute)) {
+		t.Errorf("deadline %v, want the caller's, an hour away", dl)
+	}
+
+	cancelled, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	ctx, stop = waitAtLeast(cancelled, time.Hour)
+	defer stop()
+	if ctx.Err() != nil {
+		t.Error("a cancelled caller ended the wait")
+	}
+	if dl, ok := ctx.Deadline(); !ok || dl.Before(time.Now().Add(59*time.Minute)) {
+		t.Errorf("deadline %v, %v; want an hour away", dl, ok)
+	}
+}
+
+// NewServer creates the client key, and reads the host key once: a bearer
+// request does not read the file, and the key stays the one the SSH server
+// serves until a restart (tracker 343(a), CFG-16).
+func TestNewServerLoadsKeys(t *testing.T) {
+	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	if _, err := os.Stat(s.Config.SSH.ClientKeyPath); err != nil {
+		t.Errorf("no client key: %v", err)
+	}
+	want, err := config.KeyPair(s.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.Config.SSH.KeyPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.KeyPair(s.Config)
+	if err != nil || got != want {
+		t.Errorf("KeyPair() after the key file went = %p, %v; want the key read at start %p", got, err, want)
+	}
+}
+
+// The README's "Stopping the server" says how long the drain is and that
+// the stop succeeds (S14 round-1 review note 12).
+func TestReadmeStopMatchesDrain(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	i := strings.Index(doc, "#### Stopping the server")
+	if i < 0 {
+		t.Fatal("README has no Stopping the server section")
+	}
+	section := strings.Join(strings.Fields(doc[i:i+strings.Index(doc[i+1:], "\n#")+1]), " ")
+	if drainTimeout%time.Second != 0 || backend.ShutdownDeliveryTimeout != time.Minute {
+		t.Fatal("the README states the drain in seconds and the delivery wait as a minute")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("%d seconds to finish", drainTimeout/time.Second),
+		"exits with status 0",
+		"up to a minute more",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("Stopping the server does not say %q:\n%s", want, section)
+		}
 	}
 }

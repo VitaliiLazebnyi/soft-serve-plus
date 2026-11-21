@@ -5,14 +5,17 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"charm.land/log/v2"
 
 	"charm.land/ssh"
+	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -98,9 +101,19 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	be.CheckRepositoryDirs(ctx)
 	ensureDefaultRepo(ctx, cfg, be, logger)
 
+	if err := ensureClientKey(cfg.SSH.ClientKeyPath); err != nil {
+		return nil, err
+	}
+
 	srv.SSHServer, err = sshsrv.NewSSHServer(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create ssh server: %w", err)
+	}
+
+	// The SSH server created the host key if there was none. Read it once
+	// for the tokens it signs, rather than on every bearer request.
+	if err := cfg.LoadHostKey(); err != nil {
+		logger.Warn("cannot read the SSH host key; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused", "err", err)
 	}
 
 	srv.GitDaemon, err = daemon.NewGitDaemon(ctx)
@@ -108,10 +121,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, fmt.Errorf("create git daemon: %w", err)
 	}
 
-	srv.HTTPServer, err = web.NewHTTPServer(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create http server: %w", err)
-	}
+	srv.HTTPServer = web.NewHTTPServer(ctx)
 
 	srv.StatsServer = newStatsServer()
 
@@ -136,6 +146,20 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	}
 
 	return srv, nil
+}
+
+// ensureClientKey creates the key the server presents to the ssh remotes it
+// imports and mirrors from, at path, if there is none. An error other than
+// a missing file stops the server rather than leave it without a key.
+func ensureClientKey(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if _, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite()); err != nil {
+			return fmt.Errorf("client ssh key: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("client ssh key: %w", err)
+	}
+	return nil
 }
 
 // newStatsServer returns the stats server: the Prometheus metrics on
@@ -342,16 +366,48 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Shutdown lets the server gracefully shutdown. Imports in flight are
-// cancelled, and the servers drain within ctx. The cancelled imports'
+// drainTimeout is how long the clones, pushes and SSH sessions in flight
+// get to finish when the server stops. What still runs then is cut off, and
+// the stop still succeeds. Webhook deliveries get their own time,
+// backend.ShutdownDeliveryTimeout, and cancelled cron jobs jobsTimeout.
+const drainTimeout = 5 * time.Second
+
+// jobsTimeout is how long Shutdown waits at least for the cancelled cron
+// jobs to end, so none uses the database once the caller closes it: until
+// the caller's deadline, or this long from then on if that is later.
+const jobsTimeout = 10 * time.Second
+
+// waitAtLeast returns a context that ends at ctx's deadline or d from now,
+// whichever is later, and not when ctx is cancelled before that.
+func waitAtLeast(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(d)
+	if dl, ok := ctx.Deadline(); ok && dl.After(deadline) {
+		deadline = dl
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+}
+
+// Shutdown stops the server. Imports in flight are cancelled, and the
+// servers drain within ctx; what still runs when ctx is done is closed, which
+// is logged but not an error. The cancelled cron jobs are waited for until
+// ctx's deadline, and for at least jobsTimeout. The cancelled imports'
 // cleanup and the background webhook deliveries are then waited for within
 // their own budget, backend.ShutdownDeliveryTimeout, or until abort is done,
-// whichever comes first.
+// whichever comes first; with abort already done, as for Close, they are
+// not waited for. Each server's error is logged; they are returned joined. The
+// servers that were never built are skipped, so it also stops a server
+// NewServer failed to finish.
 func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	s.markClosed()
+	logger := s.logger
+	if logger == nil {
+		logger = log.Default() // a Server NewServer did not build
+	}
 	// Stop the imports first: an SSH session running one would otherwise
 	// hold the SSH server's drain until the import finished.
-	s.Backend.StopImports()
+	if s.Backend != nil {
+		s.Backend.StopImports()
+	}
 	// Close the listeners first, and wait until every server serves on its
 	// listener, which then fails at once, or has given up on it. A server's
 	// Shutdown only closes the listeners it already serves on, and the SSH
@@ -366,31 +422,69 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 		case <-ctx.Done():
 		}
 	}
-	errg, ctx := errgroup.WithContext(ctx)
-	errg.Go(func() error {
-		return s.GitDaemon.Shutdown(ctx)
-	})
-	errg.Go(func() error {
-		return s.HTTPServer.Shutdown(ctx)
-	})
-	errg.Go(func() error {
-		return s.SSHServer.Shutdown(ctx)
-	})
-	errg.Go(func() error {
-		return s.StatsServer.Shutdown(ctx)
-	})
-	errg.Go(func() error {
-		// Cancel the running jobs and wait for them to end, so none uses
-		// the database once the caller closes it. Shutdown also stops the
-		// scheduler from starting any more.
+
+	var (
+		errg errgroup.Group
+		mu   sync.Mutex
+		errs []error
+	)
+	fail := func(err error) {
+		logger.Error("shutdown", "err", err)
+		mu.Lock()
+		errs = append(errs, err)
+		mu.Unlock()
+	}
+	stop := func(name string, shutdown func(context.Context) error, closeNow func() error) {
+		errg.Go(func() error {
+			err := shutdown(ctx)
+			if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				// Only the drain ran out: cut off what still runs.
+				if errors.Is(err, context.DeadlineExceeded) {
+					// Not for Close, whose context is cancelled
+					// before any drain.
+					logger.Warn("stopping with connections still open", "server", name, "drain", drainTimeout)
+				}
+				err = closeNow()
+				if errors.Is(err, daemon.ErrServerClosed) || errors.Is(err, http.ErrServerClosed) || errors.Is(err, ssh.ErrServerClosed) {
+					// The shutdown had closed it already; Close cut
+					// off its connections all the same.
+					err = nil
+				}
+			}
+			if err != nil {
+				fail(fmt.Errorf("%s: %w", name, err))
+			}
+			return nil
+		})
+	}
+	if s.GitDaemon != nil {
+		stop("Git daemon", s.GitDaemon.Shutdown, s.GitDaemon.Close)
+	}
+	if s.HTTPServer != nil {
+		stop("HTTP server", s.HTTPServer.Shutdown, s.HTTPServer.Close)
+	}
+	if s.SSHServer != nil {
+		stop("SSH server", s.SSHServer.Shutdown, s.SSHServer.Close)
+	}
+	if s.StatsServer != nil {
+		stop("Stats server", s.StatsServer.Shutdown, s.StatsServer.Close)
+	}
+	if s.stopJobs != nil {
+		// Cancel the running jobs; Shutdown also stops the scheduler
+		// from starting any more.
 		s.stopJobs()
-		if err := s.Cron.Shutdown(ctx); err != nil {
-			return fmt.Errorf("wait for cron jobs: %w", err)
-		}
-		return nil
-	})
-	// defer s.DB.Close() // nolint: errcheck
-	err := errg.Wait()
+	}
+	if s.Cron != nil {
+		errg.Go(func() error {
+			jctx, cancel := waitAtLeast(ctx, jobsTimeout)
+			defer cancel()
+			if err := s.Cron.Shutdown(jctx); err != nil {
+				fail(fmt.Errorf("wait for cron jobs: %w", err))
+			}
+			return nil
+		})
+	}
+	_ = errg.Wait()
 
 	// Always wait for the deliveries, even when a server failed to stop:
 	// the queue is closed here so no new delivery starts, and the ones
@@ -398,58 +492,30 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	// the caller's drain deadline for the HTTP and SSH servers. The stopped
 	// imports are waited for first, within the same budget, since cleaning
 	// up a registered one queues a repository delete event.
-	dctx, cancel := context.WithTimeout(abort, backend.ShutdownDeliveryTimeout)
-	defer cancel()
-	s.Backend.WaitForImports(dctx)
-	s.Backend.WaitForDeliveries(dctx)
-	return err
+	// An abort that is already done, as Close's, waits for nothing; the
+	// queue is still closed, so no new delivery starts.
+	if s.Backend != nil && abort.Err() != nil {
+		s.Backend.StopDeliveries()
+	} else if s.Backend != nil {
+		dctx, cancel := context.WithTimeout(abort, backend.ShutdownDeliveryTimeout)
+		defer cancel()
+		s.Backend.WaitForImports(dctx)
+		s.Backend.WaitForDeliveries(dctx)
+	}
+	return errors.Join(errs...)
 }
 
 // closeFailedServer closes a server NewServer could not finish building.
 // Tests replace it to see which server NewServer closed.
 var closeFailedServer = func(s *Server) { _ = s.Close() }
 
-// closeJobsTimeout bounds how long Close waits for the cancelled cron jobs
-// to end.
-const closeJobsTimeout = 10 * time.Second
-
-// Close closes the servers and cancels the imports in flight. It skips the ones that were never built, so it
-// also closes a server NewServer failed to finish.
+// Close stops the server at once: it is Shutdown with contexts that are
+// already done, so nothing is drained and no delivery is waited for. Its
+// callers stop a server that has not served yet.
 func (s *Server) Close() error {
-	s.markClosed()
-	if s.Backend != nil {
-		s.Backend.StopImports()
-	}
-	s.closeListeners()
-	var errg errgroup.Group
-	if s.GitDaemon != nil {
-		errg.Go(s.GitDaemon.Close)
-	}
-	if s.HTTPServer != nil {
-		errg.Go(s.HTTPServer.Close)
-	}
-	if s.SSHServer != nil {
-		errg.Go(s.SSHServer.Close)
-	}
-	if s.StatsServer != nil {
-		errg.Go(s.StatsServer.Close)
-	}
-	if s.stopJobs != nil {
-		s.stopJobs()
-	}
-	if s.Cron != nil {
-		errg.Go(func() error {
-			// The jobs were cancelled above, so they end shortly.
-			ctx, cancel := context.WithTimeout(context.Background(), closeJobsTimeout)
-			defer cancel()
-			if err := s.Cron.Shutdown(ctx); err != nil {
-				return fmt.Errorf("wait for cron jobs: %w", err)
-			}
-			return nil
-		})
-	}
-	// defer s.DB.Close() // nolint: errcheck
-	return errg.Wait()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return s.Shutdown(ctx, ctx)
 }
 
 // markClosed makes a Start that has not yet stored its listeners close them

@@ -364,6 +364,12 @@ type Config struct {
 	// configPath is the absolute path of the config file Load resolved.
 	configPath string
 
+	// hostKey and hostKeyErr are what LoadHostKey read, once
+	// hostKeyLoaded is set.
+	hostKey       *HostKey
+	hostKeyErr    error
+	hostKeyLoaded bool
+
 	// unknownKeys records the config file keys no setting is read from,
 	// and removed the removed settings the file or the environment sets.
 	unknownKeys []UnknownKey

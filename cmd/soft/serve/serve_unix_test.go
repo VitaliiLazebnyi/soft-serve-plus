@@ -143,3 +143,84 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 		t.Fatal("soft serve did not stop within a minute of SIGTERM")
 	}
 }
+
+// stop ends the delivery to the channels notifySignals registered, so a
+// soft serve run again in the same process, as tests do, leaves no handler
+// behind (tracker 312).
+func TestSignalsStop(t *testing.T) {
+	// The probe keeps a signal from killing the test binary and fences the
+	// check: the runtime hands signals to the registered channels one
+	// signal at a time, so once the probe has a second signal, delivering
+	// the first one to every channel is over.
+	probe := make(chan os.Signal, 1)
+	signal.Notify(probe, syscall.SIGHUP, syscall.SIGTERM)
+	t.Cleanup(func() { signal.Stop(probe) })
+	send := func(sig syscall.Signal) {
+		t.Helper()
+		if err := syscall.Kill(os.Getpid(), sig); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-probe:
+		case <-time.After(time.Minute):
+			t.Fatalf("%v did not arrive within a minute", sig)
+		}
+	}
+
+	sigs := notifySignals()
+	send(syscall.SIGHUP)
+	send(syscall.SIGTERM)
+	for name, c := range map[string]chan os.Signal{"hup": sigs.hup, "term": sigs.term} {
+		select {
+		case <-c:
+		default:
+			t.Fatalf("the %s channel got no signal while registered", name)
+		}
+	}
+
+	sigs.stop()
+	send(syscall.SIGHUP)
+	send(syscall.SIGTERM)
+	send(syscall.SIGHUP) // fences the SIGTERM
+	select {
+	case sig := <-sigs.hup:
+		t.Errorf("the hup channel got %v after stop", sig)
+	case sig := <-sigs.term:
+		t.Errorf("the term channel got %v after stop", sig)
+	default:
+	}
+}
+
+// A stop signal is not lost behind SIGHUPs nobody has read yet: with one
+// channel of one slot for all three signals, signal.Notify dropped it
+// (CFG-21).
+func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
+	probe := make(chan os.Signal, 1)
+	signal.Notify(probe, syscall.SIGHUP, syscall.SIGTERM)
+	t.Cleanup(func() { signal.Stop(probe) })
+	sigs := notifySignals()
+	t.Cleanup(sigs.stop)
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGTERM} {
+		if err := syscall.Kill(os.Getpid(), sig); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-probe:
+		case <-time.After(time.Minute):
+			t.Fatalf("%v did not arrive within a minute", sig)
+		}
+	}
+	// The stop and the second one, which aborts the shutdown's wait, both
+	// fit before either is read.
+	if n := len(sigs.term); n != 2 {
+		t.Fatalf("the stop channel holds %d signals, want both SIGTERMs", n)
+	}
+	select {
+	case sig := <-sigs.term:
+		if sig != syscall.SIGTERM {
+			t.Fatalf("the stop channel got %v, want SIGTERM", sig)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("SIGTERM was lost behind the unread SIGHUPs")
+	}
+}
