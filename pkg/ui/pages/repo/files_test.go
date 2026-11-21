@@ -71,14 +71,14 @@ func TestFilesListingTruncated(t *testing.T) {
 	}
 }
 
-// Opening a file larger than max_blob_size is refused without reading it,
+// Opening a file larger than config.MaxBlobSize is refused without reading it,
 // and a file that fits is shown.
 func TestSelectFileSizeLimit(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
 	files := map[string]string{
 		"small.txt": "hello\n",
-		"big.txt":   strings.Repeat("x", 100),
+		"big.txt":   strings.Repeat("x", config.MaxBlobSize+1),
 		"bin.dat":   "\x00\x01\x02",
 	}
 	for name, data := range files {
@@ -104,7 +104,6 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	cfg.MaxBlobSize = 50
 	ctx := config.WithContext(t.Context(), cfg)
 	f := NewFiles(common.NewCommon(ctx, 80, 40))
 	f.repo = r

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -61,54 +62,75 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 	}
 }
 
+// The key exchanges, ciphers and MACs are fixed (R68); the public key
+// authentication algorithms follow the config.
 func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.KexAlgorithms = []string{gossh.KeyExchangeCurve25519, gossh.InsecureKeyExchangeDH14SHA1}
-	cfg.SSH.Ciphers = []string{gossh.CipherAES256CTR}
-	cfg.SSH.MACs = []string{gossh.HMACSHA512, gossh.HMACSHA1}
 	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoED25519, gossh.KeyAlgoRSA}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	sc := serverConfig(cfg, log.Default())
-	if !slices.Equal(sc.KeyExchanges, cfg.SSH.KexAlgorithms) {
-		t.Errorf("key exchanges = %v, want %v", sc.KeyExchanges, cfg.SSH.KexAlgorithms)
+	if !slices.Equal(sc.KeyExchanges, config.DefaultSSHKexAlgorithms()) {
+		t.Errorf("key exchanges = %v, want %v", sc.KeyExchanges, config.DefaultSSHKexAlgorithms())
 	}
-	if !slices.Equal(sc.Ciphers, cfg.SSH.Ciphers) {
-		t.Errorf("ciphers = %v, want %v", sc.Ciphers, cfg.SSH.Ciphers)
+	if !slices.Equal(sc.Ciphers, config.DefaultSSHCiphers()) {
+		t.Errorf("ciphers = %v, want %v", sc.Ciphers, config.DefaultSSHCiphers())
 	}
-	if !slices.Equal(sc.MACs, cfg.SSH.MACs) {
-		t.Errorf("macs = %v, want %v", sc.MACs, cfg.SSH.MACs)
+	if !slices.Equal(sc.MACs, config.DefaultSSHMACs()) {
+		t.Errorf("macs = %v, want %v", sc.MACs, config.DefaultSSHMACs())
 	}
 	if !slices.Equal(sc.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms) {
 		t.Errorf("public key auth algorithms = %v, want %v", sc.PublicKeyAuthAlgorithms, cfg.SSH.PublicKeyAuthAlgorithms)
 	}
 }
 
-// startTestServer starts a full SSH server built by NewSSHServer with cfg
-// and returns its address and the context it runs with, which holds its
-// backend.
-func startTestServer(t *testing.T, cfg *config.Config) (string, context.Context) {
+// limit changes one of the server's fixed limits for a test.
+type limit func(*serverLimits)
+
+// withMaxSessions sets the sessions one connection may have open at once.
+func withMaxSessions(n int) limit {
+	return func(l *serverLimits) { l.maxSessions = n }
+}
+
+// withHandshakeTimeout sets the time a client has to authenticate.
+func withHandshakeTimeout(d time.Duration) limit {
+	return func(l *serverLimits) { l.handshakeTimeout = d }
+}
+
+// newTestSSHServer is NewSSHServer with the fixed limits changed by lims.
+func newTestSSHServer(ctx context.Context, lims ...limit) (*SSHServer, error) {
+	lim := serverLimits{handshakeTimeout: config.SSHHandshakeTimeout, maxSessions: config.SSHMaxSessions}
+	for _, l := range lims {
+		l(&lim)
+	}
+	return newSSHServer(ctx, lim)
+}
+
+// startTestServer starts a full SSH server built by NewSSHServer with cfg,
+// and the fixed limits changed by lims, and returns its address and the
+// context it runs with, which holds its backend.
+func startTestServer(t *testing.T, cfg *config.Config, lims ...limit) (string, context.Context) {
 	t.Helper()
-	return startSSHServer(t, cfg, log.Default())
+	return startSSHServer(t, cfg, log.Default(), lims...)
 }
 
 // startSSHServer starts a full SSH server built by NewSSHServer with cfg and
 // logger and returns its address and the context it runs with, which holds its
 // backend.
-func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context) {
+func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger, lims ...limit) (string, context.Context) {
 	t.Helper()
-	addr, ctx, _ := startServerWithLogger(t, cfg, logger)
+	addr, ctx, _ := startServerWithLogger(t, cfg, logger, lims...)
 	return addr, ctx
 }
 
 // startServerWithLogger starts an SSH server with cfg and logger on a local
 // port and returns its address, the context it runs with and the server.
-func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger) (string, context.Context, *SSHServer) {
+func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger, lims ...limit) (string, context.Context, *SSHServer) {
 	t.Helper()
 	ctx := serverContext(t, cfg, logger)
-	s, err := NewSSHServer(ctx)
+	s, err := newTestSSHServer(ctx, lims...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,25 +229,6 @@ func TestSSHServerRefusesSHA1ByDefault(t *testing.T) {
 		"client limited to hmac-sha1")
 	wantNoCommonAlgorithm(t, dialWith(t, addr, nil, ctr, []string{gossh.InsecureHMACSHA196}),
 		"client limited to hmac-sha1-96")
-}
-
-func TestSSHServerHonoursConfiguredAlgorithms(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.SSH.KexAlgorithms = []string{gossh.InsecureKeyExchangeDH14SHA1}
-	cfg.SSH.Ciphers = []string{gossh.CipherAES128CTR}
-	cfg.SSH.MACs = []string{gossh.HMACSHA1}
-	addr, _ := startTestServer(t, cfg)
-
-	if err := dialWith(t, addr, []string{gossh.InsecureKeyExchangeDH14SHA1}, nil, []string{gossh.HMACSHA1}); err != nil {
-		t.Fatalf("client limited to the configured legacy algorithms: %v", err)
-	}
-	wantNoCommonAlgorithm(t, dialWith(t, addr, []string{gossh.KeyExchangeCurve25519}, nil, nil),
-		"client limited to curve25519-sha256")
-	wantNoCommonAlgorithm(t, dialWith(t, addr, nil, []string{gossh.CipherAES256GCM}, nil),
-		"client limited to aes256-gcm")
-	wantNoCommonAlgorithm(t, dialWith(t, addr, nil, nil, []string{gossh.HMACSHA256}),
-		"client limited to hmac-sha2-256")
 }
 
 // dialWithSigner connects to addr authenticating with signer and returns

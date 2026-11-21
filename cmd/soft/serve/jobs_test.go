@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/cron"
+	"github.com/charmbracelet/soft-serve/pkg/jobs"
 )
 
 // recordingScheduler records the jobs scheduleJobs adds, by name, with
@@ -40,26 +41,24 @@ func (r *recordingScheduler) AddFunc(name, spec string, fn func()) error {
 }
 
 // An empty jobs.mirror_pull leaves the mirror job unscheduled, and a spec
-// schedules it. lfs-sweep is scheduled either way, hourly when its spec is
-// empty.
+// schedules it. lfs-sweep is scheduled hourly either way.
 func TestScheduleJobs(t *testing.T) {
 	for _, c := range []struct {
-		mirror, sweep string
-		want          map[string]string
+		mirror string
+		want   map[string]string
 	}{
-		{"", "", map[string]string{"lfs-sweep": "@every 1h"}},
-		{"@every 1h", "@daily", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@daily"}},
-		{"*/5 * * * *", "", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
+		{"", map[string]string{"lfs-sweep": "@every 1h"}},
+		{"@every 1h", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@every 1h"}},
+		{"*/5 * * * *", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
 	} {
 		cfg := config.DefaultConfig()
 		cfg.Jobs.MirrorPull = c.mirror
-		cfg.Jobs.LFSSweep = c.sweep
 		var buf bytes.Buffer
 		var sched recordingScheduler
 		scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
 
 		if !maps.Equal(sched.specs, c.want) {
-			t.Errorf("mirror_pull %q, lfs_sweep %q: scheduled %v, want %v", c.mirror, c.sweep, sched.specs, c.want)
+			t.Errorf("mirror_pull %q: scheduled %v, want %v", c.mirror, sched.specs, c.want)
 		}
 		if disabled := strings.Contains(buf.String(), "cron job disabled"); disabled != (c.mirror == "") {
 			t.Errorf("mirror_pull %q: disabled message logged %v: %q", c.mirror, disabled, buf.String())
@@ -140,4 +139,25 @@ func TestScheduleJobsRunWithJobContext(t *testing.T) {
 	if jobLogs.Len() != 0 {
 		t.Errorf("a tick after jobCtx was cancelled started the sweep: %q", jobLogs.String())
 	}
+}
+
+// The README's Removed settings table says the LFS sweep runs hourly, which
+// is what jobs.LFSSweepSpec schedules.
+func TestReadmeLFSSweepHourly(t *testing.T) {
+	if jobs.LFSSweepSpec != "@every 1h" {
+		t.Fatalf("jobs.LFSSweepSpec = %q; update the README's Removed settings table", jobs.LFSSweepSpec)
+	}
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(readme), "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(line, "| `jobs.lfs_sweep` |") {
+			if !strings.Contains(line, "hourly") {
+				t.Errorf("README row %q does not say hourly", line)
+			}
+			return
+		}
+	}
+	t.Error("README has no Removed settings row for jobs.lfs_sweep")
 }

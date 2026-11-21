@@ -192,8 +192,7 @@ func TestSSHServerMaxConnections(t *testing.T) {
 func TestSSHServerMaxSessions(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.MaxSessions = 2
-	addr, _ := startTestServer(t, cfg)
+	addr, _ := startTestServer(t, cfg, withMaxSessions(2))
 
 	c, err := dialClient(t, addr)
 	if err != nil {
@@ -243,8 +242,7 @@ func TestSSHServerMaxSessions(t *testing.T) {
 func TestSSHServerClosedTUIFreesItsPlace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.MaxSessions = 1
-	addr, _ := startTestServer(t, cfg)
+	addr, _ := startTestServer(t, cfg, withMaxSessions(1))
 
 	c, err := dialClient(t, addr)
 	if err != nil {
@@ -313,8 +311,7 @@ func TestSSHServerHandshakeTimeoutFreesPlace(t *testing.T) {
 			cfg.SSH.MaxConnections = 1
 			cfg.SSH.MaxConnectionsPerIP = 0
 			cfg.SSH.IdleTimeout = 0 // the handshake timeout alone must free the place
-			cfg.SSH.HandshakeTimeout = 1
-			addr, srv := startUnixServer(t, cfg)
+			addr, srv := startUnixServer(t, cfg, withHandshakeTimeout(time.Second))
 			places := func() int {
 				srv.limiter.mu.Lock()
 				defer srv.limiter.mu.Unlock()
@@ -349,8 +346,7 @@ func TestSSHServerHandshakeTimeoutKeepsAuthenticated(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.IdleTimeout = 0
-	cfg.SSH.HandshakeTimeout = 1
-	addr, _ := startUnixServer(t, cfg)
+	addr, _ := startUnixServer(t, cfg, withHandshakeTimeout(time.Second))
 
 	// A client slowed past the timeout in its handshake is closed and
 	// tries again.
@@ -396,10 +392,10 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // version before reading, which an unbuffered pipe deadlocks.) Its
 // connections carry no IP address, so they count only towards
 // max_connections.
-func startUnixServer(t *testing.T, cfg *config.Config) (string, *SSHServer) {
+func startUnixServer(t *testing.T, cfg *config.Config, lims ...limit) (string, *SSHServer) {
 	t.Helper()
 	ctx := serverContext(t, cfg, log.Default())
-	s, err := NewSSHServer(ctx)
+	s, err := newTestSSHServer(ctx, lims...)
 	if err != nil {
 		t.Fatal(err)
 	}

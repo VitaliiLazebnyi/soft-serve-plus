@@ -102,13 +102,10 @@ func TestFilesBlameOffRestoresMarkdown(t *testing.T) {
 	p.notView("blame off", "# Pin", "first-subject")
 }
 
-// newReadmePage returns a repository page with only the Readme tab over repo,
-// whose files are no larger than limit.
-func newReadmePage(t *testing.T, repo diskRepo, limit int64) *pinPage {
+// newReadmePage returns a repository page with only the Readme tab over repo.
+func newReadmePage(t *testing.T, repo diskRepo) *pinPage {
 	t.Helper()
-	cfg := config.DefaultConfig()
-	cfg.MaxBlobSize = limit
-	c := common.NewCommon(config.WithContext(context.Background(), cfg), 120, 40)
+	c := common.NewCommon(config.WithContext(context.Background(), config.DefaultConfig()), 120, 40)
 	p := &pinPage{t: t, repo: repo, readme: NewReadme(c)}
 	p.r = New(c, p.readme)
 	p.r.SetSize(120, 40)
@@ -118,8 +115,8 @@ func newReadmePage(t *testing.T, repo diskRepo, limit int64) *pinPage {
 // A README larger than the size limit is reported as such, not as missing; a
 // repository without one still shows that it has none.
 func TestReadmeTooLarge(t *testing.T) {
-	big := newDiskRepo(t, "big", "main", "# big\n\n"+strings.Repeat("text ", 100)+"\n")
-	p := newReadmePage(t, big, 64)
+	big := newDiskRepo(t, "big", "main", "# big\n\n"+strings.Repeat("text ", config.MaxBlobSize/5+1)+"\n")
+	p := newReadmePage(t, big)
 	p.open()
 	p.wantView("too large", "larger than the size limit")
 	p.notView("too large", "No readme found.")
@@ -127,19 +124,19 @@ func TestReadmeTooLarge(t *testing.T) {
 	none := newDiskRepo(t, "none", "main", "# none\n")
 	gitRun(t, none.path, "rm", "-q", "README.md")
 	gitRun(t, none.path, "commit", "-q", "-m", "no readme")
-	p = newReadmePage(t, none, 64)
+	p = newReadmePage(t, none)
 	p.open()
 	p.wantView("none", "No readme found.")
 
 	// A root README too large to show gives way to a small one in .github.
-	github := newDiskRepo(t, "github", "main", "# big\n\n"+strings.Repeat("text ", 100)+"\n")
+	github := newDiskRepo(t, "github", "main", "# big\n\n"+strings.Repeat("text ", config.MaxBlobSize/5+1)+"\n")
 	if err := os.MkdirAll(filepath.Join(github.path, ".github"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(github.path, ".github", "README.md"), "small-readme\n")
 	gitRun(t, github.path, "add", "-A")
 	gitRun(t, github.path, "commit", "-q", "-m", "small readme")
-	p = newReadmePage(t, github, 64)
+	p = newReadmePage(t, github)
 	p.open()
 	p.wantView(".github", "small-readme")
 	p.notView(".github", "larger than the size limit")
@@ -150,10 +147,10 @@ func TestReadmeTooLarge(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(docs.path, "docs"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(docs.path, "docs", "README.md"), strings.Repeat("text ", 100)+"\n")
+	writeFile(t, filepath.Join(docs.path, "docs", "README.md"), strings.Repeat("text ", config.MaxBlobSize/5+1)+"\n")
 	gitRun(t, docs.path, "add", "-A")
 	gitRun(t, docs.path, "commit", "-q", "-m", "big readme in docs")
-	p = newReadmePage(t, docs, 64)
+	p = newReadmePage(t, docs)
 	p.open()
 	p.wantView("docs", "larger than the size limit")
 	p.notView("docs", "No readme found.")
@@ -194,7 +191,7 @@ func TestStatusBarKeepsNoticeOnHiddenTabResult(t *testing.T) {
 // does not leave the README of the ref shown before on screen.
 func TestReadmeLoadErrorReported(t *testing.T) {
 	repo := newDiskRepo(t, "r", "main", "# r\n\nold-readme\n")
-	p := newReadmePage(t, repo, 1<<20)
+	p := newReadmePage(t, repo)
 	p.open()
 	p.wantView("open", "old-readme")
 

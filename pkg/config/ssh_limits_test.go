@@ -10,7 +10,7 @@ import (
 
 func TestSSHLimitsDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.SSH.HandshakeTimeout <= 0 || cfg.SSH.MaxConnections <= 0 || cfg.SSH.MaxConnectionsPerIP <= 0 || cfg.SSH.MaxSessions <= 0 {
+	if cfg.SSH.MaxConnections <= 0 || cfg.SSH.MaxConnectionsPerIP <= 0 {
 		t.Fatalf("ssh limits default to off: %+v", cfg.SSH)
 	}
 }
@@ -18,21 +18,17 @@ func TestSSHLimitsDefaults(t *testing.T) {
 func TestSSHLimitsEnv(t *testing.T) {
 	t.Setenv("SOFT_SERVE_SSH_MAX_CONNECTIONS", "7")
 	t.Setenv("SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP", "3")
-	t.Setenv("SOFT_SERVE_SSH_MAX_SESSIONS", "0")
-	t.Setenv("SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT", "30")
 	cfg := DefaultConfig()
 	if err := parseEnv(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SSH.MaxConnections != 7 || cfg.SSH.MaxConnectionsPerIP != 3 || cfg.SSH.MaxSessions != 0 || cfg.SSH.HandshakeTimeout != 30 {
+	if cfg.SSH.MaxConnections != 7 || cfg.SSH.MaxConnectionsPerIP != 3 {
 		t.Fatalf("env not applied: %+v", cfg.SSH)
 	}
 	env := cfg.Environ()
 	for _, want := range []string{
 		"SOFT_SERVE_SSH_MAX_CONNECTIONS=7",
 		"SOFT_SERVE_SSH_MAX_CONNECTIONS_PER_IP=3",
-		"SOFT_SERVE_SSH_MAX_SESSIONS=0",
-		"SOFT_SERVE_SSH_HANDSHAKE_TIMEOUT=30",
 	} {
 		if !slices.Contains(env, want) {
 			t.Errorf("Environ() lacks %q", want)
@@ -40,26 +36,17 @@ func TestSSHLimitsEnv(t *testing.T) {
 	}
 }
 
-func TestSSHLimitsConfigFileRoundTrip(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.SSH.MaxConnections = 11
-	cfg.SSH.MaxConnectionsPerIP = 5
-	cfg.SSH.MaxSessions = 4
-	cfg.SSH.HandshakeTimeout = 9
+func TestSSHLimitsConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	file, err := marshalConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("ssh:\n  max_connections: 11\n  max_connections_per_ip: 5\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := DefaultConfig()
 	if err := parseFile(got, path); err != nil {
 		t.Fatal(err)
 	}
-	if got.SSH.MaxConnections != 11 || got.SSH.MaxConnectionsPerIP != 5 || got.SSH.MaxSessions != 4 || got.SSH.HandshakeTimeout != 9 {
-		t.Fatalf("round trip lost ssh limits: %+v", got.SSH)
+	if got.SSH.MaxConnections != 11 || got.SSH.MaxConnectionsPerIP != 5 {
+		t.Fatalf("ssh limits not read from the file: %+v", got.SSH)
 	}
 }
 
@@ -70,8 +57,6 @@ func TestSSHLimitsRejectNegative(t *testing.T) {
 	}{
 		{"ssh.max_connections", func(c *Config) { c.SSH.MaxConnections = -1 }},
 		{"ssh.max_connections_per_ip", func(c *Config) { c.SSH.MaxConnectionsPerIP = -1 }},
-		{"ssh.max_sessions", func(c *Config) { c.SSH.MaxSessions = -1 }},
-		{"ssh.handshake_timeout", func(c *Config) { c.SSH.HandshakeTimeout = -1 }},
 	} {
 		cfg := DefaultConfig()
 		cfg.DataPath = t.TempDir()

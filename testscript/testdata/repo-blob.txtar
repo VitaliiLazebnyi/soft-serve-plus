@@ -3,9 +3,6 @@
 # convert crlf to lf on windows
 [windows] dos2unix blob1.txt blob2.txt blob3.txt
 
-# cap the files repo blob reads into memory
-env SOFT_SERVE_MAX_BLOB_SIZE=64
-
 # start soft serve
 exec soft serve &
 # wait for SSH server to start
@@ -24,7 +21,8 @@ mkfile ./repo1/.hidden ''
 mkdir ./repo1/folder
 mkdir ./repo1/.folder
 mkfile ./repo1/folder/lib.c '//#include <stdio.h>'
-mkfile ./repo1/big.txt '0123456789012345678901234567890123456789012345678901234567890123456789'
+# one byte over the 1 MiB repo blob reads into memory (config.MaxBlobSize)
+mkfile -size 1048577 ./repo1/big.txt
 git -C repo1 add -A
 git -C repo1 commit -m 'first'
 git -C repo1 push origin HEAD
@@ -42,10 +40,10 @@ cmp stdout blob2.txt
 soft repo blob repo1 master folder/lib.c -l
 cmp stdout blob3.txt
 
-# a file over max_blob_size is refused
+# a file over the size limit is refused
 ! soft repo blob repo1 big.txt
 ! stdout .
-stderr 'file too large: 70 bytes, limit is 64'
+stderr 'file too large: 1048577 bytes, limit is 1048576'
 
 # --raw streams the exact bytes, without an added newline
 soft repo blob repo1 big.txt --raw

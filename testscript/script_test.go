@@ -707,8 +707,15 @@ func cmdGit(key string) func(ts *testscript.TestScript, neg bool, args []string)
 }
 
 func cmdMkfile(ts *testscript.TestScript, neg bool, args []string) {
+	if len(args) == 3 && args[0] == "-size" {
+		// mkfile -size n path: a file of n "x" bytes.
+		n, err := strconv.Atoi(args[1])
+		ts.Check(err)
+		check(ts, os.WriteFile(ts.MkAbs(args[2]), bytes.Repeat([]byte("x"), n), 0o644), neg)
+		return
+	}
 	if len(args) < 2 {
-		ts.Fatalf("usage: mkfile path content")
+		ts.Fatalf("usage: mkfile path content | mkfile -size n path")
 	}
 	check(ts, os.WriteFile(
 		ts.MkAbs(args[0]),

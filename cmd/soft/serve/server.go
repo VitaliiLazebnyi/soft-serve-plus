@@ -509,8 +509,8 @@ type jobScheduler interface {
 }
 
 // scheduleJobs adds the server's periodic jobs to sched: mirror-pull on
-// jobs.mirror_pull, which an empty value disables, and lfs-sweep on
-// jobs.lfs_sweep, hourly when it is empty. The jobs run with jobCtx, which
+// jobs.mirror_pull, which an empty value disables, and lfs-sweep hourly
+// (jobs.LFSSweepSpec). The jobs run with jobCtx, which
 // the server cancels when it stops. A tick that fires once jobCtx is done,
 // between the cancellation and the scheduler's stop, starts nothing.
 func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler, logger *log.Logger) {
@@ -532,9 +532,5 @@ func scheduleJobs(jobCtx context.Context, cfg *config.Config, sched jobScheduler
 		add("mirror-pull", cfg.Jobs.MirrorPull, jobs.SyncMirrors)
 	}
 
-	sweep := cfg.Jobs.LFSSweep
-	if sweep == "" {
-		sweep = jobs.DefaultLFSSweepSpec
-	}
-	add("lfs-sweep", sweep, jobs.SweepLFS)
+	add("lfs-sweep", jobs.LFSSweepSpec, jobs.SweepLFS)
 }

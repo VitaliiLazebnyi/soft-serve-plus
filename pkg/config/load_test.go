@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,5 +248,83 @@ func TestValidateRejectsEmptySQLiteDataSource(t *testing.T) {
 	cfg.DB.DataSource = ""
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() with an empty postgres data source = %v", err)
+	}
+}
+
+// A config that still sets a removed setting loads, whatever the value,
+// and the setting is reported as removed, not as unknown (R68, Q3). Its
+// value reaches nothing: hooks do not get it either.
+func TestRemovedSettings(t *testing.T) {
+	loadEnv(t, `ssh:
+  kex_algorithms: ["diffie-hellman-group14-sha1"]
+  ciphers: ["aes128-ctr"]
+  macs: ["hmac-sha1"]
+  max_sessions: -1
+  handshake_timeout: -1
+  listen_adr: ":1"
+db:
+  max_idle_conns: -1
+  conn_max_lifetime: -1
+  conn_max_idle_time: -1
+jobs:
+  lfs_sweep: "every hour"
+max_blob_size: -1
+`)
+	t.Setenv("SOFT_SERVE_SSH_MACS", "hmac-sha1")
+	t.Setenv("SOFT_SERVE_MAX_BLOB_SIZE", "-1")
+	t.Setenv("SOFT_SERVE_SSH_CIPHERS", "") // empty sets nothing
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want a config that ignores the removed settings", err)
+	}
+	var got []string
+	for _, r := range cfg.RemovedSettings() {
+		if r.Now == "" {
+			t.Errorf("%s: no word on what the server does instead", r.Key)
+		}
+		got = append(got, r.Key+" "+r.Source)
+	}
+	want := []string{
+		"ssh.kex_algorithms line 2",
+		"ssh.ciphers line 3",
+		"ssh.macs line 4",
+		"ssh.max_sessions line 5",
+		"ssh.handshake_timeout line 6",
+		"db.max_idle_conns line 9",
+		"db.conn_max_lifetime line 10",
+		"db.conn_max_idle_time line 11",
+		"jobs.lfs_sweep line 13",
+		"max_blob_size line 14",
+		"ssh.macs SOFT_SERVE_SSH_MACS",
+		"max_blob_size SOFT_SERVE_MAX_BLOB_SIZE",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("RemovedSettings() =\n%q\nwant\n%q", got, want)
+	}
+	if keys := cfg.UnknownKeys(); len(keys) != 1 || keys[0].Key != "ssh.listen_adr" {
+		t.Errorf("UnknownKeys() = %v, want only ssh.listen_adr", keys)
+	}
+	for _, kv := range cfg.Environ() {
+		for _, r := range removedSettings {
+			if strings.HasPrefix(kv, r.env+"=") {
+				t.Errorf("Environ() passes the removed %s on", kv)
+			}
+		}
+	}
+
+	// No field reads a removed setting any more.
+	for _, r := range removedSettings {
+		path := strings.Split(r.key, ".")
+		src := path[len(path)-1] + ": 1\n"
+		for i := len(path) - 2; i >= 0; i-- {
+			src = path[i] + ":\n  " + strings.ReplaceAll(strings.TrimSuffix(src, "\n"), "\n", "\n  ") + "\n"
+		}
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if keys := findUnknownKeys(&doc, reflect.TypeFor[Config](), ""); len(keys) != 1 || keys[0].Key != r.key {
+			t.Errorf("%s: a field still reads it (unknown keys %v)", r.key, keys)
+		}
 	}
 }

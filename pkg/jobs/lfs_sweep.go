@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-// DefaultLFSSweepSpec is the schedule of SweepLFS when jobs.lfs_sweep is
-// empty.
-const DefaultLFSSweepSpec = "@every 1h"
+// LFSSweepSpec is the schedule of SweepLFS: hourly. It removes files left
+// for more than a day, so how often it runs matters little.
+const LFSSweepSpec = "@every 1h"
 
 // SweepLFS removes the temporary files that interrupted LFS uploads and
 // mirror downloads left behind.

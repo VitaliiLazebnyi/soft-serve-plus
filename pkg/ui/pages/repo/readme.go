@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -179,7 +180,7 @@ func (r *Readme) StatusBarInfo() string {
 func (r *Readme) updateReadmeCmd() tea.Cmd {
 	repo, ref, gen := r.repo, r.ref, r.gen
 	ctx := r.load.Start(r.common.Context())
-	limit := r.common.Config().BlobSizeLimit()
+	limit := int64(config.MaxBlobSize)
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			// A newer load replaced this one before it started.

@@ -48,8 +48,24 @@ type SSHServer struct { //nolint: revive
 	limiter *connLimiter
 }
 
+// serverLimits are the fixed per-connection limits of the SSH server.
+type serverLimits struct {
+	// handshakeTimeout bounds the handshake and authentication.
+	handshakeTimeout time.Duration
+	// maxSessions bounds the sessions open at once on one connection.
+	maxSessions int
+}
+
 // NewSSHServer returns a new SSHServer.
 func NewSSHServer(ctx context.Context) (*SSHServer, error) {
+	return newSSHServer(ctx, serverLimits{
+		handshakeTimeout: config.SSHHandshakeTimeout,
+		maxSessions:      config.SSHMaxSessions,
+	})
+}
+
+// newSSHServer returns a new SSHServer with lim, which tests lower.
+func newSSHServer(ctx context.Context, lim serverLimits) (*SSHServer, error) {
 	cfg := config.FromContext(ctx)
 	logger := log.FromContext(ctx).WithPrefix("ssh")
 	dbx := db.FromContext(ctx)
@@ -114,9 +130,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	// connection limits from the moment it is accepted, so without this an
 	// unauthenticated client could hold places for the whole idle timeout,
 	// or for ever by sending a byte now and then.
-	if cfg.SSH.HandshakeTimeout > 0 {
-		s.srv.HandshakeTimeout = time.Duration(cfg.SSH.HandshakeTimeout) * time.Second
-	}
+	s.srv.HandshakeTimeout = lim.handshakeTimeout
 
 	// Limit the connections open at once, in total and per client address,
 	// and the session channels and running commands each connection may
@@ -124,7 +138,7 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 	// (see filterSessionRequests).
 	s.limiter = newConnLimiter(cfg.SSH.MaxConnections, cfg.SSH.MaxConnectionsPerIP)
 	s.srv.ConnCallback = connCallback(s.limiter, logger, noAccountLifetime)
-	setSessionHandlers(s.srv, cfg.SSH.MaxSessions)
+	setSessionHandlers(s.srv, lim.maxSessions)
 
 	// Create client ssh key
 	if _, err := os.Stat(cfg.SSH.ClientKeyPath); errors.Is(err, fs.ErrNotExist) {
@@ -140,18 +154,19 @@ func NewSSHServer(ctx context.Context) (*SSHServer, error) {
 }
 
 // serverConfig returns the x/crypto server configuration for a new
-// connection. It restricts the key exchanges, ciphers and MACs offered, and
-// the signature algorithms accepted for public key authentication, to those
-// in the config, which default to the algorithms x/crypto considers secure.
-// Without them x/crypto falls back to its own defaults, which still include
-// SHA-1 key exchange and MACs and accept ssh-rsa and ssh-dss signatures. The SSH server adds the host keys
+// connection. It restricts the key exchanges, ciphers and MACs offered to
+// those x/crypto considers secure, without hmac-sha1, and the signature
+// algorithms accepted for public key authentication to those in the config,
+// which default to the secure ones too. Without them x/crypto falls back to
+// its own defaults, which still include SHA-1 key exchange and MACs and
+// accept ssh-rsa and ssh-dss signatures. The SSH server adds the host keys
 // and authentication callbacks on top of this.
 func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 	sc := &gossh.ServerConfig{
 		Config: gossh.Config{
-			KeyExchanges: cfg.SSH.SSHKexAlgorithms(),
-			Ciphers:      cfg.SSH.SSHCiphers(),
-			MACs:         cfg.SSH.SSHMACs(),
+			KeyExchanges: config.DefaultSSHKexAlgorithms(),
+			Ciphers:      config.DefaultSSHCiphers(),
+			MACs:         config.DefaultSSHMACs(),
 		},
 		PublicKeyAuthAlgorithms: cfg.SSH.SSHPublicKeyAuthAlgorithms(),
 	}

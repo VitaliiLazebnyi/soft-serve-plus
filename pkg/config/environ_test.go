@@ -38,9 +38,6 @@ func roundTripConfig(t *testing.T) *Config {
 			ClientAllowedHosts:          []string{"git.example.com", "10.0.0.0/8"},
 			MaxTimeout:                  11,
 			IdleTimeout:                 12,
-			KexAlgorithms:               []string{"curve25519-sha256"},
-			Ciphers:                     []string{"aes256-gcm@openssh.com"},
-			MACs:                        []string{"hmac-sha2-256-etm@openssh.com"},
 		},
 		Git: GitConfig{
 			Enabled:        false,
@@ -78,12 +75,9 @@ func roundTripConfig(t *testing.T) *Config {
 			TimeFormat: "15:04",
 		},
 		DB: DBConfig{
-			Driver:          "postgres",
-			DataSource:      "postgres://user@localhost/soft?sslmode=disable",
-			MaxOpenConns:    16,
-			MaxIdleConns:    17,
-			ConnMaxLifetime: 18,
-			ConnMaxIdleTime: 19,
+			Driver:       "postgres",
+			DataSource:   "postgres://user@localhost/soft?sslmode=disable",
+			MaxOpenConns: 16,
 		},
 		LFS: LFSConfig{
 			Enabled:    false,
@@ -91,7 +85,6 @@ func roundTripConfig(t *testing.T) *Config {
 		},
 		Jobs: JobsConfig{
 			MirrorPull: "@every 1h",
-			LFSSweep:   "@every 2h",
 		},
 		Webhook: WebhookConfig{
 			AllowedHosts: []string{"hooks.example.com:8443"},

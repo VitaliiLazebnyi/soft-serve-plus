@@ -377,8 +377,7 @@ func TestWindowChangeAfterSessionLimitLeavesNothing(t *testing.T) {
 	skipUnderRace(t)
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.SSH.MaxSessions = 1
-	addr, _ := startTestServer(t, cfg)
+	addr, _ := startTestServer(t, cfg, withMaxSessions(1))
 	before := sessionLoops()
 	for i := 0; i < 3; i++ {
 		c, err := dialClient(t, addr)
