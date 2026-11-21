@@ -80,9 +80,11 @@ jobs:
         run: |
           mkdir -p coverage/unit-postgres
           # POSTGRES_PACKAGES is a list of patterns: split it into words.
+          # -timeout only bounds a hang: these packages take about a minute
+          # with -race locally, and a slow runner must not trip it.
           # shellcheck disable=SC2086
           SOFT_SERVE_DB_DATA_SOURCE="$POSTGRES_DSN" \
-            go test -failfast -race -timeout 5m -cover $POSTGRES_PACKAGES -args -test.gocoverdir="$PWD/coverage/unit-postgres"
+            go test -failfast -race -timeout 10m -cover $POSTGRES_PACKAGES -args -test.gocoverdir="$PWD/coverage/unit-postgres"
 
       # The -timeout also covers the -race build of cmd/soft, which
       # TestScript does on first use.
