@@ -31,6 +31,54 @@ func waitSlots(t *testing.T) {
 // timeout.
 const hangGuard = time.Minute
 
+// tokeniseGuarded is tokeniseUntil, failing the test when it has not
+// returned within hangGuard, as when the budget no longer ends it.
+func tokeniseGuarded(t *testing.T, lexer chroma.Lexer, content string, budget <-chan time.Time) bool {
+	t.Helper()
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := tokeniseUntil(lexer, content, budget)
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-time.After(hangGuard):
+		t.Fatalf("tokenising had not returned %v after the budget ended", hangGuard)
+		return false
+	}
+}
+
+// lookupProbe is a lexer that counts the searches of chroma's registry that
+// reach it, as the lookup of an embedded language does, and matches
+// nothing.
+type lookupProbe struct {
+	fakeLexer
+	n *atomic.Int64
+}
+
+func (l lookupProbe) Config() *chroma.Config {
+	l.n.Add(1)
+	return &chroma.Config{Name: "lookup probe"}
+}
+
+// probeLookups adds a lookupProbe to chroma's registry for the rest of the
+// test and returns its count of lookups.
+func probeLookups(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	// No tokenisation may be reading the registry while it changes.
+	waitSlots(t)
+	saved := slices.Clone(lexers.GlobalLexerRegistry.Lexers)
+	probe := lookupProbe{n: new(atomic.Int64)}
+	lexers.GlobalLexerRegistry.Register(probe)
+	t.Cleanup(func() {
+		waitSlots(t)
+		// As in probeAnalysers, the name map keeps the probe.
+		lexers.GlobalLexerRegistry.Lexers = saved
+	})
+	return probe.n
+}
+
 // analyseProbe is a lexer whose analyser records the most text it was given
 // and never claims the text.
 type analyseProbe struct {
@@ -231,11 +279,13 @@ func TestEmbeddedEagerLexersCapped(t *testing.T) {
 	}
 }
 
-// pausingLexer wraps a lexer. At its pauseAt-th token, its iterator ends the
-// budget and waits for resume; it counts the tokens read after.
+// pausingLexer wraps a lexer. At its pauseAt-th token, its iterator calls
+// atPause when set, ends the budget and waits for resume; it counts the
+// tokens read after.
 type pausingLexer struct {
 	chroma.Lexer
 	pauseAt int
+	atPause func()
 	budget  chan time.Time
 	resume  chan struct{}
 	after   *atomic.Int64
@@ -257,6 +307,9 @@ func (l pausingLexer) Tokenise(options *chroma.TokeniseOptions, text string) (ch
 		case t.Value != "":
 			n++
 			if n == l.pauseAt {
+				if l.atPause != nil {
+					l.atPause()
+				}
 				close(l.budget)
 				<-l.resume
 			}
@@ -287,7 +340,7 @@ func TestBudgetStopsLongRuns(t *testing.T) {
 			}
 			// The lexer is paused when the budget ends, so the budget
 			// ends the call.
-			if _, ok := tokeniseUntil(l, content, l.budget); ok {
+			if tokeniseGuarded(t, l, content, l.budget) {
 				t.Fatal("the file was tokenised before the budget ended")
 			}
 			close(l.resume)
@@ -354,41 +407,55 @@ func TestTokensMerged(t *testing.T) {
 // Lexers that look embedded languages up, about 2.4 ms a block, take 7 s
 // (x.rst) to 15 s (x.art) over 10,000 lines of these blocks. They tokenise
 // as their iterator is read, so the budget stops them where it ends: no
-// tokens are read after.
+// tokens are read after. The lookups are made as the blocks are read, not
+// up front: at the 100th token they number at most 68, of the 10,000 to
+// 13,332 the whole file makes. Arturo's blocks, slow for another reason,
+// make none.
 func TestBudgetStopsEmbeddedLanguages(t *testing.T) {
 	// fill repeats block, whole lines, up to 10,000 lines.
 	fill := func(block string) string {
 		return strings.Repeat(block, 10000/strings.Count(block, "\n"))
 	}
-	cases := map[string]string{
-		"x.gmi":  fill("```zzz\nx\n```\n"),
-		"x.rst":  fill(".. code-block:: zzz\n\n   x\n\n"),
-		"x.org":  fill("#+begin_src zzz\nx\n#+end_src\n"),
-		"x.raku": fill("=begin code :lang<zzz>\nx\n=end code\n"),
-		"x.art":  fill("{!zzz x }\n"),
-		"x.md":   fill("```zzz\nx\n```\n"),
+	cases := map[string]struct {
+		content string
+		looksUp bool
+	}{
+		"x.gmi":  {fill("```zzz\nx\n```\n"), true},
+		"x.rst":  {fill(".. code-block:: zzz\n\n   x\n\n"), true},
+		"x.org":  {fill("#+begin_src zzz\nx\n#+end_src\n"), true},
+		"x.raku": {fill("=begin code :lang<zzz>\nx\n=end code\n"), true},
+		"x.art":  {fill("{!zzz x }\n"), false},
+		"x.md":   {fill("```zzz\nx\n```\n"), true},
 	}
-	for name, content := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			lexer := lexers.Match(name)
 			if eager(lexer) {
 				t.Fatalf("the %s lexer tokenises up front: the budget cannot stop it", lexer.Config().Name)
 			}
-			waitSlots(t)
+			lookups := probeLookups(t)
+			lookups.Store(0)
+			// atPause is written by the tokenisation before it ends the
+			// budget, and read after tokeniseGuarded has seen it end.
+			var atPause atomic.Int64
 			l := pausingLexer{
 				Lexer:   lexer,
 				pauseAt: 100,
+				atPause: func() { atPause.Store(lookups.Load()) },
 				budget:  make(chan time.Time),
 				resume:  make(chan struct{}),
 				after:   new(atomic.Int64),
 			}
-			if _, ok := tokeniseUntil(l, content, l.budget); ok {
+			if tokeniseGuarded(t, l, tc.content, l.budget) {
 				t.Fatal("the file was tokenised before the budget ended")
 			}
 			close(l.resume)
 			waitSlots(t)
 			if n := l.after.Load(); n > 0 {
 				t.Fatalf("%d tokens were read after the budget ended; want none", n)
+			}
+			if n := atPause.Load(); tc.looksUp && (n == 0 || n > 1000) {
+				t.Fatalf("%d lookups of the embedded language by the 100th token; want some, and at most 1000", n)
 			}
 		})
 	}

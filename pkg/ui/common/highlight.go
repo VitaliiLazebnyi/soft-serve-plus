@@ -95,14 +95,24 @@ func stylePrimitive(p gansi.StylePrimitive) string {
 // before the program's init functions have run, which wrap the eager
 // lexers; see init.
 func Highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, bool) {
-	timer := time.NewTimer(HighlightBudget)
-	defer timer.Stop()
-	return HighlightUntil(st, path, content, noMargin, timer.C)
+	return highlight(st, path, content, noMargin, func() (<-chan time.Time, func()) {
+		timer := time.NewTimer(HighlightBudget)
+		return timer.C, func() { timer.Stop() }
+	})
 }
 
 // HighlightUntil is Highlight with the budget ending when budget receives,
 // or never when it is nil, in place of HighlightBudget.
 func HighlightUntil(st gansi.StyleConfig, path, content string, noMargin bool, budget <-chan time.Time) (string, bool) {
+	return highlight(st, path, content, noMargin, func() (<-chan time.Time, func()) {
+		return budget, func() {}
+	})
+}
+
+// highlight is Highlight with start giving the budget and a function that
+// releases it. start is called once the lexer is chosen, just before the
+// tokenisation: the budget covers the tokenisation only.
+func highlight(st gansi.StyleConfig, path, content string, noMargin bool, start func() (<-chan time.Time, func())) (string, bool) {
 	lexer := lexers.Match(path)
 	if lexer == nil {
 		// A file without a known name, such as a script with a shebang.
@@ -116,7 +126,9 @@ func HighlightUntil(st gansi.StyleConfig, path, content string, noMargin bool, b
 	if eager(lexer) && len(content) > EagerHighlightMax {
 		return "", false
 	}
+	budget, stop := start()
 	tokens, ok := tokeniseUntil(lexer, content, budget)
+	stop()
 	if !ok {
 		return "", false
 	}
