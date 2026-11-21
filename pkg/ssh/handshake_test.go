@@ -34,6 +34,7 @@ func TestSSHServerFixedLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	go s.Serve(l) //nolint: errcheck
+	t.Cleanup(func() { _ = s.Close() })
 	c, err := dialClient(t, l.Addr().String())
 	if err != nil {
 		t.Fatal(err)

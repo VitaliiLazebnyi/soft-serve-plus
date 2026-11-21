@@ -573,7 +573,11 @@ func (c *Config) UnknownKeys() []UnknownKey {
 type removedSetting struct {
 	key, env, now string
 	// oldDefault is the value earlier versions wrote to config.yaml: a
-	// scalar's text, or "[]" for an empty list.
+	// scalar's text, or "[]" for an empty list. It is a historical value,
+	// and silence is right only while the server still does what it says:
+	// TestRemovedSettingsOldDefaults pins it to both, so a change of a fixed
+	// value fails there rather than silence a config that still holds the
+	// old one.
 	oldDefault []string
 }
 

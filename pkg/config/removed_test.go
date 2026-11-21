@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,57 @@ max_blob_size: 1048576
 				t.Errorf("%s: InFile = false for a config file key", r.Key)
 			}
 		}
+	}
+}
+
+// Each removed setting's oldDefault is what earlier versions wrote to
+// config.yaml, and what the server now does: only then may a config that
+// holds it go without a warning. A fixed value that changes, such as
+// SSHMaxSessions, fails here, and the entry must then drop its oldDefault.
+func TestRemovedSettingsOldDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		key string
+		// written is what config.yaml held before S14 (602806db).
+		written string
+		// now is the setting's value for what the server now does.
+		now string
+	}{
+		{"ssh.kex_algorithms", "[]", "[]"}, // empty: the secure defaults
+		{"ssh.ciphers", "[]", "[]"},
+		{"ssh.macs", "[]", "[]"},
+		{"ssh.max_sessions", "10", strconv.Itoa(SSHMaxSessions)},
+		{"ssh.handshake_timeout", "120", strconv.Itoa(int(SSHHandshakeTimeout / time.Second))},
+		{"db.max_idle_conns", "0", "0"}, // 0: database/sql's default
+		{"db.conn_max_lifetime", "0", "0"},
+		{"db.conn_max_idle_time", "0", "0"},
+		// jobs.LFSSweepSpec; TestReadmeLFSSweepHourly in cmd/soft/serve
+		// pins it to this.
+		{"jobs.lfs_sweep", "@every 1h", "@every 1h"},
+		{"max_blob_size", "1048576", strconv.Itoa(MaxBlobSize)},
+	} {
+		var r *removedSetting
+		for i := range removedSettings {
+			if removedSettings[i].key == tc.key {
+				r = &removedSettings[i]
+			}
+		}
+		if r == nil {
+			t.Errorf("%s is not a removed setting", tc.key)
+			continue
+		}
+		if tc.written != tc.now {
+			if len(r.oldDefault) != 0 {
+				t.Errorf("%s: earlier versions wrote %q but the server now does %q; a config holding %q must warn, so drop its oldDefault",
+					tc.key, tc.written, tc.now, tc.written)
+			}
+			continue
+		}
+		if len(r.oldDefault) != 1 || r.oldDefault[0] != tc.written {
+			t.Errorf("%s: oldDefault %q, want %q, what earlier versions wrote", tc.key, r.oldDefault, tc.written)
+		}
+	}
+	if len(removedSettings) != 10 {
+		t.Errorf("%d removed settings; give each new one a row here", len(removedSettings))
 	}
 }
 
