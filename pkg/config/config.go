@@ -1401,10 +1401,10 @@ func addToSet(set map[string]struct{}, items []string) map[string]struct{} {
 }
 
 // AdminKeys returns the server admin keys, as parsed by the last Validate.
-// A config that was never validated has none. The slice is shared; callers
-// must not modify it.
+// A config that was never validated has none. The slice is a copy, so a
+// caller may sort or change it: concurrent boots share one config.
 func (c *Config) AdminKeys() []ssh.PublicKey {
-	return c.adminKeys
+	return slices.Clone(c.adminKeys)
 }
 
 // UnreadableAdminKeyFiles returns, sorted and without duplicates, the

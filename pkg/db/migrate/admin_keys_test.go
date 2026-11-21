@@ -738,6 +738,68 @@ func TestAdminKeysInsertedInSortedOrder(t *testing.T) {
 	}
 }
 
+// TestAdminKeySyncLeavesConfigAlone runs two syncs at once on one config,
+// as concurrent boots in one process do, each on its own database so that
+// nothing orders one sync's work before the other's. The keys are listed in
+// reverse order, so sorting them in place would write to the config's own
+// slice, which the race detector reports, and which the test then sees.
+func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
+	ctx := context.TODO()
+
+	keys := make([]string, 8)
+	for i := range keys {
+		keys[i] = newAuthorizedKey(t)
+	}
+	slices.Sort(keys)
+	slices.Reverse(keys)
+	cfg := config.DefaultConfig()
+	cfg.InitialAdminKeys = slices.Clone(keys)
+	validate(t, cfg)
+	want := slices.Clone(cfg.AdminKeys())
+
+	// Migrate with a config of its own, so the first migration does not
+	// seed the keys: the sync attaches them.
+	empty := config.DefaultConfig()
+	validate(t, empty)
+	dbs := make([]*db.DB, 2)
+	for i := range dbs {
+		dbs[i] = openDB(t, ctx)
+		if err := Migrate(config.WithContext(ctx, empty), dbs[i]); err != nil {
+			t.Fatalf("migrate => %v", err)
+		}
+	}
+
+	cctx := config.WithContext(ctx, cfg)
+	start := make(chan struct{})
+	errs := make(chan error, len(dbs))
+	var wg sync.WaitGroup
+	for _, dbx := range dbs {
+		wg.Go(func() {
+			<-start
+			errs <- SyncAdminKeys(cctx, dbx)
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("sync => %v", err)
+		}
+	}
+
+	if got := cfg.AdminKeys(); !slices.EqualFunc(got, want, sshutils.KeysEqual) {
+		t.Error("the sync reordered the config's admin keys")
+	}
+	for _, dbx := range dbs {
+		for _, ak := range keys {
+			if o, ok := ownerOf(t, dbx, ak); !ok || o.Username != "admin" || !o.Admin {
+				t.Errorf("key owner = %+v, %v; want admin", o, ok)
+			}
+		}
+	}
+}
+
 func TestInsertIgnoreOnlyIgnoresNamedColumn(t *testing.T) {
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)

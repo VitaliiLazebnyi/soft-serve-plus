@@ -72,6 +72,31 @@ func TestValidateInitAdminKeys(t *testing.T) {
 	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
 }
 
+// TestAdminKeysReturnsCopy checks that changing the slice AdminKeys returns,
+// as the admin key sync does when it sorts the keys, leaves the config's
+// keys alone: concurrent boots share one config.
+func TestAdminKeysReturnsCopy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.InitialAdminKeys = []string{
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMwLvyV3ouVrTysUYGoJdl5Vgn5BACKov+n9PlzfPwH",
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxIobhwtfdwN7m1TFt9wx3PsfvcAkISGPxmbmbauST8",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := slices.Clone(cfg.AdminKeys())
+	if len(want) != 2 {
+		t.Fatalf("admin keys = %d, want 2", len(want))
+	}
+
+	got := cfg.AdminKeys()
+	got[0], got[1] = got[1], nil
+	if !slices.EqualFunc(cfg.AdminKeys(), want, sshutils.KeysEqual) {
+		t.Error("changing the returned slice changed the config's admin keys")
+	}
+}
+
 func TestUnreadableAdminKeyFiles(t *testing.T) {
 	is := is.New(t)
 	missing := filepath.Join(t.TempDir(), "not-mounted-yet.pub")
