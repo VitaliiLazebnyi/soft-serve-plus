@@ -177,6 +177,8 @@ func TestServeUsesContextConfig(t *testing.T) {
 		VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
 	is.NoErr(err)
 	is.NoErr(dbx.Close())
+	// sync-hooks skips a repository without a directory.
+	is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700))
 
 	// Starting the HTTP server fails, after the directories and hooks are
 	// set up.
@@ -250,6 +252,8 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 				VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
 			is.NoErr(err)
 			is.NoErr(dbx.Close())
+			// sync-hooks skips a repository without a directory.
+			is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700))
 
 			// Starting the HTTP server fails, after the hooks are synced.
 			command := NewCommand()

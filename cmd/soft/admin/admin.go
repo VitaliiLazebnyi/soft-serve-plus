@@ -40,7 +40,7 @@ func NewCommand() *cobra.Command {
 		Use:                "migrate",
 		Short:              "Migrate the database to the latest version",
 		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.InitBackendContext,
+		PersistentPreRunE:  cmd.OpenBackendContext,
 		PersistentPostRunE: cmd.CloseDBContext,
 		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()
@@ -62,7 +62,7 @@ func NewCommand() *cobra.Command {
 			"This undoes the last database migration and may drop the data it added. " +
 			"It asks for confirmation unless --yes is given.",
 		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.InitBackendContext,
+		PersistentPreRunE:  cmd.OpenBackendContext,
 		PersistentPostRunE: cmd.CloseDBContext,
 		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
 			if !rollbackYes && !confirm(c, "Roll back the last database migration? This may drop data. [y/N] ") {
@@ -84,7 +84,7 @@ func NewCommand() *cobra.Command {
 		Use:                "sync-hooks",
 		Short:              "Update repository hooks",
 		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.InitBackendContext,
+		PersistentPreRunE:  cmd.OpenBackendContext,
 		PersistentPostRunE: cmd.CloseDBContext,
 		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()

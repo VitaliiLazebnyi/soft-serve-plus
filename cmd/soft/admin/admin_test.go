@@ -2,7 +2,11 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +37,7 @@ func testAdminErrorClosesDB(t *testing.T) {
 	}
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
+	createDB(t, ctx, cfg)
 
 	// A fresh database has no migrations to roll back.
 	command := NewCommand()
@@ -64,7 +69,22 @@ func newAdminContext(t *testing.T) context.Context {
 		t.Fatal(err)
 	}
 	ctx := config.WithContext(context.Background(), cfg)
-	return log.WithContext(ctx, log.New(io.Discard))
+	ctx = log.WithContext(ctx, log.New(io.Discard))
+	createDB(t, ctx, cfg)
+	return ctx
+}
+
+// createDB creates cfg's empty database, as the server's first start does:
+// the admin commands refuse to run without one.
+func createDB(t *testing.T, ctx context.Context, cfg *config.Config) {
+	t.Helper()
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dbx.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // "soft admin rollback" undoes a migration, which may drop data, so it asks
@@ -111,5 +131,52 @@ func TestAdminRejectsUnknownSubcommand(t *testing.T) {
 	err := command.ExecuteContext(ctx)
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("admin rollbak returned %v, want an unknown command error", err)
+	}
+}
+
+// The maintenance commands refuse to run without the server's data
+// directory, or its database, and create neither: run from a shell without
+// SOFT_SERVE_DATA_PATH, migrate used to create ./data and migrate an empty
+// database while the real one was untouched (R46).
+func TestAdminRefusesMissingDataPathOrDatabase(t *testing.T) {
+	for _, sub := range []string{"migrate", "sync-hooks"} {
+		t.Run(sub+" missing data path", func(t *testing.T) {
+			dp := filepath.Join(t.TempDir(), "data")
+			t.Setenv("SOFT_SERVE_DATA_PATH", dp)
+			cfg := config.DefaultConfig()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(io.Discard))
+			command := NewCommand()
+			command.SetArgs([]string{sub})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "does not exist") {
+				t.Fatalf("admin %s returned %v, want a missing data directory error", sub, err)
+			}
+			if _, err := os.Stat(dp); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("admin %s created the data directory: %v", sub, err)
+			}
+		})
+		t.Run(sub+" missing database", func(t *testing.T) {
+			dp := t.TempDir()
+			t.Setenv("SOFT_SERVE_DATA_PATH", dp)
+			cfg := config.DefaultConfig()
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(io.Discard))
+			command := NewCommand()
+			command.SetArgs([]string{sub})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "database") {
+				t.Fatalf("admin %s returned %v, want a missing database error", sub, err)
+			}
+			if _, err := os.Stat(filepath.Join(dp, "soft-serve.db")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("admin %s created the database: %v", sub, err)
+			}
+		})
 	}
 }

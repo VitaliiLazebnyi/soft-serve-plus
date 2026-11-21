@@ -785,7 +785,13 @@ the same configuration as `soft serve`:
 - `soft admin rollback`: Roll the database back by one migration.
 - `soft admin sync-hooks`: Write the generated git hooks of every repository
   again, for example after moving the `soft` binary or the data directory.
-  `soft serve --sync-hooks` does the same before starting the server.
+  `soft serve --sync-hooks` does the same before starting the server. A
+  repository whose directory is missing is skipped with a warning, and one
+  whose hooks cannot be written does not stop the others.
+
+These commands refuse to run when the data directory, or the SQLite database,
+does not exist: only `soft serve` creates them. Run them with the same
+`SOFT_SERVE_DATA_PATH` as the server; a shell without it uses `./data`.
 
 ## Server Access
 
