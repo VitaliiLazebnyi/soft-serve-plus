@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -199,27 +200,71 @@ func TestEagerLexersCapped(t *testing.T) {
 	}
 }
 
-// An eager lexer reached from a code block of another file, which looks its
-// language up in the registry, is capped too: the block comes back as one
-// token of plain text. Svelte's lexer takes ten seconds over the block,
-// holding its slot, as the budget cannot stop it, and highlights it.
-func TestEmbeddedEagerLexersCapped(t *testing.T) {
-	cases := map[string]string{
-		"README.md":  "# T\n\n```svelte\n" + strings.Repeat("{a}", (32<<10)/3) + "\n```\n",
-		"README.rst": "T\n=\n\n.. code:: svelte\n\n" + strings.Repeat("   {a}{a}{a}{a}\n", (32<<10)/16) + "\n",
+// fenceTimedOut returns chroma's markdown lexer as it runs when the regex of
+// its fenced code block times out: chroma gives each rule's regex 250 ms,
+// and a rule whose match times out is skipped as one that does not match.
+// Matching the block of TestEmbeddedEagerLexersCapped took 0.1 s under the
+// race detector; a loaded machine took longer, and the block then came back
+// as one backtick string.
+func fenceTimedOut(t *testing.T) chroma.Lexer {
+	t.Helper()
+	inner, ok := reflect.ValueOf(lexers.Markdown).Elem().FieldByName("Lexer").Interface().(*chroma.RegexLexer)
+	if !ok {
+		t.Fatalf("chroma's markdown lexer is %T; want one that wraps a *chroma.RegexLexer", lexers.Markdown)
 	}
-	for name, content := range cases {
+	rules := inner.MustRules().Clone()
+	fences := 0
+	for i, rule := range rules["root"] {
+		if strings.HasPrefix(rule.Pattern, "^(```") {
+			// A pattern that never matches, as a timed-out one does.
+			rules["root"][i] = chroma.Rule{Pattern: `(?!)`, Type: chroma.Text}
+			fences++
+		}
+	}
+	if fences != 2 {
+		t.Fatalf("found %d fenced code block rules in chroma's markdown lexer; want 2", fences)
+	}
+	return chroma.MustNewLexer(&chroma.Config{Name: "markdown, fence timed out"}, func() chroma.Rules { return rules })
+}
+
+// An eager lexer reached from a code block of another file, which looks its
+// language up in the registry, is capped too: the block comes back as plain
+// text. Svelte's lexer takes ten seconds over the block, holding its slot,
+// as the budget cannot stop it, and highlights it.
+//
+// The block is shown plain when all of its {a} are in one token. Svelte's
+// lexer returns short tokens, and tokeniseUntil merges a run of one type
+// only up to coalesceMax bytes, less than the block's 32 KiB, so no token
+// has them all once Svelte's lexer ran: uncapped, the largest had 4264 of
+// the 10922. The token's type is not checked: it is plain text when the
+// block was capped, and a backtick string when chroma's markdown lexer did
+// not see a fenced block, as when the regex of its fenced block times out
+// (README.md, fence timed out). In neither case did Svelte's lexer run.
+func TestEmbeddedEagerLexersCapped(t *testing.T) {
+	md := "# T\n\n```svelte\n" + strings.Repeat("{a}", (32<<10)/3) + "\n```\n"
+	cases := map[string]struct {
+		lexer   chroma.Lexer
+		content string
+	}{
+		"README.md":                  {lexers.Match("README.md"), md},
+		"README.md, fence timed out": {fenceTimedOut(t), md},
+		"README.rst":                 {lexers.Match("README.rst"), "T\n=\n\n.. code:: svelte\n\n" + strings.Repeat("   {a}{a}{a}{a}\n", (32<<10)/16) + "\n"},
+	}
+	if len(md)-len("# T\n\n```svelte\n\n```\n") <= coalesceMax {
+		t.Fatalf("the block is %d bytes; want more than coalesceMax, %d", len(md), coalesceMax)
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			waitSlots(t)
 			// Without a budget, the tokenisation runs to its end.
-			tokens, ok := tokeniseUntil(lexers.Match(name), content, nil)
+			tokens, ok := tokeniseUntil(tc.lexer, tc.content, nil)
 			if !ok {
 				t.Fatal("tokenise failed")
 			}
-			want := strings.Count(content, "{a}")
+			want := strings.Count(tc.content, "{a}")
 			for _, tok := range tokens {
 				if n := strings.Count(tok.Value, "{a}"); n > 0 {
-					if n != want || tok.Type != chroma.Text {
+					if n != want {
 						t.Fatalf("the Svelte block was highlighted: a %s token has %d of its %d {a}", tok.Type, n, want)
 					}
 					return
