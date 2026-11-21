@@ -148,7 +148,7 @@ func TestCreateDBGivesUp(t *testing.T) {
 
 // TestCreateDBPostgresParallel creates databases from many goroutines at once
 // on a real server, as parallel testscripts do. It runs when
-// SOFT_SERVE_DB_DRIVER is "postgres", as in the test_postgres CI job.
+// SOFT_SERVE_DB_DRIVER is "postgres", as in the coverage job's Postgres step.
 func TestCreateDBPostgresParallel(t *testing.T) {
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")

@@ -27,7 +27,7 @@ import (
 
 // openDB opens an empty test database: postgres when SOFT_SERVE_DB_DRIVER is
 // "postgres" (a disposable database next to SOFT_SERVE_DB_DATA_SOURCE, as the
-// test_postgres CI job sets), sqlite otherwise.
+// coverage job's Postgres step sets), sqlite otherwise.
 func openDB(t *testing.T, ctx context.Context) *db.DB {
 	t.Helper()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {

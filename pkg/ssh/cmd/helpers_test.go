@@ -9,17 +9,18 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
-	_ "modernc.org/sqlite"
 )
 
 // newAuthTestContext returns a context wired with a config and a real
-// migrated SQLite-backed backend, plus the backend itself so tests can set up
-// users and repositories.
+// migrated backend on the test database dbtest opens (Postgres when
+// SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise), plus the backend
+// itself so tests can set up users and repositories.
 //
 // No user is attached to the returned context; use withUser to authenticate
 // as somebody. AdminOnlyCreate is left at its default (off); use
@@ -36,11 +37,12 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	is := is.New(t)
 	ctx := context.Background()
 
-	dp := t.TempDir()
+	dbx, err := dbtest.Open(ctx, t)
+	is.NoErr(err)
+
 	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	cfg.DataPath = t.TempDir()
+	cfg.DB.Driver = dbx.DriverName()
 	if tweak != nil {
 		tweak(cfg)
 	}
@@ -48,10 +50,6 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	is.NoErr(cfg.Validate())
 
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
 	is.NoErr(migrate.Migrate(ctx, dbx))
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
