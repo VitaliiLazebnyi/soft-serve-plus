@@ -48,12 +48,12 @@ func TestLFSTransferLooksUpTogether(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db"))
+	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db"), db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	base := database.New()

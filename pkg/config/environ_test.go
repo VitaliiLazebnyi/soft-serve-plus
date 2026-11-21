@@ -10,6 +10,21 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 )
 
+// Environ starts with the path of the running binary, which the hooks run.
+func TestEnvironBinPath(t *testing.T) {
+	t.Parallel()
+	ex, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	if got, want := DefaultConfig().Environ()[0], "SOFT_SERVE_BIN_PATH="+filepath.ToSlash(ex); got != want {
+		t.Errorf("Environ()[0] = %q, want %q", got, want)
+	}
+	if got, want := (*Config)(nil).Environ(), []string{"SOFT_SERVE_BIN_PATH=" + filepath.ToSlash(ex)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("nil Environ() = %q, want %q", got, want)
+	}
+}
+
 // environExcluded lists the config fields that Environ leaves out on
 // purpose, by their Go path, with the reason.
 var environExcluded = map[string]string{

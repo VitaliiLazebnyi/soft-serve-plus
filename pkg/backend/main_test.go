@@ -1,13 +1,28 @@
 package backend
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/internal/testdial"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 )
+
+// beginRawTx begins a transaction on a connection of its own, outside the
+// db package's helpers, so a test can hold a lock across a backend call.
+// The connection is closed when the test ends.
+func beginRawTx(tb testing.TB, ctx context.Context, d *db.DB) (*sql.Tx, error) {
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tb.Cleanup(func() { _ = conn.Close() })
+	return conn.BeginTx(ctx, nil)
+}
 
 // testNet carries every connection the SSRF-protected clients open in this
 // package's tests (see TestMain). Webhook receivers listen on it with

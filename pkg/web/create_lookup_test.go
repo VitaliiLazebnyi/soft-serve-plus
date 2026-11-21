@@ -48,10 +48,10 @@ func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { _ = dbx.Close() })
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	ok, reads := &atomic.Int32{}, &atomic.Int32{}
 	ok.Store(math.MaxInt32)
 	st := anonFailsAfterStore{Store: database.New(), ok: ok, reads: reads}

@@ -19,6 +19,7 @@ import (
 // "public". The test runs on Postgres when SOFT_SERVE_DB_DRIVER is
 // "postgres".
 func TestHasTable(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
@@ -68,12 +69,13 @@ func TestHasTable(t *testing.T) {
 // Rollback must return a failure of its migrations table lookup, such as a
 // lost connection, instead of reading it as "no migrations table".
 func TestRollbackReportsTableLookupError(t *testing.T) {
+	t.Parallel()
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
-	dbx := &db.DB{DB: sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")}
+	dbx := db.Wrap(sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite"), db.Options{})
 	t.Cleanup(func() { _ = dbx.Close() })
 
-	err := Rollback(context.TODO(), dbx)
+	err := Rollback(context.TODO(), dbx, config.DefaultConfig(), nil)
 	if !errors.Is(err, lookupErr) {
 		t.Errorf("Rollback() with a failing table lookup => %v, want it to wrap %v", err, lookupErr)
 	}
@@ -82,12 +84,13 @@ func TestRollbackReportsTableLookupError(t *testing.T) {
 // Migrate must return a failure of its migrations table lookup instead of
 // reading it as "no migrations table" and going on to create one.
 func TestMigrateReportsTableLookupError(t *testing.T) {
+	t.Parallel()
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
-	dbx := &db.DB{DB: sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")}
+	dbx := db.Wrap(sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite"), db.Options{})
 	t.Cleanup(func() { _ = dbx.Close() })
 
-	err := Migrate(context.TODO(), dbx)
+	err := Migrate(context.TODO(), dbx, config.DefaultConfig(), nil)
 	if !errors.Is(err, lookupErr) {
 		t.Errorf("Migrate() with a failing table lookup => %v, want it to wrap %v", err, lookupErr)
 	}
@@ -96,19 +99,16 @@ func TestMigrateReportsTableLookupError(t *testing.T) {
 // The first migration must return a failure of its legacy table lookups
 // instead of reading it as "no legacy table" and skipping the import.
 func TestCreateTablesReportsTableLookupError(t *testing.T) {
+	t.Parallel()
 	lookupErr := errors.New("connection lost")
 	conn := &recordingConn{err: lookupErr}
-	dbx := sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite")
+	dbx := db.Wrap(sqlx.NewDb(sql.OpenDB(recordingConnector{conn}), "sqlite"), db.Options{})
 	t.Cleanup(func() { _ = dbx.Close() })
 
-	txx, err := dbx.Beginx()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer txx.Rollback() //nolint:errcheck
-
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-	err = createTables.Migrate(ctx, &db.Tx{Tx: txx})
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
+	err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+		return createTables.Migrate(ctx, tx, env)
+	})
 	if !errors.Is(err, lookupErr) {
 		t.Errorf("createTables.Migrate() with a failing table lookup => %v, want it to wrap %v", err, lookupErr)
 	}

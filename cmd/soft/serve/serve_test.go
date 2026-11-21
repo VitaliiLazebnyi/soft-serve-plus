@@ -85,12 +85,12 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 				// its hooks fail.
 				ctx := config.WithContext(context.Background(), cfg)
 				ctx = log.WithContext(ctx, log.New(io.Discard))
-				dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+				dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer dbx.Close() //nolint: errcheck
-				if err := migrate.Migrate(ctx, dbx); err != nil {
+				if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := dbx.ExecContext(ctx, `INSERT INTO repos
@@ -169,9 +169,9 @@ func TestServeUsesContextConfig(t *testing.T) {
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
 	// A repository to generate hooks for.
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	_, err = dbx.ExecContext(ctx, `INSERT INTO repos
 		(name, project_name, description, private, mirror, hidden, user_id, updated_at)
 		VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
@@ -244,9 +244,9 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 			ctx = log.WithContext(ctx, log.New(io.Discard))
 
 			// A repository to generate hooks for.
-			dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+			dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 			is.NoErr(err)
-			is.NoErr(migrate.Migrate(ctx, dbx))
+			is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 			_, err = dbx.ExecContext(ctx, `INSERT INTO repos
 				(name, project_name, description, private, mirror, hidden, user_id, updated_at)
 				VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)

@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
@@ -17,21 +19,21 @@ import (
 // query used "?" placeholders, which Postgres rejected. The test runs on
 // Postgres when SOFT_SERVE_DB_DRIVER is "postgres".
 func TestMigrateLfsObjects(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	ctx := config.WithContext(context.TODO(), cfg)
+	ctx, env := context.TODO(), testEnv(cfg)
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:migrateLfsObjectsVersion-1]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:migrateLfsObjectsVersion-1]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() before lfs objects => %v", err)
 	}
-	migrations = all[:migrateLfsObjectsVersion]
+	list = all[:migrateLfsObjectsVersion]
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -55,7 +57,7 @@ func TestMigrateLfsObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 	if _, err := os.Stat(oldpath); !os.IsNotExist(err) {
@@ -66,15 +68,21 @@ func TestMigrateLfsObjects(t *testing.T) {
 	}
 }
 
-// Migrations that read the server configuration fail with an error, rather
-// than panic, when the context carries none.
+// Migrate, Rollback and SyncAdminKeys need the server configuration: without
+// it they fail with an error, rather than panic or, as SyncAdminKeys did,
+// silently skip the key sync.
 func TestMigrateWithoutConfig(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx, err := test.OpenSqlite(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); !errors.Is(err, errNoConfig) {
-		t.Errorf("Migrate() without config => %v, want %v", err, errNoConfig)
+	for name, run := range map[string]func(context.Context, *db.DB, *config.Config, *log.Logger) error{
+		"Migrate": Migrate, "Rollback": Rollback, "SyncAdminKeys": SyncAdminKeys,
+	} {
+		if err := run(ctx, dbx, nil, nil); !errors.Is(err, config.ErrNilConfig) {
+			t.Errorf("%s() without config => %v, want %v", name, err, config.ErrNilConfig)
+		}
 	}
 }

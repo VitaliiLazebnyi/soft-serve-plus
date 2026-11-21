@@ -42,7 +42,7 @@ func openDB(t *testing.T, ctx context.Context) *db.DB {
 	if dsn == "" {
 		dsn = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
 	}
-	admin, err := db.Open(ctx, "postgres", dsn)
+	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func openDB(t *testing.T, ctx context.Context) *db.DB {
 		t.Fatal(err)
 	}
 	u.Path = "/" + name
-	dbx, err := db.Open(ctx, "postgres", u.String())
+	dbx, err := db.Open(ctx, "postgres", u.String(), db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ type ownerRow struct {
 func ownerOf(t *testing.T, dbx *db.DB, ak string) (ownerRow, bool) {
 	t.Helper()
 	var owners []ownerRow
-	if err := dbx.Select(&owners, dbx.Rebind(`SELECT users.username, users.admin
+	if err := dbx.SelectContext(context.Background(), &owners, dbx.Rebind(`SELECT users.username, users.admin
 		FROM users INNER JOIN public_keys ON users.id = public_keys.user_id
 		WHERE public_keys.public_key = ?`), ak); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func ownerOf(t *testing.T, dbx *db.DB, ak string) (ownerRow, bool) {
 func count(t *testing.T, dbx *db.DB, query string) int {
 	t.Helper()
 	var n int
-	if err := dbx.Get(&n, query); err != nil {
+	if err := dbx.GetContext(context.Background(), &n, query); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -123,11 +123,17 @@ func mustExec(t *testing.T, dbx *db.DB, query string, args ...any) {
 }
 
 // boot runs the migrations and the admin key sync the way "soft serve" does
-// on every start, with cfg in the context.
+// on every start, with cfg.
 func boot(t *testing.T, ctx context.Context, cfg *config.Config, dbx *db.DB) {
 	t.Helper()
+	bootWithLogger(t, ctx, cfg, dbx, nil)
+}
+
+// bootWithLogger is boot logging to logger.
+func bootWithLogger(t *testing.T, ctx context.Context, cfg *config.Config, dbx *db.DB, logger *log.Logger) {
+	t.Helper()
 	validate(t, cfg)
-	if err := serveStart(config.WithContext(ctx, cfg), dbx); err != nil {
+	if err := serveStart(ctx, dbx, cfg, logger); err != nil {
 		t.Fatalf("start => %v", err)
 	}
 }
@@ -160,22 +166,23 @@ func validate(t *testing.T, cfg *config.Config) {
 }
 
 // serveStart is what "soft serve" runs on the database before it starts.
-func serveStart(ctx context.Context, dbx *db.DB) error {
-	if err := Migrate(ctx, dbx); err != nil {
+func serveStart(ctx context.Context, dbx *db.DB, cfg *config.Config, logger *log.Logger) error {
+	if err := Migrate(ctx, dbx, cfg, logger); err != nil {
 		return err
 	}
-	return SyncAdminKeys(ctx, dbx)
+	return SyncAdminKeys(ctx, dbx, cfg, logger)
 }
 
 // bootLogs is boot with the log output returned.
 func bootLogs(t *testing.T, ctx context.Context, cfg *config.Config, dbx *db.DB) string {
 	t.Helper()
 	var buf bytes.Buffer
-	boot(t, log.WithContext(ctx, log.New(&buf)), cfg, dbx)
+	bootWithLogger(t, ctx, cfg, dbx, log.New(&buf))
 	return buf.String()
 }
 
 func TestAdminKeyAddedAfterFirstBootBecomesAdminKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -240,6 +247,7 @@ func TestAdminKeyAddedAfterFirstBootBecomesAdminKey(t *testing.T) {
 }
 
 func TestAdminKeyRemovedOnlyFromUserItWasAttachedTo(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -262,6 +270,7 @@ func TestAdminKeyRemovedOnlyFromUserItWasAttachedTo(t *testing.T) {
 }
 
 func TestAdminKeyGoesToAdminOwningAnotherConfiguredKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -284,6 +293,7 @@ func TestAdminKeyGoesToAdminOwningAnotherConfiguredKey(t *testing.T) {
 }
 
 func TestAdminKeyPrefersAdminNamedAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -306,6 +316,7 @@ func TestAdminKeyPrefersAdminNamedAdmin(t *testing.T) {
 }
 
 func TestAdminKeyNotAttachedToAnotherAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -334,6 +345,7 @@ func TestAdminKeyNotAttachedToAnotherAdmin(t *testing.T) {
 }
 
 func TestAdminKeyNotAttachedWhenSeveralAdminsOwnConfiguredKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -360,6 +372,7 @@ func TestAdminKeyNotAttachedWhenSeveralAdminsOwnConfiguredKeys(t *testing.T) {
 }
 
 func TestAdminKeyRemovedFromDemotedAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -382,6 +395,7 @@ func TestAdminKeyRemovedFromDemotedAdmin(t *testing.T) {
 }
 
 func TestAdminMigrateDoesNotSyncKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -392,7 +406,7 @@ func TestAdminMigrateDoesNotSyncKeys(t *testing.T) {
 	// longer has must not attach it.
 	ak := newAuthorizedKey(t)
 	cfg.InitialAdminKeys = []string{ak}
-	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 	if o, ok := ownerOf(t, dbx, ak); ok {
@@ -401,6 +415,7 @@ func TestAdminMigrateDoesNotSyncKeys(t *testing.T) {
 }
 
 func TestAdminKeyConcurrentBoots(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("concurrent boots need a server database; set SOFT_SERVE_DB_DRIVER=postgres")
 	}
@@ -415,7 +430,6 @@ func TestAdminKeyConcurrentBoots(t *testing.T) {
 	keys := []string{newAuthorizedKey(t), newAuthorizedKey(t)}
 	cfg.InitialAdminKeys = keys
 	validate(t, cfg)
-	cctx := config.WithContext(ctx, cfg)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
@@ -423,7 +437,7 @@ func TestAdminKeyConcurrentBoots(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- serveStart(cctx, dbx)
+			errs <- serveStart(ctx, dbx, cfg, nil)
 		}()
 	}
 	wg.Wait()
@@ -445,6 +459,7 @@ func TestAdminKeyConcurrentBoots(t *testing.T) {
 }
 
 func TestAdminKeyOwnedByNonAdminIsNotPromoted(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -469,6 +484,7 @@ func TestAdminKeyOwnedByNonAdminIsNotPromoted(t *testing.T) {
 }
 
 func TestAdminKeyCreatesAdminWhenNoneExists(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -490,6 +506,7 @@ func TestAdminKeyCreatesAdminWhenNoneExists(t *testing.T) {
 }
 
 func TestAdminKeyNotAttachedToNonAdminNamedAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -511,6 +528,7 @@ func TestAdminKeyNotAttachedToNonAdminNamedAdmin(t *testing.T) {
 }
 
 func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -574,6 +592,7 @@ func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
 }
 
 func TestAdminKeyRemovedDespiteCommentsAndBadEntries(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -601,6 +620,7 @@ func TestAdminKeyRemovedDespiteCommentsAndBadEntries(t *testing.T) {
 }
 
 func TestAdminKeyAddedByHandIsKept(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 	st := database.New()
@@ -667,6 +687,7 @@ func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 // back by hand (committed by another connection) before it removes the key,
 // leaves the key alone.
 func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("needs a second connection writing during the transaction; set SOFT_SERVE_DB_DRIVER=postgres")
 	}
@@ -714,6 +735,7 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 }
 
 func TestAdminKeysInsertedInSortedOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -730,7 +752,7 @@ func TestAdminKeysInsertedInSortedOrder(t *testing.T) {
 	boot(t, ctx, cfg, dbx)
 
 	var got []string
-	if err := dbx.Select(&got, `SELECT public_key FROM public_keys ORDER BY id`); err != nil {
+	if err := dbx.SelectContext(context.Background(), &got, `SELECT public_key FROM public_keys ORDER BY id`); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(got, sorted) {
@@ -745,6 +767,7 @@ func TestAdminKeysInsertedInSortedOrder(t *testing.T) {
 // slice, which the race detector may report, and which the test sees by the
 // changed order.
 func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 
 	keys := make([]string, 8)
@@ -765,19 +788,18 @@ func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
 	dbs := make([]*db.DB, 2)
 	for i := range dbs {
 		dbs[i] = openDB(t, ctx)
-		if err := Migrate(config.WithContext(ctx, empty), dbs[i]); err != nil {
+		if err := Migrate(ctx, dbs[i], empty, nil); err != nil {
 			t.Fatalf("migrate => %v", err)
 		}
 	}
 
-	cctx := config.WithContext(ctx, cfg)
 	start := make(chan struct{})
 	errs := make(chan error, len(dbs))
 	var wg sync.WaitGroup
 	for _, dbx := range dbs {
 		wg.Go(func() {
 			<-start
-			errs <- SyncAdminKeys(cctx, dbx)
+			errs <- SyncAdminKeys(ctx, dbx, cfg, nil)
 		})
 	}
 	close(start)
@@ -802,6 +824,7 @@ func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
 }
 
 func TestInsertIgnoreOnlyIgnoresNamedColumn(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 	boot(t, ctx, config.DefaultConfig(), dbx)
@@ -832,6 +855,7 @@ func TestInsertIgnoreOnlyIgnoresNamedColumn(t *testing.T) {
 }
 
 func TestAdminKeyConcurrentBootsDifferentOrder(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("concurrent boots need a server database; set SOFT_SERVE_DB_DRIVER=postgres")
 	}
@@ -855,11 +879,10 @@ func TestAdminKeyConcurrentBootsDifferentOrder(t *testing.T) {
 			cfg.InitialAdminKeys = reversed
 		}
 		validate(t, cfg)
-		cctx := config.WithContext(ctx, cfg)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- serveStart(cctx, dbx)
+			errs <- serveStart(ctx, dbx, cfg, nil)
 		}()
 	}
 	wg.Wait()

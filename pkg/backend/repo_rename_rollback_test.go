@@ -168,7 +168,7 @@ func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
 	var holder *sql.Tx
 	be.renameTxDone = func(err error) error {
 		var berr error
-		holder, berr = be.db.BeginTx(ctx, nil)
+		holder, berr = beginRawTx(t, ctx, be.db)
 		is.NoErr(berr)
 		_, berr = holder.ExecContext(ctx, `CREATE TABLE held (n INTEGER)`)
 		is.NoErr(berr)

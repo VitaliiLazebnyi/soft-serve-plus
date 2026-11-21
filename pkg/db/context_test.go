@@ -9,6 +9,7 @@ import (
 )
 
 func TestBadFromContext(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	if c := db.FromContext(ctx); c != nil {
 		t.Errorf("FromContext(ctx) => %v, want %v", c, nil)
@@ -16,6 +17,7 @@ func TestBadFromContext(t *testing.T) {
 }
 
 func TestGoodFromContext(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx, err := test.OpenSqlite(ctx, t)
 	if err != nil {

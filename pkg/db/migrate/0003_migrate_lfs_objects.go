@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 )
 
@@ -22,12 +20,9 @@ const (
 var migrateLfsObjects = Migration{
 	Name:    migrateLfsObjectsName,
 	Version: migrateLfsObjectsVersion,
-	Migrate: func(ctx context.Context, tx *db.Tx) error {
-		cfg := config.FromContext(ctx)
-		if cfg == nil {
-			return errNoConfig
-		}
-		logger := log.FromContext(ctx).WithPrefix("migrate_lfs_objects")
+	Migrate: func(ctx context.Context, tx *db.Tx, env Env) error {
+		cfg := env.Config
+		logger := env.Logger.WithPrefix("migrate_lfs_objects")
 
 		var repoIDs []int64
 		if err := tx.SelectContext(ctx, &repoIDs, "SELECT id FROM repos"); err != nil {
@@ -54,7 +49,7 @@ var migrateLfsObjects = Migration{
 	},
 	// Nothing to undo: moving the objects back to the wrong paths would
 	// break LFS, and running the migration again is harmless.
-	Rollback: func(context.Context, *db.Tx) error {
+	Rollback: func(context.Context, *db.Tx, Env) error {
 		return nil
 	},
 }

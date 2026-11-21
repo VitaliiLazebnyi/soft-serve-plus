@@ -29,7 +29,7 @@ func newWebhookTestDB(t *testing.T) (context.Context, *db.DB) {
 	cfg.DataPath = t.TempDir()
 	cfg.DB.Driver = dbx.DriverName()
 	ctx = config.WithContext(ctx, cfg)
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 
 	// Foreign keys are enforced, so the webhook tables need real parents: one
 	// user and the repos 7 and 8 that the tests use.

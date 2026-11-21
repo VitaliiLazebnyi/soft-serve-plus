@@ -36,7 +36,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx = config.WithContext(ctx, cfg)
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	st := database.New()

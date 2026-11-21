@@ -15,6 +15,7 @@ import (
 // context is cancelled after fn has written, so database/sql rolls it back
 // before Commit, is reported as failed rather than committed.
 func TestTransactionContextCancelledBeforeCommit(t *testing.T) {
+	t.Parallel()
 	d, err := test.Open(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)

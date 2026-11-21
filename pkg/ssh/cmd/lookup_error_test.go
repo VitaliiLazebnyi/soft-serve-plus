@@ -52,7 +52,7 @@ func newLookupTestContextWith(t *testing.T, wrap func(store.Store) store.Store) 
 		t.Fatal(err)
 	}
 	ctx = config.WithContext(ctx, cfg)
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	logs := &syncLog{}

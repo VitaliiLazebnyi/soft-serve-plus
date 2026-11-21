@@ -16,7 +16,8 @@ import (
 // them again, and migrating again carries them over again. The test runs on
 // Postgres when SOFT_SERVE_DB_DRIVER is "postgres".
 func TestPublicKeySyncedUser(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +25,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
+	list := all
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -33,8 +34,8 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		}
 	}
 
-	migrations = all[:publicKeySyncedUser.Version-1]
-	if err := Migrate(ctx, dbx); err != nil {
+	list = all[:publicKeySyncedUser.Version-1]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() to %d => %v", publicKeySyncedUser.Version-1, err)
 	}
 	mustExec(`INSERT INTO users (id, username, admin, updated_at) VALUES (100, 'a', true, CURRENT_TIMESTAMP)`)
@@ -104,8 +105,8 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		}
 	}
 
-	migrations = all[:publicKeySyncedUser.Version]
-	if err := Migrate(ctx, dbx); err != nil {
+	list = all[:publicKeySyncedUser.Version]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 	if got := syncedUsers(); !maps.Equal(got, wantSynced) {
@@ -115,7 +116,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		t.Errorf("settings = %v, want %v", got, wantSettings)
 	}
 
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() => %v", err)
 	}
 	if err := dbx.GetContext(ctx, new(int), `SELECT COUNT(synced_user_id) FROM public_keys`); err == nil {
@@ -129,7 +130,7 @@ func TestPublicKeySyncedUser(t *testing.T) {
 		t.Errorf("settings after rollback = %v, want %v", got, wantRolledBack)
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	if got := syncedUsers(); !maps.Equal(got, wantSynced) {

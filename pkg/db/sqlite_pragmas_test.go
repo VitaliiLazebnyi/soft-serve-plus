@@ -8,6 +8,7 @@ import (
 )
 
 func TestSqliteDSN(t *testing.T) {
+	t.Parallel()
 	const added = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
 	for dsn, want := range map[string]string{
 		"soft-serve.db":                  "soft-serve.db?" + added,
@@ -35,6 +36,7 @@ func TestSqliteDSN(t *testing.T) {
 }
 
 func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
+	t.Parallel()
 	for _, dsn := range []string{
 		"soft-serve.db?_pragma=foreign_keys(0)",
 		"soft-serve.db?_pragma=foreign_keys=OFF",
@@ -45,8 +47,8 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 		if _, err := sqliteDSN(dsn); !errors.Is(err, errSqliteForeignKeysOff) {
 			t.Errorf("sqliteDSN(%q) error = %v, want %v", dsn, err, errSqliteForeignKeysOff)
 		}
-		if _, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), dsn)); !errors.Is(err, errSqliteForeignKeysOff) {
-			t.Errorf("Open(%q) error = %v, want %v", dsn, err, errSqliteForeignKeysOff)
+		if _, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), dsn), Options{}); !errors.Is(err, errSqliteForeignKeysOff) {
+			t.Errorf("Open(%q, Options{}) error = %v, want %v", dsn, err, errSqliteForeignKeysOff)
 		}
 	}
 }
@@ -56,8 +58,9 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 // to be off: deleting a user left their keys behind, and any statement that
 // met a git hook's write failed at once with "database is locked".
 func TestOpenSqliteBarePathEnforcesForeignKeysAndWaits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "soft.db"))
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "soft.db"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +69,7 @@ func TestOpenSqliteBarePathEnforcesForeignKeysAndWaits(t *testing.T) {
 	// Several connections at once, each set up by the driver.
 	conns := make([]interface{ Close() error }, 0, 3)
 	for range 3 {
-		c, err := d.Connx(ctx)
+		c, err := d.x.Connx(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,11 +115,12 @@ func TestOpenSqliteBarePathEnforcesForeignKeysAndWaits(t *testing.T) {
 // foreign keys and the busy timeout, and stays in WAL mode when the pragma is
 // removed again.
 func TestOpenSqliteWALOptIn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "soft.db")
 	open := func(dsn string) *DB {
 		t.Helper()
-		d, err := Open(ctx, "sqlite", dsn)
+		d, err := Open(ctx, "sqlite", dsn, Options{})
 		if err != nil {
 			t.Fatal(err)
 		}

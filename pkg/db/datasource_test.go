@@ -14,6 +14,7 @@ import (
 // a relative "file:" URI in the data directory, and an in-memory database
 // nowhere on disk.
 func TestOpenResolvedSQLiteDataSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
 		dsn  string
@@ -37,7 +38,7 @@ func TestOpenResolvedSQLiteDataSource(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			d, err := Open(ctx, "sqlite", cfg.DB.DataSource)
+			d, err := Open(ctx, "sqlite", cfg.DB.DataSource, Options{})
 			if err != nil {
 				t.Fatalf("open %q: %v", cfg.DB.DataSource, err)
 			}

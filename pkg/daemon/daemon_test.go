@@ -70,12 +70,12 @@ func runTests(m *testing.M) int {
 		log.Fatal(err)
 	}
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer dbx.Close() //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		log.Fatal(err)
 	}
 	datastore := database.New()

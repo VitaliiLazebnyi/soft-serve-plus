@@ -14,8 +14,9 @@ import (
 // TestHandlerMapsErrors checks that DB and Tx map driver errors with
 // WrapError, so callers need not wrap them again.
 func TestHandlerMapsErrors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +63,12 @@ func TestHandlerMapsErrors(t *testing.T) {
 // whose message is ErrDuplicateKey's generic one, still has the driver error,
 // naming the failed constraint, written to the debug log.
 func TestHandlerLogsConstraintDetail(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	l := log.New(&buf)
 	l.SetLevel(log.DebugLevel)
-	ctx := log.WithContext(context.Background(), l)
-	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{Logger: l})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +86,28 @@ func TestHandlerLogsConstraintDetail(t *testing.T) {
 	}
 	if out := buf.String(); !strings.Contains(out, "constraint violation") || !strings.Contains(out, "t.n") {
 		t.Errorf("debug log = %q, want the driver error naming t.n", out)
+	}
+	if strings.Contains(buf.String(), "trace") {
+		t.Errorf("debug log = %q, want no query trace without Options.Trace", buf.String())
+	}
+}
+
+// With Options.Trace, every query is logged to Options.Logger.
+func TestOpenTrace(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	l := log.New(&buf)
+	l.SetLevel(log.DebugLevel)
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{Logger: l, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE traced (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); !strings.Contains(out, "trace") || !strings.Contains(out, "CREATE TABLE traced") {
+		t.Errorf("debug log = %q, want the query traced", out)
 	}
 }

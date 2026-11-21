@@ -156,12 +156,12 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	}
 	ctx := config.WithContext(context.Background(), cfg)
 	ctx = log.WithContext(ctx, logger)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	closeTestDB(t, dbx)
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctx = db.WithContext(ctx, dbx)

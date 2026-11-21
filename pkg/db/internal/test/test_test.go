@@ -8,6 +8,7 @@ import (
 )
 
 func TestWithDatabase(t *testing.T) {
+	t.Parallel()
 	for _, dsn := range []string{
 		"postgres://postgres@localhost:5432/postgres?sslmode=disable",
 		"postgresql://postgres:secret@localhost/other",
@@ -35,6 +36,7 @@ func TestWithDatabase(t *testing.T) {
 // The test database enforces foreign keys and waits on a busy database, as
 // the server's does, so migrations and queries are tested as they run.
 func TestOpenSqlitePragmas(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbx, err := OpenSqlite(ctx, t)
 	if err != nil {

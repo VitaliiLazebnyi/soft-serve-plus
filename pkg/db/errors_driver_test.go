@@ -15,6 +15,7 @@ import (
 // and foreign key, check and not-null violations to their own errors, from
 // the driver that actually raised them, and leave other errors alone.
 func TestWrapErrorConstraintViolations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
@@ -23,7 +24,7 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 
 	// A single connection, so the SQLite foreign_keys pragma applies to
 	// every statement below.
-	conn, err := dbx.Connx(ctx)
+	conn, err := dbx.Conn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +82,7 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 
 // The Postgres codes WrapError maps, and one it does not.
 func TestWrapErrorPostgresCodes(t *testing.T) {
+	t.Parallel()
 	for code, want := range map[pqerror.Code]error{
 		pqerror.UniqueViolation:     db.ErrDuplicateKey,
 		pqerror.ForeignKeyViolation: db.ErrForeignKey,
@@ -100,6 +102,7 @@ func TestWrapErrorPostgresCodes(t *testing.T) {
 }
 
 func TestWrapErrorNil(t *testing.T) {
+	t.Parallel()
 	if err := db.WrapError(nil); err != nil {
 		t.Errorf("WrapError(nil) = %v, want nil", err)
 	}

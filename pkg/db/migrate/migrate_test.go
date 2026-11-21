@@ -12,15 +12,24 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
+// testEnv returns the Env migrations get from Migrate with cfg and the
+// default logger.
+func testEnv(cfg *config.Config) Env {
+	env, err := newEnv(cfg, nil)
+	if err != nil {
+		panic(err)
+	}
+	return env
+}
+
 func TestMigrate(t *testing.T) {
-	// XXX: we need a config.Config in the context for the migrations to run
-	// properly. Some migrations depend on the config being present.
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Errorf("Migrate() => %v, want nil error", err)
 	}
 }
@@ -30,6 +39,7 @@ func TestMigrate(t *testing.T) {
 // objects. SQLite write transactions are already serialised by BEGIN
 // IMMEDIATE, but the test database has no busy_timeout to wait with.
 func TestMigrateConcurrent(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("needs Postgres (SOFT_SERVE_DB_DRIVER=postgres)")
 	}
@@ -49,7 +59,7 @@ func TestMigrateConcurrent(t *testing.T) {
 
 func testMigrateConcurrent(t *testing.T, isolation string) {
 	t.Helper()
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +77,7 @@ func testMigrateConcurrent(t *testing.T, isolation string) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs[i] = Migrate(ctx, dbx)
+			errs[i] = migrate(ctx, dbx, env, migrations)
 		}()
 	}
 	close(start)
@@ -96,21 +106,21 @@ func testMigrateConcurrent(t *testing.T, isolation string) {
 // An older binary must refuse to run against a database that a newer binary
 // has already migrated past the newest migration it knows.
 func TestMigrateRefusesNewerDatabase(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
 
 	// Simulate an older binary that does not know the newest migration.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:len(all)-1]
+	list := all[:len(all)-1]
 
-	err = Migrate(ctx, dbx)
+	err = migrate(ctx, dbx, env, list)
 	if err == nil {
 		t.Fatal("Migrate() on a newer database => nil error, want an error")
 	}
@@ -119,8 +129,8 @@ func TestMigrateRefusesNewerDatabase(t *testing.T) {
 	}
 
 	// The binary that knows every migration still starts.
-	migrations = all
-	if err := Migrate(ctx, dbx); err != nil {
+	list = all
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Errorf("Migrate() with all migrations => %v, want nil error", err)
 	}
 }
@@ -128,21 +138,21 @@ func TestMigrateRefusesNewerDatabase(t *testing.T) {
 // Rolling back a database that a newer binary migrated past the newest
 // migration this binary knows must say so, and must leave the database alone.
 func TestRollbackRefusesNewerDatabase(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
 
 	// Simulate an older binary that does not know the newest migration.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:len(all)-1]
+	list := all[:len(all)-1]
 
-	err = Rollback(ctx, dbx)
+	err = rollback(ctx, dbx, env, list)
 	if err == nil {
 		t.Fatal("Rollback() on a newer database => nil error, want an error")
 	}
@@ -151,7 +161,7 @@ func TestRollbackRefusesNewerDatabase(t *testing.T) {
 	}
 
 	var version int64
-	if err := dbx.Get(&version, "SELECT MAX(version) FROM migrations"); err != nil {
+	if err := dbx.GetContext(context.Background(), &version, "SELECT MAX(version) FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
 	if want := all[len(all)-1].Version; version != want {
@@ -162,33 +172,31 @@ func TestRollbackRefusesNewerDatabase(t *testing.T) {
 // Rollback must pick the migration by its version, not by its position in
 // the list, so a gap in version numbers rolls back the right migration.
 func TestRollbackByVersion(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	all := migrations
-	t.Cleanup(func() { migrations = all })
 
 	var rolledBack []string
 	mk := func(version int64, name string) Migration {
 		return Migration{
 			Version: version,
 			Name:    name,
-			Migrate: func(context.Context, *db.Tx) error { return nil },
-			Rollback: func(context.Context, *db.Tx) error {
+			Migrate: func(context.Context, *db.Tx, Env) error { return nil },
+			Rollback: func(context.Context, *db.Tx, Env) error {
 				rolledBack = append(rolledBack, name)
 				return nil
 			},
 		}
 	}
-	migrations = []Migration{mk(1, "one"), mk(3, "three")}
+	list := []Migration{mk(1, "one"), mk(3, "three")}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() => %v, want nil error", err)
 	}
 	if len(rolledBack) != 1 || rolledBack[0] != "three" {
@@ -201,7 +209,7 @@ func TestRollbackByVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	rolledBack = nil
-	if err := Rollback(ctx, dbx); err == nil || !strings.Contains(err.Error(), "unknown to this binary") {
+	if err := rollback(ctx, dbx, env, list); err == nil || !strings.Contains(err.Error(), "unknown to this binary") {
 		t.Errorf("Rollback() at unknown version 2 => %v, want an unknown version error", err)
 	}
 	if len(rolledBack) != 0 {
@@ -213,13 +221,14 @@ func TestRollbackByVersion(t *testing.T) {
 // failure, not as "there are no migrations to rollback". A database that has
 // no migrations table at all still has nothing to roll back.
 func TestRollbackReportsQueryError(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = Rollback(ctx, dbx)
+	err = rollback(ctx, dbx, env, migrations)
 	if err == nil || err.Error() != "there are no migrations to rollback" {
 		t.Errorf("Rollback() without a migrations table => %v, want %q", err, "there are no migrations to rollback")
 	}
@@ -228,7 +237,7 @@ func TestRollbackReportsQueryError(t *testing.T) {
 	if _, err := dbx.ExecContext(ctx, "CREATE TABLE migrations (id INTEGER, name TEXT)"); err != nil {
 		t.Fatal(err)
 	}
-	err = Rollback(ctx, dbx)
+	err = rollback(ctx, dbx, env, migrations)
 	if err == nil {
 		t.Fatal("Rollback() with an unreadable migrations table => nil error, want an error")
 	}
@@ -243,21 +252,22 @@ func TestRollbackReportsQueryError(t *testing.T) {
 // Rolling back every migration must leave none of their tables behind, and
 // migrating again must then succeed.
 func TestRollbackAllThenMigrate(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
 
 	for range migrations {
-		if err := Rollback(ctx, dbx); err != nil {
+		if err := rollback(ctx, dbx, env, migrations); err != nil {
 			t.Fatalf("Rollback() => %v, want nil error", err)
 		}
 	}
-	if err := Rollback(ctx, dbx); err == nil || err.Error() != "there are no migrations to rollback" {
+	if err := rollback(ctx, dbx, env, migrations); err == nil || err.Error() != "there are no migrations to rollback" {
 		t.Errorf("Rollback() after rolling back everything => %v, want %q", err, "there are no migrations to rollback")
 	}
 
@@ -281,11 +291,11 @@ func TestRollbackAllThenMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() after rolling back every migration => %v, want nil error", err)
 	}
 	var admins int
-	if err := dbx.Get(&admins, dbx.Rebind("SELECT COUNT(*) FROM users WHERE username = ?"), "admin"); err != nil {
+	if err := dbx.GetContext(context.Background(), &admins, dbx.Rebind("SELECT COUNT(*) FROM users WHERE username = ?"), "admin"); err != nil {
 		t.Fatal(err)
 	}
 	if admins != 1 {
@@ -297,12 +307,13 @@ func TestRollbackAllThenMigrate(t *testing.T) {
 // there, as an older binary left them: its rollbacks of migrations 1-3
 // dropped nothing.
 func TestMigrateOverLeftoverTables(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
 
@@ -312,20 +323,20 @@ func TestMigrateOverLeftoverTables(t *testing.T) {
 		if m.Version <= migrateLfsObjectsVersion {
 			continue
 		}
-		if err := Rollback(ctx, dbx); err != nil {
+		if err := rollback(ctx, dbx, env, migrations); err != nil {
 			t.Fatalf("Rollback() => %v, want nil error", err)
 		}
 	}
 	if _, err := dbx.ExecContext(ctx, "DELETE FROM migrations"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() over leftover tables => %v, want nil error", err)
 	}
 
 	var settings int
 	// The orphan check's marker, on SQLite, is not a seed row.
-	if err := dbx.Get(&settings, dbx.Rebind("SELECT COUNT(*) FROM settings WHERE \"key\" <> ?"), orphansCheckedKey); err != nil {
+	if err := dbx.GetContext(context.Background(), &settings, dbx.Rebind("SELECT COUNT(*) FROM settings WHERE \"key\" <> ?"), orphansCheckedKey); err != nil {
 		t.Fatal(err)
 	}
 	if settings != 4 {

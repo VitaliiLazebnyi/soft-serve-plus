@@ -59,11 +59,11 @@ func setupTestBackendWithDB(tb testing.TB) (context.Context, *config.Config, *ba
 	ctx = config.WithContext(ctx, cfg)
 
 	is.NoErr(os.MkdirAll(cfg.DataPath, os.ModePerm))
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	tb.Cleanup(func() { dbx.Close() }) //nolint: errcheck
 
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)

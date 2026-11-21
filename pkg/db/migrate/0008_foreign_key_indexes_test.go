@@ -13,7 +13,8 @@ import (
 // rolling the migration back drops it. The test runs on Postgres when
 // SOFT_SERVE_DB_DRIVER is "postgres".
 func TestForeignKeyIndexes(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -21,8 +22,7 @@ func TestForeignKeyIndexes(t *testing.T) {
 
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:foreignKeyIndexes.Version]
+	list := all[:foreignKeyIndexes.Version]
 
 	indexes := []string{
 		"public_keys_user_id_idx",
@@ -49,17 +49,17 @@ func TestForeignKeyIndexes(t *testing.T) {
 		}
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 	check("after migrate", true)
 
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() => %v", err)
 	}
 	check("after rollback", false)
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	check("after migrating again", true)

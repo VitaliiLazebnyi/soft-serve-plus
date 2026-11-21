@@ -38,21 +38,21 @@ func mapError(l *log.Logger, err error) error {
 // number of its arguments, and maps the error with WrapError.
 func (d *DB) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return mapError(d.errLog, d.DB.SelectContext(ctx, dest, query, args...))
+	return mapError(d.errLog, d.x.SelectContext(ctx, dest, query, args...))
 }
 
 // GetContext wraps sqlx.GetContext: it logs the query and the
 // number of its arguments, and maps the error with WrapError.
 func (d *DB) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(d.logger, query, args...)
-	return mapError(d.errLog, d.DB.GetContext(ctx, dest, query, args...))
+	return mapError(d.errLog, d.x.GetContext(ctx, dest, query, args...))
 }
 
 // ExecContext wraps sqlx.ExecContext: it logs the query and the
 // number of its arguments, and maps the error with WrapError.
 func (d *DB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(d.logger, query, args...)
-	res, err := d.DB.ExecContext(ctx, query, args...)
+	res, err := d.x.ExecContext(ctx, query, args...)
 	return res, mapError(d.errLog, err)
 }
 
@@ -60,20 +60,20 @@ func (d *DB) ExecContext(ctx context.Context, query string, args ...interface{})
 // number of its arguments, and maps the error with WrapError.
 func (t *Tx) SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return mapError(t.errLog, t.Tx.SelectContext(ctx, dest, query, args...))
+	return mapError(t.errLog, t.x.SelectContext(ctx, dest, query, args...))
 }
 
 // GetContext wraps sqlx.GetContext: it logs the query and the
 // number of its arguments, and maps the error with WrapError.
 func (t *Tx) GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	trace(t.logger, query, args...)
-	return mapError(t.errLog, t.Tx.GetContext(ctx, dest, query, args...))
+	return mapError(t.errLog, t.x.GetContext(ctx, dest, query, args...))
 }
 
 // ExecContext wraps sqlx.ExecContext: it logs the query and the
 // number of its arguments, and maps the error with WrapError.
 func (t *Tx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	trace(t.logger, query, args...)
-	res, err := t.Tx.ExecContext(ctx, query, args...)
+	res, err := t.x.ExecContext(ctx, query, args...)
 	return res, mapError(t.errLog, err)
 }

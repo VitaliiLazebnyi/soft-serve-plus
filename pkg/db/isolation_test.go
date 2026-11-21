@@ -16,6 +16,7 @@ import (
 // committed, which only READ COMMITTED gives: a snapshot taken per
 // statement.
 func TestTransactionsAreReadCommittedPostgres(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")
 	}

@@ -49,11 +49,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg.Git.PublicURL = "git://127.0.0.1:9418"
 
 	ctx := config.WithContext(context.Background(), cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	ds := database.New()
 	ctx = db.WithContext(ctx, dbx)
 	ctx = store.WithContext(ctx, ds)

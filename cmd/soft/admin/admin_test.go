@@ -78,7 +78,7 @@ func newAdminContext(t *testing.T) context.Context {
 // the admin commands refuse to run without one.
 func createDB(t *testing.T, ctx context.Context, cfg *config.Config) {
 	t.Helper()
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,20 +24,20 @@ import (
 // are now removed first, the repository of a deleted owner going to the
 // first admin, and every migration runs.
 func TestMigrateRemovesSqliteOrphans(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	var logs bytes.Buffer
-	ctx = log.WithContext(ctx, log.New(&logs))
+	env.Logger = log.New(&logs).WithPrefix("migrate")
 	path := filepath.Join(t.TempDir(), "soft.db")
-	dbx, err := db.Open(ctx, "sqlite", path)
+	dbx, err := db.Open(ctx, "sqlite", path, db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:3]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:3]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() to 3 => %v", err)
 	}
 
@@ -78,8 +78,8 @@ func TestMigrateRemovesSqliteOrphans(t *testing.T) {
 	}
 	raw.Close() //nolint:errcheck
 
-	migrations = all
-	if err := Migrate(ctx, dbx); err != nil {
+	list = all
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
@@ -128,12 +128,12 @@ func TestMigrateRemovesSqliteOrphans(t *testing.T) {
 	// migration 4 and the column changes of the others hold with foreign
 	// keys enforced.
 	for range len(all) - 3 {
-		if err := Rollback(ctx, dbx); err != nil {
+		if err := rollback(ctx, dbx, env, list); err != nil {
 			t.Fatalf("Rollback() => %v", err)
 		}
 	}
 	assertNoOrphans(t, ctx, dbx)
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
@@ -157,12 +157,13 @@ func assertNoOrphans(t *testing.T, ctx context.Context, dbx *db.DB) {
 // the migrations change: nothing is lost and no row is left referring to a
 // missing one.
 func TestMigrateDownAndUpKeepsRows(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
@@ -202,11 +203,11 @@ func TestMigrateDownAndUpKeepsRows(t *testing.T) {
 
 	n := len(migrations)
 	for range n - 3 {
-		if err := Rollback(ctx, dbx); err != nil {
+		if err := rollback(ctx, dbx, env, migrations); err != nil {
 			t.Fatalf("Rollback() => %v", err)
 		}
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	if after := snapshot(); after != before {
@@ -223,7 +224,7 @@ func TestMigrateDownAndUpKeepsRows(t *testing.T) {
 func openSqliteFile(t *testing.T, ctx context.Context) (*db.DB, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "soft.db")
-	dbx, err := db.Open(ctx, "sqlite", path)
+	dbx, err := db.Open(ctx, "sqlite", path, db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +257,12 @@ func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
 // its collaborators, webhooks and LFS rows, leaving its directory behind and
 // its name unusable. Once a user is an admin, the upgrade goes through.
 func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, raw := openSqliteFile(t, ctx)
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:3]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:3]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatal(err)
 	}
 	rawExec(t, ctx, raw,
@@ -274,8 +275,8 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 		`DELETE FROM users WHERE id = 100`,
 	)
 
-	migrations = all
-	err := Migrate(ctx, dbx)
+	list = all
+	err := migrate(ctx, dbx, env, list)
 	if err == nil {
 		t.Fatal("Migrate() without an admin => nil, want an error")
 	}
@@ -320,7 +321,7 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 	if _, err := dbx.ExecContext(ctx, `UPDATE users SET admin = 1 WHERE username = 'admin'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() with an admin => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
@@ -333,10 +334,11 @@ func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 // A database checked clean, rolled back and given new orphans is checked
 // again when it migrates up: the marker of the first check does not skip it.
 func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, raw := openSqliteFile(t, ctx)
 	for range 2 {
-		if err := Migrate(ctx, dbx); err != nil {
+		if err := migrate(ctx, dbx, env, migrations); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -344,13 +346,13 @@ func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 	if err := dbx.GetContext(ctx, &marked, `SELECT COUNT(*) FROM settings WHERE "key" = ?`, orphansCheckedKey); err != nil || marked != 1 {
 		t.Fatalf("orphan check marker = %d, %v; want it written", marked, err)
 	}
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, migrations); err != nil {
 		t.Fatal(err)
 	}
 	rawExec(t, ctx, raw,
 		`INSERT INTO public_keys (user_id, public_key, updated_at) VALUES (999, 'ssh-ed25519 AAAA ghost', CURRENT_TIMESTAMP)`)
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() after rollback => %v", err)
 	}
 	assertNoOrphans(t, ctx, dbx)
@@ -360,6 +362,7 @@ func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 // not the plain one: on Windows, whose double quotes still let cmd.exe
 // expand %NAME% and PowerShell $name, it names cmd.exe (tracker 322).
 func TestShellNote(t *testing.T) {
+	t.Parallel()
 	if got := shellNote("windows"); got != " (in cmd.exe)" {
 		t.Errorf("shellNote(windows) = %q, want it to name cmd.exe", got)
 	}
@@ -373,6 +376,7 @@ func TestShellNote(t *testing.T) {
 // A database path is quoted for the shell of the system the message is
 // shown on, so the command it is pasted into opens that file.
 func TestShellQuote(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		goos, path, want string
 	}{
