@@ -3,13 +3,17 @@ package ssh
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
+	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -83,27 +87,98 @@ func TestStopCutsOffHandshakeInProgress(t *testing.T) {
 			// finish and then close the connection; either way the
 			// connection must end.
 			conn := &prefixConn{Conn: raw, r: io.MultiReader(strings.NewReader(version), br)}
-			cc := clientConfig(t)
-			cc.Timeout = time.Minute
-			c, chans, reqs, err := gossh.NewClientConn(conn, l.Addr().String(), cc)
+			requireCutOff(t, conn, l.Addr().String(), "a connection that finished its handshake after the server stopped")
+		})
+	}
+}
+
+// requireCutOff finishes the client side of the SSH handshake on conn, which
+// has a deadline a minute away, and fails the test unless the server cuts
+// the connection off: during the handshake, or once it is done, within a
+// minute. A handshake that only ran into the deadline was not cut off.
+func requireCutOff(t *testing.T, conn net.Conn, addr, what string) {
+	t.Helper()
+	c, chans, reqs, err := gossh.NewClientConn(conn, addr, clientConfig(t))
+	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("%s: the handshake hung until its deadline instead of being cut off: %v", what, err)
+		}
+		return // cut off during the handshake
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	client := gossh.NewClient(c, chans, reqs)
+	defer client.Close() //nolint: errcheck
+	closed := make(chan struct{})
+	go func() {
+		_ = client.Wait()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatalf("%s is still open a minute later", what)
+	}
+}
+
+// A connection the listener accepted before the server stopped, whose
+// connection callback runs only after the stop, is refused: Accept returns,
+// the stop runs, and only then does the library's HandleConn reach the
+// callback. Nothing else would close it, since the stop has already swept
+// the connections it holds. A gate in the callback holds the connection
+// there while the server stops.
+func TestStopRefusesConnectionCalledBackAfter(t *testing.T) {
+	for name, stop := range map[string]stopServer{
+		"close": func(s *SSHServer) error { return s.Close() },
+		"shutdown": func(s *SSHServer) error {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			return s.Shutdown(ctx)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.DataPath = t.TempDir()
+			ctx := serverContext(t, cfg, log.Default())
+			s, err := NewSSHServer(ctx)
 			if err != nil {
-				return // cut off during the handshake
+				t.Fatal(err)
 			}
-			client := gossh.NewClient(c, chans, reqs)
-			defer client.Close() //nolint: errcheck
-			closed := make(chan struct{})
-			go func() {
-				_ = client.Wait()
-				close(closed)
-			}()
-			if err := raw.SetDeadline(time.Time{}); err != nil {
+			t.Cleanup(func() { _ = s.Close() })
+			entered, gate := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			t.Cleanup(func() { once.Do(func() { close(gate) }) })
+			s.srv.ConnCallback = s.live.track(func(_ ssh.Context, c net.Conn) net.Conn {
+				close(entered)
+				<-gate
+				return c
+			})
+			l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			go s.Serve(l) //nolint: errcheck
+			raw, err := (&net.Dialer{Timeout: time.Minute}).DialContext(ctx, "tcp", l.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = raw.Close() })
+			if err := raw.SetDeadline(time.Now().Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 			select {
-			case <-closed:
+			case <-entered:
 			case <-time.After(time.Minute):
-				t.Fatal("a connection that finished its handshake after the server stopped is still open a minute later")
+				t.Fatal("the connection callback was not reached within a minute")
 			}
+
+			if err := stop(s); err != nil {
+				t.Fatalf("stop: %v", err)
+			}
+			once.Do(func() { close(gate) })
+
+			requireCutOff(t, raw, l.Addr().String(), "a connection accepted before the stop and called back after it")
 		})
 	}
 }

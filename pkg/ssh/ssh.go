@@ -202,6 +202,7 @@ func (s *SSHServer) Shutdown(ctx context.Context) error {
 // finished just after a stop was authenticated afterwards and stayed open
 // until its idle timeout, the drain's cut-off included. Once the server
 // stops, liveConns refuses new connections and closes the ones it holds.
+// It is not reset, so an SSHServer that has stopped cannot serve again.
 type liveConns struct {
 	mu      sync.Mutex
 	conns   map[*liveConn]struct{}
@@ -285,7 +286,9 @@ func (l *liveConns) closeAll() {
 }
 
 // closeUnestablished refuses new connections and closes the ones still in
-// their handshake. The established ones are the SSH library's to drain.
+// their handshake. The established ones are the SSH library's to drain. A
+// connection the library has just tracked but not yet given its context
+// value counts as unestablished and is closed too; it has no channels yet.
 func (l *liveConns) closeUnestablished() {
 	for _, c := range l.stop((*liveConn).established) {
 		_ = c.Close()
