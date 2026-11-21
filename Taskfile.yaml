@@ -31,24 +31,30 @@ tasks:
       - go mod tidy
 
   release:
-    desc: Create and push a new tag following semver
+    desc: Tag the checked main commit with the next semver version and push only the tag
     vars:
+      # Task evaluates this before any command runs, so the tags are
+      # fetched here: with stale local tags svu would compute an old version.
       NEXT:
-        sh: svu next --always || go run github.com/caarlos0/svu/v3@v3.4.4 next --always
+        sh: git fetch --quiet --tags && { svu next --always || go run github.com/caarlos0/svu/v3@v3.4.4 next --always; }
     prompt: "This will release {{.NEXT}}. Continue?"
     preconditions:
       - sh: '[ $(git symbolic-ref --short HEAD) = "main" ]'
         msg: Not on main branch
       - sh: "[ $(git status --porcelain=2 | wc -l) = 0 ]"
         msg: "Git is dirty"
+      # Only the tag is pushed, so the commit it names must already be main
+      # on GitHub, where the release workflow checks it out.
+      - sh: 'git fetch --quiet origin main && [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]'
+        msg: "HEAD is not origin/main"
       - sh: 'gh run list --workflow build.yml --commit $(git rev-parse HEAD) --status success --json conclusion -q ".[0].conclusion" | grep -q success'
         msg: "Test build for this commit failed or not present"
     cmds:
-      - task: fetch-tags
-      - git commit --allow-empty -m "{{.NEXT}}"
+      # The tag names HEAD, the commit whose build passed above. main is
+      # never pushed from here: the ruleset only takes pull requests.
       - git tag --annotate --sign -m "{{.NEXT}}" {{.NEXT}} {{.CLI_ARGS}}
       - echo "Pushing {{.NEXT}}..."
-      - git push origin main --follow-tags
+      - git push origin "refs/tags/{{.NEXT}}"
 
   fetch-tags:
     cmds:
