@@ -5,6 +5,10 @@
 # told where the file is (R29). The server-wide pre-receive hook below
 # refuses the push when the location it gets names no file there.
 
+# A Windows checkout gives this file CRLF line ends, and with it the hook
+# script below; it is made LF, or sh would read "/bin/sh\r".
+[windows] dos2unix check-config.sh
+
 env SOFT_SERVE_CONFIG_LOCATION=conf.yaml
 
 # start soft serve
