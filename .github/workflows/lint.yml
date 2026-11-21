@@ -32,8 +32,10 @@ jobs:
           version: v2.15.0
           args: --config=.golangci.yml --timeout=10m ./...
       # Again with the webhooktest build tag, for the files only the
-      # testscript harness builds (cmd/soft/serve, pkg/webhook).
+      # testscript harness builds (cmd/soft/serve, pkg/webhook). It runs
+      # even when the first run fails, so both report their findings.
       - name: golangci-lint (webhooktest tag)
+        if: ${{ !cancelled() }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
