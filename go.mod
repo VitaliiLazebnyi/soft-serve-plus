@@ -1,8 +1,6 @@
 module github.com/charmbracelet/soft-serve
 
-go 1.26.9
-
-toolchain go1.27.4
+go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.2.1

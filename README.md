@@ -64,7 +64,7 @@ A [Docker image][docker] is available as `ghcr.io/vitaliilazebnyi/soft-serve-plu
 
 [docker]: https://github.com/VitaliiLazebnyi/soft-serve-plus/blob/main/docker.md
 
-Or build it from source (Go is required):
+Or build it from source (Go 1.27.4 or later is required):
 
 ```bash
 git clone https://github.com/VitaliiLazebnyi/soft-serve-plus.git
