@@ -4,9 +4,6 @@
 # pushes and ref deletes on a mirror are refused over SSH and HTTP instead
 # of being silently undone at the next sync.
 
-# FIXME: don't skip windows
-[windows] skip 'curl makes github actions hang'
-
 env SOFT_SERVE_HTTP_PUBLIC_URL=http://127.0.0.1:$HTTP_PORT
 
 # start soft serve
