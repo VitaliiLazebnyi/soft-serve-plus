@@ -9,35 +9,32 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
-	_ "modernc.org/sqlite"
 )
 
 // newSettingsTestContext returns a context wired with a config, a real
-// migrated SQLite-backed backend, and an authenticated admin user, ready to
-// execute SettingsCommand() against. Returns the config too, so tests can
+// migrated backend on the test database dbtest opens (Postgres when
+// SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise), and an authenticated
+// admin user, ready to execute SettingsCommand() against. Returns the config too, so tests can
 // mutate AnonAccess/AllowKeyless to simulate a config override.
 func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 	t.Helper()
 	is := is.New(t)
 	ctx := context.Background()
 
-	dp := t.TempDir()
+	dbx, err := dbtest.Open(ctx, t)
+	is.NoErr(err)
+
 	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	cfg.DataPath = t.TempDir()
+	cfg.DB.Driver = dbx.DriverName()
 
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
 	is.NoErr(migrate.Migrate(ctx, dbx))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)

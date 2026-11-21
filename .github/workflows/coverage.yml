@@ -37,6 +37,23 @@ jobs:
           --health-retries 5
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # The Postgres service above. The steps that run on Postgres set
+      # SOFT_SERVE_DB_DRIVER=postgres and use this as the data source; the
+      # others leave the driver unset and run on SQLite.
+      POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      # The packages whose tests open their database with dbtest (or
+      # pkg/db/internal/test) and so run on Postgres when
+      # SOFT_SERVE_DB_DRIVER=postgres. Every other package's tests ignore
+      # the variable, so running them again on Postgres would only repeat
+      # the SQLite run.
+      POSTGRES_PACKAGES: >-
+        ./pkg/backend
+        ./pkg/daemon
+        ./pkg/db/...
+        ./pkg/ssh/...
+        ./pkg/store/...
+        ./pkg/test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -46,30 +63,48 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test
+      # Coverage comes from two sources: the unit tests, and the soft binary
+      # the end-to-end scripts (./testscript) build with -cover and run.
+      #
+      # https://go.dev/testing/coverage/
+      # https://dustinspecker.com/posts/go-combined-unit-integration-code-coverage/
+      # https://github.com/golang/go/issues/51430#issuecomment-1344711300
+      - name: Unit tests (SQLite)
         run: |
-          # We collect coverage data from two sources,
-          # 1) unit tests 2) integration tests
-          #
-          # https://go.dev/testing/coverage/
-          # https://dustinspecker.com/posts/go-combined-unit-integration-code-coverage/
-          # https://github.com/golang/go/issues/51430#issuecomment-1344711300
           mkdir -p coverage/unit
+          go test -failfast -race -timeout 5m -skip=^TestScript -cover ./... -args -test.gocoverdir="$PWD/coverage/unit"
+
+      - name: Unit tests (Postgres)
+        env:
+          SOFT_SERVE_DB_DRIVER: postgres
+        run: |
+          mkdir -p coverage/unit-postgres
+          # POSTGRES_PACKAGES is a list of patterns: split it into words.
+          # -timeout only bounds a hang: these packages take about a minute
+          # with -race locally, and a slow runner must not trip it.
+          # shellcheck disable=SC2086
+          SOFT_SERVE_DB_DATA_SOURCE="$POSTGRES_DSN" \
+            go test -failfast -race -timeout 10m -cover $POSTGRES_PACKAGES -args -test.gocoverdir="$PWD/coverage/unit-postgres"
+
+      # The -timeout also covers the -race build of cmd/soft, which
+      # TestScript does on first use.
+      - name: Scripts (SQLite)
+        run: |
           mkdir -p coverage/int
-          mkdir -p coverage/int2
+          GOCOVERDIR="$PWD/coverage/int" go test -failfast -race -timeout 5m -run=^TestScript ./testscript
 
-          # Collect unit tests coverage
-          go test -failfast -race -timeout 5m -skip=^TestScript -cover ./... -args -test.gocoverdir=$PWD/coverage/unit
+      - name: Scripts (Postgres)
+        env:
+          SOFT_SERVE_DB_DRIVER: postgres
+        run: |
+          mkdir -p coverage/int-postgres
+          SOFT_SERVE_DB_DATA_SOURCE="$POSTGRES_DSN" \
+            GOCOVERDIR="$PWD/coverage/int-postgres" go test -failfast -race -timeout 5m -run=^TestScript ./testscript
 
-          # Collect integration tests coverage. The -timeout also covers the
-          # -race build of cmd/soft, which TestScript does on first use.
-          GOCOVERDIR=$PWD/coverage/int go test -failfast -race -timeout 5m -run=^TestScript ./...
-          SOFT_SERVE_DB_DRIVER=postgres \
-            SOFT_SERVE_DB_DATA_SOURCE=postgres://postgres:postgres@localhost/postgres?sslmode=disable \
-            GOCOVERDIR=$PWD/coverage/int2 go test -failfast -race -timeout 5m -run=^TestScript ./...
+      - name: Merge coverage
+        # Converted to the legacy text format that Codecov reads.
+        run: go tool covdata textfmt -i=coverage/unit,coverage/unit-postgres,coverage/int,coverage/int-postgres -o=coverage.txt
 
-          # Convert coverage data to legacy textfmt format to upload
-          go tool covdata textfmt -i=coverage/unit,coverage/int,coverage/int2 -o=coverage.txt
       # Uploads need the CODECOV_TOKEN repository secret. Without it (fork
       # pull requests, or before the secret is set) the upload is tokenless
       # and may be rejected, so it only fails the job once the token exists.

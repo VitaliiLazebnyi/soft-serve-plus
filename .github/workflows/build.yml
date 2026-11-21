@@ -75,36 +75,3 @@ jobs:
           distribution: goreleaser
           version: "v2.20.0"
           args: release --snapshot --clean
-
-  test_postgres:
-    services:
-      postgres:
-        # Pinned by digest so a new Postgres release cannot change CI
-        # behind our back; bump both the tag and the digest together.
-        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Download Go modules
-        run: go mod download
-      - name: Test
-        run: go test ./...
-        env:
-          SOFT_SERVE_DB_DRIVER: postgres
-          SOFT_SERVE_DB_DATA_SOURCE: postgres://postgres:postgres@localhost/postgres?sslmode=disable
