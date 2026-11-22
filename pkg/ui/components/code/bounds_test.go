@@ -4,17 +4,17 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // renderWithin renders content as a README the way the Readme tab does and
-// fails unless the render, and Update, finish within limit. It returns the
-// view's content without styles.
-func renderWithin(t *testing.T, content string, limit time.Duration) string {
+// fails unless the render, and Update, finish within uitest.HangGuard. It
+// returns the view's content without styles.
+func renderWithin(t *testing.T, content string) string {
 	t.Helper()
 	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
 	c.UseGlamour = true
@@ -30,10 +30,8 @@ func renderWithin(t *testing.T, content string, limit time.Duration) string {
 			cmd = c.Update(msg)
 		}
 	}()
-	select {
-	case <-done:
-	case <-time.After(limit):
-		t.Fatalf("rendering did not finish within %v", limit)
+	if _, ok := uitest.Receive(done); !ok {
+		t.Fatalf("rendering did not finish within %v", uitest.HangGuard)
 	}
 	return ansi.Strip(c.GetContent())
 }
@@ -80,7 +78,7 @@ func TestGlamourBounded(t *testing.T) {
 	// render that hangs.
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			out := renderWithin(t, content, time.Minute)
+			out := renderWithin(t, content)
 			first := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
 			if len(first) > 60 {
 				first = first[:60]
@@ -92,7 +90,7 @@ func TestGlamourBounded(t *testing.T) {
 	}
 
 	// A README within the limits is still rendered as markdown.
-	if out := renderWithin(t, "# Title\n\nSome *text*.\n", time.Minute); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") || !glamourPadded(out) {
+	if out := renderWithin(t, "# Title\n\nSome *text*.\n"); strings.Contains(out, "# Title") || !strings.Contains(out, "Title") || !glamourPadded(out) {
 		t.Fatalf("a small README was not rendered as markdown:\n%s", out)
 	}
 }

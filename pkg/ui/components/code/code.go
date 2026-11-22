@@ -122,6 +122,8 @@ type Code struct {
 	ShowLineNumber  bool
 	NoContentStyle  lipgloss.Style
 	UseGlamour      bool
+	// HighlightBudget is each render's common.Budget, nil outside tests.
+	HighlightBudget common.Budget
 }
 
 // New returns a new Code.
@@ -232,6 +234,7 @@ func (r *Code) startRender(epoch int) tea.Cmd {
 		width:         r.common.Width - r.common.Styles.App.GetHorizontalFrameSize(),
 		tabWidth:      r.TabWidth,
 		styleConfig:   r.styleConfig,
+		budget:        r.HighlightBudget,
 	}
 	id, render := r.id, r.render
 	return func() tea.Msg {
@@ -361,6 +364,7 @@ type renderJob struct {
 	width       int
 	tabWidth    int
 	styleConfig gansi.StyleConfig
+	budget      common.Budget
 }
 
 // run renders the content: sanitised, highlighted or rendered as markdown
@@ -429,7 +433,7 @@ func (j renderJob) run() RenderedMsg {
 	}
 	highlighted := false
 	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
-		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers); ok {
+		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers, j.budget); ok {
 			content, highlighted = out, true
 		}
 	}

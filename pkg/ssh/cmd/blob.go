@@ -17,6 +17,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// testHookBlobBudget is blob --color's common.Budget, nil outside tests.
+var testHookBlobBudget common.Budget
+
 // blobCommand returns a command that prints the contents of a file.
 func blobCommand() *cobra.Command {
 	var linenumber bool
@@ -109,7 +112,7 @@ func blobCommand() *cobra.Command {
 				c = utils.Sanitize(c)
 			}
 			if color && !noColor {
-				c, err = common.FormatHighlight(fp, c)
+				c, err = common.FormatHighlight(fp, c, testHookBlobBudget)
 				if err != nil {
 					return err
 				}

@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // pushFiles pushes to repository "hooks" a commit that adds files.
@@ -42,13 +45,19 @@ func pushFiles(t *testing.T, ctx context.Context, files map[string]string) {
 // blob --color highlights within the same bounds as the TUI: a file whose
 // lexer would take seconds, or panics, is printed as plain text.
 //
-// The command is not timed. Plain text is what the bounds leave: the Svelte
-// file is refused by the cap on lexers the budget cannot stop, and would be
-// cut off by the budget without the cap; with neither it comes back
-// highlighted a minute or more later. The YANG file is plain because its
-// lexer's panic is caught.
+// The command is not timed, has no budget and finds a free slot, so plain
+// text is what the bounds leave: the Svelte file is refused by the cap on
+// lexers the budget cannot stop; without the cap it comes back highlighted
+// many seconds later, minutes under the race detector. The YANG file is
+// plain because its lexer's panic is caught.
 func TestBlobColorBounded(t *testing.T) {
 	t.Setenv("SOFT_SERVE_NO_COLOR", "")
+	if testHookBlobBudget != nil {
+		t.Fatal("repo blob does not have the default budget")
+	}
+	asked := false
+	testHookBlobBudget = func() <-chan time.Time { asked = true; return nil }
+	t.Cleanup(func() { testHookBlobBudget = nil })
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	pushFiles(t, ownerCtx, map[string]string{
@@ -61,6 +70,7 @@ func TestBlobColorBounded(t *testing.T) {
 	})
 
 	for _, name := range []string{"app.svelte", "a.yang"} {
+		uitest.WaitIdle(t, common.Tokenising)
 		stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -69,8 +79,9 @@ func TestBlobColorBounded(t *testing.T) {
 			t.Fatalf("%s: printed highlighted; want plain text", name)
 		}
 	}
+	uitest.WaitIdle(t, common.Tokenising)
 	stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", "main.go")
-	if err != nil || !strings.Contains(stdout, "\x1b[") {
-		t.Fatalf("main.go: blob --color = %v; want it highlighted", err)
+	if err != nil || !asked || !strings.Contains(stdout, "\x1b[") {
+		t.Fatalf("main.go: blob --color = %v, test budget used %v; want it highlighted", err, asked)
 	}
 }

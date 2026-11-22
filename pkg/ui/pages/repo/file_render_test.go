@@ -4,11 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -24,6 +24,16 @@ func newRenderFiles(width int) *Files {
 	f := NewFiles(common.NewCommon(ctx, width, 40))
 	f.SetSize(width, 40)
 	f.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+	return f
+}
+
+// newUnboundedFiles is newRenderFiles with a free slot and no highlighting
+// budget, so that only a limit shows a file plain.
+func newUnboundedFiles(t *testing.T) *Files {
+	t.Helper()
+	uitest.WaitIdle(t, common.Tokenising)
+	f := newRenderFiles(120)
+	f.code.HighlightBudget = uitest.Unbounded
 	return f
 }
 
@@ -88,17 +98,13 @@ func TestFileWithLongLineNotHighlighted(t *testing.T) {
 	go func() {
 		done <- f.Update(FileContentMsg{content: strings.Repeat("a", 1<<20), ext: "big.js", path: "big.js", load: f.load})
 	}()
-	var cmd tea.Cmd
-	select {
-	case cmd = <-done:
-	case <-time.After(time.Minute):
+	cmd, ok := uitest.Receive(done)
+	if !ok {
 		t.Fatal("Update did not return within a minute for a 1 MiB identifier")
 	}
 	rendered := make(chan struct{})
 	go func() { deliverAll(f, cmd); close(rendered) }()
-	select {
-	case <-rendered:
-	case <-time.After(time.Minute):
+	if _, ok := uitest.Receive(rendered); !ok {
 		t.Fatal("the render did not finish within a minute for a 1 MiB identifier")
 	}
 	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "aaaa") {
@@ -106,19 +112,25 @@ func TestFileWithLongLineNotHighlighted(t *testing.T) {
 	}
 }
 
-// Ordinary files are highlighted; files over 256 KiB are not.
+// Ordinary files are highlighted; files over 256 KiB, or with a line over
+// 4 KiB, are not.
 func TestFileHighlightLimit(t *testing.T) {
 	small := "package main\n\nfunc main() {}\n"
-	f := newRenderFiles(120)
+	f := newUnboundedFiles(t)
 	deliverAll(f, openFile(t, f, small, "main.go"))
 	if !strings.Contains(f.code.GetContent(), "\x1b[") {
 		t.Fatal("a small Go file was not highlighted")
 	}
 
-	large := strings.Repeat("func f() {}\n", (256<<10)/12+1)
-	f = newRenderFiles(120)
-	deliverAll(f, openFile(t, f, large, "large.go"))
-	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "func f() {}") {
-		t.Fatal("a Go file over 256 KiB was highlighted, or is missing")
+	const line = "func f() {} // one of fewer than ten thousand lines\n"
+	for limit, content := range map[string]string{
+		"over 256 KiB":           strings.Repeat(line, (256<<10)/len(line)+1),
+		"with a line over 4 KiB": "func f() {} // " + strings.Repeat("a", 4<<10) + "\n",
+	} {
+		f = newUnboundedFiles(t)
+		deliverAll(f, openFile(t, f, content, "large.go"))
+		if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "func f() {}") {
+			t.Fatalf("a Go file %s was highlighted, or is missing", limit)
+		}
 	}
 }

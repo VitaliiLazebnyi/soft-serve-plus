@@ -37,9 +37,9 @@ func FormatLineNumber(styles *styles.Styles, s string, color bool) (string, int)
 // FormatHighlight adds syntax highlighting to c, the file at p, without a
 // margin. Highlighting is bounded as Highlight bounds it; when it would take
 // too long, c is returned as is.
-func FormatHighlight(p, c string) (string, error) {
+func FormatHighlight(p, c string, budget Budget) (string, error) {
 	st := StyleConfig()
-	if out, ok := Highlight(st, p, c, true); ok {
+	if out, ok := Highlight(st, p, c, true, budget); ok {
 		return out, nil
 	}
 	return c, nil

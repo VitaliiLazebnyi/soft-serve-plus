@@ -26,6 +26,12 @@ const (
 	HighlightMaxTokens = 200_000
 )
 
+// A Budget starts the time budget of one highlighting, which ends when the
+// channel it returns receives, or never when that is nil. A nil Budget is
+// HighlightBudget, as in production. Tests give their own, so that what
+// they check does not depend on how fast the machine is.
+type Budget func() <-chan time.Time
+
 // newChromaStyle returns the chroma style for c, as glamour builds it for
 // its code blocks.
 func newChromaStyle(c *gansi.Chroma) *chroma.Style {
@@ -90,10 +96,11 @@ func stylePrimitive(p gansi.StylePrimitive) string {
 
 // Highlight highlights content, the file at path, as a glamour code block
 // styled by st would, indented by the code block's margin unless noMargin is
-// set. It reports false when the content is to be shown as plain text
-// instead; see tokenise. It must not be called before the program's init
-// functions have run, which wrap the eager lexers; see init.
-func Highlight(st gansi.StyleConfig, path, content string, noMargin bool) (string, bool) {
+// set, within budget, which starts once the lexer is chosen. It reports
+// false when the content is to be shown as plain text instead; see tokenise.
+// It must not be called before the program's init functions have run, which
+// wrap the eager lexers; see init.
+func Highlight(st gansi.StyleConfig, path, content string, noMargin bool, budget Budget) (string, bool) {
 	lexer := lexers.Match(path)
 	if lexer == nil {
 		// A file without a known name, such as a script with a shebang.
@@ -107,7 +114,7 @@ func Highlight(st gansi.StyleConfig, path, content string, noMargin bool) (strin
 	if eager(lexer) && len(content) > EagerHighlightMax {
 		return "", false
 	}
-	tokens, ok := tokenise(lexer, content)
+	tokens, ok := tokenise(lexer, content, budget)
 	if !ok {
 		return "", false
 	}
@@ -206,6 +213,10 @@ var maxTokenising = int32(max(2, runtime.GOMAXPROCS(0)/2))
 // past their budget and could not be stopped.
 var tokenising atomic.Int32
 
+// Tokenising returns how many tokenisations are running, each in its slot.
+// A test waits for none before a highlighting that needs a slot.
+func Tokenising() int { return int(tokenising.Load()) }
+
 // takeSlot takes one of the maxTokenising slots, or reports false when
 // none is free.
 func takeSlot() bool {
@@ -222,8 +233,8 @@ func takeSlot() bool {
 
 // tokenise returns the tokens of content, with neighbours of the same type
 // merged, or false when the content is to be shown as plain text: when
-// tokenising it would take more than HighlightBudget or HighlightMaxTokens,
-// no tokenising slot is free, or the lexer fails or panics.
+// tokenising it would take more than budget or HighlightMaxTokens, no
+// tokenising slot is free, or the lexer fails or panics.
 //
 // Most lexers tokenise as their iterator is read, embedded lexers and their
 // language lookups included, so the reads stop at the budget and so does
@@ -236,10 +247,18 @@ func takeSlot() bool {
 // are limited to EagerHighlightMax to keep that short. A loaded server,
 // where the budget runs out sooner and slots stay taken longer, shows more
 // files as plain text.
-func tokenise(lexer chroma.Lexer, content string) ([]chroma.Token, bool) {
-	timer := time.NewTimer(HighlightBudget)
-	defer timer.Stop()
-	return tokeniseUntil(lexer, content, timer.C)
+func tokenise(lexer chroma.Lexer, content string, budget Budget) ([]chroma.Token, bool) {
+	var end <-chan time.Time
+	if budget != nil {
+		end = budget()
+	} else {
+		timer := time.NewTimer(HighlightBudget)
+		defer timer.Stop()
+		end = timer.C
+	}
+	// One call for both, so that the tests, which give budgets, cover
+	// production's path.
+	return tokeniseUntil(lexer, content, end)
 }
 
 // tokeniseUntil is tokenise with the budget ending when budget receives,
