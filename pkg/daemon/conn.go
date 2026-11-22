@@ -194,6 +194,11 @@ func (c *serverConn) Close() (err error) {
 // deadline, the maximum deadline and, for a read before the request has been
 // read, the request deadline.
 func (c *serverConn) updateDeadline(read bool) {
+	c.Conn.SetDeadline(c.deadlineAt(read, time.Now())) //nolint: errcheck
+}
+
+// deadlineAt returns the deadline updateDeadline sets at now.
+func (c *serverConn) deadlineAt(read bool, now time.Time) time.Time {
 	deadline := c.maxDeadline
 	earlier := func(t time.Time) {
 		if deadline.IsZero() || t.Before(deadline) {
@@ -204,9 +209,9 @@ func (c *serverConn) updateDeadline(read bool) {
 		earlier(c.initDeadline)
 	}
 	if c.idleTimeout > 0 {
-		earlier(time.Now().Add(c.idleTimeout))
+		earlier(now.Add(c.idleTimeout))
 	}
-	c.Conn.SetDeadline(deadline) //nolint: errcheck
+	return deadline
 }
 
 // isNetError reports whether err is, or wraps, a net.Error.

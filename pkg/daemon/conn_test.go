@@ -55,44 +55,30 @@ func TestServerConnCancelsOnWrappedNetError(t *testing.T) {
 	}
 }
 
-// deadlineConn records the last deadline set on it.
-type deadlineConn struct {
-	net.Conn
-	deadline time.Time
-}
-
-func (c *deadlineConn) SetDeadline(t time.Time) error {
-	c.deadline = t
-	return nil
-}
-
 // TestServerConnDeadlineSubSecond checks that a timeout deadline earlier than
 // the max deadline wins even when both fall in the same second.
+//
+// The deadlines are worked out at a fixed time rather than the time the test
+// runs, so a stall between setting them up and comparing them cannot carry
+// the timeout deadline past the max one.
 func TestServerConnDeadlineSubSecond(t *testing.T) {
 	t.Parallel()
+	// A whole second: a deadline a nanosecond from now is earlier than
+	// the last instant of this second but has the same Unix second.
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	maxDeadline := now.Add(time.Second - time.Nanosecond)
 	for _, tc := range []struct {
 		name string
 		read bool
-		conn func(time.Time) *serverConn
+		conn *serverConn
 	}{
-		{"init", true, func(maxDeadline time.Time) *serverConn {
-			return &serverConn{initDeadline: time.Now().Add(time.Nanosecond), maxDeadline: maxDeadline}
-		}},
-		{"idle", false, func(maxDeadline time.Time) *serverConn {
-			return &serverConn{idleTimeout: time.Nanosecond, maxDeadline: maxDeadline}
-		}},
+		{"init", true, &serverConn{initDeadline: now.Add(time.Nanosecond), maxDeadline: maxDeadline}},
+		{"idle", false, &serverConn{idleTimeout: time.Nanosecond, maxDeadline: maxDeadline}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			// The last instant of the current second: a deadline a
-			// nanosecond from now is earlier but has the same Unix second.
-			maxDeadline := time.Now().Truncate(time.Second).Add(time.Second - time.Nanosecond)
-			dc := &deadlineConn{}
-			c := tc.conn(maxDeadline)
-			c.Conn = dc
-			c.updateDeadline(tc.read)
-			if !dc.deadline.Before(maxDeadline) {
-				t.Fatalf("deadline = %v, want before max deadline %v", dc.deadline, maxDeadline)
+			if got, want := tc.conn.deadlineAt(tc.read, now), now.Add(time.Nanosecond); !got.Equal(want) {
+				t.Fatalf("deadline = %v, want %v, before max deadline %v", got, want, maxDeadline)
 			}
 		})
 	}
