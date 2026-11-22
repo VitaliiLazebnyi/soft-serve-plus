@@ -100,6 +100,18 @@ type GitDaemon struct {
 type testHooks struct {
 	// beforeAuthorize runs before the access checks of a request.
 	beforeAuthorize func()
+	// now, if set, is the clock refuse reads the time from, so that a
+	// test can have a refusal come after a deadline without waiting
+	// for it to pass.
+	now func() time.Time
+}
+
+// now returns the time refuse counts its wait from.
+func (d *GitDaemon) now() time.Time {
+	if d.testHooks.now != nil {
+		return d.testHooks.now()
+	}
+	return time.Now()
 }
 
 // NewGitDaemon returns a new Git daemon.
@@ -289,8 +301,9 @@ func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
 // checks took.
 func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
-	deadline := earliest(time.Now().Add(d.refuseLinger), until, c.maxDeadline)
-	if time.Until(deadline) > 0 {
+	now := d.now()
+	deadline := earliest(now.Add(d.refuseLinger), until, c.maxDeadline)
+	if deadline.After(now) {
 		if cw := closeWriter(c.Conn); cw != nil && cw.CloseWrite() == nil {
 			// Read the wrapped connection: serverConn.Read would move
 			// the deadline.
