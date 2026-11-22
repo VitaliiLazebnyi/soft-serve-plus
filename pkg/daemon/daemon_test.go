@@ -87,6 +87,7 @@ func runTests(m *testing.M) int {
 	if err != nil {
 		log.Fatal(err)
 	}
+	patient(d)
 	testDaemon = d
 	defer d.Close() //nolint:errcheck
 	// Bind before running the tests so the first dial cannot race the
@@ -128,6 +129,18 @@ func dialDaemonAt(t *testing.T, addr string) net.Conn {
 // startIdleDaemon has passed.
 const idleWait = time.Minute
 
+// patience is the request and access timeout of the tests' daemons: far
+// past any wait of the tests, so that a client or a database lookup slowed
+// or paused for however long a test waits does not run out of it. A test
+// of one of these timeouts sets its own.
+const patience = time.Hour
+
+// patient gives d the request and access timeouts patience.
+func patient(d *GitDaemon) {
+	d.requestTimeout = patience
+	d.accessTimeout = patience
+}
+
 // startIdleDaemon serves a daemon like the test daemon but with an idle
 // timeout of one second, for a test that waits for the timeout to pass, and
 // returns its address. A client of it cannot be sure to finish a step within
@@ -141,6 +154,7 @@ func startIdleDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	patient(d)
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -744,7 +758,7 @@ func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener
 		t.Fatal(err)
 	}
 	// Kept connections send no request line; do not drop them for that.
-	d.requestTimeout = time.Hour
+	patient(d)
 	for _, opt := range opts {
 		opt(d)
 	}

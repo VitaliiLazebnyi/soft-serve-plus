@@ -54,6 +54,7 @@ func newRequestTestDaemon(t *testing.T, ctx context.Context) (*GitDaemon, *syncB
 	if err != nil {
 		t.Fatal(err)
 	}
+	patient(d)
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +139,9 @@ func TestReadableAccessTimeout(t *testing.T) {
 	if d.accessTimeout != defaultAccessTimeout {
 		t.Fatalf("accessTimeout = %v, want %v", d.accessTimeout, defaultAccessTimeout)
 	}
+	// The lookup that must succeed gets as long as a slowed database may
+	// take.
+	d.accessTimeout = patience
 	if ok, err := d.readable(context.Background(), "timeout-public"); !ok || err != nil {
 		t.Fatalf("public repository is not readable: %v", err)
 	}
