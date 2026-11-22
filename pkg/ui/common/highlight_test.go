@@ -17,13 +17,15 @@ import (
 // hold tokenising slots.
 func waitSlots(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for tokenising.Load() > 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("tokenisations of earlier tests never ended")
+	const poll = 10 * time.Millisecond
+	// The polls are counted, as in await.
+	for range hangGuard / poll {
+		if tokenising.Load() == 0 {
+			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(poll)
 	}
+	t.Fatal("tokenisations of earlier tests never ended")
 }
 
 // hangGuard is how long a test waits for work that ends at once when the
@@ -31,13 +33,27 @@ func waitSlots(t *testing.T) {
 // timeout.
 const hangGuard = time.Minute
 
+// await returns what c gives, or false once it has given nothing for
+// hangGuard. It waits a second at a time, so that a pause of the process
+// costs one second of the guard, not all of it.
+func await[T any](c <-chan T) (T, bool) {
+	for range hangGuard / time.Second {
+		select {
+		case v := <-c:
+			return v, true
+		case <-time.After(time.Second):
+		}
+	}
+	var none T
+	return none, false
+}
+
 // tokeniseGuarded is tokeniseUntil with a budget that the lexer closes,
-// failing the test when the call has not returned within hangGuard of the
-// budget's end, as when the budget no longer ends it. The time the lexer
-// takes to reach the end of the budget is left to the test binary's
-// timeout: on a loaded machine under the race detector, a case of
-// TestBudgetStopsLongRuns took up to 42 s in all (page.html), and notes.org
-// once took over a minute to reach its 100th token.
+// failing the test when the call returns before that, or has not returned
+// within hangGuard of it, as when the budget no longer ends it. The time the
+// lexer takes to reach the end of the budget is left to the test binary's
+// timeout: on a loaded machine under the race detector, notes.org of
+// TestBudgetStopsLongRuns has taken over a minute to reach its 100th token.
 func tokeniseGuarded(t *testing.T, lexer chroma.Lexer, content string, budget chan time.Time) bool {
 	t.Helper()
 	done := make(chan bool, 1)
@@ -47,16 +63,19 @@ func tokeniseGuarded(t *testing.T, lexer chroma.Lexer, content string, budget ch
 	}()
 	select {
 	case ok := <-done:
+		select {
+		case <-budget:
+		default:
+			t.Fatal("tokenising returned before the budget ended")
+		}
 		return ok
 	case <-budget:
 	}
-	select {
-	case ok := <-done:
-		return ok
-	case <-time.After(hangGuard):
+	ok, returned := await(done)
+	if !returned {
 		t.Fatalf("tokenising had not returned %v after the budget ended", hangGuard)
-		return false
 	}
+	return ok
 }
 
 // lookupProbe is a lexer that counts the searches of chroma's registry that
@@ -190,6 +209,90 @@ func BenchmarkAnalyse(b *testing.B) {
 	}
 }
 
+// The budget starts once the lexer is chosen: the analysers have run by then.
+func TestBudgetStartsOnceLexerChosen(t *testing.T) {
+	most := probeAnalysers(t)
+	var analysed int64
+	highlight(StyleConfig(), "noext", "some words\n", false, func() (<-chan time.Time, func()) {
+		analysed = most.Load()
+		return nil, func() {}
+	})
+	if analysed == 0 {
+		t.Fatal("the budget started before the analysers ran")
+	}
+}
+
+// blockedLexer is a lexer that claims any text it analyses, once analyse
+// returns, and whose tokenisation is its fakeLexer's.
+type blockedLexer struct {
+	fakeLexer
+	analyse func()
+}
+
+func (blockedLexer) Config() *chroma.Config { return &chroma.Config{Name: "blocked"} }
+
+func (l blockedLexer) AnalyseText(string) float32 {
+	l.analyse()
+	return 2 // more than chroma's analysers give the test's text
+}
+
+// FormatHighlight gives up once HighlightBudget has passed since the lexer
+// was chosen, and returns the content as it is. The lexer is blocked until
+// the test releases it, so only the budget can end the call, and choosing it
+// takes as long as the budget, so a budget started earlier ends too soon.
+// Load can only lengthen the time measured, which has only a lower bound.
+func TestFormatHighlightDefaultBudget(t *testing.T) {
+	waitSlots(t)
+	saved := slices.Clone(lexers.GlobalLexerRegistry.Lexers)
+	released, entered, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(released) })
+	var chosen time.Time
+	lexers.GlobalLexerRegistry.Register(blockedLexer{
+		fakeLexer: fakeLexer{tokenise: func() (chroma.Iterator, error) {
+			close(entered)
+			<-released
+			return chroma.Literator(), nil
+		}},
+		analyse: func() {
+			select {
+			case <-time.After(HighlightBudget):
+			case <-released:
+			}
+			chosen = time.Now()
+		},
+	})
+	t.Cleanup(func() {
+		release()
+		await(returned)
+		waitSlots(t)
+		// As in probeAnalysers, the name map keeps the probe.
+		lexers.GlobalLexerRegistry.Lexers = saved
+	})
+
+	const content = "some words\n"
+	var out string
+	var err error
+	var took time.Duration
+	go func() {
+		defer close(returned)
+		out, err = FormatHighlight("noext", content)
+		took = time.Since(chosen)
+	}()
+	if _, ok := await(returned); !ok {
+		t.Fatalf("FormatHighlight had not returned after %v; want it back once HighlightBudget ended", hangGuard)
+	}
+	release()
+	if _, ok := await(entered); !ok {
+		t.Fatal("FormatHighlight returned without running the lexer")
+	}
+	if err != nil || out != content {
+		t.Fatalf("FormatHighlight = %q, %v; want the content as it is", out, err)
+	}
+	if took < HighlightBudget {
+		t.Fatalf("FormatHighlight gave up %v after the lexer was chosen; want %v", took, HighlightBudget)
+	}
+}
+
 // A file without a known name is told quickly, from its start, when the
 // file view works out whether it is markdown.
 func TestIsFileMarkdownBounded(t *testing.T) {
@@ -290,15 +393,35 @@ func TestEmbeddedEagerLexersCapped(t *testing.T) {
 }
 
 // pausingLexer wraps a lexer. At its pauseAt-th token, its iterator calls
-// atPause when set, ends the budget and waits for resume; it counts the
-// tokens read after.
+// atPause when set, ends the budget and waits for resume. A read after that
+// is counted and ends the tokens, so that a tokenisation the budget did not
+// stop does not go on through the whole file.
 type pausingLexer struct {
 	chroma.Lexer
 	pauseAt int
 	atPause func()
 	budget  chan time.Time
-	resume  chan struct{}
+	resumed chan struct{}
+	resume  func()
 	after   *atomic.Int64
+}
+
+// newPausingLexer returns a pausingLexer that pauses lexer at its 100th
+// token. The end of the test resumes it, however the test ends.
+func newPausingLexer(t *testing.T, lexer chroma.Lexer, atPause func()) pausingLexer {
+	t.Helper()
+	resumed := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumed) })
+	t.Cleanup(resume)
+	return pausingLexer{
+		Lexer:   lexer,
+		pauseAt: 100,
+		atPause: atPause,
+		budget:  make(chan time.Time),
+		resumed: resumed,
+		resume:  resume,
+		after:   new(atomic.Int64),
+	}
 }
 
 func (l pausingLexer) Tokenise(options *chroma.TokeniseOptions, text string) (chroma.Iterator, error) {
@@ -310,18 +433,19 @@ func (l pausingLexer) Tokenise(options *chroma.TokeniseOptions, text string) (ch
 	// skips empty ones without looking at the budget.
 	n := 0
 	return func() chroma.Token {
-		t := it()
-		switch {
-		case n == l.pauseAt:
+		if n == l.pauseAt {
 			l.after.Add(1)
-		case t.Value != "":
+			return chroma.EOF
+		}
+		t := it()
+		if t.Value != "" {
 			n++
 			if n == l.pauseAt {
 				if l.atPause != nil {
 					l.atPause()
 				}
 				close(l.budget)
-				<-l.resume
+				<-l.resumed
 			}
 		}
 		return t
@@ -339,26 +463,24 @@ func TestBudgetStopsLongRuns(t *testing.T) {
 		"notes.org": strings.Repeat(" \n", (256<<10)/2),
 	}
 	for name, content := range cases {
-		t.Run(name, func(t *testing.T) {
+		// The first case to fail ends the test: each can wait hangGuard, and
+		// all of them would run the package into its timeout.
+		if !t.Run(name, func(t *testing.T) {
 			waitSlots(t)
-			l := pausingLexer{
-				Lexer:   lexers.Match(name),
-				pauseAt: 100,
-				budget:  make(chan time.Time),
-				resume:  make(chan struct{}),
-				after:   new(atomic.Int64),
-			}
+			l := newPausingLexer(t, lexers.Match(name), nil)
 			// The lexer is paused when the budget ends, so the budget
 			// ends the call.
 			if tokeniseGuarded(t, l, content, l.budget) {
 				t.Fatal("the file was tokenised before the budget ended")
 			}
-			close(l.resume)
+			l.resume()
 			waitSlots(t)
-			if n := l.after.Load(); n > 0 {
-				t.Fatalf("%d tokens were read after the budget ended; want none", n)
+			if l.after.Load() > 0 {
+				t.Fatal("tokens were read after the budget ended; want none")
 			}
-		})
+		}) {
+			return
+		}
 	}
 }
 
@@ -414,31 +536,30 @@ func TestTokensMerged(t *testing.T) {
 	}
 }
 
-// Lexers that look embedded languages up, about 2.4 ms a block, take 7 s
-// (x.rst) to 15 s (x.art) over 10,000 lines of these blocks. They tokenise
-// as their iterator is read, so the budget stops them where it ends: no
-// tokens are read after. The lookups are made as the blocks are read, not
-// up front: at the 100th token they number at most 68, of the 10,000 to
-// 13,332 the whole file makes. Arturo's blocks, slow for another reason,
-// make none.
+// Lexers that look embedded languages up, about 2.4 ms a block, take 7 to
+// 9 s over 10,000 lines of these blocks. They tokenise as their iterator is
+// read, so the budget stops them where it ends: no tokens are read after.
+// The lookups are made as the blocks are read, not up front: at the 100th
+// token they number at most 68, of the 10,000 to 13,332 the whole file
+// makes.
 func TestBudgetStopsEmbeddedLanguages(t *testing.T) {
 	// fill repeats block, whole lines, up to 10,000 lines.
 	fill := func(block string) string {
 		return strings.Repeat(block, 10000/strings.Count(block, "\n"))
 	}
-	cases := map[string]struct {
-		content string
-		looksUp bool
-	}{
-		"x.gmi":  {fill("```zzz\nx\n```\n"), true},
-		"x.rst":  {fill(".. code-block:: zzz\n\n   x\n\n"), true},
-		"x.org":  {fill("#+begin_src zzz\nx\n#+end_src\n"), true},
-		"x.raku": {fill("=begin code :lang<zzz>\nx\n=end code\n"), true},
-		"x.art":  {fill("{!zzz x }\n"), false},
-		"x.md":   {fill("```zzz\nx\n```\n"), true},
+	cases := map[string]string{
+		"x.gmi":  fill("```zzz\nx\n```\n"),
+		"x.rst":  fill(".. code-block:: zzz\n\n   x\n\n"),
+		"x.org":  fill("#+begin_src zzz\nx\n#+end_src\n"),
+		"x.raku": fill("=begin code :lang<zzz>\nx\n=end code\n"),
+		// Arturo's rule needs the "}" at the start of a line.
+		"x.art": fill("{!zzz\nx\n}\n"),
+		"x.md":  fill("```zzz\nx\n```\n"),
 	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
+	for name, content := range cases {
+		// The first case to fail ends the test: each can wait hangGuard, and
+		// all of them would run the package into its timeout.
+		if !t.Run(name, func(t *testing.T) {
 			lexer := lexers.Match(name)
 			if eager(lexer) {
 				t.Fatalf("the %s lexer tokenises up front: the budget cannot stop it", lexer.Config().Name)
@@ -448,26 +569,21 @@ func TestBudgetStopsEmbeddedLanguages(t *testing.T) {
 			// atPause is written by the tokenisation before it ends the
 			// budget, and read after tokeniseGuarded has seen it end.
 			var atPause atomic.Int64
-			l := pausingLexer{
-				Lexer:   lexer,
-				pauseAt: 100,
-				atPause: func() { atPause.Store(lookups.Load()) },
-				budget:  make(chan time.Time),
-				resume:  make(chan struct{}),
-				after:   new(atomic.Int64),
-			}
-			if tokeniseGuarded(t, l, tc.content, l.budget) {
+			l := newPausingLexer(t, lexer, func() { atPause.Store(lookups.Load()) })
+			if tokeniseGuarded(t, l, content, l.budget) {
 				t.Fatal("the file was tokenised before the budget ended")
 			}
-			close(l.resume)
+			l.resume()
 			waitSlots(t)
-			if n := l.after.Load(); n > 0 {
-				t.Fatalf("%d tokens were read after the budget ended; want none", n)
+			if l.after.Load() > 0 {
+				t.Fatal("tokens were read after the budget ended; want none")
 			}
-			if n := atPause.Load(); tc.looksUp && (n == 0 || n > 1000) {
+			if n := atPause.Load(); n == 0 || n > 1000 {
 				t.Fatalf("%d lookups of the embedded language by the 100th token; want some, and at most 1000", n)
 			}
-		})
+		}) {
+			return
+		}
 	}
 }
 
@@ -490,7 +606,9 @@ func (l fakeLexer) AnalyseText(string) float32                     { return 0 }
 // plain text at once.
 func TestTokenisingSlotsBounded(t *testing.T) {
 	waitSlots(t)
-	release := make(chan struct{})
+	released := make(chan struct{})
+	release := sync.OnceFunc(func() { close(released) })
+	t.Cleanup(release)
 	budget := make(chan time.Time)
 	var ended atomic.Bool
 	var running, most atomic.Int32
@@ -502,7 +620,7 @@ func TestTokenisingSlotsBounded(t *testing.T) {
 				break
 			}
 		}
-		<-release
+		<-released
 		running.Add(-1)
 		return chroma.Literator(), nil
 	}}
@@ -530,14 +648,21 @@ func TestTokenisingSlotsBounded(t *testing.T) {
 	}
 	ended.Store(true)
 	close(budget)
-	wg.Wait()
+	returned := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(returned)
+	}()
+	if _, ok := await(returned); !ok {
+		t.Fatalf("the calls had not returned %v after the budget ended", hangGuard)
+	}
 	if n := most.Load(); n > maxTokenising {
 		t.Fatalf("%d tokenisations ran at once; want at most %d", n, maxTokenising)
 	}
 	if n := refused.Load(); n != calls-maxTokenising {
 		t.Fatalf("%d calls were refused at once; want %d", n, calls-maxTokenising)
 	}
-	close(release)
+	release()
 	waitSlots(t)
 }
 
