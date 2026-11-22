@@ -26,7 +26,7 @@ func RepoCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		blobCommand(nil),
+		blobCommand(),
 		branchCommand(),
 		collabCommand(),
 		commitCommand(),

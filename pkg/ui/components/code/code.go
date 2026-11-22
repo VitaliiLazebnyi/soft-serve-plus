@@ -5,7 +5,6 @@ import (
 	"math"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -123,11 +122,8 @@ type Code struct {
 	ShowLineNumber  bool
 	NoContentStyle  lipgloss.Style
 	UseGlamour      bool
-	// HighlightBudget, when set, gives each render its highlighting budget
-	// in place of common.HighlightBudget: the budget ends when the channel
-	// it returns receives, or never when that is nil. Tests set it, so that
-	// what they check does not depend on how fast the machine is.
-	HighlightBudget func() <-chan time.Time
+	// HighlightBudget is each render's common.Budget, nil outside tests.
+	HighlightBudget common.Budget
 }
 
 // New returns a new Code.
@@ -368,8 +364,7 @@ type renderJob struct {
 	width       int
 	tabWidth    int
 	styleConfig gansi.StyleConfig
-	// budget is the Code's HighlightBudget, called at most once per render.
-	budget func() <-chan time.Time
+	budget      common.Budget
 }
 
 // run renders the content: sanitised, highlighted or rendered as markdown
@@ -438,16 +433,7 @@ func (j renderJob) run() RenderedMsg {
 	}
 	highlighted := false
 	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
-		var (
-			out string
-			ok  bool
-		)
-		if j.budget != nil {
-			out, ok = common.HighlightUntil(j.styleConfig, j.extension, content, j.lineNumbers, j.budget())
-		} else {
-			out, ok = common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers)
-		}
-		if ok {
+		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers, j.budget); ok {
 			content, highlighted = out, true
 		}
 	}

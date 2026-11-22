@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,17 +37,9 @@ func FormatLineNumber(styles *styles.Styles, s string, color bool) (string, int)
 // FormatHighlight adds syntax highlighting to c, the file at p, without a
 // margin. Highlighting is bounded as Highlight bounds it; when it would take
 // too long, c is returned as is.
-func FormatHighlight(p, c string) (string, error) {
-	if out, ok := Highlight(StyleConfig(), p, c, true); ok {
-		return out, nil
-	}
-	return c, nil
-}
-
-// FormatHighlightUntil is FormatHighlight with the budget ending when budget
-// receives, or never when it is nil, in place of HighlightBudget.
-func FormatHighlightUntil(p, c string, budget <-chan time.Time) (string, error) {
-	if out, ok := HighlightUntil(StyleConfig(), p, c, true, budget); ok {
+func FormatHighlight(p, c string, budget Budget) (string, error) {
+	st := StyleConfig()
+	if out, ok := Highlight(st, p, c, true, budget); ok {
 		return out, nil
 	}
 	return c, nil

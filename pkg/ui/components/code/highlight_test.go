@@ -1,11 +1,8 @@
 package code
 
 import (
-	"bytes"
 	"context"
-	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +10,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // lookups counts the times chroma's registry is searched for a lexer by
@@ -40,89 +38,23 @@ func (lookupProbe) AnalyseText(string) float32 {
 	return 0
 }
 
-// stall is one tokenisation by stallProbe: at its first token it offers
-// budget its end, waits to be released whether that is taken or not, and
-// closes left.
-type stall struct {
-	budget   chan time.Time
-	released chan struct{}
-	release  func()
-	left     chan struct{}
-	// ended is whether budget's end was taken; read it once left is closed.
-	ended bool
-}
+// stalled is what the tokenisation by stallProbe waits for.
+var stalled atomic.Pointer[chan struct{}]
 
-// newStall returns the stall the next tokenisation by stallProbe runs. The
-// end of the test releases it, however the test ends, and waits for it.
-func newStall(t *testing.T) *stall {
-	t.Helper()
-	waitTokenisations(t)
-	s := &stall{budget: make(chan time.Time), released: make(chan struct{}), left: make(chan struct{})}
-	s.release = sync.OnceFunc(func() { close(s.released) })
-	stalling.Store(s)
-	t.Cleanup(func() {
-		s.release()
-		waitTokenisations(t)
-	})
-	return s
-}
-
-// render renders a file of the stall's with budget as the highlighting
-// budget, and checks that it comes back plain while its tokenisation is
-// still stalled.
-func (s *stall) render(t *testing.T, budget func() <-chan time.Time) {
-	t.Helper()
-	content := strings.Repeat("stalled line\n", 3)
-	done := make(chan string, 1)
-	go func() { done <- renderBudget(t, content, "x.stall", false, budget) }()
-	out, ok := await(done)
-	if !ok {
-		t.Fatalf("the render was not back after %v; want it back once its budget ended", hangGuard)
-	}
-	// This also fails if waitTokenisations can no longer see a tokenisation.
-	if !tokenisationRunning() {
-		t.Fatal("the render was back with no tokenisation running; want it stalled")
-	}
-	s.release()
-	if _, ok := await(s.left); !ok {
-		t.Fatalf("the stalled tokenisation did not run and end within %v of its release", hangGuard)
-	}
-	if highlighted(out) {
-		t.Fatal("rendered highlighted; want plain text once the budget ended")
-	}
-	if !strings.Contains(out, "stalled line") {
-		t.Fatalf("the content is missing:\n%q", out)
-	}
-}
-
-// stalling is the stall the next tokenisation by stallProbe runs.
-var stalling atomic.Pointer[stall]
-
-// stallProbe is a lexer for files named *.stall whose tokenisation runs
-// past its budget: it runs the stall in stalling.
-type stallProbe struct{}
+// stallProbe is a lexer for files named *.stall that is blocked until the
+// test releases it.
+type stallProbe struct{ lookupProbe }
 
 func (stallProbe) Config() *chroma.Config {
 	return &chroma.Config{Name: "stall probe", Filenames: []string{"*.stall"}}
 }
 
 func (stallProbe) Tokenise(*chroma.TokeniseOptions, string) (chroma.Iterator, error) {
-	s := stalling.Load()
-	return func() chroma.Token {
-		select {
-		case s.budget <- time.Time{}:
-			s.ended = true
-			<-s.released
-		case <-s.released:
-		}
-		close(s.left)
-		return chroma.EOF
-	}, nil
+	<-*stalled.Load()
+	return chroma.Literator(), nil
 }
 
-func (l stallProbe) SetRegistry(*chroma.LexerRegistry) chroma.Lexer { return l }
-func (l stallProbe) SetAnalyser(func(string) float32) chroma.Lexer  { return l }
-func (stallProbe) AnalyseText(string) float32                       { return 0 }
+func (stallProbe) AnalyseText(string) float32 { return 0 }
 
 // The probes are registered before any test runs, so that no render reads
 // the registry as it changes.
@@ -131,28 +63,12 @@ func init() {
 	lexers.GlobalLexerRegistry.Register(stallProbe{})
 }
 
-// unbounded is a highlighting budget that never ends.
-func unbounded() <-chan time.Time { return nil }
-
-// expired is a highlighting budget that has ended.
-func expired() <-chan time.Time {
-	c := make(chan time.Time)
-	close(c)
-	return c
-}
-
 // render renders content as the file name, as markdown when glamour is set,
-// with no highlighting budget, and returns the rendered text. No test
-// depends on how fast the machine highlights.
-func render(t *testing.T, content, name string, glamour bool) string {
+// within budget, and returns the rendered text. It first waits for the
+// slots of earlier renders.
+func render(t *testing.T, content, name string, glamour bool, budget common.Budget) string {
 	t.Helper()
-	waitTokenisations(t)
-	return renderBudget(t, content, name, glamour, unbounded)
-}
-
-// renderBudget is render with budget as the highlighting budget.
-func renderBudget(t *testing.T, content, name string, glamour bool, budget func() <-chan time.Time) string {
-	t.Helper()
+	uitest.WaitIdle(t, common.Tokenising)
 	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
 	c.UseGlamour = glamour
 	c.HighlightBudget = budget
@@ -171,54 +87,6 @@ func renderBudget(t *testing.T, content, name string, glamour bool, budget func(
 // plain, as when highlighting ran out of its budget, has none.
 func highlighted(out string) bool { return strings.Contains(out, "\x1b[") }
 
-// hangGuard is how long a test waits for work that ends at once when the
-// code is right, before it fails rather than wait for the test binary's
-// timeout.
-const hangGuard = time.Minute
-
-// await returns what c gives, or false once it has given nothing for
-// hangGuard. It waits a second at a time, so that a pause of the process
-// costs one second of the guard, not all of it.
-func await[T any](c <-chan T) (T, bool) {
-	for range hangGuard / time.Second {
-		select {
-		case v := <-c:
-			return v, true
-		case <-time.After(time.Second):
-		}
-	}
-	var none T
-	return none, false
-}
-
-// tokenisationRunning reports whether a goroutine of package common's
-// tokeniseUntil is left. Its slots cannot be seen from this package.
-func tokenisationRunning() bool {
-	buf := make([]byte, 64<<10)
-	for {
-		if n := runtime.Stack(buf, true); n < len(buf) {
-			return bytes.Contains(buf[:n], []byte("pkg/ui/common.tokeniseUntil"))
-		}
-		buf = make([]byte, 2*len(buf))
-	}
-}
-
-// waitTokenisations waits for the tokenisations earlier renders left
-// running. Each holds a slot until it ends, also once its budget is over,
-// and a render that finds no slot free is plain without running its lexer.
-func waitTokenisations(t *testing.T) {
-	t.Helper()
-	const poll = 10 * time.Millisecond
-	// The polls are counted, as in await.
-	for range hangGuard / poll {
-		if !tokenisationRunning() {
-			return
-		}
-		time.Sleep(poll)
-	}
-	t.Fatal("tokenisations of earlier renders never ended")
-}
-
 // Code blocks cost chroma a language lookup each, about 2.4 ms for a
 // language it does not know. A README renders its code blocks as plain
 // text, without a lookup, and markdown shown as source is highlighted
@@ -227,10 +95,10 @@ func waitTokenisations(t *testing.T) {
 // lookups a block.
 //
 // Neither is timed. Rendered as markdown, the lookups are counted. Shown as
-// source, the render is only checked to show the content, highlighted or
-// not: its budget has ended before it starts, so that it takes no longer
-// than the budget would let it. TestBudgetShowsPlain checks that the budget
-// ends a render, TestDefaultBudgetShowsPlain that there is one by default.
+// source, these inputs take at most 0.8 s even without the budget, so a
+// time limit here could not tell the budget is there: the budget is
+// TestBudgetShowsPlain's and TestDefaultBudgetShowsPlain's check, and the
+// render as source is only checked to show the content.
 func TestCodeBlocksRenderQuickly(t *testing.T) {
 	cases := map[string]string{
 		"indented code before markers": strings.Repeat("    code\n>\n", 500),
@@ -246,16 +114,17 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 		for _, glamour := range []bool{true, false} {
 			t.Run(name, func(t *testing.T) {
 				if !glamour {
-					if out := renderBudget(t, content, "README.md", false, expired); strings.TrimSpace(out) == "" {
+					if out := render(t, content, "README.md", false, nil); strings.TrimSpace(out) == "" {
 						t.Fatal("rendering as source lost the content")
 					}
 					return
 				}
 				// A render as source before may still be finishing
-				// its last token. The README's own name is looked up.
-				waitTokenisations(t)
+				// its last token, and the README's own name is looked
+				// up.
+				uitest.WaitIdle(t, common.Tokenising)
 				lookups.Store(0)
-				render(t, content, "README.md", true)
+				render(t, content, "README.md", true, nil)
 				if n := lookups.Load(); n > 10 {
 					t.Fatalf("rendering as markdown searched the registry %d times; want no search per code block", n)
 				}
@@ -264,62 +133,95 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 	}
 }
 
-// A file whose highlighting runs past its budget is shown as plain text,
-// with its content. The stall probe's tokenisation ends the budget and waits
-// until the render is back, so the budget is what ends the render. Lexers
-// that look embedded languages up, which take seconds over a file, are
-// stopped by the budget the same way; TestBudgetStopsEmbeddedLanguages in
-// package common checks that.
-func TestBudgetShowsPlain(t *testing.T) {
-	s := newStall(t)
-	s.render(t, func() <-chan time.Time { return s.budget })
-	if !s.ended {
-		t.Fatal("the render did not wait on the budget it was given")
+// renderStalled starts the render of a file whose lexer is blocked until
+// the test ends, and returns where its text will come.
+func renderStalled(t *testing.T, budget common.Budget) <-chan string {
+	t.Helper()
+	uitest.WaitIdle(t, common.Tokenising)
+	release := make(chan struct{})
+	stalled.Store(&release)
+	t.Cleanup(func() {
+		close(release)
+		uitest.WaitIdle(t, common.Tokenising)
+	})
+	c := New(common.NewCommon(context.Background(), 120, 40), "", "")
+	if budget != nil { // nil leaves New's
+		c.HighlightBudget = budget
+	}
+	cmd := c.SetContent("stalled line\n", "x.stall")
+	done := make(chan string, 1)
+	go func() {
+		c.Update(cmd())
+		done <- c.GetContent()
+	}()
+	return done
+}
+
+// wantPlain fails the test unless the stalled render comes back plain, with
+// its content, while the lexer is still blocked.
+func wantPlain(t *testing.T, done <-chan string) {
+	t.Helper()
+	out, ok := uitest.Receive(done)
+	if !ok {
+		t.Fatalf("the render was not back after %v; want it back once its budget ended", uitest.HangGuard)
+	}
+	if common.Tokenising() == 0 || highlighted(out) || !strings.Contains(out, "stalled line") {
+		t.Fatalf("rendered %q; want the content plain, with the lexer still running", out)
 	}
 }
 
-// Without a HighlightBudget, as in production, a render is given up once
-// common.HighlightBudget has passed. The stall has no end of its own, so
-// only that budget can end the render, and load can only lengthen the time
-// measured, which has only a lower bound.
+// A render waits on the budget it is given and is plain once that ends.
+func TestBudgetShowsPlain(t *testing.T) {
+	budget := make(chan time.Time)
+	done := renderStalled(t, func() <-chan time.Time { return budget })
+	if !uitest.WaitFor(func() bool {
+		select {
+		case budget <- time.Time{}: // taken only if the render waits on it
+			return true
+		default:
+			return false
+		}
+	}) {
+		t.Fatal("the render did not wait on the budget it was given")
+	}
+	wantPlain(t, done)
+}
+
+// Without a budget, as in production, a render is plain once
+// common.HighlightBudget has passed, and no sooner.
 func TestDefaultBudgetShowsPlain(t *testing.T) {
-	s := newStall(t)
 	start := time.Now()
-	s.render(t, nil)
+	wantPlain(t, renderStalled(t, nil))
 	if took := time.Since(start); took < common.HighlightBudget {
 		t.Fatalf("the render took %v; want it to wait %v for the lexer", took, common.HighlightBudget)
 	}
 }
 
-// A file in a lexer that tokenises up front, which the budget cannot stop,
-// is shown as plain text past common.EagerHighlightMax, without a budget.
+// A file in a lexer that tokenises up front is plain past
+// common.EagerHighlightMax, without a budget to cut it off.
 func TestEagerLexerShowsPlain(t *testing.T) {
 	const line = "<script lang=\"zzz\">x</script>\n"
 	content := strings.Repeat(line, common.EagerHighlightMax/len(line)+1)
-	out := render(t, content, "x.svelte", false)
-	if highlighted(out) {
-		t.Fatal("rendered highlighted; want plain text past the cap")
-	}
-	if !strings.Contains(out, "zzz") {
-		t.Fatal("the content is missing")
+	if out := render(t, content, "x.svelte", false, uitest.Unbounded); highlighted(out) || !strings.Contains(out, "zzz") {
+		t.Fatal("rendered highlighted, or without the content; want plain text past the cap")
 	}
 }
 
 // Ordinary files are highlighted: a Go file, and a README with a Go code
-// block shown as source. The render has no budget: with one, a loaded
+// block shown as source. The renders have no budget: with one, a loaded
 // machine shows them plain.
 func TestOrdinaryFilesHighlighted(t *testing.T) {
 	goFile := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n"
-	if out := render(t, strings.Repeat(goFile, 20), "main.go", false); !highlighted(out) {
+	if out := render(t, strings.Repeat(goFile, 20), "main.go", false, uitest.Unbounded); !highlighted(out) {
 		t.Fatal("a Go file was not highlighted")
 	}
 	readme := "# Title\n\nSome text.\n\n```go\n" + goFile + "```\n"
-	if out := render(t, readme, "README.md", false); !strings.Contains(out, "\x1b[38;5;39mfunc") {
+	if out := render(t, readme, "README.md", false, uitest.Unbounded); !strings.Contains(out, "\x1b[38;5;39mfunc") {
 		t.Fatalf("the Go block of a README shown as source was not highlighted:\n%q", out)
 	}
 	// Rendered as markdown, the README keeps its code, styled but not
 	// highlighted.
-	if out := render(t, readme, "README.md", true); !strings.Contains(out, "Println") || strings.Contains(out, "\x1b[38;5;39mfunc") {
+	if out := render(t, readme, "README.md", true, uitest.Unbounded); !strings.Contains(out, "Println") || strings.Contains(out, "\x1b[38;5;39mfunc") {
 		t.Fatalf("the Go block of a README was not shown as plain code:\n%q", out)
 	}
 }
