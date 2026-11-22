@@ -201,8 +201,9 @@ func TestEagerLexersCapped(t *testing.T) {
 
 // An eager lexer reached from a code block of another file, which looks its
 // language up in the registry, is capped too: the block comes back as one
-// token of plain text. Svelte's lexer takes ten seconds over the block,
-// holding its slot, as the budget cannot stop it, and highlights it.
+// token of plain text. Without the cap, Svelte's lexer tokenises all of the
+// block up front, holding its slot, as the budget cannot stop it, and
+// highlights it.
 func TestEmbeddedEagerLexersCapped(t *testing.T) {
 	cases := map[string]string{
 		"README.md":  "# T\n\n```svelte\n" + strings.Repeat("{a}", (32<<10)/3) + "\n```\n",

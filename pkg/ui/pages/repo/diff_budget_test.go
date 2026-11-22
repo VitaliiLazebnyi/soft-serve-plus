@@ -158,7 +158,12 @@ func TestLargeDiffNotHighlighted(t *testing.T) {
 		t.Fatal("a patch of 20000 lines was highlighted")
 	}
 	small := &git.Diff{Patch: "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n"}
-	if !strings.Contains(renderDiff(small, 120), "\x1b[") {
-		t.Fatal("a small patch was not highlighted")
+	// Plain text is coloured too, so look for the colours a diff's
+	// highlighting gives removed and added lines.
+	out = renderDiff(small, 120)
+	for _, want := range []string{"\x1b[38;5;203m-old", "\x1b[38;5;42m+new"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("a small patch was not highlighted as a diff: it lacks %q:\n%q", want, out)
+		}
 	}
 }

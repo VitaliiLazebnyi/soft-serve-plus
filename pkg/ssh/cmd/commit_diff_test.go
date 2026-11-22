@@ -67,7 +67,7 @@ func TestRepoCommitRenameQuotedName(t *testing.T) {
 				put(d.from, body)
 				git("", "commit", "-q", "-m", "add")
 				git("", "update-index", "--force-remove", "--", d.from)
-				put(d.to, body+"changed\n")
+				put(d.to, body+"edited-line\n")
 				git("", "commit", "-q", "-m", "rename")
 				git("", "push", "-q", "origin", "main")
 				sha := git("", "rev-parse", "HEAD")
@@ -81,7 +81,9 @@ func TestRepoCommitRenameQuotedName(t *testing.T) {
 					if err != nil {
 						t.Fatalf("%v: %v: %s", args, err, stderr)
 					}
-					for _, want := range []string{"rename from ", "rename to ", "changed"} {
+					// The added line's text is in the patch only, not in
+					// the stat, as a word like "changed" would be.
+					for _, want := range []string{"rename from ", "rename to ", "+edited-line"} {
 						if !strings.Contains(stdout, want) {
 							t.Errorf("%v: output lacks %q:\n%s", args, want, stdout)
 						}
