@@ -2,7 +2,6 @@ package common
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -200,78 +199,28 @@ func TestEagerLexersCapped(t *testing.T) {
 	}
 }
 
-// fenceTimedOut returns chroma's markdown lexer as it runs when the regex of
-// its fenced code block times out: chroma gives each rule's regex 250 ms,
-// and a rule whose match times out is skipped as one that does not match.
-// Matching the block of TestEmbeddedEagerLexersCapped took 36 to 103 ms
-// under the race detector; a loaded machine took longer, and the block then
-// came back as one backtick string.
-func fenceTimedOut(t *testing.T) chroma.Lexer {
-	t.Helper()
-	v := reflect.ValueOf(lexers.Markdown)
-	if v.Kind() != reflect.Pointer {
-		t.Fatalf("chroma's markdown lexer is %T; want a pointer to a struct that wraps a *chroma.RegexLexer", lexers.Markdown)
-	}
-	f := v.Elem().FieldByName("Lexer")
-	if !f.IsValid() || !f.CanInterface() {
-		t.Fatalf("chroma's markdown lexer, %T, has no exported Lexer field", lexers.Markdown)
-	}
-	inner, ok := f.Interface().(*chroma.RegexLexer)
-	if !ok {
-		t.Fatalf("chroma's markdown lexer wraps a %T; want a *chroma.RegexLexer", f.Interface())
-	}
-	rules := inner.MustRules().Clone()
-	fences := 0
-	for i, rule := range rules["root"] {
-		if strings.HasPrefix(rule.Pattern, "^(```") {
-			// A pattern that never matches, as a timed-out one does.
-			rules["root"][i] = chroma.Rule{Pattern: `(?!)`, Type: chroma.Text}
-			fences++
-		}
-	}
-	if fences != 2 {
-		t.Fatalf("found %d fenced code block rules in chroma's markdown lexer; want 2", fences)
-	}
-	return chroma.MustNewLexer(&chroma.Config{Name: "markdown, fence timed out"}, func() chroma.Rules { return rules })
-}
-
 // An eager lexer reached from a code block of another file, which looks its
-// language up in the registry, is capped too: the block comes back as plain
-// text. Svelte's lexer takes ten seconds over the block, holding its slot,
-// as the budget cannot stop it, and highlights it.
-//
-// The block is shown plain when all of its {a} are in one token: Svelte's
-// lexer splits this block, and uncapped, its largest token holds 4264 of
-// the 10922 {a}. The token's type is not checked. It is plain text when the
-// block was capped, and a backtick string when chroma's markdown lexer did
-// not see a fenced block, as when the regex of its fenced block times out
-// (README.md, fence timed out); in neither case did Svelte's lexer run.
-// chroma gives each rule's regex 250 ms. Under the race detector the
-// fenced block's took 36 to 103 ms over this block, and README.rst's code
-// directive 4 to 6 ms: both are exposed on a loaded machine, README.md far
-// more.
+// language up in the registry, is capped too: the block comes back as one
+// token of plain text. Without the cap, Svelte's lexer tokenises all of the
+// block up front, holding its slot, as the budget cannot stop it, and
+// highlights it.
 func TestEmbeddedEagerLexersCapped(t *testing.T) {
-	md := "# T\n\n```svelte\n" + strings.Repeat("{a}", (32<<10)/3) + "\n```\n"
-	cases := map[string]struct {
-		lexer   chroma.Lexer
-		content string
-	}{
-		"README.md":                  {lexers.Match("README.md"), md},
-		"README.md, fence timed out": {fenceTimedOut(t), md},
-		"README.rst":                 {lexers.Match("README.rst"), "T\n=\n\n.. code:: svelte\n\n" + strings.Repeat("   {a}{a}{a}{a}\n", (32<<10)/16) + "\n"},
+	cases := map[string]string{
+		"README.md":  "# T\n\n```svelte\n" + strings.Repeat("{a}", (32<<10)/3) + "\n```\n",
+		"README.rst": "T\n=\n\n.. code:: svelte\n\n" + strings.Repeat("   {a}{a}{a}{a}\n", (32<<10)/16) + "\n",
 	}
-	for name, tc := range cases {
+	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			waitSlots(t)
 			// Without a budget, the tokenisation runs to its end.
-			tokens, ok := tokeniseUntil(tc.lexer, tc.content, nil)
+			tokens, ok := tokeniseUntil(lexers.Match(name), content, nil)
 			if !ok {
 				t.Fatal("tokenise failed")
 			}
-			want := strings.Count(tc.content, "{a}")
+			want := strings.Count(content, "{a}")
 			for _, tok := range tokens {
 				if n := strings.Count(tok.Value, "{a}"); n > 0 {
-					if n != want {
+					if n != want || tok.Type != chroma.Text {
 						t.Fatalf("the Svelte block was highlighted: a %s token has %d of its %d {a}", tok.Type, n, want)
 					}
 					return
