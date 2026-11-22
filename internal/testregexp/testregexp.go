@@ -1,8 +1,8 @@
-// Package testregexp keeps the results of this module's highlighting tests
-// from depending on the clock. chroma gives each match of a lexer's rule a
-// wall-clock timeout and takes a match that timed out for no match, without
-// an error: in a process that was stalled, the same text can get other
-// tokens. Nothing outside tests uses this package.
+// Package testregexp takes chroma's regex timeout out of this module's
+// highlighting tests. chroma gives each match of a lexer's rule a wall-clock
+// timeout and takes a match that timed out for no match, without an error:
+// in a process that was stalled, the same text can get other tokens. Nothing
+// outside tests uses this package.
 package testregexp
 
 import (
