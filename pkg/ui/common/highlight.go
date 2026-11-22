@@ -248,12 +248,17 @@ func takeSlot() bool {
 // where the budget runs out sooner and slots stay taken longer, shows more
 // files as plain text.
 func tokenise(lexer chroma.Lexer, content string, budget Budget) ([]chroma.Token, bool) {
+	var end <-chan time.Time
 	if budget != nil {
-		return tokeniseUntil(lexer, content, budget())
+		end = budget()
+	} else {
+		timer := time.NewTimer(HighlightBudget)
+		defer timer.Stop()
+		end = timer.C
 	}
-	timer := time.NewTimer(HighlightBudget)
-	defer timer.Stop()
-	return tokeniseUntil(lexer, content, timer.C)
+	// One call for both, so that the tests, which give budgets, cover
+	// production's path.
+	return tokeniseUntil(lexer, content, end)
 }
 
 // tokeniseUntil is tokenise with the budget ending when budget receives,
