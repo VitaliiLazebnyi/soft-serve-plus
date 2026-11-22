@@ -119,7 +119,10 @@ func TestFileHighlightLimit(t *testing.T) {
 		t.Fatal("a small Go file was not highlighted")
 	}
 
-	large := strings.Repeat("func f() {}\n", (256<<10)/12+1)
+	// Long enough lines that only the size is over a limit: there are fewer
+	// than code.HighlightMaxLines of them.
+	const line = "func f() {} // one of fewer than ten thousand lines\n"
+	large := strings.Repeat(line, (256<<10)/len(line)+1)
 	f = newRenderFiles(120)
 	f.code.HighlightBudget = unbounded
 	deliverAll(f, openFile(t, f, large, "large.go"))

@@ -368,7 +368,7 @@ type renderJob struct {
 	width       int
 	tabWidth    int
 	styleConfig gansi.StyleConfig
-	// budget is the Code's HighlightBudget, called once per render.
+	// budget is the Code's HighlightBudget, called at most once per render.
 	budget func() <-chan time.Time
 }
 

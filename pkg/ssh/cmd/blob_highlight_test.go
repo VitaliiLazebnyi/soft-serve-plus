@@ -67,8 +67,9 @@ func runBlobUnbounded(t *testing.T, ctx context.Context, args ...string) (stdout
 // The command is not timed, and has no highlighting budget, so that a
 // loaded machine does not print main.go plain. Plain text is what the
 // bounds leave: the Svelte file is refused by the cap on lexers the budget
-// cannot stop; without the cap it comes back highlighted a minute or more
-// later. The YANG file is plain because its lexer's panic is caught.
+// cannot stop; without the cap it comes back highlighted many seconds
+// later, minutes under the race detector. The YANG file is plain because
+// its lexer's panic is caught.
 func TestBlobColorBounded(t *testing.T) {
 	t.Setenv("SOFT_SERVE_NO_COLOR", "")
 	ctx, be := newAuthTestContext(t)
