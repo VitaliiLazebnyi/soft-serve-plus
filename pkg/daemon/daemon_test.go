@@ -1060,11 +1060,17 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // the daemon has upload-pack send keepalives; without them the connection
 // was closed as idle, and the ERR packet written after it broke the clone
 // with "bad band".
+//
+// No clock decides the outcome. The pack waits until the test releases it,
+// once a keepalive has reached the connection, and the connection's own
+// deadlines never pass (see stillConn), so neither a stalled daemon nor a
+// stalled upload-pack closes it. The daemon must ask upload-pack for
+// keepalives at keepAlive's interval, which is shorter than the idle
+// timeout, rather than at git's default of five seconds, which is longer.
 func TestQuietCloneSlowPack(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the pack-objects hook needs a POSIX shell")
 	}
-	ctx := context.Background()
 	const name = "slowpack"
 	ensureRepo(t, name)
 	src := t.TempDir()
@@ -1080,62 +1086,188 @@ func TestQuietCloneSlowPack(t *testing.T) {
 	// server's hooks.
 	runGit(t, bare, "fetch", "-q", src, "+HEAD:"+head)
 
-	cfg := *testDaemon.cfg
-	cfg.Git.IdleTimeout = 2
-	dctx := config.WithContext(context.Background(), &cfg)
-	dctx = backend.WithContext(dctx, testBackend)
-	d, err := NewGitDaemon(dctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go d.Serve(l) //nolint:errcheck
-	t.Cleanup(func() { _ = d.Close() })
+	const idleTimeout = 2
+	conns := make(chan *stillConn, 1)
+	_, addr := startDaemonOn(t, 1, stillConns(conns), func(d *GitDaemon) { d.cfg.Git.IdleTimeout = idleTimeout })
 
-	// Delay the pack past the idle timeout. The hook is only honoured
-	// from protected configuration, which the command-line scope of
-	// GIT_CONFIG_COUNT is; the daemon passes its environment to git.
+	// Hold the pack back until the test releases it. The hook records
+	// the keepalive interval upload-pack runs with and that the pack is
+	// held. It is only honoured from protected configuration, which the
+	// command-line scope of GIT_CONFIG_COUNT is; the daemon passes its
+	// environment to git.
+	dir := t.TempDir()
+	interval, held, release := filepath.Join(dir, "interval"), filepath.Join(dir, "held"), filepath.Join(dir, "release")
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "uploadpack.packObjectsHook")
-	t.Setenv("GIT_CONFIG_VALUE_0", "sleep 3;")
+	t.Setenv("GIT_CONFIG_VALUE_0", fmt.Sprintf(
+		"git config --show-scope --get uploadpack.keepalive >'%s'; : >'%s'; while test ! -e '%s'; do sleep 1; done;",
+		interval, held, release))
 
 	dst := filepath.Join(t.TempDir(), "clone")
-	cmd := exec.CommandContext(t.Context(), "git", "clone", "-q", "git://"+l.Addr().String()+"/"+name, dst)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("clone failed: %v\n%s", err, out)
+	cmd := exec.CommandContext(t.Context(), "git", "clone", "-q", "git://"+addr+"/"+name, dst)
+	type result struct {
+		out []byte
+		err error
+	}
+	cloned := make(chan result, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		cloned <- result{out, err}
+	}()
+	// The pack is held until the release file exists, so release it
+	// however the test ends.
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+
+	var c *stillConn
+	select {
+	case c = <-conns:
+	case r := <-cloned:
+		t.Fatalf("clone ended before the daemon accepted it: %v\n%s", r.err, r.out)
+	case <-time.After(idleWait):
+		t.Fatal("the daemon did not accept the clone")
+	}
+	waitForDaemon(t, "upload-pack to hold the pack", func() bool {
+		_, err := os.Stat(held)
+		return err == nil
+	})
+	got, err := os.ReadFile(interval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("command\t%d\n", keepAlive(idleTimeout*time.Second)); string(got) != want {
+		t.Fatalf("upload-pack's keepalive interval: %q, want %q", got, want)
+	}
+	// An empty data packet is upload-pack's keepalive.
+	waitForDaemon(t, "a keepalive while the pack is held", func() bool {
+		return c.wrote([]byte("0005\x01"))
+	})
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-cloned; r.err != nil {
+		t.Fatalf("clone failed: %v\n%s", r.err, r.out)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "README")); err != nil {
 		t.Errorf("clone is missing README: %v", err)
 	}
 }
 
-// TestNoErrAfterOutput leaves a request idle after upload-pack answered with
+// TestNoErrAfterOutput times a request out after upload-pack answered with
 // its references. The daemon closes the connection, but must not write an
 // ERR packet: the client already reads the response, so it would take the
 // packet for part of it.
+//
+// The test times the request out itself once it has read the first
+// reference (see stillConn), so the timeout comes after the output has
+// started however slow either side is, and the output starts however slow
+// git is.
 func TestNoErrAfterOutput(t *testing.T) {
 	const name = "idleafteradvert"
 	ensureRepo(t, name)
-	c := dialDaemonAt(t, startIdleDaemon(t))
+	conns := make(chan *stillConn, 1)
+	_, addr := startDaemonOn(t, 1, stillConns(conns))
+	c := dialDaemonAt(t, addr)
 	if _, err := io.WriteString(c, pkt("git-upload-pack /"+name+".git\x00")); err != nil {
 		t.Fatal(err)
 	}
-	// Stay silent until the daemon gives up on the connection, then
-	// collect everything it sent.
+	if line, err := readPktline(c); err != nil || !refAdvertisement.MatchString(line) {
+		t.Fatalf("first answer: %q, %v; want a reference advertisement", line, err)
+	}
+	var sc *stillConn
+	select {
+	case sc = <-conns:
+	case <-time.After(idleWait):
+		t.Fatal("the daemon did not accept the connection")
+	}
+	// Stay silent and time the connection out, as the idle timeout
+	// would, then collect everything else the daemon sent.
+	sc.expire()
 	out, err := io.ReadAll(c)
 	if err != nil {
 		t.Fatalf("reading the response: %v", err)
-	}
-	if len(out) == 0 {
-		t.Fatal("expected a response, got nothing")
 	}
 	if strings.Contains(string(out), "ERR ") {
 		t.Errorf("response has an ERR packet after output started:\n%q", out)
 	}
 }
+
+// stillConns returns a listener wrapper for startDaemonOn that makes each
+// connection a stillConn and sends it on conns.
+func stillConns(conns chan<- *stillConn) func(net.Listener) net.Listener {
+	return func(inner net.Listener) net.Listener {
+		return &stillListener{Listener: inner, conns: conns}
+	}
+}
+
+// stillListener is a listener whose connections are stillConns. It sends
+// each one on conns.
+type stillListener struct {
+	net.Listener
+	conns chan<- *stillConn
+}
+
+func (l *stillListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	sc := &stillConn{Conn: c}
+	l.conns <- sc
+	return sc, nil
+}
+
+// stillConn is a connection whose idle and other timeouts never pass by
+// themselves: the deadlines the daemon sets through SetDeadline are dropped.
+// A test times the connection out with expire instead, at a point of its
+// choosing, so no timeout is a race with how long the daemon, git or the
+// test take. It records what the daemon writes.
+type stillConn struct {
+	net.Conn
+	mu      sync.Mutex
+	expired bool
+	written []byte
+}
+
+// SetDeadline drops t. Once the connection has expired, reads keep failing
+// with a timeout, as they do once a real deadline has passed; a write
+// still goes through, as it does when the daemon moves its deadline
+// forward to write.
+func (c *stillConn) SetDeadline(time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.expired {
+		return c.Conn.SetWriteDeadline(time.Time{})
+	}
+	return c.Conn.SetDeadline(time.Time{})
+}
+
+// expire times the connection out: a read in progress and every later one
+// fail with a timeout.
+func (c *stillConn) expire() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expired = true
+	_ = c.Conn.SetReadDeadline(aLongTimeAgo)
+}
+
+func (c *stillConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.mu.Lock()
+	c.written = append(c.written, p[:n]...)
+	c.mu.Unlock()
+	return n, err
+}
+
+// wrote reports whether what the daemon wrote holds b.
+func (c *stillConn) wrote(b []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return bytes.Contains(c.written, b)
+}
+
+// NetConn returns the wrapped connection, so the daemon can still shut its
+// write side when it refuses the client.
+func (c *stillConn) NetConn() net.Conn { return c.Conn }
 
 // fixtureAdmin returns the admin account the first migration creates, the
 // owner of fixture repositories: the backend refuses a create by a caller
