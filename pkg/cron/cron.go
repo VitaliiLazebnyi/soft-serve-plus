@@ -1,3 +1,4 @@
+// Package cron runs the server's scheduled jobs on cron schedules.
 package cron
 
 import (

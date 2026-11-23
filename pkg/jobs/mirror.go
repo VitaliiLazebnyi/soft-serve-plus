@@ -1,3 +1,5 @@
+// Package jobs holds the server's scheduled jobs: syncing pull mirrors and
+// sweeping stale LFS temporary files.
 package jobs
 
 import (

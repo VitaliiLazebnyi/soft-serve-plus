@@ -16,8 +16,8 @@ var errHookInternal = errors.New("internal server error")
 // settings the server wrote for hooks to the file it names in
 // SOFT_SERVE_HOOK_CONFIG (see hooks.WriteConfig), so neither an edit to
 // config.yaml after the server started nor a typo in it reaches the hook.
-// A server that sets no such file, one from before it, gets the old load
-// from config.yaml and the environment.
+// When the server names no such file, as a server older than the file does,
+// the config is loaded from config.yaml and the environment.
 //
 // On error it returns the error with a config that logs to the hook log,
 // for the caller to report it there rather than to the client.

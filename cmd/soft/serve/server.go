@@ -345,8 +345,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	for _, svc := range services {
 		// An empty address would make net.Listen pick a random port on
-		// every interface, where the servers used to fall back to their
-		// library's default port. Neither is what an operator would expect
+		// every interface, which is not what an operator would expect
 		// from a missing setting.
 		if svc.addr == "" {
 			closeAll()

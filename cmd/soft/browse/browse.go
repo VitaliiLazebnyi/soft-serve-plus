@@ -1,3 +1,5 @@
+// Package browse is the soft browse command, which shows a local repository
+// in the TUI the server serves over SSH.
 package browse
 
 import (

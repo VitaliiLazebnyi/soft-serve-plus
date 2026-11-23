@@ -1,3 +1,5 @@
+// Package config loads and validates the server's configuration from
+// config.yaml and the SOFT_SERVE_* environment variables.
 package config
 
 import (
@@ -574,24 +576,23 @@ func (c *Config) UnknownKeys() []UnknownKey {
 	return slices.Clone(c.unknownKeys)
 }
 
-// removedSetting is a setting this version no longer reads. A config that
-// still sets one loads as before, and the server warns about it, saying
-// what it does instead. A config file that holds the value the server used
-// to write there, oldDefault, gets no warning: the server does what that
-// value said.
+// removedSetting is a setting the server does not read. A config that
+// still sets one loads, and the server warns about it, saying what it does
+// instead. A config file that holds the value older servers wrote there,
+// oldDefault, gets no warning: the server does what that value said.
 type removedSetting struct {
 	key, env, now string
-	// oldDefault is the value earlier versions wrote to config.yaml: a
-	// scalar's text, or "[]" for an empty list. It is a historical value,
-	// and silence is right only while the server still does what it says:
+	// oldDefault is the value older servers wrote to config.yaml: a
+	// scalar's text, or "[]" for an empty list. Silence is right only
+	// while the server does what it says:
 	// TestRemovedSettingsOldDefaults pins it to both, so a change of a fixed
 	// value fails there rather than silence a config that still holds the
 	// old one.
 	oldDefault []string
 }
 
-// removedSettings are the settings removed in favour of fixed values,
-// because no realistic operator tunes them (R68).
+// removedSettings are the settings replaced by fixed values, because no
+// realistic operator tunes them.
 var removedSettings = []removedSetting{
 	{"ssh.kex_algorithms", "SOFT_SERVE_SSH_KEX_ALGORITHMS", "the server offers the key exchanges golang.org/x/crypto/ssh considers secure", []string{"[]"}},
 	{"ssh.ciphers", "SOFT_SERVE_SSH_CIPHERS", "the server offers the ciphers golang.org/x/crypto/ssh considers secure", []string{"[]"}},
@@ -606,7 +607,7 @@ var removedSettings = []removedSetting{
 }
 
 // RemovedSetting is a setting the config file or the environment still
-// sets that this version no longer reads. It is ignored.
+// sets that the server does not read. It is ignored.
 type RemovedSetting struct {
 	// Key is the setting's config file key, such as "ssh.macs".
 	Key string
@@ -627,9 +628,9 @@ func (c *Config) RemovedSettings() []RemovedSetting {
 }
 
 // takeRemovedKeys moves the removed settings out of the unknown keys of
-// the config file doc. One that holds the value earlier versions wrote
-// there is dropped without a record: every upgraded config.yaml has those,
-// and the server does what they say.
+// the config file doc. One that holds the value older servers wrote there
+// is dropped without a record: every upgraded config.yaml has those, and
+// the server does what they say.
 func (c *Config) takeRemovedKeys(doc *yaml.Node) {
 	c.unknownKeys = slices.DeleteFunc(c.unknownKeys, func(k UnknownKey) bool {
 		for _, r := range removedSettings {
@@ -820,7 +821,7 @@ func (c *Config) FilePath() string {
 // SOFT_SERVE_CONFIG_LOCATION, resolved against the working directory once
 // here, or config.yaml in the data path. Environ hands the path to hooks,
 // which start in a repository's directory, and a relative one would name
-// another file there (R29).
+// another file there.
 //
 // It is an error for SOFT_SERVE_CONFIG_LOCATION to name a file that does
 // not exist: the server would otherwise start on the default config, and
@@ -1200,7 +1201,7 @@ type authKeys struct {
 // authorized_keys. Blank entries and entries starting with "#" are comments
 // and are skipped. A relative key file path is read from dataPath, like the
 // other relative paths in the config; when no file of that name is there,
-// it is read from the working directory as before.
+// it is read from the working directory (see readKeyFile).
 func parseAuthKeys(aks []string, dataPath string) authKeys {
 	var r authKeys
 	exist := make(map[string]struct{}, 0)
@@ -1322,7 +1323,8 @@ func looksLikePath(s string) bool {
 
 // readKeyFile reads the admin key file named by path. A relative path is
 // looked up in dataPath first, then, if no such file exists there, in the
-// working directory, which is where earlier versions looked.
+// working directory, so a config written for a server that read key files
+// from there keeps its admin keys.
 func readKeyFile(path, dataPath string) ([]byte, error) {
 	if dataPath != "" && !filepath.IsAbs(path) {
 		bts, err := os.ReadFile(filepath.Join(dataPath, path))

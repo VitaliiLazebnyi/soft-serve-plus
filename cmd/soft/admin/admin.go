@@ -1,3 +1,5 @@
+// Package admin is the soft admin command: database migrations and
+// rollbacks, and regenerating the hooks of every repository.
 package admin
 
 import (

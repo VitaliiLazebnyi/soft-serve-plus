@@ -1,3 +1,6 @@
+// Package serve is the soft serve command: it opens the server's data and
+// runs the SSH, HTTP, git daemon and stats servers and the scheduled jobs
+// until it is stopped.
 package serve
 
 import (
