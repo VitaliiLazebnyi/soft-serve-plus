@@ -64,10 +64,10 @@ func TestReadableLookupsMatchForPrivateAndMissing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !(r == nil) {
+		if r != nil {
 			t.Fatal("not true: r == nil")
 		}
-		if !(level < access.ReadOnlyAccess || name == "missing") {
+		if level >= access.ReadOnlyAccess && name != "missing" {
 			t.Fatal("not true: level < access.ReadOnlyAccess || name == \"missing\"")
 		}
 		return st.n.Load()

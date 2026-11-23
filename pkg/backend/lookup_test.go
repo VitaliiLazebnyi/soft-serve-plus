@@ -179,7 +179,7 @@ func TestCollaboratorLookedUpByUserID(t *testing.T) {
 	}
 
 	r, level := noLookupError(t)(be.Readable(ctx, "private", session))
-	if !(r == nil) {
+	if r != nil {
 		t.Fatal("not true: r == nil")
 	}
 	if got := level; got != access.NoAccess {
@@ -199,7 +199,7 @@ func TestCollaboratorLookedUpByUserID(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, level = noLookupError(t)(be.Readable(ctx, "private", alice))
-	if !(r != nil) {
+	if r == nil {
 		t.Fatal("not true: r != nil")
 	}
 	if got := level; got != access.ReadWriteAccess {
@@ -239,10 +239,10 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 	breakTable(t, be, "collabs")
 	for _, readable := range []func(context.Context, string, proto.User) (proto.Repository, access.Level, error){be.Readable, be.ReadableForUser} {
 		r, level, err := readable(ctx, "private", stranger)
-		if !(err != nil) {
+		if err == nil {
 			t.Fatal("not true: err != nil")
 		}
-		if !(r == nil) {
+		if r != nil {
 			t.Fatal("not true: r == nil")
 		}
 		if got := level; got != access.NoAccess {
@@ -252,10 +252,10 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 	// The repository and the caller's collaborator row are read in one
 	// query, so the lookup fails for its owner and admins too.
 	r, level, err := be.Readable(ctx, "private", admin)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
-	if !(r == nil) {
+	if r != nil {
 		t.Fatal("not true: r == nil")
 	}
 	if got := level; got != access.NoAccess {
@@ -265,17 +265,17 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 	// So it does without the repositories table.
 	breakTable(t, be, "repos")
 	r, level, err = be.ReadableForUser(ctx, "private", admin)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
-	if !(r == nil) {
+	if r != nil {
 		t.Fatal("not true: r == nil")
 	}
 	if got := level; got != access.NoAccess {
 		t.Fatalf("level = %v, want %v", got, access.NoAccess)
 	}
 	_, err = be.ReadableRepositoriesForUser(ctx, stranger)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
@@ -302,19 +302,19 @@ func TestUserLookupErrorsNotLogged(t *testing.T) {
 
 	breakTable(t, be, "users")
 	_, err = be.User(ctx, "alice")
-	if !(err != nil && !errors.Is(err, proto.ErrUserNotFound)) {
+	if err == nil || errors.Is(err, proto.ErrUserNotFound) {
 		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrUserNotFound)")
 	}
 	_, err = be.UserByID(ctx, u.ID())
-	if !(err != nil && !errors.Is(err, proto.ErrUserNotFound)) {
+	if err == nil || errors.Is(err, proto.ErrUserNotFound) {
 		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrUserNotFound)")
 	}
 	_, err = be.UserByPublicKey(ctx, newTestPublicKey(t))
-	if !(err != nil && !errors.Is(err, proto.ErrUserNotFound)) {
+	if err == nil || errors.Is(err, proto.ErrUserNotFound) {
 		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrUserNotFound)")
 	}
 	_, err = be.UserByAccessToken(ctx, token)
-	if !(err != nil && !errors.Is(err, proto.ErrUserNotFound)) {
+	if err == nil || errors.Is(err, proto.ErrUserNotFound) {
 		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrUserNotFound)")
 	}
 

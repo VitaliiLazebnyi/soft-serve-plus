@@ -24,7 +24,7 @@ func TestCreateRepositoryOwnerGone(t *testing.T) {
 	}
 
 	_, err = be.CreateSystemRepository(ctx, "orphan", user, proto.RepositoryOptions{})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	if errors.Is(err, proto.ErrRepoExist) {
@@ -34,7 +34,7 @@ func TestCreateRepositoryOwnerGone(t *testing.T) {
 		t.Fatal("not true: errors.Is(err, db.ErrForeignKey)")
 	}
 	_, err = be.Repository(ctx, "orphan")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }

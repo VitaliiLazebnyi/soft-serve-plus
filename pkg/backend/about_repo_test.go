@@ -71,7 +71,7 @@ func TestAboutRepoReservedForAdmins(t *testing.T) {
 	}
 
 	_, err = be.Repository(ctx, AboutRepo)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = be.Repository(ctx, "mine")

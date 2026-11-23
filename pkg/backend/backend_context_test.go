@@ -62,10 +62,10 @@ func TestWebhooksBareContext(t *testing.T) {
 		t.Fatalf("len(dels) = %v, want %v", got, 0)
 	}
 	_, err = e.be.WebhookDelivery(ctx, e.repo, id, uuid.New())
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	} // no such delivery, but no panic either
-	if !(e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) != nil) {
+	if e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) == nil {
 		t.Fatal("not true: e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) != nil")
 	}
 

@@ -344,7 +344,7 @@ func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 			if err := lt.be.store.DeleteRepoByName(lt.ctx, lt.be.db, lt.repo.Name()); err != nil {
 				t.Fatal(err)
 			}
-			if !(lt.store() != nil) {
+			if lt.store() == nil {
 				t.Fatal("not true: lt.store() != nil")
 			} // the sync fails
 		})
@@ -380,7 +380,7 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 		t.Fatal(err)
 	} // and stored
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), missing.Oid)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	} // the missing object is not recorded
 }
@@ -396,7 +396,7 @@ func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
 	lt.client.readErrs = map[string]error{broken.Oid: errors.New("connection reset")}
 
 	err := lt.store()
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	} // the sync fails
 	if errors.Is(err, ErrLFSObjectsUnavailable) {
@@ -434,13 +434,13 @@ func TestFetchImportLFSObjects(t *testing.T) {
 	} // the warning counts them
 
 	lt.client.err = errors.New("batch request failed")
-	if !(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) {
+	if lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) == nil {
 		t.Fatal("not true: lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil")
 	} // other errors fail the import
 
 	lt.client.err, lt.client.errs = nil, nil
 	lt.client.readErrs = map[string]error{lt.pointers[0].Oid: errors.New("connection reset")}
-	if !(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) {
+	if lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) == nil {
 		t.Fatal("not true: lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil")
 	} // as does a download that breaks off
 }
@@ -468,7 +468,7 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 				t.Fatal("not true: os.IsNotExist(err)")
 			} // the content is not stored
 			_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			if !(err != nil) {
+			if err == nil {
 				t.Fatal("not true: err != nil")
 			} // nor recorded
 			if got := lt.incompleteFiles(t); got != 0 {
@@ -515,7 +515,7 @@ func TestStoreRepoMissingLFSObjectsUnrequested(t *testing.T) {
 		t.Fatal("not true: os.IsNotExist(err)")
 	} // the unrequested one is not
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), up.Oid)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	} // nor recorded
 	var found []string

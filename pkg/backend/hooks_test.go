@@ -102,7 +102,7 @@ func TestAfterPushSenderIsThePushingAccount(t *testing.T) {
 	if got, want := got[0].Pusher.ID, alice.ID(); got != want {
 		t.Fatalf("got[0].Pusher.ID = %v, want %v", got, want)
 	}
-	if !(got[0].Sender.ID != other.ID()) {
+	if got[0].Sender.ID == other.ID() {
 		t.Fatal("not true: got[0].Sender.ID != other.ID()")
 	}
 }

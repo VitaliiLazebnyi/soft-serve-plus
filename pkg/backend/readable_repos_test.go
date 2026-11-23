@@ -165,7 +165,7 @@ func TestReadableRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := names(repos)
-	if !(got["gone-public"] && got["gone-secret"]) {
+	if !got["gone-public"] || !got["gone-secret"] {
 		t.Fatal("not true: got[\"gone-public\"] && got[\"gone-secret\"]")
 	}
 }

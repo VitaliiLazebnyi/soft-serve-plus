@@ -133,7 +133,7 @@ func TestSetMirrorRefusesTwoRemotes(t *testing.T) {
 	}
 
 	err = be.SetMirror(ctx, "m", true)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	if !strings.Contains(err.Error(), "more than one remote") {

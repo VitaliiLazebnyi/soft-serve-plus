@@ -100,7 +100,7 @@ func TestReadableForUser(t *testing.T) {
 	// The unowned admin key opens a private repository from the context alone.
 	keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, listedKey)
 	r, level := noLookupError(t)(be.ReadableForUser(keyCtx, "private", nil))
-	if !(r != nil) {
+	if r == nil {
 		t.Fatal("not true: r != nil")
 	}
 	if got := level; got != access.AdminAccess {
@@ -160,7 +160,7 @@ func TestReadableForUserDoesNotLookUpKey(t *testing.T) {
 	} // the key no longer resolves to the owner
 
 	r, level := noLookupError(t)(be.ReadableForUser(sessCtx, "private", proto.UserFromContext(sessCtx)))
-	if !(r != nil) {
+	if r == nil {
 		t.Fatal("not true: r != nil")
 	}
 	if got := level; got != access.AdminAccess {

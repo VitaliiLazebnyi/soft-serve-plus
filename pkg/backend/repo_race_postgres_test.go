@@ -153,7 +153,7 @@ func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !(!r.IsPrivate() && !r.IsHidden()) {
+			if r.IsPrivate() || r.IsHidden() {
 				t.Fatal("not true: !r.IsPrivate() && !r.IsHidden()")
 			}
 			if got := r.Description(); got != "" {

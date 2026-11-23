@@ -191,7 +191,7 @@ func TestCreateWebhookRejectsUnsafeURLs(t *testing.T) {
 		"http://169.254.169.254/latest/meta-data",
 	} {
 		err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: u, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
-		if !(err != nil) {
+		if err == nil {
 			t.Fatal("not true: err != nil")
 		}
 	}
@@ -232,7 +232,7 @@ func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentType(99), Events: []webhook.Event{webhook.EventPush}, Active: true})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -243,7 +243,7 @@ func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.Event(99)}, Active: true})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -446,7 +446,7 @@ func TestUpdateWebhookRejectsUnsafeURL(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 
 	err := e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://127.0.0.1/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
@@ -466,7 +466,7 @@ func TestUpdateWebhookUnknownIDFails(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	err := e.be.UpdateWebhook(e.ctx, e.repo, 424242, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -508,12 +508,12 @@ func TestWebhookGetScopedToRepo(t *testing.T) {
 	_ = other
 
 	_, err := e.be.Webhook(e.ctx, e.repo, otherID)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
 	_, err = e.be.Webhook(e.ctx, e.repo, 424242)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -523,10 +523,10 @@ func TestDeleteWebhookScopedToRepo(t *testing.T) {
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
 
-	if !(e.be.DeleteWebhook(e.ctx, e.repo, otherID) != nil) {
+	if e.be.DeleteWebhook(e.ctx, e.repo, otherID) == nil {
 		t.Fatal("not true: e.be.DeleteWebhook(e.ctx, e.repo, otherID) != nil")
 	}
-	if !(e.be.DeleteWebhook(e.ctx, e.repo, 424242) != nil) {
+	if e.be.DeleteWebhook(e.ctx, e.repo, 424242) == nil {
 		t.Fatal("not true: e.be.DeleteWebhook(e.ctx, e.repo, 424242) != nil")
 	}
 
@@ -639,12 +639,12 @@ func TestDeliveriesScopedToRepo(t *testing.T) {
 	delID := e.seedDelivery(t, otherID, whURLOther, `{}`)
 
 	_, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, otherID)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
 	_, err = e.be.WebhookDelivery(e.ctx, e.repo, otherID, delID)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
@@ -664,12 +664,12 @@ func TestDeliveriesUnknown(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 
 	_, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, 424242)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
 	_, err = e.be.WebhookDelivery(e.ctx, e.repo, id, uuid.New())
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -767,7 +767,7 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 			delID := e.seedDelivery(t, id, whURL, tc.body)
 
 			err := e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID)
-			if !(err != nil) {
+			if err == nil {
 				t.Fatal("not true: err != nil")
 			}
 			logs := e.logs.String()
@@ -878,11 +878,11 @@ func TestRedeliverFailures(t *testing.T) {
 		t.Fatal("not true: errors.Is(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, 424242, good), proto.ErrWebhookNotFound)")
 	}
 	// Delivery exists, but its body is not valid JSON.
-	if !(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, bad) != nil) {
+	if e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, bad) == nil {
 		t.Fatal("not true: e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, bad) != nil")
 	}
 	// A webhook owned by another repo cannot be redelivered through this one.
-	if !(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, otherID, otherDel) != nil) {
+	if e.be.RedeliverWebhookDelivery(e.ctx, e.repo, otherID, otherDel) == nil {
 		t.Fatal("not true: e.be.RedeliverWebhookDelivery(e.ctx, e.repo, otherID, otherDel) != nil")
 	}
 }
@@ -906,47 +906,47 @@ func TestErrorPathsWhenStoreFails(t *testing.T) {
 	// Events table gone: reads and writes of events fail.
 	drop("webhook_events")
 	_, err := e.be.ListWebhooks(e.ctx, e.repo)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = e.be.Webhook(e.ctx, e.repo, id)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
-	if !(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil) {
+	if e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) == nil {
 		t.Fatal("not true: e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil")
 	}
-	if !(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil) {
+	if e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) == nil {
 		t.Fatal("not true: e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil")
 	}
 
 	// Deliveries table gone.
 	drop("webhook_deliveries")
 	_, err = e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = e.be.WebhookDelivery(e.ctx, e.repo, id, delID)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
-	if !(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) != nil) {
+	if e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) == nil {
 		t.Fatal("not true: e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) != nil")
 	}
 
 	// Webhooks table gone: every entry point fails.
 	drop("webhooks")
-	if !(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil) {
+	if e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) == nil {
 		t.Fatal("not true: e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil")
 	}
 	_, err = e.be.ListWebhooks(e.ctx, e.repo)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
-	if !(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil) {
+	if e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) == nil {
 		t.Fatal("not true: e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil")
 	}
-	if !(e.be.DeleteWebhook(e.ctx, e.repo, id) != nil) {
+	if e.be.DeleteWebhook(e.ctx, e.repo, id) == nil {
 		t.Fatal("not true: e.be.DeleteWebhook(e.ctx, e.repo, id) != nil")
 	}
 }
@@ -959,7 +959,7 @@ func TestUpdateWebhookFailsOnDuplicateURL(t *testing.T) {
 	a := e.createHook(t, whURL, webhook.EventPush)
 	b := e.createHook(t, whURLOther, webhook.EventPush)
 
-	if !(e.be.UpdateWebhook(e.ctx, e.repo, b, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil) {
+	if e.be.UpdateWebhook(e.ctx, e.repo, b, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) == nil {
 		t.Fatal("not true: e.be.UpdateWebhook(e.ctx, e.repo, b, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil")
 	}
 
@@ -1039,7 +1039,7 @@ func TestUpdateWebhookRollsBackOnEventDeleteFailure(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventCollaborator)
 
 	e.execTrigger(t, "fail_event_delete", "BEFORE", "DELETE", "webhook_events")
-	if !(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Secret: "x", Events: []webhook.Event{webhook.EventPush}, Active: false}) != nil) {
+	if e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Secret: "x", Events: []webhook.Event{webhook.EventPush}, Active: false}) == nil {
 		t.Fatal("not true: e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Secret: \"x\", Events: []webhook.Event{webhook.EventPush}, Active: false}) != nil")
 	}
 	e.dropTrigger(t, "fail_event_delete")
@@ -1066,7 +1066,7 @@ func TestUpdateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 
 	e.execTrigger(t, "fail_event_insert", "BEFORE", "INSERT", "webhook_events")
-	if !(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: true}) != nil) {
+	if e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: true}) == nil {
 		t.Fatal("not true: e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: true}) != nil")
 	}
 	e.dropTrigger(t, "fail_event_insert")
@@ -1095,7 +1095,7 @@ func TestDeleteWebhookRollsBackOnStoreFailure(t *testing.T) {
 			delID := e.seedDelivery(t, id, whURL, `{}`)
 
 			e.execTrigger(t, "fail_delete", "BEFORE", "DELETE", table)
-			if !(e.be.DeleteWebhook(e.ctx, e.repo, id) != nil) {
+			if e.be.DeleteWebhook(e.ctx, e.repo, id) == nil {
 				t.Fatal("not true: e.be.DeleteWebhook(e.ctx, e.repo, id) != nil")
 			}
 			e.dropTrigger(t, "fail_delete")
@@ -1125,7 +1125,7 @@ func TestCreateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	e.execTrigger(t, "fail_create_event", "BEFORE", "INSERT", "webhook_events")
-	if !(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil) {
+	if e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) == nil {
 		t.Fatal("not true: e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil")
 	}
 	e.dropTrigger(t, "fail_create_event")
@@ -1151,7 +1151,7 @@ func TestRedeliverMalformedFormBody(t *testing.T) {
 	}
 	delID := e.seedDelivery(t, id, "http://127.0.0.1:1/", "%zz=1")
 
-	if !(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) != nil) {
+	if e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) == nil {
 		t.Fatal("not true: e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID) != nil")
 	}
 }

@@ -100,7 +100,7 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectoryPostgres(t *testing.
 		return err
 	}
 
-	if !(e.be.RenameRepository(e.ctx, "repo", "new") != nil) {
+	if e.be.RenameRepository(e.ctx, "repo", "new") == nil {
 		t.Fatal("not true: e.be.RenameRepository(e.ctx, \"repo\", \"new\") != nil")
 	}
 	_, err := os.Stat(filepath.Join(e.be.repoPath("new"), "HEAD"))

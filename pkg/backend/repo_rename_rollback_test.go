@@ -45,7 +45,7 @@ func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 	}
 	be.store = unpinnableRenameStore{Store: be.store}
 
-	if !(be.RenameRepository(ctx, "team/old", "other/new") != nil) {
+	if be.RenameRepository(ctx, "team/old", "other/new") == nil {
 		t.Fatal("not true: be.RenameRepository(ctx, \"team/old\", \"other/new\") != nil")
 	}
 
@@ -138,7 +138,7 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 		return err
 	}
 
-	if !(be.RenameRepository(ctx, "old", "new") != nil) {
+	if be.RenameRepository(ctx, "old", "new") == nil {
 		t.Fatal("not true: be.RenameRepository(ctx, \"old\", \"new\") != nil")
 	}
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
@@ -173,7 +173,7 @@ func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 		return err
 	}
 
-	if !(be.RenameRepository(ctx, "old", "new") != nil) {
+	if be.RenameRepository(ctx, "old", "new") == nil {
 		t.Fatal("not true: be.RenameRepository(ctx, \"old\", \"new\") != nil")
 	}
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
@@ -226,7 +226,7 @@ func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
 	if err := holder.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if !(renameErr != nil) {
+	if renameErr == nil {
 		t.Fatal("not true: renameErr != nil")
 	}
 	_, err = os.Stat(filepath.Join(be.repoPath("old"), "HEAD"))

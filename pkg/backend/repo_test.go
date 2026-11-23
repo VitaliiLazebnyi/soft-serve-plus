@@ -68,7 +68,7 @@ func TestDefaultAdminUserIDNoAdmin(t *testing.T) {
 		_, err := be.defaultAdminUserID(ctx, tx)
 		return err
 	})
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -180,7 +180,7 @@ func TestImportRepositoryCloneFailure(t *testing.T) {
 
 	select {
 	case res := <-resc:
-		if !(res.repo == nil) {
+		if res.repo != nil {
 			t.Fatal("not true: res.repo == nil")
 		}
 		if !errors.Is(res.err, proto.ErrImportFailed) {
@@ -724,11 +724,11 @@ func TestImportGateChecksOnce(t *testing.T) {
 		calls++
 		return git.Version{Major: 2, Minor: 45}, err
 	}
-	if !(be.ImportsDisabledReason(context.Background()) != "") {
+	if be.ImportsDisabledReason(context.Background()) == "" {
 		t.Fatal("not true: be.ImportsDisabledReason(context.Background()) != \"\"")
 	}
 	err = nil
-	if !(be.ImportsDisabledReason(context.Background()) != "") {
+	if be.ImportsDisabledReason(context.Background()) == "" {
 		t.Fatal("not true: be.ImportsDisabledReason(context.Background()) != \"\"")
 	}
 	if got := calls; got != 1 {
@@ -753,7 +753,7 @@ func TestImportGateRechecksAfterCanceledCheck(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if !(be.ImportsDisabledReason(canceled) != "") {
+	if be.ImportsDisabledReason(canceled) == "" {
 		t.Fatal("not true: be.ImportsDisabledReason(canceled) != \"\"")
 	}
 	if got := be.ImportsDisabledReason(context.Background()); got != "" {

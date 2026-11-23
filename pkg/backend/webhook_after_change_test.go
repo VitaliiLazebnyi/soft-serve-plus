@@ -149,7 +149,7 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 			if err := tc.change(ctx, e); err != nil {
 				t.Fatal(err)
 			}
-			if !(ctx.Err() != nil) {
+			if ctx.Err() == nil {
 				t.Fatal("not true: ctx.Err() != nil")
 			} // the context ended after the commit
 			e.be.WaitForDeliveries(e.ctx)

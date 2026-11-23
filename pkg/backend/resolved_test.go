@@ -76,7 +76,7 @@ func TestAddCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
 	if !errors.Is(err, proto.ErrRepoNotFound) {
 		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
 	}
-	if !(replacement() != 0) {
+	if replacement() == 0 {
 		t.Fatal("not true: replacement() != 0")
 	}
 	if got := len(collabNames(t, be, ctx, "victim")); got != 0 {
@@ -157,7 +157,7 @@ func TestResolvedSetters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !(cur.IsHidden() && cur.IsPrivate()) {
+	if !cur.IsHidden() || !cur.IsPrivate() {
 		t.Fatal("not true: cur.IsHidden() && cur.IsPrivate()")
 	}
 	if got := cur.Description(); got != "d" {
@@ -187,7 +187,7 @@ func TestResolvedSetters(t *testing.T) {
 	if got, want := cur.ID(), other.ID(); got != want {
 		t.Fatalf("cur.ID() = %v, want %v", got, want)
 	}
-	if !(!cur.IsHidden() && !cur.IsPrivate()) {
+	if cur.IsHidden() || cur.IsPrivate() {
 		t.Fatal("not true: !cur.IsHidden() && !cur.IsPrivate()")
 	}
 	if got := cur.Description(); got != "" {

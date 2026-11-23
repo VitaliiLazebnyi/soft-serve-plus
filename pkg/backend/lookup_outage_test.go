@@ -63,17 +63,17 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 			for _, user := range []proto.User{nil, stranger, collab} {
 				for _, name := range []string{"private", "public", "ghost"} {
 					r, level, err := be.Readable(ctx, name, user)
-					if !(err != nil) {
+					if err == nil {
 						t.Fatal("not true: err != nil")
 					}
-					if !(r == nil) {
+					if r != nil {
 						t.Fatal("not true: r == nil")
 					}
 					if got := level; got != access.NoAccess {
 						t.Fatalf("level = %v, want %v", got, access.NoAccess)
 					}
 					_, _, err = be.ReadableForUser(ctx, name, user)
-					if !(err != nil) {
+					if err == nil {
 						t.Fatal("not true: err != nil")
 					}
 				}
@@ -113,16 +113,16 @@ func TestSettingsLookupErrorsReturned(t *testing.T) {
 	breakTable(t, be, "settings")
 	for _, user := range []proto.User{nil, alice} {
 		_, _, err := be.Readable(ctx, "public", user)
-		if !(err != nil) {
+		if err == nil {
 			t.Fatal("not true: err != nil")
 		}
 	}
 	_, err = be.ReadableRepositories(ctx, nil)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = be.AllowKeylessSetting(ctx)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 
@@ -210,7 +210,7 @@ func TestCheckCanCreateReturnsLookupError(t *testing.T) {
 	_, ierr := be.ImportRepository(strangerCtx, "new", stranger, offlineRemote, proto.RepositoryOptions{})
 	rerr := be.RenameRepository(strangerCtx, "a", "new")
 	for _, err := range []error{cerr, ierr, rerr} {
-		if !(err != nil) {
+		if err == nil {
 			t.Fatal("not true: err != nil")
 		}
 		if errors.Is(err, proto.ErrUnauthorized) {

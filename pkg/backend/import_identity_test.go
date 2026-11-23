@@ -66,7 +66,7 @@ func TestFailedImportDeletesByIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := be.importRepository(ctx, admin, imp)
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	} // the fetch failed
 

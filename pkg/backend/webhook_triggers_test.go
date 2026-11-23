@@ -277,7 +277,7 @@ func TestWaitForDeliveriesCompletesBackgroundSends(t *testing.T) {
 // client puts on one request.
 func TestShutdownDeliveryBudgetCoversSendTimeout(t *testing.T) {
 	t.Parallel()
-	if !(ShutdownDeliveryTimeout > ssrf.ClientTimeout) {
+	if ShutdownDeliveryTimeout <= ssrf.ClientTimeout {
 		t.Fatal("not true: ShutdownDeliveryTimeout > ssrf.ClientTimeout")
 	}
 }
@@ -542,7 +542,7 @@ func TestAfterPushAnonymousPush(t *testing.T) {
 func TestAddCollaboratorRejectsInvalidUsername(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
-	if !(e.be.AddCollaborator(e.ctx, "repo", "bad name!", access.ReadWriteAccess) != nil) {
+	if e.be.AddCollaborator(e.ctx, "repo", "bad name!", access.ReadWriteAccess) == nil {
 		t.Fatal("not true: e.be.AddCollaborator(e.ctx, \"repo\", \"bad name!\", access.ReadWriteAccess) != nil")
 	}
 }
@@ -701,10 +701,10 @@ func TestCollaboratorStoreFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess) != nil) {
+	if e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess) == nil {
 		t.Fatal("not true: e.be.AddCollaborator(e.ctx, \"repo\", \"bob\", access.ReadWriteAccess) != nil")
 	}
-	if !(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil) {
+	if e.be.RemoveCollaborator(e.ctx, "repo", "bob") == nil {
 		t.Fatal("not true: e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\") != nil")
 	}
 }
@@ -722,7 +722,7 @@ func TestRemoveCollaboratorDeleteFailure(t *testing.T) {
 	}
 	e.execTrigger(t, "fail_collab_delete", "BEFORE", "DELETE", "collabs")
 
-	if !(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil) {
+	if e.be.RemoveCollaborator(e.ctx, "repo", "bob") == nil {
 		t.Fatal("not true: e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\") != nil")
 	}
 }
@@ -737,7 +737,7 @@ func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !(e.be.SetPrivate(e.ctx, "repo", true) != nil) {
+	if e.be.SetPrivate(e.ctx, "repo", true) == nil {
 		t.Fatal("not true: e.be.SetPrivate(e.ctx, \"repo\", true) != nil")
 	}
 }
@@ -1183,10 +1183,10 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Sent, and refused by the SSRF guard, rather than dropped.
-	if !(d.RequestError.String != errRepoDeliveriesFull.Error()) {
+	if d.RequestError.String == errRepoDeliveriesFull.Error() {
 		t.Fatal("not true: d.RequestError.String != errRepoDeliveriesFull.Error()")
 	}
-	if !(d.RequestError.String != errDeliveryQueueFull.Error()) {
+	if d.RequestError.String == errDeliveryQueueFull.Error() {
 		t.Fatal("not true: d.RequestError.String != errDeliveryQueueFull.Error()")
 	}
 	if got := len(e.deliveredEvents(t, id)); got != 1 {
@@ -1385,7 +1385,7 @@ func TestRefusedCreateAndRenameSendNoRepositoryEvent(t *testing.T) {
 
 	// Nothing was created or renamed.
 	_, err = e.be.Repository(e.ctx, "junk")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = e.be.Repository(e.ctx, "mine")
@@ -1393,7 +1393,7 @@ func TestRefusedCreateAndRenameSendNoRepositoryEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = e.be.Repository(e.ctx, "renamed")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 

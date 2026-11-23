@@ -247,15 +247,15 @@ func TestBackendRefusesNonAdminCreatesWhenFlagOn(t *testing.T) {
 	}
 
 	_, err = be.Repository(ctx, "junk")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = be.Repository(ctx, "anon-junk")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 	_, err = be.Repository(ctx, "junk-import")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -286,7 +286,7 @@ func TestBackendRefusesNonAdminRenameToNewNameWhenFlagOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = be.Repository(ctx, "renamed")
-	if !(err != nil) {
+	if err == nil {
 		t.Fatal("not true: err != nil")
 	}
 }
@@ -414,7 +414,7 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			if got := level; got != access.AdminAccess {
 				t.Fatalf("level = %v, want %v", got, access.AdminAccess)
 			}
-			if !(levelOf(t, be, keyCtx, "fresh", user) < access.ReadWriteAccess) {
+			if levelOf(t, be, keyCtx, "fresh", user) >= access.ReadWriteAccess {
 				t.Fatal("not true: levelOf(t, be, keyCtx, \"fresh\", user) < access.ReadWriteAccess")
 			}
 
@@ -579,7 +579,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !(r.UserID() != mallory.ID()) {
+	if r.UserID() == mallory.ID() {
 		t.Fatal("not true: r.UserID() != mallory.ID()")
 	}
 	if got := levelOf(t, be, ctx, "secret", mallory); got != access.NoAccess {

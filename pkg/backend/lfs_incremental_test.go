@@ -490,7 +490,7 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 		if got := len(got); got != 1 {
 			t.Fatalf("len(got) = %v, want %v", got, 1)
 		}
-		if !(got[0].exclude != nil) {
+		if got[0].exclude == nil {
 			t.Fatal("not true: got[0].exclude != nil")
 		} // only the new history
 		if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
@@ -535,7 +535,7 @@ func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
 	if got := len(got); got != 1 {
 		t.Fatalf("len(got) = %v, want %v", got, 1)
 	}
-	if !(got[0].exclude != nil) {
+	if got[0].exclude == nil {
 		t.Fatal("not true: got[0].exclude != nil")
 	}
 	tips, kept := readScannedRefs(lt.markerPath())
@@ -576,7 +576,7 @@ func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, fullScan = readScannedRefs(lt.markerPath())
-	if !(time.Since(fullScan) < time.Hour) {
+	if time.Since(fullScan) >= time.Hour {
 		t.Fatal("not true: time.Since(fullScan) < time.Hour")
 	} // and the time of the full scan saved
 
@@ -678,7 +678,7 @@ func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
 	if got := len(got); got != 1 {
 		t.Fatalf("len(got) = %v, want %v", got, 1)
 	}
-	if !(got[0].exclude != nil) {
+	if got[0].exclude == nil {
 		t.Fatal("not true: got[0].exclude != nil")
 	}
 	if got, want := got[0].oids, oids(p); !reflect.DeepEqual(got, want) {

@@ -26,7 +26,7 @@ func TestRepositorySettingsWriteNoFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	} // git init's own template
-	if !(string(template) != "first words") {
+	if string(template) == "first words" {
 		t.Fatal("not true: string(template) != \"first words\"")
 	}
 	_, err = os.Stat(filepath.Join(dir, "git-daemon-export-ok"))

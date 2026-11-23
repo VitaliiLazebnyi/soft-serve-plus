@@ -55,7 +55,7 @@ func TestSetDescriptionDBFailureKeepsDescription(t *testing.T) {
 	}
 	refuseRepoUpdate(t, e, "description")
 
-	if !(e.be.SetDescription(e.ctx, "repo", "after") != nil) {
+	if e.be.SetDescription(e.ctx, "repo", "after") == nil {
 		t.Fatal("not true: e.be.SetDescription(e.ctx, \"repo\", \"after\") != nil")
 	}
 	r, err := e.be.Repository(e.ctx, "repo")
@@ -73,7 +73,7 @@ func TestSetPrivateDBFailureKeepsVisibility(t *testing.T) {
 	e := newWebhookEnv(t)
 	refuseRepoUpdate(t, e, "private")
 
-	if !(e.be.SetPrivate(e.ctx, "repo", true) != nil) {
+	if e.be.SetPrivate(e.ctx, "repo", true) == nil {
 		t.Fatal("not true: e.be.SetPrivate(e.ctx, \"repo\", true) != nil")
 	}
 	r, err := e.be.Repository(e.ctx, "repo")

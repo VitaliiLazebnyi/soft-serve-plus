@@ -69,14 +69,14 @@ func TestReadable(t *testing.T) {
 
 	// Readers get the repository.
 	r, level = noLookupError(t)(be.Readable(ctx, "public", nil))
-	if !(r != nil) {
+	if r == nil {
 		t.Fatal("not true: r != nil")
 	}
 	if got := level; got != access.ReadOnlyAccess {
 		t.Fatalf("level = %v, want %v", got, access.ReadOnlyAccess)
 	}
 	r, level = noLookupError(t)(be.Readable(ctx, "secret", owner))
-	if !(r != nil) {
+	if r == nil {
 		t.Fatal("not true: r != nil")
 	}
 	if got := level; got != access.AdminAccess {
