@@ -29,7 +29,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/google/go-querystring/query"
 	"github.com/google/uuid"
 )
@@ -114,11 +113,23 @@ const (
 	defaultMaxDeliveries = 100
 )
 
+// Store is the part of store.Store a Sender uses: it reads the webhooks an
+// event goes to and the users and collaborators payloads name, and records
+// deliveries.
+type Store interface {
+	GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, events []int) ([]models.Webhook, error)
+	GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error)
+	CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error
+	PruneWebhookDeliveries(ctx context.Context, h db.Handler, webhookID int64, keep int) error
+	GetUserByID(ctx context.Context, h db.Handler, id int64) (models.User, error)
+	GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) (models.Collab, error)
+}
+
 // Sender builds webhook events and sends, records and redelivers them. The
 // backend builds one at start; its fields do not change afterwards.
 type Sender struct {
 	db     *db.DB
-	store  store.Store
+	store  Store
 	logger *log.Logger
 	// client sends every request: SSRF-protected, letting through the
 	// private and internal destinations webhook.allowed_hosts permits. The
@@ -141,7 +152,7 @@ type Sender struct {
 // NewSender returns a Sender that records deliveries in dbx through st, logs
 // to logger (the default logger when nil) and takes webhook.allowed_hosts and
 // the public URLs from cfg, which may be nil for none.
-func NewSender(cfg *config.Config, dbx *db.DB, st store.Store, logger *log.Logger) *Sender {
+func NewSender(cfg *config.Config, dbx *db.DB, st Store, logger *log.Logger) *Sender {
 	if logger == nil {
 		logger = log.Default()
 	}
