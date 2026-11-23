@@ -5,7 +5,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
+
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -42,8 +43,8 @@ func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
 		t.Helper()
 		is.NoErr(err)
 		is.Equal(len(pks), 2)
-		is.True(sshutils.KeysEqual(pks[0], good1))
-		is.True(sshutils.KeysEqual(pks[1], good2))
+		is.True(proto.KeysEqual(pks[0], good1))
+		is.True(proto.KeysEqual(pks[1], good2))
 	}
 	check(s.ListPublicKeysByUserID(ctx, dbx, 100))
 }

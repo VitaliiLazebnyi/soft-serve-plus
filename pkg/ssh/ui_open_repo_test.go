@@ -9,7 +9,6 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/matryer/is"
@@ -45,7 +44,7 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	is := is.New(t)
 	cfg := newTestUIConfig(t)
 	adminKey := uiTestKey(t)
-	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(adminKey)}
+	cfg.InitialAdminKeys = []string{proto.MarshalAuthorizedKey(adminKey)}
 	is.NoErr(cfg.Validate())
 
 	ctx := t.Context()

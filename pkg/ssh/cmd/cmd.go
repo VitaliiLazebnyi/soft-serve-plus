@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/spf13/cobra"
@@ -363,7 +362,7 @@ const identitiesOnlyHint = "if you passed -i to ssh, also pass -o IdentitiesOnly
 // fingerprint of the session's public key, followed by identitiesOnlyHint.
 // The result still matches base. Without a session key it returns base.
 func sessionKeyError(ctx context.Context, base error, reason string) error {
-	pk := sshutils.PublicKeyFromContext(ctx)
+	pk := proto.PublicKeyFromContext(ctx)
 	if pk == nil {
 		return base
 	}
@@ -382,7 +381,7 @@ func (cmds *Commands) userByPublicKey(ctx context.Context) (proto.User, error) {
 	if user := proto.UserFromContext(ctx); user != nil {
 		return user, nil
 	}
-	user, err := cmds.be.UserByPublicKey(ctx, sshutils.PublicKeyFromContext(ctx))
+	user, err := cmds.be.UserByPublicKey(ctx, proto.PublicKeyFromContext(ctx))
 	// AdminKeyNonAdminOwnerError also matches proto.ErrUserNotFound, but the
 	// key does belong to a user, so it keeps its own message. Over SSH this
 	// is unreachable, since the auth middleware refuses those sessions

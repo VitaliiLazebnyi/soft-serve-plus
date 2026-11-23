@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +22,7 @@ func (cmds *Commands) InfoCommand() *cobra.Command {
 			cmd.Printf("Admin: %t\n", user.IsAdmin())
 			cmd.Printf("Public keys:\n")
 			for _, pk := range user.PublicKeys() {
-				cmd.Printf("  %s\n", sshutils.MarshalAuthorizedKey(pk))
+				cmd.Printf("  %s\n", proto.MarshalAuthorizedKey(pk))
 			}
 			return nil
 		},

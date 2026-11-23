@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/proto"
+
 	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 )
 
 func TestSplitUserCreateKey(t *testing.T) {
@@ -51,7 +52,7 @@ func TestSplitUserCreateKey(t *testing.T) {
 			if user != tc.user {
 				t.Errorf("username = %q, want %q", user, tc.user)
 			}
-			if got := sshutils.MarshalAuthorizedKey(pk); got != ak {
+			if got := proto.MarshalAuthorizedKey(pk); got != ak {
 				t.Errorf("key = %q, want %q", got, ak)
 			}
 		})

@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/lfs/sshlfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/spf13/cobra"
@@ -216,7 +215,7 @@ func gitServiceError(ctx context.Context, logger *log.Logger, service gitserve.S
 // client ignores the request, as OpenSSH does keepalives it gets no reply
 // for.
 func channelClosed(ctx context.Context) bool {
-	s := sshutils.SessionFromContext(ctx)
+	s := SessionFromContext(ctx)
 	if s == nil {
 		return false
 	}
@@ -254,7 +253,7 @@ func (r *gitRequest) hookEnv(refs *hooks.PushRefs) []string {
 		Transport: hooks.TransportSSH,
 		Repo:      r.name,
 		User:      r.user,
-		PublicKey: sshutils.PublicKeyFromContext(r.ctx),
+		PublicKey: proto.PublicKeyFromContext(r.ctx),
 		Protocol:  r.protocol,
 		Refs:      refs,
 	})
@@ -316,7 +315,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 
 	// The session's GIT_PROTOCOL, if it sent one, goes to git.
 	var protocol string
-	if sess := sshutils.SessionFromContext(ctx); sess != nil {
+	if sess := SessionFromContext(ctx); sess != nil {
 		for _, env := range sess.Environ() {
 			if v, ok := strings.CutPrefix(env, "GIT_PROTOCOL="); ok {
 				protocol = v

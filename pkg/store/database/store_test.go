@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"golang.org/x/crypto/ssh"
 )
@@ -42,7 +42,7 @@ func sameKeys(a, b []ssh.PublicKey) bool {
 		return false
 	}
 	for i := range a {
-		if !sshutils.KeysEqual(a[i], b[i]) {
+		if !proto.KeysEqual(a[i], b[i]) {
 			return false
 		}
 	}

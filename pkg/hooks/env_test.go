@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -73,7 +72,7 @@ func TestEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := sshutils.MarshalAuthorizedKey(pk)
+	key := proto.MarshalAuthorizedKey(pk)
 
 	for _, tc := range []struct {
 		name string

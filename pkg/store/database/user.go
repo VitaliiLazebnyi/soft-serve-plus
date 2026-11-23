@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -17,7 +16,7 @@ import (
 func (*Store) AddPublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error {
 	query := h.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-	_, err := h.ExecContext(ctx, query, id, sshutils.MarshalAuthorizedKey(pk))
+	_, err := h.ExecContext(ctx, query, id, proto.MarshalAuthorizedKey(pk))
 	return err
 }
 
@@ -39,7 +38,7 @@ func (*Store) CreateUser(ctx context.Context, h db.Handler, username string, isA
 	for _, pk := range pks {
 		query := h.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 			VALUES (?, ?, CURRENT_TIMESTAMP);`)
-		if _, err := h.ExecContext(ctx, query, userID, sshutils.MarshalAuthorizedKey(pk)); err != nil {
+		if _, err := h.ExecContext(ctx, query, userID, proto.MarshalAuthorizedKey(pk)); err != nil {
 			return err
 		}
 	}
@@ -73,7 +72,7 @@ func (*Store) FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.Publ
 			FROM users
 			INNER JOIN public_keys ON users.id = public_keys.user_id
 			WHERE public_keys.public_key = ?;`)
-	err := h.GetContext(ctx, &m, query, sshutils.MarshalAuthorizedKey(pk))
+	err := h.GetContext(ctx, &m, query, proto.MarshalAuthorizedKey(pk))
 	return m, err
 }
 
@@ -156,7 +155,7 @@ func (s *Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int
 func (*Store) RemovePublicKeyByUserID(ctx context.Context, h db.Handler, id int64, pk ssh.PublicKey) error {
 	query := h.Rebind(`DELETE FROM public_keys WHERE user_id = ? AND public_key = ?;`)
 	// Nothing removed means the user does not have the key.
-	return affected(h.ExecContext(ctx, query, id, sshutils.MarshalAuthorizedKey(pk)))
+	return affected(h.ExecContext(ctx, query, id, proto.MarshalAuthorizedKey(pk)))
 }
 
 // SetAdminByUsername implements store.Store.
@@ -222,7 +221,7 @@ func affected(res sql.Result, err error) error {
 func parseStoredKeys(logger *log.Logger, aks []string, keyvals ...any) []ssh.PublicKey {
 	pks := make([]ssh.PublicKey, 0, len(aks))
 	for _, ak := range aks {
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
+		pk, _, err := proto.ParseAuthorizedKey(ak)
 		if err != nil {
 			logger.Warn("skipping unparsable stored public key", append(keyvals, "err", err)...)
 			continue

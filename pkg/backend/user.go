@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -24,7 +23,7 @@ func (d *Backend) IsAdminKey(pk ssh.PublicKey) bool {
 		return false
 	}
 	for _, k := range d.cfg.AdminKeys() {
-		if sshutils.KeysEqual(pk, k) {
+		if proto.KeysEqual(pk, k) {
 			return true
 		}
 	}
@@ -45,7 +44,7 @@ func (d *Backend) IsServerAdmin(ctx context.Context, user proto.User) bool {
 	if isAccountAdmin(user) {
 		return true
 	}
-	return d.IsAdminKey(sshutils.PublicKeyFromContext(ctx))
+	return d.IsAdminKey(proto.PublicKeyFromContext(ctx))
 }
 
 // isAccountAdmin reports whether user's account has the admin flag. Readable
@@ -426,7 +425,7 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	// refused with an error saying how to fix it.
 	if !m.Admin && d.IsAdminKey(pk) {
 		d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
-			"username", m.Username, "pk", sshutils.MarshalAuthorizedKey(pk))
+			"username", m.Username, "pk", proto.MarshalAuthorizedKey(pk))
 		return nil, &AdminKeyNonAdminOwnerError{Username: m.Username}
 	}
 
@@ -647,7 +646,7 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, user proto.User, pk ss
 			return err
 		}
 		if len(keys) <= 1 && slices.ContainsFunc(keys, func(k ssh.PublicKey) bool {
-			return sshutils.KeysEqual(k, pk)
+			return proto.KeysEqual(k, pk)
 		}) {
 			return ErrLastPublicKey
 		}

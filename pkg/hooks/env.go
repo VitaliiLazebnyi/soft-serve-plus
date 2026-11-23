@@ -8,7 +8,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -89,7 +88,7 @@ func Env(cfg *config.Config, req Request) []string {
 		"SOFT_SERVE_LOG_PATH=" + LogPath(cfg),
 	}
 	if req.Transport == TransportSSH {
-		env = append(env, "SOFT_SERVE_PUBLIC_KEY="+sshutils.MarshalAuthorizedKey(req.PublicKey))
+		env = append(env, "SOFT_SERVE_PUBLIC_KEY="+proto.MarshalAuthorizedKey(req.PublicKey))
 	}
 	if req.User != nil {
 		env = append(env, "SOFT_SERVE_USERNAME="+req.User.Username())

@@ -7,7 +7,6 @@ import (
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -26,7 +25,7 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 	userKey := newTestPublicKey(t)
 	adminKey := newTestPublicKey(t)
 	listedKey := newTestPublicKey(t)
-	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey)))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(listedKey)))
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{userKey}})
 	is.NoErr(err)

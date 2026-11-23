@@ -9,7 +9,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
 const (
@@ -138,7 +138,7 @@ var createTables = Migration{
 		}
 		for _, k := range adminKeys {
 			query := tx.Rebind(insert + "INTO public_keys (user_id, public_key, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)" + onConflict)
-			ak := sshutils.MarshalAuthorizedKey(k)
+			ak := proto.MarshalAuthorizedKey(k)
 			res, err := tx.ExecContext(ctx, query, adminID, ak)
 			if errors.Is(err, db.ErrDuplicateKey) {
 				continue

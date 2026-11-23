@@ -10,7 +10,8 @@ import (
 	"hash"
 	"strings"
 
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
+
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -86,7 +87,7 @@ func verifySSHSig(pk gossh.PublicKey, namespace string, message, armored []byte)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errBadSSHSig, err)
 	}
-	if !sshutils.KeysEqual(signer, pk) {
+	if !proto.KeysEqual(signer, pk) {
 		return fmt.Errorf("%w: signed with another key", errBadSSHSig)
 	}
 	if blob.Namespace != namespace {

@@ -11,7 +11,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -73,7 +73,7 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx, env Env) error {
 
 	keys := cfg.AdminKeys()
 	slices.SortFunc(keys, func(a, b gossh.PublicKey) int {
-		return strings.Compare(sshutils.MarshalAuthorizedKey(a), sshutils.MarshalAuthorizedKey(b))
+		return strings.Compare(proto.MarshalAuthorizedKey(a), proto.MarshalAuthorizedKey(b))
 	})
 	configured := make(map[string]struct{}, len(keys))
 
@@ -82,7 +82,7 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx, env Env) error {
 	owners := make(map[int64]string)
 	var missing []gossh.PublicKey
 	for _, k := range keys {
-		ak := sshutils.MarshalAuthorizedKey(k)
+		ak := proto.MarshalAuthorizedKey(k)
 		configured[ak] = struct{}{}
 
 		o, ok, err := keyOwner(ctx, tx, ak)
@@ -117,7 +117,7 @@ func syncAdminKeys(ctx context.Context, tx *db.Tx, env Env) error {
 			if !ok {
 				break
 			}
-			ak := sshutils.MarshalAuthorizedKey(k)
+			ak := proto.MarshalAuthorizedKey(k)
 			added, err := insertSyncedKey(ctx, tx, targetID, ak)
 			if err != nil {
 				return fmt.Errorf("add initial admin key: %w", err)
@@ -365,7 +365,7 @@ func removeSyncedKey(ctx context.Context, tx *db.Tx, logger *log.Logger, k synce
 
 // fingerprint returns the SHA256 fingerprint of an authorized key.
 func fingerprint(ak string) string {
-	if pk, _, err := sshutils.ParseAuthorizedKey(ak); err == nil {
+	if pk, _, err := proto.ParseAuthorizedKey(ak); err == nil {
 		return gossh.FingerprintSHA256(pk)
 	}
 	return "unparsable key"

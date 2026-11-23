@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -72,7 +71,7 @@ func (cmds *Commands) checkPubkeyProof(cmd *cobra.Command, user proto.User, pk g
 	}
 	name := cur.Username()
 
-	if s := sshutils.SessionFromContext(ctx); s != nil {
+	if s := SessionFromContext(ctx); s != nil {
 		if _, _, isPty := s.Pty(); isPty {
 			return cmds.noPubkeyProof(ctx, name, errProofInTerminal)
 		}
@@ -103,8 +102,8 @@ func (cmds *Commands) checkPubkeyProof(cmd *cobra.Command, user proto.User, pk g
 // good. Removing a different key of theirs is allowed, so a key can be
 // rotated by connecting with the new one.
 func checkRemovablePubkey(ctx context.Context, user proto.User, pk gossh.PublicKey) error {
-	sessionKey := sshutils.PublicKeyFromContext(ctx)
-	if sessionKey == nil || !sshutils.KeysEqual(pk, sessionKey) {
+	sessionKey := proto.PublicKeyFromContext(ctx)
+	if sessionKey == nil || !proto.KeysEqual(pk, sessionKey) {
 		return nil
 	}
 	if len(user.PublicKeys()) <= 1 {
@@ -133,7 +132,7 @@ func (cmds *Commands) PubkeyCommand() *cobra.Command {
 				return err
 			}
 
-			apk, _, err := sshutils.ParseAuthorizedKey(strings.Join(args, " "))
+			apk, _, err := proto.ParseAuthorizedKey(strings.Join(args, " "))
 			if err != nil {
 				return err
 			}
@@ -159,7 +158,7 @@ func (cmds *Commands) PubkeyCommand() *cobra.Command {
 				}
 			}
 
-			err = be.AddOwnPublicKey(ctx, user, sshutils.PublicKeyFromContext(ctx), apk)
+			err = be.AddOwnPublicKey(ctx, user, proto.PublicKeyFromContext(ctx), apk)
 			if errors.Is(err, db.ErrDuplicateKey) {
 				// Whose key it is, the caller's or another account's, is
 				// not said.
@@ -181,7 +180,7 @@ func (cmds *Commands) PubkeyCommand() *cobra.Command {
 				return err
 			}
 
-			apk, _, err := sshutils.ParseAuthorizedKey(strings.Join(args, " "))
+			apk, _, err := proto.ParseAuthorizedKey(strings.Join(args, " "))
 			if err != nil {
 				return err
 			}
@@ -216,7 +215,7 @@ func (cmds *Commands) PubkeyCommand() *cobra.Command {
 
 			pks := user.PublicKeys()
 			for _, pk := range pks {
-				cmd.Println(sshutils.MarshalAuthorizedKey(pk))
+				cmd.Println(proto.MarshalAuthorizedKey(pk))
 			}
 
 			return nil

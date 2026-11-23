@@ -1,4 +1,4 @@
-package sshutils
+package proto
 
 import (
 	"testing"

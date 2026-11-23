@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"golang.org/x/crypto/ssh"
 )
@@ -80,7 +80,7 @@ func newAuthorizedKey(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sshutils.MarshalAuthorizedKey(pk)
+	return proto.MarshalAuthorizedKey(pk)
 }
 
 type ownerRow struct {
@@ -556,7 +556,7 @@ func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
 	if o, ok := ownerOf(t, dbx, ak); !ok || o.Username != "admin" {
 		t.Errorf("key owner with the file missing = %+v, %v; want it kept on admin", o, ok)
 	}
-	pk, _, err := sshutils.ParseAuthorizedKey(ak)
+	pk, _, err := proto.ParseAuthorizedKey(ak)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 
 	pk := func(ak string) ssh.PublicKey {
 		t.Helper()
-		k, _, err := sshutils.ParseAuthorizedKey(ak)
+		k, _, err := proto.ParseAuthorizedKey(ak)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -699,7 +699,7 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 	ak := newAuthorizedKey(t)
 	cfg.InitialAdminKeys = []string{ak}
 	boot(t, ctx, cfg, dbx)
-	pk, _, err := sshutils.ParseAuthorizedKey(ak)
+	pk, _, err := proto.ParseAuthorizedKey(ak)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +810,7 @@ func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
 		}
 	}
 
-	if got := cfg.AdminKeys(); !slices.EqualFunc(got, want, sshutils.KeysEqual) {
+	if got := cfg.AdminKeys(); !slices.EqualFunc(got, want, proto.KeysEqual) {
 		t.Error("the sync reordered the config's admin keys")
 	}
 	for _, dbx := range dbs {

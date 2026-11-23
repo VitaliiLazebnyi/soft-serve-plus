@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
@@ -1013,7 +1012,7 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository, webhook.EventRepositoryVisibilityChange)
 	pub := newTestPublicKey(t)
-	setAdminKeys(t, e.cfg, append(e.cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
+	setAdminKeys(t, e.cfg, append(e.cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
 	ctx := context.WithValue(proto.WithUserContext(e.ctx, nil), charmssh.ContextKeyPublicKey, pub)
 
 	is.NoErr(e.be.SetPrivate(ctx, "repo", true))

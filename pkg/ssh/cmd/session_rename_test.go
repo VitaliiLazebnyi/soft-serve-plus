@@ -10,7 +10,6 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
@@ -61,16 +60,16 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	is.NoErr(err)
 
 	// The proof signs the account's name as it is now.
-	_, err = runPubkeyIn(sessCtx, proofFor(t, k2signer, "carol"), "add", sshutils.MarshalAuthorizedKey(k2))
+	_, err = runPubkeyIn(sessCtx, proofFor(t, k2signer, "carol"), "add", proto.MarshalAuthorizedKey(k2))
 	is.NoErr(err)
 	is.Equal(len(keysOf(ctx, "carol")), 2)
 	is.Equal(len(keysOf(ctx, "alice")), 2)
 
 	// The other account's key is not the session's to remove.
-	err = run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(mk))
+	err = run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", proto.MarshalAuthorizedKey(mk))
 	is.True(errors.Is(err, proto.ErrPublicKeyNotFound))
 	is.Equal(len(keysOf(ctx, "alice")), 2)
-	is.NoErr(run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", sshutils.MarshalAuthorizedKey(k2)))
+	is.NoErr(run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", proto.MarshalAuthorizedKey(k2)))
 	is.Equal(len(keysOf(ctx, "carol")), 1)
 
 	is.NoErr(run(sessCtx, cmdsOf(sessCtx).SetUsernameCommand(), "dave"))

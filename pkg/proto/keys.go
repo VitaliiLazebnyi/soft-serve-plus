@@ -1,8 +1,7 @@
-package sshutils
+package proto
 
 import (
 	"bytes"
-	"context"
 
 	"charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -29,23 +28,4 @@ func MarshalAuthorizedKey(pk gossh.PublicKey) string {
 // KeysEqual returns whether the two public keys are equal.
 func KeysEqual(a, b gossh.PublicKey) bool {
 	return ssh.KeysEqual(a, b)
-}
-
-// PublicKeyFromContext returns the public key from the context.
-func PublicKeyFromContext(ctx context.Context) gossh.PublicKey {
-	if pk, ok := ctx.Value(ssh.ContextKeyPublicKey).(gossh.PublicKey); ok {
-		return pk
-	}
-	return nil
-}
-
-// ContextKeySession is the context key for the SSH session.
-var ContextKeySession = &struct{ string }{"session"}
-
-// SessionFromContext returns the SSH session from the context.
-func SessionFromContext(ctx context.Context) ssh.Session {
-	if s, ok := ctx.Value(ContextKeySession).(ssh.Session); ok {
-		return s
-	}
-	return nil
 }

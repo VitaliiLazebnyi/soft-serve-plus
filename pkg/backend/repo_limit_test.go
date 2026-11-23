@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -119,7 +118,7 @@ func TestMaxReposPerUserAdminsExempt(t *testing.T) {
 	}
 
 	pub := newTestPublicKey(t)
-	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
 	is.NoErr(err)
 	keyCtx := context.WithValue(proto.WithUserContext(ctx, alice), charmssh.ContextKeyPublicKey, pub)
