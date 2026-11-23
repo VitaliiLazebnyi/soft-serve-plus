@@ -697,7 +697,7 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitDaemon, err := daemon.NewGitDaemon(cfg, be, log.New(io.Discard))
+	gitDaemon, err := daemon.NewServer(cfg, be, log.New(io.Discard))
 	if err != nil {
 		t.Fatal(err)
 	}

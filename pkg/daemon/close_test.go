@@ -12,12 +12,12 @@ import (
 // and which has no total time limit on a connection, so a request that ends
 // within the wait can only have been ended by Close. opts change the daemon
 // before it serves.
-func startCloseTestDaemon(t *testing.T, opts ...func(*GitDaemon)) (*GitDaemon, string) {
+func startCloseTestDaemon(t *testing.T, opts ...func(*Server)) (*Server, string) {
 	t.Helper()
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 600
 	cfg.Git.MaxTimeout = 0
-	d, err := NewGitDaemon(&cfg, testBackend, nil)
+	d, err := NewServer(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func startCloseTestDaemon(t *testing.T, opts ...func(*GitDaemon)) (*GitDaemon, s
 
 // waitHandlers waits up to idleWait for every goroutine of d, its accept
 // loop and its handlers, to return.
-func waitHandlers(t *testing.T, d *GitDaemon) {
+func waitHandlers(t *testing.T, d *Server) {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
@@ -70,7 +70,7 @@ func TestCloseEndsRequestContext(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	ctxErr := make(chan error, 1)
-	d, addr := startCloseTestDaemon(t, func(d *GitDaemon) {
+	d, addr := startCloseTestDaemon(t, func(d *Server) {
 		d.testHooks.beforeAuthorize = func(ctx context.Context) {
 			close(started)
 			<-release

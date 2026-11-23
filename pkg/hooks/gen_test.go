@@ -14,7 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-func TestGenerateHooks(t *testing.T) {
+func TestGenerate(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
@@ -24,7 +24,7 @@ func TestGenerateHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := GenerateHooks(context.TODO(), cfg, "test.git"); err != nil {
+	if err := Generate(context.TODO(), cfg, "test.git"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +68,7 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	if _, err := git.Init(t.Context(), repoPath, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := GenerateHooks(context.TODO(), cfg, "my repo"); err != nil {
+	if err := Generate(context.TODO(), cfg, "my repo"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -309,13 +309,13 @@ func initRepo(t *testing.T) (*config.Config, string) {
 	return cfg, repoPath
 }
 
-func TestGenerateHooksRestoresExecutableBit(t *testing.T) {
+func TestGenerateRestoresExecutableBit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes have no executable bit on Windows")
 	}
 
 	cfg, repoPath := initRepo(t)
-	if err := GenerateHooks(context.TODO(), cfg, "test.git"); err != nil {
+	if err := Generate(context.TODO(), cfg, "test.git"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,7 +334,7 @@ func TestGenerateHooksRestoresExecutableBit(t *testing.T) {
 		}
 	}
 
-	if err := GenerateHooks(context.TODO(), cfg, "test.git"); err != nil {
+	if err := Generate(context.TODO(), cfg, "test.git"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,7 +349,7 @@ func TestGenerateHooksRestoresExecutableBit(t *testing.T) {
 	}
 }
 
-func TestGenerateHooksReturnsWriteError(t *testing.T) {
+func TestGenerateReturnsWriteError(t *testing.T) {
 	cfg, repoPath := initRepo(t)
 
 	// A directory in place of the soft-serve hook makes writing it fail.
@@ -357,7 +357,7 @@ func TestGenerateHooksReturnsWriteError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := GenerateHooks(context.TODO(), cfg, "test.git"); err == nil {
+	if err := Generate(context.TODO(), cfg, "test.git"); err == nil {
 		t.Fatal("expected an error when a hook can't be written")
 	}
 }

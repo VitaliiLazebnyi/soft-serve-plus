@@ -25,7 +25,7 @@ import (
 func TestRefusalEndsAtRequestDeadline(t *testing.T) {
 	t.Parallel()
 	const requestTimeout = time.Hour
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) {
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) {
 		d.requestTimeout = requestTimeout
 		d.refuseLinger = time.Hour
 		d.testHooks.now = func() time.Time { return time.Now().Add(2 * requestTimeout) }
@@ -71,7 +71,7 @@ func dialHeld(t *testing.T, addr, request string, want error) net.Conn {
 // for a refused client to hang up.
 func TestShutdownCutsRefusalWait(t *testing.T) {
 	t.Parallel()
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) { d.refuseLinger = time.Hour })
 	dialHeld(t, addr, pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported)
 	// The refusal waits on the client, which neither sends nor hangs up.
 	waitConns(t, d, 1, idleWait)
@@ -85,7 +85,7 @@ func TestShutdownCutsRefusalWait(t *testing.T) {
 
 // holdSlot dials addr and waits until d counts the connection, which then
 // holds one of d's slots until it is closed or the test ends.
-func holdSlot(t *testing.T, d *GitDaemon, addr string) net.Conn {
+func holdSlot(t *testing.T, d *Server, addr string) net.Conn {
 	t.Helper()
 	want := d.conns.Size() + 1
 	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
@@ -108,7 +108,7 @@ func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
 	conns := make(chan *recordedConn, 2)
 	d, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
 		return &recordingListener{Listener: inner, conns: conns}
-	}, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	}, func(d *Server) { d.refuseLinger = time.Hour })
 	accepted := func() *recordedConn {
 		t.Helper()
 		select {
@@ -144,7 +144,7 @@ func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
 // them, and that Shutdown does not wait on them.
 func TestMaxConnectionsRefusalsDoNotBlockAccept(t *testing.T) {
 	t.Parallel()
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) { d.refuseLinger = time.Hour })
 	held := holdSlot(t, d, addr)
 	for range maxRefusing + 4 {
 		dialHeld(t, addr, "", gitserve.ErrMaxConnections)

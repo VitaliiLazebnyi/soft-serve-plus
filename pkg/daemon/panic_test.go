@@ -21,7 +21,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	t.Parallel()
 	logs := &syncBuffer{}
 	var panicked atomic.Bool
-	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) {
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) {
 		d.logger = log.New(logs)
 		d.testHooks.beforeAuthorize = func(context.Context) {
 			if panicked.CompareAndSwap(false, true) {

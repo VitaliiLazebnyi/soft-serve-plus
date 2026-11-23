@@ -474,7 +474,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		return hooks.GenerateHooks(ctx, d.cfg, name)
+		return hooks.Generate(ctx, d.cfg, name)
 	}); err != nil {
 		// The callers log the failure: CreateRepository through
 		// clientError, an import where it registers.

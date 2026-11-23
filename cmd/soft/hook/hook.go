@@ -24,7 +24,7 @@ var ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be r
 
 // The hook commands are run for a repository whose hooks were generated
 // before the generated scripts stopped calling soft (see
-// hooks.GenerateHooks); they call them until "soft admin sync-hooks". Each
+// hooks.Generate); they call them until "soft admin sync-hooks". Each
 // does what the generated script does now: post-receive writes the ref
 // lines to $SOFT_SERVE_PUSH_REFS, so the server sends the push's webhooks,
 // and every hook runs the custom hook. The server does the rest once

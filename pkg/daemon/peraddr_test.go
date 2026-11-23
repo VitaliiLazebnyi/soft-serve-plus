@@ -46,13 +46,13 @@ func (c *fakeAddrConn) NetConn() net.Conn { return c.Conn }
 // perAddrDaemon serves a daemon allowing limit connections in all and
 // perAddr from one address. Its from function dials it as a client at addr,
 // or at loopback if addr is the zero Addr.
-func perAddrDaemon(t *testing.T, limit, perAddr int) (*GitDaemon, func(addr netip.Addr) net.Conn) {
+func perAddrDaemon(t *testing.T, limit, perAddr int) (*Server, func(addr netip.Addr) net.Conn) {
 	t.Helper()
 	l := &fakeAddrListener{next: make(chan netip.Addr, 1)}
 	d, addr := startDaemonOn(t, limit, func(inner net.Listener) net.Listener {
 		l.Listener = inner
 		return l
-	}, func(d *GitDaemon) { d.cfg.Git.MaxConnectionsPerIP = perAddr })
+	}, func(d *Server) { d.cfg.Git.MaxConnectionsPerIP = perAddr })
 	from := func(a netip.Addr) net.Conn {
 		t.Helper()
 		if a.IsValid() {

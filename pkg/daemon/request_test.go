@@ -38,12 +38,12 @@ func (b *syncBuffer) String() string {
 
 // newRequestTestDaemon serves a daemon that logs at Info level to the
 // returned buffer, on its own loopback listener.
-func newRequestTestDaemon(t *testing.T) (*GitDaemon, *syncBuffer) {
+func newRequestTestDaemon(t *testing.T) (*Server, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
 	logger := log.New(logs)
 	logger.SetLevel(log.InfoLevel)
-	d, err := NewGitDaemon(testDaemon.cfg, testBackend, logger)
+	d, err := NewServer(testDaemon.cfg, testBackend, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func newRequestTestDaemon(t *testing.T) (*GitDaemon, *syncBuffer) {
 
 // request asks d for repo with service and returns the first line it
 // answers with, after the connection is closed.
-func request(t *testing.T, d *GitDaemon, service gitserve.Service, repo string) string {
+func request(t *testing.T, d *Server, service gitserve.Service, repo string) string {
 	t.Helper()
 	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestReadableAccessTimeout(t *testing.T) {
 	if _, err := testBackend.CreateRepository(context.Background(), "timeout-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	d, err := NewGitDaemon(testDaemon.cfg, testBackend, nil)
+	d, err := NewServer(testDaemon.cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

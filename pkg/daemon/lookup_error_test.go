@@ -21,7 +21,7 @@ import (
 // lookup tests break: Postgres when SOFT_SERVE_DB_DRIVER is "postgres",
 // SQLite otherwise. It holds one public repository, "public". The log is
 // written to the returned buffer at Debug level.
-func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *syncBuffer) {
+func newLookupTestDaemon(t *testing.T) (context.Context, *Server, *db.DB, *syncBuffer) {
 	t.Helper()
 	ctx := context.Background()
 	dbx, err := dbtest.Open(ctx, t)
@@ -45,7 +45,7 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewGitDaemon(cfg, be, logger)
+	d, err := NewServer(cfg, be, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

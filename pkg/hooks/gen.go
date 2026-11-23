@@ -20,7 +20,7 @@ const (
 	PostUpdateHook  = "post-update"
 )
 
-// GenerateHooks generates git server-side hooks for a repository. Currently, it supports the following hooks:
+// Generate generates git server-side hooks for a repository. Currently, it supports the following hooks:
 // - pre-receive
 // - update
 // - post-receive
@@ -28,7 +28,7 @@ const (
 //
 // This function should be called by the backend when a repository is created.
 // TODO: support context.
-func GenerateHooks(_ context.Context, cfg *config.Config, repo string) error {
+func Generate(_ context.Context, cfg *config.Config, repo string) error {
 	hooksPath := filepath.Join(RepoPath(cfg, repo), "hooks")
 	if err := os.MkdirAll(hooksPath, os.ModePerm); err != nil {
 		return err

@@ -93,7 +93,7 @@ func TestHangUpWithoutRequest(t *testing.T) {
 }
 
 // waitConns waits up to within until d holds n connections.
-func waitConns(t *testing.T, d *GitDaemon, n int, within time.Duration) {
+func waitConns(t *testing.T, d *Server, n int, within time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for d.conns.Size() != n {

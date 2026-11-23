@@ -223,7 +223,7 @@ func InitializeHooks(ctx context.Context, cfg *config.Config, be *backend.Backen
 			errs = append(errs, fmt.Errorf("hooks of %s: %w", repo.Name(), err))
 			continue
 		}
-		if err := hooks.GenerateHooks(ctx, cfg, repo.Name()); err != nil {
+		if err := hooks.Generate(ctx, cfg, repo.Name()); err != nil {
 			errs = append(errs, fmt.Errorf("hooks of %s: %w", repo.Name(), err))
 		}
 	}
