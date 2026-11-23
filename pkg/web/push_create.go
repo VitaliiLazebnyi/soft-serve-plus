@@ -151,7 +151,10 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 		p.remove(name, pc, gen)
 		return
 	}
-	refs := p.be.RepositoryHasRefs(pc.repo)
+	// The request has ended, and its context with it: a check cut short
+	// would count as having refs and drop the repository from the list.
+	// The list outlives requests, as remove's context does.
+	refs := p.be.RepositoryHasRefs(context.Background(), pc.repo)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

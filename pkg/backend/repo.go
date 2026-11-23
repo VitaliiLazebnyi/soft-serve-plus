@@ -1826,7 +1826,7 @@ func (r *repo) UpdatedAt() time.Time {
 // back to the row.
 func (d *Backend) populateLastModified(ctx context.Context, name string) error {
 	rp := d.repoPath(name)
-	if !hasRefs(rp) {
+	if !hasRefs(ctx, rp) {
 		return nil
 	}
 	r, err := git.Open(ctx, rp)
