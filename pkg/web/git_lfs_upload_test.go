@@ -19,14 +19,13 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 type lfsUploadEnv struct {
+	env       *testEnv
 	ctx       context.Context
 	datastore store.Store
 	repo      proto.Repository
@@ -35,9 +34,18 @@ type lfsUploadEnv struct {
 	lfsDir    string
 }
 
+// newLFSUploadEnv returns an env whose server logs on log.Default().
 func newLFSUploadEnv(t *testing.T) *lfsUploadEnv {
 	t.Helper()
-	ctx, be, datastore := newLFSTestContext(t)
+	return newLFSUploadEnvLogging(t, nil)
+}
+
+// newLFSUploadEnvLogging returns an env whose backend and server log on
+// logger.
+func newLFSUploadEnvLogging(t *testing.T, logger *log.Logger) *lfsUploadEnv {
+	t.Helper()
+	env := newTestEnvLogging(t, logger)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -50,13 +58,14 @@ func newLFSUploadEnv(t *testing.T) *lfsUploadEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.FromContext(ctx)
+	cfg := env.cfg
 	return &lfsUploadEnv{
+		env:       env,
 		ctx:       ctx,
 		datastore: datastore,
 		repo:      repo,
 		token:     token,
-		router:    lfsTestRouter(t, ctx),
+		router:    env.gitRouter(t),
 		lfsDir:    filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10)),
 	}
 }
@@ -102,6 +111,7 @@ func sha256Hex(s string) string {
 // the body straight to the object path and record it, so a client could
 // store arbitrary content under any oid.
 func TestLFSUploadRejectsMismatchedContent(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	oid := sha256Hex(content)
 	cases := []struct {
@@ -117,6 +127,7 @@ func TestLFSUploadRejectsMismatchedContent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newLFSUploadEnv(t)
 			w := e.upload(tc.oid, tc.size, strings.NewReader(tc.body))
 			if w.Code != http.StatusUnprocessableEntity {
@@ -125,7 +136,7 @@ func TestLFSUploadRejectsMismatchedContent(t *testing.T) {
 			if _, err := os.Stat(e.objectPath(tc.oid)); !os.IsNotExist(err) {
 				t.Errorf("object stored despite mismatch (stat err: %v)", err)
 			}
-			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), tc.oid); err == nil {
+			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), tc.oid); err == nil {
 				t.Error("object recorded despite mismatch")
 			}
 			e.assertNoTempFiles(t)
@@ -138,6 +149,7 @@ func TestLFSUploadRejectsMismatchedContent(t *testing.T) {
 // the handler must not rely on the header: it answers 411, since the object
 // cannot be checked against a declared size, and stores nothing.
 func TestLFSUploadRequiresContentLength(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	const content = "hello lfs"
 	oid := sha256Hex(content)
@@ -160,7 +172,7 @@ func TestLFSUploadRequiresContentLength(t *testing.T) {
 	if _, err := os.Stat(e.objectPath(oid)); !os.IsNotExist(err) {
 		t.Errorf("object stored without a content length (stat err: %v)", err)
 	}
-	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err == nil {
+	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err == nil {
 		t.Error("object recorded without a content length")
 	}
 	e.assertNoTempFiles(t)
@@ -169,6 +181,7 @@ func TestLFSUploadRequiresContentLength(t *testing.T) {
 // TestLFSUploadStoresVerifiedObject checks the happy path, including a
 // repeated upload of an object that is already stored.
 func TestLFSUploadStoresVerifiedObject(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	const content = "hello lfs"
 	oid := sha256Hex(content)
@@ -187,7 +200,7 @@ func TestLFSUploadStoresVerifiedObject(t *testing.T) {
 	if string(got) != content {
 		t.Errorf("stored content %q, want %q", got, content)
 	}
-	obj, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid)
+	obj, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +228,7 @@ func (h *hookReader) Read(p []byte) (int, error) {
 // that both get past the existence check both succeed. The second insert hits
 // the unique constraint, which used to be answered with a 500.
 func TestLFSUploadConcurrentDuplicate(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	const content = "concurrent object"
 	oid := sha256Hex(content)
@@ -242,7 +256,7 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 	}
 	done.Wait()
 
-	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err != nil {
+	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err != nil {
 		t.Errorf("object not recorded: %v", err)
 	}
 	e.assertNoTempFiles(t)
@@ -251,12 +265,13 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 // TestLFSUploadRepoDeletedMidUpload checks that a foreign key violation is
 // not mistaken for a duplicate upload, which the handler reports as success.
 func TestLFSUploadRepoDeletedMidUpload(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	const content = "orphan object"
 	oid := sha256Hex(content)
 
 	body := &hookReader{r: strings.NewReader(content), hook: func() {
-		if err := e.datastore.DeleteRepoByName(e.ctx, db.FromContext(e.ctx), "repo"); err != nil {
+		if err := e.datastore.DeleteRepoByName(e.ctx, e.env.dbx, "repo"); err != nil {
 			t.Errorf("delete repo: %v", err)
 		}
 	}}
@@ -301,6 +316,7 @@ func (e *lfsUploadEnv) batchUpload(t *testing.T, objects ...lfs.Pointer) lfs.Bat
 // whose row or file is incomplete or truncated, still get upload and verify
 // actions.
 func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 
 	stored := "stored object"
@@ -312,7 +328,7 @@ func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
 	// A row without its file, as left by a lost or deleted file.
 	noFile := "row only"
 	noFileOid := sha256Hex(noFile)
-	if err := e.datastore.CreateLFSObject(e.ctx, db.FromContext(e.ctx), e.repo.ID(), noFileOid, int64(len(noFile))); err != nil {
+	if err := e.datastore.CreateLFSObject(e.ctx, e.env.dbx, e.repo.ID(), noFileOid, int64(len(noFile))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -356,6 +372,7 @@ func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
 // used to skip any upload of a recorded object, so the file could never be
 // restored.
 func TestLFSUploadRestoresMissingObject(t *testing.T) {
+	t.Parallel()
 	const content = "restore me"
 	oid := sha256Hex(content)
 	cases := []struct {
@@ -383,6 +400,7 @@ func TestLFSUploadRestoresMissingObject(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newLFSUploadEnv(t)
 			if w := e.upload(oid, int64(len(content)), strings.NewReader(content)); w.Code != http.StatusOK {
 				t.Fatalf("first upload: got status %d, want 200: %s", w.Code, w.Body.String())
@@ -399,7 +417,7 @@ func TestLFSUploadRestoresMissingObject(t *testing.T) {
 			if string(got) != content {
 				t.Errorf("stored content %q, want %q", got, content)
 			}
-			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err != nil {
+			if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err != nil {
 				t.Errorf("object no longer recorded: %v", err)
 			}
 			e.assertNoTempFiles(t)
@@ -410,17 +428,13 @@ func TestLFSUploadRestoresMissingObject(t *testing.T) {
 // TestLFSUploadAbortedBody checks an upload whose body cannot be read to the
 // end, as when the client aborts it: that is the client's doing, so it gets
 // a 400 and an info log line rather than a 500 and an error, and nothing is
-// stored. It replaces the global default logger and must not run in
-// parallel.
+// stored.
 func TestLFSUploadAbortedBody(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	logger := log.New(&logs)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	e := newLFSUploadEnv(t)
-	e.ctx = log.WithContext(e.ctx, logger)
+	e := newLFSUploadEnvLogging(t, logger)
 	const content = "hello lfs"
 	oid := sha256Hex(content)
 

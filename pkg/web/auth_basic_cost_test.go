@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -15,6 +14,9 @@ import (
 // bcryptCompare runs one bcrypt comparison at the default cost against a
 // hash no password matches: what a password check used to run for each
 // Basic login whose password was not a token.
+//
+// The tests that time it do not run in parallel, so the machine is as busy
+// for the bcrypt comparisons they time as for the logins.
 func bcryptCompare(t *testing.T) func() {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("not-guess"), bcrypt.DefaultCost)
@@ -52,11 +54,11 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 		// "stranger" is a registered user, "nobody" is not; neither has a
 		// way to log in with a password.
 		req.SetBasicAuth("stranger", "guess")
-		if user, _, err := authenticate(req); user != nil || !badCredentials(err) {
+		if user, _, err := f.server.authenticate(req, f.server.logger); user != nil || !badCredentials(err) {
 			t.Fatalf("authenticate => %v, %v, want bad credentials", user, err)
 		}
 		req.SetBasicAuth("nobody", "guess")
-		if user, _, err := authenticate(req); user != nil || !badCredentials(err) {
+		if user, _, err := f.server.authenticate(req, f.server.logger); user != nil || !badCredentials(err) {
 			t.Fatalf("authenticate => %v, %v, want bad credentials", user, err)
 		}
 		login = min(login, time.Since(start))
@@ -84,14 +86,15 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 // compared with the fastest bcrypt measured on the same machine. A login that
 // runs a bcrypt can never be faster than one.
 func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// A limit puts the slot channel in the request path, as in production;
 	// a slot a login leaked would make the ninth request answer 503.
-	config.FromContext(ctx).HTTP.MaxConnections = 8
-	router := testRouter(t, ctx)
+	env.cfg.HTTP.MaxConnections = 8
+	router := env.router(t)
 
 	// One bcrypt comparison, as each login used to run; the faster of two.
 	compare := bcryptCompare(t)

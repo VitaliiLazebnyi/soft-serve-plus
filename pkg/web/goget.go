@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
@@ -50,12 +49,12 @@ func goImportRoot(u *url.URL) string {
 // longer import path never resolves to one.
 const maxGoGetPathLen = 4096
 
-// goGetHandler handles go get requests.
-func goGetHandler(w http.ResponseWriter, r *http.Request) {
+// goGetHandler handles go get requests from c. logger is the request's
+// logger.
+func (s *server) goGetHandler(w http.ResponseWriter, r *http.Request, logger *log.Logger, c caller) {
 	ctx := r.Context()
-	cfg := config.FromContext(ctx)
-	be := backend.FromContext(ctx)
-	logger := log.FromContext(ctx)
+	cfg := s.cfg
+	be := s.be
 	repo := mux.Vars(r)["repo"]
 
 	// Handle go get requests.
@@ -97,7 +96,7 @@ func goGetHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Readable loads the repository once and returns nil when it
 			// is missing or the caller may not read it.
-			found, _, err := be.Readable(ctx, candidate, callerFor(ctx, candidate))
+			found, _, err := be.Readable(ctx, candidate, c.userFor(candidate))
 			if err != nil {
 				lookupUnavailable(w, r, logger, candidate, err, false)
 				return

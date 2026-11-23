@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
 	"github.com/matryer/is"
@@ -47,9 +46,8 @@ func gitRun(t *testing.T, args ...string) {
 	}
 }
 
-// The cleanup tests keep pushCreateTimeout at its default, far longer than
-// any test, so no removal timer fires on its own and nothing a test checks
-// races one. A request arms or stops its repository's timer before it
+// pushCreateTimeout is far longer than any test, so no removal timer fires
+// on its own and nothing a test checks races one. A request arms or stops its repository's timer before it
 // returns, so a test reads the timer's state once the request is done, and
 // fires the real timer itself when it wants the removal to run.
 
@@ -119,6 +117,7 @@ func (f *oracleFixture) wantArmed(t *testing.T, name string, want bool) {
 // refs is kept, and so is one that a push left without refs but without
 // failing, such as the probe git sends before a large pack.
 func TestHTTPPushCreateCleanup(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -179,7 +178,7 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
 	gitRun(t, "init", "-q", "-b", "master", work)
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
-	dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "kept.git")
+	dir := filepath.Join(f.env.cfg.DataPath, "repos", "kept.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
 	is.Equal(f.push(t, "kept", auth, "garbage"), http.StatusOK)
 	listed, _ = f.pendingState("kept")
@@ -191,7 +190,7 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	// with no request to it after the advertisement is kept when the
 	// advertisement's timer fires.
 	advertise("refs-only")
-	dir = filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "refs-only.git")
+	dir = filepath.Join(f.env.cfg.DataPath, "repos", "refs-only.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
 	f.fireTimer(t, "refs-only")
 	f.waitUnlisted(t, "refs-only")
@@ -201,6 +200,7 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 // A repository created by an HTTP push and renamed before its push fails
 // leaves another, empty repository created under its old name alone.
 func TestHTTPPushCreateCleanupChecksID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -222,6 +222,7 @@ func TestHTTPPushCreateCleanupChecksID(t *testing.T) {
 // anything was done with it meanwhile, such as adding a collaborator or
 // changing its description: removing it would lose that work.
 func TestHTTPPushCreateCleanupKeepsUsed(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -242,6 +243,7 @@ func TestHTTPPushCreateCleanupKeepsUsed(t *testing.T) {
 // repository's HTTP push fails, keeps the repository: the SSH push may write
 // refs at any moment.
 func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -262,17 +264,19 @@ func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
 // finds the repository gone if it was removed, rather than running against
 // the deleted one, and proceeds if it was kept.
 func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)
 
-	pending := newPushCreates()
+	s := f.env.server(t)
+	pending := s.pending
 	waits := make(chan string, 1)
 	pending.waiting = func(name string) { waits <- name }
 	var reached proto.Repository
-	next := func(_ *gitServer, w http.ResponseWriter, _ *http.Request, gr *gitRequest) {
+	next := func(_ *server, w http.ResponseWriter, _ *http.Request, gr *gitRequest) {
 		reached = gr.repo
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -282,9 +286,9 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 		handler: next,
 		path:    "/info/refs",
 		service: true,
-		server:  &gitServer{cfg: config.FromContext(f.ctx), be: f.be, pending: pending, limits: &requestLimits{}},
+		server:  s,
 	})
-	handler := newContextHandler(f.ctx)(router)
+	handler := router
 
 	// fetch sends the owner's ref advertisement request for name while a
 	// removal of name is running, and ends that removal with end once
@@ -339,6 +343,7 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 // stopped and none is armed, so no removal runs against a backend that is
 // being closed.
 func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -365,6 +370,7 @@ func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 // A push to a name that is not a valid repository name is refused with
 // 400 and the reason, rather than failing as a server error.
 func TestHTTPPushCreateInvalidName(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -379,21 +385,24 @@ func TestHTTPPushCreateInvalidName(t *testing.T) {
 // A push to a missing name that another request creates first is
 // authorized for the repository now there, rather than failing as a
 // server error.
-func TestHTTPPushCreateRace(t *testing.T) {
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	stranger, err := f.be.User(f.ctx, "stranger")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { testHookBeforePushCreate = nil })
 	advertise := func(name string) int {
 		t.Helper()
 		return f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code
 	}
 	createFirst := func(name string, owner proto.User, private bool) {
-		testHookBeforePushCreate = func() {
-			testHookBeforePushCreate = nil
+		f.server.beforePushCreate = func() {
+			f.server.beforePushCreate = nil
 			_, err := f.be.CreateRepository(f.ctx, name, owner, proto.RepositoryOptions{Private: private})
 			if err != nil {
 				t.Error(err)
@@ -429,9 +438,9 @@ func TestHTTPPushCreateRace(t *testing.T) {
 	// the caller cannot read.
 	t.Run("creation in progress", func(t *testing.T) {
 		is := is.New(t)
-		testHookBeforePushCreate = func() {
-			testHookBeforePushCreate = nil
-			dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "claimed.git")
+		f.server.beforePushCreate = func() {
+			f.server.beforePushCreate = nil
+			dir := filepath.Join(f.env.cfg.DataPath, "repos", "claimed.git")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Error(err)
 			}
@@ -446,21 +455,21 @@ func TestHTTPPushCreateRace(t *testing.T) {
 // backend's removal, which keeps it and points HEAD at the pushed branch.
 // It used to leave the list with HEAD naming a branch that does not exist.
 func TestHTTPPushCreateFailedPushWithRefsGetsHead(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	is.Equal(f.do(http.MethodGet, "/pushed.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-	dir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "pushed.git")
+	dir := filepath.Join(f.env.cfg.DataPath, "repos", "pushed.git")
 	gitRun(t, "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing")
 	tree := gitOutput(t, "-C", dir, "mktree")
 	commit := gitOutput(t, "-C", dir, "commit-tree", tree, "-m", "x")
 	gitRun(t, "-C", dir, "update-ref", "refs/heads/feature", commit)
 
 	// A receive-pack request that fails after its refs landed.
-	ctx, done, _ := f.pending.begin(f.ctx, "pushed")
+	done, _ := f.pending.begin("pushed")
 	is.True(done != nil)
-	markPushFailed(ctx)
-	done()
+	done(true)
 
 	is.True(f.exists("pushed"))
 	listed, _ := f.pendingState("pushed")

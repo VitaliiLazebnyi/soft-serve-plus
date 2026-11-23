@@ -24,19 +24,19 @@ import (
 // logging, so one anonymous request can neither burn CPU for minutes nor
 // flood the error log.
 //
-// Backend lookups log through the logger captured when the backend is
-// created, which falls back to the global default, so the test swaps the
-// global default logger and must not run in parallel.
-func TestGoGetLongPath(t *testing.T) {
+// The backend and the server log on the test's logger, so backend lookups
+// are covered too.
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestGoGetLongPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
+	f := newOracleFixtureLogging(t, logger)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
@@ -93,7 +93,7 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
-	bearer := "Bearer " + mintJWT(f.ctx, t, f.owner, "secret")
+	bearer := "Bearer " + f.mintJWT(t, f.owner, "secret")
 
 	// Under the cap: a package path of about 2,000 segments in the
 	// repository the token names.
@@ -137,9 +137,12 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 // The server reads at most maxHeaderBytes of request line and headers, not
 // the net/http default of 1 MB.
 func TestHTTPServerHeaderLimit(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
-	s := NewHTTPServer(f.ctx)
+	e := f.env
+	s, err := NewHTTPServer(e.cfg, e.be, e.dbx, e.datastore, e.tokens(t), e.logger)
+	is.NoErr(err)
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	is.NoErr(err)
 	go func() { _ = s.Serve(l) }()
@@ -184,6 +187,7 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 // pathAncestors lists the parents nearest the root, and no more than
 // maxPathAncestors of them.
 func TestPathAncestorsBounded(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	p := strings.TrimSuffix(strings.Repeat("a/", 1000), "/")
 	got := pathAncestors(p)

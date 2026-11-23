@@ -46,7 +46,7 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 	cfg := config.FromContext(ctx)
 	expiresIn := time.Minute * 5
 	expiresAt := time.Now().Add(expiresIn)
-	j, err := jwk.Sign(cfg, user, []string{repo.Name()}, expiresAt)
+	j, err := signToken(cfg, user, []string{repo.Name()}, expiresAt)
 	if err != nil {
 		logger.Error("failed to sign token", "err", err)
 		return err
@@ -64,4 +64,18 @@ func LFSAuthenticate(ctx context.Context, cmd ServiceCommand) error {
 		ExpiresAt: expiresAt,
 		ExpiresIn: int64(expiresIn / time.Second),
 	})
+}
+
+// signToken signs a token for user with the host key cfg loaded; see
+// jwk.Signer.Sign.
+func signToken(cfg *config.Config, user proto.User, audience []string, expiresAt time.Time) (string, error) {
+	kp, err := config.KeyPair(cfg)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", jwk.ErrHostKey, err)
+	}
+	signer, err := jwk.NewSigner(kp, cfg.HTTP.PublicURL)
+	if err != nil {
+		return "", err
+	}
+	return signer.Sign(user, audience, expiresAt)
 }

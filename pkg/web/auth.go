@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
@@ -21,10 +19,10 @@ import (
 // for other credentials, which are not scoped to repositories. The error is
 // errInvalidToken or errInvalidPassword for bad credentials, errAuthUnavailable
 // when the credentials could not be checked, and proto.ErrUserNotFound
-// otherwise.
-func authenticate(r *http.Request, repos ...string) (proto.User, []string, error) {
+// otherwise. logger is the request's logger.
+func (s *server) authenticate(r *http.Request, logger *log.Logger, repos ...string) (proto.User, []string, error) {
 	// Prefer the Authorization header
-	user, audience, err := parseAuthHdr(r, repos)
+	user, audience, err := s.parseAuthHdr(r, logger, repos)
 	if err != nil || user == nil {
 		if errors.Is(err, errInvalidToken) || errors.Is(err, errInvalidPassword) || errors.Is(err, errAuthUnavailable) {
 			return nil, nil, err
@@ -76,9 +74,8 @@ var errInvalidPassword = errors.New("invalid password")
 //
 // Anything else is refused after at most two token lookups, which are
 // hashes, so a failed login costs no bcrypt and waits for nothing.
-func parseUsernamePassword(ctx context.Context, username, password string) (proto.User, error) {
-	logger := log.FromContext(ctx)
-	be := backend.FromContext(ctx)
+func (s *server) parseUsernamePassword(ctx context.Context, logger *log.Logger, username, password string) (proto.User, error) {
+	be := s.be
 
 	if username == "" && password == "" {
 		return nil, proto.ErrUserNotFound
@@ -128,7 +125,9 @@ func parseUsernamePassword(ctx context.Context, username, password string) (prot
 // errInvalidHeader is returned when the authorization header is invalid.
 var errInvalidHeader = errors.New("invalid authorization header")
 
-func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error) {
+// parseAuthHdr authenticates the Authorization header of r; see
+// authenticate. reqLogger is the request's logger.
+func (s *server) parseAuthHdr(r *http.Request, reqLogger *log.Logger, repos []string) (proto.User, []string, error) {
 	// Check for auth header
 	header := r.Header.Get("Authorization")
 	if header == "" {
@@ -136,8 +135,8 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 	}
 
 	ctx := r.Context()
-	logger := log.FromContext(ctx).WithPrefix("http.auth")
-	be := backend.FromContext(ctx)
+	logger := reqLogger.WithPrefix("http.auth")
+	be := s.be
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 {
@@ -170,7 +169,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 
 		return user, nil, nil
 	case "bearer":
-		claims, err := parseJWT(ctx, parts[1], repos)
+		claims, err := s.parseJWT(reqLogger, parts[1], repos)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -209,7 +208,7 @@ func parseAuthHdr(r *http.Request, repos []string) (proto.User, []string, error)
 			return nil, nil, errInvalidHeader
 		}
 
-		user, err := parseUsernamePassword(ctx, username, password)
+		user, err := s.parseUsernamePassword(ctx, reqLogger, username, password)
 		return user, nil, err
 	}
 }
@@ -219,10 +218,11 @@ var errInvalidToken = errors.New("invalid token")
 
 // parseJWT validates a bearer token whose audience must name one of repos,
 // so the answer does not depend on whether they exist. The token must expire.
-func parseJWT(ctx context.Context, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
-	claims, err := jwk.Verify(config.FromContext(ctx), bearer, repos)
+// reqLogger is the request's logger.
+func (s *server) parseJWT(reqLogger *log.Logger, bearer string, repos []string) (*jwt.RegisteredClaims, error) {
+	claims, err := s.tokens.Verify(bearer, repos)
 	if err != nil {
-		logger := log.FromContext(ctx).WithPrefix("http.auth")
+		logger := reqLogger.WithPrefix("http.auth")
 		if errors.Is(err, jwk.ErrHostKey) {
 			// The server cannot verify any token without its host key. That
 			// is a server fault, so log it as one; the caller still sent a

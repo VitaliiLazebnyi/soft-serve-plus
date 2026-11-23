@@ -26,8 +26,9 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // body there let an anonymous multipart POST to any …/info/refs spool its file
 // parts to temp files that were never removed.
 func TestInfoRefsDoesNotReadBody(t *testing.T) {
-	ctx, _, _ := newLFSTestContext(t)
-	router := lfsTestRouter(t, ctx)
+	t.Parallel()
+	env := newTestEnv(t)
+	router := env.gitRouter(t)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -46,7 +47,7 @@ func TestInfoRefsDoesNotReadBody(t *testing.T) {
 	}
 
 	body := &countingReader{r: &buf}
-	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/anything/info/refs", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/anything/info/refs", body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

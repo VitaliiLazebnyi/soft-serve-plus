@@ -25,13 +25,13 @@ import (
 // connection through every middleware's response writer.
 func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 	t.Helper()
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	configure(&config.FromContext(ctx).HTTP)
-	srv := httptest.NewUnstartedServer(testRouter(t, ctx))
-	srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
+	configure(&env.cfg.HTTP)
+	srv := httptest.NewUnstartedServer(env.router(t))
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv.Listener.Addr().String()
@@ -76,6 +76,7 @@ func sendStalled(t *testing.T, conn net.Conn) {
 // A client that stops sending its body is cut off after the idle timeout,
 // which ends the git process serving it, rather than holding it forever.
 func TestHTTPStalledBodyTimesOut(t *testing.T) {
+	t.Parallel()
 	addr := newLimitsServer(t, func(c *config.HTTPConfig) {
 		c.IdleTimeout = 1
 	})
@@ -94,6 +95,7 @@ func TestHTTPStalledBodyTimesOut(t *testing.T) {
 // A request is cut off after max_timeout even while the client keeps it
 // alive.
 func TestHTTPMaxTimeout(t *testing.T) {
+	t.Parallel()
 	addr := newLimitsServer(t, func(c *config.HTTPConfig) {
 		c.IdleTimeout = 0
 		c.MaxTimeout = 1
@@ -113,6 +115,7 @@ func TestHTTPMaxTimeout(t *testing.T) {
 // Requests over max_connections are turned away while the slots are taken,
 // and served again once one is free.
 func TestHTTPMaxConnections(t *testing.T) {
+	t.Parallel()
 	addr := newLimitsServer(t, func(c *config.HTTPConfig) {
 		c.IdleTimeout = 0
 		c.MaxConnections = 1
@@ -580,6 +583,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 // A client that stops reading the response is cut off after the idle
 // timeout, and the request is cancelled.
 func TestRequestLimitsIdleStalledReader(t *testing.T) {
+	t.Parallel()
 	l := &requestDeadlines{idle: 200 * time.Millisecond}
 	errc := make(chan error, 1)
 	url := serveLimits(t, l, func(w http.ResponseWriter, r *http.Request) {
@@ -609,6 +613,7 @@ func TestRequestLimitsIdleStalledReader(t *testing.T) {
 }
 
 func TestDeadlinesNext(t *testing.T) {
+	t.Parallel()
 	d := &deadlines{}
 	if got := d.next(); !got.IsZero() {
 		t.Fatalf("next without limits = %v, want zero", got)
@@ -717,15 +722,17 @@ func TestRequestDeadlinesStalledBodyDuringWrite(t *testing.T) {
 // its next request is turned away while another address is still served,
 // and it is served again once one of its requests ends.
 func TestHTTPMaxConnectionsPerIP(t *testing.T) {
-	ctx, be, _ := newLFSTestContext(t)
+	t.Parallel()
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 	if _, err := be.CreateRepository(ctx, "repo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.FromContext(ctx).HTTP
+	cfg := &env.cfg.HTTP
 	cfg.IdleTimeout = 0
 	cfg.MaxConnections = 8
 	cfg.MaxConnectionsPerIP = 2
-	h := testRouter(t, ctx)
+	h := env.router(t)
 
 	const a, b = "192.0.2.1:1000", "198.51.100.7:1000"
 	status := func(addr string) int {
@@ -798,6 +805,7 @@ func TestHTTPMaxConnectionsPerIP(t *testing.T) {
 // Requests are counted per IPv4 address and per IPv6 /64, except from
 // loopback, where a reverse proxy on the same host connects from.
 func TestClientPrefix(t *testing.T) {
+	t.Parallel()
 	key := func(addr string) string {
 		p, ok := clientPrefix(addr)
 		if !ok {

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,48 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/gorilla/mux"
 	"github.com/matryer/is"
 	_ "modernc.org/sqlite"
 )
-
-// newLFSTestContext returns a context wired with a config and a real migrated
-// SQLite-backed backend, plus the backend and datastore so tests can create
-// users, repositories, and locks.
-func newLFSTestContext(t *testing.T) (context.Context, *backend.Backend, store.Store) {
-	t.Helper()
-	is := is.New(t)
-	ctx := context.Background()
-
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-
-	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	ctx = db.WithContext(ctx, dbx)
-	datastore := database.New()
-	ctx = store.WithContext(ctx, datastore)
-	be := backend.New(cfg, dbx, datastore, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
-
-	return ctx, be, datastore
-}
 
 // TestLFSLockLookupIsScopedToRepository verifies that a lock cannot be read by
 // global lock ID from a repository it does not belong to.
@@ -65,9 +28,11 @@ func newLFSTestContext(t *testing.T) (context.Context, *backend.Backend, store.S
 // walk lock IDs and read file paths, owner usernames, and timestamps out of
 // private repositories they have no access to.
 func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	// The victim owns a private repository with a lock on a sensitive path.
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
@@ -104,9 +69,11 @@ func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 // handler the way an attacker would: authorized for their own repository,
 // asking for a lock ID that belongs to somebody else's private repository.
 func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
 	is.NoErr(err)
@@ -125,13 +92,12 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 
 	// Request the victim's lock ID while scoped to the attacker's own
 	// repository, which is exactly what the route authorizes.
-	reqCtx := proto.WithUserContext(ctx, attacker)
-	reqCtx = proto.WithRepositoryContext(reqCtx, attackerRepo)
-	req := httptest.NewRequestWithContext(reqCtx, http.MethodGet, "/attacker-repo.git/info/lfs/locks?id="+strconv.FormatInt(victimLock.ID, 10), nil)
+	s := env.server(t)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/attacker-repo.git/info/lfs/locks?id="+strconv.FormatInt(victimLock.ID, 10), nil)
 	req.Header.Set("Accept", lfs.MediaType)
 
 	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocks, w, req)
+	s.serveRoute((*server).serviceLfsLocks, w, req, routeCaller{user: attacker, repo: attackerRepo})
 
 	body := w.Body.String()
 	if strings.Contains(body, "secret/plans.bin") {
@@ -143,13 +109,11 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 
 	// The owner asking for their own lock still gets it, so the fix did not
 	// simply break the endpoint.
-	ownerCtx := proto.WithUserContext(ctx, victim)
-	ownerCtx = proto.WithRepositoryContext(ownerCtx, victimRepo)
-	req = httptest.NewRequestWithContext(ownerCtx, http.MethodGet, "/victim-repo.git/info/lfs/locks?id="+strconv.FormatInt(victimLock.ID, 10), nil)
+	req = httptest.NewRequestWithContext(ctx, http.MethodGet, "/victim-repo.git/info/lfs/locks?id="+strconv.FormatInt(victimLock.ID, 10), nil)
 	req.Header.Set("Accept", lfs.MediaType)
 
 	w = httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocks, w, req)
+	s.serveRoute((*server).serviceLfsLocks, w, req, routeCaller{user: victim, repo: victimRepo})
 	is.Equal(w.Code, http.StatusOK)
 
 	var resp lfs.LockListResponse
@@ -164,9 +128,11 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 // repository-scoped, so this path disclosed metadata rather than destroying
 // it, but it is the same unscoped lookup.
 func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
 	is.NoErr(err)
@@ -183,9 +149,7 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 	attackerRepo, err := be.CreateRepository(ctx, "attacker-repo", attacker, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	reqCtx := proto.WithUserContext(ctx, attacker)
-	reqCtx = proto.WithRepositoryContext(reqCtx, attackerRepo)
-	req := httptest.NewRequestWithContext(reqCtx, http.MethodPost,
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost,
 		"/attacker-repo.git/info/lfs/locks/"+strconv.FormatInt(victimLock.ID, 10)+"/unlock",
 		strings.NewReader(`{"force":false}`))
 	req.Header.Set("Accept", lfs.MediaType)
@@ -193,7 +157,7 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 	req = mux.SetURLVars(req, map[string]string{"lock_id": strconv.FormatInt(victimLock.ID, 10)})
 
 	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocksDelete, w, req)
+	env.server(t).serveRoute((*server).serviceLfsLocksDelete, w, req, routeCaller{user: attacker, repo: attackerRepo})
 
 	// Guard against the request never reaching the lookup: a missing or
 	// unparseable lock_id would make this test vacuously pass.
@@ -217,20 +181,6 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 // withAccess. None of them may change how an LFS route is authorized.
 var forgeableServices = []string{"git-upload-pack", "git-receive-pack", "git-upload-archive"}
 
-// lfsTestRouter builds the real git router so requests pass through withParams
-// and withAccess rather than reaching a handler directly. The middleware is
-// where LFS authorization lives, so a test that calls the handler itself cannot
-// see a bypass. The removals of repositories its pushes create stop when the
-// test ends.
-func lfsTestRouter(t *testing.T, ctx context.Context) *mux.Router {
-	t.Helper()
-	pending := newPushCreates()
-	t.Cleanup(func() { _ = pending.close(context.Background()) })
-	router := mux.NewRouter()
-	gitController(ctx, router, pending)
-	return router
-}
-
 // TestLFSUploadRejectsForgedServiceParam covers an authorization bypass in
 // withAccess: the LFS branch was selected by a `service` value that, on an LFS
 // route, always came from a caller-supplied query parameter. Because the
@@ -239,17 +189,19 @@ func lfsTestRouter(t *testing.T, ctx context.Context) *mux.Router {
 // write check. Under the shipped defaults (anon-access read-only, LFS enabled)
 // an unauthenticated caller could write objects into any public repository.
 func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	cfg := config.FromContext(ctx)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	cfg := env.cfg
+	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
 	repo, err := be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	oid := strings.Repeat("a", 64)
 	path := "/victim-repo.git/info/lfs/objects/basic/" + oid
 
@@ -287,9 +239,11 @@ func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
 // TestLFSLockCreateRejectsForgedServiceParam is the lock-create half of the
 // same bypass: a read-only collaborator could take locks on arbitrary paths.
 func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -302,7 +256,7 @@ func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, attacker, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 
 	lock := func(url string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, url,
@@ -334,10 +288,12 @@ func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 // skipped, so a forged service value re-enabled LFS on a server where the
 // administrator had turned it off.
 func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 
-	cfg := config.FromContext(ctx)
+	cfg := env.cfg
 	cfg.LFS.Enabled = false
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
@@ -345,7 +301,7 @@ func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 	_, err = be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	url := "/victim-repo.git/info/lfs/objects/basic/" + strings.Repeat("a", 64)
 
 	for _, service := range forgeableServices {
@@ -364,9 +320,11 @@ func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 // breaking LFS: a user with write access must still be able to upload an
 // object and take a lock, with or without a service parameter present.
 func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -375,7 +333,7 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	body := "payload"
 	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(body)
 
@@ -413,8 +371,13 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 // for them after a 401, so an anonymous caller must get a 401 with a
 // challenge; a 403 would end a push from a user whose token is in a
 // credential helper. A signed-in caller without write access still gets 403.
-func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) {
-	ctx, be, _ := newLFSTestContext(t)
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	if err != nil {
@@ -432,7 +395,7 @@ func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	oid := strings.Repeat("b", 64)
 	requests := []struct {
 		name, method, path, body string
@@ -482,15 +445,17 @@ func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) {
 // repository may call the endpoint, so the number of objects and the body size
 // are capped.
 func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	batch := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost,
 			"/repo.git/info/lfs/objects/batch", strings.NewReader(body))
@@ -528,8 +493,10 @@ func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
 // take a single object or path, refuse oversized JSON bodies instead of
 // reading them into memory.
 func TestLFSJSONBodiesAreLimited(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -538,7 +505,7 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
 	is.NoErr(err)
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	padding := strings.Repeat("a", maxLfsJSONBodySize)
 	for _, tc := range []struct {
 		name, path, body string
@@ -570,8 +537,10 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 // which net/http turns into an implicit 200, so a truncated or corrupt object
 // passed verification.
 func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -582,14 +551,14 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 		Oid:  "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393",
 		Size: 12,
 	}
-	dbx := db.FromContext(ctx)
+	dbx := env.dbx
 	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
 
-	objPath := filepath.Join(config.FromContext(ctx).DataPath, "lfs",
+	objPath := filepath.Join(env.cfg.DataPath, "lfs",
 		strconv.FormatInt(repo.ID(), 10), "objects", filepath.FromSlash(pointer.RelativePath()))
 	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	verify := func() *httptest.ResponseRecorder {
 		body := fmt.Sprintf(`{"oid":%q,"size":%d}`, pointer.Oid, pointer.Size)
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/basic/verify", strings.NewReader(body))
@@ -617,9 +586,11 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 // A short file, such as one a failed write left behind, used to be offered
 // because it existed and its row had the right size, and was served short.
 func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
-	dbx := db.FromContext(ctx)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
+	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -629,11 +600,11 @@ func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
 	content := "payload"
 	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(content)
 	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), oid, int64(len(content))))
-	cfg := config.FromContext(ctx)
+	cfg := env.cfg
 	objPath := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10), "objects", oid[0:2], oid[2:4], oid)
 	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	batch := func() lfs.ObjectResponse {
 		t.Helper()
 		body := fmt.Sprintf(`{"operation":"download","objects":[{"oid":%q,"size":%d}]}`, oid, len(content))

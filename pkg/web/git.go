@@ -14,14 +14,11 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -45,7 +42,7 @@ type gitRoute struct {
 	// (push-to-create); the other services need read access.
 	service bool
 	// server serves the route. gitController sets it.
-	server *gitServer
+	server *server
 }
 
 var _ http.Handler = gitRoute{}
@@ -53,41 +50,15 @@ var _ http.Handler = gitRoute{}
 // gitHandler serves a request of a git route once withAccess has let it
 // through. gr is never nil, and gr.repo is the repository the caller may
 // read.
-type gitHandler func(s *gitServer, w http.ResponseWriter, r *http.Request, gr *gitRequest)
-
-// gitServer holds what the git routes share.
-type gitServer struct {
-	cfg       *config.Config
-	be        *backend.Backend
-	dbx       *db.DB
-	datastore store.Store
-	// pending tracks repositories created by push-to-create; see
-	// pushCreates.
-	pending *pushCreates
-	// limits bounds how many requests the git routes serve at once; see
-	// requestLimits. The router bounds the time of every request; see
-	// requestDeadlines.
-	limits *requestLimits
-}
-
-// newGitServer returns a server for the git routes, using the config,
-// backend, database and store in ctx.
-func newGitServer(ctx context.Context, pending *pushCreates) *gitServer {
-	cfg := config.FromContext(ctx)
-	return &gitServer{
-		cfg:       cfg,
-		be:        backend.FromContext(ctx),
-		dbx:       db.FromContext(ctx),
-		datastore: store.FromContext(ctx),
-		pending:   pending,
-		limits:    newRequestLimits(cfg.HTTP),
-	}
-}
+type gitHandler func(s *server, w http.ResponseWriter, r *http.Request, gr *gitRequest)
 
 // gitRequest is what a git route knows about a request. The route fills in
-// the repository's name, directory, the path inside it and the git service;
-// withAccess adds the caller, the repository and the caller's access level.
+// the repository's name, directory, the path inside it, the git service and
+// the request's logger; withAccess adds the caller, the repository and the
+// caller's access level.
 type gitRequest struct {
+	// logger is the request's logger; see server.requestLogger.
+	logger *log.Logger
 	// name is the sanitized repository name.
 	name string
 	// dir is the repository's directory.
@@ -101,6 +72,9 @@ type gitRequest struct {
 	// repo is nil until withAccess finds the caller may read it.
 	repo  proto.Repository
 	level access.AccessLevel
+	// pushFailed is set by a receive-pack request that failed; see
+	// pushCreates.
+	pushFailed bool
 }
 
 // newRequest returns what the route knows about r.
@@ -108,7 +82,8 @@ func (g gitRoute) newRequest(r *http.Request) *gitRequest {
 	vars := mux.Vars(r)
 	repo := vars["repo"]
 	gr := &gitRequest{
-		file: strings.TrimPrefix(r.URL.Path, "/"+repo+"/"),
+		logger: g.server.requestLogger(r),
+		file:   strings.TrimPrefix(r.URL.Path, "/"+repo+"/"),
 		// The RPC route carries the service in its path; the
 		// caller-supplied ?service= only means something on the ref
 		// advertisement.
@@ -203,13 +178,11 @@ func withParams(next http.Handler) http.Handler {
 	})
 }
 
-// gitController routes git services, tracking the repositories HTTP pushes
-// create in pending.
-func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
+// gitController routes git services and go get.
+func (s *server) gitController(r *mux.Router) {
 	basePrefix := "/{repo:.*}"
-	server := newGitServer(ctx, pending)
 
-	goGet := withParams(withCaller(http.HandlerFunc(goGetHandler)))
+	goGet := withParams(s.withCaller(s.goGetHandler))
 
 	// The dumb protocol is not served. Its requests get a fixed answer that
 	// does not depend on the repository, so they are refused before anything
@@ -231,7 +204,7 @@ func gitController(ctx context.Context, r *mux.Router, pending *pushCreates) {
 	})
 
 	for _, route := range gitRoutes {
-		route.server = server
+		route.server = s
 		r.Handle(basePrefix+route.path, route)
 	}
 
@@ -279,13 +252,13 @@ var gitRoutes = []gitRoute{
 	// wraps each of them in withAccess.
 	{
 		method:  []string{http.MethodPost},
-		handler: (*gitServer).serviceRpc,
+		handler: (*server).serviceRpc,
 		path:    "/{service:(?:git-upload-archive|git-upload-pack|git-receive-pack)$}",
 		service: true,
 	},
 	{
 		method:  []string{http.MethodGet},
-		handler: (*gitServer).getInfoRefs,
+		handler: (*server).getInfoRefs,
 		path:    "/info/refs",
 		service: true,
 	},
@@ -295,21 +268,21 @@ var gitRoutes = []gitRoute{
 		// An upload batch needs write access; serviceLfsBatch checks
 		// that, since the operation is in the body.
 		method:  []string{http.MethodPost},
-		handler: (*gitServer).serviceLfsBatch,
+		handler: (*server).serviceLfsBatch,
 		path:    "/info/lfs/objects/batch",
 		lfs:     true,
 	},
 	{
 		// Git LFS basic object handler
 		method:  []string{http.MethodGet, http.MethodPut},
-		handler: (*gitServer).serviceLfsBasic,
+		handler: (*server).serviceLfsBasic,
 		path:    "/info/lfs/objects/basic/{oid:[0-9a-f]{64}$}",
 		lfs:     true,
 		write:   []string{http.MethodPut},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: (*gitServer).serviceLfsBasicVerify,
+		handler: (*server).serviceLfsBasicVerify,
 		path:    "/info/lfs/objects/basic/verify",
 		lfs:     true,
 	},
@@ -318,21 +291,21 @@ var gitRoutes = []gitRoute{
 	{
 		// GET lists locks, which only needs read access.
 		method:  []string{http.MethodPost, http.MethodGet},
-		handler: (*gitServer).serviceLfsLocks,
+		handler: (*server).serviceLfsLocks,
 		path:    "/info/lfs/locks",
 		lfs:     true,
 		write:   []string{http.MethodPost},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: (*gitServer).serviceLfsLocksVerify,
+		handler: (*server).serviceLfsLocksVerify,
 		path:    "/info/lfs/locks/verify",
 		lfs:     true,
 		write:   []string{http.MethodPost},
 	},
 	{
 		method:  []string{http.MethodPost},
-		handler: (*gitServer).serviceLfsLocksDelete,
+		handler: (*server).serviceLfsLocksDelete,
 		path:    "/info/lfs/locks/{lock_id:[0-9]+}/unlock",
 		lfs:     true,
 		write:   []string{http.MethodPost},
@@ -344,45 +317,37 @@ func askCredentials(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("LFS-Authenticate", `Basic realm="Git LFS", charset="UTF-8", Token, Bearer`)
 }
 
-// identify stores the authenticated caller in the request context and
-// returns the authentication error, if any. A bearer token must name one of
-// repos in its audience; its audience is stored too, see tokenAudience.
-func identify(r *http.Request, repos ...string) (*http.Request, error) {
-	ctx := r.Context()
-	logger := log.FromContext(ctx)
+// caller is who sent a request, as identify found.
+type caller struct {
+	// user is the authenticated user, or nil for an anonymous caller.
+	user proto.User
+	// audience lists the repositories the caller's bearer token names. It
+	// is nil when the caller did not authenticate with a bearer token, so
+	// is not limited to particular repositories.
+	audience []string
+}
 
+// identify returns the authenticated caller of r and the authentication
+// error, if any. A bearer token must name one of repos in its audience.
+// logger is the request's logger.
+func (s *server) identify(r *http.Request, logger *log.Logger, repos ...string) (caller, error) {
 	// authenticate logs why credentials failed, and returns only bad
 	// credentials, errAuthUnavailable or proto.ErrUserNotFound.
-	user, audience, err := authenticate(r, repos...)
+	user, audience, err := s.authenticate(r, logger, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
 	}
-
-	ctx = proto.WithUserContext(ctx, user)
-	if audience != nil {
-		ctx = context.WithValue(ctx, tokenAudienceKey{}, audience)
-	}
-	return r.WithContext(ctx), err
+	return caller{user: user, audience: audience}, err
 }
 
-type tokenAudienceKey struct{}
-
-// tokenAudience returns the repositories the caller's bearer token names,
-// and false when the caller did not authenticate with a bearer token, so is
-// not limited to particular repositories.
-func tokenAudience(ctx context.Context) ([]string, bool) {
-	audience, ok := ctx.Value(tokenAudienceKey{}).([]string)
-	return audience, ok
-}
-
-// callerFor returns the caller to authorize for repo: the authenticated
+// userFor returns the caller to authorize for repo: the authenticated
 // user, or nil (anonymous) when the user authenticated with a bearer token
 // that does not name repo.
-func callerFor(ctx context.Context, repo string) proto.User {
-	if audience, ok := tokenAudience(ctx); ok && !slices.Contains(audience, utils.SanitizeRepo(repo)) {
+func (c caller) userFor(repo string) proto.User {
+	if c.audience != nil && !slices.Contains(c.audience, utils.SanitizeRepo(repo)) {
 		return nil
 	}
-	return proto.UserFromContext(ctx)
+	return c.user
 }
 
 // badCredentials reports whether the caller sent credentials that failed.
@@ -398,21 +363,21 @@ const authRetryAfter = "10"
 // see errAuthUnavailable, with 503 Service Unavailable, and reports whether
 // it did. The answer carries no credentials challenge, so git keeps the
 // stored credential, and authenticate has already logged the fault.
-func refuseUnchecked(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) bool {
+func refuseUnchecked(w http.ResponseWriter, r *http.Request, logger *log.Logger, err error, lfsJSON bool) bool {
 	if !errors.Is(err, errAuthUnavailable) {
 		return false
 	}
-	renderUnavailable(w, r, lfsJSON)
+	renderUnavailable(w, r, logger, lfsJSON)
 	return true
 }
 
 // renderUnavailable answers 503 Service Unavailable with a Retry-After and
 // no credentials challenge, so git keeps a stored credential; an LFS
 // request gets the LFS JSON error.
-func renderUnavailable(w http.ResponseWriter, r *http.Request, lfsJSON bool) {
+func renderUnavailable(w http.ResponseWriter, r *http.Request, logger *log.Logger, lfsJSON bool) {
 	w.Header().Set("Retry-After", authRetryAfter)
 	if lfsJSON {
-		renderJSON(w, r, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
+		renderJSON(w, logger, http.StatusServiceUnavailable, lfs.ErrorResponse{Message: "service unavailable, try again later"})
 	} else {
 		renderStatus(w, http.StatusServiceUnavailable)
 	}
@@ -429,38 +394,38 @@ func lookupUnavailable(w http.ResponseWriter, r *http.Request, logger *log.Logge
 	} else {
 		logger.Error("failed to look up repository", "repo", repo, "err", err)
 	}
-	renderUnavailable(w, r, lfsJSON)
+	renderUnavailable(w, r, logger, lfsJSON)
 }
 
 // denyLFSWrite answers an LFS write by a caller without write access. An
 // anonymous caller gets 401 with a credentials challenge, since git-lfs only
 // asks for credentials after a 401 and otherwise gives up on the push. A
 // signed-in caller gets 403.
-func denyLFSWrite(w http.ResponseWriter, r *http.Request) {
-	if proto.UserFromContext(r.Context()) == nil {
+func denyLFSWrite(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+	if gr.user == nil {
 		askCredentials(w, r)
-		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
+		renderJSON(w, gr.logger, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
 		return
 	}
-	renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "write access required"})
+	renderJSON(w, gr.logger, http.StatusForbidden, lfs.ErrorResponse{Message: "write access required"})
 }
 
-// denyRead answers a caller who may not read the repository. Missing and
-// unreadable repositories get the same answer so neither is revealed.
-func denyRead(w http.ResponseWriter, r *http.Request, err error, lfsJSON bool) {
+// denyRead answers gr's caller, who may not read the repository. Missing
+// and unreadable repositories get the same answer so neither is revealed.
+func denyRead(w http.ResponseWriter, r *http.Request, gr *gitRequest, err error, lfsJSON bool) {
 	switch {
 	case badCredentials(err) && lfsJSON:
-		renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+		renderJSON(w, gr.logger, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
 	case badCredentials(err):
 		renderForbidden(w, r)
-	case proto.UserFromContext(r.Context()) == nil && lfsJSON:
+	case gr.user == nil && lfsJSON:
 		askCredentials(w, r)
-		renderJSON(w, r, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
-	case proto.UserFromContext(r.Context()) == nil:
+		renderJSON(w, gr.logger, http.StatusUnauthorized, lfs.ErrorResponse{Message: "credentials needed"})
+	case gr.user == nil:
 		askCredentials(w, r)
 		renderUnauthorized(w, r)
 	case lfsJSON:
-		renderJSON(w, r, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
+		renderJSON(w, gr.logger, http.StatusNotFound, lfs.ErrorResponse{Message: "repository not found"})
 	default:
 		renderNotFound(w, r)
 	}
@@ -536,17 +501,18 @@ func authorize(need routeAccess, readable bool, level access.AccessLevel, anonym
 	return serve
 }
 
-// requireCaller rejects anonymous requests when keyless access is disabled.
-// When the setting cannot be read, the request is answered as unavailable
-// (see lookupUnavailable) rather than asked for credentials.
-func requireCaller(w http.ResponseWriter, r *http.Request, lfsJSON bool) bool {
-	ctx := r.Context()
-	if proto.UserFromContext(ctx) != nil {
+// requireCaller rejects anonymous requests, those whose user is nil, when
+// keyless access is disabled. When the setting cannot be read, the request
+// is answered as unavailable (see lookupUnavailable) rather than asked for
+// credentials. logger is the request's logger.
+func (s *server) requireCaller(w http.ResponseWriter, r *http.Request, logger *log.Logger, user proto.User, lfsJSON bool) bool {
+	if user != nil {
 		return true
 	}
-	allow, err := backend.FromContext(ctx).AllowKeylessSetting(ctx)
+	ctx := r.Context()
+	allow, err := s.be.AllowKeylessSetting(ctx)
 	if err != nil {
-		lookupUnavailable(w, r, log.FromContext(ctx), "", err, lfsJSON)
+		lookupUnavailable(w, r, logger, "", err, lfsJSON)
 		return false
 	}
 	if !allow {
@@ -557,22 +523,27 @@ func requireCaller(w http.ResponseWriter, r *http.Request, lfsJSON bool) bool {
 	return true
 }
 
+// callerHandler serves a request whose caller withCaller identified.
+// logger is the request's logger.
+type callerHandler func(w http.ResponseWriter, r *http.Request, logger *log.Logger, c caller)
+
 // withCaller authenticates the caller without authorizing a repository.
 // Handlers behind it must check access to any repository they reveal, as
-// callerFor the repository: the request is for a path inside a repository,
+// c.userFor the repository: the request is for a path inside a repository,
 // so a bearer token is accepted when it names the path or any directory
 // above it, but it only stands for the caller on the repositories it names.
 //
 // The list of those directories is built only for a bearer token, the only
 // credential scoped to repositories.
-func withCaller(next http.Handler) http.HandlerFunc {
+func (s *server) withCaller(next callerHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := s.requestLogger(r)
 		var repos []string
 		if isBearer(r.Header.Get("Authorization")) {
 			repos = pathAncestors(mux.Vars(r)["repo"])
 		}
-		r, err := identify(r, repos...)
-		if refuseUnchecked(w, r, err, false) || !requireCaller(w, r, false) {
+		c, err := s.identify(r, logger, repos...)
+		if refuseUnchecked(w, r, logger, err, false) || !s.requireCaller(w, r, logger, c.user, false) {
 			return
 		}
 
@@ -581,13 +552,9 @@ func withCaller(next http.Handler) http.HandlerFunc {
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		next(w, r, logger, c)
 	}
 }
-
-// testHookBeforePushCreate, when set, runs in withAccess after a push to a
-// missing name was authorized and before the repository is created.
-var testHookBeforePushCreate func()
 
 // isBearer reports whether the Authorization header value hdr carries a
 // bearer token. The scheme is case-insensitive, as parseAuthHdr reads it.
@@ -628,20 +595,21 @@ func pathAncestors(p string) []string {
 // repository as route needs, and serves the route's handler. A repository
 // created by push-to-create is recorded in pending, which removes it if the
 // push fails, or never arrives, without any ref.
-func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http.Request) {
-	gr := route.newRequest(orig)
-	r, err := identify(orig, gr.name)
+func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Request) {
+	gr := route.newRequest(r)
+	logger := gr.logger
+	c, err := s.identify(r, logger, gr.name)
+	gr.user = c.user
+	user := gr.user
 	need := route.access(r.Method, gr.service)
 	lfsJSON := need.lfs
-	if refuseUnchecked(w, r, err, lfsJSON) || !requireCaller(w, r, lfsJSON) {
+	if refuseUnchecked(w, r, logger, err, lfsJSON) || !s.requireCaller(w, r, logger, user, lfsJSON) {
 		return
 	}
 
 	ctx := r.Context()
-	logger := log.FromContext(ctx)
 	be := s.be
 	repoName := gr.name
-	user := proto.UserFromContext(ctx)
 
 	if lfsJSON && !s.cfg.LFS.Enabled {
 		logger.Debug("LFS is not enabled, skipping")
@@ -656,9 +624,6 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 		lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
 		return
 	}
-	ctx = proto.WithRepositoryContext(ctx, repo)
-	ctx = access.WithContext(ctx, accessLevel)
-	r = r.WithContext(ctx)
 
 	v := authorize(need, repo != nil, accessLevel, user == nil, badCredentials(err))
 	if v == createThenServe {
@@ -680,8 +645,8 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			return
 		}
 		if cerr == nil {
-			if testHookBeforePushCreate != nil {
-				testHookBeforePushCreate()
+			if s.beforePushCreate != nil {
+				s.beforePushCreate()
 			}
 			repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
 		}
@@ -710,9 +675,6 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 				lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
 				return
 			}
-			ctx = proto.WithRepositoryContext(ctx, repo)
-			ctx = access.WithContext(ctx, accessLevel)
-			r = r.WithContext(ctx)
 			v = authorize(need, repo != nil, accessLevel, user == nil, false)
 			if v == createThenServe {
 				// The name was freed again before it could be looked
@@ -726,20 +688,18 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 			renderInternalServerError(w, r)
 			return
 		default:
-			ctx = proto.WithRepositoryContext(ctx, repo)
-			r = r.WithContext(ctx)
-			s.pending.add(ctx, repoName, repo)
+			s.pending.add(repoName, repo, user)
 		}
 	}
 
 	switch v {
 	case denyUnreadable:
-		denyRead(w, r, err, lfsJSON)
+		denyRead(w, r, gr, err, lfsJSON)
 		return
 	case forbid:
 		if lfsJSON {
 			// Only bad credentials forbid an LFS request.
-			renderJSON(w, r, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+			renderJSON(w, logger, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
 		} else {
 			renderForbidden(w, r)
 		}
@@ -749,7 +709,7 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 		renderUnauthorized(w, r)
 		return
 	case forbidLFSWrite, unauthorizedLFS:
-		denyLFSWrite(w, r)
+		denyLFSWrite(w, r, gr)
 		return
 	}
 
@@ -764,28 +724,27 @@ func (s *gitServer) withAccess(route gitRoute, w http.ResponseWriter, orig *http
 		return
 	}
 
-	ctx, done, waited := s.pending.begin(ctx, repoName)
+	done, waited := s.pending.begin(repoName)
 	if waited {
 		// The repository was being removed, so repo and accessLevel
 		// may describe one that is gone. Start over, as a request
 		// arriving now would.
-		s.withAccess(route, w, orig)
+		s.withAccess(route, w, r)
 		return
 	}
 	if done != nil {
-		defer done()
-		r = r.WithContext(ctx)
+		defer func() { done(gr.pushFailed) }()
 	}
 
-	gr.user, gr.repo, gr.level = user, repo, accessLevel
+	gr.repo, gr.level = repo, accessLevel
 	route.handler(s, w, r, gr)
 }
 
 //nolint:revive
-func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
 	cfg := s.cfg
-	logger := log.FromContext(ctx)
+	logger := gr.logger
 	service, dir, repoName := gr.service, gr.dir, gr.name
 
 	// git http-backend answers 415 to any other content type.
@@ -806,7 +765,7 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		if err != nil {
 			logger.Debugf("bad gzip request body: %v", err)
 			if service == git.ReceivePackService {
-				markPushFailed(ctx)
+				gr.pushFailed = true
 			}
 			renderStatus(w, http.StatusBadRequest)
 			return
@@ -867,7 +826,8 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 	cmd.JoinStdin = true
 	cmd.Stdout = w
 
-	err := runService(ctx, service, cmd)
+	// pkg/git logs on the logger in the context.
+	err := s.runService(log.WithContext(ctx, logger), service, cmd)
 	if service == git.ReceivePackService {
 		if err == nil {
 			if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
@@ -886,17 +846,10 @@ func (s *gitServer) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRe
 		}
 		logger.Errorf("failed to handle service: %v", err)
 		if service == git.ReceivePackService {
-			markPushFailed(ctx)
+			gr.pushFailed = true
 		}
 		return
 	}
-}
-
-// runService runs a service RPC's git. It is a variable so a test can stand
-// in for git, as for a push whose client went away after its refs were
-// updated.
-var runService = func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
-	return service.Handler(ctx, cmd)
 }
 
 // newPushRefs returns the file a push's post-receive hook writes its refs
@@ -919,7 +872,7 @@ func removePushRefs(logger *log.Logger, refs *hooks.PushRefs) {
 }
 
 // afterPush hands the refs a push to repo by user updated to the backend.
-func (s *gitServer) afterPush(ctx context.Context, logger *log.Logger, repo proto.Repository, user proto.User, refs *hooks.PushRefs) {
+func (s *server) afterPush(ctx context.Context, logger *log.Logger, repo proto.Repository, user proto.User, refs *hooks.PushRefs) {
 	if refs == nil || repo == nil {
 		return
 	}
@@ -930,9 +883,10 @@ func (s *gitServer) afterPush(ctx context.Context, logger *log.Logger, repo prot
 	s.be.AfterPush(ctx, repo, user, updated)
 }
 
-func (s *gitServer) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
-	ctx := r.Context()
-	logger := log.FromContext(ctx)
+func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+	logger := gr.logger
+	// pkg/git logs on the logger in the context.
+	ctx := log.WithContext(r.Context(), logger)
 	dir, repoName, file, service := gr.dir, gr.name, gr.file, gr.service
 	protocol := r.Header.Get("Git-Protocol")
 

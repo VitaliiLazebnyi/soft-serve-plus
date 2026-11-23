@@ -12,9 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
@@ -27,13 +24,13 @@ import (
 // over SSH reaches the object URLs, is forwarded with its remaining lifetime
 // in expires_in.
 func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	ctx, be, datastore := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be, datastore := env.ctx, env.be, env.datastore
 
-	cfg := config.FromContext(ctx)
-	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "ssh", "host_key")
-	_, err := keygen.New(cfg.SSH.KeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
-	is.NoErr(err)
+	cfg := env.cfg
+	env.writeHostKey(t)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -41,7 +38,7 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	is.NoErr(err)
 	token, err := be.CreateAccessToken(ctx, owner, "t", time.Time{})
 	is.NoErr(err)
-	jwtToken := mintJWT(ctx, t, owner, "repo")
+	jwtToken := env.mintJWT(t, owner, "repo")
 
 	// An object that exists, so a download batch returns an action.
 	body := "payload"
@@ -52,13 +49,13 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 		filepath.FromSlash(lfs.Pointer{Oid: oid}.RelativePath()))
 	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
 	is.NoErr(os.WriteFile(objPath, []byte(body), 0o644))
-	is.NoErr(datastore.CreateLFSObject(ctx, db.FromContext(ctx), repo.ID(), oid, int64(len(body))))
+	is.NoErr(datastore.CreateLFSObject(ctx, env.dbx, repo.ID(), oid, int64(len(body))))
 
 	// An object the server does not have, so an upload batch returns
 	// actions: objects already stored get none.
 	missingOid := sha256Hex("missing")
 
-	router := lfsTestRouter(t, ctx)
+	router := env.gitRouter(t)
 	batch := func(op, auth string) lfs.BatchResponse {
 		t.Helper()
 		reqOid := oid
@@ -122,18 +119,17 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 // TestLFSActionAuthFor checks the credential choice and the expires_in value
 // directly, including tokens close to or past their expiry.
 func TestLFSActionAuthFor(t *testing.T) {
-	ctx, be, _ := newLFSTestContext(t)
-	cfg := config.FromContext(ctx)
-	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "ssh", "host_key")
-	if _, err := keygen.New(cfg.SSH.KeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite()); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
+	env.writeHostKey(t)
+	s := env.server(t)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	jwtToken := mintJWT(ctx, t, owner, "repo") // expires in an hour
-	otherRepo := mintJWT(ctx, t, owner, "other")
+	jwtToken := env.mintJWT(t, owner, "repo") // expires in an hour
+	otherRepo := env.mintJWT(t, owner, "other")
 	// The same claims with the signature of another token: parsing it
 	// without checking the signature would accept it.
 	forged := jwtToken[:strings.LastIndex(jwtToken, ".")] + otherRepo[strings.LastIndex(otherRepo, "."):]
@@ -160,6 +156,7 @@ func TestLFSActionAuthFor(t *testing.T) {
 		{name: "expired", header: "Bearer " + jwtToken, now: now.Add(2 * time.Hour)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/objects/batch", nil)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
@@ -167,7 +164,7 @@ func TestLFSActionAuthFor(t *testing.T) {
 			if tc.now.IsZero() {
 				tc.now = now
 			}
-			auth := lfsActionAuthFor(req, "repo", tc.now)
+			auth := s.lfsActionAuthFor(req, s.logger, "repo", tc.now)
 			link := auth.link("http://localhost/x", nil)
 			if !tc.forward {
 				if link.Header != nil || link.ExpiresIn != nil {

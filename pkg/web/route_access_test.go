@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
 )
 
@@ -52,6 +50,7 @@ type routeWant struct {
 // black-box test on purpose: it describes the behaviour, not the code that
 // decides it, so it holds however the route table is written.
 func TestRouteAccessTable(t *testing.T) {
+	t.Parallel()
 	f := newOracleFixture(t)
 	is := is.New(t)
 
@@ -190,12 +189,13 @@ func TestRouteAccessTable(t *testing.T) {
 // lock then asks for credentials in the handler, since a lock needs an
 // owner.
 func TestRouteAccessAnonymousWriter(t *testing.T) {
+	t.Parallel()
 	f := newOracleFixture(t)
 	is := is.New(t)
 	pub, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 	// A lock of the owner's, which verify lists for others as theirs.
-	_, err = store.FromContext(f.ctx).CreateLFSLockForUser(f.ctx, db.FromContext(f.ctx), pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main")
+	_, err = f.env.datastore.CreateLFSLockForUser(f.ctx, f.env.dbx, pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main")
 	is.NoErr(err)
 
 	oid := sha256Hex("x")

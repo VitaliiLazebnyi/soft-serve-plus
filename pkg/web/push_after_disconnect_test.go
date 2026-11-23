@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -48,6 +47,7 @@ func commitInRepo(t *testing.T, dir string) string {
 // Here a stand-in for git updates the ref, writes the refs file as the
 // post-receive hook does, and returns context.Canceled.
 func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	// The fixture's token is the stranger's, so the stranger owns it.
@@ -55,7 +55,7 @@ func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 	is.NoErr(err)
 	_, err = f.be.CreateRepository(proto.WithUserContext(f.ctx, stranger), "public", stranger, proto.RepositoryOptions{})
 	is.NoErr(err)
-	cfg := config.FromContext(f.ctx)
+	cfg := f.env.cfg
 	dir := hooks.RepoPath(cfg, "public")
 	commit := commitInRepo(t, dir)
 	lastModified := filepath.Join(dir, "info", "last-modified")
@@ -63,9 +63,8 @@ func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 	is.True(os.IsNotExist(err))
 
 	var refsFile string
-	orig := runService
-	t.Cleanup(func() { runService = orig })
-	runService = func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
+	orig := f.server.runService
+	f.server.runService = func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
 		if service != git.ReceivePackService {
 			return orig(ctx, service, cmd)
 		}

@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/keygen"
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -21,26 +18,34 @@ import (
 // oracleFixture wires a router with a private repository owned by "owner"
 // and a token for "stranger", a registered user with no access to it.
 type oracleFixture struct {
+	env     *testEnv
 	ctx     context.Context
 	owner   proto.User
 	be      *backend.Backend
 	handler http.Handler
 	token   string
+	// server serves handler.
+	server *server
 	// pending is the list of push-created repositories handler keeps.
 	pending *pushCreates
 }
 
+// newOracleFixture returns a fixture whose server logs on log.Default().
 func newOracleFixture(t *testing.T) *oracleFixture {
 	t.Helper()
+	return newOracleFixtureLogging(t, nil)
+}
+
+// newOracleFixtureLogging returns a fixture whose server logs on logger.
+func newOracleFixtureLogging(t *testing.T, logger *log.Logger) *oracleFixture {
+	t.Helper()
 	is := is.New(t)
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnvLogging(t, logger)
+	ctx, be := env.ctx, env.be
 
 	// Persist a host key so tokens minted here verify against the same key
 	// the server uses.
-	cfg := config.FromContext(ctx)
-	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "ssh", "host_key")
-	_, err := keygen.New(cfg.SSH.KeyPath, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
-	is.NoErr(err)
+	env.writeHostKey(t)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)
@@ -52,9 +57,8 @@ func newOracleFixture(t *testing.T) *oracleFixture {
 	token, err := be.CreateAccessToken(ctx, stranger, "t", time.Now().Add(time.Hour))
 	is.NoErr(err)
 
-	pending := newPushCreates()
-	t.Cleanup(func() { _ = pending.close(context.Background()) })
-	return &oracleFixture{ctx: ctx, owner: owner, be: be, handler: newRouter(ctx, pending), token: token, pending: pending}
+	s := env.server(t)
+	return &oracleFixture{env: env, ctx: ctx, owner: owner, be: be, handler: s.router(), token: token, server: s, pending: s.pending}
 }
 
 // do performs a request and returns the recorded response. An empty auth
@@ -100,6 +104,7 @@ func (f *oracleFixture) assertSameAnswer(t *testing.T, method, path, auth string
 // which used to answer 401 for a private repository and 404 for a missing
 // one to the same signed-in user.
 func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
@@ -134,7 +139,7 @@ func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 
 	// With admin-only creation on, a non-admin's push to a new name is
 	// refused like any other unreadable repository and creates nothing.
-	config.FromContext(f.ctx).AdminOnlyCreate = true
+	f.env.cfg.AdminOnlyCreate = true
 	is.Equal(f.do(http.MethodGet, "/ghost2.git/info/refs?service=git-receive-pack", auth).Code, http.StatusNotFound)
 	is.Equal(f.do(http.MethodPost, "/ghost2.git/git-receive-pack", auth).Code, http.StatusNotFound)
 	_, err = f.be.Repository(f.ctx, "ghost2")
@@ -144,6 +149,7 @@ func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 // TestReceivePackReaderIsForbidden verifies a caller who can read but not
 // write is told so rather than being treated as unable to see the repo.
 func TestReceivePackReaderIsForbidden(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
@@ -176,12 +182,11 @@ func TestReceivePackReaderIsForbidden(t *testing.T) {
 	is.True(err != nil)
 }
 
-// mintJWT signs a token for user the way `soft jwt` does.
-func mintJWT(ctx context.Context, t *testing.T, user proto.User, audience ...string) string {
+// mintJWT signs a token for user the way `soft jwt` does, with f's host
+// key.
+func (f *oracleFixture) mintJWT(t *testing.T, user proto.User, audience ...string) string {
 	t.Helper()
-	signed, err := jwk.Sign(config.FromContext(ctx), user, audience, time.Now().Add(time.Hour))
-	is.New(t).NoErr(err)
-	return signed
+	return f.env.mintJWT(t, user, audience...)
 }
 
 // TestBearerTokenDoesNotRevealPrivateRepositories covers JWT auth, which
@@ -189,6 +194,7 @@ func mintJWT(ctx context.Context, t *testing.T, user proto.User, audience ...str
 // (403) before checking it, while a valid token for a private repository
 // identified the user and answered 404.
 func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	stranger, err := f.be.User(f.ctx, "stranger")
@@ -196,7 +202,7 @@ func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
 
 	const path = "/%s.git/info/refs?service=git-upload-pack"
 	mint := func(audience ...string) string {
-		return "Bearer " + mintJWT(f.ctx, t, stranger, audience...)
+		return "Bearer " + f.mintJWT(t, stranger, audience...)
 	}
 
 	// A token whose audience names the requested repository identifies the

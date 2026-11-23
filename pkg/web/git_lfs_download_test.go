@@ -46,6 +46,7 @@ func (e *lfsUploadEnv) anonymousBatch(t *testing.T, oid string, size int64) lfs.
 // sent, so an anonymous reader could pin a wrong size: later downloads got
 // "size mismatch" and uploads of the object were skipped.
 func TestLFSDownloadBatchDoesNotRecordObjects(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	const content = "hello lfs"
 	oid := sha256Hex(content)
@@ -59,7 +60,7 @@ func TestLFSDownloadBatchDoesNotRecordObjects(t *testing.T) {
 
 	assertNotRecorded := func() {
 		t.Helper()
-		_, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid)
+		_, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid)
 		if !errors.Is(err, db.ErrRecordNotFound) {
 			t.Fatalf("object recorded by a download batch (err %v)", err)
 		}
@@ -102,7 +103,7 @@ func TestLFSDownloadBatchDoesNotRecordObjects(t *testing.T) {
 	if w := e.upload(oid, size, strings.NewReader(content)); w.Code != http.StatusOK {
 		t.Fatalf("upload: got status %d, want 200: %s", w.Code, w.Body.String())
 	}
-	rec, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid)
+	rec, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestLFSDownloadWithoutDatabaseRow(t *testing.T) {
 	const content = "hello lfs download"
 	e := newLFSUploadEnv(t)
 	oid := e.storeObject(t, content)
-	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, db.FromContext(e.ctx), e.repo.ID(), oid); err == nil {
+	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err == nil {
 		t.Fatal("test setup: object unexpectedly has a database row")
 	}
 

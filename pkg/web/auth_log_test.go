@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"errors"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +11,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -20,24 +19,24 @@ import (
 // Authentication logs never carry a credential: not the Authorization header,
 // not an access token sent as the username or password, and not a password.
 //
-// Backend lookups log through the logger captured when the backend is
-// created, which falls back to the global default, so the test swaps the
-// global default logger and must not run in parallel.
-func TestAuthDoesNotLogCredentials(t *testing.T) {
+// The backend and the server log on the test's logger, so backend lookups
+// are covered too.
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
-	ctx := log.WithContext(f.ctx, logger)
-	storePasswordHash(t, ctx, "stranger", "hunter2-password")
+	f := newOracleFixtureLogging(t, logger)
+	ctx := f.ctx
+	f.env.storePasswordHash(t, "stranger", "hunter2-password")
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
-	jwt := mintJWT(ctx, t, stranger, "secret")
+	jwt := f.mintJWT(t, stranger, "secret")
 
 	const (
 		badToken = "ss_bad-token-do-not-log"
@@ -88,7 +87,7 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", tc.header)
 
-			user, _, err := parseAuthHdr(req, []string{"secret"})
+			user, _, err := f.server.parseAuthHdr(req, f.server.requestLogger(req), []string{"secret"})
 			is.Equal(err == nil && user != nil, tc.ok)
 
 			out := logs.String()
@@ -114,26 +113,25 @@ func TestAuthDoesNotLogCredentials(t *testing.T) {
 
 // A failed login is the client's mistake, not a server error, so none of
 // them is logged at error level: anyone could otherwise flood the error log.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
-func TestFailedAuthNotLoggedAsError(t *testing.T) {
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
-	ctx := log.WithContext(f.ctx, logger)
+	f := newOracleFixtureLogging(t, logger)
+	ctx := f.ctx
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
 	is.NoErr(err)
 	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
 	is.NoErr(err)
-	goneJWT := mintJWT(ctx, t, gone, "secret")
+	goneJWT := f.mintJWT(t, gone, "secret")
 	is.NoErr(f.be.DeleteUser(ctx, "gone"))
 
 	basic := func(user, pass string) string {
@@ -158,7 +156,7 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", header)
 
-			user, _, err := parseAuthHdr(req, []string{"secret"})
+			user, _, err := f.server.parseAuthHdr(req, f.server.requestLogger(req), []string{"secret"})
 			is.True(err != nil || user == nil)
 
 			if out := logs.String(); strings.Contains(out, "ERRO") {
@@ -176,36 +174,37 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) {
 	}
 }
 
-// A host key that goes missing after startup leaves the server unable to
+// A server that could not read its host key when it was built cannot
 // verify any token. A bearer request then fails as bad credentials, not as
 // an anonymous request, and the server logs the fault at error level.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
 func TestBearerWithoutHostKey(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
-	ctx := log.WithContext(f.ctx, logger)
+	f := newOracleFixtureLogging(t, logger)
+	ctx := f.ctx
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
-	bearer := "Bearer " + mintJWT(ctx, t, stranger, "secret")
+	bearer := "Bearer " + f.mintJWT(t, stranger, "secret")
 
-	is.NoErr(os.Remove(config.FromContext(ctx).SSH.KeyPath))
+	// The server reads its host key once, when it is built.
+	is.NoErr(os.Remove(f.env.cfg.SSH.KeyPath))
+	s := f.env.server(t)
 
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", bearer)
-	_, _, err = authenticate(req, "secret")
+	_, _, err = s.authenticate(req, s.requestLogger(req), "secret")
 	is.True(errors.Is(err, errInvalidToken))
-	is.True(errors.Is(err, fs.ErrNotExist))
+	is.True(errors.Is(err, jwk.ErrHostKey))
 
 	logs.Reset()
-	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", bearer)
+	req = httptest.NewRequestWithContext(ctx, http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", nil)
+	req.Header.Set("Authorization", bearer)
+	w := httptest.NewRecorder()
+	s.router().ServeHTTP(w, req)
 	is.Equal(w.Code, http.StatusForbidden) // anonymous would get 401
 	if out := logs.String(); !strings.Contains(out, "ERRO") || !strings.Contains(out, "host key") {
 		t.Errorf("missing host key not logged at error level:\n%s", out)
@@ -214,17 +213,13 @@ func TestBearerWithoutHostKey(t *testing.T) {
 
 // The log of a Basic login with a token names the token's owner, who is the
 // user the request runs as, and not the username sent with the token.
-// Like TestAuthDoesNotLogCredentials, this swaps the global default logger
-// and must not run in parallel.
 func TestBasicAuthLogsTokenOwner(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
-	prev := log.Default()
-	log.SetDefault(logger)
-	t.Cleanup(func() { log.SetDefault(prev) })
 
-	f := newOracleFixture(t)
+	f := newOracleFixtureLogging(t, logger)
 	r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 	r.SetBasicAuth("owner", f.token)
 

@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
@@ -19,6 +17,7 @@ import (
 
 // Error bodies are plain text that a browser must not sniff into HTML.
 func TestErrorBodyIsPlainText(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	for _, path := range []string{"/nope", "/secret.git/info/refs?service=git-upload-pack"} {
@@ -33,11 +32,12 @@ func TestErrorBodyIsPlainText(t *testing.T) {
 // however many origins are, so a shared cache does not hand one origin's
 // answer to another.
 func TestCORSVaryOrigin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
-	cfg := config.FromContext(f.ctx)
+	cfg := f.env.cfg
 	cfg.HTTP.CORS.AllowedOrigins = []string{"https://git.example.com"}
-	h := testRouter(t, f.ctx)
+	h := f.env.router(t)
 
 	for _, origin := range []string{"", "https://git.example.com", "https://evil.example.com"} {
 		for _, method := range []string{http.MethodGet, http.MethodOptions} {
@@ -58,12 +58,13 @@ func TestCORSVaryOrigin(t *testing.T) {
 // A public URL with a path still allows its origin: an Origin header never
 // carries a path, so the configured URL is reduced to scheme and host.
 func TestCORSPublicURLWithPath(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
-	cfg := config.FromContext(f.ctx)
+	cfg := f.env.cfg
 	cfg.HTTP.PublicURL = "https://Git.Example.com:443/soft/"
 	cfg.HTTP.CORS.AllowedOrigins = []string{cfg.HTTP.PublicURL}
-	h := testRouter(t, f.ctx)
+	h := f.env.router(t)
 
 	for origin, want := range map[string]string{
 		"https://git.example.com":  "https://git.example.com",
@@ -78,6 +79,7 @@ func TestCORSPublicURLWithPath(t *testing.T) {
 }
 
 func TestCORSOrigins(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	is.Equal(corsOrigins([]string{
 		"https://git.example.com/soft",
@@ -113,11 +115,12 @@ func goGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder
 // The go-get import root keeps the path of the public URL, and the page
 // escapes what it interpolates.
 func TestGoGetImportRoot(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
-	cfg := config.FromContext(f.ctx)
+	cfg := f.env.cfg
 
 	cfg.HTTP.PublicURL = "https://example.com/git"
 	w := goGet(t, f.handler, "/pub/sub")
@@ -146,6 +149,7 @@ func TestGoGetImportRoot(t *testing.T) {
 }
 
 func TestGoImportRoot(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	for raw, want := range map[string]string{
 		"https://example.com":           "example.com",
@@ -160,9 +164,15 @@ func TestGoImportRoot(t *testing.T) {
 
 // A lock is refused for a path that does not name one file in the working
 // tree, and nothing is stored for it.
-func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
-	ctx := access.WithContext(newLocksParamsContext(t), access.ReadWriteAccess)
-	dbx := db.FromContext(ctx)
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSLockCreateRejectsInvalidPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	rc.level = access.ReadWriteAccess
+	dbx := f.env.dbx
 	countLocks := func() int {
 		t.Helper()
 		var n int
@@ -180,7 +190,7 @@ func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
 			req.Header.Set("Accept", lfs.MediaType)
 			req.Header.Set("Content-Type", lfs.MediaType)
 			w := httptest.NewRecorder()
-			serveRoute((*gitServer).serviceLfsLocks, w, req)
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusUnprocessableEntity, w.Body)
 			}
@@ -197,7 +207,7 @@ func TestLFSLockCreateRejectsInvalidPath(t *testing.T) {
 	req.Header.Set("Accept", lfs.MediaType)
 	req.Header.Set("Content-Type", lfs.MediaType)
 	w := httptest.NewRecorder()
-	serveRoute((*gitServer).serviceLfsLocks, w, req)
+	f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusCreated, w.Body)
 	}

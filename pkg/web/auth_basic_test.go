@@ -16,11 +16,12 @@ import (
 // another registered user's name included. There is no password login: a
 // password hash written into the database by hand does not let its user in.
 func TestBasicAuthTokenForms(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	ctx := f.ctx
-	storePasswordHash(t, ctx, "stranger", "stranger-password")
-	storePasswordHash(t, ctx, "owner", "owner-password")
+	f.env.storePasswordHash(t, "stranger", "stranger-password")
+	f.env.storePasswordHash(t, "owner", "owner-password")
 	stranger, err := f.be.User(ctx, "stranger")
 	is.NoErr(err)
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
@@ -54,11 +55,12 @@ func TestBasicAuthTokenForms(t *testing.T) {
 		{"expired token as username", expired, "x-oauth-basic", "", errInvalidPassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.SetBasicAuth(tc.user, tc.pass)
 
-			user, _, err := parseAuthHdr(req, []string{"secret"})
+			user, _, err := f.server.parseAuthHdr(req, f.server.requestLogger(req), []string{"secret"})
 			if tc.want == "" {
 				is.True(user == nil)
 				if !errors.Is(err, tc.wantErr) {
@@ -78,6 +80,7 @@ func TestBasicAuthTokenForms(t *testing.T) {
 // name, and the answer does not depend on whether the name is registered,
 // so a token holder cannot use it to find out which usernames exist.
 func TestBasicAuthTokenIgnoresUsername(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	stranger, err := f.be.User(f.ctx, "stranger")

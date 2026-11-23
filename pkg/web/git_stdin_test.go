@@ -69,6 +69,7 @@ func newServiceRpcServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 	}
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
+	s := newServer(cfg, nil, nil, nil, nil, nil)
 
 	fc := make(chan *flushSignal, 8)
 	rc := make(chan handled, 8)
@@ -78,13 +79,12 @@ func newServiceRpcServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 		r.Body = body
 		fw := &flushSignal{ResponseWriter: w, flushed: make(chan struct{})}
 		fc <- fw
-		r = r.WithContext(config.WithContext(r.Context(), cfg))
 		r = mux.SetURLVars(r, map[string]string{
 			"service": "git-upload-pack",
 			"dir":     dir,
 			"repo":    "repo",
 		})
-		serveRoute((*gitServer).serviceRpc, fw, r)
+		s.serveRoute((*server).serviceRpc, fw, r, routeCaller{})
 		h.reading = body.reading.Load()
 		h.endErr = r.Context().Err()
 		rc <- h
@@ -161,7 +161,7 @@ func joiningBody() bool {
 		header, stack, _ := strings.Cut(g, "\n")
 		if strings.Contains(header, "[chan receive") &&
 			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/git.joinStdin(") &&
-			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*gitServer).serviceRpc(") {
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*server).serviceRpc(") {
 			return true
 		}
 	}
@@ -174,6 +174,7 @@ func joiningBody() bool {
 // racing that read. Waiting for it must not cancel the request context, and
 // the connection must still serve the next request.
 func TestServiceRpcJoinsBodyRead(t *testing.T) {
+	t.Parallel()
 	srv, flushes, results := newServiceRpcServer(t)
 
 	pr, pw := io.Pipe()
@@ -253,6 +254,7 @@ func TestServiceRpcJoinsBodyRead(t *testing.T) {
 // keep-alive connection as git clients do, must each start and end with a
 // live context, and keep the connection.
 func TestServiceRpcKeepAlive(t *testing.T) {
+	t.Parallel()
 	srv, flushes, results := newServiceRpcServer(t)
 
 	bodies := [][]byte{

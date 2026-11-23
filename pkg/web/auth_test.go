@@ -16,6 +16,7 @@ import (
 // repository would otherwise create it. Every scheme answers the same 403 as
 // a Basic login with a bad password.
 func TestBadCredentialsAreNotAnonymous(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	ctx := f.ctx
@@ -30,11 +31,11 @@ func TestBadCredentialsAreNotAnonymous(t *testing.T) {
 	// then replaced by another of the same name.
 	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
 	is.NoErr(err)
-	goneJWT := mintJWT(ctx, t, gone, "new", "secret")
+	goneJWT := f.mintJWT(t, gone, "new", "secret")
 	is.NoErr(f.be.DeleteUser(ctx, "gone"))
 	reborn, err := f.be.CreateUser(ctx, "reborn", proto.UserOptions{})
 	is.NoErr(err)
-	rebornJWT := mintJWT(ctx, t, reborn, "new", "secret")
+	rebornJWT := f.mintJWT(t, reborn, "new", "secret")
 	is.NoErr(f.be.DeleteUser(ctx, "reborn"))
 	_, err = f.be.CreateUser(ctx, "reborn", proto.UserOptions{})
 	is.NoErr(err)
@@ -54,6 +55,7 @@ func TestBadCredentialsAreNotAnonymous(t *testing.T) {
 		"replaced user jwt":   "Bearer " + rebornJWT,
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			w := f.do(http.MethodGet, "/new.git/info/refs?service=git-receive-pack", header)
 			is.Equal(w.Code, http.StatusForbidden)

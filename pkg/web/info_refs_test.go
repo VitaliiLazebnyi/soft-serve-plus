@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -21,23 +20,24 @@ import (
 // for a repository that exists. It used to answer 404, as if the repository
 // were missing, and log nothing; it must answer 500 and log git's reason.
 func TestInfoRefsGitFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 
-	ctx, be, _ := newLFSTestContext(t)
-	ctx = log.WithContext(ctx, logger)
+	env := newTestEnvLogging(t, logger)
+	ctx, be := env.ctx, env.be
 	_, err := be.CreateRepository(ctx, "broken", fixtureAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
 
 	// A HEAD git cannot read makes the directory no longer a repository
 	// to git, while soft-serve still knows it.
-	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "broken.git")
+	dir := filepath.Join(env.cfg.DataPath, "repos", "broken.git")
 	is.NoErr(os.WriteFile(filepath.Join(dir, "HEAD"), []byte("garbage\n"), 0o600))
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/broken.git/info/refs?service=git-upload-pack", nil)
 	w := httptest.NewRecorder()
-	testRouter(t, ctx).ServeHTTP(w, req)
+	env.router(t).ServeHTTP(w, req)
 
 	is.Equal(w.Code, http.StatusInternalServerError)
 	out := logs.String()
@@ -56,11 +56,12 @@ type infoFixture struct {
 func newInfoFixture(t *testing.T) *infoFixture {
 	t.Helper()
 	is := is.New(t)
-	ctx, be, _ := newLFSTestContext(t)
+	env := newTestEnv(t)
+	ctx, be := env.ctx, env.be
 	_, err := be.CreateRepository(ctx, "pub", fixtureAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
-	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "pub.git")
-	return &infoFixture{handler: testRouter(t, ctx), dir: dir}
+	dir := filepath.Join(env.cfg.DataPath, "repos", "pub.git")
+	return &infoFixture{handler: env.router(t), dir: dir}
 }
 
 func (f *infoFixture) get(t *testing.T, path string, header ...string) *httptest.ResponseRecorder {
@@ -114,6 +115,7 @@ func (f *infoFixture) populate(t *testing.T) {
 // TestSmartInfoRefs checks the streamed smart advertisement keeps its
 // header, the service line before protocol v2, and git's output.
 func TestSmartInfoRefs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newInfoFixture(t)
 	f.populate(t)
@@ -136,6 +138,7 @@ func TestSmartInfoRefs(t *testing.T) {
 // TestAdvertisementStartsOnFirstWrite checks the header is held back until
 // git writes, so a git that fails silently still gets an error status.
 func TestAdvertisementStartsOnFirstWrite(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var out bytes.Buffer
 	starts := 0
@@ -170,6 +173,7 @@ func (d *duplexRecorder) EnableFullDuplex() error {
 // TestServiceRPCEnablesFullDuplex checks the RPC handler lets git read the
 // request while it writes the response.
 func TestServiceRPCEnablesFullDuplex(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newInfoFixture(t)
 	f.populate(t)

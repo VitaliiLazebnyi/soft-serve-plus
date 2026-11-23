@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
@@ -39,13 +38,16 @@ func (s *countingStore) GetUserByID(ctx context.Context, h db.Handler, id int64)
 func (e *lfsUploadEnv) withCountingStore(t *testing.T) *countingStore {
 	t.Helper()
 	cs := &countingStore{Store: e.datastore}
-	e.router = lfsTestRouter(t, store.WithContext(e.ctx, cs))
+	s := e.env.server(t)
+	s.datastore = cs
+	e.router = s.gitRouter()
 	return cs
 }
 
 // A batch looks its objects up in one query, not one per object: a batch
 // can hold 1,000 objects.
 func TestLFSBatchLooksObjectsUpTogether(t *testing.T) {
+	t.Parallel()
 	e := newLFSUploadEnv(t)
 	var objects []lfs.Pointer
 	for _, s := range []string{"one", "two", "three"} {
@@ -106,18 +108,20 @@ func (e *lfsUploadEnv) batch(t *testing.T, op string, objects ...lfs.Pointer) lf
 // Lock responses name each lock's owner from the lock query itself, not one
 // user lookup per lock.
 func TestLFSLocksNameOwnersWithoutLookups(t *testing.T) {
-	ctx := newLocksParamsContext(t)
-	repo := proto.RepositoryFromContext(ctx)
-	cs := &countingStore{Store: store.FromContext(ctx)}
-	ctx = store.WithContext(ctx, cs)
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	repo := rc.repo
+	cs := &countingStore{Store: f.env.datastore}
+	f.s.datastore = cs
 
 	for _, route := range []struct {
 		method, target string
 		h              gitHandler
 	}{
-		{http.MethodGet, "/repo.git/info/lfs/locks", (*gitServer).serviceLfsLocksGet},
-		{http.MethodGet, "/repo.git/info/lfs/locks?path=a.bin", (*gitServer).serviceLfsLocksGet},
-		{http.MethodPost, "/repo.git/info/lfs/locks/verify", (*gitServer).serviceLfsLocksVerify},
+		{http.MethodGet, "/repo.git/info/lfs/locks", (*server).serviceLfsLocksGet},
+		{http.MethodGet, "/repo.git/info/lfs/locks?path=a.bin", (*server).serviceLfsLocksGet},
+		{http.MethodPost, "/repo.git/info/lfs/locks/verify", (*server).serviceLfsLocksVerify},
 	} {
 		var body io.Reader
 		if route.method == http.MethodPost {
@@ -127,7 +131,7 @@ func TestLFSLocksNameOwnersWithoutLookups(t *testing.T) {
 		req.Header.Set("Accept", lfs.MediaType)
 		req.Header.Set("Content-Type", lfs.MediaType)
 		w := httptest.NewRecorder()
-		serveRoute(route.h, w, req)
+		f.s.serveRoute(route.h, w, req, rc)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s %s: status %d: %s", route.method, route.target, w.Code, w.Body)
 		}

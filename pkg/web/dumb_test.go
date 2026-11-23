@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -18,11 +17,12 @@ import (
 // one uncacheable 403, whatever the repository and the caller. A missing
 // loose object used to be answered 404 with a one-year Cache-Control.
 func TestDumbHTTPIsRefused(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
-	pubDir := filepath.Join(config.FromContext(f.ctx).DataPath, "repos", "pub.git")
+	pubDir := filepath.Join(f.env.cfg.DataPath, "repos", "pub.git")
 	looseObj := "objects/12/" + strings.Repeat("3", 38)
 	is.NoErr(os.MkdirAll(filepath.Join(pubDir, "objects", "12"), 0o755))
 	is.NoErr(os.WriteFile(filepath.Join(pubDir, filepath.FromSlash(looseObj)), []byte("data"), 0o644))
@@ -74,6 +74,7 @@ func TestDumbHTTPIsRefused(t *testing.T) {
 // TestDumbCloneFails checks a client forced to the dumb protocol is told why
 // it cannot clone.
 func TestDumbCloneFails(t *testing.T) {
+	t.Parallel()
 	f := newInfoFixture(t)
 	f.populate(t)
 
@@ -97,6 +98,7 @@ func TestDumbCloneFails(t *testing.T) {
 // "pub/info/refs", gets its go-import page rather than the dumb HTTP
 // refusal.
 func TestGoGetPathEndingInDumbFile(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "group/HEAD", f.owner, proto.RepositoryOptions{})

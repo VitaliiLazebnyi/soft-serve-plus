@@ -10,7 +10,11 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // HTTPServer is an http server.
@@ -28,24 +32,26 @@ type HTTPServer struct {
 // handler a path of nearly that length.
 const maxHeaderBytes = 64 << 10
 
-// NewHTTPServer creates a new HTTP server.
-func NewHTTPServer(ctx context.Context) *HTTPServer {
-	cfg := config.FromContext(ctx)
-	logger := log.FromContext(ctx)
-	pending := newPushCreates()
-	s := &HTTPServer{
-		pending: pending,
+// NewHTTPServer returns the HTTP server cfg sets up, serving the
+// repositories of be, whose database and store are dbx and datastore.
+// tokens verifies bearer tokens; a nil one, for a server without a usable
+// host key, refuses them all. A nil logger is log.Default().
+func NewHTTPServer(cfg *config.Config, be *backend.Backend, dbx *db.DB, datastore store.Store, tokens *jwk.Signer, logger *log.Logger) (*HTTPServer, error) {
+	if cfg == nil {
+		return nil, config.ErrNilConfig
+	}
+	s := newServer(cfg, be, dbx, datastore, tokens, logger)
+	return &HTTPServer{
+		pending: s.pending,
 		Server: &http.Server{
 			Addr:              cfg.HTTP.ListenAddr,
-			Handler:           newRouter(ctx, pending),
+			Handler:           s.router(),
 			ReadHeaderTimeout: time.Second * 10,
 			IdleTimeout:       time.Second * 10,
 			MaxHeaderBytes:    maxHeaderBytes,
-			ErrorLog:          stdlog.New(serverErrorLog{logger.WithPrefix("http")}, "", 0),
+			ErrorLog:          stdlog.New(serverErrorLog{s.logger}, "", 0),
 		},
-	}
-
-	return s
+	}, nil
 }
 
 // serverErrorLog is the error log of the HTTP server. Clients cause most

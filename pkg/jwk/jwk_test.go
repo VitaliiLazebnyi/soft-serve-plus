@@ -1,12 +1,12 @@
 package jwk
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"io/fs"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,39 +27,68 @@ type testUser struct {
 func (u testUser) Username() string { return u.name }
 func (u testUser) ID() int64        { return u.id }
 
-func testConfig(t *testing.T, opts ...keygen.Option) *config.Config {
+// testIssuer is the issuer of the tokens the tests sign.
+const testIssuer = "http://localhost:23232"
+
+// testKey writes a host key made with opts (Ed25519 by default) and returns
+// it as the server loads it.
+func testKey(t *testing.T, opts ...keygen.Option) *config.HostKey {
 	t.Helper()
 	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.SSH.KeyPath = filepath.Join(cfg.DataPath, "host_key")
+	cfg.SSH.KeyPath = filepath.Join(t.TempDir(), "host_key")
 	if len(opts) == 0 {
 		opts = []keygen.Option{keygen.WithKeyType(keygen.Ed25519)}
 	}
 	if _, err := keygen.New(cfg.SSH.KeyPath, append(opts, keygen.WithWrite())...); err != nil {
 		t.Fatalf("write host key: %v", err)
 	}
-	return cfg
+	kp, err := config.KeyPair(cfg)
+	if err != nil {
+		t.Fatalf("KeyPair: %v", err)
+	}
+	return kp
 }
 
-func TestSignNilConfig(t *testing.T) {
-	_, err := Sign(nil, testUser{name: "u", id: 1}, []string{"repo"}, time.Now().Add(time.Hour))
-	if !errors.Is(err, config.ErrNilConfig) || !errors.Is(err, ErrHostKey) {
-		t.Errorf("Sign(nil) => %v, want an error wrapping %v and %v", err, ErrHostKey, config.ErrNilConfig)
+// testSigner returns a Signer for a new host key made with opts.
+func testSigner(t *testing.T, opts ...keygen.Option) *Signer {
+	t.Helper()
+	s, err := NewSigner(testKey(t, opts...), testIssuer)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return s
+}
+
+// Without a host key there is nothing to sign or verify tokens with: a nil
+// *Signer, which is what a server whose key could not be loaded holds,
+// refuses both as a host key fault.
+func TestNoHostKey(t *testing.T) {
+	t.Parallel()
+	if _, err := NewSigner(nil, testIssuer); !errors.Is(err, ErrHostKey) {
+		t.Errorf("NewSigner(nil) => %v, want an error wrapping %v", err, ErrHostKey)
+	}
+	var s *Signer
+	if _, err := s.Sign(testUser{name: "u", id: 1}, []string{"repo"}, time.Now().Add(time.Hour)); !errors.Is(err, ErrHostKey) {
+		t.Errorf("Sign => %v, want an error wrapping %v", err, ErrHostKey)
+	}
+	if _, err := s.SignClaims(jwt.RegisteredClaims{}); !errors.Is(err, ErrHostKey) {
+		t.Errorf("SignClaims => %v, want an error wrapping %v", err, ErrHostKey)
+	}
+	if _, err := s.Verify("a.b.c", []string{"repo"}); !errors.Is(err, ErrHostKey) {
+		t.Errorf("Verify => %v, want an error wrapping %v", err, ErrHostKey)
 	}
 }
 
-// The host key is written by the SSH server; without it there is nothing to
-// sign or verify tokens with.
-func TestMissingHostKey(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.SSH.KeyPath = filepath.Join(t.TempDir(), "missing")
-	_, err := Sign(cfg, testUser{name: "u", id: 1}, []string{"repo"}, time.Now().Add(time.Hour))
-	if !errors.Is(err, fs.ErrNotExist) || !errors.Is(err, ErrHostKey) {
-		t.Errorf("Sign => %v, want an error wrapping %v and %v", err, ErrHostKey, fs.ErrNotExist)
-	}
-	_, err = Verify(cfg, "a.b.c", []string{"repo"})
-	if !errors.Is(err, fs.ErrNotExist) || !errors.Is(err, ErrHostKey) {
-		t.Errorf("Verify => %v, want an error wrapping %v and %v", err, ErrHostKey, fs.ErrNotExist)
+// unsupportedKey is a host key of a type tokens cannot be signed with.
+type unsupportedKey struct{}
+
+func (unsupportedKey) PrivateKey() crypto.PrivateKey     { return "private" }
+func (unsupportedKey) CryptoPublicKey() crypto.PublicKey { return "public" }
+
+func TestNewSignerUnsupportedKey(t *testing.T) {
+	t.Parallel()
+	if _, err := NewSigner(unsupportedKey{}, testIssuer); !errors.Is(err, ErrHostKey) {
+		t.Errorf("NewSigner(unsupported) => %v, want an error wrapping %v", err, ErrHostKey)
 	}
 }
 
@@ -80,9 +109,9 @@ func TestSignVerify(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			cfg := testConfig(t, tc.opts...)
+			s := testSigner(t, tc.opts...)
 			exp := time.Now().Add(time.Hour)
-			token, err := Sign(cfg, testUser{name: "alice", id: 7}, []string{"a", "b"}, exp)
+			token, err := s.Sign(testUser{name: "alice", id: 7}, []string{"a", "b"}, exp)
 			if err != nil {
 				t.Fatalf("Sign: %v", err)
 			}
@@ -98,15 +127,15 @@ func TestSignVerify(t *testing.T) {
 				t.Errorf("token has a kid header %v", kid)
 			}
 
-			claims, err := Verify(cfg, token, []string{"b"})
+			claims, err := s.Verify(token, []string{"b"})
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
 			if claims.Subject != "alice#7" {
 				t.Errorf("subject = %q, want %q", claims.Subject, "alice#7")
 			}
-			if claims.Issuer != cfg.HTTP.PublicURL {
-				t.Errorf("issuer = %q, want %q", claims.Issuer, cfg.HTTP.PublicURL)
+			if claims.Issuer != testIssuer {
+				t.Errorf("issuer = %q, want %q", claims.Issuer, testIssuer)
 			}
 			if !claims.ExpiresAt.Equal(exp.Truncate(time.Second)) {
 				t.Errorf("expires = %v, want %v", claims.ExpiresAt, exp)
@@ -123,10 +152,10 @@ func TestSignVerify(t *testing.T) {
 // expire, and so must a token with any other kid: there is one key.
 func TestVerifyIgnoresKeyID(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig(t)
-	kp, err := config.KeyPair(cfg)
+	kp := testKey(t)
+	s, err := NewSigner(kp, testIssuer)
 	if err != nil {
-		t.Fatalf("KeyPair: %v", err)
+		t.Fatalf("NewSigner: %v", err)
 	}
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
@@ -134,7 +163,7 @@ func TestVerifyIgnoresKeyID(t *testing.T) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		NotBefore: jwt.NewNumericDate(now),
 		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    cfg.HTTP.PublicURL,
+		Issuer:    testIssuer,
 		Audience:  []string{"repo"},
 	}
 	// The RFC 7638 thumbprint of the Ed25519 key, as the old code minted it,
@@ -148,7 +177,7 @@ func TestVerifyIgnoresKeyID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SignedString: %v", err)
 		}
-		got, err := Verify(cfg, signed, []string{"repo"})
+		got, err := s.Verify(signed, []string{"repo"})
 		if err != nil {
 			t.Fatalf("Verify(kid=%q): %v", kid, err)
 		}
@@ -160,30 +189,30 @@ func TestVerifyIgnoresKeyID(t *testing.T) {
 
 func TestVerifyRejects(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig(t)
-	other := testConfig(t)
+	s := testSigner(t)
+	other := testSigner(t)
 	user := testUser{name: "alice", id: 7}
 	now := time.Now()
 	valid := jwt.RegisteredClaims{
 		Subject:   Subject(user),
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		IssuedAt:  jwt.NewNumericDate(now),
-		Issuer:    cfg.HTTP.PublicURL,
+		Issuer:    testIssuer,
 		Audience:  []string{"repo"},
 	}
-	sign := func(c *config.Config, mutate func(*jwt.RegisteredClaims)) string {
+	sign := func(c *Signer, mutate func(*jwt.RegisteredClaims)) string {
 		claims := valid
 		if mutate != nil {
 			mutate(&claims)
 		}
-		s, err := SignClaims(c, claims)
+		token, err := c.SignClaims(claims)
 		if err != nil {
 			t.Fatalf("SignClaims: %v", err)
 		}
-		return s
+		return token
 	}
 
-	if _, err := Verify(cfg, sign(cfg, nil), []string{"repo"}); err != nil {
+	if _, err := s.Verify(sign(s, nil), []string{"repo"}); err != nil {
 		t.Fatalf("valid token: %v", err)
 	}
 	for _, tc := range []struct {
@@ -191,16 +220,16 @@ func TestVerifyRejects(t *testing.T) {
 		token    string
 		audience []string
 	}{
-		{"no audience asked", sign(cfg, nil), nil},
-		{"other audience", sign(cfg, nil), []string{"other"}},
+		{"no audience asked", sign(s, nil), nil},
+		{"other audience", sign(s, nil), []string{"other"}},
 		{"other key", sign(other, nil), []string{"repo"}},
-		{"expired", sign(cfg, func(c *jwt.RegisteredClaims) { c.ExpiresAt = jwt.NewNumericDate(now.Add(-time.Minute)) }), []string{"repo"}},
-		{"no expiry", sign(cfg, func(c *jwt.RegisteredClaims) { c.ExpiresAt = nil }), []string{"repo"}},
-		{"other issuer", sign(cfg, func(c *jwt.RegisteredClaims) { c.Issuer = "https://elsewhere" }), []string{"repo"}},
-		{"issued in the future", sign(cfg, func(c *jwt.RegisteredClaims) { c.IssuedAt = jwt.NewNumericDate(now.Add(time.Hour)) }), []string{"repo"}},
+		{"expired", sign(s, func(c *jwt.RegisteredClaims) { c.ExpiresAt = jwt.NewNumericDate(now.Add(-time.Minute)) }), []string{"repo"}},
+		{"no expiry", sign(s, func(c *jwt.RegisteredClaims) { c.ExpiresAt = nil }), []string{"repo"}},
+		{"other issuer", sign(s, func(c *jwt.RegisteredClaims) { c.Issuer = "https://elsewhere" }), []string{"repo"}},
+		{"issued in the future", sign(s, func(c *jwt.RegisteredClaims) { c.IssuedAt = jwt.NewNumericDate(now.Add(time.Hour)) }), []string{"repo"}},
 		{"garbage", "a.b.c", []string{"repo"}},
 	} {
-		if _, err := Verify(cfg, tc.token, tc.audience); !errors.Is(err, errInvalid) || errors.Is(err, ErrHostKey) {
+		if _, err := s.Verify(tc.token, tc.audience); !errors.Is(err, errInvalid) || errors.Is(err, ErrHostKey) {
 			t.Errorf("%s: Verify => %v, want errInvalid", tc.name, err)
 		}
 	}
