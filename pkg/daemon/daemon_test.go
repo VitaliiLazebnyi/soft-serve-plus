@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,72 +21,17 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/internal/backendtest"
-	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
 )
-
-var (
-	testDaemon  *Server
-	testBackend *backend.Backend
-)
-
-func TestMain(m *testing.M) {
-	os.Exit(runTests(m))
-}
-
-// runTests starts the daemon the tests talk to, runs the tests and tears the
-// daemon down again. It is separate from TestMain so that its deferred
-// cleanup runs before os.Exit.
-func runTests(m *testing.M) int {
-	tmp, err := os.MkdirTemp("", "soft-serve-test")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.RemoveAll(tmp) //nolint:errcheck
-	ctx := context.TODO()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = tmp
-	// Each request in these tests closes its connection, but the daemon notices
-	// asynchronously; leave headroom so back-to-back requests are not refused
-	// with "too many connections" on slow (-race) runners.
-	cfg.Git.MaxConnections = 10
-	cfg.Git.MaxTimeout = 100
-	// Long enough that no client, however slowed by a loaded machine, is
-	// timed out between its steps. A test that waits for the idle timeout
-	// serves its own daemon (startIdleDaemon).
-	cfg.Git.IdleTimeout = 600
-	cfg.Git.ListenAddr = fmt.Sprintf("127.0.0.1:%d", testnet.RandomPort()) // RandomPort checks only loopback
-	e, remove, err := backendtest.NewUnmanaged(tmp, backendtest.UseConfig(cfg))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer remove() //nolint:errcheck
-	be := e.Backend
-	testBackend = be
-	d, err := NewServer(cfg, be, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	patient(d)
-	testDaemon = d
-	defer d.Close() //nolint:errcheck
-	// Bind before running the tests so the first dial cannot race the
-	// listener and be refused.
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", cfg.Git.ListenAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	go d.Serve(l) //nolint:errcheck
-	return m.Run()
-}
 
 // dialDaemon connects to the test daemon. The connection is closed when the
 // test ends, and reads give up after a deadline so a daemon that never
@@ -1279,4 +1224,710 @@ func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// startCloseTestDaemon serves a daemon like the test daemon whose request
+// and idle timeouts are ten minutes, far past the tests' one-minute wait,
+// and which has no total time limit on a connection, so a request that ends
+// within the wait can only have been ended by Close. opts change the daemon
+// before it serves.
+func startCloseTestDaemon(t *testing.T, opts ...func(*Server)) (*Server, string) {
+	t.Helper()
+	cfg := *testDaemon.cfg
+	cfg.Git.IdleTimeout = 600
+	cfg.Git.MaxTimeout = 0
+	d, err := NewServer(&cfg, testBackend, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.requestTimeout = 10 * time.Minute
+	for _, opt := range opts {
+		opt(d)
+	}
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+	return d, l.Addr().String()
+}
+
+// waitHandlers waits up to idleWait for every goroutine of d, its accept
+// loop and its handlers, to return.
+func waitHandlers(t *testing.T, d *Server) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		d.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(idleWait):
+		t.Fatal("a handler is still running after Close")
+	}
+}
+
+// Close ends a request the daemon is still reading, and its handler
+// returns, rather than waiting out the ten-minute request timeout: the
+// daemon has no context of its own, so closing the connection is what ends
+// it.
+func TestCloseEndsRequestRead(t *testing.T) {
+	d, addr := startCloseTestDaemon(t)
+	dialDaemonAt(t, addr)
+	// The daemon is reading the request once it counts the connection.
+	waitConns(t, d, 1, idleWait)
+	_ = d.Close()
+	waitHandlers(t, d)
+}
+
+// Close ends the context of a request being served, so the git command and
+// the database lookups it runs stop, and not only the connection's reads
+// and writes.
+func TestCloseEndsRequestContext(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctxErr := make(chan error, 1)
+	d, addr := startCloseTestDaemon(t, func(d *Server) {
+		d.testHooks.beforeAuthorize = func(ctx context.Context) {
+			close(started)
+			<-release
+			ctxErr <- ctx.Err()
+		}
+	})
+	c := dialDaemonAt(t, addr)
+	if _, err := c.Write([]byte(pkt("git-upload-pack /close-public.git\x00host=localhost\x00"))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(idleWait):
+		t.Fatal("the request was not served")
+	}
+	// The hook holds the handler while the daemon closes; it then reads
+	// the context it was served with.
+	_ = d.Close()
+	close(release)
+	if err := <-ctxErr; err == nil {
+		t.Error("the request's context was not done after Close")
+	}
+	waitHandlers(t, d)
+}
+
+func TestEarliest(t *testing.T) {
+	t.Parallel()
+	base := time.Now()
+	before, after := base.Add(-time.Second), base.Add(time.Second)
+	for _, tc := range []struct {
+		ts   []time.Time
+		want time.Time
+	}{
+		{nil, base},
+		{[]time.Time{{}, {}}, base},
+		{[]time.Time{after}, base},
+		{[]time.Time{{}, before}, before},
+		{[]time.Time{after, before, {}}, before},
+	} {
+		if got := earliest(base, tc.ts...); !got.Equal(tc.want) {
+			t.Errorf("earliest(base, %v) = %v, want %v", tc.ts, got, tc.want)
+		}
+	}
+}
+
+// TestRequestLineAnswers pins the answer to each kind of request line, as
+// the client sees it. It has a daemon of its own with room for every case,
+// so that connections still closing cannot crowd out the next case or the
+// other tests' requests to the shared daemon.
+func TestRequestLineAnswers(t *testing.T) {
+	ensureRepo(t, "answers-public")
+	cases := []struct {
+		name string
+		line string
+		want error // nil: served
+	}{
+		{"no space", "git-upload-pack", gitserve.ErrInvalidRequest},
+		{"no host parameter", "git-upload-pack /answers-public.git", gitserve.ErrInvalidRequest},
+		{"unknown service", "git-upload-anything /answers-public.git\x00host=localhost\x00", gitserve.ErrInvalidRequest},
+		{"push", "git-receive-pack /answers-public.git\x00host=localhost\x00", ErrPushNotSupported},
+		{"missing repo", "git-upload-pack /answers-missing.git\x00host=localhost\x00", gitserve.ErrNotAuthed},
+		{"missing repo, archive", "git-upload-archive /answers-missing.git\x00host=localhost\x00", gitserve.ErrNotAuthed},
+		{"public repo", "git-upload-pack /answers-public.git\x00host=localhost\x00", nil},
+		{"public repo without .git", "git-upload-pack /answers-public\x00host=localhost\x00", nil},
+		{"public repo, empty host", "git-upload-pack /answers-public.git\x00\x00", nil},
+		{"public repo, v2", "git-upload-pack /answers-public.git\x00host=localhost\x00\x00version=2\x00", nil},
+	}
+	_, addr := startLimitedDaemon(t, len(cases))
+	for _, tc := range cases {
+		line, err := rawRequestTo(t, addr, []byte(pkt(tc.line)))
+		switch {
+		case tc.want != nil:
+			wantErrLine(t, tc.name, err, tc.want)
+		case err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case line == "":
+			t.Errorf("%s: empty answer", tc.name)
+		}
+	}
+}
+
+// TestUploadArchiveServed pins that the daemon serves upload-archive for a
+// public repository: git acknowledges the archive arguments.
+func TestUploadArchiveServed(t *testing.T) {
+	ensureRepo(t, "archive-public")
+	c := dialDaemon(t)
+	defer c.Close() //nolint:errcheck
+	for _, p := range []string{
+		pkt("git-upload-archive /archive-public.git\x00host=localhost\x00"),
+		pkt("argument --format=tar\n"), pkt("argument HEAD\n"), "0000",
+	} {
+		if _, err := io.WriteString(c, p); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	line, err := readPktline(c)
+	if err != nil {
+		t.Fatalf("archive request refused: %v", err)
+	}
+	if line != "ACK" {
+		t.Errorf("first line = %q, want ACK", line)
+	}
+}
+
+// TestHangUpWithoutRequest pins that a client that hangs up before sending
+// a request gets no answer and releases its connection.
+func TestHangUpWithoutRequest(t *testing.T) {
+	d, addr := startLimitedDaemon(t, 1)
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
+	if err := c.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(c)
+	if err != nil && !isReset(err) {
+		t.Fatalf("read: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("answer to a client that sent nothing: %q", out)
+	}
+	waitConns(t, d, 0, idleWait)
+}
+
+// waitConns waits up to within until d holds n connections.
+func waitConns(t *testing.T, d *Server, n int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for d.conns.Size() != n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d connections open after %v, want %d", d.conns.Size(), within, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitLog waits up to within until logs holds substr. A line the daemon
+// writes after the client has seen the effect it goes with, such as a
+// panic logged once its connection is closed, may not be there yet when
+// the client sees that effect, so a test cannot read the logs just once.
+func waitLog(t *testing.T, logs *syncBuffer, substr string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !strings.Contains(logs.String(), substr) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q not logged after %v; logs:\n%s", substr, within, logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// newLookupTestDaemon returns a daemon with its own database, which the
+// lookup tests break: Postgres when SOFT_SERVE_DB_DRIVER is "postgres",
+// SQLite otherwise. It holds one public repository, "public". The log is
+// written to the returned buffer at Debug level.
+func newLookupTestDaemon(t *testing.T) (context.Context, *Server, *db.DB, *syncBuffer) {
+	t.Helper()
+	logs := &syncBuffer{}
+	logger := log.New(logs)
+	logger.SetLevel(log.DebugLevel)
+	e := backendtest.New(t, backendtest.WithLogger(logger))
+	ctx, cfg, dbx, be := e.Ctx, e.Cfg, e.DB, e.Backend
+	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewServer(cfg, be, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patient(d)
+	t.Cleanup(func() { _ = d.Close() })
+	return ctx, d, dbx, logs
+}
+
+// A repository lookup that fails is a server fault: the daemon answers with
+// its fixed malfunction message and logs the cause, rather than answering
+// as for a missing or private repository. A missing name gets the same
+// answer as an existing one, so an outage does not tell which names exist,
+// and so does every name when the keyless setting cannot be read.
+func TestAuthorizeLookupFailure(t *testing.T) {
+	for _, table := range []string{"repos", "settings"} {
+		t.Run(table, func(t *testing.T) {
+			ctx, d, dbx, logs := newLookupTestDaemon(t)
+			public := gitRequest{service: gitserve.UploadPackService, name: "public"}
+			if err := d.authorize(ctx, public); err != nil {
+				t.Fatalf("authorize = %v, want nil", err)
+			}
+			if err := d.authorize(ctx, gitRequest{service: gitserve.UploadPackService, name: "ghost"}); !errors.Is(err, gitserve.ErrNotAuthed) {
+				t.Fatalf("authorize(ghost) = %v, want %v", err, gitserve.ErrNotAuthed)
+			}
+
+			if _, err := dbx.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone"); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"public", "ghost"} {
+				if err := d.authorize(ctx, gitRequest{service: gitserve.UploadPackService, name: name}); !errors.Is(err, gitserve.ErrSystemMalfunction) {
+					t.Fatalf("authorize(%s) with the lookup failing = %v, want %v", name, err, gitserve.ErrSystemMalfunction)
+				}
+			}
+			if !strings.Contains(logs.String(), "failed to look up repository") {
+				t.Errorf("logs = %q, want the failed lookup", logs.String())
+			}
+		})
+	}
+}
+
+// A lookup canceled because the client went away is logged at Debug, not
+// as a server error.
+func TestAuthorizeLookupCanceled(t *testing.T) {
+	ctx, d, _, logs := newLookupTestDaemon(t)
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := d.authorize(cctx, gitRequest{service: gitserve.UploadPackService, name: "public"}); !errors.Is(err, gitserve.ErrSystemMalfunction) {
+		t.Fatalf("authorize with the client gone = %v, want %v", err, gitserve.ErrSystemMalfunction)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "repository lookup canceled") || strings.Contains(out, "ERRO") {
+		t.Errorf("logs = %q, want the canceled lookup at Debug only", out)
+	}
+}
+
+// NewServer refuses a missing config or backend rather than build a
+// daemon that fails at its first request.
+func TestNewServerNilDependencies(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Config
+		be   *backend.Backend
+		want error
+	}{
+		{"nil config", nil, testBackend, config.ErrNilConfig},
+		{"nil backend", testDaemon.cfg, nil, errNilBackend},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, err := NewServer(tc.cfg, tc.be, nil)
+			if !errors.Is(err, tc.want) || d != nil {
+				t.Errorf("NewServer = %v, %v; want nil, %v", d, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandlerPanicRecovered checks that a panic while a connection is
+// handled is logged and does not end the daemon: the connection is closed,
+// its slot and its place in the WaitGroup are given back, and the next
+// client is served. The handler's goroutine had no recover, so such a panic
+// ended the whole server, and its wg.Done was not deferred.
+func TestHandlerPanicRecovered(t *testing.T) {
+	t.Parallel()
+	logs := &syncBuffer{}
+	var panicked atomic.Bool
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) {
+		d.logger = log.New(logs)
+		d.testHooks.beforeAuthorize = func(context.Context) {
+			if panicked.CompareAndSwap(false, true) {
+				panic("injected handler panic")
+			}
+		}
+	})
+	request := pkt("git-upload-pack /panic-missing.git\x00host=localhost\x00")
+
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
+	if _, err := io.WriteString(c, request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	// The daemon closes the connection without an answer.
+	if out, err := io.ReadAll(c); len(out) != 0 || (err != nil && !isReset(err)) {
+		t.Fatalf("after the panic: read %q, %v; want the connection closed", out, err)
+	}
+	if !panicked.Load() {
+		t.Fatal("the hook did not run")
+	}
+	// The slot is free again: with a limit of 1, the next client is
+	// served rather than refused.
+	waitConns(t, d, 0, idleWait)
+	c2 := dialHeld(t, addr, request, gitserve.ErrNotAuthed)
+	_ = c2.Close()
+
+	// The panic is logged by safego.Run's recover, which runs after
+	// handleClient's deferred close: the client can see the connection
+	// closed, and the next client be served, before the line is written.
+	waitLog(t, logs, "recovered panic", idleWait)
+	waitLog(t, logs, "injected handler panic", idleWait)
+	// The handler's goroutine is not counted once it has recovered:
+	// Shutdown does not wait for it.
+	waitConns(t, d, 0, idleWait)
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
+	defer cancel()
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
+	}
+}
+
+func TestParseRequest(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		line string
+		want gitRequest
+		err  error
+	}{
+		{"git-upload-pack", gitRequest{}, gitserve.ErrInvalidRequest},
+		{"git-upload-pack /r.git", gitRequest{}, gitserve.ErrInvalidRequest},
+		{"git-receive-pack /r.git\x00host=h\x00", gitRequest{}, ErrPushNotSupported},
+		{"git-x /r.git\x00host=h\x00", gitRequest{}, gitserve.ErrInvalidRequest},
+		{"git-upload-pack /r.git\x00host=h\x00", gitRequest{service: gitserve.UploadPackService, name: "r", host: "h"}, nil},
+		{"git-upload-pack /a/../r\x00host=h:9418\x00", gitRequest{service: gitserve.UploadPackService, name: "r", host: "h:9418"}, nil},
+		{"git-upload-archive /r.git\x00\x00", gitRequest{service: gitserve.UploadArchiveService, name: "r"}, nil},
+		{"git-upload-pack /r.git\x00host=h\x00\x00version=2\x00", gitRequest{service: gitserve.UploadPackService, name: "r", host: "h", version: "2"}, nil},
+		{"git-upload-pack /r.git\x00host=h\x00\x00version=2:x\x00", gitRequest{service: gitserve.UploadPackService, name: "r", host: "h", version: "2"}, nil},
+		{"git-upload-pack /r.git\x00host=h\x00\x00version=3\x00", gitRequest{service: gitserve.UploadPackService, name: "r", host: "h"}, nil},
+	} {
+		got, err := parseRequest([]byte(tc.line))
+		if !errors.Is(err, tc.err) || got != tc.want {
+			t.Errorf("parseRequest(%q) = %+v, %v; want %+v, %v", tc.line, got, err, tc.want, tc.err)
+		}
+	}
+}
+
+// TestEnviron: the daemon runs no hooks, so git gets only the requested
+// protocol version, never the hook variables or the server config with its
+// database data source.
+func TestEnviron(t *testing.T) {
+	env := testDaemon.environ(gitRequest{service: gitserve.UploadPackService, name: "r", host: "h", version: "2"})
+	if want := []string{"GIT_PROTOCOL=version=2"}; !slices.Equal(env, want) {
+		t.Errorf("environ = %q, want %q", env, want)
+	}
+	if env := testDaemon.environ(gitRequest{service: gitserve.UploadPackService, name: "r"}); len(env) != 0 {
+		t.Errorf("environ without a requested version = %q, want none", env)
+	}
+}
+
+// TestRefusalEndsAtRequestDeadline checks that a refusal after access checks
+// that outlast the request timeout does not wait on the client past the
+// request deadline. A wait counted again from the refusal would let slow
+// checks push it past the deadline by as long as they took.
+//
+// Nothing here is decided by how long a step takes. The request timeout is
+// an hour, so no stall makes the request line late, and the refusal reads
+// its time from a clock two request timeouts ahead, so it comes after the
+// request deadline however soon it runs. Past that deadline the daemon
+// lets go of the connection at once; a wait counted from the refusal would
+// hold it for about the request timeout more, an hour, far past the test's
+// wait.
+func TestRefusalEndsAtRequestDeadline(t *testing.T) {
+	t.Parallel()
+	const requestTimeout = time.Hour
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) {
+		d.requestTimeout = requestTimeout
+		d.refuseLinger = time.Hour
+		d.testHooks.now = func() time.Time { return time.Now().Add(2 * requestTimeout) }
+	})
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
+	if _, err := io.WriteString(c, pkt("git-upload-pack /deadline-missing.git\x00host=localhost\x00")); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	_, err = readPktline(c)
+	wantErrLine(t, "missing repo", err, gitserve.ErrNotAuthed)
+	// The client neither sends nor hangs up, so only the end of the
+	// refusal's wait closes the connection.
+	waitConns(t, d, 0, idleWait)
+}
+
+// dialHeld connects to addr, sends request, and reads the daemon's answer,
+// which must be the ERR packet want. The connection stays open, sending
+// nothing more, until the test ends.
+func dialHeld(t *testing.T, addr, request string, want error) net.Conn {
+	t.Helper()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if request != "" {
+		if _, err := io.WriteString(c, request); err != nil {
+			t.Fatalf("write request: %v", err)
+		}
+	}
+	_, err = readPktline(c)
+	wantErrLine(t, "answer", err, want)
+	return c
+}
+
+// TestShutdownCutsRefusalWait checks that a graceful Shutdown does not wait
+// for a refused client to hang up.
+func TestShutdownCutsRefusalWait(t *testing.T) {
+	t.Parallel()
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) { d.refuseLinger = time.Hour })
+	dialHeld(t, addr, pkt("git-receive-pack /repo.git\x00host=localhost\x00"), ErrPushNotSupported)
+	// The refusal waits on the client, which neither sends nor hangs up.
+	waitConns(t, d, 1, idleWait)
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
+	defer cancel()
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
+	}
+	waitConns(t, d, 0, idleWait)
+}
+
+// holdSlot dials addr and waits until d counts the connection, which then
+// holds one of d's slots until it is closed or the test ends.
+func holdSlot(t *testing.T, d *Server, addr string) net.Conn {
+	t.Helper()
+	want := d.conns.Size() + 1
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	waitConns(t, d, want, idleWait)
+	return c
+}
+
+// TestMaxConnectionsRefusalSurvivesLateInput checks that a client turned
+// away for the connection limit can keep writing, as git archive writes its
+// arguments, without the daemon resetting the connection under it: a
+// connection closed at once would draw a reset with the client's next
+// write, and a client still writing could lose the error to it.
+func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
+	t.Parallel()
+	conns := make(chan *recordedConn, 2)
+	d, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
+		return &recordingListener{Listener: inner, conns: conns}
+	}, func(d *Server) { d.refuseLinger = time.Hour })
+	accepted := func() *recordedConn {
+		t.Helper()
+		select {
+		case c := <-conns:
+			return c
+		case <-time.After(idleWait):
+			t.Fatal("the daemon did not accept the connection")
+			return nil
+		}
+	}
+	holdSlot(t, d, addr)
+	accepted() // the held one
+	c := dialHeld(t, addr, "", gitserve.ErrMaxConnections)
+	refused := accepted() // accepted before it was refused
+	sent := 0
+	for i := range 20 {
+		n, err := io.WriteString(c, pkt("argument HEAD\n"))
+		if err != nil {
+			t.Fatalf("write %d after the refusal: %v", i+1, err)
+		}
+		sent += n
+	}
+	refused.waitRead(t, sent)
+	// The daemon shut its side after the error and its flush packet: the
+	// client reads a clean end of the stream, not a reset.
+	if out, err := io.ReadAll(c); err != nil || (len(out) != 0 && string(out) != "0000") {
+		t.Fatalf("after the refusal: read %q, %v; want a clean end", out, err)
+	}
+}
+
+// TestMaxConnectionsRefusalsDoNotBlockAccept checks that refusals that wait
+// on their clients do not hold up the accept loop, also past maxRefusing of
+// them, and that Shutdown does not wait on them.
+func TestMaxConnectionsRefusalsDoNotBlockAccept(t *testing.T) {
+	t.Parallel()
+	d, addr := startLimitedDaemon(t, 1, func(d *Server) { d.refuseLinger = time.Hour })
+	held := holdSlot(t, d, addr)
+	for range maxRefusing + 4 {
+		dialHeld(t, addr, "", gitserve.ErrMaxConnections)
+	}
+	// The first maxRefusing refusals still wait on their clients; the
+	// rest were closed at once.
+	if n := len(d.refusing); n != maxRefusing {
+		t.Errorf("%d refusals in progress, want %d", n, maxRefusing)
+	}
+	if got := d.conns.Size(); got != 1 {
+		t.Errorf("%d connections counted, want 1", got)
+	}
+	// Shutdown would wait for the connection in the slot, which has not
+	// sent its request yet.
+	_ = held.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
+	defer cancel()
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the daemon's goroutines to log to
+// while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// newRequestTestDaemon serves a daemon that logs at Info level to the
+// returned buffer, on its own loopback listener.
+func newRequestTestDaemon(t *testing.T) (*Server, *syncBuffer) {
+	t.Helper()
+	logs := &syncBuffer{}
+	logger := log.New(logs)
+	logger.SetLevel(log.InfoLevel)
+	d, err := NewServer(testDaemon.cfg, testBackend, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patient(d)
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.addr = l.Addr().String()
+	go d.Serve(l) //nolint:errcheck
+	t.Cleanup(func() { _ = d.Close() })
+	return d, logs
+}
+
+// request asks d for repo with service and returns the first line it
+// answers with, after the connection is closed.
+func request(t *testing.T, d *Server, service gitserve.Service, repo string) string {
+	t.Helper()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
+	if err != nil {
+		t.Fatalf("failed to connect to daemon: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+	if _, err := io.WriteString(c, pkt(service.String()+" /"+repo+".git\x00host=localhost\x00")); err != nil {
+		t.Fatalf("failed to send request: %v", err)
+	}
+	line, err := readPktline(c)
+	if err != nil {
+		return err.Error()
+	}
+	return line
+}
+
+// sampleCount returns how many observations the request duration histogram
+// holds for service.
+func sampleCount(t *testing.T, service gitserve.Service) uint64 {
+	t.Helper()
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(requestSeconds)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "service" && lp.GetValue() == service.String() {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// The access checks run under accessTimeout: a database lookup that runs
+// out of time refuses the request instead of waiting on the database.
+func TestReadableAccessTimeout(t *testing.T) {
+	if _, err := testBackend.CreateRepository(context.Background(), "timeout-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	d, err := NewServer(testDaemon.cfg, testBackend, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.accessTimeout != defaultAccessTimeout {
+		t.Fatalf("accessTimeout = %v, want %v", d.accessTimeout, defaultAccessTimeout)
+	}
+	// The lookup that must succeed gets as long as a slowed database may
+	// take.
+	d.accessTimeout = patience
+	if ok, err := d.readable(context.Background(), "timeout-public"); !ok || err != nil {
+		t.Fatalf("public repository is not readable: %v", err)
+	}
+	// A deadline already in the past expires before any query runs. A tiny
+	// positive timeout is not enough: on Windows the timer can fire after the
+	// fast checks have finished.
+	d.accessTimeout = -time.Second
+	if ok, _ := d.readable(context.Background(), "timeout-public"); ok {
+		t.Fatal("public repository is readable although the access checks ran out of time")
+	}
+}
+
+// An accepted request is logged at Info level and timed; a refused one is
+// neither.
+func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
+	if _, err := testBackend.CreateRepository(context.Background(), "accepted-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	d, logs := newRequestTestDaemon(t)
+
+	before := sampleCount(t, gitserve.UploadPackService)
+	if got := request(t, d, gitserve.UploadPackService, "accepted-missing"); got != gitserve.ErrNotAuthed.Error() {
+		t.Fatalf("missing repo: got %q, want %q", got, gitserve.ErrNotAuthed)
+	}
+	if got := request(t, d, gitserve.UploadPackService, "accepted-public"); got == gitserve.ErrNotAuthed.Error() {
+		t.Fatalf("public repo was refused: %q", got)
+	}
+
+	// The daemon records a request, and logs what it logs about it, before
+	// it lets go of its connection, which it does after the client hangs
+	// up: once it holds no connection, it is done with both requests.
+	waitConns(t, d, 0, idleWait)
+	// Other tests' requests may finish meanwhile, so only check that this
+	// one was counted.
+	if got := sampleCount(t, gitserve.UploadPackService) - before; got < 1 {
+		t.Errorf("request duration observations = %d, want at least 1", got)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "accepted request") || !strings.Contains(out, "repo=accepted-public") {
+		t.Errorf("accepted request not logged at Info level; logs:\n%s", out)
+	}
+	if strings.Contains(out, "accepted-missing") {
+		t.Errorf("refused request logged as accepted; logs:\n%s", out)
+	}
 }
