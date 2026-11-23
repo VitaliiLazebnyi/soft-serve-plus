@@ -8,7 +8,6 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
@@ -32,21 +31,21 @@ func TestAccountCommandsUseSessionUser(t *testing.T) {
 	sessCtx := proto.WithUserContext(context.WithValue(ctx, ssh.ContextKeyPublicKey, pk), user)
 
 	// Any lookup from here on fails.
-	if err := db.FromContext(ctx).Close(); err != nil {
+	if err := cmdsOf(ctx).db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, tc := range []struct {
 		name string
-		cmd  func() *cobra.Command
+		cmd  func(*Commands) *cobra.Command
 		args []string
 		want string
 	}{
-		{"info", InfoCommand, nil, "Username: alice"},
-		{"pubkey list", PubkeyCommand, []string{"list"}, strings.TrimSpace(string(kp.AuthorizedKey()))},
+		{"info", (*Commands).InfoCommand, nil, "Username: alice"},
+		{"pubkey list", (*Commands).PubkeyCommand, []string{"list"}, strings.TrimSpace(string(kp.AuthorizedKey()))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := tc.cmd()
+			c := tc.cmd(cmdsOf(sessCtx))
 			var out bytes.Buffer
 			c.SetOut(&out)
 			c.SetErr(&bytes.Buffer{})

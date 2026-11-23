@@ -23,7 +23,7 @@ func newTestPubkey(t *testing.T) gossh.PublicKey {
 }
 
 func runPubkey(ctx context.Context, args ...string) error {
-	c := PubkeyCommand()
+	c := cmdsOf(ctx).PubkeyCommand()
 	c.SetOut(&bytes.Buffer{})
 	c.SetErr(&bytes.Buffer{})
 	c.SetArgs(args)
@@ -33,6 +33,7 @@ func runPubkey(ctx context.Context, args ...string) error {
 // A user may not remove the key their session authenticated with, and in
 // particular not their only key; removing another of their keys still works.
 func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
+	t.Parallel()
 	ctx, be := newAuthTestContext(t)
 	k1, k2 := newTestPubkey(t), newTestPubkey(t)
 	if _, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{k1}}); err != nil {

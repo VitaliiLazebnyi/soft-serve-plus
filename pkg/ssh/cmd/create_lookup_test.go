@@ -35,6 +35,7 @@ func (s anonFailsAfterStore) GetAnonAccess(ctx context.Context, h db.Handler) (a
 // check cannot read the settings tells the client the lookup failed, keeps
 // the database's message from it, and logs the cause once at Error level.
 func TestCreateLookupFailureAnswer(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		run  func(ctx context.Context) error
@@ -45,9 +46,10 @@ func TestCreateLookupFailureAnswer(t *testing.T) {
 			return runRepo(t, ctx, "import", "new", "https://127.0.0.1/x.git")
 		}, errLookupFailed},
 		{"repo rename", func(ctx context.Context) error { return runRepo(t, ctx, "rename", "mine", "new") }, errLookupFailed},
-		{"push-to-create", func(ctx context.Context) error { return runGit(ctx, GitReceivePackCommand, "new") }, git.ErrSystemMalfunction},
+		{"push-to-create", func(ctx context.Context) error { return runGit(ctx, (*Commands).GitReceivePackCommand, "new") }, git.ErrSystemMalfunction},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			reads := &atomic.Int32{}
 			// Fail from the second read on: the first is the command's own

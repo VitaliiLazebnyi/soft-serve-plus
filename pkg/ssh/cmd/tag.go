@@ -1,45 +1,43 @@
 package cmd
 
 import (
-	"charm.land/log/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
-func tagCommand() *cobra.Command {
+func (cmds *Commands) tagCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tag",
 		Short: "Manage repository tags",
 	}
 
 	cmd.AddCommand(
-		tagListCommand(),
-		tagDeleteCommand(),
+		cmds.tagListCommand(),
+		cmds.tagDeleteCommand(),
 	)
 
 	return cmd
 }
 
-func tagListCommand() *cobra.Command {
+func (cmds *Commands) tagListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list REPOSITORY",
 		Aliases: []string{"ls"},
 		Short:   "List repository tags",
 		Args:    cobra.ExactArgs(1),
-		RunE: withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
-			r, err := openRepository(cmd.Context(), rr)
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
+			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
 
-			tags, err := r.Tags()
+			tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
 			if err != nil {
-				return gitFailed(cmd.Context(), "list tags", rr.Name(), err)
+				return cmds.gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
 			for _, t := range tags {
 				// A ref name cannot hold C0 controls, but it can hold
@@ -54,14 +52,14 @@ func tagListCommand() *cobra.Command {
 	return cmd
 }
 
-func tagDeleteCommand() *cobra.Command {
+func (cmds *Commands) tagDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "delete REPOSITORY TAG",
 		Aliases: []string{"remove", "rm", "del"},
 		Short:   "Delete a tag",
 		Args:    cobra.ExactArgs(2),
-		RunE: withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
-			ctx, err := eventSenderContext(cmd.Context())
+		RunE: cmds.withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+			ctx, err := cmds.eventSenderContext(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -69,15 +67,15 @@ func tagDeleteCommand() *cobra.Command {
 				return proto.ErrMirrorReadOnly
 			}
 
-			r, err := openRepository(cmd.Context(), rr)
+			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
 			}
 
 			tag := args[1]
-			tags, err := r.Tags()
+			tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
 			if err != nil {
-				return gitFailed(cmd.Context(), "list tags", rr.Name(), err)
+				return cmds.gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
 			var exists bool
 			for _, t := range tags {
@@ -101,19 +99,19 @@ func tagDeleteCommand() *cobra.Command {
 			// with errGitFailed, and git's error is logged at Error.
 			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
 			if err != nil {
-				return gitFailed(ctx, "read tag", rr.Name(), err)
+				return cmds.gitFailed(ctx, "read tag", rr.Name(), err)
 			}
 
 			if err := r.DeleteTag(tag); err != nil {
-				return gitFailed(ctx, "delete tag", rr.Name(), err)
+				return cmds.gitFailed(ctx, "delete tag", rr.Name(), err)
 			}
 
 			// The tag is already deleted, so a failed event is logged rather
 			// than reported as a failed command. The event is built and sent
 			// even if the session ends now, in the background like the
 			// backend's own events.
-			if err := backend.FromContext(ctx).SendBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID); err != nil {
-				log.FromContext(ctx).Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
+			if err := cmds.be.SendBranchTagEvent(ctx, proto.UserFromContext(ctx), rr, git.RefsTags+tag, tagID, git.ZeroID); err != nil {
+				cmds.logger.Error("tag deleted but webhook event skipped", "err", err, "repo", rr.Name())
 			}
 			return nil
 		}),

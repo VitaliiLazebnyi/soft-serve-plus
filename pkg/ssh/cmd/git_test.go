@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -41,7 +40,7 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 	defer stdinW.Close() //nolint: errcheck
 	stdout, stdoutW := io.Pipe()
 
-	c := GitReceivePackCommand()
+	c := cmdsOf(sessCtx).GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(stdin)
@@ -71,7 +70,7 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 	is.NoErr(err)
 
 	if beforeCancel != nil {
-		beforeCancel(ctx, be, filepath.Join(config.FromContext(ctx).DataPath, "repos", "fresh.git"))
+		beforeCancel(ctx, be, filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "fresh.git"))
 	}
 
 	cancel()
@@ -90,6 +89,7 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 // A push that creates a repository and is then cancelled, because the client
 // went away, must not leave the new repository behind.
 func TestCancelledPushRemovesCreatedRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var dir string
 	ctx, be := cancelledPushToCreate(t, func(_ context.Context, _ *backend.Backend, d string) { dir = d })
@@ -105,6 +105,7 @@ func TestCancelledPushRemovesCreatedRepository(t *testing.T) {
 // succeeded. Its HEAD must point at the pushed branch, as after a push that
 // finished, not at a branch that does not exist.
 func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var repoDir string
 	ctx, be := cancelledPushToCreate(t, func(_ context.Context, _ *backend.Backend, dir string) {
@@ -141,12 +142,13 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 // renamed since. Here a push creates a repository and fails, and a refused
 // push asks for another name.
 func TestPushAddsNoRepositorySeries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	cancelledPushToCreate(t, nil)
 
 	ctx, _ := newAuthTestContext(t)
 	const refused = "refused-push-metric-label"
-	c := GitReceivePackCommand()
+	c := cmdsOf(ctx).GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(strings.NewReader(""))
@@ -172,6 +174,7 @@ func TestPushAddsNoRepositorySeries(t *testing.T) {
 // another push to it runs: that push may write refs after the removal
 // checked for them, and they would be lost with the directory.
 func TestFailedPushKeepsCreatedRepositoryWhilePushRuns(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var endPush func()
 	ctx, be := cancelledPushToCreate(t, func(ctx context.Context, be *backend.Backend, _ string) {

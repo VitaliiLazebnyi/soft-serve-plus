@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	sgit "github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/matryer/is"
@@ -26,7 +25,7 @@ func diffRepo(t *testing.T) (context.Context, func(stdin string, args ...string)
 	ctx = withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(ctx, "diffs", proto.UserFromContext(ctx), proto.RepositoryOptions{})
 	is.NoErr(err)
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "diffs.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "diffs.git")
 	work := t.TempDir()
 	git := func(stdin string, args ...string) string {
 		t.Helper()
@@ -98,6 +97,7 @@ func TestRepoCommitRenameQuotedName(t *testing.T) {
 // file without a trailing newline, which the patch rebuilt from the parsed
 // diff used to lose.
 func TestRepoCommitPatchApplies(t *testing.T) {
+	t.Parallel()
 	ctx, git := diffRepo(t)
 	write := func(name, content string) {
 		blob := git(content, "hash-object", "-w", "--stdin")
@@ -131,6 +131,7 @@ func TestRepoCommitPatchApplies(t *testing.T) {
 // into git apply, a cut patch would apply the files before the cut and
 // succeed. The view for reading is cut and says so, and does not fail.
 func TestRepoCommitPatchTruncated(t *testing.T) {
+	// Not parallel: it lowers the package variable git.DiffMaxBytes.
 	prev := sgit.DiffMaxBytes
 	sgit.DiffMaxBytes = 300
 	t.Cleanup(func() { sgit.DiffMaxBytes = prev })
@@ -157,6 +158,7 @@ func TestRepoCommitPatchTruncated(t *testing.T) {
 // git's stat for a binary file ("Bin 2 -> 3 bytes") has no +/- graph; its
 // "->" must not be coloured as a deletion. A text file's graph still is.
 func TestRenderStatsBinary(t *testing.T) {
+	t.Parallel()
 	st := styles.DefaultStyles()
 	del := st.Log.CommitStatsDel.Render("-")
 	if del == "-" {

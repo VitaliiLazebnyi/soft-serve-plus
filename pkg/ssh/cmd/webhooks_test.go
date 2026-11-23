@@ -5,10 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
@@ -28,6 +26,7 @@ import (
 // signature), request body, and response body, so this is a cross-repository
 // disclosure of private repository event payloads.
 func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
@@ -49,7 +48,7 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 		secretSignature = "X-SoftServe-Signature: sha256=leaked-signature\n"
 	)
 	deliveryID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              deliveryID,
 		WebhookID:       victimHookID,
 		Event:           int(webhook.EventPush),

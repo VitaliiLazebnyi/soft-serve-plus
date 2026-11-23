@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/matryer/is"
 )
 
@@ -18,14 +17,16 @@ import (
 // the delete; the delete needs only the ref's ID, so it succeeds and still
 // sends its event.
 func TestDeleteRefAtMalformedCommit(t *testing.T) {
+	t.Parallel()
 	for _, kind := range gittest.Malformed {
 		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
 			whPointAtLoopback(t, ownerCtx, "hooks", id)
-			bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+			bare := filepath.Join(cmdsOf(ownerCtx).cfg.DataPath, "repos", "hooks.git")
 
 			root := gittest.Commit(t, bare, gittest.Valid, gittest.Tree(t, bare, "f", "root\n"), "root")
 			bad := gittest.Commit(t, bare, kind, gittest.Tree(t, bare, "f", "bad\n"), "bad", root)
@@ -73,12 +74,14 @@ func TestDeleteRefAtMalformedCommit(t *testing.T) {
 // TestRepoCommitMalformed checks that "repo commit" on a commit git-module
 // cannot parse reports an error instead of panicking.
 func TestRepoCommitMalformed(t *testing.T) {
+	t.Parallel()
 	for _, kind := range gittest.Malformed {
 		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
-			bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+			bare := filepath.Join(cmdsOf(ownerCtx).cfg.DataPath, "repos", "hooks.git")
 			bad := gittest.Commit(t, bare, kind, gittest.Tree(t, bare, "f", "bad\n"), "bad")
 
 			_, _, err := runRepoOutput(t, ownerCtx, "commit", "hooks", bad)

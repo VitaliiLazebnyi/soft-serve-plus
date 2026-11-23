@@ -3,15 +3,13 @@ package cmd
 import (
 	"fmt"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/spf13/cobra"
 )
 
 // SettingsCommand returns a command that manages server settings.
-func SettingsCommand() *cobra.Command {
+func (cmds *Commands) SettingsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "settings",
 		Short: "Manage server settings",
@@ -19,7 +17,7 @@ func SettingsCommand() *cobra.Command {
 		// runs the nearest persistent pre-run found when walking up from
 		// the invoked command, so subcommands added later are gated by
 		// default instead of silently unprotected.
-		PersistentPreRunE: checkIfServerAdmin,
+		PersistentPreRunE: cmds.checkIfServerAdmin,
 	}
 
 	cmd.AddCommand(
@@ -29,13 +27,13 @@ func SettingsCommand() *cobra.Command {
 			Args:  cobra.RangeArgs(0, 1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				ctx := cmd.Context()
-				be := backend.FromContext(ctx)
-				cfg := config.FromContext(ctx)
+				be := cmds.be
+				cfg := cmds.cfg
 				switch len(args) {
 				case 0:
 					allow, err := be.AllowKeylessSetting(ctx)
 					if err != nil {
-						return lookupFailed(ctx, log.FromContext(ctx), "read allow-keyless", err)
+						return lookupFailed(ctx, cmds.logger, "read allow-keyless", err)
 					}
 					cmd.Println(allow)
 				case 1:
@@ -63,13 +61,13 @@ func SettingsCommand() *cobra.Command {
 			ValidArgs: als,
 			RunE: func(cmd *cobra.Command, args []string) error {
 				ctx := cmd.Context()
-				be := backend.FromContext(ctx)
-				cfg := config.FromContext(ctx)
+				be := cmds.be
+				cfg := cmds.cfg
 				switch len(args) {
 				case 0:
 					level, err := be.AnonAccessSetting(ctx)
 					if err != nil {
-						return lookupFailed(ctx, log.FromContext(ctx), "read anon-access", err)
+						return lookupFailed(ctx, cmds.logger, "read anon-access", err)
 					}
 					cmd.Println(level)
 				case 1:

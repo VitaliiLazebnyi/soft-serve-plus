@@ -35,7 +35,7 @@ import (
 
 // Server is the Soft Serve server.
 type Server struct {
-	SSHServer   *sshsrv.SSHServer
+	SSHServer   *sshsrv.Server
 	GitDaemon   *daemon.GitDaemon
 	HTTPServer  *web.HTTPServer
 	StatsServer *http.Server
@@ -99,20 +99,32 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	be.CheckRepositoryDirs(ctx)
 	ensureDefaultRepo(ctx, cfg, be, logger)
 
-	if err := ensureClientKey(cfg.SSH.ClientKeyPath); err != nil {
+	if err := ensureKey(cfg.SSH.ClientKeyPath, "client ssh key"); err != nil {
 		return nil, err
 	}
 
-	srv.SSHServer, err = sshsrv.NewSSHServer(ctx)
+	// The host key is read once, here: the SSH server presents it, and it
+	// signs and verifies the tokens (soft jwt, git-lfs-authenticate, HTTP
+	// bearer) without reading the file on every request.
+	if err := ensureKey(cfg.SSH.KeyPath, "ssh host key"); err != nil {
+		return nil, err
+	}
+	if err := cfg.LoadHostKey(); err != nil {
+		return nil, err
+	}
+	hostKey, err := config.KeyPair(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create ssh server: %w", err)
+		return nil, err
 	}
 
-	// The SSH server created the host key if there was none. Read it once
-	// for the tokens it signs, rather than on every bearer request.
-	tokens, kerr := tokenSigner(cfg)
-	if kerr != nil {
-		logger.Warn(hostKeyWarning(kerr), "err", kerr)
+	tokens, err := jwk.NewSigner(hostKey, cfg.HTTP.PublicURL)
+	if err != nil {
+		return nil, err
+	}
+
+	srv.SSHServer, err = sshsrv.NewServer(cfg, db.FromContext(ctx), store.FromContext(ctx), be, hostKey, tokens, log.FromContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
 
 	srv.GitDaemon, err = daemon.NewGitDaemon(ctx)
@@ -150,41 +162,18 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	return srv, nil
 }
 
-// tokenSigner reads the SSH host key, once, and returns the signer of the
-// tokens the servers issue and the HTTP server verifies.
-func tokenSigner(cfg *config.Config) (*jwk.Signer, error) {
-	if err := cfg.LoadHostKey(); err != nil {
-		return nil, err
-	}
-	kp, err := config.KeyPair(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return jwk.NewSigner(kp, cfg.HTTP.PublicURL)
-}
-
-// hostKeyWarning is the start-up warning for err, the error of tokenSigner:
-// the host key file could not be read, or it was read but holds no key
-// tokens can be signed with.
-func hostKeyWarning(err error) string {
-	const refused = "; tokens (soft jwt, git-lfs-authenticate, HTTP bearer) will be refused"
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) || errors.Is(err, config.ErrEmptySSHKeyPath) {
-		return "cannot read the SSH host key" + refused
-	}
-	return "the SSH host key cannot sign tokens" + refused
-}
-
-// ensureClientKey creates the key the server presents to the ssh remotes it
-// imports and mirrors from, at path, if there is none. An error other than
-// a missing file stops the server rather than leave it without a key.
-func ensureClientKey(path string) error {
+// ensureKey creates an Ed25519 key at path if there is none: the host key
+// the SSH server presents, or the client key the server presents to the
+// ssh remotes it imports and mirrors from. An error other than a missing
+// file stops the server rather than leave it without a key. The error
+// starts with what.
+func ensureKey(path, what string) error {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		if _, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite()); err != nil {
-			return fmt.Errorf("client ssh key: %w", err)
+			return fmt.Errorf("%s: %w", what, err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("client ssh key: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	return nil
 }

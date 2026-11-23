@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
 // listCommand returns a command that list file or directory at path.
-func listCommand() *cobra.Command {
+func (cmds *Commands) listCommand() *cobra.Command {
 	var all bool
 
 	listCmd := &cobra.Command{
@@ -18,12 +16,12 @@ func listCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			// The session user, not a fresh lookup of the key: a lookup
 			// that failed would list what an anonymous caller sees.
 			repos, err := be.ReadableRepositoriesForUser(ctx, proto.UserFromContext(ctx))
 			if err != nil {
-				return lookupFailed(ctx, log.FromContext(ctx), "list repositories", err)
+				return lookupFailed(ctx, cmds.logger, "list repositories", err)
 			}
 			for _, r := range repos {
 				if !r.IsHidden() || all {

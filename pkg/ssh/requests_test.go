@@ -12,7 +12,6 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	gossh "golang.org/x/crypto/ssh"
@@ -255,7 +254,7 @@ func TestWindowChangeDuringPtyCommand(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, ctx := startTestServer(t, cfg)
-	if _, err := backend.FromContext(ctx).CreateRepository(ctx, "repo1", fixtureAdmin(t, backend.FromContext(ctx)), proto.RepositoryOptions{}); err != nil {
+	if _, err := depsOf(ctx).be.CreateRepository(ctx, "repo1", fixtureAdmin(t, depsOf(ctx).be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	before := sessionLoops()

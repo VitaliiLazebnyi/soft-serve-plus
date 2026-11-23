@@ -54,7 +54,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	}
 
 	srv := &ssh.Server{
-		Handler: ContextMiddleware(nil, nil, nil, nil, log.Default())(handler),
+		Handler: (&Server{logger: log.Default()}).loggerMiddleware(handler),
 	}
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {

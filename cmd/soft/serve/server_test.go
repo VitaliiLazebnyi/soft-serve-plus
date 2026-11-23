@@ -3,11 +3,18 @@ package serve
 import (
 	"bytes"
 	"context"
+	"crypto/dsa" //nolint:staticcheck // the test needs a DSA key
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/asn1"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +37,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -350,32 +358,32 @@ func TestAbortOnSignal(t *testing.T) {
 	is.True(strings.Contains(logs.String(), "not waiting for webhook deliveries"))
 }
 
-// ensureClientKey creates a missing client key, keeps an existing one, and
-// reports a path it cannot check, here because a file stands where its
-// directory should be, rather than leave the server without a key.
-func TestEnsureClientKey(t *testing.T) {
+// ensureKey creates a missing key, keeps an existing one, and reports a
+// path it cannot check, here because a file stands where its directory
+// should be, rather than leave the server without a key.
+func TestEnsureKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ssh", "client_ed25519")
-	if err := ensureClientKey(path); err != nil {
+	if err := ensureKey(path, "client ssh key"); err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("no client key written: %v", err)
 	}
-	if err := ensureClientKey(path); err != nil {
+	if err := ensureKey(path, "client ssh key"); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, first) {
-		t.Errorf("ensureClientKey replaced the existing key (%v)", err)
+		t.Errorf("ensureKey replaced the existing key (%v)", err)
 	}
 
 	file := filepath.Join(dir, "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureClientKey(filepath.Join(file, "client_ed25519")); err == nil || !strings.Contains(err.Error(), "client ssh key") {
-		t.Errorf("ensureClientKey() = %v, want a client key error", err)
+	if err := ensureKey(filepath.Join(file, "client_ed25519"), "client ssh key"); err == nil || !strings.Contains(err.Error(), "client ssh key") {
+		t.Errorf("ensureKey() = %v, want a client key error", err)
 	}
 }
 
@@ -684,12 +692,23 @@ func TestNewServerClosesWhatItBuiltOnError(t *testing.T) {
 // server NewServer failed to finish, here one that got no further than its
 // Git daemon.
 func TestCloseSkipsServersNotBuilt(t *testing.T) {
-	ctx, _, be, dbx := setupTestBackendWithDB(t)
+	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
 	ctx = backend.WithContext(ctx, be)
 	ctx = db.WithContext(ctx, dbx)
 	ctx = log.WithContext(ctx, log.New(io.Discard))
 
-	sshSrv, err := sshsrv.NewSSHServer(ctx)
+	if err := ensureKey(cfg.SSH.KeyPath, "ssh host key"); err != nil {
+		t.Fatal(err)
+	}
+	hostKey, err := config.KeyPair(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := jwk.NewSigner(hostKey, cfg.HTTP.PublicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshSrv, err := sshsrv.NewServer(cfg, dbx, store.FromContext(ctx), be, hostKey, tokens, log.New(io.Discard))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -997,4 +1016,86 @@ func TestReadmeStopMatchesDrain(t *testing.T) {
 			t.Errorf("Stopping the server does not say %q:\n%s", want, section)
 		}
 	}
+}
+
+// A host key the server cannot use stops it at start: the SSH server
+// presents the key the tokens are signed with, so there is no serving SSH
+// without one that signs tokens too (tracker 343(a)). There are two gates:
+//   - a DSA key, which the SSH library would still serve, is refused by the
+//     config loader before any signer is built;
+//   - an ECDSA key on P-224, which the config loader accepts, is refused by
+//     jwk.NewSigner, so this case is the one that reaches the signer check.
+func TestNewServerRefusesUnusableHostKey(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   func(*testing.T) []byte
+		check func(*testing.T, error)
+	}{
+		{"dsa refused by the config loader", dsaKeyPEM, func(t *testing.T, err error) {
+			t.Helper()
+			if !strings.Contains(err.Error(), "unsupported key type") {
+				t.Errorf("NewServer: %v, want the config loader's unsupported key type error", err)
+			}
+		}},
+		{"ecdsa p-224 refused by the token signer", p224KeyPEM, func(t *testing.T, err error) {
+			t.Helper()
+			if !errors.Is(err, jwk.ErrHostKey) {
+				t.Errorf("NewServer: %v, want the token signer's error wrapping %v", err, jwk.ErrHostKey)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cfg, be, dbx := setupTestBackendWithDB(t)
+			ctx = backend.WithContext(ctx, be)
+			ctx = db.WithContext(ctx, dbx)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+			if err := os.MkdirAll(filepath.Dir(cfg.SSH.KeyPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(cfg.SSH.KeyPath, tc.key(t), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			s, err := NewServer(ctx)
+			if err == nil {
+				_ = s.Close()
+				t.Fatal("NewServer started with an unusable host key")
+			}
+			tc.check(t, err)
+		})
+	}
+}
+
+// p224KeyPEM returns a new ECDSA private key on P-224 in SEC 1 PEM form.
+func p224KeyPEM(t *testing.T) []byte {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+}
+
+// dsaKeyPEM returns a new DSA private key in the PEM form OpenSSH wrote.
+func dsaKeyPEM(t *testing.T) []byte {
+	t.Helper()
+	var k dsa.PrivateKey
+	if err := dsa.GenerateParameters(&k.Parameters, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsa.GenerateKey(&k, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+	der, err := asn1.Marshal(struct {
+		Version       int
+		P, Q, G, Y, X *big.Int
+	}{0, k.P, k.Q, k.G, k.Y, k.X})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "DSA PRIVATE KEY", Bytes: der})
 }

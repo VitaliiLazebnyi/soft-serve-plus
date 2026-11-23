@@ -34,15 +34,15 @@ func TestNotServerAdminErrorNamesFingerprint(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context
-		cmd  func() *cobra.Command
+		cmd  func(*Commands) *cobra.Command
 		args []string
 	}{
-		{"user list, unknown key", unknownCtx, UserCommand, []string{"list"}},
-		{"user list, non-admin", userCtx, UserCommand, []string{"list"}},
-		{"settings, non-admin", userCtx, SettingsCommand, []string{"anon-access"}},
+		{"user list, unknown key", unknownCtx, (*Commands).UserCommand, []string{"list"}},
+		{"user list, non-admin", userCtx, (*Commands).UserCommand, []string{"list"}},
+		{"settings, non-admin", userCtx, (*Commands).SettingsCommand, []string{"anon-access"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := tc.cmd()
+			c := tc.cmd(cmdsOf(tc.ctx))
 			c.SetOut(&bytes.Buffer{})
 			c.SetErr(&bytes.Buffer{})
 			c.SetArgs(tc.args)

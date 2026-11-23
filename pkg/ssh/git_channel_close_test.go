@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
@@ -30,7 +29,7 @@ func TestSSHFetchChannelClosedIsNotAServerError(t *testing.T) {
 	logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
 	addr, ctx := startSSHServer(t, cfg, logger)
 
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 	if _, err := be.CreateRepository(ctx, "small", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +143,7 @@ func TestSSHFetchChannelClosedFreesSession(t *testing.T) {
 	cfg.DataPath = t.TempDir()
 	addr, ctx := startTestServer(t, cfg, withMaxSessions(1))
 
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 	if _, err := be.CreateRepository(ctx, "big", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}

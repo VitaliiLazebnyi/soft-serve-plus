@@ -73,6 +73,7 @@ func TestOpenRepoOutageSameAnswer(t *testing.T) {
 // A user lookup canceled because the client went away is logged at Debug,
 // not as a server error.
 func TestUserLookupFailureCanceledLoggedAtDebug(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	logger.SetLevel(log.DebugLevel)

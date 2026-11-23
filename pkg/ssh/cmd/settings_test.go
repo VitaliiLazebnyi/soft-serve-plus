@@ -6,15 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 )
 
@@ -26,21 +20,8 @@ import (
 func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 	t.Helper()
 	is := is.New(t)
-	ctx := context.Background()
-
-	dbx, err := dbtest.Open(ctx, t)
-	is.NoErr(err)
-
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-
-	ctx = config.WithContext(ctx, cfg)
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
+	ctx, be := newAuthTestContext(t)
+	cfg := cmdsOf(ctx).cfg
 
 	// "admin" is already taken by the default user the migration seeds, so
 	// use a distinct username for the test's admin.
@@ -53,7 +34,7 @@ func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 
 func runSettings(t *testing.T, ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	c := SettingsCommand()
+	c := cmdsOf(ctx).SettingsCommand()
 	var outBuf, errBuf bytes.Buffer
 	c.SetOut(&outBuf)
 	c.SetErr(&errBuf)
@@ -63,6 +44,7 @@ func runSettings(t *testing.T, ctx context.Context, args ...string) (stdout, std
 }
 
 func TestSettingsAnonAccessWarnsOnConfigOverride(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, cfg := newSettingsTestContext(t)
 
@@ -84,6 +66,7 @@ func TestSettingsAnonAccessWarnsOnConfigOverride(t *testing.T) {
 }
 
 func TestSettingsAllowKeylessWarnsOnConfigOverride(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, cfg := newSettingsTestContext(t)
 
@@ -108,8 +91,9 @@ func TestSettingsAllowKeylessWarnsOnConfigOverride(t *testing.T) {
 // allow-keyless must reject a value that is not a boolean instead of reading
 // it as false, which would silently lock keyless users out.
 func TestSettingsAllowKeylessParsesBool(t *testing.T) {
+	t.Parallel()
 	ctx, _ := newSettingsTestContext(t)
-	be := backend.FromContext(ctx)
+	be := cmdsOf(ctx).be
 
 	for _, tc := range []struct {
 		arg  string

@@ -14,14 +14,9 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
@@ -40,33 +35,11 @@ func newLookupTestContext(t *testing.T) (context.Context, *backend.Backend, *syn
 // wrapped by wrap, when it is not nil.
 func newLookupTestContextWith(t *testing.T, wrap func(store.Store) store.Store) (context.Context, *backend.Backend, *syncLog) {
 	t.Helper()
-	ctx := context.Background()
-	dbx, err := dbtest.Open(ctx, t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	ctx = config.WithContext(ctx, cfg)
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
 	logs := &syncLog{}
 	logger := log.New(logs)
 	logger.SetLevel(log.DebugLevel)
-	ctx = log.WithContext(ctx, logger)
-	ctx = db.WithContext(ctx, dbx)
-	var st store.Store = database.New()
-	if wrap != nil {
-		st = wrap(st)
-	}
-	ctx = store.WithContext(ctx, st)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
-	return backend.WithContext(ctx, be), be, logs
+	ctx, be := newTestCommands(t, nil, wrap, logger)
+	return ctx, be, logs
 }
 
 // syncLog is a log destination that is safe to read while git's goroutines
@@ -110,7 +83,7 @@ func (l *syncLog) count(level string) int {
 // fault would.
 func breakTable(t *testing.T, ctx context.Context, table string) {
 	t.Helper()
-	dbx := db.FromContext(ctx)
+	dbx := cmdsOf(ctx).db
 	if _, err := dbx.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone"); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +93,7 @@ func breakTable(t *testing.T, ctx context.Context, table string) {
 // resolved it. A lookup of the session's key that fails no longer turns the
 // list into what an anonymous caller sees.
 func TestRepoListUsesSessionUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -144,6 +118,7 @@ func TestRepoListUsesSessionUser(t *testing.T) {
 // A repository lookup that fails is answered as a server fault, not as a
 // missing repository; the cause goes to the server log, not the client.
 func TestRepoCommandLookupFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be, logs := newLookupTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -173,8 +148,10 @@ func TestRepoCommandLookupFailure(t *testing.T) {
 // answer, for anonymous and registered callers: otherwise anyone could tell
 // which private names exist.
 func TestRepoCommandOutageSameAnswer(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be, _ := newLookupTestContext(t)
 			ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -194,8 +171,8 @@ func TestRepoCommandOutageSameAnswer(t *testing.T) {
 
 // runGit runs the git service command c for args as ctx's caller, with no
 // input, and returns its error.
-func runGit(ctx context.Context, c func() *cobra.Command, args ...string) error {
-	cmd := c()
+func runGit(ctx context.Context, c func(*Commands) *cobra.Command, args ...string) error {
+	cmd := c(cmdsOf(ctx))
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	cmd.SetIn(strings.NewReader(""))
@@ -209,16 +186,18 @@ func runGit(ctx context.Context, c func() *cobra.Command, args ...string) error 
 // git-lfs-authenticate, is answered with the fixed malfunction message and
 // logged once at Error level.
 func TestGitServiceLookupFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		cmd  func() *cobra.Command
+		cmd  func(*Commands) *cobra.Command
 		args []string
 	}{
-		{"upload-pack", GitUploadPackCommand, []string{"repo"}},
-		{"receive-pack", GitReceivePackCommand, []string{"repo"}},
-		{"lfs-authenticate", GitLFSAuthenticateCommand, []string{"repo", "download"}},
+		{"upload-pack", (*Commands).GitUploadPackCommand, []string{"repo"}},
+		{"receive-pack", (*Commands).GitReceivePackCommand, []string{"repo"}},
+		{"lfs-authenticate", (*Commands).GitLFSAuthenticateCommand, []string{"repo", "download"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be, logs := newLookupTestContext(t)
 			ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -233,7 +212,7 @@ func TestGitServiceLookupFailure(t *testing.T) {
 				// on a non-admin account passes the first without a
 				// collaborator lookup, so the second is the one that fails.
 				pk, ak := slashFreeKey(t)
-				cfg := config.FromContext(ctx)
+				cfg := cmdsOf(ctx).cfg
 				cfg.InitialAdminKeys = []string{ak}
 				is.NoErr(cfg.Validate())
 				callerCtx = context.WithValue(strangerCtx, ssh.ContextKeyPublicKey, pk)
@@ -251,6 +230,7 @@ func TestGitServiceLookupFailure(t *testing.T) {
 // During an outage a git service gives a missing name and an existing
 // private one the same answer.
 func TestGitServiceOutageSameAnswer(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
@@ -261,7 +241,7 @@ func TestGitServiceOutageSameAnswer(t *testing.T) {
 	breakTable(t, ctx, "repos")
 	for _, c := range []context.Context{ctx, strangerCtx} {
 		for _, name := range []string{"repo", "ghost"} {
-			is.True(errors.Is(runGit(c, GitUploadPackCommand, name), git.ErrSystemMalfunction))
+			is.True(errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), git.ErrSystemMalfunction))
 		}
 	}
 }
@@ -269,6 +249,7 @@ func TestGitServiceOutageSameAnswer(t *testing.T) {
 // A lookup the client canceled by going away is logged at Debug, not as a
 // server error, and still answered as a failed lookup.
 func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var buf bytes.Buffer
 	logger := log.New(&buf)
@@ -291,12 +272,13 @@ func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
 // lookup failed rather than print the fail-closed default as if it were the
 // stored value.
 func TestSettingsGettersLookupFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	breakTable(t, ctx, "settings")
 	for _, setting := range []string{"allow-keyless", "anon-access"} {
-		c := SettingsCommand()
+		c := cmdsOf(adminCtx).SettingsCommand()
 		c.SilenceUsage = true
 		var out bytes.Buffer
 		c.SetOut(&out)

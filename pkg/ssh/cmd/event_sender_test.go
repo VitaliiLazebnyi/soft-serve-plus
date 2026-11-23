@@ -46,6 +46,7 @@ type senderEvent struct {
 // renamed after the session resolved it, and each event names the account
 // as it is now.
 func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		args  []string
@@ -57,6 +58,7 @@ func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
 		{"repo delete", []string{"delete", "hooks"}, webhook.EventRepository},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContextWith(t, func(cfg *config.Config) {
 				cfg.Webhook.AllowedHosts = []string{"127.0.0.0/8"}
@@ -64,7 +66,7 @@ func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
 			ownerCtx := whRepo(t, ctx, be) // the session resolved "owner"
 			r, err := be.Repository(ctx, "hooks")
 			is.NoErr(err)
-			gitRefs(t, filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git"))
+			gitRefs(t, filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git"))
 
 			got := make(chan senderEvent, 8)
 			srv := newMemServer(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

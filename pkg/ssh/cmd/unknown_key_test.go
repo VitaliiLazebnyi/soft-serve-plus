@@ -29,17 +29,17 @@ func TestUnknownKeyErrorNamesFingerprint(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		cmd  func() *cobra.Command
+		cmd  func(*Commands) *cobra.Command
 		args []string
 	}{
-		{"info", InfoCommand, nil},
-		{"pubkey list", PubkeyCommand, []string{"list"}},
-		{"set-username", SetUsernameCommand, []string{"bob"}},
-		{"token list", TokenCommand, []string{"list"}},
-		{"jwt", JWTCommand, []string{"repo"}},
+		{"info", (*Commands).InfoCommand, nil},
+		{"pubkey list", (*Commands).PubkeyCommand, []string{"list"}},
+		{"set-username", (*Commands).SetUsernameCommand, []string{"bob"}},
+		{"token list", (*Commands).TokenCommand, []string{"list"}},
+		{"jwt", (*Commands).JWTCommand, []string{"repo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := tc.cmd()
+			c := tc.cmd(cmdsOf(keyCtx))
 			c.SetOut(&bytes.Buffer{})
 			c.SetErr(&bytes.Buffer{})
 			c.SetArgs(tc.args)

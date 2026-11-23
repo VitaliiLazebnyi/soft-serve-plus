@@ -13,6 +13,7 @@ import (
 // repo info shows a mirror's last sync, and the error of its last sync to
 // those with write access: the error can carry what the remote wrote.
 func TestRepoInfoMirrorSync(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)

@@ -26,6 +26,7 @@ import (
 // HTTP push created and left without refs, so that removal cannot delete
 // the repository while the SSH push may write refs to it.
 func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
@@ -38,7 +39,7 @@ func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 	stdin, stdinW := io.Pipe()
 	stdout, stdoutW := io.Pipe()
 
-	c := GitReceivePackCommand()
+	c := cmdsOf(adminCtx).GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(stdin)
@@ -74,6 +75,7 @@ func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 // the repository under it would fail the upload and leave its temporary
 // file behind.
 func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
@@ -84,7 +86,7 @@ func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
 	stdin, stdinW := io.Pipe()
 	stdout, stdoutW := io.Pipe()
 
-	c := GitLFSTransfer()
+	c := cmdsOf(adminCtx).GitLFSTransfer()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(stdin)
@@ -128,13 +130,13 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	// The removal runs after this push looked the repository up and
 	// before it starts. The hook runs again for the push that creates
 	// the repository anew; only the first run removes.
-	testHookBeforeBeginPush = func() {
-		testHookBeforeBeginPush = nil
+	cmds := cmdsOf(ctx)
+	cmds.beforeBeginPush = func() {
+		cmds.beforeBeginPush = nil
 		removed, err := be.RemovePushCreatedRepository(ctx, repo)
 		is.NoErr(err)
 		is.True(removed)
 	}
-	t.Cleanup(func() { testHookBeforeBeginPush = nil })
 
 	// The repository's hooks run the server binary, which is the test
 	// binary here; point git at no hooks instead.
@@ -164,7 +166,7 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	req := fmt.Sprintf("%04x%s0000", len(line)+4, line) + string(pack)
 
 	var out bytes.Buffer
-	c := GitReceivePackCommand()
+	c := cmdsOf(adminCtx).GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(strings.NewReader(req))
@@ -194,14 +196,14 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 	otherCtx := withUser(t, ctx, be, "other", true)
 
 	var replacement proto.Repository
-	testHookBeforeBeginPush = func() {
-		testHookBeforeBeginPush = nil
+	cmds := cmdsOf(ctx)
+	cmds.beforeBeginPush = func() {
+		cmds.beforeBeginPush = nil
 		is.NoErr(be.DeleteRepository(ctx, "fresh"))
 		var err error
 		replacement, err = be.CreateRepository(ctx, "fresh", proto.UserFromContext(otherCtx), proto.RepositoryOptions{Private: true})
 		is.NoErr(err)
 	}
-	t.Cleanup(func() { testHookBeforeBeginPush = nil })
 
 	// The repository's hooks run the server binary, which is the test
 	// binary here; point git at no hooks instead.
@@ -231,7 +233,7 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 	req := fmt.Sprintf("%04x%s0000", len(line)+4, line) + string(pack)
 
 	var out bytes.Buffer
-	c := GitReceivePackCommand()
+	c := cmdsOf(pusherCtx).GitReceivePackCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(strings.NewReader(req))
@@ -273,17 +275,19 @@ func (s beginPushFailStore) GetRepoByName(ctx context.Context, h db.Handler, nam
 // the server: the database error is logged once, and the client gets
 // git.ErrSystemMalfunction, not the error.
 func TestBeginPushLookupFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		exists bool
-		cmd    func() *cobra.Command
+		cmd    func(*Commands) *cobra.Command
 		args   []string
 	}{
-		{"push", true, GitReceivePackCommand, []string{"shared"}},
-		{"push to create", false, GitReceivePackCommand, []string{"shared"}},
-		{"lfs upload", true, GitLFSTransfer, []string{"shared", "upload"}},
+		{"push", true, (*Commands).GitReceivePackCommand, []string{"shared"}},
+		{"push to create", false, (*Commands).GitReceivePackCommand, []string{"shared"}},
+		{"lfs upload", true, (*Commands).GitLFSTransfer, []string{"shared", "upload"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			armed := new(atomic.Bool)
 			ctx, be, logs := newLookupTestContextWith(t, func(s store.Store) store.Store {
@@ -294,10 +298,9 @@ func TestBeginPushLookupFailure(t *testing.T) {
 				_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 				is.NoErr(err)
 			}
-			testHookBeforeBeginPush = func() { armed.Store(true) }
-			t.Cleanup(func() { testHookBeforeBeginPush = nil })
+			cmdsOf(adminCtx).beforeBeginPush = func() { armed.Store(true) }
 
-			c := tc.cmd()
+			c := tc.cmd(cmdsOf(adminCtx))
 			c.SilenceUsage = true
 			c.SilenceErrors = true
 			c.SetIn(strings.NewReader(""))

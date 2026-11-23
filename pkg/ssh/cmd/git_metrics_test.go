@@ -53,7 +53,7 @@ func TestReceivePackCountedOnce(t *testing.T) {
 	// push creates branch with the commit.
 	push := func(ctx context.Context, branch string) error {
 		line := fmt.Sprintf("%s %s refs/heads/%s\x00report-status\n", strings.Repeat("0", 40), commit, branch)
-		c := GitReceivePackCommand()
+		c := cmdsOf(ctx).GitReceivePackCommand()
 		c.SilenceUsage = true
 		c.SilenceErrors = true
 		c.SetIn(strings.NewReader(fmt.Sprintf("%04x%s0000", len(line)+4, line) + pack))

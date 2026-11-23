@@ -5,17 +5,23 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
+	"io/fs"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
+	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
@@ -32,6 +38,7 @@ var sha1Algorithms = []string{
 }
 
 func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	if err := cfg.Validate(); err != nil {
@@ -65,6 +72,7 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 // The key exchanges, ciphers and MACs are fixed (R68); the public key
 // authentication algorithms follow the config.
 func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoED25519, gossh.KeyAlgoRSA}
@@ -99,16 +107,18 @@ func withHandshakeTimeout(d time.Duration) limit {
 	return func(l *serverLimits) { l.handshakeTimeout = d }
 }
 
-// newTestSSHServer is NewSSHServer with the fixed limits changed by lims.
-func newTestSSHServer(ctx context.Context, lims ...limit) (*SSHServer, error) {
+// newTestSSHServer is NewServer, with the dependencies ctx carries (see
+// serverContext), and the fixed limits changed by lims.
+func newTestSSHServer(ctx context.Context, lims ...limit) (*Server, error) {
 	lim := serverLimits{handshakeTimeout: config.SSHHandshakeTimeout, maxSessions: config.SSHMaxSessions}
 	for _, l := range lims {
 		l(&lim)
 	}
-	return newSSHServer(ctx, lim)
+	d := depsOf(ctx)
+	return newServer(d.cfg, d.dbx, d.st, d.be, d.hostKey, d.tokens, d.logger, lim)
 }
 
-// startTestServer starts a full SSH server built by NewSSHServer with cfg,
+// startTestServer starts a full SSH server built by NewServer with cfg,
 // and the fixed limits changed by lims, and returns its address and the
 // context it runs with, which holds its backend.
 func startTestServer(t *testing.T, cfg *config.Config, lims ...limit) (string, context.Context) {
@@ -116,7 +126,7 @@ func startTestServer(t *testing.T, cfg *config.Config, lims ...limit) (string, c
 	return startSSHServer(t, cfg, log.Default(), lims...)
 }
 
-// startSSHServer starts a full SSH server built by NewSSHServer with cfg and
+// startSSHServer starts a full SSH server built by NewServer with cfg and
 // logger and returns its address and the context it runs with, which holds its
 // backend.
 func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger, lims ...limit) (string, context.Context) {
@@ -127,7 +137,7 @@ func startSSHServer(t *testing.T, cfg *config.Config, logger *log.Logger, lims .
 
 // startServerWithLogger starts an SSH server with cfg and logger on a local
 // port and returns its address, the context it runs with and the server.
-func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger, lims ...limit) (string, context.Context, *SSHServer) {
+func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger, lims ...limit) (string, context.Context, *Server) {
 	t.Helper()
 	ctx := serverContext(t, cfg, logger)
 	s, err := newTestSSHServer(ctx, lims...)
@@ -143,8 +153,32 @@ func startServerWithLogger(t *testing.T, cfg *config.Config, logger *log.Logger,
 	return l.Addr().String(), ctx, s
 }
 
-// serverContext validates cfg and returns a context with what NewSSHServer
-// needs: the config, logger, and a migrated database, store and backend.
+// testDeps are what a test server is built from. The server takes them as
+// parameters; the tests carry them on the context the server runs with,
+// under testDepsKey, so that a test can reach the server's backend.
+type testDeps struct {
+	cfg     *config.Config
+	dbx     *db.DB
+	st      store.Store
+	be      *backend.Backend
+	hostKey *config.HostKey
+	tokens  *jwk.Signer
+	logger  *log.Logger
+}
+
+// testDepsKey is the context key of a test server's testDeps.
+type testDepsKey struct{}
+
+// depsOf returns the testDeps ctx carries; serverContext's contexts always
+// carry them.
+func depsOf(ctx context.Context) *testDeps {
+	return ctx.Value(testDepsKey{}).(*testDeps)
+}
+
+// serverContext validates cfg and returns a context with what NewServer
+// needs: the config, logger, host key and token signer, and a migrated
+// database, store and backend. The host key is the one at cfg.SSH.KeyPath,
+// which it creates if there is none, as the server does at start.
 //
 // The caller sets cfg.DataPath to a t.TempDir before calling it, and starts
 // the server after: closeTestDB, which closes the database, then runs after
@@ -154,8 +188,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, logger)
+	ctx := log.WithContext(context.Background(), logger)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -164,11 +197,52 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
-	return backend.WithContext(ctx, be)
+	be := backend.New(cfg, dbx, dbstore, logger)
+	hostKey := testHostKey(t, cfg.SSH.KeyPath)
+	tokens, err := jwk.NewSigner(hostKey, cfg.HTTP.PublicURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return context.WithValue(ctx, testDepsKey{}, &testDeps{
+		cfg:     cfg,
+		dbx:     dbx,
+		st:      dbstore,
+		be:      be,
+		hostKey: hostKey,
+		tokens:  tokens,
+		logger:  logger,
+	})
+}
+
+// testHostKey returns the host key at path, which it creates first if
+// there is none.
+func testHostKey(t *testing.T, path string) *config.HostKey {
+	t.Helper()
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if _, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.DefaultConfig()
+	cfg.SSH.KeyPath = path
+	key, err := config.KeyPair(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// handlerServer returns a Server with cfg, be and logger, and the commands
+// built with them, dbx and st, but no SSH server of its own: for a test
+// that serves its middleware on a server it sets up itself.
+func handlerServer(t testing.TB, cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, logger *log.Logger) *Server {
+	t.Helper()
+	cmds, err := cmd.New(cmd.Deps{Config: cfg, Backend: be, DB: dbx, Store: st, Logger: logger.WithPrefix("ssh")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Server{cfg: cfg, be: be, logger: logger.WithPrefix("ssh"), cmds: cmds}
 }
 
 // closeTestDB closes dbx when tb ends, and waits until its last connection
@@ -247,6 +321,7 @@ func wantNoCommonAlgorithm(t *testing.T, err error, what string) {
 }
 
 func TestSSHServerRefusesSHA1ByDefault(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, _ := startTestServer(t, cfg)
@@ -328,6 +403,7 @@ func wantAuthFailure(t *testing.T, err error, what string) {
 }
 
 func TestSSHServerRefusesSHA1SignaturesByDefault(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	addr, _ := startTestServer(t, cfg)
@@ -342,6 +418,7 @@ func TestSSHServerRefusesSHA1SignaturesByDefault(t *testing.T) {
 }
 
 func TestSSHServerHonoursConfiguredPublicKeyAuthAlgorithms(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.SSH.PublicKeyAuthAlgorithms = []string{gossh.KeyAlgoRSA}

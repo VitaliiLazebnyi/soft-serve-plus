@@ -8,14 +8,13 @@ import (
 
 	"charm.land/lipgloss/v2/table"
 	"github.com/caarlos0/duration"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 )
 
 // TokenCommand returns a command that manages user access tokens.
-func TokenCommand() *cobra.Command {
+func (cmds *Commands) TokenCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "token",
 		Aliases: []string{"access-token"},
@@ -29,7 +28,7 @@ func TokenCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			name := strings.Join(args, " ")
 
 			user := proto.UserFromContext(ctx)
@@ -76,7 +75,7 @@ func TokenCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			user := proto.UserFromContext(ctx)
 			if user == nil {
@@ -123,7 +122,7 @@ func TokenCommand() *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			user := proto.UserFromContext(ctx)
 			if user == nil {

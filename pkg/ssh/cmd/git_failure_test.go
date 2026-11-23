@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -41,7 +40,7 @@ func newGitFailureRepo(t *testing.T, wrap func(store.Store) store.Store) gitFail
 	if _, err := be.CreateRepository(ownerCtx, "r", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(config.FromContext(ctx).DataPath, "repos", "r.git")
+	dir := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "r.git")
 	blob := gittest.Git(t, dir, []byte("root\n"), "hash-object", "-w", "--stdin")
 	subtree := gittest.Tree(t, dir, "g", "sub\n")
 	tree := gittest.Git(t, dir, fmt.Appendf(nil, "100644 blob %s\tf\n040000 tree %s\td\n", blob, subtree), "mktree")
@@ -82,6 +81,7 @@ func (g gitFailureRepo) wantGitFailed(t *testing.T, want string, leaks []string,
 // the server: the client must not see git's message, which names the
 // repository's path on the server.
 func TestLockedRefIsServerFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		lock string
 		args []string
@@ -91,6 +91,7 @@ func TestLockedRefIsServerFailure(t *testing.T) {
 		{"refs/tags/v1.lock", []string{"tag", "delete", "r", "v1"}},
 	} {
 		t.Run(tc.lock, func(t *testing.T) {
+			t.Parallel()
 			g := newGitFailureRepo(t, nil)
 			if err := os.WriteFile(filepath.Join(g.dir, filepath.FromSlash(tc.lock)), nil, 0o600); err != nil {
 				t.Fatal(err)
@@ -103,6 +104,7 @@ func TestLockedRefIsServerFailure(t *testing.T) {
 // An object that is missing from the repository, while the refs that lead
 // to it still resolve, fails the read on the server.
 func TestMissingObjectIsServerFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		missing func(g gitFailureRepo) string
@@ -127,6 +129,7 @@ func TestMissingObjectIsServerFailure(t *testing.T) {
 		{"blob raw of branch", func(g gitFailureRepo) string { return g.commit }, []string{"blob", "-r", "r", "main", "f"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			g := newGitFailureRepo(t, nil)
 			id := tc.missing(g)
 			if err := os.Remove(looseObject(g.dir, id)); err != nil {
@@ -145,7 +148,9 @@ func TestMissingObjectIsServerFailure(t *testing.T) {
 // A repository directory git does not accept, or one that is gone, fails
 // every command that opens it on the server.
 func TestOpenFailureIsServerFailure(t *testing.T) {
+	t.Parallel()
 	t.Run("not a repository", func(t *testing.T) {
+		t.Parallel()
 		g := newGitFailureRepo(t, nil)
 		if err := os.Remove(filepath.Join(g.dir, "HEAD")); err != nil {
 			t.Fatal(err)
@@ -155,6 +160,7 @@ func TestOpenFailureIsServerFailure(t *testing.T) {
 		g.wantGitFailed(t, "git does not accept the repository", []string{g.dir, "not a git repository"}, "branch", "list", "r")
 	})
 	t.Run("not a directory", func(t *testing.T) {
+		t.Parallel()
 		g := newGitFailureRepo(t, nil)
 		if err := os.RemoveAll(g.dir); err != nil {
 			t.Fatal(err)
@@ -198,12 +204,13 @@ func (s failRepoByNameStore) GetRepoByName(ctx context.Context, h db.Handler, na
 // `repo info` on a mirror reads its sync status from the database; a failed
 // read is logged, and the client gets the generic lookup error.
 func TestInfoMirrorSyncStatusLookupFailure(t *testing.T) {
+	t.Parallel()
 	armed := new(atomic.Bool)
 	g := newGitFailureRepo(t, func(s store.Store) store.Store { return failRepoByNameStore{Store: s, armed: armed} })
-	if err := store.FromContext(g.ctx).SetRepoIsMirrorByName(g.ctx, db.FromContext(g.ctx), "r", true); err != nil {
+	if err := cmdsOf(g.ctx).store.SetRepoIsMirrorByName(g.ctx, cmdsOf(g.ctx).db, "r", true); err != nil {
 		t.Fatal(err)
 	}
-	afterGate(t, func() { armed.Store(true) })
+	afterGate(g.ctx, func() { armed.Store(true) })
 
 	out, stderr, err := runRepoOutput(t, g.ctx, "info", "r")
 	if !errors.Is(err, errLookupFailed) {
@@ -222,6 +229,7 @@ func TestInfoMirrorSyncStatusLookupFailure(t *testing.T) {
 // git.ErrMalformedTree, from the listing and from a lookup of that name
 // alike.
 func TestMalformedTreeIsReported(t *testing.T) {
+	t.Parallel()
 	g := newGitFailureRepo(t, nil)
 	blob := gittest.Git(t, g.dir, []byte("x\n"), "hash-object", "-w", "--stdin")
 	long := strings.Repeat("n", 5000)
@@ -250,6 +258,7 @@ func TestMalformedTreeIsReported(t *testing.T) {
 // only feeds the event, fails; the change still goes on and the failure is
 // logged at Warn.
 func TestBranchDefaultFromDetachedHEAD(t *testing.T) {
+	t.Parallel()
 	g := newGitFailureRepo(t, nil)
 	if err := os.WriteFile(filepath.Join(g.dir, "HEAD"), []byte(g.commit+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -269,6 +278,7 @@ func TestBranchDefaultFromDetachedHEAD(t *testing.T) {
 // for one there is the client's mistake, answered "revision does not
 // exist" and not logged as a server failure.
 func TestTagOnBlobIsRevisionNotExist(t *testing.T) {
+	t.Parallel()
 	g := newGitFailureRepo(t, nil)
 	gittest.Git(t, g.dir, nil, "update-ref", "refs/tags/blobtag", g.blob)
 	gittest.Git(t, g.dir, nil, "tag", "-a", "-m", "on a blob", "annblob", g.blob)
@@ -296,6 +306,7 @@ func TestTagOnBlobIsRevisionNotExist(t *testing.T) {
 // A detached HEAD whose commit object is gone is the repository failing,
 // as a branch without its commit is.
 func TestDetachedHEADWithoutCommitIsServerFailure(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{
 		{"commit", "r", "HEAD"},
 		{"tree", "r", "HEAD", "f"},

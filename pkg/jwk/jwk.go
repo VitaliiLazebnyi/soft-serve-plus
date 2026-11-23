@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -28,13 +29,6 @@ var errNoHostKey = fmt.Errorf("%w: the host key was not loaded", ErrHostKey)
 // errInvalid is wrapped by the error of a token that does not verify.
 var errInvalid = errors.New("invalid token")
 
-// HostKey is the key tokens are signed with: the server's SSH host key, as
-// *config.HostKey holds it.
-type HostKey interface {
-	PrivateKey() crypto.PrivateKey
-	CryptoPublicKey() crypto.PublicKey
-}
-
 // Signer signs and verifies the server's tokens with its host key. A nil
 // *Signer stands for a server without a usable host key: its methods return
 // an error wrapping ErrHostKey.
@@ -46,11 +40,10 @@ type Signer struct {
 	issuer string
 }
 
-// NewSigner returns a Signer for key that issues tokens as issuer, the
-// server's HTTP public URL. The error wraps ErrHostKey when key is nil or of
-// a type tokens cannot be signed with. key must hold a key: pass nil, not a
-// nil *config.HostKey, for none.
-func NewSigner(key HostKey, issuer string) (*Signer, error) {
+// NewSigner returns a Signer for key, the server's SSH host key, that issues
+// tokens as issuer, the server's HTTP public URL. The error wraps ErrHostKey
+// when key is nil or of a type tokens cannot be signed with.
+func NewSigner(key *config.HostKey, issuer string) (*Signer, error) {
 	if key == nil {
 		return nil, errNoHostKey
 	}

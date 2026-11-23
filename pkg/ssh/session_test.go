@@ -99,8 +99,9 @@ func setupServer(tb testing.TB) *ssh.Server {
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
 	return &ssh.Server{
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(BubbleTeaMiddleware(func(s ssh.Session) {
+		Handler: hs.loggerMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
 				tb.Error("session has no pty")
@@ -412,14 +413,134 @@ func TestTUIWindowSizeClamped(t *testing.T) {
 	}
 }
 
+// The UI's context ends when the TUI program exits, through the cancel
+// newSessionProgram returns, and not only with the connection: a client
+// that keeps the connection open, as for its next session, does not keep
+// the UI's git commands running (UI-11, R57).
+func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	d := depsOf(serverContext(t, cfg, log.Default()))
+	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
+	srv := &ssh.Server{
+		Handler: hs.loggerMiddleware(func(s ssh.Session) {
+			p, c, cancel := hs.newSessionProgram(s)
+			if p == nil {
+				_ = s.Exit(1)
+				return
+			}
+			defer c.Zone.Close()
+			before := c.Context().Err()
+			cancel()
+			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, c.Context().Err(), s.Context().Err())
+			_ = s.Exit(0)
+		}),
+	}
+	if err := ssh.EmulatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
+	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	sess.Stderr = &stderr
+	if err := sess.Run(""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stderr.String(), "before=<nil> after=context canceled conn=<nil>"; got != want {
+		t.Errorf("UI context: %s, want %s", got, want)
+	}
+}
+
+// bubbleTeaMiddleware cancels the UI's context once the TUI program has
+// exited, while the connection stays open, so the UI's git commands do not
+// run on until the client goes (UI-11, R57).
+func TestBubbleTeaMiddlewareEndsUIContextWithProgram(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	d := depsOf(serverContext(t, cfg, log.Default()))
+	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
+	uiCtxs := make(chan context.Context, 1)
+	hs.onUIContext = func(ctx context.Context) { uiCtxs <- ctx }
+	type errs struct{ ui, conn error }
+	after := make(chan errs, 1)
+	srv := &ssh.Server{
+		Handler: hs.loggerMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
+			// The program has exited; the session's handler goes on.
+			var e errs
+			select {
+			case ctx := <-uiCtxs:
+				e.ui = ctx.Err()
+			default:
+				e.ui = errors.New("no UI context")
+			}
+			e.conn = s.Context().Err()
+			after <- e
+			_ = s.Exit(0)
+		})),
+	}
+	if err := ssh.EmulatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
+	addr := testsession.Listen(t, srv)
+	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		User:            "test",
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		Timeout:         sessionLoopsWait,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	// Quit the TUI, retrying until the program reads the key.
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(sessionLoopsWait)
+	var got errs
+wait:
+	for {
+		select {
+		case got = <-after:
+			break wait
+		case <-tick.C:
+			_, _ = io.WriteString(stdin, "q")
+		case <-timeout:
+			t.Fatal("TUI did not quit")
+		}
+	}
+	if !errors.Is(got.ui, context.Canceled) {
+		t.Errorf("UI context after the program exited: %v, want %v", got.ui, context.Canceled)
+	}
+	if got.conn != nil {
+		t.Errorf("connection context after the program exited: %v, want it open", got.conn)
+	}
+}
+
 // newSessionProgram gives the UI the clamped size.
 func TestNewSessionProgramClampsSize(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	ctx := serverContext(t, cfg, log.Default())
+	hs := handlerServer(t, cfg, depsOf(ctx).dbx, depsOf(ctx).st, depsOf(ctx).be, log.Default())
 	srv := &ssh.Server{
-		Handler: ContextMiddleware(cfg, db.FromContext(ctx), store.FromContext(ctx), backend.FromContext(ctx), log.Default())(func(s ssh.Session) {
-			p, c := newSessionProgram(s)
+		Handler: hs.loggerMiddleware(func(s ssh.Session) {
+			p, c, cancel := hs.newSessionProgram(s)
+			defer cancel()
 			if p == nil {
 				_ = s.Exit(1)
 				return

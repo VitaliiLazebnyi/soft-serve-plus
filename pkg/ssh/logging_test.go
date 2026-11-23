@@ -37,14 +37,14 @@ func (logTestUser) Username() string { return "alice" }
 // terminal details in addition to the address, username and command, rather
 // than in place of them.
 func TestLoggingMiddlewarePtyKeepsFields(t *testing.T) {
+	t.Parallel()
 	var buf syncBuffer
 	logger := log.NewWithOptions(&buf, log.Options{Level: log.DebugLevel})
 
 	sess := testsession.New(t, &ssh.Server{
 		Handler: func(s ssh.Session) {
-			s.Context().SetValue(log.ContextKey, logger)
 			s.Context().SetValue(proto.ContextKeyUser, proto.User(logTestUser{}))
-			LoggingMiddleware(func(s ssh.Session) {
+			(&Server{logger: logger}).loggingMiddleware(func(s ssh.Session) {
 				s.Exit(0) //nolint: errcheck
 			})(s)
 		},

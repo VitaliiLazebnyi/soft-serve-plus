@@ -7,7 +7,6 @@ import (
 
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -16,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func webhookCommand() *cobra.Command {
+func (cmds *Commands) webhookCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "webhook",
 		Aliases: []string{"webhooks"},
@@ -24,34 +23,35 @@ func webhookCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		webhookListCommand(),
-		webhookCreateCommand(),
-		webhookDeleteCommand(),
-		webhookUpdateCommand(),
-		webhookDeliveriesCommand(),
+		cmds.webhookListCommand(),
+		cmds.webhookCreateCommand(),
+		cmds.webhookDeleteCommand(),
+		cmds.webhookUpdateCommand(),
+		cmds.webhookDeliveriesCommand(),
 	)
 
 	return cmd
 }
 
-var webhookEvents []string
-
-func init() {
+// webhookEventNames returns the names of the webhook events, for the help
+// of the --events flags.
+func webhookEventNames() string {
 	events := webhook.Events()
-	webhookEvents = make([]string, len(events))
+	names := make([]string, len(events))
 	for i, e := range events {
-		webhookEvents[i] = e.String()
+		names[i] = e.String()
 	}
+	return strings.Join(names, ", ")
 }
 
-func webhookListCommand() *cobra.Command {
+func (cmds *Commands) webhookListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list REPOSITORY",
 		Short: "List repository webhooks",
 		Args:  cobra.ExactArgs(1),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			webhooks, err := be.ListWebhooks(ctx, repo)
 			if err != nil {
@@ -82,7 +82,7 @@ func webhookListCommand() *cobra.Command {
 	return cmd
 }
 
-func webhookCreateCommand() *cobra.Command {
+func (cmds *Commands) webhookCreateCommand() *cobra.Command {
 	var events []string
 	var secret string
 	var active bool
@@ -91,9 +91,9 @@ func webhookCreateCommand() *cobra.Command {
 		Use:   "create REPOSITORY URL",
 		Short: "Create a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			evs, err := parseWebhookEvents(events)
 			if err != nil {
@@ -110,7 +110,7 @@ func webhookCreateCommand() *cobra.Command {
 		}),
 	}
 
-	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, available events are (%s)", strings.Join(webhookEvents, ", ")))
+	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, available events are (%s)", webhookEventNames()))
 	cmd.Flags().StringVarP(&secret, "secret", "s", "", "secret to sign the webhook payload")
 	cmd.Flags().BoolVarP(&active, "active", "a", true, "whether the webhook is active")
 	cmd.Flags().StringVarP(&contentType, "content-type", "c", "json", "content type of the webhook payload, can be either `json` or `form`")
@@ -146,14 +146,14 @@ func parseWebhookContentType(s string) (webhook.ContentType, error) {
 	}
 }
 
-func webhookDeleteCommand() *cobra.Command {
+func (cmds *Commands) webhookDeleteCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete REPOSITORY WEBHOOK_ID",
 		Short: "Delete a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -167,7 +167,7 @@ func webhookDeleteCommand() *cobra.Command {
 	return cmd
 }
 
-func webhookUpdateCommand() *cobra.Command {
+func (cmds *Commands) webhookUpdateCommand() *cobra.Command {
 	var events []string
 	var secret string
 	var active string
@@ -177,9 +177,9 @@ func webhookUpdateCommand() *cobra.Command {
 		Use:   "update REPOSITORY WEBHOOK_ID",
 		Short: "Update a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -237,7 +237,7 @@ func webhookUpdateCommand() *cobra.Command {
 		}),
 	}
 
-	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, replacing the current ones; available events are (%s); pass --events= to remove them all", strings.Join(webhookEvents, ", ")))
+	cmd.Flags().StringSliceVarP(&events, "events", "e", nil, fmt.Sprintf("events to trigger the webhook, replacing the current ones; available events are (%s); pass --events= to remove them all", webhookEventNames()))
 	cmd.Flags().StringVarP(&secret, "secret", "s", "", "secret to sign the webhook payload; pass --secret= to remove it")
 	cmd.Flags().StringVarP(&active, "active", "a", "", "whether the webhook is active")
 	cmd.Flags().StringVarP(&contentType, "content-type", "c", "", "content type of the webhook payload, can be either `json` or `form`")
@@ -246,7 +246,7 @@ func webhookUpdateCommand() *cobra.Command {
 	return cmd
 }
 
-func webhookDeliveriesCommand() *cobra.Command {
+func (cmds *Commands) webhookDeliveriesCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "deliveries",
 		Short:   "Manage webhook deliveries",
@@ -254,22 +254,22 @@ func webhookDeliveriesCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		webhookDeliveriesListCommand(),
-		webhookDeliveriesRedeliverCommand(),
-		webhookDeliveriesGetCommand(),
+		cmds.webhookDeliveriesListCommand(),
+		cmds.webhookDeliveriesRedeliverCommand(),
+		cmds.webhookDeliveriesGetCommand(),
 	)
 
 	return cmd
 }
 
-func webhookDeliveriesListCommand() *cobra.Command {
+func (cmds *Commands) webhookDeliveriesListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list REPOSITORY WEBHOOK_ID",
 		Short: "List webhook deliveries",
 		Args:  cobra.ExactArgs(2),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -302,14 +302,14 @@ func webhookDeliveriesListCommand() *cobra.Command {
 	return cmd
 }
 
-func webhookDeliveriesRedeliverCommand() *cobra.Command {
+func (cmds *Commands) webhookDeliveriesRedeliverCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "redeliver REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Redeliver a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {
@@ -328,14 +328,14 @@ func webhookDeliveriesRedeliverCommand() *cobra.Command {
 	return cmd
 }
 
-func webhookDeliveriesGetCommand() *cobra.Command {
+func (cmds *Commands) webhookDeliveriesGetCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Get a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 
 			id, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {

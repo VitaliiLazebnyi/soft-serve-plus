@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/spf13/cobra"
@@ -50,7 +48,7 @@ func splitUserCreateKey(key string, args []string) (string, ssh.PublicKey, error
 }
 
 // UserCommand returns the user subcommand.
-func UserCommand() *cobra.Command {
+func (cmds *Commands) UserCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "user",
 		Aliases: []string{"users"},
@@ -59,7 +57,7 @@ func UserCommand() *cobra.Command {
 		// runs the nearest persistent pre-run found when walking up from
 		// the invoked command, so subcommands added later are gated by
 		// default instead of silently unprotected.
-		PersistentPreRunE: checkIfServerAdmin,
+		PersistentPreRunE: cmds.checkIfServerAdmin,
 	}
 
 	var admin bool
@@ -80,7 +78,7 @@ func UserCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var pubkeys []ssh.PublicKey
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 			if key != "" {
 				var pk ssh.PublicKey
@@ -112,7 +110,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 
 			return be.DeleteUser(ctx, username)
@@ -126,7 +124,7 @@ func UserCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			users, err := be.Users(ctx)
 			if err != nil {
 				return err
@@ -147,7 +145,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 			pubkey := strings.Join(args[1:], " ")
 			pk, _, err := sshutils.ParseAuthorizedKey(pubkey)
@@ -165,7 +163,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 			pubkey := strings.Join(args[1:], " ")
 			pk, _, err := sshutils.ParseAuthorizedKey(pubkey)
@@ -183,7 +181,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 			admin, err := parseBool(args[1])
 			if err != nil {
@@ -200,7 +198,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 
 			user, err := be.User(ctx, username)
@@ -208,7 +206,7 @@ func UserCommand() *cobra.Command {
 				return err
 			}
 			if err != nil {
-				return lookupFailed(ctx, log.FromContext(ctx), "look up user", err)
+				return lookupFailed(ctx, cmds.logger, "look up user", err)
 			}
 
 			isAdmin := user.IsAdmin()
@@ -230,7 +228,7 @@ func UserCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			be := backend.FromContext(ctx)
+			be := cmds.be
 			username := args[0]
 			newUsername := args[1]
 

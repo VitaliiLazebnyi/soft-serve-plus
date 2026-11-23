@@ -1,15 +1,16 @@
 package ssh
 
 import (
+	"context"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	bm "charm.land/wish/v2/bubbletea"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,9 +34,8 @@ var tuiSessionDuration = promauto.NewCounter(prometheus.CounterOpts{
 	Help:      "The total time spent in TUI sessions",
 })
 
-// BubbleTeaMiddleware runs the soft-serve TUI for sessions with a pty, and
+// bubbleTeaMiddleware runs the soft-serve TUI for sessions with a pty, and
 // counts the time each one spends in it.
-// This middleware must be run after the ContextMiddleware.
 //
 // It releases the session's UI resources once the program has exited,
 // however the session ended: quit, disconnect or idle timeout. They cannot
@@ -44,10 +44,13 @@ var tuiSessionDuration = promauto.NewCounter(prometheus.CounterOpts{
 //
 // The time runs until the program exits, which ends the session. The
 // connection may outlive it, for example when a client multiplexes several
-// sessions over one connection, so its close is not the TUI's end.
-func BubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
+// sessions over one connection, so its close is not the TUI's end. So the
+// UI's work, such as the git commands of a load still running, is canceled
+// when the program exits, not when the connection closes.
+func (srv *Server) bubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
 	return func(s ssh.Session) {
 		var c *common.Common
+		cancel := func() {}
 		var start time.Time
 		stop := func() {
 			if !start.IsZero() {
@@ -59,36 +62,41 @@ func BubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
 			// A panic skips the handler below; count that session's time
 			// too.
 			stop()
+			cancel()
 			if c != nil {
 				c.Zone.Close()
 			}
 		}()
 		bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
-			p, pc := newSessionProgram(s)
-			c = pc
+			p, pc, pcancel := srv.newSessionProgram(s)
+			c, cancel = pc, pcancel
 			if p != nil {
 				start = time.Now()
 			}
 			return p
 		})(func(s ssh.Session) {
-			// The program has exited: stop the clock before handing the
-			// session on.
+			// The program has exited: stop the clock and the UI's work
+			// before handing the session on.
 			stop()
+			cancel()
 			next(s)
 		})(s)
 	}
 }
 
-// newSessionProgram returns the TUI program for the session, and the Common
-// its UI was built with, or nil for both when the session gets no TUI.
-func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
+// newSessionProgram returns the TUI program for the session, the Common
+// its UI was built with, and the function that cancels the UI's context,
+// which the caller calls once the program has exited. When the session
+// gets no TUI, the program and the Common are nil.
+func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *common.Common, context.CancelFunc) {
+	none := func() {}
 	pty, _, active := s.Pty()
 	if !active {
-		return nil, nil
+		return nil, nil, none
 	}
 
 	ctx := s.Context()
-	be := backend.FromContext(ctx)
+	be := srv.be
 	cmd := s.Command()
 	initialRepo := ""
 	if len(cmd) == 1 {
@@ -104,13 +112,24 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	// up again here. Admin keys are still recognised from the context's key.
 	level, err := be.BaseAccessLevelForUser(ctx, proto.UserFromContext(ctx))
 	if err != nil {
-		logAccessCheckFailure(ctx, log.FromContext(ctx), err)
+		logAccessCheckFailure(ctx, srv.logger, err)
 		wish.Fatalln(s, ErrAccessCheckFailed)
-		return nil, nil
+		return nil, nil, none
 	}
 	if level < access.ReadOnlyAccess {
 		wish.Fatalln(s, proto.ErrUnauthorized)
-		return nil, nil
+		return nil, nil, none
+	}
+
+	// The UI's context is the session's, not the connection's: it ends
+	// when the program exits, so a client that keeps the connection open
+	// for its next session does not keep the UI's git commands running.
+	// pkg/ui still takes the config and backend from it.
+	uiCtx, cancel := context.WithCancel(ctx)
+	uiCtx = config.WithContext(uiCtx, srv.cfg)
+	uiCtx = backend.WithContext(uiCtx, be)
+	if srv.onUIContext != nil {
+		srv.onUIContext(uiCtx)
 	}
 
 	// The terminal size is the client's to choose, and Bubble Tea allocates
@@ -119,19 +138,19 @@ func newSessionProgram(s ssh.Session) (*tea.Program, *common.Common) {
 	width, height := common.ClampSize(pty.Window.Width, pty.Window.Height)
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
-		tea.WithContext(ctx),
+		tea.WithContext(uiCtx),
 		tea.WithColorProfile(common.DefaultColorProfile),
 		tea.WithWindowSize(width, height),
 		tea.WithFilter(sessionFilter),
 	)
 
-	c := common.NewCommon(ctx, width, height)
+	c := common.NewCommon(uiCtx, width, height)
 	m := NewUI(c, initialRepo)
 	p := tea.NewProgram(m, opts...)
 
 	tuiSessionCounter.Inc()
 
-	return p, &c
+	return p, &c, cancel
 }
 
 // sessionFilter is the TUI program's message filter. It limits window sizes

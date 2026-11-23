@@ -15,12 +15,13 @@ import (
 )
 
 // TestSSHServerRefusesOverlongCommand checks that the server built by
-// NewSSHServer refuses an overlong exec command from an unregistered key with
+// NewServer refuses an overlong exec command from an unregistered key with
 // ErrCommandTooLong alone. A cobra "unknown command" error would mean the
 // command handler parsed it, and a debug log line carrying the command would
 // mean LoggingMiddleware parsed it, so the length check must be wired in
 // ahead of both.
 func TestSSHServerRefusesOverlongCommand(t *testing.T) {
+	t.Parallel()
 	var logs syncBuffer
 	logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
 

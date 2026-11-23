@@ -28,7 +28,7 @@ type prefixConn struct {
 func (c *prefixConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // stopServer is how a test stops an SSH server.
-type stopServer func(*SSHServer) error
+type stopServer func(*Server) error
 
 // A connection still in its handshake when the server stops is cut off too.
 // The SSH library closes on Close, and waits for on Shutdown, only the
@@ -38,9 +38,10 @@ type stopServer func(*SSHServer) error
 // The test stops the server while a client is mid-handshake, and only then
 // lets the client finish it.
 func TestStopCutsOffHandshakeInProgress(t *testing.T) {
+	t.Parallel()
 	for name, stop := range map[string]stopServer{
-		"close": func(s *SSHServer) error { return s.Close() },
-		"shutdown": func(s *SSHServer) error {
+		"close": func(s *Server) error { return s.Close() },
+		"shutdown": func(s *Server) error {
 			// Nothing has finished its handshake, so there is nothing
 			// to drain.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -49,10 +50,11 @@ func TestStopCutsOffHandshakeInProgress(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			cfg := config.DefaultConfig()
 			cfg.DataPath = t.TempDir()
 			ctx := serverContext(t, cfg, log.Default())
-			s, err := NewSSHServer(ctx)
+			s, err := newTestSSHServer(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,19 +131,21 @@ func requireCutOff(t *testing.T, conn net.Conn, addr, what string) {
 // the connections it holds. A gate in the callback holds the connection
 // there while the server stops.
 func TestStopRefusesConnectionCalledBackAfter(t *testing.T) {
+	t.Parallel()
 	for name, stop := range map[string]stopServer{
-		"close": func(s *SSHServer) error { return s.Close() },
-		"shutdown": func(s *SSHServer) error {
+		"close": func(s *Server) error { return s.Close() },
+		"shutdown": func(s *Server) error {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			return s.Shutdown(ctx)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			cfg := config.DefaultConfig()
 			cfg.DataPath = t.TempDir()
 			ctx := serverContext(t, cfg, log.Default())
-			s, err := NewSSHServer(ctx)
+			s, err := newTestSSHServer(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}

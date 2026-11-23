@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -43,6 +42,7 @@ func (s *cancelAfterRefChangeStore) GetUserByID(ctx context.Context, h db.Handle
 // when the session ends after the ref has changed but before the event is
 // built.
 func TestBranchAndTagEventsSentWhenSessionEndsAfterRefChange(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		args    []string
@@ -80,25 +80,26 @@ func TestBranchAndTagEventsSentWhenSessionEndsAfterRefChange(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			whPushRefs(t, ownerCtx)
 			id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete", "-e", "repository")
 			whPointAtLoopback(t, ownerCtx, "hooks", id)
-			bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+			bare := filepath.Join(cmdsOf(ownerCtx).cfg.DataPath, "repos", "hooks.git")
 
 			sess, cancel := context.WithCancel(ownerCtx)
 			defer cancel()
 			st := &cancelAfterRefChangeStore{
-				Store:   store.FromContext(ownerCtx),
+				Store:   cmdsOf(ownerCtx).store,
 				changed: func() bool { return tc.changed(t, bare) },
 				cancel:  cancel,
 			}
 			// The event is built by the backend, so the session runs on one
 			// whose store is st.
-			stBe := backend.New(config.FromContext(ownerCtx), db.FromContext(ownerCtx), st, nil)
-			sess = backend.WithContext(store.WithContext(sess, st), stBe)
+			stBe := backend.New(cmdsOf(ownerCtx).cfg, cmdsOf(ownerCtx).db, st, nil)
+			sess = withTestBackend(withTestStore(sess, st), stBe)
 
 			is.NoErr(runRepo(t, sess, tc.args...))
 			is.True(sess.Err() != nil) // the session ended after the ref change

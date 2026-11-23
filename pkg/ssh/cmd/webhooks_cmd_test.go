@@ -14,10 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -109,12 +107,12 @@ func whCreate(t *testing.T, ctx context.Context, be *backend.Backend, extra ...s
 func whPointAtLoopback(t *testing.T, ctx context.Context, repo string, hookID int64) {
 	t.Helper()
 	is := is.New(t)
-	be := backend.FromContext(ctx)
+	be := cmdsOf(ctx).be
 	r, err := be.Repository(ctx, repo)
 	is.NoErr(err)
 	h, err := be.Webhook(ctx, r, hookID)
 	is.NoErr(err)
-	is.NoErr(store.FromContext(ctx).UpdateWebhookByID(ctx, db.FromContext(ctx), r.ID(), hookID,
+	is.NoErr(cmdsOf(ctx).store.UpdateWebhookByID(ctx, cmdsOf(ctx).db, r.ID(), hookID,
 		"http://127.0.0.1:1/", h.Secret, int(h.ContentType), h.Active))
 }
 
@@ -144,7 +142,7 @@ func whAwaitDeliveries(t *testing.T, ctx context.Context, be *backend.Backend, r
 func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.UUID, status int) {
 	t.Helper()
 	is := is.New(t)
-	is.NoErr(store.FromContext(ctx).CreateWebhookDelivery(ctx, db.FromContext(ctx), models.WebhookDelivery{
+	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              id,
 		WebhookID:       hookID,
 		Event:           int(webhook.EventPush),
@@ -159,6 +157,7 @@ func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.U
 }
 
 func TestWebhookCreatePersistsEveryFlag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -180,6 +179,7 @@ func TestWebhookCreatePersistsEveryFlag(t *testing.T) {
 }
 
 func TestWebhookCreateDefaults(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -194,6 +194,7 @@ func TestWebhookCreateDefaults(t *testing.T) {
 }
 
 func TestWebhookCreateContentTypeIsCaseInsensitiveAndTrimmed(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -208,6 +209,7 @@ func TestWebhookCreateContentTypeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 }
 
 func TestWebhookCreateTrimsURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -219,6 +221,7 @@ func TestWebhookCreateTrimsURL(t *testing.T) {
 // Every invalid create input is refused for its own reason and leaves nothing
 // behind. Each case names the error text it must fail with.
 func TestWebhookCreateRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		args []string
 		want string
@@ -238,6 +241,7 @@ func TestWebhookCreateRejectsInvalidInput(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
@@ -254,6 +258,7 @@ func TestWebhookCreateRejectsInvalidInput(t *testing.T) {
 }
 
 func TestWebhookCreateReportsUnknownEventAndContentType(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -266,6 +271,7 @@ func TestWebhookCreateReportsUnknownEventAndContentType(t *testing.T) {
 }
 
 func TestWebhookListOutputsRowsWithoutSecrets(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -286,6 +292,7 @@ func TestWebhookListOutputsRowsWithoutSecrets(t *testing.T) {
 }
 
 func TestWebhookListEmptyRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -297,6 +304,7 @@ func TestWebhookListEmptyRepository(t *testing.T) {
 }
 
 func TestWebhookDeleteRemovesOnlyThatWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -311,6 +319,7 @@ func TestWebhookDeleteRemovesOnlyThatWebhook(t *testing.T) {
 }
 
 func TestWebhookDeleteRejectsBadIDs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -328,6 +337,7 @@ func TestWebhookDeleteRejectsBadIDs(t *testing.T) {
 // A webhook ID from another repository must not be deletable through this
 // repository.
 func TestWebhookDeleteIsScopedToRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -345,6 +355,7 @@ func TestWebhookDeleteIsScopedToRepository(t *testing.T) {
 }
 
 func TestWebhookUpdateChangesOnlyRequestedFields(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -363,6 +374,7 @@ func TestWebhookUpdateChangesOnlyRequestedFields(t *testing.T) {
 }
 
 func TestWebhookUpdateChangesEveryFlag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -381,6 +393,7 @@ func TestWebhookUpdateChangesEveryFlag(t *testing.T) {
 }
 
 func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
 	cases := map[string][]string{
 		"bad active":       {"-a", "maybe"},
 		"bad content type": {"-c", "xml"},
@@ -391,6 +404,7 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 	}
 	for name, flags := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
@@ -408,6 +422,7 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 // --active must refuse anything that is not a boolean, with an error naming
 // the flag, and leave the webhook as it was rather than switching it off.
 func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -425,6 +440,7 @@ func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
 }
 
 func TestWebhookUpdateRejectsBadIDs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -438,6 +454,7 @@ func TestWebhookUpdateRejectsBadIDs(t *testing.T) {
 }
 
 func TestWebhookDeliveriesListShowsStatusRows(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -474,6 +491,7 @@ func rowContaining(out, needle string) string {
 }
 
 func TestWebhookDeliveriesListWithoutDeliveries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -485,6 +503,7 @@ func TestWebhookDeliveriesListWithoutDeliveries(t *testing.T) {
 }
 
 func TestWebhookDeliveriesRejectBadIDs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -504,6 +523,7 @@ func TestWebhookDeliveriesRejectBadIDs(t *testing.T) {
 }
 
 func TestWebhookDeliveriesGetPrintsEverySection(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -547,6 +567,7 @@ func hasLine(out, want string) bool {
 // Each list row must describe its own webhook: the events are comma-joined and
 // the active flag matches that webhook.
 func TestWebhookListRowsDescribeEachWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -569,6 +590,7 @@ func TestWebhookListRowsDescribeEachWebhook(t *testing.T) {
 
 // Updating only the URL or secret must keep an inactive webhook inactive.
 func TestWebhookUpdateKeepsInactiveState(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -582,6 +604,7 @@ func TestWebhookUpdateKeepsInactiveState(t *testing.T) {
 
 // Delivery rows are successful only for 2xx statuses.
 func TestWebhookDeliveriesStatusBoundaries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -605,6 +628,7 @@ func TestWebhookDeliveriesStatusBoundaries(t *testing.T) {
 }
 
 func TestWebhookDeliveriesGetUnknownDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -618,6 +642,7 @@ func TestWebhookDeliveriesGetUnknownDelivery(t *testing.T) {
 // A delivery belonging to one webhook must not be readable or redeliverable
 // through another webhook of the same repository.
 func TestWebhookDeliveriesAreScopedToWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -633,6 +658,7 @@ func TestWebhookDeliveriesAreScopedToWebhook(t *testing.T) {
 }
 
 func TestWebhookRedeliverRecordsNewDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -691,6 +717,7 @@ func TestWebhookCommandsRequireAdminAccess(t *testing.T) {
 }
 
 func TestWebhookServerAdminCanManageAnyRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -707,6 +734,7 @@ func TestWebhookServerAdminCanManageAnyRepository(t *testing.T) {
 }
 
 func TestWebhookCommandsOnMissingRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -720,6 +748,7 @@ func TestWebhookCommandsOnMissingRepository(t *testing.T) {
 }
 
 func TestWebhookSecretIsNeverPrinted(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -743,6 +772,7 @@ func TestWebhookSecretIsNeverPrinted(t *testing.T) {
 // create trims surrounding whitespace from the URL, so update should accept
 // the same padded URL and store it trimmed.
 func TestWebhookUpdateTrimsURLLikeCreate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -755,6 +785,7 @@ func TestWebhookUpdateTrimsURLLikeCreate(t *testing.T) {
 // requireRepo normally resolves the repository before RunE runs. Each leaf
 // command must still refuse to run when no repository was resolved.
 func TestWebhookRunEFailsWithoutResolvedRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, _ := newAuthTestContext(t)
 
@@ -768,7 +799,7 @@ func TestWebhookRunEFailsWithoutResolvedRepository(t *testing.T) {
 			walk(s)
 		}
 	}
-	walk(webhookCommand())
+	walk(cmdsOf(ctx).webhookCommand())
 	// list, create, delete, update, deliveries list, redeliver, get.
 	is.Equal(len(leaves), 7)
 
@@ -780,6 +811,7 @@ func TestWebhookRunEFailsWithoutResolvedRepository(t *testing.T) {
 }
 
 func TestWebhookUpdateContentTypeJSON(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -800,14 +832,15 @@ func (failingWebhookStore) GetWebhooksByRepoID(context.Context, db.Handler, int6
 }
 
 func TestWebhookListReportsStoreFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	// The backend lists webhooks through its own store, not the context's,
 	// so the failing store goes into a backend over the same database.
-	failStore := failingWebhookStore{Store: store.FromContext(ownerCtx)}
-	failBe := backend.New(config.FromContext(ownerCtx), db.FromContext(ownerCtx), failStore, log.FromContext(ownerCtx))
-	failCtx := backend.WithContext(store.WithContext(ownerCtx, failStore), failBe)
+	failStore := failingWebhookStore{Store: cmdsOf(ownerCtx).store}
+	failBe := backend.New(cmdsOf(ownerCtx).cfg, cmdsOf(ownerCtx).db, failStore, cmdsOf(ownerCtx).logger)
+	failCtx := withTestBackend(withTestStore(ownerCtx, failStore), failBe)
 
 	stdout, _, err := runRepoOutput(t, failCtx, "webhook", "list", "hooks")
 	is.True(err != nil)
@@ -820,7 +853,7 @@ func TestWebhookListReportsStoreFailure(t *testing.T) {
 func whPushRefs(t *testing.T, ctx context.Context) {
 	t.Helper()
 	is := is.New(t)
-	bare := filepath.Join(config.FromContext(ctx).DataPath, "repos", "hooks.git")
+	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git")
 	work := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
@@ -844,6 +877,7 @@ func whPushRefs(t *testing.T, ctx context.Context) {
 // through the backend's background deliveries: the session ending does not
 // cancel them, and once shutdown has closed the queue no new one starts.
 func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -892,6 +926,7 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 // An empty --secret or --events given to update clears the stored value;
 // leaving the flag out keeps it.
 func TestWebhookUpdateClearsSecretAndEvents(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -916,6 +951,7 @@ func TestWebhookUpdateClearsSecretAndEvents(t *testing.T) {
 // An empty value for a flag that cannot be empty is refused, not silently
 // treated as if the flag were left out.
 func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		flag string
 		want string
@@ -926,6 +962,7 @@ func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
@@ -943,6 +980,7 @@ func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
 }
 
 func TestParseWebhookContentType(t *testing.T) {
+	t.Parallel()
 	cases := map[string]webhook.ContentType{
 		"json": webhook.ContentTypeJSON, " JSON ": webhook.ContentTypeJSON,
 		"form": webhook.ContentTypeForm, "Form": webhook.ContentTypeForm,
@@ -962,6 +1000,7 @@ func TestParseWebhookContentType(t *testing.T) {
 
 // A default branch change says which branch was the default before.
 func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
@@ -987,11 +1026,12 @@ func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
 // Deleting an annotated tag sends the tag object as "before", the same id a
 // push that deletes the tag sends, not the commit it points at.
 func TestTagDeleteEventNamesTagObject(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whPushRefs(t, ownerCtx)
-	bare := filepath.Join(config.FromContext(ownerCtx).DataPath, "repos", "hooks.git")
+	bare := filepath.Join(cmdsOf(ownerCtx).cfg.DataPath, "repos", "hooks.git")
 	gitOut := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"--git-dir", bare, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...) //nolint:noctx

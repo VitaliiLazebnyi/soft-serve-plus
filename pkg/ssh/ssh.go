@@ -2,6 +2,8 @@ package ssh
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -14,6 +16,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/jwk"
+	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -36,10 +40,18 @@ var (
 	}, []string{"allowed"})
 )
 
-// SSHServer is a SSH server that implements the git protocol.
-type SSHServer struct { //nolint: revive
+// Server is an SSH server that implements the git protocol.
+type Server struct {
 	srv *ssh.Server
+	cfg *config.Config
 	be  *backend.Backend
+	// logger is the server's logger, with the "ssh" prefix.
+	logger *log.Logger
+	// cmds builds the commands of each session.
+	cmds *cmd.Commands
+	// onUIContext, when a test sets it, gets the context of each TUI
+	// session's UI as newSessionProgram derives it.
+	onUIContext func(context.Context)
 
 	limiter *connLimiter
 	// live holds every connection accepted and not yet closed, the ones
@@ -55,44 +67,72 @@ type serverLimits struct {
 	maxSessions int
 }
 
-// NewSSHServer returns a new SSHServer.
-func NewSSHServer(ctx context.Context) (*SSHServer, error) {
-	return newSSHServer(ctx, serverLimits{
+// errNilHostKey is returned by NewServer without a host key.
+var errNilHostKey = errors.New("nil host key")
+
+// NewServer returns an SSH server for cfg and be, which presents hostKey
+// to clients and signs the tokens of `jwt` with tokens. tokens must be
+// the Signer the HTTP server verifies with, built from the key cfg loaded
+// (see config.Config.LoadHostKey): git-lfs-authenticate signs with cfg's
+// key, so another key would give `jwt` tokens the HTTP server refuses. dbx
+// and st are for the LFS transfer handler, which takes them from its
+// context. A nil logger means log.Default().
+func NewServer(cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, hostKey *config.HostKey, tokens *jwk.Signer, logger *log.Logger) (*Server, error) {
+	return newServer(cfg, dbx, st, be, hostKey, tokens, logger, serverLimits{
 		handshakeTimeout: config.SSHHandshakeTimeout,
 		maxSessions:      config.SSHMaxSessions,
 	})
 }
 
-// newSSHServer returns a new SSHServer with lim, which tests lower.
-func newSSHServer(ctx context.Context, lim serverLimits) (*SSHServer, error) {
-	cfg := config.FromContext(ctx)
-	logger := log.FromContext(ctx).WithPrefix("ssh")
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	be := backend.FromContext(ctx)
+// newServer is NewServer with lim, which tests lower.
+func newServer(cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, hostKey *config.HostKey, tokens *jwk.Signer, logger *log.Logger, lim serverLimits) (*Server, error) {
+	if cfg == nil {
+		return nil, config.ErrNilConfig
+	}
+	if hostKey == nil {
+		return nil, errNilHostKey
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger = logger.WithPrefix("ssh")
+	signer, err := gossh.NewSignerFromKey(hostKey.PrivateKey())
+	if err != nil {
+		return nil, fmt.Errorf("ssh host key: %w", err)
+	}
+	cmds, err := cmd.New(cmd.Deps{
+		Config:  cfg,
+		Backend: be,
+		DB:      dbx,
+		Store:   st,
+		Tokens:  tokens,
+		Logger:  logger,
+	})
+	if err != nil {
+		return nil, err
+	}
 
-	var err error
-	s := &SSHServer{be: be}
+	s := &Server{cfg: cfg, be: be, logger: logger, cmds: cmds}
 
 	mw := []wish.Middleware{
 		rm.MiddlewareWithLogger(
 			logger,
 			// BubbleTea middleware.
-			BubbleTeaMiddleware,
+			s.bubbleTeaMiddleware,
 			// CLI middleware.
-			CommandMiddleware,
+			s.commandMiddleware,
 			// Logging middleware.
-			LoggingMiddleware,
+			s.loggingMiddleware,
 			// Authentication middleware.
 			// Sets the session's user from the key that authenticated
 			// it, and refuses keyless sessions when keyless access is off.
-			AuthenticationMiddleware,
+			s.authenticationMiddleware,
 			// Command length middleware.
 			// Refuses overlong exec commands before anything parses them.
-			CommandLengthMiddleware,
-			// Context middleware.
+			commandLengthMiddleware,
+			// Logger middleware.
 			// This must come first to set up the context.
-			ContextMiddleware(cfg, dbx, datastore, be, logger),
+			s.loggerMiddleware,
 		),
 	}
 
@@ -100,7 +140,10 @@ func newSSHServer(ctx context.Context, lim serverLimits) (*SSHServer, error) {
 		ssh.PublicKeyAuth(s.PublicKeyHandler),
 		ssh.KeyboardInteractiveAuth(s.KeyboardInteractiveHandler),
 		wish.WithAddress(cfg.SSH.ListenAddr),
-		wish.WithHostKeyPath(cfg.SSH.KeyPath),
+		func(srv *ssh.Server) error {
+			srv.AddHostKey(signer)
+			return nil
+		},
 		wish.WithMiddleware(mw...),
 	}
 
@@ -168,12 +211,12 @@ func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 }
 
 // ListenAndServe starts the SSH server.
-func (s *SSHServer) ListenAndServe() error {
+func (s *Server) ListenAndServe() error {
 	return s.srv.ListenAndServe()
 }
 
 // Serve starts the SSH server on the given net.Listener.
-func (s *SSHServer) Serve(l net.Listener) error {
+func (s *Server) Serve(l net.Listener) error {
 	return s.srv.Serve(l)
 }
 
@@ -181,7 +224,7 @@ func (s *SSHServer) Serve(l net.Listener) error {
 //
 // It closes every connection, the ones still in their handshake included,
 // which the SSH library's Close does not know about yet.
-func (s *SSHServer) Close() error {
+func (s *Server) Close() error {
 	err := s.srv.Close()
 	s.live.closeAll()
 	return err
@@ -190,7 +233,7 @@ func (s *SSHServer) Close() error {
 // Shutdown gracefully shuts down the SSH server: it stops accepting
 // connections, closes the ones still in their handshake, which have no work
 // in flight, and waits within ctx for the others to end.
-func (s *SSHServer) Shutdown(ctx context.Context) error {
+func (s *Server) Shutdown(ctx context.Context) error {
 	s.live.closeUnestablished()
 	return s.srv.Shutdown(ctx)
 }
@@ -202,7 +245,7 @@ func (s *SSHServer) Shutdown(ctx context.Context) error {
 // finished just after a stop was authenticated afterwards and stayed open
 // until its idle timeout, the drain's cut-off included. Once the server
 // stops, liveConns refuses new connections and closes the ones it holds.
-// It is not reset, so an SSHServer that has stopped cannot serve again.
+// It is not reset, so a Server that has stopped cannot serve again.
 type liveConns struct {
 	mu      sync.Mutex
 	conns   map[*liveConn]struct{}
@@ -299,7 +342,7 @@ func (l *liveConns) closeUnestablished() {
 // what a key may do is decided per session, from the account that owns it.
 // charm.land/ssh gives each session the key that signed, which is how
 // AuthenticationMiddleware finds the session's user.
-func (s *SSHServer) PublicKeyHandler(_ ssh.Context, pk ssh.PublicKey) (allowed bool) {
+func (s *Server) PublicKeyHandler(_ ssh.Context, pk ssh.PublicKey) (allowed bool) {
 	allowed = pk != nil
 	publicKeyCounter.WithLabelValues(strconv.FormatBool(allowed)).Inc()
 	return allowed
@@ -307,7 +350,7 @@ func (s *SSHServer) PublicKeyHandler(_ ssh.Context, pk ssh.PublicKey) (allowed b
 
 // KeyboardInteractiveHandler handles keyboard interactive authentication,
 // which lets a client in without a key when keyless access is allowed.
-func (s *SSHServer) KeyboardInteractiveHandler(ctx ssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
+func (s *Server) KeyboardInteractiveHandler(ctx ssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
 	ac := s.be.AllowKeyless(ctx)
 	keyboardInteractiveCounter.WithLabelValues(strconv.FormatBool(ac)).Inc()
 	return ac

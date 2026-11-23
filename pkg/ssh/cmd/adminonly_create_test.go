@@ -21,6 +21,7 @@ import (
 // With the flag off, registered users may create repositories as upstream
 // does, and the admin-only restriction does not apply.
 func TestUsersCreateRepositoriesWhenFlagOff(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = false })
 	userCtx := withUser(t, ctx, be, "worker", false)
@@ -33,6 +34,7 @@ func TestUsersCreateRepositoriesWhenFlagOff(t *testing.T) {
 // With the flag off, a registered owner may rename their repository to a new
 // name, as upstream allows.
 func TestUsersRenameToNewNameWhenFlagOff(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = false })
 	userCtx := withUser(t, ctx, be, "worker", false)
@@ -46,6 +48,7 @@ func TestUsersRenameToNewNameWhenFlagOff(t *testing.T) {
 }
 
 func TestOnlyAdminsCreateRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = true })
 	adminCtx := withUser(t, ctx, be, "boss", true)
@@ -76,6 +79,7 @@ func TestOnlyAdminsCreateRepositories(t *testing.T) {
 // admin, and with the flag on it may create, import and rename to a new name
 // end to end, not just pass the SSH gate.
 func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	is.NoErr(err)
@@ -105,6 +109,7 @@ func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 // is still taken. A server admin may attach a listed key, and ordinary keys
 // are unaffected.
 func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	newKey := func() gossh.PublicKey {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -116,7 +121,7 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	adminPub := newKey()
 	ctx, be := newAuthTestContext(t)
 	// Added after the first migration, so no account owns it yet.
-	cfg := config.FromContext(ctx)
+	cfg := cmdsOf(ctx).cfg
 	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(adminPub))
 	is.NoErr(cfg.Validate())
 
@@ -127,7 +132,7 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 		return context.WithValue(proto.WithUserContext(ctx, u), ssh.ContextKeyPublicKey, pk)
 	}
 	runPubkey := func(ctx context.Context, args ...string) error {
-		c := PubkeyCommand()
+		c := cmdsOf(ctx).PubkeyCommand()
 		c.SilenceUsage = true
 		c.SetOut(io.Discard)
 		c.SetErr(io.Discard)

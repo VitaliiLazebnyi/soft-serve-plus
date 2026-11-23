@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
@@ -21,7 +20,7 @@ type lifetimeServer struct {
 	admin gossh.Signer // an admin key no account owns
 }
 
-// startLifetimeServer starts a server built by NewSSHServer whose
+// startLifetimeServer starts a server built by NewServer whose
 // connections without an account have lifetime instead of
 // noAccountLifetime. It holds the user alice, a listed admin key that no
 // account owns, and the public repository repo1.
@@ -32,13 +31,13 @@ func startLifetimeServer(t *testing.T, lifetime time.Duration) lifetimeServer {
 	cfg.DataPath = t.TempDir()
 	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(ls.admin.PublicKey())}
 	ctx := serverContext(t, cfg, log.Default())
-	s, err := NewSSHServer(ctx)
+	s, err := newTestSSHServer(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.srv.ConnCallback = connCallback(s.limiter, log.Default(), lifetime)
 
-	be := backend.FromContext(ctx)
+	be := depsOf(ctx).be
 	if _, err := be.CreateUser(ctx, "alice", proto.UserOptions{
 		PublicKeys: []gossh.PublicKey{ls.alice.PublicKey()},
 	}); err != nil {
@@ -286,6 +285,7 @@ func TestNoAccountLifetime(t *testing.T) {
 // lifetime is over within the test's wait only if the clock goes on: one
 // that started again would run for another hour.
 func TestConnLifetimeResumes(t *testing.T) {
+	t.Parallel()
 	const lifetime = time.Hour
 	var l connLifetime
 	expired := make(chan struct{})

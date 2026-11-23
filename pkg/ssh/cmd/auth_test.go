@@ -18,6 +18,7 @@ import (
 // set-admin victim true` used to be authorized by the caller's admin access
 // to a repository they happened to own called "victim".
 func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	attackerCtx := withUser(t, ctx, be, "attacker", false)
@@ -56,6 +57,7 @@ func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 // (the default), so the flag is forced off here; with it on the missing name
 // is capped at read-only and set-admin must still be refused.
 func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		adminOnly bool
 		missing   access.AccessLevel
@@ -64,6 +66,7 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 		{adminOnly: true, missing: access.ReadOnlyAccess},
 	} {
 		t.Run(fmt.Sprintf("admin_only_create=%t", tt.adminOnly), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = tt.adminOnly })
 			is.NoErr(be.SetAnonAccess(ctx, access.AdminAccess))
@@ -87,8 +90,10 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 // TestUserSubcommandsAreGatedByParent verifies the gate lives on the `user`
 // parent command, so subcommands cannot be left unprotected by omission.
 func TestUserSubcommandsAreGatedByParent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	c := UserCommand()
+	ctx, _ := newAuthTestContext(t)
+	c := cmdsOf(ctx).UserCommand()
 	is.True(c.PersistentPreRunE != nil)
 
 	for _, sub := range c.Commands() {
@@ -100,8 +105,10 @@ func TestUserSubcommandsAreGatedByParent(t *testing.T) {
 
 // TestSettingsSubcommandsAreGatedByParent is the settings counterpart.
 func TestSettingsSubcommandsAreGatedByParent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	c := SettingsCommand()
+	ctx, _ := newAuthTestContext(t)
+	c := cmdsOf(ctx).SettingsCommand()
 	is.True(c.PersistentPreRunE != nil)
 
 	for _, sub := range c.Commands() {
@@ -116,6 +123,7 @@ func TestSettingsSubcommandsAreGatedByParent(t *testing.T) {
 // peers and, with anon-access set to no-access, lock any registered user out
 // of a public repository by adding them as a no-access collaborator.
 func TestCollabManagementRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
@@ -161,6 +169,7 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 // is not the owner or a server admin, can add, remove and re-add
 // collaborators at any level.
 func TestCollabManagementByRepoAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
@@ -189,6 +198,7 @@ func TestCollabManagementByRepoAdmin(t *testing.T) {
 // TestCollabManagementRefusesAnonymous verifies that anon-access set to
 // admin-access does not let an anonymous caller manage collaborators.
 func TestCollabManagementRefusesAnonymous(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
@@ -212,6 +222,7 @@ func TestCollabManagementRefusesAnonymous(t *testing.T) {
 // TestCollabListShowsLevels verifies `collab list` prints each
 // collaborator's access level next to their name.
 func TestCollabListShowsLevels(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 

@@ -71,9 +71,10 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 
 	// The handler prints the session's user, or "anon" without one.
 	logs := &syncBuffer{}
+	hs := handlerServer(t, cfg, dbx, dbstore, be, log.New(logs))
 	srv := &ssh.Server{
-		PublicKeyHandler: (&SSHServer{}).PublicKeyHandler,
-		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.New(logs))(AuthenticationMiddleware(func(s ssh.Session) {
+		PublicKeyHandler: (&Server{}).PublicKeyHandler,
+		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()

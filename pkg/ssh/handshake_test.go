@@ -10,14 +10,15 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// NewSSHServer bounds the handshake with config.SSHHandshakeTimeout and
+// NewServer bounds the handshake with config.SSHHandshakeTimeout and
 // the sessions per connection with config.SSHMaxSessions: one connection
 // opens that many sessions, and the next is refused.
 func TestSSHServerFixedLimits(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	ctx := serverContext(t, cfg, log.Default())
-	s, err := NewSSHServer(ctx)
+	s, err := newTestSSHServer(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +59,7 @@ func TestSSHServerFixedLimits(t *testing.T) {
 // never completes the key exchange is disconnected after the handshake
 // timeout rather than held until the much longer idle timeout.
 func TestSSHServerClosesStalledHandshake(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	// A close within waitClosed's wait can only come from the handshake
