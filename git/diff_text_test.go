@@ -689,16 +689,29 @@ func TestDiffWriterChunks(t *testing.T) {
 }
 
 // A huge line or a huge file costs memory by the caps, not by its size.
+//
+// The file is twice DiffMaxBytes, and a quarter of it is still far over
+// what the caps keep. Removing the line bytes cap, the file lines cap or
+// Patch's blob-size check fails a case, and so does removing the blob-size
+// check and the Patch total together, down to a file of about 2 MiB. The
+// Diff total is not reached here, as the line caps keep about 16 KB of the
+// file; TestDiffTotalCap and TestDiffCaps/bytes cover it. The many lines are
+// 16 bytes each, well under DiffMaxLineBytes, and 512 Ki of them, hundreds
+// of times DiffMaxFileLines. The test's time goes by the line: under -race
+// -cover each line costs about a microsecond of atomic coverage counters,
+// and 16 Mi 2-byte lines ran past git-module's one-minute command timeout
+// on a loaded runner.
 func TestDiffHugeMemory(t *testing.T) {
-	const size = 32 << 20
+	const size = 8 << 20
+	many := strings.Repeat(strings.Repeat("x", 15)+"\n", size/16)
 	for _, tc := range []struct {
 		name, content string
 		patch         bool // Repository.Patch: no line caps, only the total
 	}{
 		{"one line", strings.Repeat("x", size), false},
-		{"many lines", strings.Repeat("x\n", size/2), false},
+		{"many lines", many, false},
 		{"one line patch", strings.Repeat("x", size), true},
-		{"many lines patch", strings.Repeat("x\n", size/2), true},
+		{"many lines patch", many, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDiffRepo(t)
