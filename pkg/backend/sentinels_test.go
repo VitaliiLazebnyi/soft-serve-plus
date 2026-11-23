@@ -106,7 +106,7 @@ func (s failingCreateStore) CountUserRepos(context.Context, db.Handler, int64) (
 
 // A create, import or rename that fails for a reason other than a refusal
 // tells the client only that the server could not do it; the cause is
-// logged. The driver's error used to reach the SSH client unchanged.
+// logged. The driver's error does not reach the SSH client.
 func TestRepositoryChangesHideServerFaults(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer

@@ -264,8 +264,7 @@ func TestRemovePushCreatedRepositoryGivesUpOnDirectory(t *testing.T) {
 }
 
 // HEAD is fixed only on the repository the push created. One renamed or
-// created under the name since is left as it is. HEAD used to be pointed
-// at a branch of whatever had the name.
+// created under the name since is left as it is.
 func TestRemovePushCreatedRepositoryLeavesHeadOfAnother(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -393,7 +392,7 @@ func (w *chmodOnFailureLog) Write(p []byte) (int, error) {
 // A reftable repository always has a file at refs/heads and a table, since
 // HEAD lives in the reftable, whether or not anything was pushed. That is
 // not a ref written after the delete: the retry goes on and removes the
-// directory. It used to stop at once and log that a push wrote refs.
+// directory.
 func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")

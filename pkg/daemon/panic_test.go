@@ -58,8 +58,8 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	// closed, and the next client be served, before the line is written.
 	waitLog(t, logs, "recovered panic", idleWait)
 	waitLog(t, logs, "injected handler panic", idleWait)
-	// The handler's goroutine is no longer counted: Shutdown does not
-	// wait for it.
+	// The handler's goroutine is not counted once it has recovered:
+	// Shutdown does not wait for it.
 	waitConns(t, d, 0, idleWait)
 	ctx, cancel := context.WithTimeout(t.Context(), idleWait)
 	defer cancel()

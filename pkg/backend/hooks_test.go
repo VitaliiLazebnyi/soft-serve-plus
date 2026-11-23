@@ -71,9 +71,8 @@ func (e whEnv) deliveredPushes(t *testing.T, hookID int64) []pushPayload {
 
 // The events of a push name the account the transport authenticated, by
 // its ID, even when that account was renamed and another took its name
-// before the events were built. Regression (KNOWN_ISSUES 326(b)): the hook
-// process looked the pusher up by the name in SOFT_SERVE_USERNAME, and
-// named the other account.
+// before the events were built: the pusher is not looked up by the name in
+// SOFT_SERVE_USERNAME, which would name the other account.
 func TestAfterPushSenderIsThePushingAccount(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -131,7 +130,7 @@ func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
 }
 
 // The push's events go through the delivery queue, behind the repository's
-// earlier events, so AfterPush does not wait on receivers (R53): with the
+// earlier events, so AfterPush does not wait on receivers: with the
 // repository's one sender busy, AfterPush returns before any of them is
 // sent, and they are sent once the sender is free.
 func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
@@ -164,9 +163,9 @@ func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
 }
 
 // A push queued before shutdown starts is still sent: WaitForDeliveries runs
-// the queued jobs to the end of its wait, and a push job is one of them.
-// Regression (review round 1): the job stopped as soon as the queue was
-// closed, so the push lost every event, recorded nowhere.
+// the queued jobs to the end of its wait, and a push job is one of them: it
+// does not stop when the queue is closed, which would lose every event of
+// the push, recorded nowhere.
 func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -289,7 +288,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 }
 
 // A push to a repository without webhooks for its events builds no payload
-// and queues nothing (R55): the owner row is broken here, so building one
+// and queues nothing: the owner row is broken here, so building one
 // would log an error.
 func TestAfterPushWithoutSubscribersBuildsNothing(t *testing.T) {
 	t.Parallel()

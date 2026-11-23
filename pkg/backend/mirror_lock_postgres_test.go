@@ -24,7 +24,7 @@ func (s *pausingMirrorStore) SetRepoIsMirrorByName(ctx context.Context, h db.Han
 
 // On Postgres SetMirror holds the row it checked until it commits, so a
 // rename of the repository waits for it rather than slip in between the
-// check and the write. The check used to read the row without a lock.
+// check and the write.
 func TestSetMirrorLocksCheckedRowPostgres(t *testing.T) {
 	t.Parallel()
 	e := newPostgresWebhookEnv(t)

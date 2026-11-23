@@ -69,8 +69,8 @@ func TestRunCustomHookIgnoresMissingOrNonExecutableHook(t *testing.T) {
 	}
 }
 
-// On Windows a hook file has no execute bit and is run with sh. Regression:
-// global custom hooks never ran there, as the execute bit was required.
+// On Windows a hook file has no execute bit and is run with sh, so global
+// custom hooks run there too.
 func TestCustomHookCommandWindows(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not found")
@@ -119,10 +119,10 @@ func TestHookErrorReturned(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil && runtime.GOOS == "windows" {
 		t.Skip("custom hook is a shell script and sh is not found")
 	}
-	// Run twice, each with its own data path. Regression: the hook command
-	// tree was package-level, and cobra keeps a subcommand's context from
-	// its first run, so a second run used the first run's config and found
-	// no custom hook in the first run's (deleted) data path.
+	// Run twice, each with its own data path: cobra keeps a subcommand's
+	// context from its first run, so a command tree shared by both runs
+	// would give the second the first run's config, and it would find no
+	// custom hook in the first run's (deleted) data path.
 	for _, name := range []string{"first", "second"} {
 		t.Run(name, testHookErrorReturned)
 	}
@@ -154,7 +154,7 @@ func testHookErrorReturned(t *testing.T) {
 }
 
 // No hook opens the database or leaves one in the data path: the server does
-// the work of post-receive and post-update (R53, R55), and pre-receive and
+// the work of post-receive and post-update, and pre-receive and
 // update only run the custom hook. post-receive, as run by hooks generated
 // before soft stopped being called, writes its refs to $SOFT_SERVE_PUSH_REFS
 // for the server, and gives them to the custom hook too.

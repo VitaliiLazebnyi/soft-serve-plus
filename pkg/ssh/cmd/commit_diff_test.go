@@ -47,7 +47,7 @@ func diffRepo(t *testing.T) (context.Context, func(stdin string, args ...string)
 	return ctx, git
 }
 
-// R1: `repo commit` on a commit that renames a file to or from a name git
+// `repo commit` on a commit that renames a file to or from a name git
 // quotes crashed the server. It must print the commit with the rename.
 func TestRepoCommitRenameQuotedName(t *testing.T) {
 	names := []string{"café.txt"}
@@ -93,9 +93,9 @@ func TestRepoCommitRenameQuotedName(t *testing.T) {
 	}
 }
 
-// R43: `repo commit --patch | git apply` gives back the commit, including a
-// file without a trailing newline, which the patch rebuilt from the parsed
-// diff used to lose.
+// `repo commit --patch | git apply` gives back the commit, including a
+// file without a trailing newline, which a patch rebuilt from the parsed
+// diff would lose.
 func TestRepoCommitPatchApplies(t *testing.T) {
 	t.Parallel()
 	ctx, git := diffRepo(t)

@@ -71,7 +71,7 @@ func (w *eofAfterWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// R32: once the copy of git's output to the client fails, git must not stay
+// Once the copy of git's output to the client fails, git must not stay
 // blocked on a full pipe nobody reads. The context is not cancelled, as an
 // SSH session's is not when only its channel closes (OpenSSH ControlMaster),
 // and the input stays open: nothing but the failed copy can stop git. The
@@ -276,7 +276,7 @@ type panicWriter struct{}
 
 func (panicWriter) Write([]byte) (int, error) { panic("client write panicked") }
 
-// R16: a panic while copying git's output to the client is recovered: the
+// A panic while copying git's output to the client is recovered: the
 // server keeps running, git is stopped and the handler returns. Without the
 // recover the panic ends the test binary.
 func TestServiceCopyPanicRecovered(t *testing.T) {
@@ -365,7 +365,7 @@ func quarantineBytes(t *testing.T, dir string) int64 {
 	return n
 }
 
-// R33: a push whose client goes away mid-pack must not leave the partly
+// A push whose client goes away mid-pack must not leave the partly
 // received pack behind. git must be told the input ended, not killed: a
 // killed receive-pack cannot remove its quarantine directory, and nothing
 // in the server ever does.

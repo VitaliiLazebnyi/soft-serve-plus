@@ -75,7 +75,7 @@ func TestJWTHostKeyFailureIsLogged(t *testing.T) {
 }
 
 // jwt signs with the host key the server was given, not with whatever is
-// at ssh.key_path now (tracker 343(a)).
+// at ssh.key_path now.
 func TestJWTSignsWithGivenHostKey(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

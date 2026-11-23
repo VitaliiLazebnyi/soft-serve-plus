@@ -511,8 +511,8 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 // resolve to that account: the owner may have claimed it with `pubkey add`
 // before it was listed. The lookup returns AdminKeyNonAdminOwnerError naming
 // the account (the SSH server refuses the session with it), and the warning
-// is logged on every such lookup. A listed key owned by an admin account resolves
-// as before, and so does the owner once promoted or once the key is
+// is logged on every such lookup. A listed key owned by an admin account
+// resolves to it, and so does the owner once promoted or once the key is
 // unlisted.
 func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	t.Parallel()

@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
-// R57, HTTP: git runs under the request's context, so a client that goes
+// Git runs under the request's context, so a client that goes
 // away ends it. The wrapper named git first on PATH holds upload-pack on a
 // fifo nobody writes, so only the end of the request can end it: the
 // handler then stops git (see pkg/gitserve's gitServiceHandler). Unbound, git

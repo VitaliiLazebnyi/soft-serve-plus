@@ -37,11 +37,9 @@ func (s *raceDeleteWebhookStore) DeleteRepoByName(ctx context.Context, h db.Hand
 }
 
 // On Postgres, deleting a webhook while its repository is being deleted
-// must not make the repository's delete fail. The webhook delete used to
-// take no lock on the repository: it removed a webhook the repository's
-// delete had already listed, which then found nothing to delete and
-// reported the repository not found, rolling everything back. The two now
-// take turns on the repository's row.
+// must not make the repository's delete fail, as it would if the webhook
+// delete removed a webhook the repository's delete had already listed. The
+// two take turns on the repository's row.
 func TestDeleteWebhookRacingRepositoryDeletePostgres(t *testing.T) {
 	t.Parallel()
 	e := newPostgresWebhookEnv(t)

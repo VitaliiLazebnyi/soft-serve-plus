@@ -131,8 +131,8 @@ func testConfig(t *testing.T, dp string) *config.Config {
 }
 
 // The maintenance commands refuse a data directory or SQLite database that
-// does not exist, and create neither, where they used to create an empty
-// one and act on it (R46, CFG-7). serve still creates them.
+// does not exist, and create neither, rather than create an empty one and
+// act on it. serve still creates them.
 func TestOpenEnvRefusesMissingDataPath(t *testing.T) {
 	dp := filepath.Join(t.TempDir(), "data")
 	_, err := OpenEnv(t.Context(), Given(testConfig(t, dp), nil), false)
@@ -197,7 +197,7 @@ func TestSqliteFile(t *testing.T) {
 // sync-hooks skips a repository whose directory is missing, rather than
 // leave a hooks-only directory the server takes for the repository, and a
 // repository whose hooks cannot be written does not stop the others; the
-// errors are returned together (R47, CFG-8).
+// errors are returned together.
 func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
 	cfg := testConfig(t, t.TempDir())
 	var logs bytes.Buffer

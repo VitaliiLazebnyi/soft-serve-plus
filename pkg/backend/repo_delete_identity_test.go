@@ -62,8 +62,7 @@ func swapFixture(t *testing.T) (be *Backend, ctx context.Context, orig proto.Rep
 
 // A delete acts on the repository it looked up: if another repository took
 // the name between that lookup and the delete, the delete reports the name
-// as not found and leaves both alone. It used to build the event for one
-// repository and delete the other.
+// as not found and leaves both alone.
 func TestDeleteRepositoryActsOnTheRepositoryItLookedUp(t *testing.T) {
 	t.Parallel()
 	be, ctx, orig, replacement := swapFixture(t)

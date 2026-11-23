@@ -40,8 +40,8 @@ func (s *failingLookupStore) GetRepoByNameForUpdate(ctx context.Context, h db.Ha
 }
 
 // A lookup that fails for any reason other than a missing row says nothing
-// about whether the repository exists, so its directory must stay. It used
-// to be removed as an orphan, with the row kept. Only the delete's own
+// about whether the repository exists, so its directory must stay, not be
+// removed as an orphan with the row kept. Only the delete's own
 // lookup fails: a failure that is gone by the next lookup must still be
 // returned, not taken for an orphan and reported as not found.
 func TestDeleteRepositoryLookupErrorKeepsDirectory(t *testing.T) {

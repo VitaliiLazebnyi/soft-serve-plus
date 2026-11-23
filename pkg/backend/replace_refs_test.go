@@ -7,7 +7,7 @@ import (
 // A refs/replace ref, which any writer can push and a --mirror import
 // fetches, must not change what the server shows: upload-pack ignores it,
 // so a clone gets the original objects, and the server's own views must
-// show the same. They used to show the replacement.
+// show the same, not the replacement.
 func TestServerReadsIgnoreReplaceRefs(t *testing.T) {
 	t.Parallel()
 	r := readmeRepo(t, map[string]string{"README.md": "real"})

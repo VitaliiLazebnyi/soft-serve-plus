@@ -214,7 +214,7 @@ func quotedNames() []string {
 	return names
 }
 
-// R1: renaming a file to or from a name git quotes made the diff parser
+// Renaming a file to or from a name git quotes made the diff parser
 // slice with -1 in a goroutine without a recover, which ended the process.
 // The diff must come back, showing both names.
 func TestDiffRenameQuotedName(t *testing.T) {
@@ -240,7 +240,7 @@ func TestDiffRenameQuotedName(t *testing.T) {
 	}
 }
 
-// R43: the patch is git's own text, so it applies and gives back a file
+// The patch is git's own text, so it applies and gives back a file
 // without a trailing newline.
 func TestDiffPatchAppliesNoNewline(t *testing.T) {
 	r := newDiffRepo(t)
@@ -266,7 +266,7 @@ func TestDiffPatchAppliesNoNewline(t *testing.T) {
 	}
 }
 
-// R6 (source half): a commit's diff has a total size cap, not only caps per
+// A commit's diff has a total size cap, not only caps per
 // file and per line. 20 files of 1000 lines of 999 bytes (one blob, a few
 // KiB in the repository) give a patch of about 19 MiB.
 func TestDiffTotalCap(t *testing.T) {

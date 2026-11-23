@@ -65,7 +65,7 @@ func TestSourceDate(t *testing.T) {
 // Commands that do not act on the server's data read no server config and
 // open no server log: --version, --help and man succeed in a directory whose
 // data/config.yaml the server would refuse, and, with a usable config or
-// none, create no log file where SOFT_SERVE_LOG_PATH says (R60, CFG-9).
+// none, create no log file where SOFT_SERVE_LOG_PATH says.
 func TestNonServerCommandsLoadNoConfig(t *testing.T) {
 	for name, file := range map[string]string{
 		"refused config": "db:\n  driver: mysql\n",

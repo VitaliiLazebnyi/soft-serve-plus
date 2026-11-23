@@ -42,9 +42,9 @@ func assertSecretIntact(t *testing.T, be *Backend) {
 }
 
 // On a case-insensitive filesystem the path of "SECRET" is the directory of
-// "secret". Deleting the case variant, which has no row, used to treat that
-// directory as an orphan and remove it, leaving the real repository's row
-// without a repository.
+// "secret". Deleting the case variant, which has no row, must not treat
+// that directory as an orphan and remove it, which would leave the real
+// repository's row without a repository.
 func TestDeleteRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -59,8 +59,9 @@ func TestDeleteRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	assertSecretIntact(t, be)
 }
 
-// On a case-insensitive filesystem renaming the case variant used to move the
-// directory of "secret" while no row was renamed, stranding the repository.
+// On a case-insensitive filesystem renaming the case variant must not move
+// the directory of "secret" while no row is renamed, which would strand the
+// repository.
 func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -81,9 +82,8 @@ func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
 	}
 }
 
-// Renaming a directory with no row used to move it without renaming any row,
-// which reported success for a repository that does not exist. The rename now
-// needs the row and leaves the directory where it is.
+// A rename needs the row: a directory with no row is left where it is, and
+// the rename does not report success for a repository that does not exist.
 func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -108,7 +108,7 @@ func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 
 // A delete needs the row: a directory with no row is left in place and the
 // name reported as not found. It is reported when the server starts (see
-// OrphanRepositoryDirs). The delete used to remove it.
+// OrphanRepositoryDirs).
 func TestDeleteRepositoryLeavesOrphanDirectory(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

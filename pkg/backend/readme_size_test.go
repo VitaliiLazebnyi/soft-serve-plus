@@ -68,8 +68,7 @@ func readmeRepo(t *testing.T, files map[string]string) proto.Repository {
 }
 
 // A README too large to show is reported as such, not as missing; one in a
-// later directory is still shown. Readme used to return only the error of
-// the last directory it looked in.
+// later directory is still shown.
 func TestReadmeTooLarge(t *testing.T) {
 	t.Parallel()
 	big := strings.Repeat("x", 100)

@@ -51,16 +51,15 @@ func TestValidateGitRemote(t *testing.T) {
 		{"ipv6 loopback", "http://[::1]/x.git", 0, ErrPrivateIP},
 		{"ipv4-mapped loopback", "http://[::ffff:127.0.0.1]/x.git", 0, ErrPrivateIP},
 
-		// git:// is a raw TCP connect and must be validated the same way.
-		// Regression: an earlier fix checked http(s) on import but let
-		// git:// through on mirror sync.
+		// git:// is a raw TCP connect and must be validated the same way,
+		// on import and on mirror sync.
 		{"git scheme private", "git://10.0.0.1/x.git", 0, ErrPrivateIP},
 		{"git scheme metadata", "git://169.254.169.254/x.git", 0, ErrPrivateIP},
 		{"git scheme public", "git://1.1.1.1/x.git", GitTransportGit, nil},
 
-		// Non-canonical IPv4 literals parse differently in Go and libcurl.
-		// Regression: net.ParseIP reads 0177.0.0.1 as public 177.0.0.1 while
-		// libcurl reads it as loopback.
+		// Non-canonical IPv4 literals parse differently in Go and libcurl:
+		// net.ParseIP reads 0177.0.0.1 as public 177.0.0.1 while libcurl
+		// reads it as loopback.
 		{"octal loopback", "http://0177.0.0.1/x.git", 0, ErrAmbiguousHost},
 		{"hex loopback", "http://0x7f.1/x.git", 0, ErrAmbiguousHost},
 		{"short-form loopback", "http://127.1/x.git", 0, ErrAmbiguousHost},
@@ -76,9 +75,9 @@ func TestValidateGitRemote(t *testing.T) {
 		{"no host", "https:///x.git", 0, ErrInvalidURL},
 		{"ssh no host", "ssh:///x.git", 0, ErrInvalidURL},
 
-		// URLs that Go refuses to parse but libcurl accepts. These used to
-		// fall through as scp-style SSH remotes and skip validation.
-		// Regression: http://a{b@127.0.0.1:8080/ reached loopback.
+		// URLs that Go refuses to parse but libcurl accepts. They must not
+		// fall through as scp-style SSH remotes and skip validation:
+		// http://a{b@127.0.0.1:8080/ would reach loopback.
 		{"unparseable http userinfo", "http://a{b@127.0.0.1:8080/", 0, ErrInvalidURL},
 		{"unparseable git userinfo", "git://a{b@127.0.0.1:9418/x", 0, ErrInvalidURL},
 		{"unparseable http port", "http://a@127.0.0.1:80x/", 0, ErrInvalidURL},
@@ -107,8 +106,8 @@ func TestValidateGitRemote(t *testing.T) {
 		{"bare ssh empty host", ":path", 0, ErrInvalidURL},
 		{"remote helper syntax", "host::path", 0, ErrUnsupportedRemoteScheme},
 		// git for Windows reads a drive prefix as a local path, not as the
-		// ssh host "C". Regression: these validated as ssh remotes, letting
-		// an import open a local repository on a Windows server.
+		// ssh host "C", so these must not validate as ssh remotes, which
+		// would let an import open a local repository on a Windows server.
 		{"drive path forward slash", "C:/Users/x/repo", 0, ErrUnsupportedRemoteScheme},
 		{"drive path backslash", `C:\Users\x\repo`, 0, ErrUnsupportedRemoteScheme},
 		{"drive relative path", "c:repo", 0, ErrUnsupportedRemoteScheme},

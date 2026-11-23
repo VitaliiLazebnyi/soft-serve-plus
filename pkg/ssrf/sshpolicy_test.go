@@ -169,7 +169,7 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 			t.Errorf("ParseAllowedHosts(%q): %v", entry, err)
 		}
 	}
-	// An empty port says how to fix it, since it used to mean any port.
+	// An empty port says how to fix it: it does not mean any port.
 	for _, entry := range []string{"host:", "[fd00::1]:"} {
 		_, err := ParseAllowedHosts([]string{entry})
 		want := fmt.Sprintf(`allowed host %q: empty port; drop the ":" to allow any port`, entry)
@@ -177,7 +177,7 @@ func TestParseAllowedHostsRejectsBadEntries(t *testing.T) {
 			t.Errorf("ParseAllowedHosts(%q) = %v, want %q", entry, err, want)
 		}
 	}
-	// So does text after the brackets, which used to be dropped.
+	// So does text after the brackets, rather than be dropped.
 	for _, entry := range []string{"[fd00::1]x", "[fd00::1]2222", "[fd00::/8]x:22"} {
 		_, err := ParseAllowedHosts([]string{entry})
 		want := fmt.Sprintf(`allowed host %q: only ":port" may follow "]"`, entry)
@@ -361,7 +361,7 @@ func TestLookupsAreBounded(t *testing.T) {
 
 // An IPv4-mapped network matches the IPv4 addresses it maps, the same as
 // the IPv4 network written plainly. Addresses are unmapped before matching,
-// so the mapped form used to match nothing.
+// so the network must be unmapped too, or the mapped form matches nothing.
 func TestAllowedHostsMappedNetworks(t *testing.T) {
 	t.Parallel()
 	lookup := fakeLookup(map[string][]string{

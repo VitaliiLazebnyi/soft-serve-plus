@@ -56,7 +56,7 @@ func holdGit(t *testing.T, sub string) (fifo, held string, commands func() []str
 	}
 }
 
-// R57, TUI: a load runs its git under the session's context. It is held
+// A load runs its git under the session's context. It is held
 // in the show-ref that lists the references, the session ends there, as
 // when the client disconnects, and the held git is let go: no git starts
 // after that, so the default reference is not looked up.

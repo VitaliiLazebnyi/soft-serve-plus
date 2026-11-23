@@ -22,9 +22,9 @@ import (
 )
 
 // TestLFSLockRangeRejectsInvalidCursor checks that listing locks over SSH
-// refuses a cursor that is not a lock ID it hands out. A cursor that did not
-// parse used to read as the first page. The backend has no database on
-// purpose: a refused cursor must not reach it.
+// refuses a cursor that is not a lock ID it hands out, rather than read it
+// as the first page. The backend has no database on purpose: a refused
+// cursor must not reach it.
 func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
 	t.Parallel()
 	l := &lfsLockBackend{
@@ -135,7 +135,7 @@ func (passwordLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) 
 
 // TestLFSLockDebugLogOmitsPassword checks that the transfer library's debug
 // log of a lock, as in its "lock success" line, does not print the owner's
-// password hash. A lock used to hold the owner's whole user record.
+// password hash: a lock holds only the owner's ID and name.
 func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
 	t.Parallel()
 	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
@@ -187,10 +187,9 @@ func (u lfsLockTestUser) Username() string { return u.name }
 func (u lfsLockTestUser) IsAdmin() bool    { return u.admin }
 
 // TestLFSLockOwnership checks that SSH lock commands see every user's locks
-// and tell the caller's from other users', as the HTTP locks API does. Every
-// lock used to be reported "ours", and lock lookups by id or path saw only
-// the caller's own locks, so a conflicting lock went unreported and another
-// user's lock could not be listed, refused or force-unlocked.
+// and tell the caller's from other users', as the HTTP locks API does, so a
+// conflicting lock is reported and another user's lock can be listed,
+// refused or force-unlocked.
 func TestLFSLockOwnership(t *testing.T) {
 	t.Parallel()
 	tr, deps := newLFSUploadTransfer(t)

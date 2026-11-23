@@ -33,7 +33,7 @@ func (p *pinPage) deliver(msgs ...tea.Msg) (errs int) {
 	return errs
 }
 
-// UI-6: a listing that arrives after a file was opened is dropped; it does
+// A listing that arrives after a file was opened is dropped; it does
 // not put the list back while the path names the file.
 func TestFilesLateListingAfterFileOpened(t *testing.T) {
 	t.Parallel()
@@ -66,7 +66,7 @@ func TestFilesLateListingAfterFileOpened(t *testing.T) {
 	p.wantView("back to the list", "README.md", "file.txt", "sub")
 }
 
-// UI-9: when opening repository B fails, the page shows nothing of the
+// When opening repository B fails, the page shows nothing of the
 // repository shown before under B's name, and takes no input meant for it.
 func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 	t.Parallel()

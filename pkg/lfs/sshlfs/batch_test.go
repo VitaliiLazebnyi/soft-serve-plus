@@ -13,10 +13,9 @@ import (
 )
 
 // Batch only reads: for an object on disk but not recorded (an upload
-// between storing and recording it), it used to record the size the client
-// sent, in download sessions too. The size is now checked against the file,
-// and an upload session reports the object missing so the upload records
-// it.
+// between storing and recording it), it records nothing, in download
+// sessions too. The size is checked against the file, and an upload session
+// reports the object missing so the upload records it.
 func TestLFSTransferBatchDoesNotRecordObjects(t *testing.T) {
 	t.Parallel()
 	const content = "hello lfs"

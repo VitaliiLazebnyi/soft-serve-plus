@@ -200,8 +200,7 @@ func TestSSHAlgorithmDocsMatchDefaults(t *testing.T) {
 
 // checkRSANote checks that the README's note about RSA keys, in doc, says what
 // the defaults do: SHA-2 RSA signatures are accepted and SHA-1 ssh-rsa ones
-// refused unless configured. It used to say ssh-rsa was accepted (R103,
-// OPS-9).
+// refused unless configured, not that ssh-rsa is accepted.
 func checkRSANote(t *testing.T, doc string) {
 	t.Helper()
 	i := strings.Index(doc, "## A note about RSA keys")

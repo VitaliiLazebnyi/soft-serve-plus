@@ -285,7 +285,7 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 }
 
 // The user and token lookups leave logging a failure to their callers,
-// which know whether the client went away (item 259).
+// which know whether the client went away.
 func TestUserLookupErrorsNotLogged(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer

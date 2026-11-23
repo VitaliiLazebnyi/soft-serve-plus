@@ -14,7 +14,7 @@ import (
 // Once an --lfs import has registered its repository, the owner can delete
 // it and create another under the name while the LFS objects are fetched.
 // A failed fetch then removes the import's own repository only: the one now
-// under the name is left alone. The cleanup used to delete by name.
+// under the name is left alone: the cleanup does not delete by name.
 func TestFailedImportDeletesByIdentity(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

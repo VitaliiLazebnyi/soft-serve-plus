@@ -34,7 +34,7 @@ type stopServer func(*Server) error
 // The SSH library closes on Close, and waits for on Shutdown, only the
 // connections that have finished their handshake, so one that finished it
 // just after either ran was authenticated after the stop and stayed open
-// until its idle timeout: the drain cut-off did not cut it off (PR #442 CI).
+// until its idle timeout: the drain cut-off did not cut it off.
 // The test stops the server while a client is mid-handshake, and only then
 // lets the client finish it.
 func TestStopCutsOffHandshakeInProgress(t *testing.T) {

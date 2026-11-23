@@ -41,8 +41,8 @@ func TestMigrateRemovesSqliteOrphans(t *testing.T) {
 		t.Fatalf("Migrate() to 3 => %v", err)
 	}
 
-	// Write the orphans the way an old data source did: with foreign keys
-	// off, which db.Open no longer allows.
+	// Write the orphans the way a data source with foreign keys off could,
+	// which db.Open does not allow.
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -253,9 +253,9 @@ func rawExec(t *testing.T, ctx context.Context, raw *sql.DB, qs ...string) {
 // With no admin to give a repository of a deleted owner to, the upgrade
 // stops with an error that names the repository and says how to make a user
 // an admin, with commands that work while it cannot start, and changes
-// nothing. The repository's row used to be deleted, with
-// its collaborators, webhooks and LFS rows, leaving its directory behind and
-// its name unusable. Once a user is an admin, the upgrade goes through.
+// nothing: deleting the repository's row, with its collaborators, webhooks
+// and LFS rows, would leave its directory behind and its name unusable.
+// Once a user is an admin, the upgrade goes through.
 func TestMigrateRefusesOwnerlessReposWithoutAdmin(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
@@ -360,7 +360,7 @@ func TestMigrateChecksOrphansAgainAfterRollback(t *testing.T) {
 
 // The message says which shell its commands are quoted for where that is
 // not the plain one: on Windows, whose double quotes still let cmd.exe
-// expand %NAME% and PowerShell $name, it names cmd.exe (tracker 322).
+// expand %NAME% and PowerShell $name, it names cmd.exe.
 func TestShellNote(t *testing.T) {
 	t.Parallel()
 	if got := shellNote("windows"); got != " (in cmd.exe)" {

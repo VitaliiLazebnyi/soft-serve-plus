@@ -82,8 +82,8 @@ func oidOf(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Upload must check the data against the oid and the declared size itself.
-// It used to store and record whatever it was given, trusting its caller.
+// Upload must check the data against the oid and the declared size itself,
+// not trust its caller.
 func TestLFSTransferUploadRejectsMismatchedContent(t *testing.T) {
 	t.Parallel()
 	const content = "hello lfs"
@@ -117,8 +117,8 @@ func TestLFSTransferUploadRejectsMismatchedContent(t *testing.T) {
 	}
 }
 
-// Uploading an object that is already recorded succeeds. The insert used to
-// fail on the unique constraint and the client got an internal error.
+// Uploading an object that is already recorded succeeds: the insert's
+// unique constraint does not reach the client as an internal error.
 func TestLFSTransferUploadDuplicate(t *testing.T) {
 	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)
@@ -199,7 +199,7 @@ func TestLFSTransferPutObjectOversized(t *testing.T) {
 
 // A put-object with an invalid oid is refused with a 400 and its data is
 // drained, so the next command is still read from the right place in the
-// stream. The data packet and flush used to be read as commands.
+// stream, not the data packet and flush.
 func TestLFSTransferPutObjectInvalidOid(t *testing.T) {
 	t.Parallel()
 	_, deps := newLFSUploadTransfer(t)
@@ -235,8 +235,8 @@ func (failRenameStorage) Rename(string, string) error {
 }
 
 // When the rename into objects/ fails but the object is already there, as
-// when a concurrent upload of it stored it first, the upload succeeds. On
-// Windows, one of two identical concurrent uploads used to fail this way. A
+// when a concurrent upload of it stored it first, the upload succeeds, as
+// happens on Windows to one of two identical concurrent uploads. A
 // destination that is not the object, even one of the same size, is not
 // accepted.
 func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
@@ -280,9 +280,9 @@ func TestLFSTransferUploadRenameOntoExistingObject(t *testing.T) {
 }
 
 // Batch reports a recorded object present only if its file has the
-// pointer's size. A short file, such as one a failed write left behind, used
-// to be reported present, so the client skipped the upload and downloads
-// served it short.
+// pointer's size. A short file, such as one a failed write left behind, is
+// reported missing, so the client uploads it again rather than downloads
+// serving it short.
 func TestLFSTransferBatchShortObjectIsNotPresent(t *testing.T) {
 	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)

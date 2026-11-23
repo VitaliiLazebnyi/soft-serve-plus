@@ -15,9 +15,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
-// Older versions wrote git-daemon-export-ok for each public repository and
-// removed it when the repository was made private. This version no longer
-// does, so the start-up sweep removes every such file, a stale one on a
+// Data directories from before the server stopped writing
+// git-daemon-export-ok can hold one for each public repository, and stale
+// ones. The start-up sweep removes every such file, a stale one on a
 // repository made private since and one in a directory without a row
 // included, and a stock git daemon pointed at the data directory exports
 // none of them.
@@ -86,8 +86,7 @@ func (s *repoCountingStore) GetAllRepos(ctx context.Context, h db.Handler) ([]mo
 }
 
 // The start-up checks read the rows and walk the repos directory once for
-// both the orphan report and the export-file sweep. They used to do both
-// twice.
+// both the orphan report and the export-file sweep.
 func TestCheckRepositoryDirsScansOnce(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer

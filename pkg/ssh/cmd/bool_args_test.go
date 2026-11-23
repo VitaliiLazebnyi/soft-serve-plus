@@ -80,9 +80,9 @@ func wantInvalidBool(t *testing.T, err error) {
 	}
 }
 
-// TestRepoBoolArgs is the regression test for repository boolean properties
-// treating anything other than the exact string "true" as false: an
-// uppercase TRUE turned the property off and a typo was silently accepted.
+// TestRepoBoolArgs checks that repository boolean properties do not treat
+// anything other than the exact string "true" as false: an uppercase TRUE
+// turns the property on and a typo is refused.
 func TestRepoBoolArgs(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -127,7 +127,7 @@ func TestRepoBoolArgs(t *testing.T) {
 	wantInvalidBool(t, runRepo(t, adminCtx, "mirror", "r", "yes"))
 	is.NoErr(runRepo(t, adminCtx, "mirror", "r", "FALSE"))
 
-	// hidden used to accept and ignore any number of extra arguments.
+	// hidden refuses extra arguments rather than ignore them.
 	if err := runRepo(t, adminCtx, "hidden", "r", "true", "extra"); err == nil {
 		t.Error("repo hidden r true extra: expected an argument count error")
 	}

@@ -73,14 +73,14 @@ max_blob_size: 1048576
 	}
 }
 
-// Each removed setting's oldDefault is what earlier versions wrote to
-// config.yaml, and what the server now does: only then may a config that
+// Each removed setting's oldDefault is what a config.yaml written before it
+// was removed holds, and what the server now does: only then may a config that
 // holds it go without a warning. A fixed value that changes, such as
 // SSHMaxSessions, fails here, and the entry must then drop its oldDefault.
 func TestRemovedSettingsOldDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		key string
-		// written is what config.yaml held before S14 (602806db).
+		// written is what config.yaml held before these settings went.
 		written string
 		// now is the setting's value for what the server now does.
 		now string

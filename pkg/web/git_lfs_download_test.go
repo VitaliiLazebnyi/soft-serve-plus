@@ -42,9 +42,9 @@ func (e *lfsUploadEnv) anonymousBatch(t *testing.T, oid string, size int64) lfs.
 
 // TestLFSDownloadBatchDoesNotRecordObjects checks that a download batch for
 // an object that is on disk but not recorded (an upload between storing and
-// recording it) records nothing. It used to record the size the client
-// sent, so an anonymous reader could pin a wrong size: later downloads got
-// "size mismatch" and uploads of the object were skipped.
+// recording it) records nothing. Recording the size the client sent would
+// let an anonymous reader pin a wrong size: later downloads would get "size
+// mismatch" and uploads of the object would be skipped.
 func TestLFSDownloadBatchDoesNotRecordObjects(t *testing.T) {
 	t.Parallel()
 	e := newLFSUploadEnv(t)
@@ -143,9 +143,8 @@ func (e *lfsUploadEnv) storeObject(t *testing.T, content string) string {
 }
 
 // TestLFSDownloadWithoutDatabaseRow checks that the basic download handler
-// serves a stored object whose database row is missing. It used to take the
-// length from the missing row and send Content-Length: 0 followed by the
-// object, which failed the copy.
+// serves a stored object whose database row is missing, with the length of
+// the file.
 func TestLFSDownloadWithoutDatabaseRow(t *testing.T) {
 	t.Parallel()
 	const content = "hello lfs download"

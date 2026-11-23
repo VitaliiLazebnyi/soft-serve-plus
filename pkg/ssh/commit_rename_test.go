@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
-// R1: `ssh host repo commit REPO REV` on a commit that renames a file to a
+// `ssh host repo commit REPO REV` on a commit that renames a file to a
 // name git quotes ended the whole server from the diff parser's goroutine.
 // Over a real SSH connection the command must print the rename, and the
 // server must still answer afterwards.

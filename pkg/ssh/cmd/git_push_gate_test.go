@@ -273,7 +273,7 @@ func (s beginPushFailStore) GetRepoByName(ctx context.Context, h db.Handler, nam
 
 // A push or LFS upload whose BeginPush cannot read the repository fails on
 // the server: the database error is logged once, and the client gets
-// git.ErrSystemMalfunction, not the error.
+// gitserve.ErrSystemMalfunction, not the error.
 func TestBeginPushLookupFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

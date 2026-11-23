@@ -40,8 +40,8 @@ func commitLongAgo(t *testing.T, dir string) {
 }
 
 // UpdatedAt runs no git: without info/last-modified it is the time the row
-// last changed, not the latest commit's. It used to run two git processes
-// for every repository nothing had been pushed to, on every TUI listing.
+// last changed, not the latest commit's, so a TUI listing runs no git for
+// a repository nothing has been pushed to.
 func TestUpdatedAtFallsBackToRow(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -114,7 +114,7 @@ func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
 }
 
 // An empty import, or a sync of an empty mirror, has no commit to record:
-// it is not a failure to warn about. Each used to log a warning.
+// it is not a failure to warn about.
 func TestEmptyImportRecordsNoLastModified(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer

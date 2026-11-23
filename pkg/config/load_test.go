@@ -54,7 +54,7 @@ func writeTestConfig(t *testing.T, cfg *Config) error {
 }
 
 // The file the server writes on its first start holds the defaults, and
-// only keys the server reads (R68, CFG-13).
+// only keys the server reads.
 func TestDefaultConfigFileMatchesDefaults(t *testing.T) {
 	var got Config
 	if err := yaml.Unmarshal(defaultConfigFile, &got); err != nil {
@@ -157,7 +157,7 @@ func loadEnv(t *testing.T, file string) string {
 }
 
 // Load validates once, after the environment, so the environment can
-// repair a value the file got wrong (R68, CFG-10).
+// repair a value the file got wrong.
 func TestLoadEnvironmentRepairsFile(t *testing.T) {
 	for name, tc := range map[string]struct {
 		file string
@@ -230,9 +230,8 @@ func TestLoad(t *testing.T) {
 }
 
 // A SQLite data source with no file name, empty or only options, is refused
-// rather than opening the data directory, or a file named "?_pragma=…"
-// (tracker 323). Postgres reads
-// the PG* variables when it is empty, so it is allowed there.
+// rather than opening the data directory, or a file named "?_pragma=…".
+// Postgres reads the PG* variables when it is empty, so it is allowed there.
 func TestValidateRejectsEmptySQLiteDataSource(t *testing.T) {
 	for _, ds := range []string{"", "  ", "?_pragma=busy_timeout(5000)", "file:?mode=rwc", " ?x=1"} {
 		cfg := DefaultConfig()
@@ -252,7 +251,7 @@ func TestValidateRejectsEmptySQLiteDataSource(t *testing.T) {
 }
 
 // A config that still sets a removed setting loads, whatever the value,
-// and the setting is reported as removed, not as unknown (R68, Q3). Its
+// and the setting is reported as removed, not as unknown. Its
 // value reaches nothing: hooks do not get it either.
 func TestRemovedSettings(t *testing.T) {
 	loadEnv(t, `ssh:
@@ -333,7 +332,7 @@ max_blob_size: -1
 // the working directory the server starts in. FilePath and the
 // environment hooks get name that file wherever they are used from: a hook
 // starts in a repository's directory, where the relative path named another
-// file and every push failed (R29, CFG-1).
+// file and every push failed.
 func TestRelativeConfigLocation(t *testing.T) {
 	clearSoftServeEnv(t)
 	dir := t.TempDir()

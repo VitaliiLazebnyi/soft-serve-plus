@@ -84,7 +84,7 @@ func TestWebhooksBareContext(t *testing.T) {
 // TestRedeliverBareContext redelivers a stored delivery under a context that
 // carries no config, database or store. The send must still reach a receiver
 // that only webhook.allowed_hosts permits, and the new attempt must be
-// recorded; recording from the bare context used to panic.
+// recorded, without a panic.
 func TestRedeliverBareContext(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)

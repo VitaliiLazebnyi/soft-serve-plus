@@ -23,10 +23,11 @@ import (
 // global lock ID from a repository it does not belong to.
 //
 // The LFS lock routes authorize the caller against the repository in the URL,
-// but the lock list handler accepts an `id` query parameter and used to fetch
-// the lock by global ID alone. A user with write access to any repository could
-// walk lock IDs and read file paths, owner usernames, and timestamps out of
-// private repositories they have no access to.
+// and the lock list handler accepts an `id` query parameter, so it must not
+// fetch the lock by global ID alone. A user with write access to any
+// repository could otherwise walk lock IDs and read file paths, owner
+// usernames, and timestamps out of private repositories they have no access
+// to.
 func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -533,9 +534,9 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 
 // TestLFSVerifyRejectsStoredSizeMismatch checks that verify fails when the
 // object recorded in the database matches the requested size but the file on
-// disk does not. The handler used to fall through without writing a response,
-// which net/http turns into an implicit 200, so a truncated or corrupt object
-// passed verification.
+// disk does not. A handler that fell through without writing a response
+// would get an implicit 200 from net/http, so a truncated or corrupt object
+// would pass verification.
 func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -582,9 +583,9 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 	}
 }
 
-// A download batch offers an object only if its file has the requested size.
-// A short file, such as one a failed write left behind, used to be offered
-// because it existed and its row had the right size, and was served short.
+// A download batch offers an object only if its file has the requested size:
+// a short file, such as one a failed write left behind, is not offered
+// because it exists and its row has the right size.
 func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

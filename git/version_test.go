@@ -75,10 +75,10 @@ func TestVersionLess(t *testing.T) {
 func TestBinVersion(t *testing.T) {
 	v, err := BinVersion(t.Context())
 	if err != nil {
-		t.Fatalf("BinVersion(): %v", err)
+		t.Fatalf("BinVersion(ctx): %v", err)
 	}
 	if v.Major < 2 {
-		t.Errorf("BinVersion() = %v, implausible", v)
+		t.Errorf("BinVersion(ctx) = %v, implausible", v)
 	}
 }
 
@@ -88,15 +88,15 @@ func TestBinVersionRetriesAfterFailure(t *testing.T) {
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
 	if _, err := BinVersion(t.Context()); err == nil {
-		t.Fatal("BinVersion() with no git on PATH: want error, got nil")
+		t.Fatal("BinVersion(ctx) with no git on PATH: want error, got nil")
 	}
 
 	t.Setenv("PATH", path)
 	v, err := BinVersion(t.Context())
 	if err != nil {
-		t.Fatalf("BinVersion() after git is back on PATH: %v", err)
+		t.Fatalf("BinVersion(ctx) after git is back on PATH: %v", err)
 	}
 	if v.Major < 2 {
-		t.Errorf("BinVersion() = %v, implausible", v)
+		t.Errorf("BinVersion(ctx) = %v, implausible", v)
 	}
 }

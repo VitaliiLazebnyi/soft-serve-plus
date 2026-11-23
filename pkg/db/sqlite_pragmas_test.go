@@ -78,9 +78,9 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 }
 
 // A data source that is a bare path, as SOFT_SERVE_DB_DATA_SOURCE often is,
-// still gets foreign keys and a busy timeout on every connection. Both used
-// to be off: deleting a user left their keys behind, and any statement that
-// met a git hook's write failed at once with "database is locked".
+// still gets foreign keys and a busy timeout on every connection. Without
+// them, deleting a user would leave their keys behind, and any statement
+// that met a git hook's write would fail at once with "database is locked".
 func TestOpenSqliteBarePathEnforcesForeignKeysAndWaits(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

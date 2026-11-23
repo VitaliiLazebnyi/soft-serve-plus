@@ -12,8 +12,8 @@ import (
 )
 
 // bcryptCompare runs one bcrypt comparison at the default cost against a
-// hash no password matches: what a password check used to run for each
-// Basic login whose password was not a token.
+// hash no password matches: what a password check would run for each Basic
+// login whose password is not a token.
 //
 // The tests that time it do not run in parallel, so the machine is as busy
 // for the bcrypt comparisons they time as for the logins.
@@ -37,8 +37,8 @@ func bcryptCompare(t *testing.T) func() {
 func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 	f := newOracleFixture(t)
 
-	// One bcrypt comparison, as a password check used to run; the fastest
-	// of a few.
+	// One bcrypt comparison, as a password check would run; the fastest of
+	// a few.
 	compare := bcryptCompare(t)
 	oneBcrypt := time.Duration(math.MaxInt64)
 	for range 4 {
@@ -69,12 +69,11 @@ func TestBasicNonTokenLoginRunsNoBcrypt(t *testing.T) {
 }
 
 // A failed Basic login holds its request slot for a small part of one bcrypt
-// comparison. Each such login used to run a bcrypt against a dummy hash,
-// queued per client address and behind a global semaphore, while holding a
-// slot, so sixteen looping clients from one address kept all eight slots of
-// max_connections 8 and every anonymous fetch answered 503. Waits that only
-// happen under contention, such as a per-client queue or a semaphore around
-// cheap work, are deliberately not tested.
+// comparison. A login that ran a bcrypt while holding a slot would let a few
+// looping clients from one address keep every slot, and every anonymous
+// fetch would answer 503. Waits that only happen under contention, such as a
+// per-client queue or a semaphore around cheap work, are deliberately not
+// tested.
 //
 // The test does not race clients against the limit: how many slots looping
 // clients hold depends on how fast the machine serves them, not only on what a
@@ -96,7 +95,8 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 	env.cfg.HTTP.MaxConnections = 8
 	router := env.router(t)
 
-	// One bcrypt comparison, as each login used to run; the faster of two.
+	// One bcrypt comparison, as a password check would run; the faster of
+	// two.
 	compare := bcryptCompare(t)
 	oneBcrypt := time.Duration(math.MaxInt64)
 	for range 2 {

@@ -27,8 +27,8 @@ func createDeleteFixture(t *testing.T, be *Backend) string {
 }
 
 // A delete whose commit fails leaves the repository, so its directory must
-// stay too. The directory used to be removed inside the transaction, so a
-// failed commit left a row with no repository behind it.
+// stay too: it is removed after the commit, so a failed commit cannot leave
+// a row with no repository behind it.
 func TestDeleteRepositoryCommitFailureKeepsDirectory(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

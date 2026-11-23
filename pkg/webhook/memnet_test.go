@@ -23,7 +23,7 @@ import (
 // the test binaries and in a separate process probing loopback at the same
 // moment. CPU load alone did not do it. No client timeout covers a connect
 // the kernel gives up on, and a test that expects a delivery then sees none.
-// A pipe has no connect to stall, and these tests no longer add to the churn.
+// A pipe has no connect to stall, and these tests do not add to the churn.
 //
 // Tests of the SSRF-protected client itself (allowed_hosts_test.go,
 // ssrf_test.go) still use TCP, since its checks run on the socket.

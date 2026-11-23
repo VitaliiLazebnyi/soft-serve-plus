@@ -27,7 +27,7 @@ func setHookEnv(t *testing.T) (dataPath, logPath string) {
 }
 
 // A hook logs as the server does, with the settings from the hook config file,
-// whatever config.yaml and the environment say (R45).
+// whatever config.yaml and the environment say.
 func TestLoadHookConfigReadsTheServersConfig(t *testing.T) {
 	dataPath, logPath := setHookEnv(t)
 	server := config.DefaultConfig()
@@ -73,8 +73,8 @@ func TestLoadHookConfigErrorLogsToHookLog(t *testing.T) {
 }
 
 // Under a server that names no hook config, one from before it, a hook
-// loads config.yaml and the environment as before, and a broken config.yaml
-// is an error with a config that logs to the hook log.
+// loads config.yaml and the environment, and a broken config.yaml is an
+// error with a config that logs to the hook log.
 func TestLoadHookConfigWithoutHookConfig(t *testing.T) {
 	_, logPath := setHookEnv(t)
 	t.Setenv(hooks.ConfigEnv, "")

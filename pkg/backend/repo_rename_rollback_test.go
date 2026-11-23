@@ -30,8 +30,7 @@ func (s unpinnableRenameStore) SetRepoNameByName(ctx context.Context, h db.Handl
 }
 
 // A rename whose transaction fails after the directory moved moves it back,
-// so the row and the directory agree again. The directory used to stay at
-// the new name, without a row, while the row still named the old one.
+// so the row and the directory agree again.
 func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -74,8 +73,7 @@ func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 
 // A COMMIT whose answer is lost, as when the connection drops during it,
 // reports an error although the rename committed. The row then names the
-// new name, so the directory stays there and the rename succeeds. The
-// directory used to be moved back under the old name, away from its row.
+// new name, so the directory stays there and the rename succeeds.
 func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -151,8 +149,7 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 
 // After a failed rename, the directory is moved back only if the row still
 // has the old name. A row renamed by another session since has a name this
-// rename does not know of, so the directory stays where it is. It used to
-// be moved back whenever the row did not have the new name.
+// rename does not know of, so the directory stays where it is.
 func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -191,8 +188,8 @@ func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 
 // On SQLite the re-check after a failed rename does not wait for the
 // database's write lock: another writer holding it does not keep the
-// directory from going back to its row. The re-check used to take the
-// write lock and, past busy_timeout, leave the directory at the new name.
+// directory from going back to its row, as it would once busy_timeout
+// passed.
 func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

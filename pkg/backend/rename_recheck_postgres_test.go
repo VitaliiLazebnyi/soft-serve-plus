@@ -14,8 +14,8 @@ import (
 // connection does, and sees the row as it leaves it. Here the rename's own
 // transaction fails, and another transaction, standing in for the COMMIT
 // in flight, renames the row to the new name and commits only once the
-// re-check waits for it. A plain read saw the old name, moved the directory
-// back, and left it away from its row.
+// re-check waits for it. A plain read would see the old name, move the
+// directory back, and leave it away from its row.
 func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 	t.Parallel()
 	e := newPostgresWebhookEnv(t)

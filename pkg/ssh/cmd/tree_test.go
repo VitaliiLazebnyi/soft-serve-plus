@@ -43,7 +43,7 @@ func blockLsTree(t *testing.T) string {
 	return marker
 }
 
-// R10: `repo tree` and `repo blob` run git under the session's context, so
+// `repo tree` and `repo blob` run git under the session's context, so
 // git stops when the session ends instead of running on to git-module's
 // one-minute timeout.
 func TestRepoTreeAndBlobStopWithSession(t *testing.T) {
@@ -92,7 +92,7 @@ func diffRepoOnMain(t *testing.T) (context.Context, func(stdin string, args ...s
 	return ctx, git
 }
 
-// R10: `repo tree` on a directory with more than git.MaxTreeEntries entries
+// `repo tree` on a directory with more than git.MaxTreeEntries entries
 // lists the first ones and says on stderr that the listing is cut. Paths
 // past the cap can still be read.
 func TestRepoTreeTruncated(t *testing.T) {

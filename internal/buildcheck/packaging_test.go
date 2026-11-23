@@ -144,7 +144,7 @@ var (
 // the OpenSSH client (for ssh:// mirrors) and tini, but not bash (the hooks
 // the server generates are #!/bin/sh), the OpenSSH server or its SFTP server,
 // and that it does not set CI, a workaround for a terminal library the binary
-// no longer links.
+// does not link.
 func TestImageInstallsOnlyWhatTheServerUses(t *testing.T) {
 	t.Parallel()
 	var pkgs []string

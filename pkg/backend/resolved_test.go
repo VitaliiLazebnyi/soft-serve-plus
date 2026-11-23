@@ -63,8 +63,7 @@ func collabNames(t *testing.T, be *Backend, ctx context.Context, name string) []
 
 // A collaborator added while another repository takes the name between the
 // lookup and the write is not added to that other repository: the change
-// is refused as the repository is gone. It used to be added to the other
-// repository while the event named the first.
+// is refused as the repository is gone.
 func TestAddCollaboratorActsOnTheRepositoryItLookedUp(t *testing.T) {
 	t.Parallel()
 	be, ctx, _, replacement := swapFixture(t)
@@ -203,8 +202,7 @@ func TestResolvedSetters(t *testing.T) {
 }
 
 // A mirror sync is recorded on the mirror's row, wherever it is now, and a
-// mirror deleted meanwhile is not found. It used to be recorded on
-// whatever had the name, and a deleted one matched no row and succeeded.
+// mirror deleted meanwhile is not found.
 func TestRecordMirrorSyncByID(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -243,8 +241,7 @@ func TestRecordMirrorSyncByID(t *testing.T) {
 
 // The events of a visibility change and a rename name the repository the
 // change was made to, even if another takes its name before the event is
-// built: they go to that repository's webhooks. They used to be built from
-// a second lookup of the name.
+// built: they go to that repository's webhooks.
 func TestChangeEventsNameTheChangedRepository(t *testing.T) {
 	t.Parallel()
 	t.Run("SetPrivate", func(t *testing.T) {

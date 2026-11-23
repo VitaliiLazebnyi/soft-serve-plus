@@ -140,8 +140,7 @@ func TestAdminKeyFileRelativeToDataPath(t *testing.T) {
 }
 
 // TestAdminKeyFileFallsBackToWorkingDirectory checks that a relative key file
-// that is not in the data directory is still read from the working directory,
-// where earlier versions looked.
+// that is not in the data directory is still read from the working directory.
 func TestAdminKeyFileFallsBackToWorkingDirectory(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()

@@ -85,7 +85,7 @@ func TestCommitPrintsHash(t *testing.T) {
 }
 
 // The repo commands run git under the session's context: git started after
-// the session ended fails rather than running on (SSH-6, R57). The context
+// the session ended fails rather than running on. The context
 // is canceled after the access check, so only git is left to notice.
 func TestRepoCommandsRunGitUnderSessionContext(t *testing.T) {
 	t.Parallel()

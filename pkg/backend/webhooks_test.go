@@ -225,8 +225,8 @@ func TestCreateWebhookSanitizesURL(t *testing.T) {
 	}
 }
 
-// Suspected bug: an unknown content type is accepted and stored, so every
-// later delivery to the webhook fails.
+// An unknown content type is refused: stored, it would fail every later
+// delivery to the webhook.
 func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -237,7 +237,7 @@ func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
 	}
 }
 
-// Suspected bug: an event value outside the known set is stored as-is.
+// An event value outside the known set is refused, not stored as is.
 func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -248,9 +248,9 @@ func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
 	}
 }
 
-// Suspected bug: a repeated event violates the unique (webhook_id, event)
-// constraint, so the whole create fails with a raw database error instead of
-// storing the event once.
+// A repeated event is stored once, rather than violate the unique
+// (webhook_id, event) constraint and fail the whole create with a raw
+// database error.
 func TestCreateWebhookAcceptsDuplicateEvents(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -388,9 +388,9 @@ func TestUpdateWebhookChangesEverything(t *testing.T) {
 	}
 }
 
-// Suspected bug: when no event has to be removed, UpdateWebhook passes an
-// empty list to DeleteWebhookEventsByID, and sqlx rejects an empty IN clause,
-// so a plain update that keeps the same events fails.
+// An update that keeps the same events succeeds: with no event to remove,
+// UpdateWebhook must not pass an empty list to DeleteWebhookEventsByID, as
+// sqlx rejects an empty IN clause.
 func TestUpdateWebhookWithSameEvents(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -401,7 +401,7 @@ func TestUpdateWebhookWithSameEvents(t *testing.T) {
 	}
 }
 
-// Suspected bug: a plain add (nothing removed) hits the same empty IN clause.
+// A plain add (nothing removed) must not hit the same empty IN clause.
 func TestUpdateWebhookAddsEventOnly(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -420,8 +420,8 @@ func TestUpdateWebhookAddsEventOnly(t *testing.T) {
 	}
 }
 
-// Suspected bug: CreateWebhook sanitizes the URL but UpdateWebhook does not,
-// so the stored URL depends on which call wrote it.
+// UpdateWebhook sanitizes the URL as CreateWebhook does, so the stored URL
+// does not depend on which call wrote it.
 func TestUpdateWebhookSanitizesURL(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -459,9 +459,8 @@ func TestUpdateWebhookRejectsUnsafeURL(t *testing.T) {
 	}
 }
 
-// Suspected bug: updating a webhook id that does not belong to the repo
-// succeeds silently, because the store's UPDATE matches zero rows and nothing
-// checks that.
+// Updating a webhook id that does not belong to the repo fails: the store's
+// UPDATE matches zero rows, which must not pass silently.
 func TestUpdateWebhookUnknownIDFails(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -472,9 +471,8 @@ func TestUpdateWebhookUnknownIDFails(t *testing.T) {
 	}
 }
 
-// Suspected bug: the event rewrite uses the URL-scoped webhook ID after a
-// zero-row update, so updating another repo's webhook through this repo
-// rewrites that webhook's events.
+// Updating another repo's webhook through this repo does not rewrite that
+// webhook's events, as an event rewrite after a zero-row update would.
 func TestUpdateWebhookCannotTouchOtherRepo(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)
@@ -786,8 +784,8 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 	}
 }
 
-// Suspected bug: a form-encoded webhook cannot be redelivered, because the
-// stored JSON body is passed as a raw message and form encoding of it fails.
+// A form-encoded webhook can be redelivered: its stored body is sent as
+// stored, not form-encoded again from JSON, which fails.
 func TestRedeliverFormWebhook(t *testing.T) {
 	t.Parallel()
 	e := newWebhookEnv(t)

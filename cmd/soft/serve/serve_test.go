@@ -210,8 +210,7 @@ func TestServeUsesContextConfig(t *testing.T) {
 }
 
 // Each "soft serve" command starts with its flags at their defaults: a
-// --sync-hooks given to one run does not carry over to the next. Regression:
-// the command was package-level, so a flag one run set stayed set.
+// --sync-hooks given to one run does not carry over to the next.
 func TestServeFlagsDoNotCarryOver(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -274,7 +273,7 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 }
 
 // The server warns about each setting it ignores: a misspelt key and a
-// removed setting, from the file or the environment (R68, Q3).
+// removed setting, from the file or the environment.
 func TestWarnIgnoredSettings(t *testing.T) {
 	dp := t.TempDir()
 	t.Setenv("SOFT_SERVE_DATA_PATH", dp)

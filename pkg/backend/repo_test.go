@@ -114,8 +114,8 @@ func TestValidateImportRemote(t *testing.T) {
 		{"local path", "/data/repos/secret.git", nobody, proto.ErrInvalidRemote},
 		{"file scheme", "file:///etc/passwd", nobody, proto.ErrInvalidRemote},
 		{"empty", "", nobody, proto.ErrInvalidRemote},
-		// Regression: a URL Go cannot parse but curl can was classified as
-		// SSH and skipped validation entirely.
+		// A URL Go cannot parse but curl can is not classified as SSH,
+		// which would skip validation entirely.
 		{"unparseable http to loopback", "http://a{b@127.0.0.1:8080/", nobody, proto.ErrInvalidRemote},
 	}
 
@@ -149,9 +149,8 @@ func TestValidateImportRemote(t *testing.T) {
 }
 
 // TestImportRepositoryCloneFailure verifies that a failed clone returns to the
-// caller promptly with a fixed error and leaves nothing behind. Before the fix
-// the caller blocked forever on a channel that was only written after a
-// successful clone, leaking a goroutine per failed import.
+// caller promptly with a fixed error and leaves nothing behind, and no
+// goroutine.
 func TestImportRepositoryCloneFailure(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("ssh"); err != nil {

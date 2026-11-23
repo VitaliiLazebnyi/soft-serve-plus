@@ -12,16 +12,16 @@ import (
 
 // TestRefusalEndsAtRequestDeadline checks that a refusal after access checks
 // that outlast the request timeout does not wait on the client past the
-// request deadline. The wait used to be what was left of the request timeout
-// when the request line arrived, counted again from the refusal, so slow
-// checks pushed it past the deadline by as long as they took.
+// request deadline. A wait counted again from the refusal would let slow
+// checks push it past the deadline by as long as they took.
 //
 // Nothing here is decided by how long a step takes. The request timeout is
 // an hour, so no stall makes the request line late, and the refusal reads
 // its time from a clock two request timeouts ahead, so it comes after the
 // request deadline however soon it runs. Past that deadline the daemon
-// lets go of the connection at once; the old wait would hold it for about
-// the request timeout more, an hour, far past the test's wait.
+// lets go of the connection at once; a wait counted from the refusal would
+// hold it for about the request timeout more, an hour, far past the test's
+// wait.
 func TestRefusalEndsAtRequestDeadline(t *testing.T) {
 	t.Parallel()
 	const requestTimeout = time.Hour
@@ -99,10 +99,9 @@ func holdSlot(t *testing.T, d *Server, addr string) net.Conn {
 
 // TestMaxConnectionsRefusalSurvivesLateInput checks that a client turned
 // away for the connection limit can keep writing, as git archive writes its
-// arguments, without the daemon resetting the connection under it. The
-// accept loop used to close such a connection at once, so the client's
-// next write drew a reset, and a client still writing could lose the error
-// to it.
+// arguments, without the daemon resetting the connection under it: a
+// connection closed at once would draw a reset with the client's next
+// write, and a client still writing could lose the error to it.
 func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
 	t.Parallel()
 	conns := make(chan *recordedConn, 2)

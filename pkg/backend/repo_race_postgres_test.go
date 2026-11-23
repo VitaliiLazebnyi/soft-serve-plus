@@ -83,9 +83,7 @@ func waitForLockWaiter(t *testing.T, e whEnv, op <-chan error, name string) {
 
 // On Postgres a delete that waited for a rename of the same repository to
 // commit finds no repository under the old name. It must say so, and leave
-// the renamed repository's webhooks and LFS objects alone. It used to read
-// the row without a lock, delete its webhooks, delete nothing and report
-// success, then remove the LFS directory of the repository's id.
+// the renamed repository's webhooks and LFS objects alone.
 func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
 	t.Parallel()
 	e := newPostgresWebhookEnv(t)
@@ -126,9 +124,9 @@ func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
 }
 
 // On Postgres a setter that waited for a rename of the same repository to
-// commit finds no repository under the old name and must say so. They used
-// to look the repository up without a lock, update no row and report
-// success: "repo private" then left the renamed repository public.
+// commit finds no repository under the old name and must say so, rather
+// than update no row and report success: "repo private" would then leave
+// the renamed repository public.
 func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 	t.Parallel()
 	for name, set := range map[string]func(e whEnv) error{

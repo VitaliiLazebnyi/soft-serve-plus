@@ -462,7 +462,7 @@ func TestValidateURLAlreadyCancelled(t *testing.T) {
 	if err := ValidateURLAllowing(ctx, "https://does-not-exist.invalid/", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ValidateURLAllowing() = %v, want context.Canceled", err)
 	}
-	// An IP literal needs no lookup, so it is still checked as before.
+	// An IP literal needs no lookup, so it is still checked.
 	if err := ValidateURL(ctx, "https://93.184.216.34/"); err != nil {
 		t.Fatalf("ValidateURL(IP literal) = %v, want nil", err)
 	}

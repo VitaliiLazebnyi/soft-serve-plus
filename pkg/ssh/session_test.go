@@ -281,10 +281,10 @@ func heapAlloc() uint64 {
 // Bubble Tea allocates its screen at the size it is given, about 250 bytes a
 // cell: at the initial size, which it does not check, and again on every
 // resize it lets through (up to 4096 columns or rows and 1<<20 cells), as
-// the renderer resizes its screen and cell buffer on the next frame. So a
-// 5000x300 pty used to hold over 300 MiB, a 4000x250 window-change over
-// 200 MiB, and a 30000x30000 pty would have exhausted memory.
-// newSessionProgram clamps the initial size and sessionFilter the resizes.
+// the renderer resizes its screen and cell buffer on the next frame. So an
+// unclamped 5000x300 pty holds over 300 MiB, a 4000x250 window-change over
+// 200 MiB, and a 30000x30000 pty exhausts memory. newSessionProgram clamps
+// the initial size and sessionFilter the resizes.
 func TestTUIWindowSizeClamped(t *testing.T) {
 	// The clamped 500x200 costs about 25 MiB; the sizes below, unclamped,
 	// over 200 MiB.
@@ -407,7 +407,7 @@ func TestTUIWindowSizeClamped(t *testing.T) {
 // The UI's context ends when the TUI program exits, through the cancel
 // newSessionProgram returns, and not only with the connection: a client
 // that keeps the connection open, as for its next session, does not keep
-// the UI's git commands running (UI-11, R57).
+// the UI's git commands running.
 func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
@@ -506,7 +506,7 @@ func TestSessionFilter(t *testing.T) {
 
 // The TUI's git work belongs to the session, not to the connection: once the
 // program has exited, its context is done although the client keeps the
-// connection open, as a multiplexing client does (UI-11, R57).
+// connection open, as a multiplexing client does.
 //
 // The middleware cancels the UI's context when the program exits, before it
 // hands the session on, and not only in its deferred cleanup: the next

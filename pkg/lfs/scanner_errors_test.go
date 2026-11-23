@@ -89,9 +89,9 @@ func TestSearchPointerBlobs(t *testing.T) {
 	}
 }
 
-// Every git command of the scan must report its failure. Only git rev-list
-// used to: a failing cat-file ended the scan early with no error, so it
-// passed for a complete scan that found fewer pointers.
+// Every git command of the scan must report its failure: a failing cat-file
+// that ended the scan early with no error would pass for a complete scan
+// that found fewer pointers.
 func TestSearchPointerBlobsReportsGitFailures(t *testing.T) {
 	// Not parallel: failGit sets PATH.
 	if runtime.GOOS == "windows" {

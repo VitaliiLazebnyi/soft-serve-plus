@@ -10,8 +10,8 @@ import (
 
 // The description and the visibility live in the database only. The
 // repository's description and git-daemon-export-ok files, which nothing in
-// the server reads, are no longer written: creating a repository or
-// changing either setting does no file I/O inside the transaction.
+// the server reads, are not written: creating a repository or changing
+// either setting does no file I/O inside the transaction.
 func TestRepositorySettingsWriteNoFiles(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

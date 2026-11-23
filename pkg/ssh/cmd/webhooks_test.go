@@ -18,10 +18,11 @@ import (
 // cannot be read across repositories.
 //
 // The `repo webhook deliveries list|get` commands authorize the caller against
-// the REPOSITORY argument, but the delivery lookup used to be keyed only on
-// the numeric webhook ID. Since any user who owns a repository has admin
-// access to it, a user could pass their own repository name together with
-// another repository's webhook ID and read that webhook's stored deliveries.
+// the REPOSITORY argument, so the delivery lookup must be keyed on it as well
+// as on the numeric webhook ID. Since any user who owns a repository has admin
+// access to it, a user could otherwise pass their own repository name together
+// with another repository's webhook ID and read that webhook's stored
+// deliveries.
 //
 // Deliveries store the full request URL, headers (including the HMAC
 // signature), request body, and response body, so this is a cross-repository

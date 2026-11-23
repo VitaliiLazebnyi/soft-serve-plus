@@ -417,7 +417,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 //
 // The connection is an in-memory pipe: the test is about the HTTP/2 stream,
 // not the socket, and a pipe has no loopback connect for a loaded macOS
-// machine to stall or fail (KNOWN_ISSUES item 309).
+// machine to stall or fail.
 func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	t.Parallel()
 	l := &requestDeadlines{idle: 200 * time.Millisecond}
@@ -638,8 +638,8 @@ func TestDeadlinesNext(t *testing.T) {
 
 // A request that announces a body and never sends it is cut off after the
 // idle timeout on every route, not only on the git routes: net/http reads
-// the body a handler left unread before it answers, and used to wait for it
-// with no deadline.
+// the body a handler left unread before it answers, and must not wait for
+// it with no deadline.
 func TestHTTPStalledBodyOutsideGitRoutes(t *testing.T) {
 	t.Parallel()
 	addr := newLimitsServer(t, func(c *config.HTTPConfig) {

@@ -12,7 +12,7 @@ import (
 
 // loadServerConfig loads the config from the config file and the
 // environment, opens the log it names and makes it the default logger; the
-// log file is closed with the command's Env (R60).
+// log file is closed with the command's Env.
 func TestLoadServerConfig(t *testing.T) {
 	old := log.Default()
 	t.Cleanup(func() { log.SetDefault(old) })

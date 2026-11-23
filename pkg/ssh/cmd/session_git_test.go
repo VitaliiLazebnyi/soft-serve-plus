@@ -94,7 +94,7 @@ func (f *gitFence) commands(t *testing.T) []string {
 	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 }
 
-// R57: every `repo` command runs its git under the session's context. The
+// Every `repo` command runs its git under the session's context. The
 // command is held in the git rev-parse that opens the repository, the
 // session ends there, as when the client disconnects, and the held git is
 // then let go. A command whose git commands are bound to the session starts

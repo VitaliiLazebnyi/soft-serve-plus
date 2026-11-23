@@ -42,8 +42,7 @@ func (s *lookupCountingStore) GetAnonAccess(ctx context.Context, h db.Handler) (
 
 // A registered stranger asking for a private repository costs as many
 // lookups as asking for a missing name, so an outage cannot tell the two
-// apart by which lookup failed. The private repository used to cost one
-// more: the collaborator row was read on its own.
+// apart by which lookup failed.
 func TestReadableLookupsMatchForPrivateAndMissing(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -80,8 +79,8 @@ func TestReadableLookupsMatchForPrivateAndMissing(t *testing.T) {
 
 // With only the collaborators table failing, an existing private repository
 // and a missing name answer alike, for an anonymous caller and for a
-// stranger: both lookups go through the same failing query. A missing name
-// used to skip it and answer as free, while the private repository failed.
+// stranger: both lookups go through the same failing query, so a missing
+// name does not skip it and answer as free.
 func TestReadableCollabOutageAnswersAlike(t *testing.T) {
 	t.Parallel()
 	be := newLookupBackend(t, nil)

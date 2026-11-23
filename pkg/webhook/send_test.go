@@ -528,8 +528,8 @@ func truncatingServer(t *testing.T) string {
 	return fmt.Sprintf("http://%s/hook", ln.Addr().String())
 }
 
-// Regression for suspect (b): a body-read error used to return before the
-// delivery was recorded. The delivery must be recorded and the read error kept.
+// A body-read error does not return before the delivery is recorded: the
+// delivery must be recorded and the read error kept.
 func TestSendWebhookBodyReadErrorStillRecordsDelivery(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -602,9 +602,9 @@ func TestSendEventDeliversToEveryWebhook(t *testing.T) {
 	}
 }
 
-// BUG (suspect a): sending an event returned on the first SendWebhook error, so the
-// webhooks after the failing one are never delivered. Every subscribed webhook
-// must be attempted, and the failure must still be reported.
+// Sending an event does not stop at the first failed webhook: every
+// subscribed webhook must be attempted, and the failure must still be
+// reported.
 func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

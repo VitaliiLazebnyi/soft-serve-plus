@@ -49,9 +49,9 @@ func lfsDeleteFixture(t *testing.T, be *Backend) (dir string, files []string) {
 	return dir, files
 }
 
-// Deleting a repository removes its whole LFS directory. It used to delete
-// only the object files that had a row, so objects without one and the
-// temporary files of unfinished uploads outlived the repository.
+// Deleting a repository removes its whole LFS directory, so objects without
+// a row and the temporary files of unfinished uploads do not outlive the
+// repository.
 func TestDeleteRepositoryRemovesLFSDirectory(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)
@@ -73,8 +73,8 @@ func TestDeleteRepositoryRemovesLFSDirectory(t *testing.T) {
 }
 
 // A delete that fails in the database leaves the repository, so its LFS
-// objects must stay too. They used to be removed inside the transaction,
-// before the row, and were lost when the transaction rolled back.
+// objects must stay too: they are removed after the row's transaction
+// commits.
 func TestDeleteRepositoryFailureKeepsLFSObjects(t *testing.T) {
 	t.Parallel()
 	be, cfg := newTestBackend(t)

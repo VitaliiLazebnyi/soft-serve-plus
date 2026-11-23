@@ -198,7 +198,7 @@ func (p *signalProbe) fence() {
 
 // stop ends the delivery to the channels notifySignals registered, so a
 // soft serve run again in the same process, as tests do, leaves no handler
-// behind (tracker 312).
+// behind.
 func TestSignalsStop(t *testing.T) {
 	probe := newSignalProbe(t)
 	sigs := notifySignals()
@@ -228,8 +228,7 @@ func TestSignalsStop(t *testing.T) {
 }
 
 // A stop signal is not lost behind SIGHUPs nobody has read yet: with one
-// channel of one slot for all three signals, signal.Notify dropped it
-// (CFG-21).
+// channel of one slot for all three signals, signal.Notify would drop it.
 func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
 	probe := newSignalProbe(t)
 	sigs := notifySignals()
