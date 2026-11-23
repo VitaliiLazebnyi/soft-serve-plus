@@ -1,3 +1,5 @@
+// Package migrate creates, upgrades and rolls back the database schema, and
+// keeps the admin keys in the database in step with initial_admin_keys.
 package migrate
 
 import (

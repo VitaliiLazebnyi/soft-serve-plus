@@ -1,3 +1,5 @@
+// Package store defines the queries the backend runs on the database, as
+// interfaces by kind of row.
 package store
 
 // Store is an interface for managing repositories, users, and settings.

@@ -1,3 +1,5 @@
+// Package access defines the levels of access to a repository: none,
+// read-only, read-write and admin.
 package access
 
 import (

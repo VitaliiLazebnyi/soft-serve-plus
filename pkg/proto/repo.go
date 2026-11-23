@@ -1,3 +1,6 @@
+// Package proto defines the types the backend and the transports share:
+// repositories, users, access tokens, repository names, and the errors
+// reported to clients.
 package proto
 
 import (

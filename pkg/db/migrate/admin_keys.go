@@ -38,14 +38,13 @@ const defaultAdminUsername = "admin"
 //   - a key a non-admin account owns is left alone with a warning: the
 //     account is not promoted and the key is not moved;
 //   - a key this function attached is removed again once it leaves the
-//     config, the same way a config-only key stopped being an admin key when
-//     it was removed before keys were synced, even if its user is no longer
-//     an admin. So is a key the first migration seeded, which it records
-//     the same way. Keys added or removed with the user commands are never
-//     removed. On a database first started by an older version, which did
-//     not record seeded keys, a key of the admin named "admin" that is
-//     neither configured nor recorded is logged with a warning at every
-//     start (see warnUnrecordedKeys). Nothing is removed
+//     config, even if its user is no longer an admin, so a key's admin rights
+//     end with its config entry. So is a key the first migration seeded,
+//     which it records the same way. Keys added or removed with the user
+//     commands are never removed. On a database first started by an older
+//     version, which did not record seeded keys, a key of the admin named
+//     "admin" that is neither configured nor recorded is logged with a
+//     warning at every start (see warnUnrecordedKeys). Nothing is removed
 //     while an initial_admin_keys entry names a key file that cannot be read,
 //     since that file may hold a key that is still wanted; each key kept for
 //     that reason is logged as an error. Blank and "#" comment entries, and

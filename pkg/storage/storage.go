@@ -1,3 +1,4 @@
+// Package storage stores LFS objects as files.
 package storage
 
 import (

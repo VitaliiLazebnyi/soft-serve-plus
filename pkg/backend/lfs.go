@@ -272,7 +272,7 @@ func (d *Backend) storeMissingLFSObjects(ctx context.Context, repo proto.Reposit
 		dbx:       d.db,
 		datastore: d.store,
 		client:    lfsClient,
-		// TODO: support S3 storage
+		// Objects are stored on the local file system only.
 		strg:     storage.NewLocal(lfsRoot),
 		logger:   d.logger.WithPrefix("lfs"),
 		recorded: make(map[string]int64),

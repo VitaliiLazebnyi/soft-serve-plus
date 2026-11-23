@@ -13,9 +13,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
-// AfterPush does, in the server, the work the post-receive and post-update
-// hooks used to do in a hook process, for a push to repo by user that
-// updated refs. The transport calls it once receive-pack has exited, with
+// AfterPush does the post-receive and post-update work, in the server
+// rather than in a hook process, for a push to repo by user that updated
+// refs. The transport calls it once receive-pack has exited, with
 // the refs git gave post-receive (see hooks.PushRefs): only the refs it
 // actually updated, so a ref that git or a hook rejected sends nothing.
 //
