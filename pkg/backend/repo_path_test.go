@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestOrphanRepoDirectoryIsNotClaimable verifies that a repository directory
@@ -21,27 +20,42 @@ import (
 // repository.
 func TestOrphanRepoDirectoryIsNotClaimable(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	orphan := filepath.Join(cfg.DataPath, "repos", "orphan.git")
-	is.NoErr(os.MkdirAll(orphan, 0o755))
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	is.Equal(levelOf(t, be, ctx, "orphan", user), access.NoAccess)
-	is.Equal(levelOf(t, be, ctx, "orphan", nil), access.NoAccess)
+	if got := levelOf(t, be, ctx, "orphan", user); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"orphan\", user) = %v, want %v", got, access.NoAccess)
+	}
+	if got := levelOf(t, be, ctx, "orphan", nil); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"orphan\", nil) = %v, want %v", got, access.NoAccess)
+	}
 
 	_, err = be.CreateRepository(ctx, "orphan", user, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoExist))
+	if !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoExist)")
+	}
 
 	// A genuinely new name is still creatable, unless admin-only creation is on.
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadWriteAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.ReadWriteAccess)
+	}
 	cfg.AdminOnlyCreate = true
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
-	is.Equal(levelOf(t, be, ctx, "orphan", user), access.NoAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.ReadOnlyAccess)
+	}
+	if got := levelOf(t, be, ctx, "orphan", user); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"orphan\", user) = %v, want %v", got, access.NoAccess)
+	}
 }
 
 // TestCaseVariantOfExistingRepo verifies that a name differing only by case
@@ -51,17 +65,22 @@ func TestOrphanRepoDirectoryIsNotClaimable(t *testing.T) {
 // one they share a directory and the variant must be refused.
 func TestCaseVariantOfExistingRepo(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	attacker, err := be.CreateUser(ctx, "attacker", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "secret", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, statErr := os.Stat(filepath.Join(cfg.DataPath, "repos", "SECRET.git"))
 	caseInsensitive := statErr == nil
@@ -70,30 +89,52 @@ func TestCaseVariantOfExistingRepo(t *testing.T) {
 	_, createErr := be.CreateRepository(ctx, "SECRET", attacker, proto.RepositoryOptions{})
 
 	if caseInsensitive {
-		is.Equal(level, access.NoAccess)
-		is.True(errors.Is(createErr, proto.ErrRepoExist))
+		if got := level; got != access.NoAccess {
+			t.Fatalf("level = %v, want %v", got, access.NoAccess)
+		}
+		if !errors.Is(createErr, proto.ErrRepoExist) {
+			t.Fatal("not true: errors.Is(createErr, proto.ErrRepoExist)")
+		}
 	} else {
-		is.Equal(level, access.ReadWriteAccess)
-		is.NoErr(createErr)
+		if got := level; got != access.ReadWriteAccess {
+			t.Fatalf("level = %v, want %v", got, access.ReadWriteAccess)
+		}
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
 	}
 
 	// Whatever the filesystem did, the original is untouched and still private.
 	r, err := be.Repository(ctx, "secret")
-	is.NoErr(err)
-	is.True(r.IsPrivate())
-	is.Equal(r.UserID(), owner.ID())
-	is.Equal(levelOf(t, be, ctx, "secret", attacker), access.NoAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.IsPrivate() {
+		t.Fatal("not true: r.IsPrivate()")
+	}
+	if got, want := r.UserID(), owner.ID(); got != want {
+		t.Fatalf("r.UserID() = %v, want %v", got, want)
+	}
+	if got := levelOf(t, be, ctx, "secret", attacker); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"secret\", attacker) = %v, want %v", got, access.NoAccess)
+	}
 
 	// With admin-only creation on, no case variant is creatable by the
 	// attacker, whatever the filesystem.
 	cfg.AdminOnlyCreate = true
 	level = levelOf(t, be, ctx, "Secret", attacker)
 	_, createErr = be.CreateRepository(ctx, "Secret", attacker, proto.RepositoryOptions{})
-	is.True(errors.Is(createErr, proto.ErrUnauthorized))
+	if !errors.Is(createErr, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(createErr, proto.ErrUnauthorized)")
+	}
 	if caseInsensitive {
-		is.Equal(level, access.NoAccess)
+		if got := level; got != access.NoAccess {
+			t.Fatalf("level = %v, want %v", got, access.NoAccess)
+		}
 	} else {
-		is.Equal(level, access.ReadOnlyAccess)
+		if got := level; got != access.ReadOnlyAccess {
+			t.Fatalf("level = %v, want %v", got, access.ReadOnlyAccess)
+		}
 	}
 }
 
@@ -101,7 +142,6 @@ func TestCaseVariantOfExistingRepo(t *testing.T) {
 // exactly one repository; the directory claim is what arbitrates.
 func TestConcurrentCreateSameName(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
@@ -130,14 +170,24 @@ func TestConcurrentCreateSameName(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
-	is.Equal(created, 1)
-	is.Equal(existed, workers-1)
+	if got := created; got != 1 {
+		t.Fatalf("created = %v, want %v", got, 1)
+	}
+	if got, want := existed, workers-1; got != want {
+		t.Fatalf("existed = %v, want %v", got, want)
+	}
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 1 {
+		t.Fatalf("len(repos) = %v, want %v", got, 1)
+	}
 	_, err = os.Stat(filepath.Join(cfg.DataPath, "repos", "raced.git", "HEAD"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestRegisterRepositoryAdoptsClaimedPath covers the import flow: the
@@ -145,28 +195,47 @@ func TestConcurrentCreateSameName(t *testing.T) {
 // registering it must not refuse its own directory.
 func TestRegisterRepositoryAdoptsClaimedPath(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	owner, err := be.CreateUser(ctx, "importer", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	rp := filepath.Join(cfg.DataPath, "repos", "imported.git")
-	is.NoErr(claimRepoPath(rp))
-	is.True(errors.Is(claimRepoPath(rp), proto.ErrRepoExist))
+	if err := claimRepoPath(rp); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(claimRepoPath(rp), proto.ErrRepoExist) {
+		t.Fatal("not true: errors.Is(claimRepoPath(rp), proto.ErrRepoExist)")
+	}
 	_, err = git.Init(t.Context(), rp, true)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := be.registerRepository(ctx, "imported", owner, proto.RepositoryOptions{Private: true}, false)
-	is.NoErr(err)
-	is.Equal(r.UserID(), owner.ID())
-	is.True(r.IsPrivate())
-	is.Equal(levelOf(t, be, ctx, "imported", owner), access.AdminAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.UserID(), owner.ID(); got != want {
+		t.Fatalf("r.UserID() = %v, want %v", got, want)
+	}
+	if !r.IsPrivate() {
+		t.Fatal("not true: r.IsPrivate()")
+	}
+	if got := levelOf(t, be, ctx, "imported", owner); got != access.AdminAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"imported\", owner) = %v, want %v", got, access.AdminAccess)
+	}
 
 	// The name is now taken on both axes.
 	_, err = be.CreateRepository(ctx, "imported", owner, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoExist))
+	if !errors.Is(err, proto.ErrRepoExist) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoExist)")
+	}
 	_, err = be.Repository(ctx, "imported")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

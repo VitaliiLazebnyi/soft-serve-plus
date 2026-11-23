@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestAccessLevelCollaboratorPrivateRepo verifies that the anonymous access
@@ -35,22 +34,31 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be, _ := newTestBackend(t)
 			ctx := context.Background()
 
-			is.NoErr(be.SetAnonAccess(ctx, tt.anon))
+			if err := be.SetAnonAccess(ctx, tt.anon); err != nil {
+				t.Fatal(err)
+			}
 
 			_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{Private: tt.private})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			user, err := be.CreateUser(ctx, "collab", proto.UserOptions{})
-			is.NoErr(err)
-			is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 				return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "repo", tt.collab)
-			}))
+			}); err != nil {
+				t.Fatal(err)
+			}
 
-			is.Equal(levelOf(t, be, ctx, "repo", user), tt.want)
+			if got := levelOf(t, be, ctx, "repo", user); got != tt.want {
+				t.Fatalf("levelOf(t, be, ctx, \"repo\", user) = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }
@@ -59,18 +67,25 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 // who is not a collaborator has no access to a private repository.
 func TestAccessLevelPrivateRepoNonCollaborator(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.Equal(levelOf(t, be, ctx, "repo", user), access.NoAccess)
-	is.Equal(levelOf(t, be, ctx, "repo", nil), access.NoAccess)
+	if got := levelOf(t, be, ctx, "repo", user); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"repo\", user) = %v, want %v", got, access.NoAccess)
+	}
+	if got := levelOf(t, be, ctx, "repo", nil); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"repo\", nil) = %v, want %v", got, access.NoAccess)
+	}
 }
 
 // TestAccessLevelPublicRepoNonCollaborator verifies that the anonymous
@@ -94,20 +109,29 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be, _ := newTestBackend(t)
 			ctx := context.Background()
 
-			is.NoErr(be.SetAnonAccess(ctx, tt.anon))
+			if err := be.SetAnonAccess(ctx, tt.anon); err != nil {
+				t.Fatal(err)
+			}
 
 			_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			user, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-			is.Equal(levelOf(t, be, ctx, "repo", user), tt.want)
-			is.Equal(levelOf(t, be, ctx, "repo", nil), tt.anon)
+			if got := levelOf(t, be, ctx, "repo", user); got != tt.want {
+				t.Fatalf("levelOf(t, be, ctx, \"repo\", user) = %v, want %v", got, tt.want)
+			}
+			if got := levelOf(t, be, ctx, "repo", nil); got != tt.anon {
+				t.Fatalf("levelOf(t, be, ctx, \"repo\", nil) = %v, want %v", got, tt.anon)
+			}
 		})
 	}
 }
@@ -117,32 +141,51 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 // their repositories are left untouched by the refusal.
 func TestDeleteUserWithRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 
 	ctx := context.Background()
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx = proto.WithUserContext(ctx, admin)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "owned", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	err = be.DeleteUser(ctx, "owner")
-	is.True(errors.Is(err, proto.ErrUserOwnsRepos))
+	if !errors.Is(err, proto.ErrUserOwnsRepos) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUserOwnsRepos)")
+	}
 	_, err = be.User(ctx, "owner")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "owned")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.DeleteRepository(ctx, "owned"))
-	is.NoErr(be.DeleteUser(ctx, "owner"))
+	if err := be.DeleteRepository(ctx, "owned"); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.DeleteUser(ctx, "owner"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.User(ctx, "owner")
-	is.True(errors.Is(err, proto.ErrUserNotFound))
+	if !errors.Is(err, proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUserNotFound)")
+	}
 
-	is.True(errors.Is(be.DeleteUser(ctx, "owner"), proto.ErrUserNotFound))
+	if !errors.Is(be.DeleteUser(ctx, "owner"), proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(be.DeleteUser(ctx, \"owner\"), proto.ErrUserNotFound)")
+	}
 }
 
 // TestDeleteRepositoryWithoutDirectory verifies that a repository whose
@@ -150,17 +193,24 @@ func TestDeleteUserWithRepositories(t *testing.T) {
 // that does not exist at all reports it as not found.
 func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 
 	ctx := context.Background()
 
 	_, err := be.CreateRepository(ctx, "orphan", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(os.RemoveAll(be.repoPath("orphan")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(be.repoPath("orphan")); err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.DeleteRepository(ctx, "orphan"))
-	is.True(errors.Is(be.DeleteRepository(ctx, "orphan"), proto.ErrRepoNotFound))
+	if err := be.DeleteRepository(ctx, "orphan"); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(be.DeleteRepository(ctx, "orphan"), proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(be.DeleteRepository(ctx, \"orphan\"), proto.ErrRepoNotFound)")
+	}
 }
 
 // TestMutationsOnMissingUserOrKey verifies that changing a user who does not
@@ -168,18 +218,23 @@ func TestDeleteRepositoryWithoutDirectory(t *testing.T) {
 // succeeding or leaking a raw SQL error.
 func TestMutationsOnMissingUserOrKey(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 
 	ctx := context.Background()
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx = proto.WithUserContext(ctx, admin)
 
 	_, err = be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pk := newTestPublicKey(t)
 
@@ -201,12 +256,24 @@ func TestMutationsOnMissingUserOrKey(t *testing.T) {
 	_, err = be.User(ctx, "phantom")
 	isErr(err, proto.ErrUserNotFound)
 	collabs, err := be.Collaborators(ctx, "repo")
-	is.NoErr(err)
-	is.Equal(len(collabs), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(collabs); got != 0 {
+		t.Fatalf("len(collabs) = %v, want %v", got, 0)
+	}
 
 	// The same changes on a user who exists still succeed.
-	is.NoErr(be.AddPublicKey(ctx, "alice", pk))
-	is.NoErr(be.RemovePublicKey(ctx, "alice", pk))
-	is.NoErr(be.SetAdmin(ctx, "alice", false))
-	is.NoErr(be.SetUsername(ctx, "alice", "alicia"))
+	if err := be.AddPublicKey(ctx, "alice", pk); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RemovePublicKey(ctx, "alice", pk); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAdmin(ctx, "alice", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetUsername(ctx, "alice", "alicia"); err != nil {
+		t.Fatal(err)
+	}
 }

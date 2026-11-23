@@ -4,12 +4,12 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/matryer/is"
 )
 
 func TestParseAttr(t *testing.T) {
@@ -54,9 +54,10 @@ func TestParseAttr(t *testing.T) {
 		},
 	}
 
-	is := is.New(t)
 	for _, c := range cases {
-		is.Equal(parseAttributes([]byte(c.in)), c.want)
+		if got, want := parseAttributes([]byte(c.in)), c.want; !reflect.DeepEqual(got, want) {
+			t.Fatalf("parseAttributes([]byte(c.in)) = %v, want %v", got, want)
+		}
 	}
 }
 

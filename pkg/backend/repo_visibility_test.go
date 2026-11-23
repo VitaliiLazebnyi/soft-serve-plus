@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestRepositoryReflectsDatabase verifies that access checks see a
@@ -15,20 +14,31 @@ import (
 // (GHSA-f3fj-9625-rv3m).
 func TestRepositoryReflectsDatabase(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.Equal(levelOf(t, be, ctx, "repo", nil), access.ReadOnlyAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOf(t, be, ctx, "repo", nil); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"repo\", nil) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 
-	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return be.store.SetRepoIsPrivateByName(ctx, tx, "repo", true)
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := be.Repository(ctx, "repo")
-	is.NoErr(err)
-	is.True(r.IsPrivate())
-	is.Equal(levelOf(t, be, ctx, "repo", nil), access.NoAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.IsPrivate() {
+		t.Fatal("not true: r.IsPrivate()")
+	}
+	if got := levelOf(t, be, ctx, "repo", nil); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"repo\", nil) = %v, want %v", got, access.NoAccess)
+	}
 }

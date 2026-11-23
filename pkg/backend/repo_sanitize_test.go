@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // A description or project name given at creation reaches every user who
@@ -13,7 +12,6 @@ import (
 // characters just as when it is set later.
 func TestCreateRepositorySanitisesDescriptionAndProjectName(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
@@ -21,7 +19,13 @@ func TestCreateRepositorySanitisesDescriptionAndProjectName(t *testing.T) {
 		Description: "a\x1bP1|x\x1b\\b\x07\nc",
 		ProjectName: "p\x1b]52;c;Zm9v\x07q",
 	})
-	is.NoErr(err)
-	is.Equal(r.Description(), "ab\nc")
-	is.Equal(r.ProjectName(), "pq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Description(); got != "ab\nc" {
+		t.Fatalf("r.Description() = %v, want %v", got, "ab\nc")
+	}
+	if got := r.ProjectName(); got != "pq" {
+		t.Fatalf("r.ProjectName() = %v, want %v", got, "pq")
+	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -23,23 +22,32 @@ import (
 // anonymous users, so nothing can be created there.
 func TestAdminOnlyCreateFlagOnCapsBaseAccess(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 	cfg.AdminOnlyCreate = true
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
-	is.Equal(levelOf(t, be, ctx, "fresh", admin), access.AdminAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.ReadOnlyAccess)
+	}
+	if got := levelOf(t, be, ctx, "fresh", admin); got != access.AdminAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", admin) = %v, want %v", got, access.AdminAccess)
+	}
 	// Anonymous access is capped too: even when the server allows read-write
 	// for anonymous users, a missing name is read-only.
 	rw := access.ReadWriteAccess
 	cfg.AnonAccess = &rw
-	is.Equal(levelOf(t, be, ctx, "fresh", nil), access.ReadOnlyAccess)
+	if got := levelOf(t, be, ctx, "fresh", nil); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", nil) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 }
 
 // With AdminOnlyCreate off (the default), the backend keeps upstream
@@ -47,35 +55,47 @@ func TestAdminOnlyCreateFlagOnCapsBaseAccess(t *testing.T) {
 // create it.
 func TestAdminOnlyCreateFlagOffKeepsUpstreamBaseAccess(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
-	is.True(!cfg.AdminOnlyCreate)
+	if cfg.AdminOnlyCreate {
+		t.Fatal("not true: !cfg.AdminOnlyCreate")
+	}
 	rw := access.ReadWriteAccess
 	cfg.AnonAccess = &rw
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadWriteAccess)
-	is.Equal(levelOf(t, be, ctx, "fresh", nil), access.ReadWriteAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.ReadWriteAccess)
+	}
+	if got := levelOf(t, be, ctx, "fresh", nil); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", nil) = %v, want %v", got, access.ReadWriteAccess)
+	}
 }
 
 // A database admin keeps admin access on a missing name whatever the flag.
 func TestDatabaseAdminBaseAccessIgnoresFlag(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	pub := newTestPublicKey(t)
 	root, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{pub}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.AdminOnlyCreate = true
-	is.Equal(baseLevel(t, be, ctx, root), access.AdminAccess)
+	if got := baseLevel(t, be, ctx, root); got != access.AdminAccess {
+		t.Fatalf("baseLevel(t, be, ctx, root) = %v, want %v", got, access.AdminAccess)
+	}
 	cfg.AdminOnlyCreate = false
-	is.Equal(baseLevel(t, be, ctx, root), access.AdminAccess)
+	if got := baseLevel(t, be, ctx, root); got != access.AdminAccess {
+		t.Fatalf("baseLevel(t, be, ctx, root) = %v, want %v", got, access.AdminAccess)
+	}
 }
 
 // With the flag off, a registered user on a missing name gets the anonymous
@@ -83,20 +103,25 @@ func TestDatabaseAdminBaseAccessIgnoresFlag(t *testing.T) {
 // flag on caps it at read-only.
 func TestAnonAdminLevelIsCappedOnlyWhenFlagOn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	anonAdmin := access.AdminAccess
 	cfg.AnonAccess = &anonAdmin
 
 	cfg.AdminOnlyCreate = false
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.AdminAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.AdminAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.AdminAccess)
+	}
 
 	cfg.AdminOnlyCreate = true
-	is.Equal(levelOf(t, be, ctx, "fresh", user), access.ReadOnlyAccess)
+	if got := levelOf(t, be, ctx, "fresh", user); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"fresh\", user) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 }
 
 // backendTestContext wires the config, database and store a backend call
@@ -149,29 +174,48 @@ const offlineRemote = "https://127.0.0.1/x.git"
 // skips the handlers' checks cannot let anonymous users create.
 func TestBackendRefusesAnonymousCreatesUnderReadOnlyAnonAccess(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
-	is.True(!cfg.AdminOnlyCreate)
-	is.Equal(be.AnonAccess(ctx), access.ReadOnlyAccess)
+	if cfg.AdminOnlyCreate {
+		t.Fatal("not true: !cfg.AdminOnlyCreate")
+	}
+	if got := be.AnonAccess(ctx); got != access.ReadOnlyAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 
 	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "anon", nil, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 	_, err = be.ImportRepository(ctx, "anon", nil, offlineRemote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
-	is.True(errors.Is(be.RenameRepository(ctx, "a", "anon"), proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
+	if !errors.Is(be.RenameRepository(ctx, "a", "anon"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(be.RenameRepository(ctx, \"a\", \"anon\"), proto.ErrUnauthorized)")
+	}
 	_, err = be.Repository(ctx, "anon")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	_, err = be.Repository(ctx, "a")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// With anon-access read-write, anonymous callers may create.
-	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "anon", nil, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // With AdminOnlyCreate on, the backend itself refuses a non-admin, and an
@@ -179,50 +223,72 @@ func TestBackendRefusesAnonymousCreatesUnderReadOnlyAnonAccess(t *testing.T) {
 // caller reaches it. Nothing is created.
 func TestBackendRefusesNonAdminCreatesWhenFlagOn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.AdminOnlyCreate = true
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	userCtx := proto.WithUserContext(ctx, user)
 
 	_, err = be.CreateRepository(userCtx, "junk", user, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 	_, err = be.CreateRepository(ctx, "anon-junk", nil, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 	_, err = be.ImportRepository(userCtx, "junk-import", user, offlineRemote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 
 	_, err = be.Repository(ctx, "junk")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = be.Repository(ctx, "anon-junk")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = be.Repository(ctx, "junk-import")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 // With AdminOnlyCreate on, a non-admin's rename of an owned repository to a
 // new name is refused and the repository stays where it was.
 func TestBackendRefusesNonAdminRenameToNewNameWhenFlagOn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.AdminOnlyCreate = true
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = seedCreate(be, ctx, "mine", user, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	userCtx := proto.WithUserContext(ctx, user)
-	is.True(errors.Is(be.RenameRepository(userCtx, "mine", "renamed"), proto.ErrUnauthorized))
+	if !errors.Is(be.RenameRepository(userCtx, "mine", "renamed"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(be.RenameRepository(userCtx, \"mine\", \"renamed\"), proto.ErrUnauthorized)")
+	}
 	_, err = be.Repository(ctx, "mine")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "renamed")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 // With AdminOnlyCreate on, a database admin may create, import and rename to
@@ -230,53 +296,74 @@ func TestBackendRefusesNonAdminRenameToNewNameWhenFlagOn(t *testing.T) {
 // a git version gate), so it only has to pass the policy.
 func TestBackendAllowsAdminCreatesWhenFlagOn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.AdminOnlyCreate = true
 
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	adminCtx := proto.WithUserContext(ctx, admin)
 
 	_, err = be.CreateRepository(adminCtx, "made", admin, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.ImportRepository(adminCtx, "imported", admin, offlineRemote, proto.RepositoryOptions{})
-	is.True(!errors.Is(err, proto.ErrUnauthorized))
-	is.NoErr(be.RenameRepository(adminCtx, "made", "made-again"))
+	if errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: !errors.Is(err, proto.ErrUnauthorized)")
+	}
+	if err := be.RenameRepository(adminCtx, "made", "made-again"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "made-again")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // With AdminOnlyCreate off, the same non-admin calls are not refused by the
 // policy: create and rename to a new name succeed.
 func TestBackendAllowsNonAdminCreatesWhenFlagOff(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.AdminOnlyCreate = false
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	userCtx := proto.WithUserContext(ctx, user)
 
 	_, err = be.CreateRepository(userCtx, "mine", user, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(be.RenameRepository(userCtx, "mine", "renamed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RenameRepository(userCtx, "mine", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "renamed")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.ImportRepository(userCtx, "imported", user, offlineRemote, proto.RepositoryOptions{})
-	is.True(!errors.Is(err, proto.ErrUnauthorized))
+	if errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: !errors.Is(err, proto.ErrUnauthorized)")
+	}
 }
 
 func newTestPublicKey(t *testing.T) ssh.PublicKey {
 	t.Helper()
-	is := is.New(t)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	signer, err := ssh.NewSignerFromKey(priv)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return signer.PublicKey()
 }
 
@@ -294,7 +381,6 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
 			cfg.AdminOnlyCreate = true
@@ -306,34 +392,52 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			if registered {
 				var err error
 				user, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
-				is.NoErr(err)
-				is.True(!user.IsAdmin())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if user.IsAdmin() {
+					t.Fatal("not true: !user.IsAdmin()")
+				}
 				ctx = proto.WithUserContext(ctx, user)
 			}
 			keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, pub)
 
 			// Without the key on the context, the same user is refused.
 			_, err := be.CreateRepository(ctx, "nokey", user, proto.RepositoryOptions{})
-			is.True(errors.Is(err, proto.ErrUnauthorized))
+			if !errors.Is(err, proto.ErrUnauthorized) {
+				t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+			}
 
 			// ReadableForUser honours the key; Readable, for the account
 			// alone, does not, on a missing name as on an existing one.
 			_, level := noLookupError(t)(be.ReadableForUser(keyCtx, "fresh", user))
-			is.Equal(level, access.AdminAccess)
-			is.True(levelOf(t, be, keyCtx, "fresh", user) < access.ReadWriteAccess)
+			if got := level; got != access.AdminAccess {
+				t.Fatalf("level = %v, want %v", got, access.AdminAccess)
+			}
+			if !(levelOf(t, be, keyCtx, "fresh", user) < access.ReadWriteAccess) {
+				t.Fatal("not true: levelOf(t, be, keyCtx, \"fresh\", user) < access.ReadWriteAccess")
+			}
 
 			_, err = be.CreateRepository(keyCtx, "made", user, proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.ImportRepository(keyCtx, "imported", user, offlineRemote, proto.RepositoryOptions{})
-			is.True(!errors.Is(err, proto.ErrUnauthorized))
+			if errors.Is(err, proto.ErrUnauthorized) {
+				t.Fatal("not true: !errors.Is(err, proto.ErrUnauthorized)")
+			}
 			if !registered {
 				// The rename webhook needs a sender, so rename is only
 				// exercised with a registered user.
 				return
 			}
-			is.NoErr(be.RenameRepository(keyCtx, "made", "made-again"))
+			if err := be.RenameRepository(keyCtx, "made", "made-again"); err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.Repository(ctx, "made-again")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -345,16 +449,19 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 // before an operator lists it and become an admin over HTTP.
 func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.AdminOnlyCreate = true
 
 	claimed := newTestPublicKey(t)
 	_, err := be.CreateUser(ctx, "mallory", proto.UserOptions{PublicKeys: []ssh.PublicKey{claimed}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "boss", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{newTestPublicKey(t)}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The operator lists the key after mallory attached it.
 	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(claimed)))
@@ -363,24 +470,40 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 	// and by access token.
 	load := func(name string) []proto.User {
 		u, err := be.User(ctx, name)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		tok, err := be.CreateAccessToken(ctx, u, "t", time.Time{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		byToken, err := be.UserByAccessToken(ctx, tok)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return []proto.User{u, byToken}
 	}
 
 	for i, u := range load("mallory") {
-		is.True(!u.IsAdmin())
-		is.Equal(levelOf(t, be, ctx, "fresh", u), access.ReadOnlyAccess)
+		if u.IsAdmin() {
+			t.Fatal("not true: !u.IsAdmin()")
+		}
+		if got := levelOf(t, be, ctx, "fresh", u); got != access.ReadOnlyAccess {
+			t.Fatalf("levelOf(t, be, ctx, \"fresh\", u) = %v, want %v", got, access.ReadOnlyAccess)
+		}
 		_, err := be.CreateRepository(ctx, fmt.Sprintf("mallory-%d", i), u, proto.RepositoryOptions{})
-		is.True(errors.Is(err, proto.ErrUnauthorized))
+		if !errors.Is(err, proto.ErrUnauthorized) {
+			t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+		}
 	}
 	for i, u := range load("boss") {
-		is.Equal(levelOf(t, be, ctx, "fresh", u), access.AdminAccess)
+		if got := levelOf(t, be, ctx, "fresh", u); got != access.AdminAccess {
+			t.Fatalf("levelOf(t, be, ctx, \"fresh\", u) = %v, want %v", got, access.AdminAccess)
+		}
 		_, err := be.CreateRepository(ctx, fmt.Sprintf("boss-%d", i), u, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -393,21 +516,28 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 // unlisted.
 func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	ctx := backendTestContext(be, cfg)
 
 	claimed := newTestPublicKey(t)
 	_, err := be.CreateUser(ctx, "mallory", proto.UserOptions{PublicKeys: []ssh.PublicKey{claimed}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bossKey := newTestPublicKey(t)
 	_, err = be.CreateUser(ctx, "boss", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{bossKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	u, err := be.UserByPublicKey(ctx, claimed)
-	is.NoErr(err)
-	is.Equal(u.Username(), "mallory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "mallory" {
+		t.Fatalf("u.Username() = %v, want %v", got, "mallory")
+	}
 
 	orig := cfg.InitialAdminKeys
 	setAdminKeys(t, cfg, append(append([]string{}, orig...),
@@ -415,42 +545,80 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 
 	for range 3 {
 		_, err = be.UserByPublicKey(ctx, claimed)
-		is.True(errors.Is(err, proto.ErrUserNotFound))
+		if !errors.Is(err, proto.ErrUserNotFound) {
+			t.Fatal("not true: errors.Is(err, proto.ErrUserNotFound)")
+		}
 		var owned *AdminKeyNonAdminOwnerError
-		is.True(errors.As(err, &owned))
-		is.Equal(owned.Username, "mallory")
-		is.True(strings.Contains(err.Error(), "user set-admin mallory true"))
-		is.True(strings.Contains(err.Error(), "user remove-pubkey mallory KEY"))
+		if !errors.As(err, &owned) {
+			t.Fatal("not true: errors.As(err, &owned)")
+		}
+		if got := owned.Username; got != "mallory" {
+			t.Fatalf("owned.Username = %v, want %v", got, "mallory")
+		}
+		if !strings.Contains(err.Error(), "user set-admin mallory true") {
+			t.Fatal("not true: strings.Contains(err.Error(), \"user set-admin mallory true\")")
+		}
+		if !strings.Contains(err.Error(), "user remove-pubkey mallory KEY") {
+			t.Fatal("not true: strings.Contains(err.Error(), \"user remove-pubkey mallory KEY\")")
+		}
 	}
-	is.Equal(strings.Count(logs.String(), "admin key is owned by a non-admin account"), 3)
-	is.Equal(baseLevel(t, be, context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), nil), access.AdminAccess)
+	if got := strings.Count(logs.String(), "admin key is owned by a non-admin account"); got != 3 {
+		t.Fatalf("strings.Count(logs.String(), \"admin key is owned by a non-admin account\") = %v, want %v", got, 3)
+	}
+	if got := baseLevel(t, be, context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), nil); got != access.AdminAccess {
+		t.Fatalf("baseLevel(t, be, context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), nil) = %v, want %v", got, access.AdminAccess)
+	}
 
 	// A private repository made with the key goes to the default admin,
 	// and mallory gets nothing on it.
 	r, err := be.CreateRepository(context.WithValue(ctx, charmssh.ContextKeyPublicKey, claimed), "secret", nil, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mallory, err := be.User(ctx, "mallory")
-	is.NoErr(err)
-	is.True(r.UserID() != mallory.ID())
-	is.Equal(levelOf(t, be, ctx, "secret", mallory), access.NoAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(r.UserID() != mallory.ID()) {
+		t.Fatal("not true: r.UserID() != mallory.ID()")
+	}
+	if got := levelOf(t, be, ctx, "secret", mallory); got != access.NoAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"secret\", mallory) = %v, want %v", got, access.NoAccess)
+	}
 
 	u, err = be.UserByPublicKey(ctx, bossKey)
-	is.NoErr(err)
-	is.Equal(u.Username(), "boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "boss" {
+		t.Fatalf("u.Username() = %v, want %v", got, "boss")
+	}
 
 	setAdminKeys(t, cfg, orig)
 	u, err = be.UserByPublicKey(ctx, claimed)
-	is.NoErr(err)
-	is.Equal(u.Username(), "mallory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "mallory" {
+		t.Fatalf("u.Username() = %v, want %v", got, "mallory")
+	}
 
 	// Promoting the owner (the fix when the key is theirs) resolves the
 	// listed key to them again, keeping their account.
 	setAdminKeys(t, cfg, append(append([]string{}, orig...), proto.MarshalAuthorizedKey(claimed)))
-	is.NoErr(be.SetAdmin(ctx, "mallory", true))
+	if err := be.SetAdmin(ctx, "mallory", true); err != nil {
+		t.Fatal(err)
+	}
 	u, err = be.UserByPublicKey(ctx, claimed)
-	is.NoErr(err)
-	is.Equal(u.Username(), "mallory")
-	is.True(u.IsAdmin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "mallory" {
+		t.Fatalf("u.Username() = %v, want %v", got, "mallory")
+	}
+	if !u.IsAdmin() {
+		t.Fatal("not true: u.IsAdmin()")
+	}
 }
 
 // The owned-admin-key warning is logged on every refused lookup, naming the
@@ -458,7 +626,6 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 // the key gone from the account, or the key no longer listed.
 func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	ctx := backendTestContext(be, cfg)
@@ -474,9 +641,13 @@ func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 
 	key := newTestPublicKey(t)
 	_, err := be.CreateUser(ctx, "mallory", proto.UserOptions{PublicKeys: []ssh.PublicKey{key}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "eve", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	orig := cfg.InitialAdminKeys
 	listed := append(append([]string{}, orig...), proto.MarshalAuthorizedKey(key))
@@ -487,38 +658,72 @@ func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 		for range 2 {
 			_, err := be.UserByPublicKey(ctx, key)
 			var owned *AdminKeyNonAdminOwnerError
-			is.True(errors.As(err, &owned))
-			is.Equal(owned.Username, owner)
+			if !errors.As(err, &owned) {
+				t.Fatal("not true: errors.As(err, &owned)")
+			}
+			if got := owned.Username; got != owner {
+				t.Fatalf("owned.Username = %v, want %v", got, owner)
+			}
 		}
 	}
 
 	lookup("mallory")
-	is.Equal(warnings("mallory"), 2)
+	if got := warnings("mallory"); got != 2 {
+		t.Fatalf("warnings(\"mallory\") = %v, want %v", got, 2)
+	}
 
 	// Promoting the owner resolves it; demoting them again brings it back.
-	is.NoErr(be.SetAdmin(ctx, "mallory", true))
+	if err := be.SetAdmin(ctx, "mallory", true); err != nil {
+		t.Fatal(err)
+	}
 	u, err := be.UserByPublicKey(ctx, key)
-	is.NoErr(err)
-	is.Equal(u.Username(), "mallory")
-	is.Equal(warnings("mallory"), 2)
-	is.NoErr(be.SetAdmin(ctx, "mallory", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "mallory" {
+		t.Fatalf("u.Username() = %v, want %v", got, "mallory")
+	}
+	if got := warnings("mallory"); got != 2 {
+		t.Fatalf("warnings(\"mallory\") = %v, want %v", got, 2)
+	}
+	if err := be.SetAdmin(ctx, "mallory", false); err != nil {
+		t.Fatal(err)
+	}
 	lookup("mallory")
-	is.Equal(warnings("mallory"), 4)
+	if got := warnings("mallory"); got != 4 {
+		t.Fatalf("warnings(\"mallory\") = %v, want %v", got, 4)
+	}
 
 	// The key leaving the account resolves it; another non-admin claiming
 	// it is logged, naming the new owner.
-	is.NoErr(be.RemovePublicKey(ctx, "mallory", key))
+	if err := be.RemovePublicKey(ctx, "mallory", key); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.UserByPublicKey(ctx, key)
-	is.True(errors.Is(err, proto.ErrUserNotFound))
-	is.NoErr(be.AddPublicKey(ctx, "eve", key))
+	if !errors.Is(err, proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUserNotFound)")
+	}
+	if err := be.AddPublicKey(ctx, "eve", key); err != nil {
+		t.Fatal(err)
+	}
 	lookup("eve")
-	is.Equal(warnings("eve"), 2)
+	if got := warnings("eve"); got != 2 {
+		t.Fatalf("warnings(\"eve\") = %v, want %v", got, 2)
+	}
 
 	// Unlisting the key resolves it too.
 	setAdminKeys(t, cfg, orig)
 	u, err = be.UserByPublicKey(ctx, key)
-	is.NoErr(err)
-	is.Equal(u.Username(), "eve")
-	is.Equal(warnings("eve"), 2)
-	is.Equal(warnings("mallory"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Username(); got != "eve" {
+		t.Fatalf("u.Username() = %v, want %v", got, "eve")
+	}
+	if got := warnings("eve"); got != 2 {
+		t.Fatalf("warnings(\"eve\") = %v, want %v", got, 2)
+	}
+	if got := warnings("mallory"); got != 4 {
+		t.Fatalf("warnings(\"mallory\") = %v, want %v", got, 4)
+	}
 }

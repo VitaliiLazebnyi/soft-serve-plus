@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -21,7 +22,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 const (
@@ -40,9 +40,8 @@ func (e whEnv) seedHook(t *testing.T, events ...webhook.Event) int64 {
 // seedHookOn is seedHook for a given repository.
 func (e whEnv) seedHookOn(t *testing.T, repo proto.Repository, events ...webhook.Event) int64 {
 	t.Helper()
-	is := is.New(t)
 	var id int64
-	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+	if err := e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		var err error
 		id, err = e.be.store.CreateWebhook(e.ctx, tx, models.Webhook{RepoID: repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		if err != nil {
@@ -53,16 +52,19 @@ func (e whEnv) seedHookOn(t *testing.T, repo proto.Repository, events ...webhook
 			evs[i] = int(ev)
 		}
 		return e.be.store.CreateWebhookEvents(e.ctx, tx, id, evs)
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return id
 }
 
 // deliveredEvents returns the events of every delivery recorded for a webhook.
 func (e whEnv) deliveredEvents(t *testing.T, hookID int64) []webhook.Event {
 	t.Helper()
-	is := is.New(t)
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, hookID)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := make([]webhook.Event, 0, len(list))
 	for _, d := range list {
 		out = append(out, d.Event)
@@ -116,7 +118,6 @@ func (e whEnv) awaitLog(t *testing.T, text string) {
 // A branch or tag creation sends branch_tag_create.
 func TestAfterPushSendsBranchTagCreate(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate)
 
@@ -124,13 +125,14 @@ func TestAfterPushSendsBranchTagCreate(t *testing.T) {
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A branch or tag deletion sends branch_tag_delete.
 func TestAfterPushSendsBranchTagDelete(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagDelete)
 
@@ -138,13 +140,14 @@ func TestAfterPushSendsBranchTagDelete(t *testing.T) {
 		OldSha: someSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagDelete})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagDelete}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A plain ref update sends no branch_tag event.
 func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
@@ -152,59 +155,84 @@ func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
 		OldSha: someSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
 
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	}
 }
 
 func TestRenameRepositorySendsRepositoryEvent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
 
-	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))
+	if err := e.be.RenameRepository(e.ctx, "repo", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 
 	e.awaitDeliveries(t, id, webhook.EventRepository)
 
 	// The event names the repository by its new name and says what it was
 	// called before.
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	d, err := e.be.WebhookDelivery(e.ctx, e.repo, id, list[0].ID)
-	is.NoErr(err)
-	is.True(strings.Contains(d.RequestBody, `"name":"renamed"`))
-	is.True(strings.Contains(d.RequestBody, `"changes":{"name":{"from":"repo"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(d.RequestBody, `"name":"renamed"`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"name\":\"renamed\"`)")
+	}
+	if !strings.Contains(d.RequestBody, `"changes":{"name":{"from":"repo"}}`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"changes\":{\"name\":{\"from\":\"repo\"}}`)")
+	}
 }
 
 // A failed event does not undo a committed rename, and the caller sees success.
 func TestRenameRepositoryKeepsChangeWhenEventFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
 	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhook_deliveries")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))
+	if err := e.be.RenameRepository(e.ctx, "repo", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = e.be.Repository(e.ctx, "renamed")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = e.be.Repository(e.ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	e.awaitLog(t, "webhook event not delivered")
 }
 
 // A failed event does not undo a committed visibility change.
 func TestSetPrivateKeepsChangeWhenEventFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepositoryVisibilityChange)
 	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhook_deliveries")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(e.be.SetPrivate(e.ctx, "repo", true))
+	if err := e.be.SetPrivate(e.ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	repo, err := e.be.Repository(e.ctx, "repo")
-	is.NoErr(err)
-	is.True(repo.IsPrivate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repo.IsPrivate() {
+		t.Fatal("not true: repo.IsPrivate()")
+	}
 	e.awaitLog(t, "webhook event not delivered")
 }
 
@@ -213,13 +241,16 @@ func TestSetPrivateKeepsChangeWhenEventFails(t *testing.T) {
 // SSRF-protected client refuses, so the attempt shows up as a logged failure.
 func TestDeleteRepositorySendsRepositoryEvent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
 
-	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
+	if err := e.be.DeleteRepository(e.ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := e.be.Repository(e.ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 
 	e.awaitLog(t, "webhook event not delivered")
 }
@@ -228,14 +259,17 @@ func TestDeleteRepositorySendsRepositoryEvent(t *testing.T) {
 // the failed attempt is already logged when it returns, with no polling.
 func TestWaitForDeliveriesCompletesBackgroundSends(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
 
-	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
+	if err := e.be.DeleteRepository(e.ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	e.be.WaitForDeliveries(e.ctx)
 
-	is.True(strings.Contains(e.logs.String(), "webhook event not delivered"))
+	if !strings.Contains(e.logs.String(), "webhook event not delivered") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook event not delivered\")")
+	}
 }
 
 // A delivery that starts just before shutdown must be able to finish within
@@ -243,8 +277,9 @@ func TestWaitForDeliveriesCompletesBackgroundSends(t *testing.T) {
 // client puts on one request.
 func TestShutdownDeliveryBudgetCoversSendTimeout(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
-	is.True(ShutdownDeliveryTimeout > ssrf.ClientTimeout)
+	if !(ShutdownDeliveryTimeout > ssrf.ClientTimeout) {
+		t.Fatal("not true: ShutdownDeliveryTimeout > ssrf.ClientTimeout")
+	}
 }
 
 // Once shutdown has started waiting, a change made by a request that is still
@@ -252,17 +287,24 @@ func TestShutdownDeliveryBudgetCoversSendTimeout(t *testing.T) {
 // deliveries being waited on.
 func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := e.seedHook(t, webhook.EventCollaborator)
 
 	e.be.WaitForDeliveries(e.ctx)
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
-	is.True(strings.Contains(e.logs.String(), "webhook event skipped: server is shutting down"))
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
+	if !strings.Contains(e.logs.String(), "webhook event skipped: server is shutting down") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook event skipped: server is shutting down\")")
+	}
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	}
 }
 
 // Deleting a repository removes its webhooks with their events and
@@ -271,17 +313,22 @@ func TestChangesAfterShutdownStartSkipDelivery(t *testing.T) {
 // instead.
 func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
 	e.afterPush(t, e.admin, []hooks.HookArg{{
 		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
 	}})
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 
-	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
+	if err := e.be.DeleteRepository(e.ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	e.be.WaitForDeliveries(e.ctx)
-	is.True(strings.Contains(e.logs.String(), "webhook event not delivered"))
+	if !strings.Contains(e.logs.String(), "webhook event not delivered") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook event not delivered\")")
+	}
 
 	for _, q := range []string{
 		"SELECT COUNT(*) FROM webhooks WHERE id = ?",
@@ -289,22 +336,31 @@ func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 		"SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?",
 	} {
 		var n int
-		is.NoErr(e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind(q), id))
-		is.Equal(n, 0)
+		if err := e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind(q), id); err != nil {
+			t.Fatal(err)
+		}
+		if got := n; got != 0 {
+			t.Fatalf("n = %v, want %v", got, 0)
+		}
 	}
 }
 
 func TestCollaboratorEventsAddAndRemove(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := e.seedHook(t, webhook.EventCollaborator)
 
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
-	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
+	if err := e.be.RemoveCollaborator(e.ctx, "repo", "bob"); err != nil {
+		t.Fatal(err)
+	}
 
 	e.awaitDeliveries(t, id, webhook.EventCollaborator, webhook.EventCollaborator)
 }
@@ -312,47 +368,64 @@ func TestCollaboratorEventsAddAndRemove(t *testing.T) {
 // A failed event does not undo committed collaborator changes.
 func TestCollaboratorChangesKeepWhenEventFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	bob, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.seedHook(t, webhook.EventCollaborator)
 	_, err = e.be.db.ExecContext(e.ctx, "DROP TABLE webhook_deliveries")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	// Its event fails to be recorded; wait for that to finish before the
 	// next change, which would otherwise read while the record writes.
 	e.awaitLog(t, "webhook event not delivered")
-	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
+	if got := levelOf(t, e.be, e.ctx, "repo", bob); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, e.be, e.ctx, \"repo\", bob) = %v, want %v", got, access.ReadWriteAccess)
+	}
 
-	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
+	if err := e.be.RemoveCollaborator(e.ctx, "repo", "bob"); err != nil {
+		t.Fatal(err)
+	}
 	// The repository is public, so a non-collaborator gets read-only.
-	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
+	if got := levelOf(t, e.be, e.ctx, "repo", bob); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, e.be, e.ctx, \"repo\", bob) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 	// Wait for both events, so neither is still writing under the test's
 	// temporary directory when it is removed.
 	e.be.WaitForDeliveries(e.ctx)
-	is.Equal(strings.Count(e.logs.String(), "webhook event not delivered"), 2)
+	if got := strings.Count(e.logs.String(), "webhook event not delivered"); got != 2 {
+		t.Fatalf("strings.Count(e.logs.String(), \"webhook event not delivered\") = %v, want %v", got, 2)
+	}
 }
 
 func TestRemoveCollaboratorNotFound(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := e.seedHook(t, webhook.EventCollaborator)
 
-	is.True(errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound))
+	if !errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound) {
+		t.Fatal("not true: errors.Is(e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\"), proto.ErrCollaboratorNotFound)")
+	}
 	e.be.WaitForDeliveries(e.ctx)
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	}
 }
 
 // makeCommit writes one commit into the bare repository at path and points
 // refs/heads/main at it, so push events have real commits to describe.
 func makeCommit(t *testing.T, path string) string {
 	t.Helper()
-	is := is.New(t)
 	git := func(stdin string, args ...string) string {
 		t.Helper()
 		cmd := exec.CommandContext(t.Context(), "git", append([]string{"--git-dir", path}, args...)...)
@@ -361,7 +434,9 @@ func makeCommit(t *testing.T, path string) string {
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
 		cmd.Stdin = strings.NewReader(stdin)
 		out, err := cmd.Output()
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return strings.TrimSpace(string(out))
 	}
 	blob := git("hello\n", "hash-object", "-w", "--stdin")
@@ -374,7 +449,6 @@ func makeCommit(t *testing.T, path string) string {
 // A push that moves a branch sends a push event describing its commits.
 func TestAfterPushSendsPushEvent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -383,14 +457,15 @@ func TestAfterPushSendsPushEvent(t *testing.T) {
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventPush})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A new branch on a repository with commits sends both branch_tag_create and
 // push, in that order.
 func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -399,14 +474,15 @@ func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A push that updates several refs sends the events of each ref, in the
 // order git lists them.
 func TestAfterPushSendsEventsForEachRef(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -416,17 +492,18 @@ func TestAfterPushSendsEventsForEachRef(t *testing.T) {
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
 	})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{
 		webhook.EventBranchTagCreate, webhook.EventPush,
 		webhook.EventBranchTagCreate, webhook.EventPush,
-	})
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A push that deletes a branch sends branch_tag_delete and then a push event
 // with no commits, without logging an error.
 func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -435,8 +512,12 @@ func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
 		OldSha: commit, NewSha: zeroSha, RefName: "refs/heads/main",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagDelete, webhook.EventPush})
-	is.True(!strings.Contains(e.logs.String(), "error creating push webhook"))
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagDelete, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+	if strings.Contains(e.logs.String(), "error creating push webhook") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"error creating push webhook\")")
+	}
 }
 
 // A push with neither a public key nor a username, such as an anonymous HTTP
@@ -444,7 +525,6 @@ func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
 // the server authorized the push.
 func TestAfterPushAnonymousPush(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -453,29 +533,37 @@ func TestAfterPushAnonymousPush(t *testing.T) {
 		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // Collaborator changes validate the username before anything is written.
 func TestAddCollaboratorRejectsInvalidUsername(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
-	is.True(e.be.AddCollaborator(e.ctx, "repo", "bad name!", access.ReadWriteAccess) != nil)
+	if !(e.be.AddCollaborator(e.ctx, "repo", "bad name!", access.ReadWriteAccess) != nil) {
+		t.Fatal("not true: e.be.AddCollaborator(e.ctx, \"repo\", \"bad name!\", access.ReadWriteAccess) != nil")
+	}
 }
 
 // Adding a collaborator twice is refused, and no second event is sent.
 func TestAddCollaboratorTwice(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := e.seedHook(t, webhook.EventCollaborator)
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 
-	is.True(errors.Is(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess), proto.ErrCollaboratorExist))
+	if !errors.Is(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess), proto.ErrCollaboratorExist) {
+		t.Fatal("not true: errors.Is(e.be.AddCollaborator(e.ctx, \"repo\", \"bob\", access.ReadWriteAccess), proto.ErrCollaboratorExist)")
+	}
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 }
 
@@ -483,7 +571,6 @@ func TestAddCollaboratorTwice(t *testing.T) {
 // SHA is checked first. This documents that classification.
 func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
 
@@ -491,7 +578,9 @@ func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
 		OldSha: zeroSha, NewSha: zeroSha, RefName: "refs/heads/feature",
 	}})
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // Building an event looks up the repository owner. Foreign keys stop the owner
@@ -499,30 +588,42 @@ func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
 // A rename whose event cannot be built is still committed.
 func TestRenameRepositoryKeepsChangeWhenEventBuildFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
 
-	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "renamed"))
+	if err := e.be.RenameRepository(e.ctx, "repo", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := e.be.Repository(e.ctx, "renamed")
-	is.NoErr(err)
-	is.True(strings.Contains(e.logs.String(), "rename committed but webhook event skipped"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.logs.String(), "rename committed but webhook event skipped") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"rename committed but webhook event skipped\")")
+	}
 }
 
 // A delete whose event cannot be built still removes the repository; the
 // skipped event is logged.
 func TestDeleteRepositoryKeepsGoingWhenEventBuildFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
 
-	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
+	if err := e.be.DeleteRepository(e.ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := e.be.Repository(e.ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	_, err = os.Stat(e.be.repoPath("repo"))
-	is.True(errors.Is(err, os.ErrNotExist))
-	is.True(strings.Contains(e.logs.String(), "deleting repository without webhook event"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("not true: errors.Is(err, os.ErrNotExist)")
+	}
+	if !strings.Contains(e.logs.String(), "deleting repository without webhook event") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"deleting repository without webhook event\")")
+	}
 }
 
 // corruptOwner removes the repository owner's row with foreign keys switched
@@ -553,62 +654,92 @@ func corruptOwner(t *testing.T, e whEnv) {
 // and returns nil; the skipped event is logged.
 func TestCollaboratorEventBuildFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	bob, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	corruptOwner(t, e)
 
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
-	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadWriteAccess)
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOf(t, e.be, e.ctx, "repo", bob); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, e.be, e.ctx, \"repo\", bob) = %v, want %v", got, access.ReadWriteAccess)
+	}
 
-	is.NoErr(e.be.RemoveCollaborator(e.ctx, "repo", "bob"))
+	if err := e.be.RemoveCollaborator(e.ctx, "repo", "bob"); err != nil {
+		t.Fatal(err)
+	}
 	// The repository is public, so a non-collaborator gets read-only.
-	is.Equal(levelOf(t, e.be, e.ctx, "repo", bob), access.ReadOnlyAccess)
-	is.True(strings.Contains(e.logs.String(), "collaborator added but webhook event skipped"))
-	is.True(strings.Contains(e.logs.String(), "collaborator removed but webhook event skipped"))
+	if got := levelOf(t, e.be, e.ctx, "repo", bob); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, e.be, e.ctx, \"repo\", bob) = %v, want %v", got, access.ReadOnlyAccess)
+	}
+	if !strings.Contains(e.logs.String(), "collaborator added but webhook event skipped") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"collaborator added but webhook event skipped\")")
+	}
+	if !strings.Contains(e.logs.String(), "collaborator removed but webhook event skipped") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"collaborator removed but webhook event skipped\")")
+	}
 
 	// A missing collaborator is still reported as such.
-	is.True(errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound))
+	if !errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound) {
+		t.Fatal("not true: errors.Is(e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\"), proto.ErrCollaboratorNotFound)")
+	}
 }
 
 // A failing collaborator table makes both operations return the error.
 func TestCollaboratorStoreFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = e.be.db.ExecContext(e.ctx, "DROP TABLE collabs")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.True(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess) != nil)
-	is.True(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil)
+	if !(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess) != nil) {
+		t.Fatal("not true: e.be.AddCollaborator(e.ctx, \"repo\", \"bob\", access.ReadWriteAccess) != nil")
+	}
+	if !(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil) {
+		t.Fatal("not true: e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\") != nil")
+	}
 }
 
 // Removing a row that a trigger refuses to delete returns the database error.
 func TestRemoveCollaboratorDeleteFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	e.execTrigger(t, "fail_collab_delete", "BEFORE", "DELETE", "collabs")
 
-	is.True(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil)
+	if !(e.be.RemoveCollaborator(e.ctx, "repo", "bob") != nil) {
+		t.Fatal("not true: e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\") != nil")
+	}
 }
 
 // Changing visibility builds the event first; a failed owner lookup returns
 // the error.
 func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.db.ExecContext(e.ctx, "DELETE FROM users WHERE username = 'admin'")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.True(e.be.SetPrivate(e.ctx, "repo", true) != nil)
+	if !(e.be.SetPrivate(e.ctx, "repo", true) != nil) {
+		t.Fatal("not true: e.be.SetPrivate(e.ctx, \"repo\", true) != nil")
+	}
 }
 
 // If the collaborator row vanishes between the lookup and the delete, the
@@ -618,11 +749,14 @@ func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
 // own delete.
 func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
-	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	execAll(t, e.ctx, e.be.db, byDriver(e.be.db,
 		[]string{"CREATE TRIGGER vanish BEFORE DELETE ON collabs BEGIN DELETE FROM collabs WHERE rowid = OLD.rowid; END;"},
 		[]string{
@@ -630,21 +764,30 @@ func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 			"CREATE TRIGGER vanish BEFORE DELETE ON collabs FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE FUNCTION vanish();",
 		}))
 
-	is.True(errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound))
+	if !errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound) {
+		t.Fatal("not true: errors.Is(e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\"), proto.ErrCollaboratorNotFound)")
+	}
 }
 
 // A visibility change whose event cannot be built still commits and returns nil.
 func TestSetPrivateKeepsChangeWhenEventBuildFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	corruptOwner(t, e)
 
-	is.NoErr(e.be.SetPrivate(e.ctx, "repo", true))
+	if err := e.be.SetPrivate(e.ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	repo, err := e.be.Repository(e.ctx, "repo")
-	is.NoErr(err)
-	is.True(repo.IsPrivate())
-	is.True(strings.Contains(e.logs.String(), "visibility change committed but webhook event skipped"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repo.IsPrivate() {
+		t.Fatal("not true: repo.IsPrivate()")
+	}
+	if !strings.Contains(e.logs.String(), "visibility change committed but webhook event skipped") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"visibility change committed but webhook event skipped\")")
+	}
 }
 
 // blockDeliveries replaces the backend's delivery queue with one of one
@@ -670,55 +813,76 @@ func blockDeliveries(t *testing.T, e whEnv, maxPending int) func() {
 // at once, and the event is sent once a sender is free.
 func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
 	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	unblock := blockDeliveries(t, e, 10)
 
 	const n = 3
 	for i := 0; i < n; i++ {
 		ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		e.be.deliverAfterChange(e.ctx, whs, ev, true)
 	}
-	is.Equal(len(e.deliveredEvents(t, id)), 0) // queued, not run in the caller
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	} // queued, not run in the caller
 
 	unblock()
 	e.be.WaitForDeliveries(e.ctx)
-	is.Equal(len(e.deliveredEvents(t, id)), n)
+	if got := len(e.deliveredEvents(t, id)); got != n {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, n)
+	}
 }
 
 // When the queue is full too, the event is dropped without blocking the
 // caller. The drop is logged and recorded as a failed delivery.
 func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
 	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	blockDeliveries(t, e, 0)
 
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.be.deliverAfterChange(e.ctx, whs, ev, true)
 
-	is.True(strings.Contains(e.logs.String(), "webhook event dropped: delivery queue is full"))
+	if !strings.Contains(e.logs.String(), "webhook event dropped: delivery queue is full") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook event dropped: delivery queue is full\")")
+	}
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(list), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(list); got != 1 {
+		t.Fatalf("len(list) = %v, want %v", got, 1)
+	}
 	d, err := e.be.WebhookDelivery(e.ctx, e.repo, id, list[0].ID)
-	is.NoErr(err)
-	is.Equal(d.RequestError.String, errDeliveryQueueFull.Error())
-	is.Equal(d.Event, webhook.EventRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := d.RequestError.String, errDeliveryQueueFull.Error(); got != want {
+		t.Fatalf("d.RequestError.String = %v, want %v", got, want)
+	}
+	if got := d.Event; got != webhook.EventRepository {
+		t.Fatalf("d.Event = %v, want %v", got, webhook.EventRepository)
+	}
 }
 
 // The queue never runs more than its workers at once, and runs every job.
 func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	q := newDeliveryQueue(2, 100, charmlog.New(io.Discard))
 	var mu sync.Mutex
 	running, peak, ran := 0, 0, 0
@@ -726,7 +890,7 @@ func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 	// when the rest are enqueued.
 	release := make(chan struct{})
 	for i := 0; i < 50; i++ {
-		is.Equal(q.enqueue(int64(i), func() {
+		if got := q.enqueue(int64(i), func() {
 			mu.Lock()
 			running++
 			peak = max(peak, running)
@@ -736,7 +900,9 @@ func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 			running--
 			ran++
 			mu.Unlock()
-		}), enqueued)
+		}); got != enqueued {
+			t.Fatalf("q.enqueue(int64(i), func() {\n\t\t\tmu.Lock()\n\t\t\trunning++\n\t\t\tpeak = max(peak, running)\n\t\t\tmu.Unlock()\n\t\t\t<-release\n\t\t\tmu.Lock()\n\t\t\trunning--\n\t\t\tran++\n\t\t\tmu.Unlock()\n\t\t}) = %v, want %v", got, enqueued)
+		}
 	}
 	// enqueue starts a job's goroutine or queues it before it returns.
 	q.mu.Lock()
@@ -763,9 +929,15 @@ func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 	close(release)
 	_, finished := q.close()
 	<-finished
-	is.Equal(ran, 50)
-	is.Equal(peak, 2)
-	is.Equal(q.enqueue(1, func() {}), enqueueClosed)
+	if got := ran; got != 50 {
+		t.Fatalf("ran = %v, want %v", got, 50)
+	}
+	if got := peak; got != 2 {
+		t.Fatalf("peak = %v, want %v", got, 2)
+	}
+	if got := q.enqueue(1, func() {}); got != enqueueClosed {
+		t.Fatalf("q.enqueue(1, func() {}) = %v, want %v", got, enqueueClosed)
+	}
 }
 
 // blocker returns a job that signals started and then waits for release.
@@ -781,31 +953,42 @@ func blocker(started chan<- struct{}, release <-chan struct{}) func() {
 // a backlog of deliveries that do not return.
 func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
 	q.maxRepoRunning = 2
 	started := make(chan struct{}, 5)
 	release := make(chan struct{})
 	for i := 0; i < 5; i++ {
-		is.Equal(q.enqueue(1, blocker(started, release)), enqueued)
+		if got := q.enqueue(1, blocker(started, release)); got != enqueued {
+			t.Fatalf("q.enqueue(1, blocker(started, release)) = %v, want %v", got, enqueued)
+		}
 	}
 	<-started
 	<-started
 
 	ran := make(chan struct{})
-	is.Equal(q.enqueue(2, func() { close(ran) }), enqueued)
+	if got := q.enqueue(2, func() { close(ran) }); got != enqueued {
+		t.Fatalf("q.enqueue(2, func() { close(ran) }) = %v, want %v", got, enqueued)
+	}
 	<-ran
 
 	q.mu.Lock()
-	is.Equal(q.repos[1].running, 2)
-	is.Equal(len(q.repos[1].queued), 3)
+	if got := q.repos[1].running; got != 2 {
+		t.Fatalf("q.repos[1].running = %v, want %v", got, 2)
+	}
+	if got := len(q.repos[1].queued); got != 3 {
+		t.Fatalf("len(q.repos[1].queued) = %v, want %v", got, 3)
+	}
 	q.mu.Unlock()
-	is.Equal(len(started), 0)
+	if got := len(started); got != 0 {
+		t.Fatalf("len(started) = %v, want %v", got, 0)
+	}
 
 	close(release)
 	_, finished := q.close()
 	<-finished
-	is.Equal(len(started), 3) // the queued ones ran once a share was free
+	if got := len(started); got != 3 {
+		t.Fatalf("len(started) = %v, want %v", got, 3)
+	} // the queued ones ran once a share was free
 }
 
 // One repository's deliveries are sent one at a time, in the order they were
@@ -813,83 +996,108 @@ func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 // receiver before an earlier one, since each carries the state at its change.
 func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var mu sync.Mutex
 	var order []int
-	is.Equal(q.enqueue(1, func() {
+	if got := q.enqueue(1, func() {
 		started <- struct{}{}
 		<-release
 		mu.Lock()
 		order = append(order, 1)
 		mu.Unlock()
-	}), enqueued)
+	}); got != enqueued {
+		t.Fatalf("q.enqueue(1, func() {\n\t\tstarted <- struct{}{}\n\t\t<-release\n\t\tmu.Lock()\n\t\torder = append(order, 1)\n\t\tmu.Unlock()\n\t}) = %v, want %v", got, enqueued)
+	}
 	<-started
 	for i := 2; i <= 4; i++ {
-		is.Equal(q.enqueue(1, func() {
+		if got := q.enqueue(1, func() {
 			mu.Lock()
 			order = append(order, i)
 			mu.Unlock()
-		}), enqueued)
+		}); got != enqueued {
+			t.Fatalf("q.enqueue(1, func() {\n\t\t\tmu.Lock()\n\t\t\torder = append(order, i)\n\t\t\tmu.Unlock()\n\t\t}) = %v, want %v", got, enqueued)
+		}
 	}
 
 	q.mu.Lock()
-	is.Equal(q.repos[1].running, 1)
-	is.Equal(len(q.repos[1].queued), 3)
+	if got := q.repos[1].running; got != 1 {
+		t.Fatalf("q.repos[1].running = %v, want %v", got, 1)
+	}
+	if got := len(q.repos[1].queued); got != 3 {
+		t.Fatalf("len(q.repos[1].queued) = %v, want %v", got, 3)
+	}
 	q.mu.Unlock()
 
 	close(release)
 	_, finished := q.close()
 	<-finished
-	is.Equal(order, []int{1, 2, 3, 4})
+	if got, want := order, ([]int{1, 2, 3, 4}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
 }
 
 // Once a repository has its cap of deliveries queued or running, its next
 // one is refused, while other repositories can still queue theirs.
 func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
 	q.maxRepo = 3
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	is.Equal(q.enqueue(1, blocker(started, release)), enqueued)
+	if got := q.enqueue(1, blocker(started, release)); got != enqueued {
+		t.Fatalf("q.enqueue(1, blocker(started, release)) = %v, want %v", got, enqueued)
+	}
 	<-started
 
-	is.Equal(q.enqueue(1, func() {}), enqueued)
-	is.Equal(q.enqueue(1, func() {}), enqueued)
-	is.Equal(q.enqueue(1, func() {}), enqueueRepoFull)
+	if got := q.enqueue(1, func() {}); got != enqueued {
+		t.Fatalf("q.enqueue(1, func() {}) = %v, want %v", got, enqueued)
+	}
+	if got := q.enqueue(1, func() {}); got != enqueued {
+		t.Fatalf("q.enqueue(1, func() {}) = %v, want %v", got, enqueued)
+	}
+	if got := q.enqueue(1, func() {}); got != enqueueRepoFull {
+		t.Fatalf("q.enqueue(1, func() {}) = %v, want %v", got, enqueueRepoFull)
+	}
 	ran := make(chan struct{})
-	is.Equal(q.enqueue(2, func() { close(ran) }), enqueued)
+	if got := q.enqueue(2, func() { close(ran) }); got != enqueued {
+		t.Fatalf("q.enqueue(2, func() { close(ran) }) = %v, want %v", got, enqueued)
+	}
 
 	close(release)
 	<-ran
 	_, finished := q.close()
 	<-finished
-	is.Equal(len(q.repos), 0)
+	if got := len(q.repos); got != 0 {
+		t.Fatalf("len(q.repos) = %v, want %v", got, 0)
+	}
 }
 
 // Queued deliveries are taken from the repositories in turn, so a repository
 // with a long backlog does not hold back one that queued later.
 func TestDeliveryQueueTakesReposInTurn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	is.Equal(q.enqueue(0, blocker(started, release)), enqueued)
+	if got := q.enqueue(0, blocker(started, release)); got != enqueued {
+		t.Fatalf("q.enqueue(0, blocker(started, release)) = %v, want %v", got, enqueued)
+	}
 	<-started
 
 	var order []int64 // written by the single worker only
 	for _, repo := range []int64{1, 1, 1, 2} {
-		is.Equal(q.enqueue(repo, func() { order = append(order, repo) }), enqueued)
+		if got := q.enqueue(repo, func() { order = append(order, repo) }); got != enqueued {
+			t.Fatalf("q.enqueue(repo, func() { order = append(order, repo) }) = %v, want %v", got, enqueued)
+		}
 	}
 	close(release)
 	_, finished := q.close()
 	<-finished
-	is.Equal(order, []int64{1, 2, 1, 1})
+	if got, want := order, ([]int64{1, 2, 1, 1}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
 }
 
 // An event of a repository that already has its cap of deliveries pending is
@@ -898,16 +1106,21 @@ func TestDeliveryQueueTakesReposInTurn(t *testing.T) {
 // queued and sent.
 func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
 	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	other, err := e.be.CreateRepository(e.ctx, "other", e.admin, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	otherID := e.seedHookOn(t, other, webhook.EventRepository)
 	otherHooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, other.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The repository's one allowed delivery is running and does not return
 	// until released.
@@ -918,61 +1131,97 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
-	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), blocker(started, release)), enqueued)
+	if got := e.be.deliveries.enqueue(e.repo.ID(), blocker(started, release)); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), blocker(started, release)) = %v, want %v", got, enqueued)
+	}
 	<-started
 
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.be.deliverAfterChange(e.ctx, whs, ev, true)
 
-	is.True(strings.Contains(e.logs.String(), "webhook event dropped: repository has too many pending deliveries"))
+	if !strings.Contains(e.logs.String(), "webhook event dropped: repository has too many pending deliveries") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook event dropped: repository has too many pending deliveries\")")
+	}
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(list), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(list); got != 1 {
+		t.Fatalf("len(list) = %v, want %v", got, 1)
+	}
 	d, err := e.be.WebhookDelivery(e.ctx, e.repo, id, list[0].ID)
-	is.NoErr(err)
-	is.Equal(d.RequestError.String, errRepoDeliveriesFull.Error())
-	is.Equal(d.Event, webhook.EventRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := d.RequestError.String, errRepoDeliveriesFull.Error(); got != want {
+		t.Fatalf("d.RequestError.String = %v, want %v", got, want)
+	}
+	if got := d.Event; got != webhook.EventRepository {
+		t.Fatalf("d.Event = %v, want %v", got, webhook.EventRepository)
+	}
 
 	otherEv, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, other, webhook.RepositoryEventActionRename)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.be.deliverAfterChange(e.ctx, otherHooks, otherEv, true)
 
 	unblock()
 	e.be.WaitForDeliveries(e.ctx)
 	list, err = e.be.ListWebhookDeliveries(e.ctx, other, otherID)
-	is.NoErr(err)
-	is.Equal(len(list), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(list); got != 1 {
+		t.Fatalf("len(list) = %v, want %v", got, 1)
+	}
 	d, err = e.be.WebhookDelivery(e.ctx, other, otherID, list[0].ID)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Sent, and refused by the SSRF guard, rather than dropped.
-	is.True(d.RequestError.String != errRepoDeliveriesFull.Error())
-	is.True(d.RequestError.String != errDeliveryQueueFull.Error())
-	is.Equal(len(e.deliveredEvents(t, id)), 1) // the dropped one only
+	if !(d.RequestError.String != errRepoDeliveriesFull.Error()) {
+		t.Fatal("not true: d.RequestError.String != errRepoDeliveriesFull.Error()")
+	}
+	if !(d.RequestError.String != errDeliveryQueueFull.Error()) {
+		t.Fatal("not true: d.RequestError.String != errDeliveryQueueFull.Error()")
+	}
+	if got := len(e.deliveredEvents(t, id)); got != 1 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 1)
+	} // the dropped one only
 }
 
 // A panicking delivery is logged and does not take the process down; the
 // queue keeps running later deliveries.
 func TestDeliveryPanicIsRecovered(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
-	is.Equal(e.be.deliveries.enqueue(1, func() { panic("boom") }), enqueued)
+	if got := e.be.deliveries.enqueue(1, func() { panic("boom") }); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(1, func() { panic(\"boom\") }) = %v, want %v", got, enqueued)
+	}
 	ran := make(chan struct{})
-	is.Equal(e.be.deliveries.enqueue(1, func() { close(ran) }), enqueued)
+	if got := e.be.deliveries.enqueue(1, func() { close(ran) }); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(1, func() { close(ran) }) = %v, want %v", got, enqueued)
+	}
 	<-ran
 	e.be.WaitForDeliveries(e.ctx)
-	is.True(strings.Contains(e.logs.String(), "webhook delivery panicked"))
+	if !strings.Contains(e.logs.String(), "webhook delivery panicked") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"webhook delivery panicked\")")
+	}
 }
 
 // Shutdown logs how many deliveries it waits for. When its context ends first,
 // as on a second signal, it returns at once and warns that some are left.
 func TestWaitForDeliveriesLogsPendingAndStopsOnCancel(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	blockDeliveries(t, e, 1)
-	is.Equal(e.be.deliveries.enqueue(1, func() {}), enqueued)
+	if got := e.be.deliveries.enqueue(1, func() {}); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(1, func() {}) = %v, want %v", got, enqueued)
+	}
 
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
@@ -991,18 +1240,25 @@ func TestWaitForDeliveriesLogsPendingAndStopsOnCancel(t *testing.T) {
 	}
 
 	logs := e.logs.String()
-	is.True(strings.Contains(logs, "waiting for webhook deliveries"))
-	is.True(strings.Contains(logs, "pending=2"))
-	is.True(strings.Contains(logs, "shutting down with webhook deliveries still running"))
+	if !strings.Contains(logs, "waiting for webhook deliveries") {
+		t.Fatal("not true: strings.Contains(logs, \"waiting for webhook deliveries\")")
+	}
+	if !strings.Contains(logs, "pending=2") {
+		t.Fatal("not true: strings.Contains(logs, \"pending=2\")")
+	}
+	if !strings.Contains(logs, "shutting down with webhook deliveries still running") {
+		t.Fatal("not true: strings.Contains(logs, \"shutting down with webhook deliveries still running\")")
+	}
 }
 
 // StopDeliveries closes the queue, so no new delivery starts, without
 // waiting for the ones queued or running.
 func TestStopDeliveriesClosesWithoutWaiting(t *testing.T) {
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	blockDeliveries(t, e, 1)
-	is.Equal(e.be.deliveries.enqueue(1, func() {}), enqueued)
+	if got := e.be.deliveries.enqueue(1, func() {}); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(1, func() {}) = %v, want %v", got, enqueued)
+	}
 
 	// The deliveries stay blocked until the test ends, so StopDeliveries
 	// returns only if it does not wait for them.
@@ -1016,53 +1272,79 @@ func TestStopDeliveriesClosesWithoutWaiting(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("StopDeliveries waited for blocked deliveries")
 	}
-	is.True(e.be.deliveries.closedForTest())
-	is.Equal(e.be.deliveries.enqueue(2, func() {}), enqueueClosed)
+	if !e.be.deliveries.closedForTest() {
+		t.Fatal("not true: e.be.deliveries.closedForTest()")
+	}
+	if got := e.be.deliveries.enqueue(2, func() {}); got != enqueueClosed {
+		t.Fatalf("e.be.deliveries.enqueue(2, func() {}) = %v, want %v", got, enqueueClosed)
+	}
 }
 
 // A change made without a user in the context, as by an initial admin key
 // that has no user row, still sends its event, with an empty sender.
 func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository, webhook.EventRepositoryVisibilityChange)
 	pub := newTestPublicKey(t)
 	setAdminKeys(t, e.cfg, append(e.cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
 	ctx := context.WithValue(proto.WithUserContext(e.ctx, nil), charmssh.ContextKeyPublicKey, pub)
 
-	is.NoErr(e.be.SetPrivate(ctx, "repo", true))
+	if err := e.be.SetPrivate(ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	e.awaitDeliveries(t, id, webhook.EventRepositoryVisibilityChange)
-	is.NoErr(e.be.RenameRepository(ctx, "repo", "renamed"))
+	if err := e.be.RenameRepository(ctx, "repo", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	e.be.WaitForDeliveries(e.ctx)
 
-	is.Equal(sortedEvents(e.deliveredEvents(t, id)), sortedEvents([]webhook.Event{webhook.EventRepositoryVisibilityChange, webhook.EventRepository}))
-	var bodies []string
-	is.NoErr(e.be.db.SelectContext(e.ctx, &bodies, e.be.db.Rebind("SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?"), id))
-	for _, b := range bodies {
-		is.True(strings.Contains(b, `"sender":{"id":0,"username":""}`))
+	if got, want := sortedEvents(e.deliveredEvents(t, id)), sortedEvents([]webhook.Event{webhook.EventRepositoryVisibilityChange, webhook.EventRepository}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sortedEvents(e.deliveredEvents(t, id)) = %v, want %v", got, want)
 	}
-	is.True(!strings.Contains(e.logs.String(), "panicked"))
+	var bodies []string
+	if err := e.be.db.SelectContext(e.ctx, &bodies, e.be.db.Rebind("SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?"), id); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, `"sender":{"id":0,"username":""}`) {
+			t.Fatal("not true: strings.Contains(b, `\"sender\":{\"id\":0,\"username\":\"\"}`)")
+		}
+	}
+	if strings.Contains(e.logs.String(), "panicked") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"panicked\")")
+	}
 }
 
 // A send whose webhook is deleted before it records must not leave a delivery
 // row behind for the removed webhook.
 func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
 	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(e.be.DeleteWebhook(e.ctx, e.repo, id))
-	is.NoErr(e.be.webhooks.Deliver(e.ctx, whs, ev))
+	if err := e.be.DeleteWebhook(e.ctx, e.repo, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.be.webhooks.Deliver(e.ctx, whs, ev); err != nil {
+		t.Fatal(err)
+	}
 
 	var n int
-	is.NoErr(e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id))
-	is.Equal(n, 0)
+	if err := e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id); err != nil {
+		t.Fatal(err)
+	}
+	if got := n; got != 0 {
+		t.Fatalf("n = %v, want %v", got, 0)
+	}
 }
 
 // With AdminOnlyCreate on, a non-admin's create and rename to a new name are
@@ -1074,37 +1356,56 @@ func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 // the event when a rename really happens.
 func TestRefusedCreateAndRenameSendNoRepositoryEvent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.cfg.AdminOnlyCreate = true
 
 	alice, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	aliceCtx := proto.WithUserContext(e.ctx, alice)
 	mine, err := seedCreate(e.be, e.ctx, "mine", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mineHook := e.seedHookOn(t, mine, webhook.EventRepository)
 
 	before := e.logs.String()
 
-	is.True(errors.Is(func() error {
+	if !errors.Is(func() error {
 		_, err := e.be.CreateRepository(aliceCtx, "junk", alice, proto.RepositoryOptions{})
 		return err
-	}(), proto.ErrUnauthorized))
-	is.True(errors.Is(e.be.RenameRepository(aliceCtx, "mine", "renamed"), proto.ErrUnauthorized))
+	}(), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(func() error {\n\t\t_, err := e.be.CreateRepository(aliceCtx, \"junk\", alice, proto.RepositoryOptions{})\n\t\treturn err\n\t}(), proto.ErrUnauthorized)")
+	}
+	if !errors.Is(e.be.RenameRepository(aliceCtx, "mine", "renamed"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(e.be.RenameRepository(aliceCtx, \"mine\", \"renamed\"), proto.ErrUnauthorized)")
+	}
 	e.be.WaitForDeliveries(e.ctx)
 
 	// Nothing was created or renamed.
 	_, err = e.be.Repository(e.ctx, "junk")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = e.be.Repository(e.ctx, "mine")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = e.be.Repository(e.ctx, "renamed")
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 
 	// No delivery was recorded on the hook, and no webhook event was logged.
 	mineDeliveries, err := e.be.ListWebhookDeliveries(e.ctx, mine, mineHook)
-	is.NoErr(err)
-	is.Equal(len(mineDeliveries), 0)
-	is.True(!strings.Contains(e.logs.String()[len(before):], "webhook event"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(mineDeliveries); got != 0 {
+		t.Fatalf("len(mineDeliveries) = %v, want %v", got, 0)
+	}
+	if strings.Contains(e.logs.String()[len(before):], "webhook event") {
+		t.Fatal("not true: !strings.Contains(e.logs.String()[len(before):], \"webhook event\")")
+	}
 }

@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // gitIn runs git in dir with stdin and returns its trimmed output.
@@ -73,20 +72,29 @@ func readmeRepo(t *testing.T, files map[string]string) proto.Repository {
 // the last directory it looked in.
 func TestReadmeTooLarge(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	big := strings.Repeat("x", 100)
 
 	r := readmeRepo(t, map[string]string{"README.md": big})
 	_, _, err := Readme(t.Context(), r, nil, 10)
-	is.True(errors.Is(err, git.ErrFileTooLarge))
+	if !errors.Is(err, git.ErrFileTooLarge) {
+		t.Fatal("not true: errors.Is(err, git.ErrFileTooLarge)")
+	}
 
 	r = readmeRepo(t, map[string]string{"README.md": big, "docs/README.md": "small"})
 	readme, path, err := Readme(t.Context(), r, nil, 10)
-	is.NoErr(err)
-	is.Equal(path, "docs/README.md")
-	is.Equal(readme, "small")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := path; got != "docs/README.md" {
+		t.Fatalf("path = %v, want %v", got, "docs/README.md")
+	}
+	if got := readme; got != "small" {
+		t.Fatalf("readme = %v, want %v", got, "small")
+	}
 
 	r = readmeRepo(t, map[string]string{"main.go": "package main"})
 	_, _, err = Readme(t.Context(), r, nil, 10)
-	is.True(errors.Is(err, git.ErrFileNotFound))
+	if !errors.Is(err, git.ErrFileNotFound) {
+		t.Fatal("not true: errors.Is(err, git.ErrFileNotFound)")
+	}
 }

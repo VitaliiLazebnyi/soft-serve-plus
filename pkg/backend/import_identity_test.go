@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // Once an --lfs import has registered its repository, the owner can delete
@@ -18,7 +17,6 @@ import (
 // under the name is left alone. The cleanup used to delete by name.
 func TestFailedImportDeletesByIdentity(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx, cancel := context.WithCancel(asAdmin(t, be, backendTestContext(be, cfg)))
 	defer cancel()
@@ -37,14 +35,22 @@ func TestFailedImportDeletesByIdentity(t *testing.T) {
 		be.afterRegister = nil
 		other := backendTestContext(be, cfg)
 		orig, err := be.Repository(other, "imported")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		origID = orig.ID()
-		is.NoErr(be.DeleteRepository(other, "imported"))
+		if err := be.DeleteRepository(other, "imported"); err != nil {
+			t.Fatal(err)
+		}
 		// What the import's LFS fetch had stored after the delete removed
 		// the repository's LFS storage.
-		is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(origID, 10), "objects"), 0o755))
+		if err := os.MkdirAll(filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(origID, 10), "objects"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		replacement, err = be.CreateRepository(other, "imported", admin, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		cancel()
 	}
 
@@ -56,24 +62,40 @@ func TestFailedImportDeletesByIdentity(t *testing.T) {
 		lfsEndpoint: "http://127.0.0.1:1/x.git",
 		lfs:         &fakeLFSClient{},
 	}
-	is.NoErr(claimRepoPath(imp.path))
+	if err := claimRepoPath(imp.path); err != nil {
+		t.Fatal(err)
+	}
 	_, err := be.importRepository(ctx, admin, imp)
-	is.True(err != nil) // the fetch failed
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	} // the fetch failed
 
 	r, err := be.Repository(context.Background(), "imported")
-	is.NoErr(err) // the repository now under the name is kept
-	is.Equal(r.ID(), replacement.ID())
+	if err != nil {
+		t.Fatal(err)
+	} // the repository now under the name is kept
+	if got, want := r.ID(), replacement.ID(); got != want {
+		t.Fatalf("r.ID() = %v, want %v", got, want)
+	}
 
 	// The import set its LFS endpoint in its own clone only, not in the
 	// config of the repository now under the name.
 	gr, err := r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	lfsURL, _, err := gr.ConfigGet("lfs.url")
-	is.NoErr(err)
-	is.Equal(lfsURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lfsURL; got != "" {
+		t.Fatalf("lfsURL = %v, want %v", got, "")
+	}
 
 	// The LFS storage of the import's own repository, gone with its row,
 	// is removed.
 	_, err = os.Stat(filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(origID, 10)))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }

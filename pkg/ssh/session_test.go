@@ -22,27 +22,29 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/matryer/is"
 	dto "github.com/prometheus/client_model/go"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
 func TestSession(t *testing.T) {
-	is := is.New(t)
 	t.Run("authorized repo access", func(t *testing.T) {
 		t.Log("setting up")
 		s := setup(t)
 		s.Stderr = os.Stderr
 		t.Log("requesting pty")
 		err := s.RequestPty("xterm", 80, 40, nil)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		// Close the session once the TUI has drawn, so the command is
 		// known to run: a close before the exec request fails the request
 		// instead of ending the command.
 		out := &firstWrite{written: make(chan struct{})}
 		s.Stdout = out
-		is.NoErr(s.Start("test"))
+		if err := s.Start("test"); err != nil {
+			t.Fatal(err)
+		}
 		select {
 		case <-out.written:
 		case <-time.After(time.Minute):
@@ -52,7 +54,9 @@ func TestSession(t *testing.T) {
 		t.Log("waiting for session to exit")
 		err = s.Wait()
 		var ee *gossh.ExitMissingError
-		is.True(errors.As(err, &ee))
+		if !errors.As(err, &ee) {
+			t.Fatal("not true: errors.As(err, &ee)")
+		}
 		t.Log("session exited")
 	})
 }

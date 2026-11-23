@@ -7,39 +7,59 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestDeleteAccessTokenOtherUser verifies that deleting another user's token
 // fails exactly like deleting a missing one and leaves the token in place.
 func TestDeleteAccessTokenOtherUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	other, err := be.CreateUser(ctx, "other", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateAccessToken(ctx, owner, "t", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tokens, err := be.ListAccessTokens(ctx, owner)
-	is.NoErr(err)
-	is.Equal(len(tokens), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(tokens); got != 1 {
+		t.Fatalf("len(tokens) = %v, want %v", got, 1)
+	}
 	id := tokens[0].ID
 
 	err = be.DeleteAccessToken(ctx, other, id)
-	is.True(errors.Is(err, proto.ErrTokenNotFound))
+	if !errors.Is(err, proto.ErrTokenNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTokenNotFound)")
+	}
 	err = be.DeleteAccessToken(ctx, other, id+1000)
-	is.True(errors.Is(err, proto.ErrTokenNotFound))
+	if !errors.Is(err, proto.ErrTokenNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTokenNotFound)")
+	}
 
 	tokens, err = be.ListAccessTokens(ctx, owner)
-	is.NoErr(err)
-	is.Equal(len(tokens), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(tokens); got != 1 {
+		t.Fatalf("len(tokens) = %v, want %v", got, 1)
+	}
 
-	is.NoErr(be.DeleteAccessToken(ctx, owner, id))
+	if err := be.DeleteAccessToken(ctx, owner, id); err != nil {
+		t.Fatal(err)
+	}
 	err = be.DeleteAccessToken(ctx, owner, id)
-	is.True(errors.Is(err, proto.ErrTokenNotFound))
+	if !errors.Is(err, proto.ErrTokenNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTokenNotFound)")
+	}
 }

@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/matryer/is"
 )
 
 // batchRecorder is an LFSClient that records each batch it is asked for and
@@ -34,7 +34,6 @@ func (c *batchRecorder) Download(_ context.Context, pointers []lfs.Pointer, cb l
 // second pointer with an oid already in the batch waits for a later one.
 func TestLFSSyncBatches(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	client := &batchRecorder{}
 	s := &lfsSync{
 		ctx:      context.Background(),
@@ -47,24 +46,52 @@ func TestLFSSyncBatches(t *testing.T) {
 	oid := func(i int) string { return fmt.Sprintf("%02x%062d", i, 0) }
 
 	for i := range lfsBatchSize + 1 {
-		is.NoErr(s.queue(lfs.Pointer{Oid: oid(i), Size: 1}))
+		if err := s.queue(lfs.Pointer{Oid: oid(i), Size: 1}); err != nil {
+			t.Fatal(err)
+		}
 		if i == 0 {
 			// The same oid with another size, as a malformed pointer has.
-			is.NoErr(s.queue(lfs.Pointer{Oid: oid(0), Size: 2}))
+			if err := s.queue(lfs.Pointer{Oid: oid(0), Size: 2}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	is.Equal(len(client.batches), 1) // the first batch went when full
-	is.Equal(len(client.batches[0]), lfsBatchSize)
-	is.Equal(len(s.deferred), 1)
+	if got := len(client.batches); got != 1 {
+		t.Fatalf("len(client.batches) = %v, want %v", got, 1)
+	} // the first batch went when full
+	if got := len(client.batches[0]); got != lfsBatchSize {
+		t.Fatalf("len(client.batches[0]) = %v, want %v", got, lfsBatchSize)
+	}
+	if got := len(s.deferred); got != 1 {
+		t.Fatalf("len(s.deferred) = %v, want %v", got, 1)
+	}
 
-	is.NoErr(s.flush())
-	is.Equal(len(client.batches), 2)
-	is.Equal(client.batches[1], []string{"14/1"})
+	if err := s.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(client.batches); got != 2 {
+		t.Fatalf("len(client.batches) = %v, want %v", got, 2)
+	}
+	if got, want := client.batches[1], ([]string{"14/1"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("client.batches[1] = %v, want %v", got, want)
+	}
 
-	is.NoErr(s.queue(s.deferred[0]))
-	is.NoErr(s.flush())
-	is.Equal(client.batches[2], []string{"00/2"})
-	is.Equal(s.unavailable, lfsBatchSize+2)
-	is.NoErr(s.flush()) // an empty batch asks for nothing
-	is.Equal(len(client.batches), 3)
+	if err := s.queue(s.deferred[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := client.batches[2], ([]string{"00/2"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("client.batches[2] = %v, want %v", got, want)
+	}
+	if got, want := s.unavailable, lfsBatchSize+2; got != want {
+		t.Fatalf("s.unavailable = %v, want %v", got, want)
+	}
+	if err := s.flush(); err != nil {
+		t.Fatal(err)
+	} // an empty batch asks for nothing
+	if got := len(client.batches); got != 3 {
+		t.Fatalf("len(client.batches) = %v, want %v", got, 3)
+	}
 }

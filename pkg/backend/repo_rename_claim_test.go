@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // renameHookStore runs onRename when a rename is recorded, in the middle of
@@ -29,47 +28,65 @@ func (s renameHookStore) SetRepoNameByName(ctx context.Context, h db.Handler, na
 // repository and its cleanup then deleting that repository.
 func TestRenameRepositoryClaimsNewPath(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var claimErr error
 	be.store = renameHookStore{Store: be.store, onRename: func() {
 		claimErr = claimRepoPath(be.repoPath("c"))
 	}}
-	is.NoErr(be.RenameRepository(ctx, "a", "c"))
-	is.True(errors.Is(claimErr, proto.ErrRepoExist)) // the concurrent claim failed
+	if err := be.RenameRepository(ctx, "a", "c"); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(claimErr, proto.ErrRepoExist) {
+		t.Fatal("not true: errors.Is(claimErr, proto.ErrRepoExist)")
+	} // the concurrent claim failed
 
 	r, err := be.Repository(ctx, "c")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A rename that fails after claiming the new path gives the claim up and
 // leaves the repository where it was.
 func TestRenameRepositoryFailureReleasesClaim(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
 	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	failed := errors.New("store failure")
 	be.store = failingRenameStore{Store: be.store, err: failed}
-	is.True(errors.Is(be.RenameRepository(ctx, "a", "c"), proto.ErrServerFault)) // the cause is logged, not returned
+	if !errors.Is(be.RenameRepository(ctx, "a", "c"), proto.ErrServerFault) {
+		t.Fatal("not true: errors.Is(be.RenameRepository(ctx, \"a\", \"c\"), proto.ErrServerFault)")
+	} // the cause is logged, not returned
 
 	_, err = os.Lstat(be.repoPath("c"))
-	is.True(errors.Is(err, os.ErrNotExist)) // the claim was given up
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("not true: errors.Is(err, os.ErrNotExist)")
+	} // the claim was given up
 	r, err := be.Repository(ctx, "a")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 type failingRenameStore struct {

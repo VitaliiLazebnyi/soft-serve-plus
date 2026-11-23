@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // swapAfterLookupStore runs swap once, right after the first lookup of name
@@ -37,19 +36,24 @@ func (s *swapAfterLookupStore) GetRepoByName(ctx context.Context, h db.Handler, 
 // that returns the ID of its replacement once the swap ran.
 func swapFixture(t *testing.T) (be *Backend, ctx context.Context, orig proto.Repository, replacement func() int64) {
 	t.Helper()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx = asAdmin(t, be, backendTestContext(be, cfg))
 	admin := defaultAdmin(t, be)
 	orig, err := be.CreateRepository(ctx, "victim", admin, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var replacementID int64
 	st := &swapAfterLookupStore{Store: be.store, name: "victim"}
 	st.swap = func() {
-		is.NoErr(be.RenameRepository(ctx, "victim", "moved"))
+		if err := be.RenameRepository(ctx, "victim", "moved"); err != nil {
+			t.Fatal(err)
+		}
 		r, err := be.CreateRepository(ctx, "victim", admin, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		replacementID = r.ID()
 	}
 	be.store = st
@@ -62,39 +66,63 @@ func swapFixture(t *testing.T) (be *Backend, ctx context.Context, orig proto.Rep
 // repository and delete the other.
 func TestDeleteRepositoryActsOnTheRepositoryItLookedUp(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, ctx, orig, replacement := swapFixture(t)
 
 	err := be.DeleteRepository(ctx, "victim")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	r, err := be.Repository(ctx, "victim")
-	is.NoErr(err)
-	is.Equal(r.ID(), replacement())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.ID(), replacement(); got != want {
+		t.Fatalf("r.ID() = %v, want %v", got, want)
+	}
 	moved, err := be.Repository(ctx, "moved")
-	is.NoErr(err)
-	is.Equal(moved.ID(), orig.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := moved.ID(), orig.ID(); got != want {
+		t.Fatalf("moved.ID() = %v, want %v", got, want)
+	}
 }
 
 // DeleteResolvedRepository deletes the repository a caller resolved, and
 // checked access to, before; never another one that took its name since.
 func TestDeleteResolvedRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	admin := defaultAdmin(t, be)
 	r, err := be.CreateRepository(ctx, "repo", admin, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.RenameRepository(ctx, "repo", "moved"))
+	if err := be.RenameRepository(ctx, "repo", "moved"); err != nil {
+		t.Fatal(err)
+	}
 	other, err := be.CreateRepository(ctx, "repo", admin, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.True(errors.Is(be.DeleteResolvedRepository(ctx, r), proto.ErrRepoNotFound))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(be.DeleteResolvedRepository(ctx, r), proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(be.DeleteResolvedRepository(ctx, r), proto.ErrRepoNotFound)")
+	}
 	cur, err := be.Repository(ctx, "repo")
-	is.NoErr(err)
-	is.Equal(cur.ID(), other.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cur.ID(), other.ID(); got != want {
+		t.Fatalf("cur.ID() = %v, want %v", got, want)
+	}
 
-	is.NoErr(be.DeleteResolvedRepository(ctx, other))
+	if err := be.DeleteResolvedRepository(ctx, other); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 }

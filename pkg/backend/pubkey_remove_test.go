@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -16,31 +15,54 @@ import (
 // leaves the admin path (RemovePublicKey) free to remove the last key.
 func TestRemoveOwnPublicKey(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	k1, k2 := newTestPublicKey(t), newTestPublicKey(t)
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.RemoveOwnPublicKey(ctx, alice, k2))
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, alice, k1), ErrLastPublicKey))
+	if err := be.RemoveOwnPublicKey(ctx, alice, k2); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(be.RemoveOwnPublicKey(ctx, alice, k1), ErrLastPublicKey) {
+		t.Fatal("not true: errors.Is(be.RemoveOwnPublicKey(ctx, alice, k1), ErrLastPublicKey)")
+	}
 	keys, err := publicKeysOf(be, ctx, "alice")
-	is.NoErr(err)
-	is.Equal(len(keys), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(keys); got != 1 {
+		t.Fatalf("len(keys) = %v, want %v", got, 1)
+	}
 
 	// A key the account does not hold is not "the last key": it is reported
 	// as not found rather than refused.
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, alice, k2), proto.ErrPublicKeyNotFound))
+	if !errors.Is(be.RemoveOwnPublicKey(ctx, alice, k2), proto.ErrPublicKeyNotFound) {
+		t.Fatal("not true: errors.Is(be.RemoveOwnPublicKey(ctx, alice, k2), proto.ErrPublicKeyNotFound)")
+	}
 	gone, err := be.CreateUser(ctx, "gone", proto.UserOptions{})
-	is.NoErr(err)
-	is.NoErr(be.DeleteUser(ctx, "gone"))
-	is.True(errors.Is(be.RemoveOwnPublicKey(ctx, gone, k1), proto.ErrUserNotFound))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.DeleteUser(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(be.RemoveOwnPublicKey(ctx, gone, k1), proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(be.RemoveOwnPublicKey(ctx, gone, k1), proto.ErrUserNotFound)")
+	}
 
-	is.NoErr(be.RemovePublicKey(ctx, "alice", k1))
+	if err := be.RemovePublicKey(ctx, "alice", k1); err != nil {
+		t.Fatal(err)
+	}
 	keys, err = publicKeysOf(be, ctx, "alice")
-	is.NoErr(err)
-	is.Equal(len(keys), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(keys); got != 0 {
+		t.Fatalf("len(keys) = %v, want %v", got, 0)
+	}
 }
 
 // Two sessions of one user, on keys k1 and k2, each remove the other's key
@@ -65,11 +87,12 @@ func TestRemoveOwnPublicKeyConcurrentPostgres(t *testing.T) {
 func testRemoveOwnPublicKeyConcurrent(t *testing.T, be *Backend, ctx context.Context) {
 	t.Helper()
 	for i := range 20 {
-		is := is.New(t)
 		name := fmt.Sprintf("racer%d", i)
 		k1, k2 := newTestPublicKey(t), newTestPublicKey(t)
 		u, err := be.CreateUser(ctx, name, proto.UserOptions{PublicKeys: []ssh.PublicKey{k1, k2}})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
@@ -95,9 +118,15 @@ func testRemoveOwnPublicKeyConcurrent(t *testing.T, be *Backend, ctx context.Con
 				t.Fatalf("round %d: unexpected error: %v", i, err)
 			}
 		}
-		is.Equal(refused, 1)
+		if got := refused; got != 1 {
+			t.Fatalf("refused = %v, want %v", got, 1)
+		}
 		keys, err := publicKeysOf(be, ctx, name)
-		is.NoErr(err)
-		is.Equal(len(keys), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(keys); got != 1 {
+			t.Fatalf("len(keys) = %v, want %v", got, 1)
+		}
 	}
 }

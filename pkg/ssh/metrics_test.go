@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
-	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
@@ -29,11 +28,14 @@ func publicKeyCounts() (allowed, refused float64) {
 // The public key auth counter counts public key auth attempts, as they are
 // made, and nothing else.
 func TestPublicKeyCounterCountsKeyAuth(t *testing.T) {
-	is := is.New(t)
 	pair, err := keygen.New("", keygen.WithKeyType(keygen.Ed25519))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pk, _, _, _, err := gossh.ParseAuthorizedKey([]byte(pair.AuthorizedKey()))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := &mockSSHContext{
 		Context:     context.Background(),
@@ -43,20 +45,29 @@ func TestPublicKeyCounterCountsKeyAuth(t *testing.T) {
 	s := &Server{}
 
 	allowed, refused := publicKeyCounts()
-	is.True(s.PublicKeyHandler(ctx, pk))
-	is.True(!s.PublicKeyHandler(ctx, nil))
+	if !s.PublicKeyHandler(ctx, pk) {
+		t.Fatal("not true: s.PublicKeyHandler(ctx, pk)")
+	}
+	if s.PublicKeyHandler(ctx, nil) {
+		t.Fatal("not true: !s.PublicKeyHandler(ctx, nil)")
+	}
 	gotAllowed, gotRefused := publicKeyCounts()
-	is.Equal(gotAllowed-allowed, 1.0)
-	is.Equal(gotRefused-refused, 1.0)
+	if got := gotAllowed - allowed; got != 1.0 {
+		t.Fatalf("gotAllowed-allowed = %v, want %v", got, 1.0)
+	}
+	if got := gotRefused - refused; got != 1.0 {
+		t.Fatalf("gotRefused-refused = %v, want %v", got, 1.0)
+	}
 }
 
 // A session that signed in without a key is not a public key auth: it must
 // not be counted as one, allowed or not.
 func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
-	is := is.New(t)
 	e := backendtest.New(t, backendtest.WithLogger(log.Default()))
 	be := e.Backend
-	is.True(be.AllowKeyless(e.Ctx))
+	if !be.AllowKeyless(e.Ctx) {
+		t.Fatal("not true: be.AllowKeyless(e.Ctx)")
+	}
 
 	s := &Server{be: be}
 	hs := handlerServer(t, e.Cfg, e.DB, e.Store, be, log.Default())
@@ -65,7 +76,9 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 			s.Exit(0) //nolint:errcheck
 		}),
 	}
-	is.NoErr(srv.SetOption(ssh.KeyboardInteractiveAuth(s.KeyboardInteractiveHandler)))
+	if err := srv.SetOption(ssh.KeyboardInteractiveAuth(s.KeyboardInteractiveHandler)); err != nil {
+		t.Fatal(err)
+	}
 
 	allowed, refused := publicKeyCounts()
 	sess := testsession.New(t, srv, &gossh.ClientConfig{
@@ -75,10 +88,16 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 		})},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
-	is.NoErr(sess.Run(""))
+	if err := sess.Run(""); err != nil {
+		t.Fatal(err)
+	}
 	gotAllowed, gotRefused := publicKeyCounts()
-	is.Equal(gotAllowed, allowed)
-	is.Equal(gotRefused, refused)
+	if got := gotAllowed; got != allowed {
+		t.Fatalf("gotAllowed = %v, want %v", got, allowed)
+	}
+	if got := gotRefused; got != refused {
+		t.Fatalf("gotRefused = %v, want %v", got, refused)
+	}
 }
 
 // The CLI command metric is labelled from the server's command tree, never

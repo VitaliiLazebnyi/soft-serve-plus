@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // longAgo is the date of the commits these tests make, far from the time
@@ -45,24 +44,30 @@ func commitLongAgo(t *testing.T, dir string) {
 // for every repository nothing had been pushed to, on every TUI listing.
 func TestUpdatedAtFallsBackToRow(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	commitLongAgo(t, be.repoPath("repo"))
 
 	r, err := be.Repository(ctx, "repo")
-	is.NoErr(err)
-	is.True(!r.UpdatedAt().IsZero())
-	is.True(r.UpdatedAt().After(longAgo.Add(24 * time.Hour))) // the row's time, not the commit's
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.UpdatedAt().IsZero() {
+		t.Fatal("not true: !r.UpdatedAt().IsZero()")
+	}
+	if !r.UpdatedAt().After(longAgo.Add(24 * time.Hour)) {
+		t.Fatal("not true: r.UpdatedAt().After(longAgo.Add(24 * time.Hour))")
+	} // the row's time, not the commit's
 }
 
 // An import and a mirror sync run no hooks, so they record the time of the
 // latest commit themselves.
 func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 
@@ -73,28 +78,45 @@ func TestImportAndMirrorSyncRecordLastModified(t *testing.T) {
 	commitLongAgo(t, src)
 
 	imp := importSpec{name: "imported", path: be.repoPath("imported"), remote: src, logRemote: src}
-	is.NoErr(claimRepoPath(imp.path))
+	if err := claimRepoPath(imp.path); err != nil {
+		t.Fatal(err)
+	}
 	r, err := be.importRepository(ctx, defaultAdmin(t, be), imp)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Stat(imp.path + "/info/last-modified")
-	is.NoErr(err)
-	is.True(r.UpdatedAt().Equal(longAgo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.UpdatedAt().Equal(longAgo) {
+		t.Fatal("not true: r.UpdatedAt().Equal(longAgo)")
+	}
 
 	// A sync that fetched a newer history records it.
-	is.NoErr(os.Remove(imp.path + "/info/last-modified"))
-	is.NoErr(be.RecordMirrorSync(ctx, r, nil))
+	if err := os.Remove(imp.path + "/info/last-modified"); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RecordMirrorSync(ctx, r, nil); err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Stat(imp.path + "/info/last-modified")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, err = be.Repository(ctx, "imported")
-	is.NoErr(err)
-	is.True(r.UpdatedAt().Equal(longAgo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.UpdatedAt().Equal(longAgo) {
+		t.Fatal("not true: r.UpdatedAt().Equal(longAgo)")
+	}
 }
 
 // An empty import, or a sync of an empty mirror, has no commit to record:
 // it is not a failure to warn about. Each used to log a warning.
 func TestEmptyImportRecordsNoLastModified(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -104,14 +126,24 @@ func TestEmptyImportRecordsNoLastModified(t *testing.T) {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	imp := importSpec{name: "empty", path: be.repoPath("empty"), remote: src, logRemote: src}
-	is.NoErr(claimRepoPath(imp.path))
+	if err := claimRepoPath(imp.path); err != nil {
+		t.Fatal(err)
+	}
 	r, err := be.importRepository(ctx, defaultAdmin(t, be), imp)
-	is.NoErr(err)
-	is.NoErr(be.RecordMirrorSync(ctx, r, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RecordMirrorSync(ctx, r, nil); err != nil {
+		t.Fatal(err)
+	}
 
-	is.True(!strings.Contains(logs.String(), "failed to record the last change"))
+	if strings.Contains(logs.String(), "failed to record the last change") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"failed to record the last change\")")
+	}
 	_, err = os.Stat(imp.path + "/info/last-modified")
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }
 
 // info/last-modified is a data file: it is written readable and writable as
@@ -121,16 +153,21 @@ func TestLastModifiedIsNotExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows has no execute bits")
 	}
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	commitLongAgo(t, be.repoPath("repo"))
 
-	is.NoErr(be.populateLastModified(ctx, "repo"))
+	if err := be.populateLastModified(ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	fi, err := os.Stat(filepath.Join(be.repoPath("repo"), "info", "last-modified"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if mode := fi.Mode().Perm(); mode&^0o666 != 0 {
 		t.Fatalf("info/last-modified has mode %v, want no bits beyond 0666", mode)
 	}

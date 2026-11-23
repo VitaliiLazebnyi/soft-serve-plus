@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -22,27 +21,38 @@ import (
 // it (busy_timeout) and then failing with "database is locked".
 func TestLookupsDoNotWaitForWriter(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	// Both differ from what the lookups fall back to on an error.
-	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
-	is.NoErr(be.SetAllowKeyless(ctx, true))
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAllowKeyless(ctx, true); err != nil {
+		t.Fatal(err)
+	}
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "repo", admin, proto.RepositoryOptions{Description: "desc"})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pk := newTestPublicKey(t)
 	collab, err := be.CreateUser(ctx, "collab", proto.UserOptions{PublicKeys: []ssh.PublicKey{pk}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, collab, "t", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Inactive, so RedeliverWebhookDelivery stops with ErrWebhookInactive
 	// after its lookups instead of sending anything.
 	var hookID int64
 	delID := uuid.New()
-	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if err := be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "repo", access.ReadOnlyAccess); err != nil {
 			return err
 		}
@@ -60,7 +70,9 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 			RequestBody:    "{}",
 			ResponseStatus: 200,
 		})
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	written := make(chan struct{})
 	release := make(chan struct{})
@@ -156,5 +168,7 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 		}
 	}()
 
-	is.NoErr(<-writerErr)
+	if err := <-writerErr; err != nil {
+		t.Fatal(err)
+	}
 }

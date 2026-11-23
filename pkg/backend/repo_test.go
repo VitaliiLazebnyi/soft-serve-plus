@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -27,21 +26,30 @@ import (
 // lowest-ID admin rather than failing the NOT NULL repos.user_id constraint.
 func TestCreateRepositoryAnonymousOwner(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Anonymous callers may create only where anon-access allows it.
 	_, err = be.CreateRepository(ctx, "refused", nil, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
-	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	repo, err := be.CreateRepository(ctx, "anon-repo", nil, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.Equal(repo.UserID(), admin.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := repo.UserID(), admin.ID(); got != want {
+		t.Fatalf("repo.UserID() = %v, want %v", got, want)
+	}
 }
 
 // TestDefaultAdminUserIDNoAdmin verifies that defaultAdminUserID surfaces an
@@ -49,7 +57,6 @@ func TestCreateRepositoryAnonymousOwner(t *testing.T) {
 // the NOT NULL repos.user_id constraint) when the database has no admin.
 func TestDefaultAdminUserIDNoAdmin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
@@ -61,7 +68,9 @@ func TestDefaultAdminUserIDNoAdmin(t *testing.T) {
 		_, err := be.defaultAdminUserID(ctx, tx)
 		return err
 	})
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 // TestValidateImportRemote verifies that import remotes pointing at private,
@@ -114,20 +123,27 @@ func TestValidateImportRemote(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			v, err := d.validateImportRemote(context.Background(), tt.remote, tt.policy)
 
 			if tt.wantErr != nil {
-				is.True(errors.Is(err, tt.wantErr))
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatal("not true: errors.Is(err, tt.wantErr)")
+				}
 				return
 			}
 
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			env := ssrf.GitEnv(v)
 			// Redirect following must be off, or a public remote can hand
 			// off to an internal one after validation has passed.
-			is.True(slices.Contains(env, "GIT_CONFIG_VALUE_0=false"))
-			is.True(slices.Contains(env, "GIT_CONFIG_KEY_0=http.followRedirects"))
+			if !slices.Contains(env, "GIT_CONFIG_VALUE_0=false") {
+				t.Fatal("not true: slices.Contains(env, \"GIT_CONFIG_VALUE_0=false\")")
+			}
+			if !slices.Contains(env, "GIT_CONFIG_KEY_0=http.followRedirects") {
+				t.Fatal("not true: slices.Contains(env, \"GIT_CONFIG_KEY_0=http.followRedirects\")")
+			}
 		})
 	}
 }
@@ -142,12 +158,13 @@ func TestImportRepositoryCloneFailure(t *testing.T) {
 		t.Skip("ssh client not available")
 	}
 
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// An ssh remote passes validation, and nothing listens on port 1 of
 	// loopback, so the clone is refused immediately without touching the
@@ -164,18 +181,28 @@ func TestImportRepositoryCloneFailure(t *testing.T) {
 
 	select {
 	case res := <-resc:
-		is.True(res.repo == nil)
-		is.True(errors.Is(res.err, proto.ErrImportFailed))
+		if !(res.repo == nil) {
+			t.Fatal("not true: res.repo == nil")
+		}
+		if !errors.Is(res.err, proto.ErrImportFailed) {
+			t.Fatal("not true: errors.Is(res.err, proto.ErrImportFailed)")
+		}
 		// The clone's own message must not reach the caller.
-		is.Equal(res.err.Error(), proto.ErrImportFailed.Error())
+		if got, want := res.err.Error(), proto.ErrImportFailed.Error(); got != want {
+			t.Fatalf("res.err.Error() = %v, want %v", got, want)
+		}
 	case <-time.After(time.Minute):
 		t.Fatal("ImportRepository did not return after a failed clone")
 	}
 
 	_, err = be.Repository(ctx, "broken")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	_, err = os.Stat(be.repoPath("broken"))
-	is.True(errors.Is(err, os.ErrNotExist))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("not true: errors.Is(err, os.ErrNotExist)")
+	}
 }
 
 func TestRedactRemote(t *testing.T) {
@@ -200,13 +227,16 @@ func TestRedactRemote(t *testing.T) {
 // present the server's client key to whatever host the remote names.
 func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
-	is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
+	if got := len(cfg.SSH.ParsedClientAllowedHosts()); got != 0 {
+		t.Fatalf("len(cfg.SSH.ParsedClientAllowedHosts()) = %v, want %v", got, 0)
+	}
 
 	user, err := be.CreateUser(ctx, "tenant", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, remote := range []string{
 		"ssh://git@10.0.0.1/x.git",
@@ -215,34 +245,54 @@ func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
 		"[git@10.0.0.1:2222]:x.git",
 	} {
 		_, err = be.ImportRepository(ctx, "tenant-ssh", user, remote, proto.RepositoryOptions{})
-		is.True(errors.Is(err, proto.ErrUnauthorized)) // remote
+		if !errors.Is(err, proto.ErrUnauthorized) {
+			t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+		} // remote
 	}
 
 	_, err = be.ImportRepository(ctx, "tenant-ssh", nil, "ssh://git@10.0.0.1/x.git", proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 
 	// An ssh LFS endpoint is subject to the same policy as the remote.
 	_, err = be.ImportRepository(ctx, "tenant-ssh", user, "https://1.1.1.1/x.git", proto.RepositoryOptions{LFSEndpoint: "ssh://git@10.0.0.1/x.git"})
-	is.True(errors.Is(err, proto.ErrUnauthorized))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
 
 	// An allowlist entry that does not cover the host is refused for
 	// everyone, admin included, with the remote error rather than an
 	// authorization one.
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.SSH.ClientAllowedHosts = []string{"git.internal.example"}
-	is.NoErr(cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.ImportRepository(ctx, "admin-ssh", admin, "ssh://git@10.0.0.1/x.git", proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrInvalidRemote))
-	is.True(errors.Is(err, ssrf.ErrSSHHostNotAllowed))
+	if !errors.Is(err, proto.ErrInvalidRemote) {
+		t.Fatal("not true: errors.Is(err, proto.ErrInvalidRemote)")
+	}
+	if !errors.Is(err, ssrf.ErrSSHHostNotAllowed) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrSSHHostNotAllowed)")
+	}
 	_, err = be.ImportRepository(ctx, "tenant-ssh", user, "ssh://git@10.0.0.1/x.git", proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrInvalidRemote))
+	if !errors.Is(err, proto.ErrInvalidRemote) {
+		t.Fatal("not true: errors.Is(err, proto.ErrInvalidRemote)")
+	}
 
 	// Nothing was created along the way.
 	_, err = be.Repository(ctx, "tenant-ssh")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	_, err = be.Repository(ctx, "admin-ssh")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 }
 
 // TestImportRepositorySSHAdminKey verifies that a caller whose session key is
@@ -262,10 +312,11 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
-			is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
+			if got := len(cfg.SSH.ParsedClientAllowedHosts()); got != 0 {
+				t.Fatalf("len(cfg.SSH.ParsedClientAllowedHosts()) = %v, want %v", got, 0)
+			}
 
 			pub := newTestPublicKey(t)
 			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
@@ -274,8 +325,12 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			if registered {
 				var err error
 				user, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
-				is.NoErr(err)
-				is.True(!user.IsAdmin())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if user.IsAdmin() {
+					t.Fatal("not true: !user.IsAdmin()")
+				}
 			}
 
 			// Nothing listens on loopback port 1, so a remote that passes
@@ -284,25 +339,35 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			opts := proto.RepositoryOptions{}
 
 			_, err := be.ImportRepository(ctx, "nokey", user, remote, opts)
-			is.True(errors.Is(err, proto.ErrUnauthorized)) // no key on the context
+			if !errors.Is(err, proto.ErrUnauthorized) {
+				t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+			} // no key on the context
 
 			otherCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, newTestPublicKey(t))
 			_, err = be.ImportRepository(otherCtx, "otherkey", user, remote, opts)
-			is.True(errors.Is(err, proto.ErrUnauthorized)) // not an admin key
+			if !errors.Is(err, proto.ErrUnauthorized) {
+				t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+			} // not an admin key
 
 			keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, pub)
 			_, err = be.ImportRepository(keyCtx, "adminkey", user, remote, opts)
-			is.True(errors.Is(err, proto.ErrImportFailed)) // admin key passes policy
+			if !errors.Is(err, proto.ErrImportFailed) {
+				t.Fatal("not true: errors.Is(err, proto.ErrImportFailed)")
+			} // admin key passes policy
 
 			// An ssh LFS endpoint is checked, before the clone, against the
 			// same policy, so the admin key covers it as well.
 			lfsOpts := proto.RepositoryOptions{LFSEndpoint: remote}
 			_, err = be.ImportRepository(otherCtx, "otherkey-lfs", user, remote, lfsOpts)
-			is.True(errors.Is(err, proto.ErrUnauthorized))
+			if !errors.Is(err, proto.ErrUnauthorized) {
+				t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+			}
 			_, err = be.ImportRepository(keyCtx, "adminkey-lfs", user, remote, lfsOpts)
 			// It passes policy, and is then refused as lfs objects are
 			// not fetched over ssh.
-			is.True(errors.Is(err, errLFSEndpointUnsupported))
+			if !errors.Is(err, errLFSEndpointUnsupported) {
+				t.Fatal("not true: errors.Is(err, errLFSEndpointUnsupported)")
+			}
 
 			// A mirror is synced later by the mirror job with its owner's
 			// stored privileges. An anonymous caller's mirror is owned by
@@ -311,32 +376,54 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			mirrorOpts := proto.RepositoryOptions{Mirror: true}
 			_, err = be.ImportRepository(keyCtx, "adminkey-mirror", user, remote, mirrorOpts)
 			if registered {
-				is.True(errors.Is(err, proto.ErrUnauthorized))
-				is.True(errors.Is(err, errMirrorImportOwnerNotAdmin))
-				is.True(errors.Is(err, errMirrorOwnerNotAdmin))
+				if !errors.Is(err, proto.ErrUnauthorized) {
+					t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+				}
+				if !errors.Is(err, errMirrorImportOwnerNotAdmin) {
+					t.Fatal("not true: errors.Is(err, errMirrorImportOwnerNotAdmin)")
+				}
+				if !errors.Is(err, errMirrorOwnerNotAdmin) {
+					t.Fatal("not true: errors.Is(err, errMirrorOwnerNotAdmin)")
+				}
 			} else {
-				is.True(errors.Is(err, proto.ErrImportFailed))
+				if !errors.Is(err, proto.ErrImportFailed) {
+					t.Fatal("not true: errors.Is(err, proto.ErrImportFailed)")
+				}
 			}
 			mirrorOpts.LFSEndpoint = remote
 			_, err = be.ImportRepository(keyCtx, "adminkey-mirror-lfs", user, remote, mirrorOpts)
 			if registered {
-				is.True(errors.Is(err, errMirrorOwnerNotAdmin))
+				if !errors.Is(err, errMirrorOwnerNotAdmin) {
+					t.Fatal("not true: errors.Is(err, errMirrorOwnerNotAdmin)")
+				}
 			} else {
-				is.True(errors.Is(err, errLFSEndpointUnsupported))
+				if !errors.Is(err, errLFSEndpointUnsupported) {
+					t.Fatal("not true: errors.Is(err, errLFSEndpointUnsupported)")
+				}
 			}
 
 			// A configured allowlist binds the admin key too. A host it
 			// names is open to the mirror job as well, so a non-admin
 			// account may mirror from it.
 			cfg.SSH.ClientAllowedHosts = []string{"git.internal.example"}
-			is.NoErr(cfg.Validate())
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.ImportRepository(keyCtx, "adminkey-allowlist", user, remote, opts)
-			is.True(errors.Is(err, proto.ErrInvalidRemote))
-			is.True(errors.Is(err, ssrf.ErrSSHHostNotAllowed))
+			if !errors.Is(err, proto.ErrInvalidRemote) {
+				t.Fatal("not true: errors.Is(err, proto.ErrInvalidRemote)")
+			}
+			if !errors.Is(err, ssrf.ErrSSHHostNotAllowed) {
+				t.Fatal("not true: errors.Is(err, ssrf.ErrSSHHostNotAllowed)")
+			}
 			cfg.SSH.ClientAllowedHosts = []string{"127.0.0.1:1"}
-			is.NoErr(cfg.Validate())
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.ImportRepository(keyCtx, "adminkey-allowed-mirror", user, remote, proto.RepositoryOptions{Mirror: true})
-			is.True(errors.Is(err, proto.ErrImportFailed))
+			if !errors.Is(err, proto.ErrImportFailed) {
+				t.Fatal("not true: errors.Is(err, proto.ErrImportFailed)")
+			}
 		})
 	}
 }
@@ -348,34 +435,51 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 // admin key imports from ssh without --mirror.
 func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
-	is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
+	if got := len(cfg.SSH.ParsedClientAllowedHosts()); got != 0 {
+		t.Fatalf("len(cfg.SSH.ParsedClientAllowedHosts()) = %v, want %v", got, 0)
+	}
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
-	is.True(!alice.IsAdmin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alice.IsAdmin() {
+		t.Fatal("not true: !alice.IsAdmin()")
+	}
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// newRepo creates a repository owned by owner whose git config holds
 	// the given remote and, if non-empty, LFS endpoint, as an import does.
 	newRepo := func(name string, owner proto.User, remote, lfsURL string) {
 		t.Helper()
 		_, err := seedCreate(be, ctx, name, owner, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		r, err := git.Open(t.Context(), be.repoPath(name))
-		is.NoErr(err)
-		is.NoErr(r.ConfigSet("remote.origin.url", remote))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.ConfigSet("remote.origin.url", remote); err != nil {
+			t.Fatal(err)
+		}
 		if lfsURL != "" {
-			is.NoErr(r.ConfigSet("lfs.url", lfsURL))
+			if err := r.ConfigSet("lfs.url", lfsURL); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	isMirror := func(name string) bool {
 		t.Helper()
 		r, err := be.Repository(ctx, name)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return r.IsMirror()
 	}
 
@@ -386,57 +490,111 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	// and the flag and git config are left alone.
 	newRepo("alice-ssh", alice, sshRemote, "")
 	err = be.SetMirror(ctx, "alice-ssh", true)
-	is.True(errors.Is(err, proto.ErrUnauthorized))
-	is.True(errors.Is(err, errMirrorOwnerNotAdmin))
-	is.True(!isMirror("alice-ssh"))
+	if !errors.Is(err, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUnauthorized)")
+	}
+	if !errors.Is(err, errMirrorOwnerNotAdmin) {
+		t.Fatal("not true: errors.Is(err, errMirrorOwnerNotAdmin)")
+	}
+	if isMirror("alice-ssh") {
+		t.Fatal("not true: !isMirror(\"alice-ssh\")")
+	}
 	r, err := git.Open(t.Context(), be.repoPath("alice-ssh"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, set, err := r.ConfigGet("remote.origin.mirror")
-	is.NoErr(err)
-	is.True(!set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set {
+		t.Fatal("not true: !set")
+	}
 
 	// An LFS endpoint that fails validation does not refuse the switch,
 	// with LFS on or off: the job syncs the git data regardless and skips
 	// only the LFS objects.
 	newRepo("alice-lfs", alice, httpsRemote, sshRemote)
-	is.True(cfg.LFS.Enabled)
-	is.NoErr(be.SetMirror(ctx, "alice-lfs", true))
-	is.True(isMirror("alice-lfs"))
-	is.NoErr(be.SetMirror(ctx, "alice-lfs", false))
+	if !cfg.LFS.Enabled {
+		t.Fatal("not true: cfg.LFS.Enabled")
+	}
+	if err := be.SetMirror(ctx, "alice-lfs", true); err != nil {
+		t.Fatal(err)
+	}
+	if !isMirror("alice-lfs") {
+		t.Fatal("not true: isMirror(\"alice-lfs\")")
+	}
+	if err := be.SetMirror(ctx, "alice-lfs", false); err != nil {
+		t.Fatal(err)
+	}
 	cfg.LFS.Enabled = false
-	is.NoErr(be.SetMirror(ctx, "alice-lfs", true))
-	is.True(isMirror("alice-lfs"))
+	if err := be.SetMirror(ctx, "alice-lfs", true); err != nil {
+		t.Fatal(err)
+	}
+	if !isMirror("alice-lfs") {
+		t.Fatal("not true: isMirror(\"alice-lfs\")")
+	}
 	cfg.LFS.Enabled = true
 
 	// Switching mirroring off is never refused.
-	is.NoErr(be.SetMirror(ctx, "alice-ssh", false))
+	if err := be.SetMirror(ctx, "alice-ssh", false); err != nil {
+		t.Fatal(err)
+	}
 
 	// A public https remote, and an admin owner's ssh remote, pass.
 	newRepo("alice-https", alice, httpsRemote, "")
-	is.NoErr(be.SetMirror(ctx, "alice-https", true))
-	is.True(isMirror("alice-https"))
+	if err := be.SetMirror(ctx, "alice-https", true); err != nil {
+		t.Fatal(err)
+	}
+	if !isMirror("alice-https") {
+		t.Fatal("not true: isMirror(\"alice-https\")")
+	}
 	newRepo("admin-ssh", admin, sshRemote, sshRemote)
-	is.NoErr(be.SetMirror(ctx, "admin-ssh", true))
-	is.True(isMirror("admin-ssh"))
+	if err := be.SetMirror(ctx, "admin-ssh", true); err != nil {
+		t.Fatal(err)
+	}
+	if !isMirror("admin-ssh") {
+		t.Fatal("not true: isMirror(\"admin-ssh\")")
+	}
 
 	// An allowlist that names the host opens it to the job, and so to the
 	// flag, for a non-admin owner. One that does not is refused with the
 	// remote error, for an admin owner too.
 	cfg.SSH.ClientAllowedHosts = []string{"127.0.0.1:1"}
-	is.NoErr(cfg.Validate())
-	is.NoErr(be.SetMirror(ctx, "alice-ssh", true))
-	is.True(isMirror("alice-ssh"))
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetMirror(ctx, "alice-ssh", true); err != nil {
+		t.Fatal(err)
+	}
+	if !isMirror("alice-ssh") {
+		t.Fatal("not true: isMirror(\"alice-ssh\")")
+	}
 	newRepo("alice-other", alice, "ssh://git@10.0.0.1/x.git", "")
 	err = be.SetMirror(ctx, "alice-other", true)
-	is.True(errors.Is(err, proto.ErrInvalidRemote))
-	is.True(errors.Is(err, ssrf.ErrSSHHostNotAllowed))
-	is.True(!isMirror("alice-other"))
-	is.NoErr(be.SetMirror(ctx, "admin-ssh", false))
+	if !errors.Is(err, proto.ErrInvalidRemote) {
+		t.Fatal("not true: errors.Is(err, proto.ErrInvalidRemote)")
+	}
+	if !errors.Is(err, ssrf.ErrSSHHostNotAllowed) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrSSHHostNotAllowed)")
+	}
+	if isMirror("alice-other") {
+		t.Fatal("not true: !isMirror(\"alice-other\")")
+	}
+	if err := be.SetMirror(ctx, "admin-ssh", false); err != nil {
+		t.Fatal(err)
+	}
 	cfg.SSH.ClientAllowedHosts = []string{"git.internal.example"}
-	is.NoErr(cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	err = be.SetMirror(ctx, "admin-ssh", true)
-	is.True(errors.Is(err, ssrf.ErrSSHHostNotAllowed))
-	is.True(!isMirror("admin-ssh"))
+	if !errors.Is(err, ssrf.ErrSSHHostNotAllowed) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrSSHHostNotAllowed)")
+	}
+	if isMirror("admin-ssh") {
+		t.Fatal("not true: !isMirror(\"admin-ssh\")")
+	}
 }
 
 // TestSetMirrorValidatesOutsideTransaction verifies that SetMirror resolves
@@ -444,17 +602,24 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 // resolver cannot hold the database lock and stall other writers.
 func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = seedCreate(be, ctx, "slow", admin, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, err := git.Open(t.Context(), be.repoPath("slow"))
-	is.NoErr(err)
-	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"); err != nil {
+		t.Fatal(err)
+	}
 
 	entered := make(chan bool, 1)
 	release := make(chan struct{})
@@ -468,17 +633,27 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- be.SetMirror(ctx, "slow", true) }()
-	is.True(<-entered) // the lookup is bounded
+	if !(<-entered) {
+		t.Fatal("not true: <-entered")
+	} // the lookup is bounded
 
 	// While validation is stalled, another writer still commits.
 	_, err = be.CreateUser(ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	close(release)
-	is.NoErr(<-done)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	slow, err := be.Repository(ctx, "slow")
-	is.NoErr(err)
-	is.True(slow.IsMirror())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slow.IsMirror() {
+		t.Fatal("not true: slow.IsMirror()")
+	}
 }
 
 // TestImportRepositoryDisabled verifies that when the installed git is too
@@ -506,25 +681,34 @@ func TestImportRepositoryDisabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be, _ := newTestBackend(t)
 			be.binVersion = func(context.Context) (git.Version, error) { return tt.version, tt.err }
 			ctx := context.Background()
 			admin, err := be.User(ctx, "admin")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			reason := be.ImportsDisabledReason(context.Background())
-			is.Equal(reason != "", tt.disabled)
+			if got := reason != ""; got != tt.disabled {
+				t.Fatalf("reason != \"\" = %v, want %v", got, tt.disabled)
+			}
 			if !tt.disabled {
 				return
 			}
 
 			_, err = be.ImportRepository(ctx, "gated", admin, "https://1.1.1.1/x.git", proto.RepositoryOptions{})
-			is.True(errors.Is(err, proto.ErrImportsDisabled))
+			if !errors.Is(err, proto.ErrImportsDisabled) {
+				t.Fatal("not true: errors.Is(err, proto.ErrImportsDisabled)")
+			}
 			// The reason is for the operator, not the user.
-			is.Equal(err.Error(), proto.ErrImportsDisabled.Error())
+			if got, want := err.Error(), proto.ErrImportsDisabled.Error(); got != want {
+				t.Fatalf("err.Error() = %v, want %v", got, want)
+			}
 			_, err = be.Repository(ctx, "gated")
-			is.True(errors.Is(err, proto.ErrRepoNotFound))
+			if !errors.Is(err, proto.ErrRepoNotFound) {
+				t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+			}
 		})
 	}
 }
@@ -534,7 +718,6 @@ func TestImportRepositoryDisabled(t *testing.T) {
 // imports off until restart.
 func TestImportGateChecksOnce(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var calls int
 	err := errors.New("fork/exec git: resource temporarily unavailable")
 	be, _ := newTestBackend(t)
@@ -542,10 +725,16 @@ func TestImportGateChecksOnce(t *testing.T) {
 		calls++
 		return git.Version{Major: 2, Minor: 45}, err
 	}
-	is.True(be.ImportsDisabledReason(context.Background()) != "")
+	if !(be.ImportsDisabledReason(context.Background()) != "") {
+		t.Fatal("not true: be.ImportsDisabledReason(context.Background()) != \"\"")
+	}
 	err = nil
-	is.True(be.ImportsDisabledReason(context.Background()) != "")
-	is.Equal(calls, 1)
+	if !(be.ImportsDisabledReason(context.Background()) != "") {
+		t.Fatal("not true: be.ImportsDisabledReason(context.Background()) != \"\"")
+	}
+	if got := calls; got != 1 {
+		t.Fatalf("calls = %v, want %v", got, 1)
+	}
 }
 
 // TestImportGateRechecksAfterCanceledCheck verifies that a check of git's
@@ -554,7 +743,6 @@ func TestImportGateChecksOnce(t *testing.T) {
 // runs, and its answer is kept.
 func TestImportGateRechecksAfterCanceledCheck(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var calls int
 	be, _ := newTestBackend(t)
 	be.binVersion = func(ctx context.Context) (git.Version, error) {
@@ -566,10 +754,18 @@ func TestImportGateRechecksAfterCanceledCheck(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	is.True(be.ImportsDisabledReason(canceled) != "")
-	is.Equal(be.ImportsDisabledReason(context.Background()), "")
-	is.Equal(be.ImportsDisabledReason(canceled), "")
-	is.Equal(calls, 2)
+	if !(be.ImportsDisabledReason(canceled) != "") {
+		t.Fatal("not true: be.ImportsDisabledReason(canceled) != \"\"")
+	}
+	if got := be.ImportsDisabledReason(context.Background()); got != "" {
+		t.Fatalf("be.ImportsDisabledReason(context.Background()) = %v, want %v", got, "")
+	}
+	if got := be.ImportsDisabledReason(canceled); got != "" {
+		t.Fatalf("be.ImportsDisabledReason(canceled) = %v, want %v", got, "")
+	}
+	if got := calls; got != 2 {
+		t.Fatalf("calls = %v, want %v", got, 2)
+	}
 }
 
 // TestImportRefusesSSHLFSEndpoint verifies that an import asking for LFS

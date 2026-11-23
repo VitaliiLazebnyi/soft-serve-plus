@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // stallingRemote returns an ssh remote on loopback whose server accepts the
@@ -94,45 +93,54 @@ func waitImport(t *testing.T, errc <-chan error) error {
 // assertNothingLeft checks that a stopped import left no repository behind.
 func assertNothingLeft(t *testing.T, be *Backend, name string) {
 	t.Helper()
-	is := is.New(t)
 	_, err := be.Repository(context.Background(), name)
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	_, err = os.Stat(be.repoPath(name))
-	is.True(errors.Is(err, os.ErrNotExist))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("not true: errors.Is(err, os.ErrNotExist)")
+	}
 }
 
 // An import stops, and cleans up, when the caller goes away: a dropped SSH
 // session must not leave a clone running on the server.
 func TestImportRepositoryStopsWithCaller(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, accepted := stallingRemote(t)
 	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
 	defer cancel()
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
 	waitAccepted(t, accepted, errc)
 	cancel()
-	is.True(errors.Is(waitImport(t, errc), proto.ErrImportFailed))
+	if !errors.Is(waitImport(t, errc), proto.ErrImportFailed) {
+		t.Fatal("not true: errors.Is(waitImport(t, errc), proto.ErrImportFailed)")
+	}
 	assertNothingLeft(t, be, "stalled")
 }
 
 // An import that runs past importTimeout is stopped and cleaned up.
 func TestImportRepositoryTimeout(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, _ := stallingRemote(t)
 	ctx := backendTestContext(be, cfg)
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	be.importTimeout = time.Second
 
-	is.True(errors.Is(waitImport(t, importAsync(ctx, be, "stalled", admin, remote)), proto.ErrImportFailed))
+	if !errors.Is(waitImport(t, importAsync(ctx, be, "stalled", admin, remote)), proto.ErrImportFailed) {
+		t.Fatal("not true: errors.Is(waitImport(t, importAsync(ctx, be, \"stalled\", admin, remote)), proto.ErrImportFailed)")
+	}
 	assertNothingLeft(t, be, "stalled")
 }
 
@@ -140,12 +148,13 @@ func TestImportRepositoryTimeout(t *testing.T) {
 // refuses new ones; WaitForImports returns once they have cleaned up.
 func TestStopImports(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, accepted := stallingRemote(t)
 	ctx := backendTestContext(be, cfg)
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
 	waitAccepted(t, accepted, errc)
@@ -153,12 +162,18 @@ func TestStopImports(t *testing.T) {
 	wctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	be.WaitForImports(wctx)
-	is.NoErr(wctx.Err())
-	is.True(errors.Is(waitImport(t, errc), proto.ErrImportFailed))
+	if err := wctx.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(waitImport(t, errc), proto.ErrImportFailed) {
+		t.Fatal("not true: errors.Is(waitImport(t, errc), proto.ErrImportFailed)")
+	}
 	assertNothingLeft(t, be, "stalled")
 
 	_, err = be.ImportRepository(ctx, "late", admin, remote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrImportsDisabled))
+	if !errors.Is(err, proto.ErrImportsDisabled) {
+		t.Fatal("not true: errors.Is(err, proto.ErrImportsDisabled)")
+	}
 	assertNothingLeft(t, be, "late")
 }
 
@@ -168,12 +183,13 @@ func TestStopImports(t *testing.T) {
 // repository, after the clone: it then fails and leaves nothing behind.
 func TestImportRepoLimit(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 1
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	src := t.TempDir()
 	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
@@ -182,12 +198,16 @@ func TestImportRepoLimit(t *testing.T) {
 
 	// Below the limit, the import gets a slot.
 	slot, err := be.reserveImport(ctx, alice, false, true)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer slot.release()
 
 	// A create takes the last repository while the import clones.
 	_, err = be.CreateRepository(ctx, "created", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	imp := importSpec{
 		name:      "imported",
@@ -196,67 +216,94 @@ func TestImportRepoLimit(t *testing.T) {
 		logRemote: src,
 		limited:   true,
 	}
-	is.NoErr(claimRepoPath(imp.path))
+	if err := claimRepoPath(imp.path); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.importRepository(ctx, alice, imp)
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	assertNothingLeft(t, be, "imported")
 
 	// At the limit, the next import is refused before it clones.
 	_, err = be.reserveImport(ctx, alice, false, true)
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 }
 
 // reserveImport caps the imports in flight per user, except for server
 // admins, and on the whole server, and frees a slot once.
 func TestReserveImportCaps(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var releases []func()
 	for range maxUserConcurrentImports {
 		slot, err := be.reserveImport(ctx, alice, false, false)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, alice, false, false)
-	is.True(errors.Is(err, proto.ErrTooManyImports))
+	if !errors.Is(err, proto.ErrTooManyImports) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTooManyImports)")
+	}
 	// Callers without an account count together, apart from alice.
 	for range maxUserConcurrentImports {
 		slot, err := be.reserveImport(ctx, nil, false, false)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, nil, false, false)
-	is.True(errors.Is(err, proto.ErrTooManyImports))
+	if !errors.Is(err, proto.ErrTooManyImports) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTooManyImports)")
+	}
 
 	// Releasing twice frees one slot.
 	releases[0]()
 	releases[0]()
 	slot, err := be.reserveImport(ctx, alice, false, false)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	releases[0] = slot.release
 	_, err = be.reserveImport(ctx, alice, false, false)
-	is.True(errors.Is(err, proto.ErrTooManyImports))
+	if !errors.Is(err, proto.ErrTooManyImports) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTooManyImports)")
+	}
 
 	// Admins are not capped per user, but the server cap holds for them.
 	for len(releases) < maxConcurrentImports {
 		slot, err := be.reserveImport(ctx, alice, true, false)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		releases = append(releases, slot.release)
 	}
 	_, err = be.reserveImport(ctx, alice, true, false)
-	is.True(errors.Is(err, proto.ErrTooManyImports))
+	if !errors.Is(err, proto.ErrTooManyImports) {
+		t.Fatal("not true: errors.Is(err, proto.ErrTooManyImports)")
+	}
 
 	for _, release := range releases {
 		release()
 	}
 	be.imports.mu.Lock()
-	is.Equal(be.imports.total, 0)
-	is.Equal(len(be.imports.perUser), 0)
+	if got := be.imports.total; got != 0 {
+		t.Fatalf("be.imports.total = %v, want %v", got, 0)
+	}
+	if got := len(be.imports.perUser); got != 0 {
+		t.Fatalf("len(be.imports.perUser) = %v, want %v", got, 0)
+	}
 	be.imports.mu.Unlock()
 }
 
@@ -265,12 +312,13 @@ func TestReserveImportCaps(t *testing.T) {
 // end, and the import either succeeds or removes what it created.
 func TestImportStoppedDuringRegister(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
 	defer cancel()
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	src := t.TempDir()
 	if out, err := exec.CommandContext(context.Background(), "git", "init", "--bare", "--quiet", src).CombinedOutput(); err != nil {
@@ -284,7 +332,9 @@ func TestImportStoppedDuringRegister(t *testing.T) {
 		remote:    src,
 		logRemote: src,
 	}
-	is.NoErr(claimRepoPath(imp.path))
+	if err := claimRepoPath(imp.path); err != nil {
+		t.Fatal(err)
+	}
 	be.afterRegister = cancel
 	defer func() { be.afterRegister = nil }()
 
@@ -294,7 +344,11 @@ func TestImportStoppedDuringRegister(t *testing.T) {
 		return
 	}
 	_, err = be.Repository(context.Background(), name)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Stat(imp.path)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

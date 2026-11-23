@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // Postgres runs transactions in READ COMMITTED, so DeleteUser looking for
@@ -21,13 +20,14 @@ import (
 // and then refuse with proto.ErrUserOwnsRepos.
 func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	owner, err := e.be.CreateUser(e.ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result := make(chan error, 1)
-	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+	if err := (e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		var holder int
 		if err := tx.GetContext(e.ctx, &holder, `SELECT pg_backend_pid();`); err != nil {
 			return err
@@ -44,17 +44,27 @@ func TestDeleteUserWaitsForRepoCreatePostgres(t *testing.T) {
 		// An error, rather than a failed test, rolls the create back and
 		// lets DeleteUser finish before the database is dropped.
 		return waitBlockedBy(e, holder, result, "DeleteUser")
-	}))
+	})); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case err := <-result:
-		is.True(errors.Is(err, proto.ErrUserOwnsRepos))
+		if !errors.Is(err, proto.ErrUserOwnsRepos) {
+			t.Fatal("not true: errors.Is(err, proto.ErrUserOwnsRepos)")
+		}
 	case <-time.After(time.Minute):
 		t.Fatal("DeleteUser still waiting after the create committed")
 	}
 	_, err = e.be.User(e.ctx, "owner")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	m, err := e.be.store.GetRepoByName(e.ctx, e.be.db, "owned")
-	is.NoErr(err)
-	is.Equal(m.UserID, owner.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.UserID, owner.ID(); got != want {
+		t.Fatalf("m.UserID = %v, want %v", got, want)
+	}
 }

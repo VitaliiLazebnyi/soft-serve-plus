@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync/atomic"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
-	"github.com/matryer/is"
 )
 
 // TestWebhooksBareContext verifies that the webhook methods use the
@@ -20,36 +20,65 @@ import (
 // once did, gave nil and panicked.
 func TestWebhooksBareContext(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	ctx := context.Background()
 
-	is.NoErr(e.be.CreateWebhook(ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
+	if err := e.be.CreateWebhook(ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}); err != nil {
+		t.Fatal(err)
+	}
 	hooks, err := e.be.ListWebhooks(ctx, e.repo)
-	is.NoErr(err)
-	is.Equal(len(hooks), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hooks); got != 1 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 1)
+	}
 	id := hooks[0].ID
 
 	h, err := e.be.Webhook(ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(h.URL, whURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.URL; got != whURL {
+		t.Fatalf("h.URL = %v, want %v", got, whURL)
+	}
 
-	is.NoErr(e.be.UpdateWebhook(ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Events: []webhook.Event{webhook.EventPush}, Active: true}))
+	if err := e.be.UpdateWebhook(ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Events: []webhook.Event{webhook.EventPush}, Active: true}); err != nil {
+		t.Fatal(err)
+	}
 	h, err = e.be.Webhook(ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(h.URL, whURLOther)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.URL; got != whURLOther {
+		t.Fatalf("h.URL = %v, want %v", got, whURLOther)
+	}
 
 	dels, err := e.be.ListWebhookDeliveries(ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(dels), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(dels); got != 0 {
+		t.Fatalf("len(dels) = %v, want %v", got, 0)
+	}
 	_, err = e.be.WebhookDelivery(ctx, e.repo, id, uuid.New())
-	is.True(err != nil) // no such delivery, but no panic either
-	is.True(e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	} // no such delivery, but no panic either
+	if !(e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) != nil) {
+		t.Fatal("not true: e.be.RedeliverWebhookDelivery(ctx, e.repo, id, uuid.New()) != nil")
+	}
 
-	is.NoErr(e.be.DeleteWebhook(ctx, e.repo, id))
+	if err := e.be.DeleteWebhook(ctx, e.repo, id); err != nil {
+		t.Fatal(err)
+	}
 	hooks, err = e.be.ListWebhooks(ctx, e.repo)
-	is.NoErr(err)
-	is.Equal(len(hooks), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hooks); got != 0 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 0)
+	}
 }
 
 // TestRedeliverBareContext redelivers a stored delivery under a context that
@@ -58,7 +87,6 @@ func TestWebhooksBareContext(t *testing.T) {
 // recorded; recording from the bare context used to panic.
 func TestRedeliverBareContext(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 
 	var hits atomic.Int32
@@ -72,18 +100,30 @@ func TestRedeliverBareContext(t *testing.T) {
 	id := e.createHook(t, url, webhook.EventPush)
 	delID := e.seedDelivery(t, id, url, `{"ref":"main"}`)
 
-	is.NoErr(e.be.RedeliverWebhookDelivery(context.Background(), e.repo, id, delID))
-	is.Equal(hits.Load(), int32(1))
+	if err := e.be.RedeliverWebhookDelivery(context.Background(), e.repo, id, delID); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hits.Load(), int32(1); got != want {
+		t.Fatalf("hits.Load() = %v, want %v", got, want)
+	}
 
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(list), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(list); got != 2 {
+		t.Fatalf("len(list) = %v, want %v", got, 2)
+	}
 	for _, d := range list {
 		if d.ID == delID {
 			continue
 		}
-		is.Equal(d.ResponseStatus, http.StatusOK)
-		is.True(!d.RequestError.Valid)
+		if got := d.ResponseStatus; got != http.StatusOK {
+			t.Fatalf("d.ResponseStatus = %v, want %v", got, http.StatusOK)
+		}
+		if d.RequestError.Valid {
+			t.Fatal("not true: !d.RequestError.Valid")
+		}
 	}
 }
 
@@ -91,17 +131,26 @@ func TestRedeliverBareContext(t *testing.T) {
 // stored under the backend's data path, whatever config the context carries.
 func TestStoreRepoMissingLFSObjectsBackendConfig(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 
 	lt.ctx = context.Background()
-	is.NoErr(lt.store())
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
 	p := lt.pointers[0]
 	got, err := os.ReadFile(filepath.Join(lt.be.cfg.DataPath, "lfs", strconv.FormatInt(lt.repo.ID(), 10), "objects", p.RelativePath()))
-	is.NoErr(err)
-	is.Equal(got, lt.client.objects[p.Oid])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := got, lt.client.objects[p.Oid]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got = %v, want %v", got, want)
+	}
 
 	lt.client.requested = nil
-	is.NoErr(lt.be.SyncRepoLFSObjects(lt.ctx, lt.repo, lt.client))
-	is.Equal(len(lt.client.requested), 0) // already stored
+	if err := lt.be.SyncRepoLFSObjects(lt.ctx, lt.repo, lt.client); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(lt.client.requested); got != 0 {
+		t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+	} // already stored
 }

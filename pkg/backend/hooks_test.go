@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // afterPush runs the server's work after a push to e.repo by user that
@@ -46,9 +46,10 @@ type pushPayload struct {
 // a webhook, oldest first.
 func (e whEnv) deliveredPushes(t *testing.T, hookID int64) []pushPayload {
 	t.Helper()
-	is := is.New(t)
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, hookID)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out []pushPayload
 	for _, d := range list {
 		if d.Event != webhook.EventPush {
@@ -56,9 +57,13 @@ func (e whEnv) deliveredPushes(t *testing.T, hookID int64) []pushPayload {
 		}
 		// The list leaves the bodies out.
 		full, err := e.be.WebhookDelivery(e.ctx, e.repo, hookID, d.ID)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var p pushPayload
-		is.NoErr(json.Unmarshal([]byte(full.RequestBody), &p))
+		if err := json.Unmarshal([]byte(full.RequestBody), &p); err != nil {
+			t.Fatal(err)
+		}
 		out = append(out, p)
 	}
 	return out
@@ -71,30 +76,42 @@ func (e whEnv) deliveredPushes(t *testing.T, hookID int64) []pushPayload {
 // named the other account.
 func TestAfterPushSenderIsThePushingAccount(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	alice, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
-	is.NoErr(e.be.SetUsername(e.ctx, "alice", "alice-old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.be.SetUsername(e.ctx, "alice", "alice-old"); err != nil {
+		t.Fatal(err)
+	}
 	other, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
 	e.afterPush(t, alice, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 
 	got := e.deliveredPushes(t, id)
-	is.Equal(len(got), 1)
-	is.Equal(got[0].Sender.ID, alice.ID())
-	is.Equal(got[0].Pusher.ID, alice.ID())
-	is.True(got[0].Sender.ID != other.ID())
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got, want := got[0].Sender.ID, alice.ID(); got != want {
+		t.Fatalf("got[0].Sender.ID = %v, want %v", got, want)
+	}
+	if got, want := got[0].Pusher.ID, alice.ID(); got != want {
+		t.Fatalf("got[0].Pusher.ID = %v, want %v", got, want)
+	}
+	if !(got[0].Sender.ID != other.ID()) {
+		t.Fatal("not true: got[0].Sender.ID != other.ID()")
+	}
 }
 
 // A push with no account, such as an anonymous one or a key with no user
 // row, sends its events with an empty sender.
 func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -102,9 +119,15 @@ func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
 	e.afterPush(t, nil, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 
 	got := e.deliveredPushes(t, id)
-	is.Equal(len(got), 1)
-	is.Equal(got[0].Sender, webhook.User{})
-	is.Equal(got[0].Pusher, webhook.User{})
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got, want := got[0].Sender, (webhook.User{}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].Sender = %v, want %v", got, want)
+	}
+	if got, want := got[0].Pusher, (webhook.User{}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].Pusher = %v, want %v", got, want)
+	}
 }
 
 // The push's events go through the delivery queue, behind the repository's
@@ -113,24 +136,31 @@ func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
 // sent, and they are sent once the sender is free.
 func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
 	release := make(chan struct{})
-	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+	if got := e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }) = %v, want %v", got, enqueued)
+	}
 
 	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 	// The blocking job holds the repository's only sender, so the push's
 	// job cannot have run yet.
-	is.Equal(len(e.deliveredEvents(t, id)), 0)
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	}
 	pending, _ := e.be.deliveries.pending()
-	is.Equal(pending, 2)
+	if got := pending; got != 2 {
+		t.Fatalf("pending = %v, want %v", got, 2)
+	}
 
 	close(release)
 	e.drainDeliveries(t)
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A push queued before shutdown starts is still sent: WaitForDeliveries runs
@@ -139,13 +169,14 @@ func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
 // closed, so the push lost every event, recorded nowhere.
 func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
 	release := make(chan struct{})
-	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+	if got := e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }) = %v, want %v", got, enqueued)
+	}
 	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 
 	// Shutdown starts while the push job waits behind the blocker.
@@ -164,7 +195,9 @@ func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 		t.Fatal("timed out waiting for shutdown")
 	}
 
-	is.Equal(e.deliveredEvents(t, id), []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
 }
 
 // A push whose job does not fit in the repository's share of the queue
@@ -172,30 +205,43 @@ func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 // be redelivered.
 func TestAfterPushQueueFullRecordsUndelivered(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
 	release := make(chan struct{})
 	for range maxRepoDeliveries {
-		is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+		if got := e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }); got != enqueued {
+			t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }) = %v, want %v", got, enqueued)
+		}
 	}
-	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() {}), enqueueRepoFull)
+	if got := e.be.deliveries.enqueue(e.repo.ID(), func() {}); got != enqueueRepoFull {
+		t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), func() {}) = %v, want %v", got, enqueueRepoFull)
+	}
 
 	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 	// Recorded before AfterPush returns: the blockers still hold the queue.
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got []webhook.Event
 	for _, d := range list {
 		full, err := e.be.WebhookDelivery(e.ctx, e.repo, id, d.ID)
-		is.NoErr(err)
-		is.Equal(full.RequestError.String, errRepoDeliveriesFull.Error())
-		is.Equal(full.ResponseStatus, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := full.RequestError.String, errRepoDeliveriesFull.Error(); got != want {
+			t.Fatalf("full.RequestError.String = %v, want %v", got, want)
+		}
+		if got := full.ResponseStatus; got != 0 {
+			t.Fatalf("full.ResponseStatus = %v, want %v", got, 0)
+		}
 		got = append(got, d.Event)
 	}
-	is.Equal(got, []webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush})
+	if got, want := got, ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got = %v, want %v", got, want)
+	}
 
 	close(release)
 	e.drainDeliveries(t)
@@ -205,7 +251,6 @@ func TestAfterPushQueueFullRecordsUndelivered(t *testing.T) {
 // how far it got, so the queue-full path can log what it left unrecorded.
 func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 	subs := pushSubscribers{webhook.EventPush: {{ID: 1}}}
@@ -216,21 +261,31 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 	ctx := e.ctx
 
 	calls := 0
-	is.Equal(e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
+	if got := e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
 		calls++
 		return true
-	}), 2)
-	is.Equal(calls, 2)
+	}); got != 2 {
+		t.Fatalf("e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\treturn true\n\t}) = %v, want %v", got, 2)
+	}
+	if got := calls; got != 2 {
+		t.Fatalf("calls = %v, want %v", got, 2)
+	}
 
 	cctx, cancel := context.WithCancel(ctx)
 	calls = 0
-	is.Equal(e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
+	if got := e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {
 		calls++
 		cancel()
 		return true
-	}), 1)
-	is.Equal(calls, 1)
-	is.True(!strings.Contains(e.logs.String(), "error creating push webhook"))
+	}); got != 1 {
+		t.Fatalf("e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\tcancel()\n\t\treturn true\n\t}) = %v, want %v", got, 1)
+	}
+	if got := calls; got != 1 {
+		t.Fatalf("calls = %v, want %v", got, 1)
+	}
+	if strings.Contains(e.logs.String(), "error creating push webhook") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"error creating push webhook\")")
+	}
 }
 
 // A push to a repository without webhooks for its events builds no payload
@@ -238,7 +293,6 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 // would log an error.
 func TestAfterPushWithoutSubscribersBuildsNothing(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -250,15 +304,18 @@ func TestAfterPushWithoutSubscribersBuildsNothing(t *testing.T) {
 	})
 
 	pending, _ := e.be.deliveries.pending()
-	is.Equal(pending, 0)
-	is.True(!strings.Contains(e.logs.String(), "webhook"))
+	if got := pending; got != 0 {
+		t.Fatalf("pending = %v, want %v", got, 0)
+	}
+	if strings.Contains(e.logs.String(), "webhook") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"webhook\")")
+	}
 }
 
 // A payload that cannot be built is logged and skipped; the push's other
 // events are still sent.
 func TestAfterPushSkipsAnEventItCannotBuild(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -269,17 +326,22 @@ func TestAfterPushSkipsAnEventItCannotBuild(t *testing.T) {
 		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
 	})
 
-	is.True(strings.Contains(e.logs.String(), "error creating push webhook"))
+	if !strings.Contains(e.logs.String(), "error creating push webhook") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"error creating push webhook\")")
+	}
 	got := e.deliveredPushes(t, id)
-	is.Equal(len(got), 1)
-	is.Equal(got[0].Ref, "refs/heads/main")
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got := got[0].Ref; got != "refs/heads/main" {
+		t.Fatalf("got[0].Ref = %v, want %v", got, "refs/heads/main")
+	}
 }
 
 // When the subscribers cannot be read, the failure is logged and nothing is
 // sent; the push itself has already happened.
 func TestAfterPushSurvivesSubscriberLookupFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -289,44 +351,56 @@ func TestAfterPushSurvivesSubscriberLookupFailure(t *testing.T) {
 
 	e.afterPush(t, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 
-	is.True(strings.Contains(e.logs.String(), "push webhook events not sent: reading the subscribers failed"))
+	if !strings.Contains(e.logs.String(), "push webhook events not sent: reading the subscribers failed") {
+		t.Fatal("not true: strings.Contains(e.logs.String(), \"push webhook events not sent: reading the subscribers failed\")")
+	}
 }
 
 // A repository deleted before its push's events are sent sends none.
 func TestAfterPushRepositoryGoneSendsNothing(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 
 	release := make(chan struct{})
-	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }), enqueued)
+	if got := e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }); got != enqueued {
+		t.Fatalf("e.be.deliveries.enqueue(e.repo.ID(), func() { <-release }) = %v, want %v", got, enqueued)
+	}
 	e.be.AfterPush(e.ctx, e.repo, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 	_, err := e.be.db.ExecContext(e.ctx, e.be.db.Rebind("DELETE FROM repos WHERE id = ?"), e.repo.ID())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	close(release)
 	e.drainDeliveries(t)
 
-	is.True(!strings.Contains(e.logs.String(), "webhook event not delivered"))
+	if strings.Contains(e.logs.String(), "webhook event not delivered") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"webhook event not delivered\")")
+	}
 }
 
 // The post-update work: a push that updated refs writes info/last-modified;
 // one that updated none leaves it alone.
 func TestAfterPushWritesLastModified(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	commit := makeCommit(t, e.be.repoPath("repo"))
 	lm := filepath.Join(e.be.repoPath("repo"), "info", "last-modified")
 
 	e.afterPush(t, e.admin, nil)
 	_, err := os.Stat(lm)
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 
 	e.afterPush(t, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 	b, err := os.ReadFile(lm)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = time.Parse(time.RFC3339, string(b))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

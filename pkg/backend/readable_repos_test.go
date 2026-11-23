@@ -3,11 +3,11 @@ package backend
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // TestReadableRepositories verifies that the bulk listing, which loads the
@@ -15,18 +15,25 @@ import (
 // lets the caller read one by one.
 func TestReadableRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	collab, err := be.CreateUser(ctx, "collab", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, r := range []struct {
 		name    string
@@ -39,11 +46,19 @@ func TestReadableRepositories(t *testing.T) {
 		{"blocked", true},
 	} {
 		_, err := be.CreateRepository(ctx, r.name, owner, proto.RepositoryOptions{Private: r.private})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	is.NoErr(be.AddCollaborator(ctx, "shared", "collab", access.ReadOnlyAccess))
-	is.NoErr(be.AddCollaborator(ctx, "shared-public", "collab", access.ReadWriteAccess))
-	is.NoErr(be.AddCollaborator(ctx, "blocked", "collab", access.NoAccess))
+	if err := be.AddCollaborator(ctx, "shared", "collab", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.AddCollaborator(ctx, "shared-public", "collab", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.AddCollaborator(ctx, "blocked", "collab", access.NoAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	// Rows whose directories are gone: Readable refuses them to every
 	// non-admin, owner and collaborators included, so the listing must too.
@@ -55,11 +70,19 @@ func TestReadableRepositories(t *testing.T) {
 		{"gone-secret", true},
 	} {
 		_, err := be.CreateRepository(ctx, r.name, owner, proto.RepositoryOptions{Private: r.private})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	is.NoErr(be.AddCollaborator(ctx, "gone-secret", "collab", access.ReadOnlyAccess))
-	is.NoErr(os.RemoveAll(be.repoPath("gone-public")))
-	is.NoErr(os.RemoveAll(be.repoPath("gone-secret")))
+	if err := be.AddCollaborator(ctx, "gone-secret", "collab", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(be.repoPath("gone-public")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(be.repoPath("gone-secret")); err != nil {
+		t.Fatal(err)
+	}
 
 	names := func(repos []proto.Repository) map[string]bool {
 		m := make(map[string]bool, len(repos))
@@ -70,14 +93,20 @@ func TestReadableRepositories(t *testing.T) {
 	}
 
 	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
-		is.NoErr(be.SetAnonAccess(ctx, anon))
+		if err := be.SetAnonAccess(ctx, anon); err != nil {
+			t.Fatal(err)
+		}
 		for _, user := range []proto.User{nil, owner, collab, stranger, admin} {
 			repos, err := be.ReadableRepositories(ctx, user)
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			got := names(repos)
 
 			all, err := be.Repositories(ctx)
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			want := map[string]bool{}
 			for _, r := range all {
 				// Admins are listed every row, directory or not, as the
@@ -90,31 +119,53 @@ func TestReadableRepositories(t *testing.T) {
 					want[r.Name()] = true
 				}
 			}
-			is.Equal(got, want)
+			if got, want := got, want; !reflect.DeepEqual(got, want) {
+				t.Fatalf("got = %v, want %v", got, want)
+			}
 		}
 	}
 
 	// Spot checks so the comparison above cannot pass on two empty lists.
 	repos, err := be.ReadableRepositories(ctx, collab)
-	is.NoErr(err)
-	is.Equal(names(repos), map[string]bool{"public": true, "shared": true, "shared-public": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := names(repos), (map[string]bool{"public": true, "shared": true, "shared-public": true}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("names(repos) = %v, want %v", got, want)
+	}
 	repos, err = be.ReadableRepositories(ctx, owner)
-	is.NoErr(err)
-	is.Equal(len(repos), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 5 {
+		t.Fatalf("len(repos) = %v, want %v", got, 5)
+	}
 
 	// No non-admin is listed a row whose directory is gone.
 	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
-		is.NoErr(be.SetAnonAccess(ctx, anon))
+		if err := be.SetAnonAccess(ctx, anon); err != nil {
+			t.Fatal(err)
+		}
 		for _, user := range []proto.User{nil, owner, collab, stranger} {
 			repos, err := be.ReadableRepositories(ctx, user)
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			got := names(repos)
-			is.True(!got["gone-public"])
-			is.True(!got["gone-secret"])
+			if got["gone-public"] {
+				t.Fatal("not true: !got[\"gone-public\"]")
+			}
+			if got["gone-secret"] {
+				t.Fatal("not true: !got[\"gone-secret\"]")
+			}
 		}
 	}
 	repos, err = be.ReadableRepositories(ctx, admin)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := names(repos)
-	is.True(got["gone-public"] && got["gone-secret"])
+	if !(got["gone-public"] && got["gone-secret"]) {
+		t.Fatal("not true: got[\"gone-public\"] && got[\"gone-secret\"]")
+	}
 }

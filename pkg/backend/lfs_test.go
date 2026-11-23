@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +19,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // fakeLFSClient serves every requested object from memory and records which
@@ -207,33 +207,56 @@ func TestStoreRepoMissingLFSObjects(t *testing.T) {
 	for _, n := range []int{1, 21} {
 		t.Run(fmt.Sprintf("%d objects", n), func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			lt := newLFSTest(t, n)
 
-			is.NoErr(lt.store())
-			is.Equal(len(lt.client.requested), n) // every LFS object is downloaded
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(lt.client.requested); got != n {
+				t.Fatalf("len(lt.client.requested) = %v, want %v", got, n)
+			} // every LFS object is downloaded
 
 			for _, p := range lt.pointers {
 				_, err := lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-				is.NoErr(err) // every LFS object is recorded
+				if err != nil {
+					t.Fatal(err)
+				} // every LFS object is recorded
 				got, err := os.ReadFile(lt.path(p))
-				is.NoErr(err)
-				is.Equal(got, lt.client.objects[p.Oid]) // every LFS object is stored
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := got, lt.client.objects[p.Oid]; !reflect.DeepEqual(got, want) {
+					t.Fatalf("got = %v, want %v", got, want)
+				} // every LFS object is stored
 			}
 
 			// A second sync finds everything on disk and recorded.
 			lt.client.requested = nil
-			is.NoErr(lt.store())
-			is.Equal(len(lt.client.requested), 0) // nothing is downloaded again
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(lt.client.requested); got != 0 {
+				t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+			} // nothing is downloaded again
 
 			// An object that is recorded but gone from disk is fetched again.
 			p := lt.pointers[0]
-			is.NoErr(os.Remove(lt.path(p)))
-			is.NoErr(lt.store())
-			is.Equal(lt.client.requested, []string{p.Oid})
+			if err := os.Remove(lt.path(p)); err != nil {
+				t.Fatal(err)
+			}
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := lt.client.requested, ([]string{p.Oid}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("lt.client.requested = %v, want %v", got, want)
+			}
 			got, err := os.ReadFile(lt.path(p))
-			is.NoErr(err)
-			is.Equal(got, lt.client.objects[p.Oid])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := got, lt.client.objects[p.Oid]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("got = %v, want %v", got, want)
+			}
 		})
 	}
 }
@@ -243,7 +266,6 @@ func TestStoreRepoMissingLFSObjects(t *testing.T) {
 // writers aren't blocked for as long as the download takes.
 func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	// The database is in rollback-journal mode, where an open read
 	// transaction keeps a write from committing too, so the probe below
 	// catches either kind. In WAL mode it would catch only a write one.
@@ -257,7 +279,9 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	// Unlike a write bounded by a deadline, it doesn't depend on how fast
 	// the machine is.
 	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)"+journal, db.Options{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { probe.Close() }) //nolint:errcheck
 
 	var called bool
@@ -277,12 +301,22 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 		writeErr = lt.be.store.SetAllowKeylessAccess(wctx, lt.be.db, false)
 	}
 
-	is.NoErr(lt.store())
-	is.True(called)    // the content was read
-	is.NoErr(probeErr) // no write transaction, nor a read one, is open while the object downloads
-	is.NoErr(writeErr) // so another writer isn't blocked
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("not true: called")
+	} // the content was read
+	if probeErr != nil {
+		t.Fatal(probeErr)
+	} // no write transaction, nor a read one, is open while the object downloads
+	if writeErr != nil {
+		t.Fatal(writeErr)
+	} // so another writer isn't blocked
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), lt.pointers[0].Oid)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestStoreRepoMissingLFSObjectsRepoDeleted verifies that a sync fails, rather
@@ -294,18 +328,25 @@ func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 	for _, onDisk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("on disk %v", onDisk), func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			lt := newLFSTest(t, 1)
 
 			if onDisk {
 				// The object is on disk but not recorded, so it is only recorded.
 				p := lt.pointers[0]
-				is.NoErr(os.MkdirAll(filepath.Dir(lt.path(p)), 0o755))
-				is.NoErr(os.WriteFile(lt.path(p), lt.client.objects[p.Oid], 0o600))
+				if err := os.MkdirAll(filepath.Dir(lt.path(p)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(lt.path(p), lt.client.objects[p.Oid], 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 
-			is.NoErr(lt.be.store.DeleteRepoByName(lt.ctx, lt.be.db, lt.repo.Name()))
-			is.True(lt.store() != nil) // the sync fails
+			if err := lt.be.store.DeleteRepoByName(lt.ctx, lt.be.db, lt.repo.Name()); err != nil {
+				t.Fatal(err)
+			}
+			if !(lt.store() != nil) {
+				t.Fatal("not true: lt.store() != nil")
+			} // the sync fails
 		})
 	}
 }
@@ -315,22 +356,33 @@ func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 // stored, and the sync reports ErrLFSObjectsUnavailable.
 func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 2)
 	missing, ok := lt.pointers[0], lt.pointers[1]
 	lt.client.errs = map[string]error{missing.Oid: errors.New("object does not exist")}
 
 	err := lt.store()
-	is.True(errors.Is(err, ErrLFSObjectsUnavailable))            // the missing object is reported
-	is.Equal(err.Error(), "some lfs objects are unavailable: 1") // as a count; each oid is logged on its own
-	is.Equal(len(lt.client.requested), 2)                        // every object is attempted
+	if !errors.Is(err, ErrLFSObjectsUnavailable) {
+		t.Fatal("not true: errors.Is(err, ErrLFSObjectsUnavailable)")
+	} // the missing object is reported
+	if got := err.Error(); got != "some lfs objects are unavailable: 1" {
+		t.Fatalf("err.Error() = %v, want %v", got, "some lfs objects are unavailable: 1")
+	} // as a count; each oid is logged on its own
+	if got := len(lt.client.requested); got != 2 {
+		t.Fatalf("len(lt.client.requested) = %v, want %v", got, 2)
+	} // every object is attempted
 
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), ok.Oid)
-	is.NoErr(err) // the available object is recorded
+	if err != nil {
+		t.Fatal(err)
+	} // the available object is recorded
 	_, err = os.Stat(lt.path(ok))
-	is.NoErr(err) // and stored
+	if err != nil {
+		t.Fatal(err)
+	} // and stored
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), missing.Oid)
-	is.True(err != nil) // the missing object is not recorded
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	} // the missing object is not recorded
 }
 
 // TestStoreRepoMissingLFSObjectsReadError verifies that a download that
@@ -339,40 +391,58 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 // object nor a temporary file behind.
 func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	broken := lt.pointers[0]
 	lt.client.readErrs = map[string]error{broken.Oid: errors.New("connection reset")}
 
 	err := lt.store()
-	is.True(err != nil)                                        // the sync fails
-	is.True(!errors.Is(err, ErrLFSObjectsUnavailable))         // rather than skipping the object
-	is.True(strings.Contains(err.Error(), "connection reset")) // with the download's error
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	} // the sync fails
+	if errors.Is(err, ErrLFSObjectsUnavailable) {
+		t.Fatal("not true: !errors.Is(err, ErrLFSObjectsUnavailable)")
+	} // rather than skipping the object
+	if !strings.Contains(err.Error(), "connection reset") {
+		t.Fatal("not true: strings.Contains(err.Error(), \"connection reset\")")
+	} // with the download's error
 	_, err = os.Stat(lt.path(broken))
-	is.True(os.IsNotExist(err))        // the object is not stored
-	is.Equal(lt.incompleteFiles(t), 0) // and no temporary file is left behind
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	} // the object is not stored
+	if got := lt.incompleteFiles(t); got != 0 {
+		t.Fatalf("lt.incompleteFiles(t) = %v, want %v", got, 0)
+	} // and no temporary file is left behind
 }
 
 // TestFetchImportLFSObjects verifies that an import succeeds when the remote
 // lacks some LFS objects, and fails when fetching them fails otherwise.
 func TestFetchImportLFSObjects(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 2)
 
 	var logs bytes.Buffer
 	lt.be.logger = log.New(&logs)
 	lt.client.errs = map[string]error{lt.pointers[0].Oid: errors.New("object does not exist")}
-	is.NoErr(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client))     // missing objects are only logged
-	is.True(strings.Contains(logs.String(), "will not be fetched again")) // a plain import doesn't retry them
-	is.True(strings.Contains(logs.String(), "missing=1"))                 // the warning counts them
+	if err := lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client); err != nil {
+		t.Fatal(err)
+	} // missing objects are only logged
+	if !strings.Contains(logs.String(), "will not be fetched again") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"will not be fetched again\")")
+	} // a plain import doesn't retry them
+	if !strings.Contains(logs.String(), "missing=1") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"missing=1\")")
+	} // the warning counts them
 
 	lt.client.err = errors.New("batch request failed")
-	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // other errors fail the import
+	if !(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) {
+		t.Fatal("not true: lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil")
+	} // other errors fail the import
 
 	lt.client.err, lt.client.errs = nil, nil
 	lt.client.readErrs = map[string]error{lt.pointers[0].Oid: errors.New("connection reset")}
-	is.True(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) // as does a download that breaks off
+	if !(lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil) {
+		t.Fatal("not true: lt.be.fetchImportLFSObjects(lt.ctx, lt.repo, lt.client) != nil")
+	} // as does a download that breaks off
 }
 
 // TestStoreRepoMissingLFSObjectsBadContent verifies that content which
@@ -386,17 +456,24 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
 			lt.client.objects[p.Oid] = content(lt.client.objects[p.Oid])
 
-			is.True(errors.Is(lt.store(), ErrLFSObjectsUnavailable)) // the object is reported
+			if !errors.Is(lt.store(), ErrLFSObjectsUnavailable) {
+				t.Fatal("not true: errors.Is(lt.store(), ErrLFSObjectsUnavailable)")
+			} // the object is reported
 			_, err := os.Stat(lt.path(p))
-			is.True(os.IsNotExist(err)) // the content is not stored
+			if !os.IsNotExist(err) {
+				t.Fatal("not true: os.IsNotExist(err)")
+			} // the content is not stored
 			_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.True(err != nil)                // nor recorded
-			is.Equal(lt.incompleteFiles(t), 0) // no temporary file is left behind
+			if !(err != nil) {
+				t.Fatal("not true: err != nil")
+			} // nor recorded
+			if got := lt.incompleteFiles(t); got != 0 {
+				t.Fatalf("lt.incompleteFiles(t) = %v, want %v", got, 0)
+			} // no temporary file is left behind
 		})
 	}
 }
@@ -405,40 +482,54 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 // remote leaves out of its response is reported.
 func TestStoreRepoMissingLFSObjectsOmitted(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	lt.client.omit = map[string]bool{lt.pointers[0].Oid: true}
-	is.True(errors.Is(lt.store(), ErrLFSObjectsUnavailable))
+	if !errors.Is(lt.store(), ErrLFSObjectsUnavailable) {
+		t.Fatal("not true: errors.Is(lt.store(), ErrLFSObjectsUnavailable)")
+	}
 }
 
 // TestStoreRepoMissingLFSObjectsUnrequested verifies that objects the remote
 // sends without being asked for, valid or not, are not stored.
 func TestStoreRepoMissingLFSObjectsUnrequested(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 
 	unasked := []byte("not in the repository")
 	up, err := lfs.GeneratePointer(bytes.NewReader(unasked))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	invalid := lfs.Pointer{Oid: "../../../../escaped", Size: 1}
 	lt.client.extra = map[lfs.Pointer][]byte{up: unasked, invalid: []byte("x")}
 
-	is.NoErr(lt.store())
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Stat(lt.path(lt.pointers[0]))
-	is.NoErr(err) // the requested object is stored
+	if err != nil {
+		t.Fatal(err)
+	} // the requested object is stored
 	_, err = os.Stat(lt.path(up))
-	is.True(os.IsNotExist(err)) // the unrequested one is not
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	} // the unrequested one is not
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), up.Oid)
-	is.True(err != nil) // nor recorded
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	} // nor recorded
 	var found []string
-	is.NoErr(filepath.Walk(lt.be.cfg.DataPath, func(path string, _ os.FileInfo, err error) error {
+	if err := filepath.Walk(lt.be.cfg.DataPath, func(path string, _ os.FileInfo, err error) error {
 		if filepath.Base(path) == "escaped" || filepath.Base(filepath.Dir(path)) == "escaped" {
 			found = append(found, path)
 		}
 		return err
-	}))
-	is.Equal(len(found), 0) // the invalid pointer wrote nothing
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(found); got != 0 {
+		t.Fatalf("len(found) = %v, want %v", got, 0)
+	} // the invalid pointer wrote nothing
 }
 
 // TestStoreRepoMissingLFSObjectsTruncated verifies that a file on disk whose
@@ -449,24 +540,39 @@ func TestStoreRepoMissingLFSObjectsTruncated(t *testing.T) {
 	for _, recorded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recorded %v", recorded), func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
 			content := lt.client.objects[p.Oid]
 
 			if recorded {
-				is.NoErr(lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, p.Size))
+				if err := lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, p.Size); err != nil {
+					t.Fatal(err)
+				}
 			}
-			is.NoErr(os.MkdirAll(filepath.Dir(lt.path(p)), 0o755))
-			is.NoErr(os.WriteFile(lt.path(p), content[:len(content)/2], 0o600))
+			if err := os.MkdirAll(filepath.Dir(lt.path(p)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(lt.path(p), content[:len(content)/2], 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-			is.NoErr(lt.store())
-			is.Equal(lt.client.requested, []string{p.Oid}) // the object is downloaded again
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := lt.client.requested, ([]string{p.Oid}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("lt.client.requested = %v, want %v", got, want)
+			} // the object is downloaded again
 			got, err := os.ReadFile(lt.path(p))
-			is.NoErr(err)
-			is.Equal(got, content) // and stored in full
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := got, content; !reflect.DeepEqual(got, want) {
+				t.Fatalf("got = %v, want %v", got, want)
+			} // and stored in full
 			_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.NoErr(err) // and recorded
+			if err != nil {
+				t.Fatal(err)
+			} // and recorded
 		})
 	}
 }
@@ -475,14 +581,19 @@ func TestStoreRepoMissingLFSObjectsTruncated(t *testing.T) {
 // different pointer blobs share is requested only once.
 func TestStoreRepoMissingLFSObjectsDuplicateOid(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 		// A trailing line makes another blob that parses to the same pointer.
-		is.NoErr(os.WriteFile(filepath.Join(work, "copy.bin"), []byte(pointers[0].String()+"\n"), 0o600))
+		if err := os.WriteFile(filepath.Join(work, "copy.bin"), []byte(pointers[0].String()+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	})
 
-	is.NoErr(lt.store())
-	is.Equal(lt.client.requested, []string{lt.pointers[0].Oid}) // requested once
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lt.client.requested, ([]string{lt.pointers[0].Oid}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	} // requested once
 }
 
 // TestStoreRepoMissingLFSObjectsSameOidOtherSize verifies that a pointer
@@ -504,29 +615,46 @@ func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 				bad := lfs.Pointer{Oid: pointers[0].Oid, Size: pointers[0].Size + 1}
-				is.NoErr(os.WriteFile(filepath.Join(work, tc.file), []byte(bad.String()), 0o600))
+				if err := os.WriteFile(filepath.Join(work, tc.file), []byte(bad.String()), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			})
 			p := lt.pointers[0]
 
 			err := lt.store()
 			if tc.unavailable {
-				is.True(errors.Is(err, ErrLFSObjectsUnavailable)) // the bad pointer can't be fetched
+				if !errors.Is(err, ErrLFSObjectsUnavailable) {
+					t.Fatal("not true: errors.Is(err, ErrLFSObjectsUnavailable)")
+				} // the bad pointer can't be fetched
 			} else {
-				is.NoErr(err)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			got, err := os.ReadFile(lt.path(p))
-			is.NoErr(err)
-			is.Equal(got, lt.client.objects[p.Oid]) // the right pointer's object is stored
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := got, lt.client.objects[p.Oid]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("got = %v, want %v", got, want)
+			} // the right pointer's object is stored
 			obj, err := lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.NoErr(err)
-			is.Equal(obj.Size, p.Size) // and recorded with its size
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := obj.Size; got != p.Size {
+				t.Fatalf("obj.Size = %v, want %v", got, p.Size)
+			} // and recorded with its size
 
 			lt.client.requested = nil
-			is.NoErr(lt.store())                  // the next sync is clean
-			is.Equal(len(lt.client.requested), 0) // and fetches nothing
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			} // the next sync is clean
+			if got := len(lt.client.requested); got != 0 {
+				t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+			} // and fetches nothing
 		})
 	}
 }
@@ -537,28 +665,49 @@ func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
 // isn't the object.
 func TestStoreRepoMissingLFSObjectsWrongStoredObject(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	p := lt.pointers[0]
 	content := lt.client.objects[p.Oid]
 
 	// A cut short file, recorded with its size.
-	is.NoErr(os.MkdirAll(filepath.Dir(lt.path(p)), 0o755))
-	is.NoErr(os.WriteFile(lt.path(p), content[:len(content)-1], 0o600))
-	is.NoErr(lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, p.Size-1))
+	if err := os.MkdirAll(filepath.Dir(lt.path(p)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lt.path(p), content[:len(content)-1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, p.Size-1); err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(lt.store())
-	is.Equal(lt.client.requested, []string{p.Oid}) // fetched again
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lt.client.requested, ([]string{p.Oid}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	} // fetched again
 	got, err := os.ReadFile(lt.path(p))
-	is.NoErr(err)
-	is.Equal(got, content) // stored in full
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := got, content; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got = %v, want %v", got, want)
+	} // stored in full
 	obj, err := lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-	is.NoErr(err)
-	is.Equal(obj.Size, p.Size) // and recorded with its size
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := obj.Size; got != p.Size {
+		t.Fatalf("obj.Size = %v, want %v", got, p.Size)
+	} // and recorded with its size
 
 	lt.client.requested = nil
-	is.NoErr(lt.store())
-	is.Equal(len(lt.client.requested), 0)
+	if err := lt.store(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(lt.client.requested); got != 0 {
+		t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+	}
 }
 
 // TestStoreRepoMissingLFSObjectsWrongRecordedSize verifies that an object
@@ -577,30 +726,49 @@ func TestStoreRepoMissingLFSObjectsWrongRecordedSize(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			var bad lfs.Pointer
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 				bad = lfs.Pointer{Oid: pointers[0].Oid, Size: pointers[0].Size + 1}
-				is.NoErr(os.WriteFile(filepath.Join(work, tc.file), []byte(bad.String()), 0o600))
+				if err := os.WriteFile(filepath.Join(work, tc.file), []byte(bad.String()), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			})
 			p := lt.pointers[0]
-			is.NoErr(os.MkdirAll(filepath.Dir(lt.path(p)), 0o755))
-			is.NoErr(os.WriteFile(lt.path(p), lt.client.objects[p.Oid], 0o600))
-			is.NoErr(lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, bad.Size))
+			if err := os.MkdirAll(filepath.Dir(lt.path(p)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(lt.path(p), lt.client.objects[p.Oid], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := lt.be.store.CreateLFSObject(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid, bad.Size); err != nil {
+				t.Fatal(err)
+			}
 
 			err := lt.store()
 			if tc.unavailable {
-				is.True(errors.Is(err, ErrLFSObjectsUnavailable)) // the bad pointer was tried before the record was fixed
+				if !errors.Is(err, ErrLFSObjectsUnavailable) {
+					t.Fatal("not true: errors.Is(err, ErrLFSObjectsUnavailable)")
+				} // the bad pointer was tried before the record was fixed
 			} else {
-				is.NoErr(err)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			obj, err := lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-			is.NoErr(err)
-			is.Equal(obj.Size, p.Size) // the record is corrected
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := obj.Size; got != p.Size {
+				t.Fatalf("obj.Size = %v, want %v", got, p.Size)
+			} // the record is corrected
 
 			lt.client.requested = nil
-			is.NoErr(lt.store())                  // the next sync is clean
-			is.Equal(len(lt.client.requested), 0) // and fetches nothing
+			if err := lt.store(); err != nil {
+				t.Fatal(err)
+			} // the next sync is clean
+			if got := len(lt.client.requested); got != 0 {
+				t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+			} // and fetches nothing
 		})
 	}
 }

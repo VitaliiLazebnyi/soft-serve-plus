@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // newLookupBackend is newTestBackendWithLog logging at Debug level. The
@@ -36,30 +35,47 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			be := newLookupBackend(t, nil)
 			ctx := context.Background()
 			_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.CreateRepository(ctx, "public", defaultAdmin(t, be), proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			collab, err := be.CreateUser(ctx, "collab", proto.UserOptions{})
-			is.NoErr(err)
-			is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 				return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "private", access.ReadOnlyAccess)
-			}))
+			}); err != nil {
+				t.Fatal(err)
+			}
 
 			breakTable(t, be, table)
 			for _, user := range []proto.User{nil, stranger, collab} {
 				for _, name := range []string{"private", "public", "ghost"} {
 					r, level, err := be.Readable(ctx, name, user)
-					is.True(err != nil)
-					is.True(r == nil)
-					is.Equal(level, access.NoAccess)
+					if !(err != nil) {
+						t.Fatal("not true: err != nil")
+					}
+					if !(r == nil) {
+						t.Fatal("not true: r == nil")
+					}
+					if got := level; got != access.NoAccess {
+						t.Fatalf("level = %v, want %v", got, access.NoAccess)
+					}
 					_, _, err = be.ReadableForUser(ctx, name, user)
-					is.True(err != nil)
+					if !(err != nil) {
+						t.Fatal("not true: err != nil")
+					}
 				}
 			}
 		})
@@ -73,65 +89,102 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 // error. The wrappers other callers use still fail closed.
 func TestSettingsLookupErrorsReturned(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
 	ctx := context.Background()
 	_, err := be.CreateRepository(ctx, "public", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
-	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
-	is.NoErr(be.SetAllowKeyless(ctx, true))
-	is.Equal(levelOf(t, be, ctx, "public", alice), access.ReadWriteAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAllowKeyless(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOf(t, be, ctx, "public", alice); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"public\", alice) = %v, want %v", got, access.ReadWriteAccess)
+	}
 
 	breakTable(t, be, "settings")
 	for _, user := range []proto.User{nil, alice} {
 		_, _, err := be.Readable(ctx, "public", user)
-		is.True(err != nil)
+		if !(err != nil) {
+			t.Fatal("not true: err != nil")
+		}
 	}
 	_, err = be.ReadableRepositories(ctx, nil)
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = be.AllowKeylessSetting(ctx)
-	is.True(err != nil)
+	if !(err != nil) {
+		t.Fatal("not true: err != nil")
+	}
 
-	is.Equal(be.AnonAccess(ctx), access.NoAccess)
-	is.True(!be.AllowKeyless(ctx))
-	is.True(strings.Contains(logs.String(), "ERRO"))
+	if got := be.AnonAccess(ctx); got != access.NoAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.NoAccess)
+	}
+	if be.AllowKeyless(ctx) {
+		t.Fatal("not true: !be.AllowKeyless(ctx)")
+	}
+	if !strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"ERRO\")")
+	}
 }
 
 // The fail-closed settings wrappers log a lookup the client canceled at
 // Debug, not as a server error.
 func TestSettingsLookupCanceledLoggedAtDebug(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	is.Equal(be.AnonAccess(ctx), access.NoAccess)
-	is.True(!be.AllowKeyless(ctx))
-	is.True(strings.Contains(logs.String(), "anon-access"))
-	is.True(strings.Contains(logs.String(), "allow-keyless"))
-	is.True(!strings.Contains(logs.String(), "ERRO"))
+	if got := be.AnonAccess(ctx); got != access.NoAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.NoAccess)
+	}
+	if be.AllowKeyless(ctx) {
+		t.Fatal("not true: !be.AllowKeyless(ctx)")
+	}
+	if !strings.Contains(logs.String(), "anon-access") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"anon-access\")")
+	}
+	if !strings.Contains(logs.String(), "allow-keyless") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"allow-keyless\")")
+	}
+	if strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"ERRO\")")
+	}
 }
 
 // A failed owner lookup keeps the about repository's readme hidden, as
 // before, and is now logged.
 func TestAboutRepoOwnerLookupFailureLogged(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
 	ctx := context.Background()
 	r, err := be.CreateRepository(ctx, AboutRepo, defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.True(be.AboutRepoOwnedByAdmin(ctx, r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !be.AboutRepoOwnedByAdmin(ctx, r) {
+		t.Fatal("not true: be.AboutRepoOwnedByAdmin(ctx, r)")
+	}
 
 	breakTable(t, be, "users")
-	is.True(!be.AboutRepoOwnedByAdmin(ctx, r))
-	is.True(strings.Contains(logs.String(), "about repository's owner"))
+	if be.AboutRepoOwnedByAdmin(ctx, r) {
+		t.Fatal("not true: !be.AboutRepoOwnedByAdmin(ctx, r)")
+	}
+	if !strings.Contains(logs.String(), "about repository's owner") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"about repository's owner\")")
+	}
 }
 
 // When the creation rule cannot be worked out because the anon-access
@@ -140,13 +193,16 @@ func TestAboutRepoOwnerLookupFailureLogged(t *testing.T) {
 // refusal, and nothing is created.
 func TestCheckCanCreateReturnsLookupError(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be := newLookupBackend(t, nil)
 	ctx := context.Background()
 	_, err := be.CreateRepository(ctx, "a", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	strangerCtx := proto.WithUserContext(ctx, stranger)
 
 	breakTable(t, be, "settings")
@@ -154,10 +210,20 @@ func TestCheckCanCreateReturnsLookupError(t *testing.T) {
 	_, ierr := be.ImportRepository(strangerCtx, "new", stranger, offlineRemote, proto.RepositoryOptions{})
 	rerr := be.RenameRepository(strangerCtx, "a", "new")
 	for _, err := range []error{cerr, ierr, rerr} {
-		is.True(err != nil)
-		is.True(!errors.Is(err, proto.ErrUnauthorized))
-		is.True(errors.Is(err, proto.ErrLookupFailed))
-		is.True(strings.Contains(err.Error(), "anon-access")) // the cause is kept
+		if !(err != nil) {
+			t.Fatal("not true: err != nil")
+		}
+		if errors.Is(err, proto.ErrUnauthorized) {
+			t.Fatal("not true: !errors.Is(err, proto.ErrUnauthorized)")
+		}
+		if !errors.Is(err, proto.ErrLookupFailed) {
+			t.Fatal("not true: errors.Is(err, proto.ErrLookupFailed)")
+		}
+		if !strings.Contains(err.Error(), "anon-access") {
+			t.Fatal("not true: strings.Contains(err.Error(), \"anon-access\")")
+		} // the cause is kept
 	}
-	is.True(!be.repoPathExists("new"))
+	if be.repoPathExists("new") {
+		t.Fatal("not true: !be.repoPathExists(\"new\")")
+	}
 }
