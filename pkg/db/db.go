@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -295,21 +296,24 @@ func driverKey(q url.Values, key, alias string) string {
 }
 
 // sqliteReadOnly reports whether a SQLite data source, dsn with its query q,
-// opens the database read-only: a "file:" URI with the parameter mode=ro or
+// may open the database read-only: a "file:" URI with a parameter mode=ro or
 // immutable set to a true value. Such a connection cannot change the journal
-// mode: SQLite refuses with "attempt to write a readonly database". The
+// mode: SQLite refuses with "attempt to write a readonly database". Every
+// value of a repeated parameter counts, whichever one SQLite takes. The
 // driver passes the parameters to SQLite only in a "file:" URI; it drops
 // them from a plain path.
 func sqliteReadOnly(dsn string, q url.Values) bool {
 	if !strings.HasPrefix(dsn, "file:") {
 		return false
 	}
-	if q.Get("mode") == "ro" {
+	if slices.Contains(q["mode"], "ro") {
 		return true
 	}
-	switch strings.ToLower(q.Get("immutable")) {
-	case "1", "true", "on", "yes":
-		return true
+	for _, v := range q["immutable"] {
+		switch strings.ToLower(v) {
+		case "1", "true", "on", "yes":
+			return true
+		}
 	}
 	return false
 }

@@ -797,6 +797,9 @@ func TestSqliteDSN(t *testing.T) {
 		"file:soft-serve.db?immutable=1": "file:soft-serve.db?immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"file:soft-serve.db?immutable=0": "file:soft-serve.db?immutable=0&" + added,
 		"file:soft-serve.db?mode=rw":     "file:soft-serve.db?mode=rw&" + added,
+		// Any of a repeated mode or immutable counts.
+		"file:soft-serve.db?mode=rw&mode=ro":         "file:soft-serve.db?mode=rw&mode=ro&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"file:soft-serve.db?immutable=0&immutable=1": "file:soft-serve.db?immutable=0&immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		// Starting with "?", the whole string is a file name to the driver.
 		"?odd": "?odd",
 	} {
@@ -1134,7 +1137,7 @@ func TestOpenSqliteReadOnlyKeepsJournalMode(t *testing.T) {
 	d.Close() //nolint:errcheck
 
 	uri := "file:" + filepath.ToSlash(path)
-	for _, q := range []string{"mode=ro", "immutable=1", "mode=ro&cache=private", "immutable=true"} {
+	for _, q := range []string{"mode=ro", "immutable=1", "mode=ro&cache=private", "immutable=true", "mode=rw&mode=ro"} {
 		ro, err := Open(ctx, "sqlite", uri+"?"+q, Options{})
 		if err != nil {
 			t.Errorf("Open(%s): %v", q, err)
