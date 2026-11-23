@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
@@ -19,9 +18,9 @@ const renderAllocMax = 160 << 20
 
 // newRenderFiles returns a Files pane width columns wide that has seen a
 // window size message.
-func newRenderFiles(width int) *Files {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, width, 40))
+func newRenderFiles(t *testing.T, width int) *Files {
+	t.Helper()
+	f := NewFiles(uitest.NewCommon(t, context.Background(), nil, nil))
 	f.SetSize(width, 40)
 	f.Update(tea.WindowSizeMsg{Width: width, Height: 40})
 	return f
@@ -32,7 +31,7 @@ func newRenderFiles(width int) *Files {
 func newUnboundedFiles(t *testing.T) *Files {
 	t.Helper()
 	uitest.WaitIdle(t, common.Tokenising)
-	f := newRenderFiles(120)
+	f := newRenderFiles(t, 120)
 	f.code.HighlightBudget = uitest.Unbounded
 	return f
 }
@@ -52,10 +51,12 @@ func openFile(t *testing.T, f *Files, content, name string) tea.Cmd {
 // A file of 1 MiB of newlines is rendered in a command with bounded memory
 // at any width, its lines are numbered as they are shown rather than all at
 // once, and toggling the numbers does not render it in Update.
+//
+// Not parallel: it measures the bytes the process allocates.
 func TestFileOfNewlinesRendersOutsideUpdate(t *testing.T) {
 	content := strings.Repeat("\n", 1<<20)
 	for _, width := range []int{100, common.MaxWidth} {
-		f := newRenderFiles(width)
+		f := newRenderFiles(t, width)
 		cmd := openFile(t, f, content, "empty.txt")
 		var n int
 		if a := allocated(func() { n = deliverAll(f, cmd) }); a > renderAllocMax {
@@ -92,8 +93,12 @@ func TestFileOfNewlinesRendersOutsideUpdate(t *testing.T) {
 
 // A JavaScript file that is one identifier of 1 MiB took minutes to
 // highlight. It is shown without highlighting, in a command.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted,
+// so it would pass for the wrong reason.
 func TestFileWithLongLineNotHighlighted(t *testing.T) {
-	f := newRenderFiles(120)
+	f := newRenderFiles(t, 120)
 	done := make(chan tea.Cmd, 1)
 	go func() {
 		done <- f.Update(FileContentMsg{content: strings.Repeat("a", 1<<20), ext: "big.js", path: "big.js", load: f.load})
@@ -114,6 +119,9 @@ func TestFileWithLongLineNotHighlighted(t *testing.T) {
 
 // Ordinary files are highlighted; files over 256 KiB, or with a line over
 // 4 KiB, are not.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted.
 func TestFileHighlightLimit(t *testing.T) {
 	small := "package main\n\nfunc main() {}\n"
 	f := newUnboundedFiles(t)

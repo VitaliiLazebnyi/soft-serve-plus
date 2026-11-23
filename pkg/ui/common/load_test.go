@@ -9,6 +9,7 @@ import (
 // Starting a load cancels the one before it; Stop cancels the one in
 // flight.
 func TestLoader(t *testing.T) {
+	t.Parallel()
 	var l Loader
 	first := l.Start(context.Background())
 	second := l.Start(context.Background())
@@ -34,6 +35,7 @@ func TestLoader(t *testing.T) {
 
 // A cancelled load reports nothing; any other failure is an error.
 func TestLoadError(t *testing.T) {
+	t.Parallel()
 	err := errors.New("boom")
 	if msg := LoadError(context.Background(), err); msg == nil {
 		t.Fatal("a failed load reported nothing")

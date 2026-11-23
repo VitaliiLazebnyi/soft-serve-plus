@@ -9,8 +9,9 @@ import (
 
 // Model is a status bar model.
 type Model struct {
-	common     common.Common
+	common     *common.Common
 	zonePrefix string
+	width      int
 	key        string
 	value      string
 	info       string
@@ -21,7 +22,7 @@ type Model struct {
 }
 
 // New creates a new status bar component.
-func New(c common.Common) *Model {
+func New(c *common.Common) *Model {
 	s := &Model{
 		common:     c,
 		zonePrefix: c.Zone.NewPrefix(),
@@ -31,8 +32,7 @@ func New(c common.Common) *Model {
 
 // SetSize implements common.Component.
 func (s *Model) SetSize(width, height int) {
-	s.common.Width = width
-	s.common.Height = height
+	s.width = width
 }
 
 // SetStatus sets the status bar status. Empty values clear the matching
@@ -55,7 +55,7 @@ func (s *Model) SetMessage(msg string) {
 	s.msg = common.SanitizeText(msg)
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (s *Model) Init() tea.Cmd {
 	return nil
 }
@@ -71,7 +71,7 @@ func (s *Model) HelpZoneID() string {
 	return s.zonePrefix + "help"
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (s *Model) View() string {
 	st := s.common.Styles
 	w := lipgloss.Width
@@ -85,7 +85,7 @@ func (s *Model) View() string {
 		info = st.StatusBarInfo.Render(s.info)
 	}
 	branch := st.StatusBarBranch.Render(s.extra)
-	maxWidth := s.common.Width - w(key) - w(info) - w(branch) - w(help)
+	maxWidth := s.width - w(key) - w(info) - w(branch) - w(help)
 	v := s.value
 	if s.msg != "" {
 		v = s.msg
@@ -95,7 +95,7 @@ func (s *Model) View() string {
 		Width(maxWidth).
 		Render(v)
 
-	return lipgloss.NewStyle().MaxWidth(s.common.Width).
+	return lipgloss.NewStyle().MaxWidth(s.width).
 		Render(
 			lipgloss.JoinHorizontal(lipgloss.Top,
 				key,

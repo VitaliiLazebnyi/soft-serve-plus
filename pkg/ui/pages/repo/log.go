@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -17,7 +16,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var waitBeforeLoading = time.Millisecond * 100
+// waitBeforeLoading is how long a load in the Commits tab leaves the commit
+// list on screen before the spinner shows.
+const waitBeforeLoading = 100 * time.Millisecond
 
 type logView int
 
@@ -81,11 +82,12 @@ func (m LogDiffErrorMsg) pane() paneID { return paneLog }
 
 // Log is a model that displays a list of commits and their diffs.
 type Log struct {
-	common     common.Common
+	common     *common.Common
+	width      int
 	selector   *selector.Selector
 	vp         *viewport.Viewport
 	activeView logView
-	repo       proto.Repository
+	repo       Repository
 	ref        *git.Reference
 	// count is the number of commits of the ref. The list holds one page of
 	// them: page, counted from 0, of perPage commits, with the cursor on
@@ -113,16 +115,20 @@ type Log struct {
 	// countLoad, pageLoad and diffLoad are the loads in flight of each
 	// kind: a new one cancels the one before.
 	countLoad, pageLoad, diffLoad common.Loader
+	// waitBeforeLoading is waitBeforeLoading; tests change it.
+	waitBeforeLoading time.Duration
 }
 
 // NewLog creates a new Log model.
-func NewLog(common common.Common) *Log {
+func NewLog(common *common.Common) *Log {
 	l := &Log{
 		common:     common,
 		vp:         viewport.New(common),
 		activeView: logViewCommits,
+
+		waitBeforeLoading: waitBeforeLoading,
 	}
-	selector := selector.NewPane(common, LogItemDelegate{&common})
+	selector := selector.NewPane(common, LogItemDelegate{common})
 	l.selector = selector
 	return l
 }
@@ -144,7 +150,7 @@ func (l *Log) TabName() string {
 
 // SetSize implements common.Component.
 func (l *Log) SetSize(width, height int) {
-	l.common.SetSize(width, height)
+	l.width, _ = common.ClampSize(width, height)
 	l.selector.SetSize(width, height)
 	l.vp.SetSize(width, height)
 }
@@ -219,7 +225,7 @@ func (l *Log) startLoading() {
 	l.activeView = logViewLoading
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (l *Log) Init() tea.Cmd {
 	l.activeView = logViewCommits
 	l.count = 0
@@ -407,7 +413,7 @@ func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (l *Log) View() string {
 	switch l.activeView {
 	case logViewLoading, logViewCommits:
@@ -428,7 +434,7 @@ func (l *Log) Loading() (string, bool) {
 	if l.activeView != logViewLoading {
 		return "", false
 	}
-	if !l.loadingTime.Add(waitBeforeLoading).Before(time.Now()) {
+	if !l.loadingTime.Add(l.waitBeforeLoading).Before(time.Now()) {
 		return "", true
 	}
 	if l.selectedCommit == nil {
@@ -504,7 +510,7 @@ func (l *Log) renderDiffCmd() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	commit, st, width := l.selectedCommit, l.common.Styles, l.common.Width
+	commit, st, width := l.selectedCommit, l.common.Styles, l.width
 	return renderDiffCmd(paneLog, l.render, epoch, st, width, l.currentDiff, func() string {
 		return renderCommit(commit, st, width)
 	})
@@ -690,7 +696,7 @@ func (l *Log) loadDiffCmd() tea.Cmd {
 }
 
 func (l *Log) renderCommit(c *git.Commit) string {
-	return renderCommit(c, l.common.Styles, l.common.Width)
+	return renderCommit(c, l.common.Styles, l.width)
 }
 
 // renderCommit renders c's header and message width columns wide.

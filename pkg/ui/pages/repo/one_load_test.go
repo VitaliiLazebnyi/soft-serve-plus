@@ -13,8 +13,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
@@ -120,10 +118,12 @@ func (l *loop) settle(waiting *atomic.Int32) {
 // 25 "l" and "h" pairs, sent faster than git answers, leave one load
 // running: each new load cancels the one before, so the superseded ones
 // start no git command. A resize loads nothing.
+//
+// Not parallel: it puts a recording git first on PATH.
 func TestFilesOneLoadInFlight(t *testing.T) {
 	count := gitLog(t)
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 120, 40))
+	ctx := context.Background()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(120, 40)
 	repo := gatedRepo{
 		diskRepo: newPinRepo(t),
@@ -190,6 +190,7 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 // Each resize or footer toggle reloads the commit page; a reload cancels the
 // one before, whose command then sends nothing.
 func TestLogPageLoadSupersedes(t *testing.T) {
+	t.Parallel()
 	l := newTestLog(t, filepath.Join(t.TempDir(), "repo"))
 	first := resizeLog(l, 80, 30)
 	second := resizeLog(l, 80, 20)

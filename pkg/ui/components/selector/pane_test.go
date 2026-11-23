@@ -8,7 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 type nopDelegate struct{}
@@ -21,8 +21,10 @@ func (nopDelegate) Update(tea.Msg, *list.Model) tea.Cmd          { return nil }
 // Every repository pane list hides the list chrome, cannot be filtered or
 // quit from, and pages with the shared page keys.
 func TestNewPane(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := NewPane(c, nopDelegate{})
+	s.SetSize(80, 24)
 	m := s.Model
 	if m.ShowTitle() || m.ShowFilter() || m.ShowHelp() || m.ShowPagination() || m.ShowStatusBar() {
 		t.Error("pane list shows list chrome")

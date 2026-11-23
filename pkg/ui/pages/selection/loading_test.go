@@ -6,16 +6,17 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // The About tab says "loading…" instead of its scroll position while the
 // readme renders, since what it shows meanwhile is not that readme.
 func TestSelectionAboutStatusWhileRendering(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	s := New(common.NewCommon(ctx, 80, 40))
+	t.Parallel()
+	ctx := context.Background()
+	s := New(uitest.NewCommon(t, ctx, nil, nil))
+	s.SetSize(80, 40)
 	s.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
 	s.activePane = readmePane
 	if v := s.View(); strings.Contains(v, "loading…") || !strings.Contains(v, "≡") {

@@ -7,9 +7,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -48,8 +47,8 @@ func newLogOf(t *testing.T, n int) *Log {
 	for i := range n - 1 {
 		gitRun(t, repo.path, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("c%02d", i))
 	}
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	l := NewLog(common.NewCommon(ctx, 80, 15))
+	ctx := context.Background()
+	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(80, 15)
 	l.Update(RepoMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
@@ -92,6 +91,7 @@ func wantPage(t *testing.T, l *Log, name string, page, total, index int) {
 // The page keys, the cursor keys at the edge of a page and the mouse wheel
 // turn the page, and the status bar numbers it.
 func TestLogPageKeys(t *testing.T) {
+	t.Parallel()
 	l := newPagedLog(t)
 	press := func(msg tea.Msg) { deliverAll(l, l.Update(msg)) }
 
@@ -129,6 +129,7 @@ func TestLogPageKeys(t *testing.T) {
 // A load of an earlier page that finishes after the load of the page the
 // user turned to is dropped: the page turned to stays on screen.
 func TestLogLatePageDropped(t *testing.T) {
+	t.Parallel()
 	l := newPagedLog(t)
 	deliverAll(l, l.Update(keyNextPage))
 	wantPage(t, l, "next page", 2, 9, 5)
@@ -169,6 +170,8 @@ func TestLogLatePageDropped(t *testing.T) {
 
 // A history of a million commits is listed a page at a time: neither the
 // count nor a page turn holds a slot for every commit.
+//
+// Not parallel: it measures the bytes the process allocates.
 func TestLogMillionCommitsHoldsOnePage(t *testing.T) {
 	l := newPagedLog(t)
 	const limit = 4 << 20
@@ -193,6 +196,7 @@ func TestLogMillionCommitsHoldsOnePage(t *testing.T) {
 // A resize that keeps the number of commits a page holds, such as a change
 // of width, loads nothing and keeps the page on screen.
 func TestLogResizeKeepingPageSizeLoadsNothing(t *testing.T) {
+	t.Parallel()
 	l := newPagedLog(t)
 	deliverAll(l, l.Update(keyNextPage))
 	for _, msg := range runCmd(resizeLog(l, 100, 16)) {
@@ -209,6 +213,7 @@ func TestLogResizeKeepingPageSizeLoadsNothing(t *testing.T) {
 // End, then a resize before the last page arrives, shows the last page by the
 // new size with the cursor on the last commit, not a page past the end.
 func TestLogEndThenResize(t *testing.T) {
+	t.Parallel()
 	l := newPagedLog(t)
 	end := l.Update(keyEnd)
 	deliverAll(l, resizeLog(l, 80, 9))
@@ -223,6 +228,7 @@ func TestLogEndThenResize(t *testing.T) {
 // page. A resize before that page arrives puts the cursor on the last commit,
 // not on a page past the end.
 func TestLogNextPageThenResize(t *testing.T) {
+	t.Parallel()
 	l := newPagedLog(t)
 	for range 7 {
 		deliverAll(l, l.Update(keyNextPage))
@@ -243,6 +249,7 @@ func TestLogNextPageThenResize(t *testing.T) {
 // At the edges of a short history the status bar numbers the one or two
 // pages right, and the keys that would leave them do nothing.
 func TestLogPageEdges(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		commits, rows   int
 		first, lastPage string
@@ -253,6 +260,7 @@ func TestLogPageEdges(t *testing.T) {
 		{6, 5, "p. 1/2", "p. 2/2"},
 	} {
 		t.Run(fmt.Sprint(tc.commits), func(t *testing.T) {
+			t.Parallel()
 			l := newLogOf(t, max(tc.commits, 1))
 			if tc.commits == 0 {
 				deliverAll(l, l.Update(LogCountMsg{count: 0, gen: l.gen}))
@@ -295,6 +303,7 @@ func TestLogPageEdges(t *testing.T) {
 // tab's page again by its new size, so the tab does not show a page of the
 // wrong length when it is shown next.
 func TestRepoFooterToggleReachesHiddenCommitsTab(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	for i := range 20 {
 		gitRun(t, p.repo.path, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("c%02d", i))

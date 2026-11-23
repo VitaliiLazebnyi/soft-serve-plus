@@ -6,13 +6,17 @@ import (
 	pathpkg "path"
 
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
+
+// Opener is a repository LatestFile and Readme can read: they only open it.
+type Opener interface {
+	Open() (*git.Repository, error)
+}
 
 // LatestFile returns the contents of the latest file at the specified path in
 // the repository and its file path. Files larger than maxSize bytes are not
 // read (see git.LatestFile). Its git commands stop when ctx is done.
-func LatestFile(ctx context.Context, r proto.Repository, ref *git.Reference, pattern string, maxSize int64) (string, string, error) {
+func LatestFile(ctx context.Context, r Opener, ref *git.Reference, pattern string, maxSize int64) (string, string, error) {
 	repo, err := r.Open()
 	if err != nil {
 		return "", "", err
@@ -27,7 +31,7 @@ func LatestFile(ctx context.Context, r proto.Repository, ref *git.Reference, pat
 // git.ErrFileTooLarge if one was too large, and git.ErrFileNotFound
 // otherwise. Any other error, such as a git failure, ends the search and is
 // returned. Its git commands stop when ctx is done.
-func Readme(ctx context.Context, r proto.Repository, ref *git.Reference, maxSize int64) (string, string, error) {
+func Readme(ctx context.Context, r Opener, ref *git.Reference, maxSize int64) (string, string, error) {
 	var tooLarge error
 	for _, dir := range []string{".", ".github", "docs"} {
 		// Tree paths always use forward slashes, whatever the OS.

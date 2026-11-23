@@ -1,12 +1,10 @@
 package browse
 
 import (
-	"context"
 	"testing"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 )
 
@@ -14,8 +12,11 @@ import (
 // handles the toggle, so the Commits tab loads its page once, by the height
 // it has with the footer, rather than by the old height and then again.
 func TestBrowseFooterToggleLoadsCommitPageOnce(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	m := newModel(ctx, newDriveRepo(t))
+	t.Parallel()
+	m, err := newModel(t.Context(), newDriveRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(m.common.Zone.Close)
 
 	// send delivers msg and every message the commands produce, and

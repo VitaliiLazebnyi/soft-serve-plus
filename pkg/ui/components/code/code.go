@@ -89,7 +89,8 @@ type RenderedMsg struct {
 // Code is a code snippet.
 type Code struct {
 	*vp.Viewport
-	common      common.Common
+	common      *common.Common
+	width       int
 	sidenote    string
 	content     string
 	extension   string
@@ -127,26 +128,24 @@ type Code struct {
 }
 
 // New returns a new Code.
-func New(c common.Common, content, extension string) *Code {
+func New(c *common.Common, content, extension string) *Code {
 	r := &Code{
 		common:          c,
 		content:         content,
 		extension:       extension,
 		id:              lastID.Add(1),
-		winWidth:        c.Width,
 		TabWidth:        defaultTabWidth,
 		SideNotePercent: defaultSideNotePercent,
 		Viewport:        vp.New(c),
 		NoContentStyle:  c.Styles.NoContent.SetString("No Content."),
 	}
 	r.styleConfig = common.StyleConfig()
-	r.SetSize(c.Width, c.Height)
 	return r
 }
 
 // SetSize implements common.Component.
 func (r *Code) SetSize(width, height int) {
-	r.common.SetSize(width, height)
+	r.width, _ = common.ClampSize(width, height)
 	r.Viewport.SetSize(width, height)
 }
 
@@ -199,7 +198,7 @@ func (r *Code) Rendering() bool {
 	return r.pending && !r.shown
 }
 
-// Init implements tea.Model. It returns a command that renders the content;
+// Init implements common.Model. It returns a command that renders the content;
 // its RenderedMsg must come back to Update. While a render is in flight it
 // returns nil, and the content is rendered once that one returns, so that
 // key presses and resizes cost one render at a time.
@@ -231,7 +230,7 @@ func (r *Code) startRender(epoch int) tea.Cmd {
 		lineNumbers:   r.ShowLineNumber,
 		sidenote:      r.sidenote,
 		sideNoteWidth: int(math.Ceil(float64(r.Model.Width()) * r.SideNotePercent)),
-		width:         r.common.Width - r.common.Styles.App.GetHorizontalFrameSize(),
+		width:         r.width - r.common.Styles.App.GetHorizontalFrameSize(),
 		tabWidth:      r.TabWidth,
 		styleConfig:   r.styleConfig,
 		budget:        r.HighlightBudget,
@@ -304,7 +303,7 @@ func (r *Code) Resizes() int {
 	return r.resizes
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (r *Code) View() string {
 	return r.Viewport.View()
 }

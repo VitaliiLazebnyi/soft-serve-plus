@@ -12,6 +12,7 @@ import (
 // dropped like any late result: it neither reaches a pane nor the error
 // screen.
 func TestRepoDropsStaleError(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	stale := errorMsg{err: errors.New("late"), to: paneLog, gen: p.r.gen - 1}
@@ -36,6 +37,7 @@ func TestRepoDropsStaleError(t *testing.T) {
 // A list that fails to load is not left showing what was loaded before,
 // perhaps for another ref or repository.
 func TestListErrorClearsPreviousItems(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	fail := func(to paneID) {

@@ -49,9 +49,6 @@ type Server struct {
 	logger *log.Logger
 	// cmds builds the commands of each session.
 	cmds *cmd.Commands
-	// onUIContext, when a test sets it, gets the context of each TUI
-	// session's UI as newSessionProgram derives it.
-	onUIContext func(context.Context)
 
 	limiter *connLimiter
 	// live holds every connection accepted and not yet closed, the ones

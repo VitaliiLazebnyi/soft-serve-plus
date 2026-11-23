@@ -9,15 +9,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // Tabs switch with the keys bound to KeyMap.Section and KeyMap.PrevSection.
 func TestTabsUseSectionKeys(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	c.KeyMap.Section = key.NewBinding(key.WithKeys("]"))
 	c.KeyMap.PrevSection = key.NewBinding(key.WithKeys("["))
 	tb := New(c, []string{"a", "b", "c"})
+	tb.SetSize(80, 24)
 
 	press := func(k tea.KeyPressMsg) int {
 		cmd := tb.Update(k)
@@ -45,7 +47,7 @@ func TestTabsUseSectionKeys(t *testing.T) {
 
 // waitZone waits for the zone manager to store the zone with the given ID,
 // since Scan hands zones to a background worker.
-func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
+func waitZone(t *testing.T, c *common.Common, id string) (x, y int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
@@ -62,9 +64,10 @@ func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
 // file named "Files", must not switch to that tab when clicked.
 func TestTabZoneIgnoresSameNamedZone(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	t.Cleanup(c.Zone.Close)
 	tb := New(c, []string{"About", "Files"})
+	tb.SetSize(80, 24)
 	c.Zone.Scan(lipgloss.JoinVertical(lipgloss.Left,
 		tb.View(),
 		c.Zone.Mark("Files", "a repository named Files"),

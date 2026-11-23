@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 )
@@ -30,10 +29,10 @@ func (m ReadmeMsg) pane() paneID { return paneReadme }
 
 // Readme is the readme component page.
 type Readme struct {
-	common     common.Common
+	common     *common.Common
 	code       *code.Code
 	ref        *git.Reference
-	repo       proto.Repository
+	repo       Repository
 	readmePath string
 	isLoading  bool
 	gen        uint64
@@ -42,7 +41,7 @@ type Readme struct {
 }
 
 // NewReadme creates a new readme model.
-func NewReadme(common common.Common) *Readme {
+func NewReadme(common *common.Common) *Readme {
 	readme := code.New(common, "", "")
 	readme.NoContentStyle = readme.NoContentStyle.SetString("No readme found.")
 	readme.UseGlamour = true
@@ -65,7 +64,6 @@ func (r *Readme) TabName() string {
 
 // SetSize implements common.Component.
 func (r *Readme) SetSize(width, height int) {
-	r.common.SetSize(width, height)
 	r.code.SetSize(width, height)
 }
 
@@ -97,7 +95,7 @@ func (r *Readme) FullHelp() [][]key.Binding {
 	return b
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (r *Readme) Init() tea.Cmd {
 	r.isLoading = true
 	return r.updateReadmeCmd()
@@ -146,7 +144,7 @@ func (r *Readme) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (r *Readme) View() string {
 	return r.code.View()
 }
@@ -160,7 +158,7 @@ func (r *Readme) id() paneID { return paneReadme }
 
 func (r *Readme) ownsRender(msg code.RenderedMsg) bool { return r.code.Owns(msg) }
 
-// StatusBarValue implements statusbar.StatusBar.
+// StatusBarValue implements Pane.
 func (r *Readme) StatusBarValue() string {
 	dir := path.Dir(r.readmePath)
 	if dir == "." || dir == "" {
@@ -169,7 +167,7 @@ func (r *Readme) StatusBarValue() string {
 	return dir
 }
 
-// StatusBarInfo implements statusbar.StatusBar.
+// StatusBarInfo implements Pane.
 func (r *Readme) StatusBarInfo() string {
 	return common.ScrollPercent(r.code.ScrollPosition())
 }
@@ -213,7 +211,7 @@ const readmeTooLarge = "The README is larger than the size limit and is not show
 // findReadme returns the README of ref and its path (see backend.Readme).
 // It returns "" and no error when there is none, and an error wrapping
 // git.ErrFileTooLarge when every README it found is larger than limit.
-func findReadme(ctx context.Context, repo proto.Repository, ref *git.Reference, limit int64) (string, string, error) {
+func findReadme(ctx context.Context, repo Repository, ref *git.Reference, limit int64) (string, string, error) {
 	rm, rp, err := backend.Readme(ctx, repo, ref, limit)
 	if errors.Is(err, git.ErrFileNotFound) {
 		return "", "", nil

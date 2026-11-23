@@ -8,15 +8,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // Opening a file from the listing shown while another directory loads does
 // not cancel that listing: when the file fails to open, the pane still shows
 // the directory it is in.
 func TestFilesFileLoadKeepsListing(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
@@ -35,8 +35,9 @@ func TestFilesFileLoadKeepsListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := context.Background()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
+	f.SetSize(80, 40)
 	f.Update(RepoMsg(openRepo{path: dir}))
 	f.Update(findMsg[FileItemsMsg](t, runCmd(f.Update(RefMsg{Ref: ref}))))
 	item := func(name string) selector.SelectMsg {
@@ -71,6 +72,7 @@ func TestFilesFileLoadKeepsListing(t *testing.T) {
 // A load is cancelled when its pane resets, so a late result cannot switch
 // the pane's view or do work for nothing.
 func TestPaneResetCancelsLoads(t *testing.T) {
+	t.Parallel()
 	stashItem := func(p *pinPage) selector.SelectMsg {
 		return selector.SelectMsg{IdentifiableItem: p.stash.list.SelectedItem()}
 	}
@@ -124,6 +126,7 @@ func TestPaneResetCancelsLoads(t *testing.T) {
 	}
 	for name, start := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			p := newPinPage(t)
 			p.open()
 			noLoadResult(t, runCmd(start(p)))

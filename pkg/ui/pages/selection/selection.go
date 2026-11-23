@@ -1,6 +1,7 @@
 package selection
 
 import (
+	"context"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
@@ -44,7 +45,9 @@ func (p pane) String() string {
 
 // Selection is the model for the selection screen/page.
 type Selection struct {
-	common     common.Common
+	common     *common.Common
+	width      int
+	height     int
 	readme     *code.Code
 	selector   *selector.Selector
 	activePane pane
@@ -55,7 +58,7 @@ type Selection struct {
 }
 
 // New creates a new selection model.
-func New(c common.Common) *Selection {
+func New(c *common.Common) *Selection {
 	ts := make([]string, lastPane)
 	for i, b := range []pane{selectorPane, readmePane} {
 		ts[i] = b.String()
@@ -77,7 +80,7 @@ func New(c common.Common) *Selection {
 		SetString(defaultNoContent)
 	selector := selector.New(c,
 		[]selector.IdentifiableItem{},
-		NewItemDelegate(&c, &sel.activePane))
+		NewItemDelegate(c, &sel.activePane))
 	selector.SetShowTitle(false)
 	selector.SetShowHelp(false)
 	selector.SetShowStatusBar(false)
@@ -105,7 +108,7 @@ func (s *Selection) FilterState() list.FilterState {
 
 // SetSize implements common.Component.
 func (s *Selection) SetSize(width, height int) {
-	s.common.SetSize(width, height)
+	s.width, s.height = common.ClampSize(width, height)
 	wm, hm := s.getMargins()
 	s.tabs.SetSize(width, height-hm)
 	s.selector.SetSize(width-wm, height-hm)
@@ -209,31 +212,27 @@ type ReposMsg struct {
 	hasReadme  bool
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (s *Selection) Init() tea.Cmd {
-	if s.common.Config() == nil {
-		return nil
-	}
-	return loadReposCmd(s.common.WithContext(s.load.Start(s.common.Context())))
+	return loadReposCmd(s.load.Start(s.common.Context()), s.common)
 }
 
 // loadReposCmd lists the repositories the caller may read, and the server
 // readme, without blocking the UI. bubbletea runs the command on its own
-// goroutine while Update keeps resizing the page, so it works on the copy
-// of common taken when Init returned and never reads the model.
-func loadReposCmd(c common.Common) tea.Cmd {
+// goroutine while Update keeps resizing the page, so it reads only ctx, the
+// load's context, and c, which does not change, and never the model.
+func loadReposCmd(ctx context.Context, c *common.Common) tea.Cmd {
 	return func() tea.Msg {
-		return loadRepos(c)
+		return loadRepos(ctx, c)
 	}
 }
 
-func loadRepos(c common.Common) tea.Msg {
-	ctx := c.Context()
+func loadRepos(ctx context.Context, c *common.Common) tea.Msg {
 	if ctx.Err() != nil {
 		// A refresh replaced this one before it started.
 		return nil
 	}
-	be := c.Backend()
+	be := c.Backend
 	pk := c.PublicKey()
 	if pk == nil {
 		allow, err := be.AllowKeylessSetting(ctx)
@@ -353,19 +352,19 @@ func (s *Selection) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (s *Selection) View() string {
 	var view string
 	wm, hm := s.getMargins()
 	switch s.activePane {
 	case selectorPane:
 		ss := lipgloss.NewStyle().
-			Width(s.common.Width - wm).
-			Height(s.common.Height - hm)
+			Width(s.width - wm).
+			Height(s.height - hm)
 		view = ss.Render(s.selector.View())
 	case readmePane:
 		rs := lipgloss.NewStyle().
-			Height(s.common.Height - hm)
+			Height(s.height - hm)
 		status := common.ScrollPercent(s.readme.ScrollPosition())
 		if s.readme.Rendering() {
 			// The readme on screen is not the one being rendered.
@@ -373,7 +372,7 @@ func (s *Selection) View() string {
 		}
 		readmeStatus := lipgloss.NewStyle().
 			Align(lipgloss.Right).
-			Width(s.common.Width - wm).
+			Width(s.width - wm).
 			Foreground(s.common.Styles.InactiveBorderColor).
 			Render(status)
 		view = rs.Render(lipgloss.JoinVertical(lipgloss.Left,

@@ -5,12 +5,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func newTestModel() *Model {
-	return New(common.NewCommon(context.Background(), 120, 1))
+func newTestModel(t *testing.T) *Model {
+	t.Helper()
+	m := New(uitest.NewCommon(t, context.Background(), nil, nil))
+	m.SetSize(120, 1)
+	return m
 }
 
 // An empty value or info clears what the previous status showed instead of
@@ -18,7 +21,7 @@ func newTestModel() *Model {
 func TestSetStatusClearsEmptyParts(t *testing.T) {
 	t.Parallel()
 
-	s := newTestModel()
+	s := newTestModel(t)
 	s.SetStatus("repo", "abc1234 by Alice", "p. 2/3", "* main")
 	s.SetStatus("repo", "", "", "* main")
 
@@ -38,7 +41,7 @@ func TestSetStatusClearsEmptyParts(t *testing.T) {
 func TestMessageIsTransient(t *testing.T) {
 	t.Parallel()
 
-	s := newTestModel()
+	s := newTestModel(t)
 	s.SetStatus("repo", "", "p. 1/1", "* main")
 	s.SetMessage("Commit hash copied to clipboard")
 

@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -101,11 +100,11 @@ func (m FileBlameMsg) pane() paneID { return paneFiles }
 
 // Files is the model for the files view.
 type Files struct {
-	common         common.Common
+	common         *common.Common
 	selector       *selector.Selector
 	ref            *git.Reference
 	activeView     filesView
-	repo           proto.Repository
+	repo           Repository
 	code           *code.Code
 	path           string
 	currentItem    *FileItem
@@ -145,7 +144,7 @@ type Files struct {
 }
 
 // NewFiles creates a new files model.
-func NewFiles(common common.Common) *Files {
+func NewFiles(common *common.Common) *Files {
 	f := &Files{
 		common:       common,
 		code:         code.New(common, "", ""),
@@ -153,7 +152,7 @@ func NewFiles(common common.Common) *Files {
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.NewPane(common, FileItemDelegate{&common})
+	selector := selector.NewPane(common, FileItemDelegate{common})
 	f.selector = selector
 	f.code.ShowLineNumber = f.lineNumber
 	// "b" toggles blame and "l" toggles line numbers in the content view, so
@@ -185,7 +184,6 @@ func (f *Files) TabName() string {
 
 // SetSize implements common.Component.
 func (f *Files) SetSize(width, height int) {
-	f.common.SetSize(width, height)
 	f.selector.SetSize(width, height)
 	f.code.SetSize(width, height)
 }
@@ -271,7 +269,7 @@ func (f *Files) FullHelp() [][]key.Binding {
 	return append(b, actionKeys)
 }
 
-// Init implements tea.Model.
+// Init implements common.Model.
 func (f *Files) Init() tea.Cmd {
 	f.path = ""
 	f.currentItem = nil
@@ -447,7 +445,7 @@ func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
+// View implements common.Model.
 func (f *Files) View() string {
 	switch f.activeView {
 	case filesViewFiles:
@@ -643,7 +641,7 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 	}
 }
 
-func renderBlame(c common.Common, f *FileItem, b *git.Blame) string {
+func renderBlame(c *common.Common, f *FileItem, b *git.Blame) string {
 	if f == nil || f.entry.IsTree() || b == nil {
 		return ""
 	}

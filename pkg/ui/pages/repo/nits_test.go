@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -25,12 +26,13 @@ const bidi = "\u202e\u2066\u2069"
 // bidirectional controls, as file names do, so they cannot reorder the text
 // around them in a terminal that implements bidi.
 func TestBidiControlsRemoved(t *testing.T) {
+	t.Parallel()
 	repo := newDiskRepo(t, "r", "main", "# r\n")
 	gitRun(t, repo.path, "commit", "-q", "--allow-empty",
 		"--author", "auth"+bidi+"or <a@b>", "-m", "sub"+bidi+"ject\n\nbo"+bidi+"dy")
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	p := &pinPage{t: t, repo: repo, log: NewLog(c)}
 	p.r = New(c, p.log)
 	p.r.SetSize(120, 40)
@@ -52,13 +54,14 @@ func TestBidiControlsRemoved(t *testing.T) {
 // it says so, as a user error, rather than running git on a commit the
 // repository does not have, which logged a server error per click.
 func TestFilesSubmoduleIsUserError(t *testing.T) {
+	t.Parallel()
 	repo := newDiskRepo(t, "r", "main", "# r\n")
 	gitRun(t, repo.path, "update-index", "--add", "--cacheinfo",
 		"160000,0123456789abcdef0123456789abcdef01234567,mod")
 	gitRun(t, repo.path, "commit", "-q", "-m", "add a submodule")
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	f := NewFiles(common.NewCommon(ctx, 80, 40))
+	ctx := context.Background()
+	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
 	f.Update(RepoMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
@@ -78,6 +81,7 @@ func TestFilesSubmoduleIsUserError(t *testing.T) {
 // Turning blame off on a Markdown file shows it rendered again, as it was
 // before blame was turned on.
 func TestFilesBlameOffRestoresMarkdown(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
@@ -105,7 +109,7 @@ func TestFilesBlameOffRestoresMarkdown(t *testing.T) {
 // newReadmePage returns a repository page with only the Readme tab over repo.
 func newReadmePage(t *testing.T, repo diskRepo) *pinPage {
 	t.Helper()
-	c := common.NewCommon(config.WithContext(context.Background(), config.DefaultConfig()), 120, 40)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	p := &pinPage{t: t, repo: repo, readme: NewReadme(c)}
 	p.r = New(c, p.readme)
 	p.r.SetSize(120, 40)
@@ -115,6 +119,7 @@ func newReadmePage(t *testing.T, repo diskRepo) *pinPage {
 // A README larger than the size limit is reported as such, not as missing; a
 // repository without one still shows that it has none.
 func TestReadmeTooLarge(t *testing.T) {
+	t.Parallel()
 	big := newDiskRepo(t, "big", "main", "# big\n\n"+strings.Repeat("text ", config.MaxBlobSize/5+1)+"\n")
 	p := newReadmePage(t, big)
 	p.open()
@@ -160,7 +165,7 @@ func TestReadmeTooLarge(t *testing.T) {
 // file names do everywhere else.
 func TestDiffSummaryBidiControlsRemoved(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	out := renderSummary(&git.Diff{Stat: " na" + bidi + "me.txt | 1 +\n 1 file changed, 1 insertion(+)\n"}, c.Styles, 80)
 	if strings.ContainsAny(out, bidi) {
 		t.Fatalf("the diff summary keeps bidirectional controls: %q", out)
@@ -173,6 +178,7 @@ func TestDiffSummaryBidiControlsRemoved(t *testing.T) {
 // A result for a hidden tab leaves the status bar alone, so a copy notice
 // stays until something on the tab shown changes.
 func TestStatusBarKeepsNoticeOnHiddenTabResult(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(2)
@@ -190,6 +196,7 @@ func TestStatusBarKeepsNoticeOnHiddenTabResult(t *testing.T) {
 // A README that fails to load for another reason reports the error, and
 // does not leave the README of the ref shown before on screen.
 func TestReadmeLoadErrorReported(t *testing.T) {
+	t.Parallel()
 	repo := newDiskRepo(t, "r", "main", "# r\n\nold-readme\n")
 	p := newReadmePage(t, repo)
 	p.open()
@@ -229,6 +236,7 @@ func TestReadmeLoadErrorReported(t *testing.T) {
 // arrives, whichever result it is: here the commit count, which changes the
 // number of pages.
 func TestStatusBarRefreshedOnEveryResult(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(2)
@@ -259,6 +267,7 @@ func TestSanitizeTextBidi(t *testing.T) {
 // A code view render of a hidden tab leaves the status bar alone, so a copy
 // notice stays; a render of the tab shown refreshes it.
 func TestStatusBarKeepsNoticeOnHiddenTabRender(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	notice := func() bool {

@@ -6,18 +6,13 @@ import (
 	"sync"
 	"testing"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/repo"
 	"github.com/charmbracelet/soft-serve/pkg/ui/pages/selection"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
@@ -26,33 +21,19 @@ import (
 // the repository list.
 func newRepoTestUI(t *testing.T) *UI {
 	t.Helper()
-	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
-	ctx := context.Background()
-	cfg := config.DefaultConfig()
+	ctx := t.Context()
+	cfg := newTestUIConfig(t)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dbx.Close() })
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
+	be := newTestUIBackend(t, cfg)
 	for _, name := range []string{"a", "b"} {
 		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	c := common.NewCommon(ctx, 80, 40)
-	ui := NewUI(c, "")
+	ui := NewUI(uitest.NewCommon(t, ctx, cfg, be), 80, 40, "")
 	ui.pages[selectionPage] = selection.New(ui.common)
 	ui.pages[repoPage] = repo.New(ui.common,
 		repo.NewReadme(ui.common),
@@ -62,7 +43,6 @@ func newRepoTestUI(t *testing.T) *UI {
 		repo.NewRefs(ui.common, git.RefsTags),
 	)
 	ui.state = readyState
-	t.Cleanup(ui.common.Zone.Close)
 	return ui
 }
 
@@ -87,6 +67,7 @@ func shownRepo(t *testing.T, ui *UI) string {
 // TestUIDropsLateRepoOpen opens "a" and then "b", and delivers the result for
 // "a" last. The UI must keep showing "b".
 func TestUIDropsLateRepoOpen(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
 
 	openA := ui.openRepoCmd("a")
@@ -107,6 +88,7 @@ func TestUIDropsLateRepoOpen(t *testing.T) {
 // TestUIDropsLateRepoOpenError checks that a failed open the user has moved on
 // from does not show the error screen over the current repository.
 func TestUIDropsLateRepoOpenError(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
 
 	openMissing := ui.openRepoCmd("missing")
@@ -131,6 +113,7 @@ func TestUIDropsLateRepoOpenError(t *testing.T) {
 // opens, a missing one shows the missing repository error, and one
 // that finishes after the user picked another repository is dropped.
 func TestUIInitialRepoOpen(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
 	ui.Update(ui.openRepoCmd("a")())
 	if got := shownRepo(t, ui); got != "a" {
@@ -157,8 +140,9 @@ func TestUIInitialRepoOpen(t *testing.T) {
 // on the values copied when it was built; under -race, reading the UI from
 // the command goroutine is reported as a data race.
 func TestUIRepoOpenDoesNotReadModel(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
-	rb, err := ui.common.Backend().Repository(ui.common.Context(), "b")
+	rb, err := ui.common.Backend.Repository(ui.common.Context(), "b")
 	if err != nil {
 		t.Fatal(err)
 	}

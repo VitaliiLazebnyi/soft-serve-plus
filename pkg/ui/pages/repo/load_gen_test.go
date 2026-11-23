@@ -36,6 +36,7 @@ func (p *pinPage) deliver(msgs ...tea.Msg) (errs int) {
 // UI-6: a listing that arrives after a file was opened is dropped; it does
 // not put the list back while the path names the file.
 func TestFilesLateListingAfterFileOpened(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
@@ -68,6 +69,7 @@ func TestFilesLateListingAfterFileOpened(t *testing.T) {
 // UI-9: when opening repository B fails, the page shows nothing of the
 // repository shown before under B's name, and takes no input meant for it.
 func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	// A's Files tab is in a directory.
@@ -128,6 +130,7 @@ func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 // A file opened from the listing on screen, while another directory loads,
 // is named after the directory it was listed in.
 func TestFilesFileFromPreviousListingNamedRight(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
@@ -164,6 +167,7 @@ func TestFilesFileFromPreviousListingNamedRight(t *testing.T) {
 // Opening a file stops a listing still on its way, so that the listing
 // cannot fail afterwards and turn off a blame the user opened.
 func TestFilesOpenedFileStopsListing(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)
@@ -189,6 +193,7 @@ func TestFilesOpenedFileStopsListing(t *testing.T) {
 // A load that fails in a tab that is not shown reaches that tab, which
 // leaves its loading view, rather than the tab that is shown.
 func TestErrorReachesItsPane(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 	p.tab(1)

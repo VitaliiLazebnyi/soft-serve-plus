@@ -1,13 +1,15 @@
 package common_test
 
 import (
-	"context"
+	"errors"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
 func TestIsFileMarkdown(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		filename string
@@ -23,6 +25,7 @@ func TestIsFileMarkdown(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := common.IsFileMarkdown(c.content, c.filename); got != c.isMkd {
 				t.Errorf("IsFileMarkdown(%q, %q) = %v, want %v", c.content, c.filename, got, c.isMkd)
 			}
@@ -30,9 +33,10 @@ func TestIsFileMarkdown(t *testing.T) {
 	}
 }
 
-// The UI's size comes from the SSH client; NewCommon and SetSize keep it to
-// at most 500x200 cells.
-func TestCommonSizeClamped(t *testing.T) {
+// The UI's size comes from the SSH client; ClampSize keeps it to at most
+// 500x200 cells.
+func TestClampSize(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		width, height         int
 		wantWidth, wantHeight int
@@ -49,15 +53,27 @@ func TestCommonSizeClamped(t *testing.T) {
 		{-5, -7, 0, 0},
 		{-1 << 31, 80, 0, 80},
 	} {
-		c := common.NewCommon(context.Background(), tc.width, tc.height)
-		if c.Width != tc.wantWidth || c.Height != tc.wantHeight {
-			t.Errorf("NewCommon(%dx%d) size %dx%d, want %dx%d", tc.width, tc.height, c.Width, c.Height, tc.wantWidth, tc.wantHeight)
+		w, h := common.ClampSize(tc.width, tc.height)
+		if w != tc.wantWidth || h != tc.wantHeight {
+			t.Errorf("ClampSize(%d, %d) = %d, %d, want %d, %d", tc.width, tc.height, w, h, tc.wantWidth, tc.wantHeight)
 		}
-		c.SetSize(1, 1)
-		c.SetSize(tc.width, tc.height)
-		if c.Width != tc.wantWidth || c.Height != tc.wantHeight {
-			t.Errorf("SetSize(%dx%d) size %dx%d, want %dx%d", tc.width, tc.height, c.Width, c.Height, tc.wantWidth, tc.wantHeight)
-		}
-		c.Zone.Close()
+	}
+}
+
+// New takes its dependencies as parameters: a nil config is an error, and a
+// nil logger means the default one.
+func TestNew(t *testing.T) {
+	t.Parallel()
+	if _, err := common.New(t.Context(), nil, nil, nil); !errors.Is(err, config.ErrNilConfig) {
+		t.Fatalf("New with a nil config: err = %v, want %v", err, config.ErrNilConfig)
+	}
+	cfg := config.DefaultConfig()
+	c, err := common.New(t.Context(), cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Zone.Close()
+	if c.Config != cfg || c.Backend != nil || c.Logger == nil || c.Context() != t.Context() {
+		t.Fatalf("New returned %+v", c)
 	}
 }

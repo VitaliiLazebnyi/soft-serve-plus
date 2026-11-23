@@ -14,6 +14,7 @@ import (
 // height it has with the footer, rather than by the old height and then
 // again.
 func TestUIFooterToggleLoadsCommitPageOnce(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
 	commitTo(t, ui, "a")
 

@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -23,17 +22,22 @@ import (
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
-// newTestBackend returns a context carrying a config and a migrated SQLite
-// backend, with no user or key attached.
-func newTestBackend(t *testing.T) (context.Context, *backend.Backend) {
+// testServer is a migrated SQLite backend, its config and database.
+type testServer struct {
+	cfg *config.Config
+	db  *db.DB
+	be  *backend.Backend
+}
+
+// newTestBackend returns a migrated SQLite backend.
+func newTestBackend(t *testing.T) *testServer {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -42,23 +46,26 @@ func newTestBackend(t *testing.T) (context.Context, *backend.Backend) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	ctx = db.WithContext(ctx, dbx)
-	st := database.New()
-	ctx = store.WithContext(ctx, st)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
-	ctx = backend.WithContext(ctx, be)
-	return ctx, be
+	be := backend.New(cfg, dbx, database.New(), log.Default())
+	return &testServer{cfg: cfg, db: dbx, be: be}
 }
 
-// newTestContext returns a context carrying a config and a backend backed by
-// a fresh sqlite database that holds one public repository.
-func newTestContext(t *testing.T) context.Context {
+// common returns the Common of a session on the server whose context is
+// ctx.
+func (srv *testServer) common(t *testing.T, ctx context.Context) *common.Common {
 	t.Helper()
-	ctx, be := newTestBackend(t)
-	if _, err := be.CreateRepository(ctx, "a", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
+	return uitest.NewCommon(t, ctx, srv.cfg, srv.be)
+}
+
+// newTestCommon returns the Common of a keyless session on a server that
+// holds one public repository.
+func newTestCommon(t *testing.T) *common.Common {
+	t.Helper()
+	srv := newTestBackend(t)
+	if _, err := srv.be.CreateRepository(t.Context(), "a", fixtureAdmin(t, srv.be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	return ctx
+	return srv.common(t, t.Context())
 }
 
 // bubbletea runs the command Init returns on its own goroutine while Update
@@ -66,9 +73,9 @@ func newTestContext(t *testing.T) context.Context {
 // on what Init captured and not read the model, which raced with SetSize.
 func TestLoadReposCmdDoesNotReadModel(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(newTestContext(t), 80, 40)
-	t.Cleanup(c.Zone.Close)
+	c := newTestCommon(t)
 	s := New(c)
+	s.SetSize(80, 40)
 
 	cmd := s.Init()
 	if cmd == nil {
@@ -151,14 +158,16 @@ func press(s *Selection, k rune) tea.Cmd {
 // Init and the refresh key load the list in a command, so the tests run it
 // and feed its ReposMsg back to Update before checking the list.
 func TestSelectionRefreshKey(t *testing.T) {
-	ctx, be := newTestBackend(t)
+	t.Parallel()
+	srv := newTestBackend(t)
+	ctx, be := t.Context(), srv.be
 	for _, name := range []string{"bravo", "delta"} {
 		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	c := common.NewCommon(ctx, 80, 40)
+	c := srv.common(t, ctx)
 	s := New(c)
 	s.SetSize(80, 40)
 	if !runLoad(t, s, s.Init()) {
@@ -194,11 +203,13 @@ func TestSelectionRefreshKey(t *testing.T) {
 // While the filter is being typed, r is part of the filter text and must not
 // reload the list.
 func TestSelectionRefreshKeyIgnoredWhileFiltering(t *testing.T) {
-	ctx, be := newTestBackend(t)
+	t.Parallel()
+	srv := newTestBackend(t)
+	ctx, be := t.Context(), srv.be
 	if _, err := be.CreateRepository(ctx, "bravo", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	c := common.NewCommon(ctx, 80, 40)
+	c := srv.common(t, ctx)
 	s := New(c)
 	s.SetSize(80, 40)
 	if !runLoad(t, s, s.Init()) {
@@ -224,7 +235,8 @@ func TestSelectionRefreshKeyIgnoredWhileFiltering(t *testing.T) {
 // Replacing the items keeps the highlighted repository highlighted even
 // when its position in the list changes.
 func TestSelectionSetItemsKeepsHighlight(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 40)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := New(c)
 	s.SetSize(80, 40)
 	items := func(names ...string) []selector.IdentifiableItem {
@@ -263,7 +275,8 @@ func hasBinding(kb []key.Binding, want key.Binding) bool {
 // The refresh key is listed in the short help of the repository list, and
 // not while the filter is typed, when r goes into the filter text.
 func TestSelectionShortHelpRefreshKey(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 40)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := New(c)
 	s.SetSize(80, 40)
 	it := NewItem(c, fakeRepo{name: "bravo"})

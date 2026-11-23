@@ -7,16 +7,17 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // The Log tab of a repository whose history holds a commit git-module
 // cannot parse lists the other commits instead of ending the session with a
 // panic.
 func TestLogSkipsMalformedCommit(t *testing.T) {
+	t.Parallel()
 	for _, kind := range gittest.Malformed {
 		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "r.git")
 			gittest.Git(t, "", nil, "init", "-q", "--bare", dir)
 			root := gittest.Commit(t, dir, gittest.Valid, gittest.Tree(t, dir, "f", "root\n"), "root")
@@ -33,8 +34,8 @@ func TestLogSkipsMalformedCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := config.WithContext(context.Background(), config.DefaultConfig())
-			l := NewLog(common.NewCommon(ctx, 80, 40))
+			ctx := context.Background()
+			l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 			l.SetSize(80, 40)
 			l.Update(RepoMsg(openRepo{path: dir}))
 			l.Update(RefMsg{Ref: ref})

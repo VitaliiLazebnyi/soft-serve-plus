@@ -8,9 +8,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // runCmd runs cmd and every command it batches, and returns the messages
@@ -69,9 +69,9 @@ func cmdTestRepo(t *testing.T) (openRepo, *git.Reference) {
 	return openRepo{path: dir}, ref
 }
 
-func cmdTestCommon() common.Common {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	return common.NewCommon(ctx, 80, 40)
+func cmdTestCommon(t *testing.T) *common.Common {
+	t.Helper()
+	return uitest.NewCommon(t, context.Background(), nil, nil)
 }
 
 // bubbletea runs every command in its own goroutine, after Update returned.
@@ -81,7 +81,8 @@ func cmdTestCommon() common.Common {
 func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	t.Parallel()
 	repo, ref := cmdTestRepo(t)
-	f := NewFiles(cmdTestCommon())
+	f := NewFiles(cmdTestCommon(t))
+	f.SetSize(80, 40)
 	f.Update(RepoMsg(repo))
 	cmd := f.Update(RefMsg{Ref: ref})
 	items := findMsg[FileItemsMsg](t, runCmd(cmd))
@@ -137,7 +138,8 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 func TestLogCommandsDoNotReadModel(t *testing.T) {
 	t.Parallel()
 	repo, ref := cmdTestRepo(t)
-	l := NewLog(cmdTestCommon())
+	l := NewLog(cmdTestCommon(t))
+	l.SetSize(80, 40)
 	l.Update(RepoMsg(repo))
 
 	// A new ref, then the model changes before the count command runs. An
@@ -223,8 +225,10 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFiles(cmdTestCommon())
-	r := New(cmdTestCommon(), f)
+	f := NewFiles(cmdTestCommon(t))
+	f.SetSize(80, 40)
+	r := New(cmdTestCommon(t), f)
+	r.SetSize(80, 40)
 	update := func(msg tea.Msg) tea.Cmd {
 		t.Helper()
 		cmd := r.Update(msg)

@@ -8,8 +8,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -38,6 +37,7 @@ func newDiskRepo(t *testing.T, name, branch, readme string) diskRepo {
 // What was loaded for a repository or ref the user has left since arrives
 // late and must not be shown in place of the current one.
 func TestRepoDropsLateMessages(t *testing.T) {
+	t.Parallel()
 	a := newDiskRepo(t, "a", "main", "# Readme of A\n")
 	b := newDiskRepo(t, "b", "trunk", "# Readme of B\n")
 	gitRun(t, b.path, "checkout", "-q", "-b", "dev")
@@ -47,10 +47,12 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	gitRun(t, b.path, "commit", "-q", "-am", "dev")
 	gitRun(t, b.path, "checkout", "-q", "trunk")
 
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 80, 40)
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	readme := NewReadme(c)
+	readme.SetSize(80, 40)
 	files := NewFiles(c)
+	files.SetSize(80, 40)
 	r := New(c, readme, files, NewRefs(c, git.RefsHeads))
 	r.SetSize(80, 40)
 	// The readme tab is the active one; the page shows its spinner in

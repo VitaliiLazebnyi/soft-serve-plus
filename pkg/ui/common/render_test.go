@@ -5,6 +5,7 @@ import "testing"
 // Renders asked for while one runs collapse into one more, started when the
 // running one returns.
 func TestRenderGate(t *testing.T) {
+	t.Parallel()
 	var g RenderGate
 	epoch, ok := g.Start()
 	if !ok {
@@ -36,6 +37,7 @@ func TestRenderGate(t *testing.T) {
 // After Reset a render starts at once, and the late result of the render
 // before it does not end the new one.
 func TestRenderGateReset(t *testing.T) {
+	t.Parallel()
 	var g RenderGate
 	lost, _ := g.Start()
 	g.Start()

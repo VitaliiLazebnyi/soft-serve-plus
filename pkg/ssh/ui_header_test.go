@@ -1,22 +1,20 @@
 package ssh
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // The selection page starts with the server name, trimmed.
 func TestUISelectionShowsServerName(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.Name = "  Test Server  "
-	c := common.NewCommon(config.WithContext(context.Background(), cfg), 80, 24)
-	t.Cleanup(c.Zone.Close)
-	ui := NewUI(c, "")
+	ui := NewUI(uitest.NewCommon(t, t.Context(), cfg, nil), 80, 24, "")
 	ui.Init()
 
 	var first string

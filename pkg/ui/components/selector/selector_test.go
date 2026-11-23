@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 type testItem string
@@ -46,9 +47,10 @@ func runCmd(cmd tea.Cmd) []tea.Msg {
 // when Update returned, and must not read the list, which raced with Update.
 func TestSelectItemCmdDoesNotReadModel(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(t.Context(), 80, 40)
+	c := uitest.NewCommon(t, t.Context(), nil, nil)
 	items := []IdentifiableItem{testItem("a"), testItem("b")}
 	s := New(c, items, list.NewDefaultDelegate())
+	s.SetSize(80, 40)
 
 	cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -93,7 +95,7 @@ func (testDelegate) Render(w io.Writer, _ list.Model, _ int, item list.Item) {
 
 // waitZone waits for the zone manager to store the zone with the given ID,
 // since Scan hands zones to a background worker.
-func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
+func waitZone(t *testing.T, c *common.Common, id string) (x, y int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
@@ -111,9 +113,10 @@ func waitZone(t *testing.T, c common.Common, id string) (x, y int) {
 // nor gets selected by clicks on it.
 func TestItemZoneIgnoresSameNamedZone(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 10)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	t.Cleanup(c.Zone.Close)
 	s := New(c, []IdentifiableItem{testItem("one"), testItem("footer")}, testDelegate{})
+	s.SetSize(80, 10)
 	c.Zone.Scan(lipgloss.JoinVertical(lipgloss.Left,
 		s.View(),
 		c.Zone.Mark("footer", "the footer"),
@@ -134,13 +137,14 @@ func TestItemZoneIgnoresSameNamedZone(t *testing.T) {
 
 func newTestSelector(t *testing.T, names ...string) *Selector {
 	t.Helper()
-	c := common.NewCommon(context.Background(), 40, 10)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	t.Cleanup(c.Zone.Close)
 	items := make([]IdentifiableItem, len(names))
 	for i, n := range names {
 		items[i] = testItem(n)
 	}
 	s := New(c, items, testDelegate{})
+	s.SetSize(40, 10)
 	s.SetShowTitle(false)
 	s.SetShowHelp(false)
 	s.SetShowStatusBar(false)
@@ -246,9 +250,10 @@ func TestClickSelectedFilteredItemOpensIt(t *testing.T) {
 // "?" typed while filtering goes into the filter.
 func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	t.Cleanup(c.Zone.Close)
 	s := New(c, []IdentifiableItem{testItem("a?"), testItem("b")}, testDelegate{})
+	s.SetSize(80, 24)
 	for _, k := range []tea.KeyPressMsg{
 		{Code: '/', Text: "/"},
 		{Code: 'a', Text: "a"},
@@ -268,8 +273,9 @@ func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
 // MouseWheelMsg, never as a click.
 func TestMouseWheelMovesCursor(t *testing.T) {
 	t.Parallel()
-	c := common.NewCommon(context.Background(), 80, 24)
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := New(c, []IdentifiableItem{testItem("a"), testItem("b"), testItem("c")}, list.NewDefaultDelegate())
+	s.SetSize(80, 24)
 
 	for _, step := range []struct {
 		button tea.MouseButton

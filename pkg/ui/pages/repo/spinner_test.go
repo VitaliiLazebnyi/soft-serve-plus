@@ -12,6 +12,7 @@ import (
 // tick chain starts again when a load begins, and a tick that was already
 // handled is dropped.
 func TestRepoSpinnerLifecycle(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 
@@ -70,10 +71,11 @@ func TestRepoSpinnerLifecycle(t *testing.T) {
 // For its first waitBeforeLoading, a load in the Commits tab keeps the
 // spinner turning but leaves the commit list on screen.
 func TestLogLoadingWaitsBeforeShowingSpinner(t *testing.T) {
+	t.Parallel()
 	p := newPinPage(t)
 	p.open()
 
-	waitBeforeLoading = time.Hour
+	p.log.waitBeforeLoading = time.Hour
 	p.log.startLoading()
 	if text, ok := p.log.Loading(); text != "" || !ok {
 		t.Fatalf("Loading() before the wait = (%q, %v); want (\"\", true)", text, ok)
@@ -83,7 +85,7 @@ func TestLogLoadingWaitsBeforeShowingSpinner(t *testing.T) {
 	p.notView("commits before the wait", "loading")
 
 	// Negative, not zero: see newPinPage.
-	waitBeforeLoading = -time.Hour
+	p.log.waitBeforeLoading = -time.Hour
 	if text, ok := p.log.Loading(); text != "loading commits…" || !ok {
 		t.Fatalf("Loading() after the wait = (%q, %v); want (\"loading commits…\", true)", text, ok)
 	}

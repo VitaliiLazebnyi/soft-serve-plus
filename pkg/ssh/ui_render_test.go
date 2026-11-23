@@ -18,7 +18,7 @@ import (
 // commitTo pushes a commit that adds a file to the server repository name.
 func commitTo(t *testing.T, ui *UI, name string) {
 	t.Helper()
-	r, err := ui.common.Backend().Repository(ui.common.Context(), name)
+	r, err := ui.common.Backend.Repository(ui.common.Context(), name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +75,7 @@ func openCommit(t *testing.T, ui *UI) {
 // returns while the selection page is shown. It must reach the Commits tab,
 // or the tab waits for it for ever and shows no diff again.
 func TestUIDiffRenderAfterLeavingRepository(t *testing.T) {
+	t.Parallel()
 	ui := newRepoTestUI(t)
 	commitTo(t, ui, "a")
 	settleUI(t, ui, tea.WindowSizeMsg{Width: 80, Height: 40})

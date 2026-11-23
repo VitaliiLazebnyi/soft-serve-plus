@@ -6,8 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // escapes holds the string sequences the bubbletea renderer passes through
@@ -44,6 +43,7 @@ func assertClean(t *testing.T, out string, want ...string) {
 // to everyone on the repository list, so they must not carry escape
 // sequences into the viewer's terminal.
 func TestItemSanitisesProjectNameAndDescription(t *testing.T) {
+	t.Parallel()
 	out := renderItem(t, fakeRepo{
 		name:        "repo",
 		projectName: "proj" + escapes,
@@ -55,8 +55,9 @@ func TestItemSanitisesProjectNameAndDescription(t *testing.T) {
 // The server README is shown to everyone who connects, and glamour keeps
 // string sequences in it.
 func TestReadmePaneSanitisesReadme(t *testing.T) {
-	ctx := config.WithContext(context.Background(), config.DefaultConfig())
-	c := common.NewCommon(ctx, 120, 40)
+	t.Parallel()
+	ctx := context.Background()
+	c := uitest.NewCommon(t, ctx, nil, nil)
 	s := New(c)
 	s.SetSize(120, 40)
 	s.Update(s.setReadme("# Welcome"+escapes+"\n\nreadme-text"+escapes+"\n", "README.md")())

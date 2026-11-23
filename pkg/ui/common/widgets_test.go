@@ -7,11 +7,13 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
 // TruncateString measures like lipgloss, so emoji with a variation selector
 // or a skin-tone modifier never make a truncated line wider than asked.
 func TestTruncateStringMeasuresLikeLipgloss(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in    string
 		width int
@@ -41,7 +43,8 @@ func TestTruncateStringMeasuresLikeLipgloss(t *testing.T) {
 // CopyKey describes what the copy key copies without changing the shared
 // key map other panes read.
 func TestCopyKey(t *testing.T) {
-	c := common.NewCommon(context.Background(), 80, 24)
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	before := c.KeyMap.Copy.Help().Desc
 	k := c.CopyKey("copy hash")
 	if got := k.Help().Desc; got != "copy hash" {

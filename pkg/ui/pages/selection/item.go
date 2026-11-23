@@ -12,7 +12,6 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/dustin/go-humanize"
 )
@@ -46,28 +45,34 @@ func (it Items) Swap(i int, j int) {
 	it[i], it[j] = it[j], it[i]
 }
 
+// Repository is a listed repository: the methods of proto.Repository the
+// list calls.
+type Repository interface {
+	Name() string
+	ProjectName() string
+	Description() string
+	IsPrivate() bool
+	UpdatedAt() time.Time
+}
+
 // Item represents a single item in the selector.
 type Item struct {
-	repo       proto.Repository
+	repo       Repository
 	lastUpdate *time.Time
 	cmd        string
 }
 
 // NewItem creates a new Item.
-func NewItem(c common.Common, repo proto.Repository) Item {
+func NewItem(c *common.Common, repo Repository) Item {
 	var lastUpdate *time.Time
 	lu := repo.UpdatedAt()
 	if !lu.IsZero() {
 		lastUpdate = &lu
 	}
-	var cmd string
-	if cfg := c.Config(); cfg != nil {
-		cmd = c.CloneCmd(cfg.SSH.PublicURL, repo.Name())
-	}
 	return Item{
 		repo:       repo,
 		lastUpdate: lastUpdate,
-		cmd:        cmd,
+		cmd:        c.CloneCmd(c.Config.SSH.PublicURL, repo.Name()),
 	}
 }
 
@@ -112,7 +117,9 @@ func (i Item) Command() string {
 type ItemDelegate struct {
 	common     *common.Common
 	activePane *pane
-	copiedID   string
+	// copiedID is the item whose clone command was copied last. Its row
+	// says so until the next key press.
+	copiedID string
 }
 
 // NewItemDelegate creates a new ItemDelegate.
@@ -140,6 +147,7 @@ func (d *ItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 	}
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		d.copiedID = ""
 		switch {
 		case key.Matches(msg, d.common.KeyMap.Copy):
 			d.copiedID = item.ID()
@@ -154,7 +162,10 @@ func (d *ItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 
 // Render implements list.ItemDelegate.
 func (d *ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	i := listItem.(Item)
+	i, ok := listItem.(Item)
+	if !ok {
+		return
+	}
 	s := strings.Builder{}
 	var matchedRunes []int
 
@@ -221,7 +232,6 @@ func (d *ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	if d.copiedID == i.ID() {
 		cmd = "(copied to clipboard)"
 		cmdStyler = styles.Desc.Render
-		d.copiedID = ""
 	}
 	cmd = common.TruncateString(cmd, m.Width()-styles.Base.GetHorizontalFrameSize())
 	s.WriteString(cmdStyler(cmd))

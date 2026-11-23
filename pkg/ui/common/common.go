@@ -14,15 +14,28 @@ import (
 	zone "github.com/lrstanley/bubblezone/v2"
 )
 
-// Common is a struct all components should embed.
+// Common is what the components of one TUI session share. It is built once,
+// when the session starts, and is not changed after that: every component
+// holds the same pointer, and keeps its own size.
 type Common struct {
-	ctx           context.Context
-	Width, Height int
-	Styles        *styles.Styles
-	KeyMap        *keymap.KeyMap
-	Zone          *zone.Manager
-	Logger        *log.Logger
-	HideCloneCmd  bool
+	// Config is the server's configuration.
+	Config *config.Config
+	// Backend is the server's backend. It is nil in soft browse, which
+	// shows a local repository and no server's list.
+	Backend *backend.Backend
+	// Logger logs for the session's UI.
+	Logger *log.Logger
+
+	Styles       *styles.Styles
+	KeyMap       *keymap.KeyMap
+	Zone         *zone.Manager
+	HideCloneCmd bool
+
+	// ctx is the session's context. Bubble Tea commands take no context,
+	// so the session's is kept here for them. It ends when the session's
+	// program exits. The UI reads only the session's user and key, and
+	// its cancellation, from it.
+	ctx context.Context
 }
 
 // MaxWidth and MaxHeight are the largest terminal size, in cells, the UI
@@ -41,63 +54,41 @@ func ClampSize(width, height int) (int, int) {
 	return max(0, min(width, MaxWidth)), max(0, min(height, MaxHeight))
 }
 
-// NewCommon returns a new Common struct, with its size limited by
-// ClampSize.
+// New returns the Common of a session whose context is ctx. The session's
+// git work runs under ctx, so it should end when the session does. A nil
+// logger means log.Default(); a nil config is an error.
 //
 // Its Zone manager runs a background worker. The caller must close it with
 // Zone.Close once the program using it has exited, and not before: a render
 // after Close blocks once the view has more zones than the worker buffers.
-func NewCommon(ctx context.Context, width, height int) Common {
-	if ctx == nil {
-		ctx = context.TODO()
+func New(ctx context.Context, cfg *config.Config, be *backend.Backend, logger *log.Logger) (*Common, error) {
+	if cfg == nil {
+		return nil, config.ErrNilConfig
 	}
-	width, height = ClampSize(width, height)
-	return Common{
-		ctx:    ctx,
-		Width:  width,
-		Height: height,
-		Styles: styles.DefaultStyles(),
-		KeyMap: keymap.DefaultKeyMap(),
-		Zone:   zone.New(),
-		Logger: log.FromContext(ctx).WithPrefix("ui"),
+	if logger == nil {
+		logger = log.Default()
 	}
+	return &Common{
+		ctx:     ctx,
+		Config:  cfg,
+		Backend: be,
+		Logger:  logger.WithPrefix("ui"),
+		Styles:  styles.DefaultStyles(),
+		KeyMap:  keymap.DefaultKeyMap(),
+		Zone:    zone.New(),
+	}, nil
 }
 
-// SetSize sets the width and height of the common struct, limited by
-// ClampSize.
-func (c *Common) SetSize(width, height int) {
-	c.Width, c.Height = ClampSize(width, height)
-}
-
-// Context returns the context.
+// Context returns the session's context.
 func (c *Common) Context() context.Context {
 	return c.ctx
 }
 
-// WithContext returns a copy of c whose context is ctx, such as a context
-// derived from c's for one load.
-func (c Common) WithContext(ctx context.Context) Common {
-	c.ctx = ctx
-	return c
-}
-
-// Config returns the server config.
-func (c *Common) Config() *config.Config {
-	return config.FromContext(c.ctx)
-}
-
-// Backend returns the Soft Serve backend.
-func (c *Common) Backend() *backend.Backend {
-	return backend.FromContext(c.ctx)
-}
-
-// PublicKey returns the public key.
+// PublicKey returns the session's public key, or nil for a session without
+// one.
 func (c *Common) PublicKey() ssh.PublicKey {
-	v := c.ctx.Value(ssh.ContextKeyPublicKey)
-	if p, ok := v.(ssh.PublicKey); ok {
-		return p
-	}
-	return nil
+	p, _ := c.ctx.Value(ssh.ContextKeyPublicKey).(ssh.PublicKey)
+	return p
 }
 
 // CloneCmd returns the clone command string.
