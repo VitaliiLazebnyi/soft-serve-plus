@@ -16,12 +16,11 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -31,7 +30,7 @@ import (
 func openDB(t *testing.T, ctx context.Context) *db.DB {
 	t.Helper()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
-		dbx, err := test.OpenSqlite(ctx, t)
+		dbx, err := dbtest.OpenSqlite(ctx, t)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +45,7 @@ func openDB(t *testing.T, ctx context.Context) *db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, err := sstest.CreateDB(ctx, admin, "softserve_migrate_test")
+	name, err := dbtest.CreateDB(ctx, admin, "softserve_migrate_test")
 	if err != nil {
 		admin.Close() //nolint:errcheck
 		t.Fatal(err)

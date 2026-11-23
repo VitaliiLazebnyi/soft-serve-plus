@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package test
+package testnet
 
 import (
 	"os"
@@ -45,7 +45,7 @@ func TestRandomPortPanicsWhenItCannotBind(t *testing.T) {
 	if err == nil {
 		t.Fatalf("child exited successfully; want a panic\n%s", out)
 	}
-	if !strings.Contains(string(out), "panic: test.RandomPort:") || !strings.Contains(string(out), "too many open files") {
+	if !strings.Contains(string(out), "panic: testnet.RandomPort:") || !strings.Contains(string(out), "too many open files") {
 		t.Fatalf("child did not panic with the bind error:\n%s", out)
 	}
 }

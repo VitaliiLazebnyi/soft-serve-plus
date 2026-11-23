@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // Migration versions must strictly increase in the order they run, and each
@@ -89,7 +89,7 @@ func TestMigrationSQLFilesComplete(t *testing.T) {
 func migratedDB(t *testing.T) (context.Context, Env, *db.DB) {
 	t.Helper()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

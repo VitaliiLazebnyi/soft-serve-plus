@@ -1,4 +1,4 @@
-package test
+package testnet
 
 import (
 	"context"

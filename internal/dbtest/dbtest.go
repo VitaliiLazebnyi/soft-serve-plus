@@ -1,4 +1,6 @@
-package test
+// Package dbtest opens disposable databases for tests and names the ones
+// tests create on a Postgres server themselves.
+package dbtest
 
 import (
 	"context"
@@ -9,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/lib/pq"
 )
 
@@ -51,7 +52,7 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 	if err != nil {
 		return nil, err
 	}
-	name, err := sstest.CreateDB(ctx, admin, "softserve_test")
+	name, err := CreateDB(ctx, admin, "softserve_test")
 	if err != nil {
 		admin.Close() //nolint:errcheck
 		return nil, err

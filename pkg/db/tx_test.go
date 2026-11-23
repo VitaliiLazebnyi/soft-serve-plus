@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // TestTransactionContextCancelledBeforeCommit checks that a transaction whose
@@ -16,7 +16,7 @@ import (
 // before Commit, is reported as failed rather than committed.
 func TestTransactionContextCancelledBeforeCommit(t *testing.T) {
 	t.Parallel()
-	d, err := test.Open(context.Background(), t)
+	d, err := dbtest.Open(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}

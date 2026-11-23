@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/test"
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -264,13 +264,13 @@ func TestSSHConfigRetriesConnect(t *testing.T) {
 }
 
 // refusedPort returns a port on 127.0.0.1 where nothing listens, for the
-// life of the test binary: a test.RandomPort, reserved for this process
+// life of the test binary: a testnet.RandomPort, reserved for this process
 // and below every OS's ephemeral range, so neither a ":0" listener nor
 // another test's RandomPort is given it. A connect to it is refused at
 // once. A socket that is bound but not listening would not do: macOS drops
 // the SYNs, and the connect times out after about 7.8 s instead.
 func refusedPort() string {
-	return strconv.Itoa(test.RandomPort())
+	return strconv.Itoa(testnet.RandomPort())
 }
 
 // refusedAtBanner tells OpenSSH for Windows' report of a refused connect

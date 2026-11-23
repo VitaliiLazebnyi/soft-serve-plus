@@ -24,9 +24,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/keygen"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/rogpeppe/go-internal/testscript"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
@@ -189,18 +190,18 @@ func TestScript(t *testing.T) {
 			}
 
 			data := t.TempDir()
-			sshPort := test.RandomPort()
+			sshPort := testnet.RandomPort()
 			// Servers listen on IPv4 loopback and the harness dials it
 			// directly. Dialing "localhost" tries ::1 first, and on a busy
 			// macOS machine a connect to a closed ::1 port can appear to
 			// succeed and then fail the SSH handshake instead of falling
 			// back to 127.0.0.1. Public URLs keep "localhost".
 			sshListen := fmt.Sprintf("%s:%d", loopback, sshPort)
-			gitPort := test.RandomPort()
+			gitPort := testnet.RandomPort()
 			gitListen := fmt.Sprintf("%s:%d", loopback, gitPort)
-			httpPort := test.RandomPort()
+			httpPort := testnet.RandomPort()
 			httpListen := fmt.Sprintf("%s:%d", loopback, httpPort)
-			statsPort := test.RandomPort()
+			statsPort := testnet.RandomPort()
 			statsListen := fmt.Sprintf("%s:%d", loopback, statsPort)
 			serverName := "Test Soft Serve"
 
@@ -1278,14 +1279,14 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 	}
 
 	// Create the database. Scripts run in parallel, so its name comes from
-	// test.CreateDB, which never hands two of them the same one.
+	// dbtest.CreateDB, which never hands two of them the same one.
 	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo, db.Options{})
 	if err != nil {
 		return nil, err
 	}
 
 	defer dbx.Close() //nolint:errcheck
-	dbName, err := test.CreateDB(context.TODO(), dbx, "softserve_test")
+	dbName, err := dbtest.CreateDB(context.TODO(), dbx, "softserve_test")
 	if err != nil {
 		return nil, err
 	}

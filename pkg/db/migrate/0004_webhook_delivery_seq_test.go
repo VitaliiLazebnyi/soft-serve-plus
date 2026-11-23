@@ -9,9 +9,9 @@ import (
 
 	"charm.land/log/v2"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 	"github.com/google/uuid"
 )
 
@@ -24,7 +24,7 @@ import (
 func TestWebhookDeliverySeqBackfill(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestWebhookDeliverySeqVacuumHint(t *testing.T) {
 		var buf bytes.Buffer
 		ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 		env.Logger = log.New(&buf).WithPrefix("migrate")
-		dbx, err := test.OpenSqlite(ctx, t)
+		dbx, err := dbtest.OpenSqlite(ctx, t)
 		if err != nil {
 			t.Fatal(err)
 		}

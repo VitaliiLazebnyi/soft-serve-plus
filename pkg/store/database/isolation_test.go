@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 )
 
 // The webhook cap holds when the database defaults to REPEATABLE READ. A

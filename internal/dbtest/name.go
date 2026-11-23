@@ -1,4 +1,4 @@
-package test
+package dbtest
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const maxIdentifier = 63
 func DBName(prefix string) string {
 	name := fmt.Sprintf("%s_%d_%d_%s", prefix, os.Getpid(), dbCounter.Add(1), strings.ToLower(rand.Text()[:10]))
 	if len(name) > maxIdentifier {
-		panic(fmt.Sprintf("test.DBName: %q is longer than %d bytes", name, maxIdentifier))
+		panic(fmt.Sprintf("dbtest.DBName: %q is longer than %d bytes", name, maxIdentifier))
 	}
 	return name
 }
@@ -65,7 +65,7 @@ func CreateDB(ctx context.Context, admin Execer, prefix string) (string, error) 
 			return "", err
 		}
 	}
-	return "", fmt.Errorf("test.CreateDB: no free name after %d attempts: %w", createDBAttempts, err)
+	return "", fmt.Errorf("dbtest.CreateDB: no free name after %d attempts: %w", createDBAttempts, err)
 }
 
 // nameTaken reports whether err from CREATE DATABASE means the name is in use.

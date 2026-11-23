@@ -1,4 +1,5 @@
-package test
+// Package testnet hands out loopback ports for test servers.
+package testnet
 
 import (
 	"context"
@@ -89,13 +90,13 @@ func RandomPort() int {
 		used[port] = reservation
 		return port
 	}
-	panic(fmt.Sprintf("test.RandomPort: no free port in [%d, %d) after %d attempts", minPort, maxPort, maxAttempts))
+	panic(fmt.Sprintf("testnet.RandomPort: no free port in [%d, %d) after %d attempts", minPort, maxPort, maxAttempts))
 }
 
 // skipIfInUse returns if err means the port is in use, and panics otherwise.
 func skipIfInUse(err error) {
 	if !inUse(err) {
-		panic(fmt.Sprintf("test.RandomPort: %v", err))
+		panic(fmt.Sprintf("testnet.RandomPort: %v", err))
 	}
 }
 

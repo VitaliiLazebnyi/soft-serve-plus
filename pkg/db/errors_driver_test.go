@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 	"github.com/lib/pq"
 	"github.com/lib/pq/pqerror"
 )
@@ -16,7 +16,7 @@ import (
 // the driver that actually raised them, and leave other errors alone.
 func TestWrapErrorConstraintViolations(t *testing.T) {
 	ctx := context.Background()
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

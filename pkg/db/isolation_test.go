@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // Every transaction runs in READ COMMITTED on Postgres, whatever the
@@ -21,11 +21,11 @@ func TestTransactionsAreReadCommittedPostgres(t *testing.T) {
 		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")
 	}
 	ctx := context.Background()
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	test.SetDefaultIsolation(ctx, t, dbx, "repeatable read")
+	dbtest.SetDefaultIsolation(ctx, t, dbx, "repeatable read")
 
 	for name, run := range map[string]func(context.Context, func(*db.Tx) error) error{
 		"TransactionContext":     dbx.TransactionContext,

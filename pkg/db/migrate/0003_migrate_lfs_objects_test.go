@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // The LFS objects migration applies to a database that already holds a
@@ -23,7 +23,7 @@ func TestMigrateLfsObjects(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	ctx, env := context.TODO(), testEnv(cfg)
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestMigrateLfsObjects(t *testing.T) {
 func TestMigrateWithoutConfig(t *testing.T) {
 	t.Parallel()
 	ctx := context.TODO()
-	dbx, err := test.OpenSqlite(ctx, t)
+	dbx, err := dbtest.OpenSqlite(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
