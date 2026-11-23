@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/spf13/cobra"
 )
 
@@ -108,14 +108,14 @@ func (cmds *Commands) blobCommand() *cobra.Command {
 				c = termtext.Sanitize(c)
 			}
 			if color && !noColor {
-				c, err = common.FormatHighlight(fp, c, cmds.blobBudget)
+				c, err = syntax.FormatHighlight(fp, c, cmds.blobBudget)
 				if err != nil {
 					return err
 				}
 			}
 
 			if linenumber {
-				c, _ = common.FormatLineNumber(styles.DefaultStyles(), c, color && !noColor)
+				c, _ = syntax.FormatLineNumber(styles.DefaultStyles(), c, color && !noColor)
 			}
 
 			cmd.Println(c)

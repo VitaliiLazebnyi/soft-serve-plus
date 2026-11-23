@@ -1,4 +1,4 @@
-package common
+package syntax
 
 import "github.com/charmbracelet/soft-serve/internal/testregexp"
 

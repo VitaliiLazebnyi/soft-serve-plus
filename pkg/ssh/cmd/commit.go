@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/spf13/cobra"
 )
 
@@ -136,7 +136,7 @@ func renderDiff(patch string, color bool) string {
 			Language: "diff",
 		}
 
-		err := diffChroma.Render(&pr, common.StyleRenderer())
+		err := diffChroma.Render(&pr, syntax.StyleRenderer())
 
 		if err != nil {
 			s.WriteString("\n" + err.Error())

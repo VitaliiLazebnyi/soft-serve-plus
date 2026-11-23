@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,7 +31,7 @@ func newRenderFiles(t *testing.T, width int) *Files {
 // budget, so that only a limit shows a file plain.
 func newUnboundedFiles(t *testing.T) *Files {
 	t.Helper()
-	uitest.WaitIdle(t, common.Tokenising)
+	uitest.WaitIdle(t, syntax.Tokenising)
 	f := newRenderFiles(t, 120)
 	f.code.HighlightBudget = uitest.Unbounded
 	return f
@@ -40,7 +41,7 @@ func newUnboundedFiles(t *testing.T) *Files {
 // failing if Update allocated more than updateAllocMax.
 func openFile(t *testing.T, f *Files, content, name string) tea.Cmd {
 	t.Helper()
-	msg := FileContentMsg{content: content, ext: name, path: name, load: f.load, isMarkdown: common.IsFileMarkdown(content, name)}
+	msg := FileContentMsg{content: content, ext: name, path: name, load: f.load, isMarkdown: syntax.IsFileMarkdown(content, name)}
 	var cmd tea.Cmd
 	if n := allocated(func() { cmd = f.Update(msg) }); n > updateAllocMax {
 		t.Fatalf("Update allocated %d bytes to open %s; want at most %d", n, name, updateAllocMax)

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -113,7 +113,7 @@ func TestGlamourOutputWrappedPerLine(t *testing.T) {
 		glamour:     true,
 		width:       116,
 		tabWidth:    defaultTabWidth,
-		styleConfig: common.StyleConfig(),
+		styleConfig: syntax.StyleConfig(),
 	}
 	if msg := j.run(); len(msg.lines) < 900 || msg.lineNumbers {
 		t.Fatalf("the README was not rendered as markdown: %d lines", len(msg.lines))

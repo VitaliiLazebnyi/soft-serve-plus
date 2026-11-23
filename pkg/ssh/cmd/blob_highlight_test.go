@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
@@ -69,7 +69,7 @@ func TestBlobColorBounded(t *testing.T) {
 	})
 
 	for _, name := range []string{"app.svelte", "a.yang"} {
-		uitest.WaitIdle(t, common.Tokenising)
+		uitest.WaitIdle(t, syntax.Tokenising)
 		stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -78,7 +78,7 @@ func TestBlobColorBounded(t *testing.T) {
 			t.Fatalf("%s: printed highlighted; want plain text", name)
 		}
 	}
-	uitest.WaitIdle(t, common.Tokenising)
+	uitest.WaitIdle(t, syntax.Tokenising)
 	stdout, _, err := runRepoOutput(t, ownerCtx, "blob", "--color", "hooks", "main.go")
 	if err != nil || !asked || !strings.Contains(stdout, "\x1b[") {
 		t.Fatalf("main.go: blob --color = %v, test budget used %v; want it highlighted", err, asked)

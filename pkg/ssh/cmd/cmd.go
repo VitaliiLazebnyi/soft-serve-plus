@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -54,8 +54,8 @@ type Commands struct {
 	// push is marked as running: for a push to a missing name, right after
 	// the push created the repository.
 	beforeBeginPush func()
-	// blobBudget is blob --color's common.Budget, nil outside tests.
-	blobBudget common.Budget
+	// blobBudget is blob --color's syntax.Budget, nil outside tests.
+	blobBudget syntax.Budget
 }
 
 // New returns the Commands for a server with d.

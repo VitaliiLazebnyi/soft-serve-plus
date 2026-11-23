@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 )
 
 // diffHighlightMax is the largest patch, in bytes, that is highlighted. A
@@ -108,7 +109,7 @@ func renderDiff(diff *git.Diff, width int) string {
 		Code:     patch,
 		Language: "diff",
 	}
-	err := diffChroma.Render(&pr, common.StyleRenderer())
+	err := diffChroma.Render(&pr, syntax.StyleRenderer())
 	if err != nil {
 		s.WriteString("\n" + err.Error())
 	} else {

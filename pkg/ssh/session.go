@@ -151,7 +151,7 @@ func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *ui.Model, co
 	opts := bm.MakeOptions(s)
 	opts = append(opts,
 		tea.WithContext(uiCtx),
-		tea.WithColorProfile(common.ColorProfile()),
+		tea.WithColorProfile(ui.ColorProfile()),
 		tea.WithWindowSize(width, height),
 		tea.WithFilter(sessionFilter),
 	)

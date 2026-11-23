@@ -1,4 +1,7 @@
-package common
+// Package syntax highlights source code for the terminal, within a time and
+// token budget, and holds the glamour styles it and the markdown renderer
+// share.
+package syntax
 
 import (
 	"fmt"
@@ -347,4 +350,20 @@ func indentLines(s string, n int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// IsFileMarkdown returns true if the file is markdown.
+// It uses chroma lexers to analyze and determine the language.
+func IsFileMarkdown(content, ext string) bool {
+	var lang string
+	lexer := lexers.Match(ext)
+	if lexer == nil {
+		// Only the start of the file: some analysers take time quadratic
+		// in their input.
+		lexer = analyse(content)
+	}
+	if lexer != nil && lexer.Config() != nil {
+		lang = lexer.Config().Name
+	}
+	return lang == "markdown"
 }

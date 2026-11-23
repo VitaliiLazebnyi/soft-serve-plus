@@ -9,7 +9,7 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
@@ -66,9 +66,9 @@ func init() {
 // render renders content as the file name, as markdown when glamour is set,
 // within budget, and returns the rendered text. It first waits for the
 // slots of earlier renders.
-func render(t *testing.T, content, name string, glamour bool, budget common.Budget) string {
+func render(t *testing.T, content, name string, glamour bool, budget syntax.Budget) string {
 	t.Helper()
-	uitest.WaitIdle(t, common.Tokenising)
+	uitest.WaitIdle(t, syntax.Tokenising)
 	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
 	c.SetSize(120, 40)
 	c.UseGlamour = glamour
@@ -123,7 +123,7 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 				// A render as source before may still be finishing
 				// its last token, and the README's own name is looked
 				// up.
-				uitest.WaitIdle(t, common.Tokenising)
+				uitest.WaitIdle(t, syntax.Tokenising)
 				lookups.Store(0)
 				render(t, content, "README.md", true, nil)
 				if n := lookups.Load(); n > 10 {
@@ -136,14 +136,14 @@ func TestCodeBlocksRenderQuickly(t *testing.T) {
 
 // renderStalled starts the render of a file whose lexer is blocked until
 // the test ends, and returns where its text will come.
-func renderStalled(t *testing.T, budget common.Budget) <-chan string {
+func renderStalled(t *testing.T, budget syntax.Budget) <-chan string {
 	t.Helper()
-	uitest.WaitIdle(t, common.Tokenising)
+	uitest.WaitIdle(t, syntax.Tokenising)
 	release := make(chan struct{})
 	stalled.Store(&release)
 	t.Cleanup(func() {
 		close(release)
-		uitest.WaitIdle(t, common.Tokenising)
+		uitest.WaitIdle(t, syntax.Tokenising)
 	})
 	c := New(uitest.NewCommon(t, context.Background(), nil, nil), "", "")
 	c.SetSize(120, 40)
@@ -167,7 +167,7 @@ func wantPlain(t *testing.T, done <-chan string) {
 	if !ok {
 		t.Fatalf("the render was not back after %v; want it back once its budget ended", uitest.HangGuard)
 	}
-	if common.Tokenising() == 0 || highlighted(out) || !strings.Contains(out, "stalled line") {
+	if syntax.Tokenising() == 0 || highlighted(out) || !strings.Contains(out, "stalled line") {
 		t.Fatalf("rendered %q; want the content plain, with the lexer still running", out)
 	}
 }
@@ -190,20 +190,20 @@ func TestBudgetShowsPlain(t *testing.T) {
 }
 
 // Without a budget, as in production, a render is plain once
-// common.HighlightBudget has passed, and no sooner.
+// syntax.HighlightBudget has passed, and no sooner.
 func TestDefaultBudgetShowsPlain(t *testing.T) {
 	start := time.Now()
 	wantPlain(t, renderStalled(t, nil))
-	if took := time.Since(start); took < common.HighlightBudget {
-		t.Fatalf("the render took %v; want it to wait %v for the lexer", took, common.HighlightBudget)
+	if took := time.Since(start); took < syntax.HighlightBudget {
+		t.Fatalf("the render took %v; want it to wait %v for the lexer", took, syntax.HighlightBudget)
 	}
 }
 
 // A file in a lexer that tokenises up front is plain past
-// common.EagerHighlightMax, without a budget to cut it off.
+// syntax.EagerHighlightMax, without a budget to cut it off.
 func TestEagerLexerShowsPlain(t *testing.T) {
 	const line = "<script lang=\"zzz\">x</script>\n"
-	content := strings.Repeat(line, common.EagerHighlightMax/len(line)+1)
+	content := strings.Repeat(line, syntax.EagerHighlightMax/len(line)+1)
 	if out := render(t, content, "x.svelte", false, uitest.Unbounded); highlighted(out) || !strings.Contains(out, "zzz") {
 		t.Fatal("rendered highlighted, or without the content; want plain text past the cap")
 	}
