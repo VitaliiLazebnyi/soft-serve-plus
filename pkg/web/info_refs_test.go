@@ -135,6 +135,30 @@ func TestSmartInfoRefs(t *testing.T) {
 	is.True(strings.HasPrefix(w.Body.String(), "000eversion 2\n"))
 }
 
+// TestInfoRefsServiceLineFollowsServedVersion checks the service line is
+// there exactly when git serves a version before v2, which it reads from
+// Git-Protocol as hooks.ProtocolVersion does: the highest of 0, 1 and 2,
+// ignoring the rest.
+func TestInfoRefsServiceLineFollowsServedVersion(t *testing.T) {
+	t.Parallel()
+	f := newInfoFixture(t)
+	f.populate(t)
+	const serviceLine = "001e# service=git-upload-pack\n0000"
+	for _, tc := range []struct {
+		protocol, want string
+	}{
+		{"version=3", serviceLine},
+		{"version=02", serviceLine},
+		{"version=1:version=3", serviceLine + "000eversion 1\n"},
+		{"version=3:version=2", "000eversion 2\n"},
+	} {
+		w := f.get(t, "/pub.git/info/refs?service=git-upload-pack", "Git-Protocol", tc.protocol)
+		if w.Code != http.StatusOK || !strings.HasPrefix(w.Body.String(), tc.want) {
+			t.Errorf("Git-Protocol %q: %d %q, want 200 starting with %q", tc.protocol, w.Code, w.Body.String()[:min(w.Body.Len(), 40)], tc.want)
+		}
+	}
+}
+
 // TestAdvertisementStartsOnFirstWrite checks the header is held back until
 // git writes, so a git that fails silently still gets an error status.
 func TestAdvertisementStartsOnFirstWrite(t *testing.T) {

@@ -632,7 +632,7 @@ func (d *Backend) importUserRepository(ctx context.Context, name string, user pr
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", proto.ErrInvalidRemote, err)
 		}
-		imp.lfsEndpoint, imp.lfs = lfsEndpoint, lfs.NewClient(ep)
+		imp.lfsEndpoint, imp.lfs = lfsEndpoint, lfs.NewClient(ep, d.logger)
 	}
 
 	// Claiming the directory is what serializes concurrent imports of one

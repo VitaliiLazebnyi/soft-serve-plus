@@ -1,8 +1,7 @@
-package git
+package sshlfs
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,21 +13,14 @@ import (
 
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
 // runLFSTransfer runs an upload session over in and returns the status codes
 // it answered with and the error it ended with.
-func runLFSTransfer(t *testing.T, ctx context.Context, in string) ([]string, error) {
+func runLFSTransfer(t *testing.T, deps TransferDeps, in string) ([]string, error) {
 	t.Helper()
-	ctx = proto.WithRepositoryContext(ctx, lfsTestRepo{})
-	ctx = proto.WithUserContext(ctx, lfsTestUser{})
 	var out bytes.Buffer
-	err := LFSTransfer(ctx, ServiceCommand{
-		Stdin:  strings.NewReader(in),
-		Stdout: &out,
-		Args:   []string{"repo1", lfs.OperationUpload},
-	})
+	err := Transfer(t.Context(), strings.NewReader(in), &out, deps, lfsTestRepo{}, lfsTestUser{}, lfs.OperationUpload)
 	var got []string
 	for _, m := range regexp.MustCompile(`status (\d{3})`).FindAllStringSubmatch(out.String(), -1) {
 		got = append(got, m[1])
@@ -50,13 +42,14 @@ func batchRequest(n int) string {
 // A batch over SSH holds at most as many objects as one over HTTP. A larger
 // one is refused before any object is looked up, and the session goes on.
 func TestLFSTransferBatchTooManyObjects(t *testing.T) {
-	_, ctx := newLFSUploadTransfer(t)
+	t.Parallel()
+	_, deps := newLFSUploadTransfer(t)
 	in := pkt("version 1\n") + "0000" +
 		batchRequest(lfs.MaxBatchObjects+1) +
 		batchRequest(lfs.MaxBatchObjects) +
 		pkt("quit\n") + "0000"
 
-	got, err := runLFSTransfer(t, ctx, in)
+	got, err := runLFSTransfer(t, deps, in)
 	if err != nil {
 		t.Fatalf("LFSTransfer: %v", err)
 	}
@@ -68,7 +61,8 @@ func TestLFSTransferBatchTooManyObjects(t *testing.T) {
 // A command whose packets add up to more than the limit ends the session
 // instead of being read into memory whole.
 func TestLFSTransferCommandTooLarge(t *testing.T) {
-	_, ctx := newLFSUploadTransfer(t)
+	t.Parallel()
+	_, deps := newLFSUploadTransfer(t)
 	arg := pkt("ref=" + strings.Repeat("a", 60000) + "\n")
 	var in strings.Builder
 	in.WriteString(pkt("version 1\n") + "0000")
@@ -79,7 +73,7 @@ func TestLFSTransferCommandTooLarge(t *testing.T) {
 	in.WriteString("0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	got, err := runLFSTransfer(t, ctx, in.String())
+	got, err := runLFSTransfer(t, deps, in.String())
 	if !errors.Is(err, errLFSCommandTooLarge) {
 		t.Fatalf("LFSTransfer: got %v, want errLFSCommandTooLarge", err)
 	}
@@ -91,7 +85,8 @@ func TestLFSTransferCommandTooLarge(t *testing.T) {
 // Object data sent with put-object is not a command's arguments: an object
 // larger than the limit is stored.
 func TestLFSTransferPutObjectLargerThanCommandLimit(t *testing.T) {
-	tr, ctx := newLFSUploadTransfer(t)
+	t.Parallel()
+	tr, deps := newLFSUploadTransfer(t)
 	data := strings.Repeat("x", 2*lfs.MaxBatchRequestSize)
 	oid := oidOf(data)
 
@@ -106,7 +101,7 @@ func TestLFSTransferPutObjectLargerThanCommandLimit(t *testing.T) {
 	in.WriteString("0000")
 	in.WriteString(pkt("quit\n") + "0000")
 
-	got, err := runLFSTransfer(t, ctx, in.String())
+	got, err := runLFSTransfer(t, deps, in.String())
 	if err != nil {
 		t.Fatalf("LFSTransfer: %v", err)
 	}
@@ -121,6 +116,7 @@ func TestLFSTransferPutObjectLargerThanCommandLimit(t *testing.T) {
 // The limit counts the bytes since the last flush, so many commands under the
 // limit add up to more than it, and the bytes pass through unchanged.
 func TestLFSCommandLimitReader(t *testing.T) {
+	t.Parallel()
 	cmd := pkt("verify-object x\n") + pkt("size=1\n") + "0000"
 	in := strings.Repeat(cmd, 10)
 
@@ -169,6 +165,7 @@ func TestLFSCommandLimitReader(t *testing.T) {
 // and reads past, ends the session instead of turning the limit off; so does a
 // signed header the limiter once refused while the processor read it.
 func TestLFSTransferMalformedPacketKeepsLimit(t *testing.T) {
+	t.Parallel()
 	// A 3 MiB batch: refused with a 400 if read whole, before any store or
 	// database lookup.
 	var b strings.Builder
@@ -186,8 +183,9 @@ func TestLFSTransferMalformedPacketKeepsLimit(t *testing.T) {
 		"signed version":      {"+00eversion 1\n" + "0000" + big, errLFSCommandTooLarge},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, ctx := newLFSUploadTransfer(t)
-			_, err := runLFSTransfer(t, ctx, tc.in+pkt("quit\n")+"0000")
+			t.Parallel()
+			_, deps := newLFSUploadTransfer(t)
+			_, err := runLFSTransfer(t, deps, tc.in+pkt("quit\n")+"0000")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("LFSTransfer: got %v, want %v", err, tc.want)
 			}
@@ -198,6 +196,7 @@ func TestLFSTransferMalformedPacketKeepsLimit(t *testing.T) {
 // Packets read while the backend streams object data don't count; the same
 // packets read as a command do.
 func TestLFSCommandLimitReaderStreamData(t *testing.T) {
+	t.Parallel()
 	args := pkt("put-object x\n") + pkt("size=100\n") + "0001"
 	data := pkt(strings.Repeat("d", 100)) + "0000"
 	in := strings.Repeat(args+data, 3)
@@ -233,6 +232,7 @@ func TestLFSCommandLimitReaderStreamData(t *testing.T) {
 // stream, and the processor reads it as the next command. Those packets count:
 // a client can't hide an oversized command behind a failed put-object.
 func TestLFSTransferFailedPutObjectDataCounts(t *testing.T) {
+	t.Parallel()
 	// No flush after the delimiter: everything from the batch on is either
 	// put-object data or, once put-object fails, one oversized command.
 	var b strings.Builder
@@ -249,10 +249,11 @@ func TestLFSTransferFailedPutObjectDataCounts(t *testing.T) {
 		"invalid oid":  pkt("put-object ../../etc\n") + pkt(fmt.Sprintf("size=%d\n", len(oversized))) + "0001",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, ctx := newLFSUploadTransfer(t)
+			t.Parallel()
+			_, deps := newLFSUploadTransfer(t)
 			in := pkt("version 1\n") + "0000" + put + oversized + "0000" + pkt("quit\n") + "0000"
 
-			_, err := runLFSTransfer(t, ctx, in)
+			_, err := runLFSTransfer(t, deps, in)
 			if !errors.Is(err, errLFSCommandTooLarge) {
 				t.Fatalf("LFSTransfer: got %v, want errLFSCommandTooLarge", err)
 			}
@@ -262,6 +263,7 @@ func TestLFSTransferFailedPutObjectDataCounts(t *testing.T) {
 
 // Batch itself refuses too many objects, before touching the store.
 func TestLFSTransferBatchObjectLimit(t *testing.T) {
+	t.Parallel()
 	tr, _ := newLFSUploadTransfer(t)
 	tr.store = nil
 	items := make([]transfer.BatchItem, lfs.MaxBatchObjects+1)

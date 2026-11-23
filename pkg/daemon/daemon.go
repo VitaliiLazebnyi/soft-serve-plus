@@ -68,7 +68,6 @@ const requestTimeout = 10 * time.Second
 
 // GitDaemon represents a Git daemon.
 type GitDaemon struct {
-	ctx            context.Context
 	addr           string
 	requestTimeout time.Duration
 	finished       chan struct{}
@@ -98,8 +97,9 @@ type GitDaemon struct {
 // testHooks are called by the daemon while it serves, for tests to inject
 // delays and faults. They are nil outside tests.
 type testHooks struct {
-	// beforeAuthorize runs before the access checks of a request.
-	beforeAuthorize func()
+	// beforeAuthorize runs before the access checks of a request, with
+	// the request's context.
+	beforeAuthorize func(ctx context.Context)
 	// now, if set, is the clock refuse reads the time from, so that a
 	// test can have a refusal come after a deadline without waiting
 	// for it to pass.
@@ -114,19 +114,27 @@ func (d *GitDaemon) now() time.Time {
 	return time.Now()
 }
 
-// NewGitDaemon returns a new Git daemon.
-func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
-	cfg := config.FromContext(ctx)
-	addr := cfg.Git.ListenAddr
+// NewGitDaemon returns a new Git daemon that serves the repositories of be
+// on cfg.Git.ListenAddr, with the limits and timeouts in cfg.Git, and logs to
+// logger, or to log.Default() when it is nil. A nil cfg or be is an error.
+func NewGitDaemon(cfg *config.Config, be *backend.Backend, logger *log.Logger) (*GitDaemon, error) {
+	if cfg == nil {
+		return nil, config.ErrNilConfig
+	}
+	if be == nil {
+		return nil, errNilBackend
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
 	d := &GitDaemon{
-		ctx:            ctx,
-		addr:           addr,
+		addr:           cfg.Git.ListenAddr,
 		requestTimeout: requestTimeout,
 		finished:       make(chan struct{}, 1),
 		cfg:            cfg,
-		be:             backend.FromContext(ctx),
+		be:             be,
 		conns:          newConnections(),
-		logger:         log.FromContext(ctx).WithPrefix("gitdaemon"),
+		logger:         logger.WithPrefix("gitdaemon"),
 
 		accessTimeout: defaultAccessTimeout,
 		refuseLinger:  refuseLinger,
@@ -135,13 +143,16 @@ func NewGitDaemon(ctx context.Context) (*GitDaemon, error) {
 	return d, nil
 }
 
+// errNilBackend is returned by NewGitDaemon for a nil backend.
+var errNilBackend = errors.New("daemon: nil backend")
+
 // ListenAndServe starts the Git TCP daemon.
 func (d *GitDaemon) ListenAndServe() error {
 	if d.done.Load() {
 		return ErrServerClosed
 	}
 	var cfg net.ListenConfig
-	listener, err := cfg.Listen(d.ctx, "tcp", d.addr)
+	listener, err := cfg.Listen(context.Background(), "tcp", d.addr)
 	if err != nil {
 		return err
 	}
@@ -292,13 +303,12 @@ func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
 //
 // The wait ends refuseLinger after the answer, at until unless it is zero,
 // and at the connection's maximum deadline, whichever comes first, and reads
-// at most refuseDrain bytes. It also ends when the server's context does or
-// the daemon shuts down, so a graceful Shutdown does not wait on refused
-// clients. A connection counted against max_connections stays counted
-// meanwhile, as it is still open. A refusal of the request passes the request deadline
-// as until, so a client holds its connection unanswered no longer than it
-// could already by sending the request line late, however long the access
-// checks took.
+// at most refuseDrain bytes. It also ends when the daemon shuts down, so a
+// graceful Shutdown does not wait on refused clients. A connection counted
+// against max_connections stays counted meanwhile, as it is still open. A
+// refusal of the request passes the request deadline as until, so a client
+// holds its connection unanswered no longer than it could already by
+// sending the request line late, however long the access checks took.
 func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	now := d.now()
@@ -321,16 +331,15 @@ func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 // aLongTimeAgo is a deadline that has passed, which ends a blocked read.
 var aLongTimeAgo = time.Unix(1, 0)
 
-// onClosing calls f once, on another goroutine, when the server's context
-// ends or the daemon shuts down or closes, unless stop is called first. stop
-// returns once f will not be called or has returned.
+// onClosing calls f once, on another goroutine, when the daemon shuts down
+// or closes, unless stop is called first. stop returns once f will not be
+// called or has returned.
 func (d *GitDaemon) onClosing(f func()) (stop func()) {
 	quit := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		select {
-		case <-d.ctx.Done():
 		case <-d.finished:
 		case <-quit:
 			return
@@ -370,11 +379,12 @@ func closeWriter(c net.Conn) interface{ CloseWrite() error } {
 	return nil
 }
 
-// requestContext returns the context a request is served with. It derives
-// from the server's context, so the request carries the server's config,
-// backend and logger and ends when the server's context does.
+// requestContext returns the context a request is served with. It carries
+// nothing: the daemon is anonymous, and what serving takes it has itself. It
+// ends when the connection fails or is closed, which Close does to every
+// connection.
 func (d *GitDaemon) requestContext() (context.Context, context.CancelFunc) {
-	return context.WithCancel(d.ctx)
+	return context.WithCancel(context.Background())
 }
 
 // readable reports whether the anonymous daemon may serve the repository
@@ -412,7 +422,7 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 		d.logger.Debugf("git: protocol version %s", req.version)
 	}
 	if d.testHooks.beforeAuthorize != nil {
-		d.testHooks.beforeAuthorize()
+		d.testHooks.beforeAuthorize(ctx)
 	}
 	if err := d.authorize(ctx, req); err != nil {
 		d.refuse(c, err, until)
@@ -427,22 +437,9 @@ func (d *GitDaemon) handleClient(ctx context.Context, c *serverConn) {
 // may wait on the client.
 func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok bool) {
 	// Read the request line on this goroutine. The connection's deadlines
-	// bound the read, and closing the connection on shutdown unblocks it, so
-	// there is nothing to wait on beside it. If the server's context ends
-	// first, the client gets the timeout answer and the connection is closed,
-	// which ends the read too.
-	stopRead := context.AfterFunc(d.ctx, func() {
-		d.logger.Debugf("git: connection context error: %v", d.ctx.Err())
-		d.fatal(c, git.ErrTimeout)
-	})
-	// A panic in the read must not leave the AfterFunc registered on the
-	// server's context; stopping it again below is harmless.
-	defer stopRead()
+	// bound the read, and closing the connection on Close unblocks it, so
+	// there is nothing to wait on beside it.
 	line, err := git.ReadPkt(c)
-	if !stopRead() {
-		// The server's context ended and the client has been answered.
-		return nil, time.Time{}, false
-	}
 	// The read is over: from here on reads and writes only have to keep
 	// the connection from going idle. A refusal of the request may still
 	// wait on the client until the request deadline.
@@ -584,6 +581,7 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 		Stderr: stderr,
 		Env:    d.environ(req),
 		Dir:    d.repoDir(req),
+		Logger: d.logger,
 	}
 	if ka := keepAlive(c.idleTimeout); ka > 0 {
 		// Neither side talks while pack-objects prepares the pack
@@ -691,24 +689,14 @@ func isErrorLine(err error) bool {
 }
 
 // protocolVersion returns the protocol version the client asked for in the
-// extra parameters of its request, or "" if it asked for none. Like git, it
-// takes the highest "version=N" and ignores every other parameter, so nothing
-// else the client sends reaches GIT_PROTOCOL.
+// extra parameters of its request, or "" if it asked for none git knows.
+// git-daemon passes the parameters to git joined with colons, as
+// GIT_PROTOCOL, so they are read as that value is over SSH and HTTP (see
+// hooks.ProtocolVersion), and nothing else the client sends reaches git.
 func protocolVersion(params []byte) string {
-	version := -1
-	for p := range bytes.SplitSeq(params, []byte{0}) {
-		v, ok := bytes.CutPrefix(p, []byte("version="))
-		if !ok || len(v) == 0 || len(v) > 3 {
-			continue
-		}
-		n, err := strconv.Atoi(string(v))
-		if err != nil || n < 0 {
-			continue
-		}
-		version = max(version, n)
-	}
-	if version < 0 {
+	v, ok := hooks.ProtocolVersion(strings.Join(strings.Split(string(params), "\x00"), ":"))
+	if !ok {
 		return ""
 	}
-	return strconv.Itoa(version)
+	return strconv.Itoa(v)
 }

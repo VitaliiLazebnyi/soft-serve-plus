@@ -11,13 +11,12 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
+	"github.com/charmbracelet/soft-serve/pkg/lfs/sshlfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -573,9 +572,16 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Serv
 		return err
 	}
 
-	r.scmd.Args = []string{r.name, operation}
 	counter, seconds := lfsTransferCounter, lfsTransferSeconds
-	run := git.LFSTransfer
+	run := func() error {
+		deps := sshlfs.TransferDeps{
+			Config: r.cfg,
+			DB:     cmds.db,
+			Store:  cmds.store,
+			Logger: r.logger,
+		}
+		return sshlfs.Transfer(r.ctx, r.scmd.Stdin, r.scmd.Stdout, deps, r.repo, r.user, operation)
+	}
 	if service == git.LFSAuthenticateService {
 		// A caller without an account that may read the repository, such
 		// as an unregistered key on a public repository with anonymous
@@ -587,7 +593,9 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Serv
 			return errLFSAuthNoAccount
 		}
 		counter, seconds = lfsAuthenticateCounter, lfsAuthenticateSeconds
-		run = git.LFSAuthenticate
+		run = func() error {
+			return sshlfs.Authenticate(r.scmd.Stdout, r.cfg, cmds.tokens, r.logger, r.repo, r.user, operation)
+		}
 	} else if operation == lfs.OperationUpload {
 		// An upload writes to the repository like a push, so it holds off
 		// the same removal.
@@ -603,12 +611,7 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Serv
 		seconds.WithLabelValues(operation).Add(time.Since(r.start).Seconds())
 	}()
 
-	// The handlers in pkg/git take the config, database and store from
-	// their context.
-	ctx := config.WithContext(r.ctx, cmds.cfg)
-	ctx = db.WithContext(ctx, cmds.db)
-	ctx = store.WithContext(ctx, cmds.store)
-	if err := run(ctx, r.scmd); err != nil {
+	if err := run(); err != nil {
 		return gitServiceError(r.ctx, r.logger, service, r.name, err)
 	}
 	return nil

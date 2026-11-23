@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"bytes"
@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // TestLFSLockRangeRejectsInvalidCursor checks that listing locks over SSH
@@ -25,6 +26,7 @@ import (
 // parse used to read as the first page. The backend has no database on
 // purpose: a refused cursor must not reach it.
 func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
+	t.Parallel()
 	l := &lfsLockBackend{
 		lfsTransfer: &lfsTransfer{ctx: context.Background(), op: lfs.OperationUpload},
 		user:        lfsTestUser{},
@@ -38,6 +40,7 @@ func TestLFSLockRangeRejectsInvalidCursor(t *testing.T) {
 		"99999999999999999999",
 	} {
 		t.Run(cursor, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r != nil {
 					t.Fatalf("Range(%q) reached the database: %v", cursor, r)
@@ -74,6 +77,7 @@ func (pagedLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) (mo
 // of the last lock of a full page as the next cursor, and starts the next
 // page after it, so paging lists every lock exactly once.
 func TestLFSLockRangeCursor(t *testing.T) {
+	t.Parallel()
 	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -133,6 +137,7 @@ func (passwordLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) 
 // log of a lock, as in its "lock success" line, does not print the owner's
 // password hash. A lock used to hold the owner's whole user record.
 func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
+	t.Parallel()
 	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -187,9 +192,12 @@ func (u lfsLockTestUser) IsAdmin() bool    { return u.admin }
 // the caller's own locks, so a conflicting lock went unreported and another
 // user's lock could not be listed, refused or force-unlocked.
 func TestLFSLockOwnership(t *testing.T) {
-	tr, ctx := newLFSUploadTransfer(t)
-	datastore := store.FromContext(ctx)
-	dbx := db.FromContext(ctx)
+	t.Parallel()
+	tr, deps := newLFSUploadTransfer(t)
+	ctx := t.Context()
+	// The store is stateless: this one sees what the transfer's does.
+	datastore := database.New()
+	dbx := deps.DB
 
 	users := map[string]lfsLockTestUser{}
 	for _, u := range []struct {
@@ -219,7 +227,7 @@ func TestLFSLockOwnership(t *testing.T) {
 		in.WriteString(pkt("quit\n") + "0000")
 
 		utr := *tr
-		utr.ctx = proto.WithUserContext(ctx, users[user])
+		utr.user = users[user]
 		var out bytes.Buffer
 		p := transfer.NewProcessor(transfer.NewPktline(strings.NewReader(in.String()), &out, nil), &utr, nil)
 		if err := p.ProcessCommands(lfs.OperationUpload); err != nil {
@@ -297,6 +305,7 @@ func TestLFSLockOwnership(t *testing.T) {
 // not a number is a client error (400) rather than an internal one (500).
 // The backend has no database on purpose: a refused ID must not reach it.
 func TestLFSLockFromIDRejectsInvalidID(t *testing.T) {
+	t.Parallel()
 	l := &lfsLockBackend{
 		lfsTransfer: &lfsTransfer{ctx: context.Background(), op: lfs.OperationUpload},
 		user:        lfsTestUser{},
@@ -304,6 +313,7 @@ func TestLFSLockFromIDRejectsInvalidID(t *testing.T) {
 
 	for _, id := range []string{"abc", "", "1x", "99999999999999999999"} {
 		t.Run(id, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r != nil {
 					t.Fatalf("FromID(%q) reached the database: %v", id, r)

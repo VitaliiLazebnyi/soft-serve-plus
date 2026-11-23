@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"context"
@@ -43,11 +43,11 @@ func (s *lookupCountingStore) GetUserByID(ctx context.Context, h db.Handler, id 
 // A batch over SSH looks its objects up in one query, and lock responses
 // name their owners from the lock query, not one lookup per object or lock.
 func TestLFSTransferLooksUpTogether(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db"), db.Options{})
 	if err != nil {
 		t.Fatal(err)

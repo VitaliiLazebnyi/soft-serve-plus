@@ -12,6 +12,7 @@ const (
 )
 
 func TestReadPointer(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		content string
@@ -162,6 +163,7 @@ size abc
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p, err := ReadPointerFromBuffer([]byte(tc.content))
 			switch {
 			case tc.wantErr != nil:

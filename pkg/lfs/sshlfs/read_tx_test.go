@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"context"
@@ -39,11 +39,11 @@ func (u lfsIDUser) ID() int64 { return u.id }
 // connection holds a write transaction open, instead of waiting for it
 // (busy_timeout) and then failing with "database is locked".
 func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db")+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)

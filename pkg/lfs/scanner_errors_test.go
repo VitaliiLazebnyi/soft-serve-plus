@@ -70,7 +70,7 @@ exec %q "$@"
 func searchPointers(repo *git.Repository) ([]PointerBlob, error) {
 	pointerChan := make(chan PointerBlob)
 	errChan := make(chan error, 1)
-	go SearchPointerBlobs(context.Background(), repo, pointerChan, errChan)
+	go SearchPointerBlobs(context.Background(), nil, repo, pointerChan, errChan)
 	var pointers []PointerBlob
 	for p := range pointerChan {
 		pointers = append(pointers, p)
@@ -79,6 +79,7 @@ func searchPointers(repo *git.Repository) ([]PointerBlob, error) {
 }
 
 func TestSearchPointerBlobs(t *testing.T) {
+	t.Parallel()
 	pointers, err := searchPointers(newPointerRepo(t))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -92,6 +93,7 @@ func TestSearchPointerBlobs(t *testing.T) {
 // used to: a failing cat-file ended the scan early with no error, so it
 // passed for a complete scan that found fewer pointers.
 func TestSearchPointerBlobsReportsGitFailures(t *testing.T) {
+	// Not parallel: failGit sets PATH.
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as git")
 	}

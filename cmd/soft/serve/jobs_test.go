@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -55,7 +54,9 @@ func TestScheduleJobs(t *testing.T) {
 		cfg.Jobs.MirrorPull = c.mirror
 		var buf bytes.Buffer
 		var sched recordingScheduler
-		scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
+		if err := scheduleJobs(t.Context(), cfg, new(backend.Backend), &sched, log.New(&buf)); err != nil {
+			t.Fatal(err)
+		}
 
 		if !maps.Equal(sched.specs, c.want) {
 			t.Errorf("mirror_pull %q: scheduled %v, want %v", c.mirror, sched.specs, c.want)
@@ -71,7 +72,9 @@ func TestScheduleJobsLogsRefusedJob(t *testing.T) {
 	cfg := config.DefaultConfig()
 	var buf bytes.Buffer
 	sched := recordingScheduler{fail: map[string]bool{"mirror-pull": true}}
-	scheduleJobs(t.Context(), cfg, &sched, log.New(&buf))
+	if err := scheduleJobs(t.Context(), cfg, new(backend.Backend), &sched, log.New(&buf)); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := slices.Collect(maps.Keys(sched.specs)); !slices.Equal(got, []string{"lfs-sweep"}) {
 		t.Errorf("scheduled %v, want only lfs-sweep", got)
@@ -85,8 +88,9 @@ func TestScheduleJobsLogsRefusedJob(t *testing.T) {
 var _ jobScheduler = (*cron.Scheduler)(nil)
 
 // The jobs run with the jobCtx scheduleJobs is given, not with whatever
-// context the scheduler has: the lfs-sweep it schedules sweeps the data path
-// of the config in jobCtx. Once jobCtx is done, a tick starts nothing.
+// context the scheduler has, and with the config and logger given alongside:
+// the lfs-sweep it schedules sweeps that config's data path and logs to that
+// logger. Once jobCtx is done, a tick starts nothing.
 func TestScheduleJobsRunWithJobContext(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
@@ -104,26 +108,26 @@ func TestScheduleJobsRunWithJobContext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	jobCtx, cancel := context.WithCancel(config.WithContext(t.Context(), cfg))
+	jobCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	// The jobs log through jobCtx's logger, so it shows whether one ran.
+	// The jobs log through the logger given, so it shows whether one ran.
 	var jobLogs bytes.Buffer
 	jobLogger := log.New(&jobLogs)
 	jobLogger.SetLevel(log.DebugLevel)
-	jobCtx = log.WithContext(jobCtx, jobLogger)
 
-	// The config passed alongside has no data path: only jobCtx's does.
 	var sched recordingScheduler
-	scheduleJobs(jobCtx, config.DefaultConfig(), &sched, log.New(io.Discard))
+	if err := scheduleJobs(jobCtx, cfg, new(backend.Backend), &sched, jobLogger); err != nil {
+		t.Fatal(err)
+	}
 
 	writeStale()
 	sched.fns["lfs-sweep"]()
 	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("stale temp file not swept with jobCtx's config: %v", err)
+		t.Fatalf("stale temp file not swept with the config given: %v", err)
 	}
 
 	if !strings.Contains(jobLogs.String(), "removed stale lfs temp files") {
-		t.Errorf("the sweep did not log through jobCtx's logger: %q", jobLogs.String())
+		t.Errorf("the sweep did not log through the logger given: %q", jobLogs.String())
 	}
 
 	// A tick once jobCtx is done starts nothing: the sweep would stop on

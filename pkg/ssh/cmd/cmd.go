@@ -28,12 +28,11 @@ import (
 type Deps struct {
 	Config  *config.Config
 	Backend *backend.Backend
-	// DB and Store are for git-lfs-transfer, whose handler in pkg/git still
-	// takes them, and the config, from its context.
+	// DB and Store are for git-lfs-transfer.
 	DB    *db.DB
 	Store store.Store
-	// Tokens signs the tokens `jwt` issues. Without one, `jwt` fails as
-	// it does when the host key cannot be used.
+	// Tokens signs the tokens `jwt` and git-lfs-authenticate issue.
+	// Without one, both fail as they do when the host key cannot be used.
 	Tokens *jwk.Signer
 	Logger *log.Logger
 }

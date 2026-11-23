@@ -49,10 +49,6 @@ var testChunk = strings.Repeat("c", 32<<10)
 // with them in the returned log.
 func newLoopbackAdapter(t *testing.T, stall time.Duration) (*HTTPClient, *connLog) {
 	t.Helper()
-	old := stallTimeout
-	stallTimeout = stall
-	t.Cleanup(func() { stallTimeout = old })
-
 	conns := &connLog{}
 	dial := (&net.Dialer{}).DialContext
 	tr := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -63,8 +59,8 @@ func newLoopbackAdapter(t *testing.T, stall time.Duration) (*HTTPClient, *connLo
 		return &loggedConn{Conn: c, log: conns}, nil
 	}}
 	t.Cleanup(tr.CloseIdleConnections)
-	client := newTransferClient(&http.Client{Timeout: ssrf.ClientTimeout, Transport: tr})
-	return &HTTPClient{client: client}, conns
+	client := newTransferClient(&http.Client{Timeout: ssrf.ClientTimeout, Transport: tr}, stall)
+	return &HTTPClient{client: client, logger: log.New(io.Discard)}, conns
 }
 
 // connLog records, for the connections under the stall timeout, how many
@@ -133,7 +129,8 @@ func (c *loggedConn) Write(b []byte) (int, error) {
 }
 
 func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
-	c := newHTTPClient(&url.URL{})
+	t.Parallel()
+	c := newHTTPClient(&url.URL{}, nil)
 	if c.client.Timeout != 0 {
 		t.Fatalf("client.Timeout = %v, want 0: it cuts off any LFS transfer that takes longer", c.client.Timeout)
 	}
@@ -143,6 +140,7 @@ func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
 // deadline forward, so one that keeps flowing for longer than the stall
 // timeout in all does not stall out.
 func TestHTTPClientSlowDownloadCompletes(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		for i := range testChunks {
@@ -190,6 +188,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 // deadline forward although nothing is read from the server meanwhile:
 // writes alone keep the connection alive.
 func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
+	t.Parallel()
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -221,8 +220,10 @@ func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 // A server that stops sending must still fail the transfer, both before the
 // response headers and in the middle of the body.
 func TestHTTPClientStalledTransferFails(t *testing.T) {
+	t.Parallel()
 	for name, headers := range map[string]bool{"no headers": false, "stalled body": true} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			release := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if headers {
@@ -268,14 +269,13 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
-// debugContext returns a context whose logger writes everything, down to
-// debug, to the returned buffer.
-func debugContext(t *testing.T) (context.Context, *bytes.Buffer) {
-	t.Helper()
+// debugLogger returns a logger that writes everything, down to debug, to
+// the returned buffer.
+func debugLogger() (*log.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	logger.SetLevel(log.DebugLevel)
-	return log.WithContext(context.Background(), logger), &buf
+	return logger, &buf
 }
 
 // plainClient is an HTTPClient set up by newTransferClient like the shared
@@ -290,8 +290,8 @@ func plainClient(t *testing.T, endpoint string) *HTTPClient {
 	}
 	tr := &http.Transport{DialContext: (&net.Dialer{}).DialContext}
 	t.Cleanup(tr.CloseIdleConnections)
-	c := newTransferClient(&http.Client{Transport: tr})
-	return &HTTPClient{client: c, endpoint: ep}
+	c := newTransferClient(&http.Client{Transport: tr}, stallTimeout)
+	return &HTTPClient{client: c, endpoint: ep, logger: log.New(io.Discard)}
 }
 
 func assertNoSecrets(t *testing.T, what, s string, secrets ...string) {
@@ -311,10 +311,12 @@ var testPointer = Pointer{Oid: strings.Repeat("a", 64), Size: 1}
 // TestBatchRedactsEndpoint checks that an endpoint's user info, which can be
 // a token, is neither logged nor returned when the batch request fails.
 func TestBatchRedactsEndpoint(t *testing.T) {
-	ctx, logs := debugContext(t)
+	t.Parallel()
+	logger, logs := debugLogger()
 	c := plainClient(t, "http://TOKEN:PASSWORD@"+closedAddr(t)+"/x.git")
+	c.logger = logger
 
-	err := c.Download(ctx, []Pointer{testPointer}, discard)
+	err := c.Download(t.Context(), []Pointer{testPointer}, discard)
 	if err == nil {
 		t.Fatal("expected the batch request to fail")
 	}
@@ -354,6 +356,7 @@ func batchServer(t *testing.T, actions map[string]*Link) *httptest.Server {
 // TestTransferRedactsHref checks that a presigned href's signature and an
 // action's headers are neither logged nor returned when a transfer fails.
 func TestTransferRedactsHref(t *testing.T) {
+	t.Parallel()
 	header := map[string]string{"Authorization": "Bearer HEADERSECRET"}
 	tests := map[string]struct {
 		actions  map[string]*Link
@@ -390,12 +393,14 @@ func TestTransferRedactsHref(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			srv := batchServer(t, tt.actions)
-			ctx, logs := debugContext(t)
+			logger, logs := debugLogger()
 			c := plainClient(t, srv.URL+"/x.git")
+			c.logger = logger
 
 			var objectErr error
-			err := c.Download(ctx, []Pointer{testPointer}, func(_ Pointer, content io.ReadCloser, objectError error) error {
+			err := c.Download(t.Context(), []Pointer{testPointer}, func(_ Pointer, content io.ReadCloser, objectError error) error {
 				if content != nil {
 					content.Close() //nolint: errcheck,gosec
 				}
@@ -432,16 +437,17 @@ func TestTransferRedactsHref(t *testing.T) {
 // The clients are built from two goroutines, as concurrent mirror jobs do, so
 // that -race catches newHTTPClient changing the shared client.
 func TestNewHTTPClientSharesTransport(t *testing.T) {
+	t.Parallel()
 	var a, b *HTTPClient
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		a = newHTTPClient(&url.URL{Scheme: "https", Host: "a.example.com"})
+		a = newHTTPClient(&url.URL{Scheme: "https", Host: "a.example.com"}, nil)
 	}()
 	go func() {
 		defer wg.Done()
-		b = newHTTPClient(&url.URL{Scheme: "https", Host: "b.example.com"})
+		b = newHTTPClient(&url.URL{Scheme: "https", Host: "b.example.com"}, nil)
 	}()
 	wg.Wait()
 
@@ -457,6 +463,7 @@ func TestNewHTTPClientSharesTransport(t *testing.T) {
 // transport's dialer once more for every LFS client would stack stall
 // wrappers and race with transfers already using it.
 func TestNewHTTPClientDoesNotRewrapTransport(t *testing.T) {
+	// Not parallel: it replaces the shared transport's dialer.
 	tr, ok := secureHTTPClient.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("shared transport is %T, want *http.Transport", secureHTTPClient.Transport)
@@ -469,8 +476,8 @@ func TestNewHTTPClientDoesNotRewrapTransport(t *testing.T) {
 		return c, nil
 	}
 
-	newHTTPClient(&url.URL{Scheme: "https", Host: "a.example.com"})
-	newHTTPClient(&url.URL{Scheme: "https", Host: "b.example.com"})
+	newHTTPClient(&url.URL{Scheme: "https", Host: "a.example.com"}, nil)
+	newHTTPClient(&url.URL{Scheme: "https", Host: "b.example.com"}, nil)
 
 	conn, err := tr.DialContext(context.Background(), "tcp", "a.example.com:443")
 	if err != nil {
@@ -485,6 +492,7 @@ func TestNewHTTPClientDoesNotRewrapTransport(t *testing.T) {
 // The shared client must be set up by newTransferClient: without it, a
 // client with no whole-request timeout would have no stall limit either.
 func TestSecureHTTPClientHasStallTimeout(t *testing.T) {
+	t.Parallel()
 	tr, ok := secureHTTPClient.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("shared transport is %T, want *http.Transport", secureHTTPClient.Transport)
@@ -505,6 +513,7 @@ func TestSecureHTTPClientHasStallTimeout(t *testing.T) {
 // bound on the wait for response headers, so a server that takes the request
 // and never answers is still given up on.
 func TestSecureHTTPClientBoundsResponseHeaders(t *testing.T) {
+	t.Parallel()
 	tr, ok := secureHTTPClient.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("shared transport is %T, want *http.Transport", secureHTTPClient.Transport)
@@ -520,17 +529,19 @@ func TestSecureHTTPClientBoundsResponseHeaders(t *testing.T) {
 // setTransferTimeouts must refuse a transport it cannot add the stall limit
 // to, rather than leave transfers with no bound at all.
 func TestSetTransferTimeoutsPanicsOnUnknownTransport(t *testing.T) {
+	t.Parallel()
 	for name, rt := range map[string]http.RoundTripper{
 		"not an *http.Transport": http.NewFileTransport(http.Dir(".")),
 		"no DialContext":         &http.Transport{},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if recover() == nil {
 					t.Fatal("setTransferTimeouts accepted a transport it cannot wrap")
 				}
 			}()
-			setTransferTimeouts(&http.Client{Transport: rt})
+			setTransferTimeouts(&http.Client{Transport: rt}, stallTimeout)
 		})
 	}
 }
@@ -538,6 +549,7 @@ func TestSetTransferTimeoutsPanicsOnUnknownTransport(t *testing.T) {
 // The shared client must still be the SSRF-protected one: it refuses to
 // connect to loopback and does not follow redirects.
 func TestSecureHTTPClientIsSSRFProtected(t *testing.T) {
+	t.Parallel()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:1/", nil)
 	if err != nil {
 		t.Fatal(err)

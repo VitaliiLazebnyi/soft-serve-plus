@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"errors"
@@ -18,6 +18,7 @@ import (
 // and an upload session reports the object missing so the upload records
 // it.
 func TestLFSTransferBatchDoesNotRecordObjects(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	oid := oidOf(content)
 	size := int64(len(content))

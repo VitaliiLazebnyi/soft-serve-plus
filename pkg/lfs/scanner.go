@@ -19,16 +19,17 @@ import (
 )
 
 // SearchPointerBlobs scans the whole repository for LFS pointer files. It
-// sends at most one error on errChan, which must have room for it.
-func SearchPointerBlobs(ctx context.Context, repo *git.Repository, pointerChan chan<- PointerBlob, errChan chan<- error) {
-	searchPointerBlobs(ctx, repo, []string{"--all"}, "", pointerChan, errChan)
+// sends at most one error on errChan, which must have room for it. A panic
+// in the scan is logged to logger, or to log.Default() when it is nil.
+func SearchPointerBlobs(ctx context.Context, logger *log.Logger, repo *git.Repository, pointerChan chan<- PointerBlob, errChan chan<- error) {
+	searchPointerBlobs(ctx, logger, ReadPointerFromBuffer, repo, []string{"--all"}, "", pointerChan, errChan)
 }
 
 // SearchPointerBlobsBetween is SearchPointerBlobs for only the objects
 // reachable from the objects in include but not from those in exclude, as
 // git rev-list --objects <include...> --not <exclude...> lists them. Each
 // one is an object id. With no include, nothing is scanned.
-func SearchPointerBlobsBetween(ctx context.Context, repo *git.Repository, include, exclude []string, pointerChan chan<- PointerBlob, errChan chan<- error) {
+func SearchPointerBlobsBetween(ctx context.Context, logger *log.Logger, repo *git.Repository, include, exclude []string, pointerChan chan<- PointerBlob, errChan chan<- error) {
 	// The ids go on stdin, as a repository can have more refs than fit on
 	// a command line.
 	var revs strings.Builder
@@ -38,20 +39,24 @@ func SearchPointerBlobsBetween(ctx context.Context, repo *git.Repository, includ
 	for _, id := range exclude {
 		revs.WriteString("^" + id + "\n")
 	}
-	searchPointerBlobs(ctx, repo, []string{"--stdin"}, revs.String(), pointerChan, errChan)
+	searchPointerBlobs(ctx, logger, ReadPointerFromBuffer, repo, []string{"--stdin"}, revs.String(), pointerChan, errChan)
 }
 
 // searchPointerBlobs scans the objects git rev-list --objects lists with
-// revArgs and stdin, sends the pointers it finds on pointerChan, and closes
+// revArgs and stdin, reading each candidate blob with read, sends the
+// pointers it finds on pointerChan, and closes
 // pointerChan and then errChan, after sending the error of the scan, if any.
 // A scan that stops because ctx is done reports ctx's error, even if git
 // happened to finish cleanly, so it does not pass for a complete one. A scan
 // that panics, as it reads what git prints, is logged and reports the panic,
 // since it runs in a goroutine of its own that nothing else recovers.
-func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []string, stdin string, pointerChan chan<- PointerBlob, errChan chan<- error) {
+func searchPointerBlobs(ctx context.Context, logger *log.Logger, read pointerReader, repo *git.Repository, revArgs []string, stdin string, pointerChan chan<- PointerBlob, errChan chan<- error) {
+	if logger == nil {
+		logger = log.Default()
+	}
 	var err error
-	if perr := safego.Run(log.FromContext(ctx).WithPrefix("lfs"), func() {
-		err = scanPointerBlobs(ctx, repo.Path, revArgs, stdin, func(p PointerBlob) bool {
+	if perr := safego.Run(logger.WithPrefix("lfs"), func() {
+		err = scanPointerBlobs(ctx, repo.Path, revArgs, stdin, read, func(p PointerBlob) bool {
 			select {
 			case pointerChan <- p:
 				return true
@@ -76,8 +81,8 @@ func searchPointerBlobs(ctx context.Context, repo *git.Repository, revArgs []str
 
 // scanPointerBlobs runs git rev-list, keeping only the blobs that are small
 // enough to be pointers, into git cat-file --batch in dir, and calls found
-// with each pointer, until found returns false.
-func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin string, found func(PointerBlob) bool) error {
+// with each pointer read reads, until found returns false.
+func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin string, read pointerReader, found func(PointerBlob) bool) error {
 	// Stop both commands when the scan ends early, as when found or the
 	// parser stops it: they would otherwise block on a full pipe.
 	ctx, cancel := context.WithCancel(ctx)
@@ -154,7 +159,7 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 		}
 	}()
 
-	parseErr := parseCatFileBatch(out, found)
+	parseErr := parseCatFileBatch(out, read, found)
 	if parseErr != nil {
 		// Stopped early: cat-file may be blocked writing the rest.
 		cancel()
@@ -226,9 +231,9 @@ const maxObjectSize int64 = 1 << 50
 var errStopScan = errors.New("scan stopped")
 
 // parseCatFileBatch reads git cat-file --batch output from r and calls found
-// with each blob that is an LFS pointer. It returns nil at the end of the
-// output, and errStopScan once found returns false.
-func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
+// with each blob that read reads as an LFS pointer. It returns nil at the end
+// of the output, and errStopScan once found returns false.
+func parseCatFileBatch(r io.Reader, read pointerReader, found func(PointerBlob) bool) error {
 	br := bufio.NewReader(r)
 	// Room for the largest blob read, plus its trailing newline.
 	buf := make([]byte, blobSizeCutoff+1)
@@ -270,7 +275,7 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 		if _, err := io.ReadFull(br, content); err != nil {
 			return err //nolint:wrapcheck
 		}
-		pointer, _ := readPointer(content[:size])
+		pointer, _ := read(content[:size])
 		if !pointer.IsValid() {
 			continue
 		}
@@ -280,5 +285,6 @@ func parseCatFileBatch(r io.Reader, found func(PointerBlob) bool) error {
 	}
 }
 
-// readPointer parses a blob as a pointer. Tests replace it.
-var readPointer = ReadPointerFromBuffer
+// pointerReader parses a blob as a pointer: ReadPointerFromBuffer, which
+// tests replace.
+type pointerReader func([]byte) (Pointer, error)

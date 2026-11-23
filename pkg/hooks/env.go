@@ -3,6 +3,7 @@ package hooks
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -53,7 +54,8 @@ type Request struct {
 	User proto.User
 	// PublicKey is the key an SSH session authenticated with, or nil.
 	PublicKey gossh.PublicKey
-	// Protocol is the GIT_PROTOCOL value to pass to git, or "".
+	// Protocol is the client's GIT_PROTOCOL value, or "". git gets only
+	// the version it asks for (see ProtocolEnv).
 	Protocol string
 	// Refs, if not nil, is where post-receive writes the refs the push
 	// updated.
@@ -76,7 +78,8 @@ const dataSourceEnv = "SOFT_SERVE_DB_DATA_SOURCE="
 //     (see WriteConfig);
 //   - the server config, from cfg.Environ, without the database data
 //     source;
-//   - GIT_PROTOCOL when req has one.
+//   - GIT_PROTOCOL with the version req.Protocol asks for, if any (see
+//     ProtocolEnv).
 //
 // Only receive-pack runs hooks. Every other git service gets ProtocolEnv,
 // so a fetch, including an anonymous one, never carries the server config.
@@ -105,10 +108,37 @@ func Env(cfg *config.Config, req Request) []string {
 }
 
 // ProtocolEnv returns the environment of a git service that runs no hooks:
-// GIT_PROTOCOL, when protocol is not empty, and nothing else.
+// GIT_PROTOCOL with the version protocol, the client's GIT_PROTOCOL value,
+// asks for (see ProtocolVersion), and nothing else. Every transport passes
+// what its client sent through it, so git gets "version=N" and none of the
+// client's other parameters. It returns nil when protocol asks for no
+// version git knows.
 func ProtocolEnv(protocol string) []string {
-	if protocol == "" {
+	v, ok := ProtocolVersion(protocol)
+	if !ok {
 		return nil
 	}
-	return []string{"GIT_PROTOCOL=" + protocol}
+	return []string{"GIT_PROTOCOL=version=" + strconv.Itoa(v)}
+}
+
+// maxProtocolVersion is the highest protocol version git knows.
+const maxProtocolVersion = 2
+
+// ProtocolVersion returns the protocol version git serves for protocol, a
+// GIT_PROTOCOL value: parameters separated by colons, of which git reads
+// only "version=N". Like git, it takes the highest version it knows, 0, 1 or
+// 2, and ignores every other parameter. ok is false when protocol asks for
+// none of them.
+func ProtocolVersion(protocol string) (version int, ok bool) {
+	version = -1
+	for p := range strings.SplitSeq(protocol, ":") {
+		v, found := strings.CutPrefix(p, "version=")
+		// git compares the value with "0", "1" and "2" as strings, so
+		// "02" or "+2" is no version at all.
+		if !found || len(v) != 1 || v[0] < '0' || v[0] > '0'+maxProtocolVersion {
+			continue
+		}
+		version = max(version, int(v[0]-'0'))
+	}
+	return version, version >= 0
 }

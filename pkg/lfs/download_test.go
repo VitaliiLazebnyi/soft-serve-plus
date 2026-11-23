@@ -49,10 +49,10 @@ func TestDownloadErrorResponse(t *testing.T) {
 				_, _ = io.WriteString(w, tt.body)
 			}))
 			t.Cleanup(srv.Close)
-			a := &HTTPClient{client: srv.Client()}
-			ctx, logs := debugContext(t)
+			logger, logs := debugLogger()
+			a := &HTTPClient{client: srv.Client(), logger: logger}
 
-			rc, err := a.download(ctx, &Link{Href: srv.URL + "/obj"})
+			rc, err := a.download(t.Context(), &Link{Href: srv.URL + "/obj"})
 			if err == nil {
 				_ = rc.Close()
 				t.Fatal("expected the download to fail")

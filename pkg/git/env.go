@@ -5,6 +5,10 @@ import "strings"
 // noReplaceObjects makes git ignore refs/replace (see serviceEnv).
 const noReplaceObjects = "GIT_NO_REPLACE_OBJECTS=1"
 
+// gitProtocolEnv is the variable git reads the protocol version from. Only
+// the request sets it (see serviceEnv).
+const gitProtocolEnv = "GIT_PROTOCOL"
+
 // softServeEnvPrefix is the prefix of the variables Soft Serve passes to git
 // and its hooks.
 const softServeEnvPrefix = "SOFT_SERVE_"
@@ -42,6 +46,13 @@ var inheritedSoftServeEnvPrefixes = []string{
 // server's environment would reach the hooks whenever the request does not
 // set it itself (an anonymous or keyless push), and the push would be
 // attributed to that user.
+//
+// GIT_PROTOCOL is dropped too: it is the client's to send, and every
+// transport passes the version its client asked for in extra. A
+// GIT_PROTOCOL in the server's own environment would otherwise be what git
+// serves to a client that asks for no version, while the transport, which
+// reads only the client's value, answers as for v0: HTTP's info/refs would
+// send a service line that contradicts git's advertisement.
 func serviceEnv(environ, extra []string) []string {
 	env := make([]string, 0, len(environ)+1+len(extra))
 	for _, kv := range environ {
@@ -59,6 +70,9 @@ func keepInheritedEnv(kv string) bool {
 	key, _, _ := strings.Cut(kv, "=")
 	// Environment variable names are case-insensitive on Windows.
 	upper := strings.ToUpper(key)
+	if upper == gitProtocolEnv {
+		return false
+	}
 	if !strings.HasPrefix(upper, softServeEnvPrefix) {
 		return true
 	}

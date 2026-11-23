@@ -21,29 +21,36 @@ import (
 type HTTPClient struct {
 	client   *http.Client
 	endpoint Endpoint
+	logger   *log.Logger
 }
 
 // stallTimeout is how long an LFS connection may go without sending or
-// receiving any data before it is closed. Tests lower it.
-var stallTimeout = ssrf.ClientTimeout
+// receiving any data before it is closed.
+const stallTimeout = ssrf.ClientTimeout
 
 // secureHTTPClient is the SSRF-protected HTTP client shared by every LFS
 // client, so they all draw from one connection pool instead of each keeping
 // its own idle connections. Its transfer timeouts are set once here, as
-// setTransferTimeouts wraps the shared transport's dialer.
-var secureHTTPClient = newTransferClient(ssrf.NewSecureClient())
+// setTransferTimeouts wraps the shared transport's dialer. Nothing changes
+// it after.
+var secureHTTPClient = newTransferClient(ssrf.NewSecureClient(), stallTimeout)
 
-// newTransferClient sets up client for LFS transfers and returns it. Tests
-// pass a client that may reach loopback, so the stall tests run through the
-// same setup as secureHTTPClient.
-func newTransferClient(client *http.Client) *http.Client {
-	setTransferTimeouts(client)
+// newTransferClient sets up client for LFS transfers, with stall as the
+// stall timeout of its connections, and returns it. Tests pass a client that
+// may reach loopback, so the stall tests run through the same setup as
+// secureHTTPClient.
+func newTransferClient(client *http.Client, stall time.Duration) *http.Client {
+	setTransferTimeouts(client, stall)
 	return client
 }
 
-// newHTTPClient returns a new Git LFS client.
-func newHTTPClient(endpoint Endpoint) *HTTPClient {
-	return &HTTPClient{client: secureHTTPClient, endpoint: endpoint}
+// newHTTPClient returns a new Git LFS client that logs to logger, or to
+// log.Default() when it is nil.
+func newHTTPClient(endpoint Endpoint, logger *log.Logger) *HTTPClient {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &HTTPClient{client: secureHTTPClient, endpoint: endpoint, logger: logger.WithPrefix("lfs")}
 }
 
 // setTransferTimeouts replaces the client's whole-request timeout, which also
@@ -53,7 +60,7 @@ func newHTTPClient(endpoint Endpoint) *HTTPClient {
 // one still fails. It panics if the client's transport is not an
 // *http.Transport with a DialContext, since it could not add the stall limit
 // and transfers would then have no bound at all.
-func setTransferTimeouts(client *http.Client) {
+func setTransferTimeouts(client *http.Client, stall time.Duration) {
 	t, ok := client.Transport.(*http.Transport)
 	if !ok || t.DialContext == nil {
 		panic(fmt.Sprintf("lfs: cannot add a stall timeout to transport %T", client.Transport))
@@ -65,7 +72,7 @@ func setTransferTimeouts(client *http.Client) {
 		if err != nil {
 			return nil, err
 		}
-		return &stallTimeoutConn{Conn: conn, timeout: stallTimeout}, nil
+		return &stallTimeoutConn{Conn: conn, timeout: stall}, nil
 	}
 }
 
@@ -95,7 +102,7 @@ func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 
 // batch performs a batch request to the LFS server.
 func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Pointer) (*BatchResponse, error) {
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger := c.logger
 	url := c.endpoint.JoinPath("objects", "batch").String()
 
 	// TODO: support ref
@@ -191,7 +198,7 @@ func actionLink(object *ObjectResponse, action string) (link *Link, ok bool, err
 // Download asks the server for objects in one batch
 // request and calls dc with each one it answers for.
 func (c *HTTPClient) Download(ctx context.Context, objects []Pointer, dc DownloadCallback) error {
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger := c.logger
 	if len(objects) == 0 {
 		return nil
 	}
@@ -300,7 +307,7 @@ func isObjectError(err error) bool {
 // download fetches an object from its download link, as the basic transfer
 // adapter does, and returns its content.
 func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, error) {
-	logger := log.FromContext(ctx).WithPrefix("lfs")
+	logger := c.logger
 	logger.Debugf("Calling: %s %s", http.MethodGet, utils.RedactURL(l.Href))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.Href, nil)

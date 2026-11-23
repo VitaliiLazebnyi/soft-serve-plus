@@ -9,6 +9,7 @@ import (
 // expires_in on an action link is a number of seconds, both in what the
 // server sends and in what the client reads from a remote server.
 func TestLinkExpiresInSeconds(t *testing.T) {
+	t.Parallel()
 	var l Link
 	if err := json.Unmarshal([]byte(`{"href":"https://example.com/obj","expires_in":3600}`), &l); err != nil {
 		t.Fatalf("decode link: %v", err)

@@ -23,7 +23,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	var panicked atomic.Bool
 	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) {
 		d.logger = log.New(logs)
-		d.testHooks.beforeAuthorize = func() {
+		d.testHooks.beforeAuthorize = func(context.Context) {
 			if panicked.CompareAndSwap(false, true) {
 				panic("injected handler panic")
 			}

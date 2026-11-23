@@ -1,4 +1,7 @@
-package git
+// Package sshlfs serves Git LFS over SSH: git-lfs-transfer, the SSH transfer
+// protocol, and git-lfs-authenticate, which hands out a token for the HTTP
+// API.
+package sshlfs
 
 import (
 	"context"
@@ -17,21 +20,43 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	"github.com/charmbracelet/soft-serve/pkg/git"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
+// Store is the part of store.Store a transfer uses.
+type Store interface {
+	store.LFSStore
+	store.RepositoryStore
+}
+
+// TransferDeps are what Transfer needs of the server.
+type TransferDeps struct {
+	// Config gives the data path the objects are stored under.
+	Config *config.Config
+	DB     *db.DB
+	Store  Store
+	// Logger is the session's logger; nil means log.Default().
+	Logger *log.Logger
+}
+
 // lfsTransfer implements transfer.Backend.
 type lfsTransfer struct {
+	// ctx is the session's. transfer.Backend's methods take none, so the
+	// backend keeps the one Transfer was called with, for as long as it
+	// runs.
 	ctx     context.Context
 	cfg     *config.Config
 	dbx     *db.DB
-	store   store.Store
+	store   Store
 	logger  *log.Logger
 	storage storage.Storage
 	repo    proto.Repository
+	// user is the caller's account, or nil when it has none.
+	user proto.User
 	// op is the session operation (download or upload). The SSH command
 	// authorizes only the operation, and the transfer processor accepts
 	// put-object and lock in either, so write commands check it here.
@@ -53,32 +78,39 @@ var _ transfer.Backend = &lfsTransfer{}
 // so callers can still test for the cause.
 var errInvalidOid = fmt.Errorf("%w: %w", transfer.ErrParseError, lfs.ErrInvalidOIDFormat)
 
+// errNilDeps is returned by Transfer when TransferDeps has no database or
+// no store.
+var errNilDeps = errors.New("lfs transfer: nil database or store")
+
 // errReadOnlySession is returned for a write command (put-object, lock,
 // unlock) sent in a download session, which needs only read access.
 var errReadOnlySession = fmt.Errorf("%w: not allowed in a download session", transfer.ErrForbidden)
 
-// LFSTransfer is a Git LFS transfer service handler.
-// ctx is expected to have proto.Repository, *log.Logger, *config.Config,
-// *db.DB and store.Store, and proto.User when the caller has an account.
-// The first arg in cmd.Args is the repo path; the repository itself is taken
-// from the context.
-// The second arg in cmd.Args should be the LFS operation (download or upload).
-func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
-	if len(cmd.Args) < 2 {
-		return errors.New("missing args")
-	}
-
-	op := cmd.Args[1]
+// Transfer serves a git-lfs-transfer session for repo, reading the client's
+// commands from in and answering on out, until the client quits or ctx is
+// done. op is the session's operation, lfs.OperationDownload or
+// lfs.OperationUpload, which the caller has authorized; user is the caller's
+// account, or nil when it has none, which may not use locks.
+func Transfer(ctx context.Context, in io.Reader, out io.Writer, deps TransferDeps, repo proto.Repository, user proto.User, op string) error {
 	if op != lfs.OperationDownload && op != lfs.OperationUpload {
 		return errors.New("invalid operation")
 	}
+	if deps.Config == nil {
+		return config.ErrNilConfig
+	}
+	if deps.DB == nil || deps.Store == nil {
+		return errNilDeps
+	}
 
-	logger := log.FromContext(ctx).WithPrefix("lfs-transfer")
-	stdin := newLFSCommandLimitReader(cmd.Stdin, lfs.MaxBatchRequestSize)
-	handler := transfer.NewPktline(stdin, cmd.Stdout, &lfsLogger{logger})
-	repo := proto.RepositoryFromContext(ctx)
+	logger := deps.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger = logger.WithPrefix("lfs-transfer")
+	stdin := newLFSCommandLimitReader(in, lfs.MaxBatchRequestSize)
+	handler := transfer.NewPktline(stdin, out, &lfsLogger{logger})
 	if repo == nil {
-		logger.Error("no repository in context")
+		logger.Error("no repository")
 		return proto.ErrRepoNotFound
 	}
 
@@ -94,15 +126,16 @@ func LFSTransfer(ctx context.Context, cmd ServiceCommand) error {
 	}
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	cfg := config.FromContext(ctx)
+	cfg := deps.Config
 	processor := transfer.NewProcessor(handler, &lfsTransfer{
 		ctx:     ctx,
 		cfg:     cfg,
-		dbx:     db.FromContext(ctx),
-		store:   store.FromContext(ctx),
+		dbx:     deps.DB,
+		store:   deps.Store,
 		logger:  logger,
 		storage: storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID)),
 		repo:    repo,
+		user:    user,
 		op:      op,
 		stdin:   stdin,
 	}, &lfsLogger{logger})
@@ -122,7 +155,7 @@ func lfsTransferError(ctx context.Context, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, errLFSCommandTooLarge) {
 		return err
 	}
-	if ctx.Err() != nil || clientGone(err) {
+	if ctx.Err() != nil || git.ClientGone(err) {
 		return fmt.Errorf("%w: client went away: %w", context.Canceled, err)
 	}
 	return err
@@ -305,13 +338,13 @@ var _ transfer.LockBackend = (*lfsLockBackend)(nil)
 
 // LockBackend implements transfer.Backend.
 func (t *lfsTransfer) LockBackend(args transfer.Args) transfer.LockBackend {
-	user := proto.UserFromContext(t.ctx)
+	user := t.user
 	if user == nil {
 		// Locks are owned by an account. A caller without one (an anonymous
 		// key, or an initial_admin_keys key with no user row) can't hold or
 		// list them. Returning nil here would make the transfer processor
 		// panic on the first lock command, so refuse each one instead.
-		t.logger.Debugf("no user in context, refusing lock commands, repo %s", t.repo.Name())
+		t.logger.Debugf("no user, refusing lock commands, repo %s", t.repo.Name())
 		return noUserLockBackend{}
 	}
 

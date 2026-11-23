@@ -90,7 +90,7 @@ func TestEnv(t *testing.T) {
 	}, {
 		name: "http",
 		req:  Request{Transport: TransportHTTP, Repo: "repo", User: testUser{}, Protocol: "version=2:foo"},
-		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_USERNAME=alice", hookConfig, "GIT_PROTOCOL=version=2:foo"},
+		want: []string{"SOFT_SERVE_REPO_NAME=repo", repoPath, logPath, "SOFT_SERVE_USERNAME=alice", hookConfig, "GIT_PROTOCOL=version=2"},
 	}, {
 		name: "http anonymous",
 		req:  Request{Transport: TransportHTTP, Repo: "repo"},
@@ -110,12 +110,28 @@ func TestEnv(t *testing.T) {
 }
 
 // TestProtocolEnv: a service that runs no hooks gets GIT_PROTOCOL and
-// nothing else.
+// nothing else, and git gets only the version from the client's value.
 func TestProtocolEnv(t *testing.T) {
-	if got, want := ProtocolEnv("version=2"), []string{"GIT_PROTOCOL=version=2"}; !slices.Equal(got, want) {
-		t.Errorf("ProtocolEnv(version=2) = %q, want %q", got, want)
-	}
-	if got := ProtocolEnv(""); len(got) != 0 {
-		t.Errorf("ProtocolEnv(\"\") = %q, want none", got)
+	for _, tc := range []struct {
+		protocol string
+		want     []string
+	}{
+		{"version=2", []string{"GIT_PROTOCOL=version=2"}},
+		{"version=1:version=2", []string{"GIT_PROTOCOL=version=2"}},
+		{"version=2:object-format=sha256:evil=1", []string{"GIT_PROTOCOL=version=2"}},
+		{"version=0", []string{"GIT_PROTOCOL=version=0"}},
+		// git ignores a version it does not know, so version=1 stands.
+		{"version=1:version=3", []string{"GIT_PROTOCOL=version=1"}},
+		{"", nil},
+		{"foo=bar", nil},
+		{"version=", nil},
+		{"version=02", nil},
+		{"version=two", nil},
+		{"version=-1", nil},
+		{"version=99999", nil},
+	} {
+		if got := ProtocolEnv(tc.protocol); !slices.Equal(got, tc.want) {
+			t.Errorf("ProtocolEnv(%q) = %q, want %q", tc.protocol, got, tc.want)
+		}
 	}
 }

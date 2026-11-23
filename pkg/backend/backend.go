@@ -103,6 +103,9 @@ func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Bac
 	}
 	webhooks := webhook.NewSender(cfg, db, st, logger)
 	logger = logger.WithPrefix("backend")
+	searchPointerBlobs := func(ctx context.Context, r *git.Repository, include, exclude []string, pointerChan chan<- lfs.PointerBlob, errChan chan<- error) {
+		lfs.SearchPointerBlobsBetween(ctx, logger, r, include, exclude, pointerChan, errChan)
+	}
 	b := &Backend{
 		cfg:    cfg,
 		db:     db,
@@ -116,7 +119,7 @@ func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Bac
 
 		binVersion:         git.BinVersion,
 		validateGitRemote:  ssrf.ValidateGitRemoteContext,
-		searchPointerBlobs: lfs.SearchPointerBlobsBetween,
+		searchPointerBlobs: searchPointerBlobs,
 		importTimeout:      time.Hour,
 	}
 	// The version is read through the field when first needed, so a test

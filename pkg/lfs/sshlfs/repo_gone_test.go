@@ -1,4 +1,4 @@
-package git
+package sshlfs
 
 import (
 	"context"
@@ -28,11 +28,11 @@ func (u lockTestUser) ID() int64 { return u.id }
 // lock's foreign key. That must be reported as the repository being gone,
 // not as a conflict with an existing lock.
 func TestLFSLockOnDeletedRepository(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, "sqlite", dp+"/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
 	if err != nil {
 		t.Fatal(err)

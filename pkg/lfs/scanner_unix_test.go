@@ -3,9 +3,9 @@
 package lfs
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,8 +22,6 @@ import (
 // is left running or as a zombie.
 func TestSearchPointerBlobsPanicReapsGit(t *testing.T) {
 	repo := newPointerRepo(t)
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	realGit, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not found")
@@ -36,14 +34,9 @@ func TestSearchPointerBlobsPanicReapsGit(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	orig := readPointer
-	readPointer = func([]byte) (Pointer, error) { panic("scanner boom") }
-	t.Cleanup(func() { readPointer = orig })
-
-	ctx := log.WithContext(context.Background(), log.New(&strings.Builder{}))
 	pointerChan := make(chan PointerBlob)
 	errChan := make(chan error, 1)
-	go SearchPointerBlobs(ctx, repo, pointerChan, errChan)
+	go searchPointerBlobs(t.Context(), log.New(io.Discard), panickingReader, repo, []string{"--all"}, "", pointerChan, errChan)
 	for range pointerChan { //nolint:revive // drain until closed
 	}
 	if err := <-errChan; err == nil {

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
-
-	"charm.land/log/v2"
 )
 
 func TestDecodeJSONLimit(t *testing.T) {
@@ -44,13 +42,13 @@ func TestDecodeJSONLimit(t *testing.T) {
 func TestHandleErrorResponseLimit(t *testing.T) {
 	t.Parallel()
 	body := `{"message":"` + strings.Repeat("x", maxErrorResponseSize) + `"}`
-	ctx, logs := debugContext(t)
+	logger, logs := debugLogger()
 	res := &http.Response{
 		Status:     "500 Internal Server Error",
 		StatusCode: http.StatusInternalServerError,
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
-	err := handleErrorResponse(log.FromContext(ctx), res)
+	err := handleErrorResponse(logger, res)
 	if want := "request failed with status 500 Internal Server Error"; err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}

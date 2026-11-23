@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 )
 
 // fakeSlowGit stands in for a git fetch that runs for two minutes unless it
@@ -38,7 +40,7 @@ func TestRunMirrorGitTerminatesOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runMirrorGit(ctx, dir, env, "fetch", "--prune") }()
+	go func() { done <- backend.RunRemoteGit(ctx, dir, env, "fetch", "--prune") }()
 
 	// Cancel only once the command is running.
 	deadline := time.Now().Add(time.Minute)
@@ -56,10 +58,10 @@ func TestRunMirrorGitTerminatesOnCancel(t *testing.T) {
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
-			t.Errorf("runMirrorGit = %v, want %v", err, context.Canceled)
+			t.Errorf("RunRemoteGit = %v, want %v", err, context.Canceled)
 		}
 	case <-time.After(60 * time.Second):
-		t.Fatal("runMirrorGit did not stop after its context was cancelled")
+		t.Fatal("RunRemoteGit did not stop after its context was cancelled")
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Errorf("git was not sent SIGTERM: %v", err)

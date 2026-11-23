@@ -21,6 +21,7 @@ import (
 // writer shows up, so the fallback after a failed rename must check the type
 // before it opens the file, and StoreObject must fail promptly.
 func TestStoreObjectRenameOntoFIFO(t *testing.T) {
+	t.Parallel()
 	const content = "hello lfs"
 	sum := sha256.Sum256([]byte(content))
 	oid := hex.EncodeToString(sum[:])

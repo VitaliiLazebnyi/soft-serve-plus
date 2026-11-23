@@ -30,9 +30,11 @@ const (
 	UploadArchiveService Service = "git-upload-archive"
 	// ReceivePackService is the receive-pack service.
 	ReceivePackService Service = "git-receive-pack"
-	// LFSTransferService is the LFS transfer service.
+	// LFSTransferService is the LFS transfer service. Handler does not
+	// run it: see pkg/lfs/sshlfs.
 	LFSTransferService Service = "git-lfs-transfer"
-	// LFSAuthenticateService is the LFS authenticate service.
+	// LFSAuthenticateService is the LFS authenticate service. Handler does
+	// not run it: see pkg/lfs/sshlfs.
 	LFSAuthenticateService Service = "git-lfs-authenticate"
 )
 
@@ -46,15 +48,12 @@ func (s Service) Name() string {
 	return strings.TrimPrefix(s.String(), "git-")
 }
 
-// Handler is the service handler.
+// Handler runs the git service s, upload-pack, upload-archive or
+// receive-pack, with cmd.
 func (s Service) Handler(ctx context.Context, cmd ServiceCommand) error {
 	switch s {
 	case UploadPackService, UploadArchiveService, ReceivePackService:
 		return gitServiceHandler(ctx, s, cmd)
-	case LFSTransferService:
-		return LFSTransfer(ctx, cmd)
-	case LFSAuthenticateService:
-		return LFSAuthenticate(ctx, cmd)
 	default:
 		return fmt.Errorf("unsupported service: %s", s)
 	}
@@ -82,7 +81,11 @@ func (s Service) Handler(ctx context.Context, cmd ServiceCommand) error {
 // where the context does not end with the client: an SSH session's context
 // is its connection's, which outlives a channel the client closed.
 func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) error {
-	logger := log.FromContext(ctx)
+	logger := scmd.Logger
+	if logger == nil {
+		// The SSH and HTTP callers still pass theirs in the context.
+		logger = log.FromContext(ctx)
+	}
 	cmd := exec.CommandContext(ctx, "git")
 	cmd.Dir = scmd.Dir
 	cmd.Args = append(cmd.Args, []string{
@@ -406,7 +409,7 @@ type outputProgress struct {
 	// expected.
 	stopped atomic.Bool
 	// clientGone is set when a write to the client failed because the
-	// client closed its end (see clientGone).
+	// client closed its end (see ClientGone).
 	clientGone atomic.Bool
 }
 
@@ -429,7 +432,7 @@ func (w progressWriter) Write(b []byte) (int, error) {
 		w.p.writing.Add(-1)
 	}()
 	n, err := w.w.Write(b)
-	if err != nil && clientGone(err) && !w.p.stopped.Load() {
+	if err != nil && ClientGone(err) && !w.p.stopped.Load() {
 		w.p.clientGone.Store(true)
 	}
 	return n, err
@@ -490,7 +493,7 @@ func waitOutput(ctx context.Context, copied <-chan struct{}, p *outputProgress, 
 // is expected, so it is logged at Debug, as is any failure the caller marks
 // as expected; any other failure is logged at Error.
 func logCopyError(ctx context.Context, stream string, err error, expected bool) {
-	if expected || ctx.Err() != nil || clientGone(err) {
+	if expected || ctx.Err() != nil || ClientGone(err) {
 		log.Debugf("gitServiceHandler: failed to copy %s: %v", stream, err)
 		return
 	}
@@ -500,21 +503,21 @@ func logCopyError(ctx context.Context, stream string, err error, expected bool) 
 // gitGone reports whether err, returned by a write of the client's input to
 // git, means git no longer reads it. Git can exit before the client is done
 // sending, for example after a protocol error. The write then fails with a
-// broken pipe, which clientGone covers, or with os.ErrClosed once the pipe
+// broken pipe, which ClientGone covers, or with os.ErrClosed once the pipe
 // was closed after git exited or when the context was cancelled.
 func gitGone(err error) bool {
 	return errors.Is(err, os.ErrClosed)
 }
 
-// clientGone reports whether err, returned by a write to the client or a
+// ClientGone reports whether err, returned by a write to the client or a
 // read from it, means the client closed its end. A closed SSH channel
 // returns io.EOF, and a closed network connection a closed, broken pipe or
 // reset error. A broken pipe also covers git's input once git exited.
-func clientGone(err error) bool {
+func ClientGone(err error) bool {
 	return clientGoneOn(runtime.GOOS, err)
 }
 
-// clientGoneOn is clientGone for the operating system goos. On Windows,
+// clientGoneOn is ClientGone for the operating system goos. On Windows,
 // syscall.EPIPE and syscall.ECONNRESET are values Go made up, which the
 // system never returns, so the Windows error codes are checked as well.
 func clientGoneOn(goos string, err error) bool {
@@ -674,6 +677,10 @@ type ServiceCommand struct {
 	// returns, as for an HTTP request body; the copy then ends when the
 	// client finishes sending or goes away. See joinStdin.
 	JoinStdin bool
+
+	// Logger logs a panic in the handler's copies of git's input and
+	// output. When it is nil, the logger in the context is used.
+	Logger *log.Logger
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
