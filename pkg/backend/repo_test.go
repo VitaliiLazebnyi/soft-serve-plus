@@ -1140,7 +1140,7 @@ func TestFailedImportDeletesByIdentity(t *testing.T) {
 	}
 }
 
-// longAgo is the date of the commits these tests make, far from the time
+// longAgo is the date of the commits commitLongAgo makes, far from the time
 // any row is written.
 var longAgo = time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 

@@ -749,9 +749,9 @@ const gitRetryPause = 250 * time.Millisecond
 // loopback connections, macOS can stall a loopback connect for seconds, fail
 // it with ETIMEDOUT after about 7.8 seconds, or leave git with a socket whose
 // first write fails ("Socket is not connected"). git has to run as a
-// subprocess, so these tests cannot use an in-memory network. A run that
-// never got its request to the listener says nothing about the pin, so it is
-// run again after a short pause.
+// subprocess, so the tests that use runUntilReached cannot use an in-memory
+// network. A run that never got its request to the listener says nothing
+// about the pin, so it is run again after a short pause.
 //
 // A run that did reach the listener is never repeated: the caller then checks
 // what the listener got, so a request naming the wrong host still fails. A
@@ -1088,7 +1088,7 @@ func TestValidateGitRemotePinsGitProtocol(t *testing.T) {
 // gitDaemonStub accepts git:// connections on one loopback address and
 // records the first pkt-line of each: the request naming the repository and
 // the host git put in its URL (host=...). It answers nothing, so git fails
-// after sending it, which is all these tests need.
+// after sending it, which is all the git:// pin tests need.
 type gitDaemonStub struct {
 	port     string
 	mu       sync.Mutex

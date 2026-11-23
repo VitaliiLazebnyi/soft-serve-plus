@@ -475,11 +475,14 @@ func TestValidateURLAlreadyCancelled(t *testing.T) {
 	}
 }
 
-// These tests drive the secure client through its transport, as webhooks and
-// the LFS client use it. Names resolve through fakeResolver and connection
-// attempts go through stubConnect, so nothing reaches DNS or leaves the
-// machine. A refused destination must fail with ErrPrivateIP, which only the
-// SSRF checks produce: a dial that merely fails would not pass.
+// The TestSecureClient tests below drive the secure client through its
+// transport, as webhooks and the LFS client use it. Names resolve through
+// fakeResolver, and the tests up to TestSecureClientDialBudget send
+// connection attempts through stubConnect, which reaches only the loopback
+// servers a test names; the TestSecureClientTestDial tests use the
+// in-memory network instead. Nothing reaches DNS or leaves the machine. A
+// refused destination must fail with ErrPrivateIP, which only the SSRF
+// checks produce: a dial that merely fails would not pass.
 
 // blockedLiterals are addresses of every blocked kind, as dial targets.
 var blockedLiterals = []string{

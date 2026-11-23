@@ -31,10 +31,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// The tests below run AuthenticationMiddleware behind a real SSH handshake
-// on a server built by NewServer. They read the user a session runs as
-// from the access tokens `token create` makes, as that command acts as the
-// user AuthenticationMiddleware puts in the session context.
+// The TestAuthentication tests run AuthenticationMiddleware behind a real
+// SSH handshake on a server built by NewServer. They read the user a session
+// runs as from the access tokens `token create` makes, as that command acts
+// as the user AuthenticationMiddleware puts in the session context.
 
 func newSigner(t *testing.T) gossh.Signer {
 	t.Helper()

@@ -112,10 +112,10 @@ func TestStatusBarDoesNotKeepStaleValues(t *testing.T) {
 	}
 }
 
-// These tests drive the repository page the way the bubbletea runtime does:
-// they send messages, run the commands Update returns, and look at View. They
-// pin what the user sees on each tab, so the components can be reworked
-// underneath.
+// The TestPin tests drive the repository page the way the bubbletea runtime
+// does: they send messages, run the commands Update returns, and look at
+// View. They pin what the user sees on each tab, so the components can be
+// reworked underneath.
 
 var (
 	keyTab      = tea.KeyPressMsg{Code: tea.KeyTab}
