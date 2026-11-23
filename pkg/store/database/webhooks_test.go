@@ -331,9 +331,9 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 
 // A webhook deleted after the existence check but before the insert makes the
 // insert violate the foreign key. That is the same outcome as a webhook that
-// is already gone: nothing is written and no error is returned. A trigger
-// deletes the webhook in that window.
-func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
+// is already gone: nothing is written, and the error matches
+// db.ErrForeignKey. A trigger deletes the webhook in that window.
+func TestCreateWebhookDeliveryForeignKeyViolation(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
@@ -341,7 +341,7 @@ func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
 	is.NoErr(err)
 	vanishOnInsert(t, ctx, dbx, id)
 
-	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+	err = s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
 		ID:             uuid.New(),
 		WebhookID:      id,
 		Event:          1,
@@ -349,27 +349,28 @@ func TestCreateWebhookDeliveryForeignKeyViolationIsSkipped(t *testing.T) {
 		RequestMethod:  "POST",
 		RequestBody:    "{}",
 		ResponseStatus: 200,
-	}))
+	})
+	is.True(errors.Is(err, db.ErrForeignKey))
 
 	var n int
 	is.NoErr(dbx.GetContext(ctx, &n, "SELECT COUNT(*) FROM webhook_deliveries"))
 	is.Equal(n, 0)
 }
 
-// Both drivers' forms of a foreign key violation are recognized, and nothing
-// else is.
-func TestIsForeignKeyViolation(t *testing.T) {
+// Both drivers' forms of a foreign key violation map to db.ErrForeignKey,
+// which CreateWebhookDelivery tests for, and nothing else does.
+func TestForeignKeyViolationIsMapped(t *testing.T) {
 	is := is.New(t)
-	is.True(isForeignKeyViolation(fmt.Errorf("wrapped: %w", db.ErrForeignKey)))
-	is.True(!isForeignKeyViolation(db.ErrDuplicateKey))
-	is.True(!isForeignKeyViolation(errors.New("FOREIGN KEY constraint failed")))
-	is.True(!isForeignKeyViolation(nil))
+	is.True(errors.Is(fmt.Errorf("wrapped: %w", db.ErrForeignKey), db.ErrForeignKey))
+	is.True(!errors.Is(db.ErrDuplicateKey, db.ErrForeignKey))
+	is.True(!errors.Is(errors.New("FOREIGN KEY constraint failed"), db.ErrForeignKey))
+	is.True(!errors.Is(nil, db.ErrForeignKey))
 
 	// A real foreign key violation from the driver under test.
 	ctx, dbx := newWebhookTestDB(t)
 	_, err := dbx.ExecContext(ctx, `INSERT INTO webhook_events (webhook_id, event) VALUES (424242, 1)`)
 	is.True(err != nil)
-	is.True(isForeignKeyViolation(err))
+	is.True(errors.Is(err, db.ErrForeignKey))
 }
 
 // Webhooks and their events are listed in creation order. Without ORDER BY,

@@ -8,6 +8,7 @@ import (
 )
 
 func TestEventsListsEveryEventOnce(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	events := Events()
@@ -21,6 +22,7 @@ func TestEventsListsEveryEventOnce(t *testing.T) {
 }
 
 func TestEventStringRoundTrip(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	for _, ev := range Events() {
@@ -31,6 +33,7 @@ func TestEventStringRoundTrip(t *testing.T) {
 }
 
 func TestParseEventRejectsUnknown(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	ev, err := ParseEvent("not_an_event")
@@ -39,6 +42,7 @@ func TestParseEventRejectsUnknown(t *testing.T) {
 }
 
 func TestEventUnmarshalText(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	var ev Event
@@ -51,6 +55,7 @@ func TestEventUnmarshalText(t *testing.T) {
 }
 
 func TestEventMarshalText(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	text, err := EventRepositoryVisibilityChange.MarshalText()

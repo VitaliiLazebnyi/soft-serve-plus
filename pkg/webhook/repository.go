@@ -48,7 +48,7 @@ const (
 )
 
 // NewRepositoryEvent builds the payload for a repository event.
-func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Repository, action RepositoryEventAction) (RepositoryEvent, error) {
+func (s *Sender) NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Repository, action RepositoryEventAction) (RepositoryEvent, error) {
 	var event Event
 	switch action {
 	case RepositoryEventActionVisibilityChange:
@@ -57,7 +57,7 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 		event = EventRepository
 	}
 
-	repository, err := newRepository(ctx, repo)
+	repository, err := s.newRepository(ctx, repo)
 	if err != nil {
 		return RepositoryEvent{}, err
 	}
@@ -76,8 +76,8 @@ func NewRepositoryEvent(ctx context.Context, user proto.User, repo proto.Reposit
 
 // NewRepositoryRenameEvent builds the payload for a repository rename. repo
 // is the renamed repository, and oldName the name it had before.
-func NewRepositoryRenameEvent(ctx context.Context, user proto.User, repo proto.Repository, oldName string) (RepositoryEvent, error) {
-	payload, err := NewRepositoryEvent(ctx, user, repo, RepositoryEventActionRename)
+func (s *Sender) NewRepositoryRenameEvent(ctx context.Context, user proto.User, repo proto.Repository, oldName string) (RepositoryEvent, error) {
+	payload, err := s.NewRepositoryEvent(ctx, user, repo, RepositoryEventActionRename)
 	if err != nil {
 		return RepositoryEvent{}, err
 	}
@@ -87,8 +87,8 @@ func NewRepositoryRenameEvent(ctx context.Context, user proto.User, repo proto.R
 
 // NewDefaultBranchChangeEvent builds the payload for a default branch change.
 // oldBranch is the default branch before the change, as a short branch name.
-func NewDefaultBranchChangeEvent(ctx context.Context, user proto.User, repo proto.Repository, oldBranch string) (RepositoryEvent, error) {
-	payload, err := NewRepositoryEvent(ctx, user, repo, RepositoryEventActionDefaultBranchChange)
+func (s *Sender) NewDefaultBranchChangeEvent(ctx context.Context, user proto.User, repo proto.Repository, oldBranch string) (RepositoryEvent, error) {
+	payload, err := s.NewRepositoryEvent(ctx, user, repo, RepositoryEventActionDefaultBranchChange)
 	if err != nil {
 		return RepositoryEvent{}, err
 	}

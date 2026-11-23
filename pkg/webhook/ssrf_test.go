@@ -50,7 +50,7 @@ func TestSSRFProtection(t *testing.T) {
 				t.Fatalf("failed to create request: %v", err)
 			}
 
-			resp, err := secureHTTPClient.Do(req)
+			resp, err := NewSender(nil, nil, nil, nil).client.Do(req)
 			if resp != nil {
 				_ = resp.Body.Close()
 			}

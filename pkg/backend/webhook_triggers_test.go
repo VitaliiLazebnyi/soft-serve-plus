@@ -664,7 +664,7 @@ func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
 
 	const n = 3
 	for i := 0; i < n; i++ {
-		ev, err := webhook.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
+		ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 		is.NoErr(err)
 		e.be.deliverAfterChange(e.ctx, hooks, ev, true)
 	}
@@ -686,7 +686,7 @@ func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
 	is.NoErr(err)
 	blockDeliveries(t, e, 0)
 
-	ev, err := webhook.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
+	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
 	e.be.deliverAfterChange(e.ctx, hooks, ev, true)
 
@@ -906,7 +906,7 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 	is.Equal(e.be.deliveries.enqueue(e.repo.ID(), blocker(started, release)), enqueued)
 	<-started
 
-	ev, err := webhook.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
+	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
 	e.be.deliverAfterChange(e.ctx, hooks, ev, true)
 
@@ -919,7 +919,7 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 	is.Equal(d.RequestError.String, errRepoDeliveriesFull.Error())
 	is.Equal(d.Event, webhook.EventRepository)
 
-	otherEv, err := webhook.NewRepositoryEvent(e.ctx, e.admin, other, webhook.RepositoryEventActionRename)
+	otherEv, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, other, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
 	e.be.deliverAfterChange(e.ctx, otherHooks, otherEv, true)
 
@@ -1039,11 +1039,11 @@ func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 	id := e.seedHook(t, webhook.EventRepository)
 	hooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
 	is.NoErr(err)
-	ev, err := webhook.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
+	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
 
 	is.NoErr(e.be.DeleteWebhook(e.ctx, e.repo, id))
-	is.NoErr(webhook.Deliver(e.ctx, hooks, ev))
+	is.NoErr(e.be.webhooks.Deliver(e.ctx, hooks, ev))
 
 	var n int
 	is.NoErr(e.be.db.GetContext(e.ctx, &n, "SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?", id))

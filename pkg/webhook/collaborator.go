@@ -4,9 +4,7 @@ import (
 	"context"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 )
 
 // CollaboratorEvent is a collaborator event.
@@ -32,10 +30,10 @@ const (
 )
 
 // NewCollaboratorEvent builds the payload for a collaborator event.
-func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repository, collabUsername string, action CollaboratorEventAction) (CollaboratorEvent, error) {
+func (s *Sender) NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repository, collabUsername string, action CollaboratorEventAction) (CollaboratorEvent, error) {
 	event := EventCollaborator
 
-	repository, err := newRepository(ctx, repo)
+	repository, err := s.newRepository(ctx, repo)
 	if err != nil {
 		return CollaboratorEvent{}, err
 	}
@@ -49,9 +47,7 @@ func NewCollaboratorEvent(ctx context.Context, user proto.User, repo proto.Repos
 		},
 	}
 
-	dbx := db.FromContext(ctx)
-	datastore := store.FromContext(ctx)
-	collab, err := datastore.GetCollabByUsernameAndRepo(ctx, dbx, collabUsername, repo.Name())
+	collab, err := s.store.GetCollabByUsernameAndRepo(ctx, s.db, collabUsername, repo.Name())
 	if err != nil {
 		return CollaboratorEvent{}, err
 	}

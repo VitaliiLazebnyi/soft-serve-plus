@@ -16,6 +16,7 @@ import (
 )
 
 func TestRedactURL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -35,6 +36,7 @@ func TestRedactURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			is.Equal(redactURL(c.in), c.want)
 		})
@@ -42,6 +44,7 @@ func TestRedactURL(t *testing.T) {
 }
 
 func TestRedactURLErrorKeepsChain(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	in := &url.Error{Op: "Post", URL: "https://hooks.slack.com/services/T000/B000/XXXX", Err: context.DeadlineExceeded}
 
@@ -93,13 +96,14 @@ func assertNoSecret(t *testing.T, s string) {
 // token is the username here: net/http masks a password itself but prints a
 // username in full.
 func TestDeliverUnrecordedTransportErrorRedactsURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	base := strings.Replace(closingServer(t), "http://", "http://USERSECRET@", 1)
 	w := e.newWebhook(t, base+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
 
-	err := DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
 	is.True(err != nil)
 	assertNoSecret(t, err.Error())
 	is.True(strings.Contains(err.Error(), "[redacted]"))
@@ -112,13 +116,14 @@ func TestDeliverUnrecordedTransportErrorRedactsURL(t *testing.T) {
 // A send that runs out of time still reports a deadline error through the
 // redacted error, and the recorded error text is redacted too.
 func TestDeliverTimeoutRedactsURLAndKeepsDeadline(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
-	useSendTimeout(t, 200*time.Millisecond)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.s.sendTimeout = 200 * time.Millisecond
 	w := e.newWebhook(t, hangingServer(t)+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
 
-	err := DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
 	is.True(err != nil)
 	assertNoSecret(t, err.Error())
 	is.True(errors.Is(err, context.DeadlineExceeded))
@@ -126,7 +131,7 @@ func TestDeliverTimeoutRedactsURLAndKeepsDeadline(t *testing.T) {
 	is.True(errors.As(err, &nerr))
 	is.True(nerr.Timeout())
 
-	is.NoErr(Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
 	is.True(strings.Contains(ds[0].RequestError.String, "deadline exceeded"))
@@ -135,15 +140,16 @@ func TestDeliverTimeoutRedactsURLAndKeepsDeadline(t *testing.T) {
 
 // A cancelled send keeps context.Canceled in the chain.
 func TestDeliverUnrecordedCancelKeepsCanceled(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, 200, "")
 	w := e.newWebhook(t, srv.URL+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
 
-	err := DeliverUnrecorded(ctx, []models.Webhook{w}, samplePayloadFor(e))
+	err := e.s.DeliverUnrecorded(ctx, []models.Webhook{w}, samplePayloadFor(e))
 	is.True(err != nil)
 	assertNoSecret(t, err.Error())
 	is.True(errors.Is(err, context.Canceled))
@@ -153,9 +159,10 @@ func TestDeliverUnrecordedCancelKeepsCanceled(t *testing.T) {
 // parse error quotes part of the URL (here the port), so both the returned and
 // the recorded error must say only "invalid URL" and carry no part of it.
 func TestDeliverUnparsableURLRedactsURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
-	useHTTPClient(t)
 	e := newTestEnv(t)
+	e.useHTTPClient(t)
 	w := e.newWebhook(t, "http://USERSECRET@example.com:PORTSECRET"+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
 
 	assertRedacted := func(s string) {
@@ -169,13 +176,13 @@ func TestDeliverUnparsableURLRedactsURL(t *testing.T) {
 		is.True(strings.Contains(s, "invalid URL"))
 	}
 
-	err := DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
 	is.True(err != nil)
 	is.True(errors.Is(err, utils.ErrInvalidURL))
 	is.Equal(err.Error(), fmt.Sprintf("webhook %d: parse \"[redacted]\": invalid URL", w.ID))
 	assertRedacted(err.Error())
 
-	is.NoErr(Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
 	is.Equal(ds[0].ResponseStatus, 0)

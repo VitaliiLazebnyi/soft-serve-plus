@@ -26,18 +26,18 @@ import (
 // anonymous or keyless push or a key with no account, leaves them empty.
 //
 // The push has happened, so a failure is logged rather than returned, and a
-// caller that has gone away does not stop it (see AfterChangeContext).
+// caller that has gone away does not stop it (see afterChangeContext).
 func (d *Backend) AfterPush(ctx context.Context, repo proto.Repository, user proto.User, refs []hooks.HookArg) {
 	if repo == nil || len(refs) == 0 {
 		return
 	}
-	ctx, cancel := AfterChangeContext(ctx)
+	ctx, cancel := afterChangeContext(ctx)
 	defer cancel()
 
 	if err := d.populateLastModified(ctx, repo.Name()); err != nil {
 		d.logger.Error("error populating last-modified", "repo", repo.Name(), "err", err)
 	}
-	d.queuePushEvents(d.webhookContext(ctx), repo, user, refs)
+	d.queuePushEvents(ctx, repo, user, refs)
 }
 
 // pushSubscribers are the active webhooks of a repository that subscribe to
@@ -91,7 +91,7 @@ func (d *Backend) queuePushEvents(ctx context.Context, repo proto.Repository, us
 			if ctx.Err() != nil {
 				return false
 			}
-			if err := webhook.RecordUndelivered(bg, whs, ev, reason); err != nil {
+			if err := d.webhooks.RecordUndelivered(bg, whs, ev, reason); err != nil {
 				d.logger.Error("dropped webhook event not recorded", "event", ev.Event(), "repo_id", ev.RepositoryID(), "err", err)
 			}
 			return true
@@ -120,7 +120,7 @@ func (d *Backend) sendPushEvents(ctx context.Context, id int64, user proto.User,
 	}
 	repo := d.repoFromRow(m.Name, m)
 	d.forEachPushEvent(ctx, repo, user, refs, subs, func(whs []models.Webhook, ev webhook.EventPayload) bool {
-		if err := webhook.Deliver(ctx, whs, ev); err != nil {
+		if err := d.webhooks.Deliver(ctx, whs, ev); err != nil {
 			d.logEventNotDelivered(ev, err)
 		}
 		return true
@@ -169,9 +169,9 @@ func (d *Backend) buildPushEvent(ctx context.Context, ev webhook.Event, repo pro
 	defer cancel()
 	switch ev {
 	case webhook.EventPush:
-		return webhook.NewPushEvent(ctx, user, repo, ref.RefName, ref.OldSha, ref.NewSha)
+		return d.webhooks.NewPushEvent(ctx, user, repo, ref.RefName, ref.OldSha, ref.NewSha)
 	case webhook.EventBranchTagCreate, webhook.EventBranchTagDelete:
-		return webhook.NewBranchTagEvent(ctx, user, repo, ref.RefName, ref.OldSha, ref.NewSha)
+		return d.webhooks.NewBranchTagEvent(ctx, user, repo, ref.RefName, ref.OldSha, ref.NewSha)
 	}
 	return nil, fmt.Errorf("not a push event: %v", ev)
 }

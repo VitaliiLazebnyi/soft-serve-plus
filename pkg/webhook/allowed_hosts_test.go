@@ -10,24 +10,26 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/google/uuid"
 	"github.com/matryer/is"
 )
 
 // setAllowedHosts sets webhook.allowed_hosts on the test config and parses it
-// the way the server does.
+// the way the server does, and builds the test's Sender again with it.
 func (e *testEnv) setAllowedHosts(t *testing.T, entries ...string) {
 	t.Helper()
 	e.cfg.Webhook.AllowedHosts = entries
 	if err := e.cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+	// The list is read when a Sender is built, as at start-up.
+	e.s = NewSender(e.cfg, e.dbx, e.ds, nil)
 }
 
 // TestSendWebhookAllowedHosts sends to a loopback receiver through the real
 // SSRF-protected client: it is reached only while webhook.allowed_hosts
-// covers it, and the list is read from the config at send time.
+// covers it. The Sender reads the list when it is built.
 func TestSendWebhookAllowedHosts(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	// The SSRF checks run on the socket, so this receiver is on loopback
@@ -38,7 +40,7 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 	w := e.newWebhook(t, srv.URL+"/hook", "", ContentTypeJSON, EventBranchTagCreate)
 
 	// Not listed: refused at send time, recorded with the reason.
-	is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 	is.Equal(rec.calls, 0)
 	ds := e.deliveries(t, w.ID)
 	is.Equal(len(ds), 1)
@@ -57,7 +59,7 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Minute)
 	for {
-		is.NoErr(SendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+		is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
 		ds = e.deliveries(t, w.ID)
 		last := ds[len(ds)-1]
 		if calls() > 0 {
@@ -77,7 +79,7 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 	// Removed from the list again: the stored webhook is refused, since
 	// the current config applies to every delivery.
 	e.setAllowedHosts(t, "10.0.0.0/8")
-	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), uuid.Nil, false)
+	err := e.s.sendPayload(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 	is.Equal(calls(), 1)
 }
@@ -85,15 +87,17 @@ func TestSendWebhookAllowedHosts(t *testing.T) {
 // TestSendWebhookAllowedHostsKeepsMetadataBlocked checks that a broad entry
 // does not open the cloud metadata address.
 func TestSendWebhookAllowedHostsKeepsMetadataBlocked(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	e.setAllowedHosts(t, "0.0.0.0/0")
 	w := e.newWebhook(t, "http://169.254.169.254/latest/meta-data/", "", ContentTypeJSON, EventBranchTagCreate)
-	err := sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload(), uuid.Nil, false)
+	err := e.s.sendPayload(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 }
 
 func TestValidateWebhookURLAllowing(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	allowed, err := ssrf.ParseAllowedHosts([]string{"127.0.0.1"})
 	is.NoErr(err)

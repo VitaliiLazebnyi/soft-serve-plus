@@ -46,13 +46,14 @@ func gitRepoWithCommits(t *testing.T, n int, msg string) (string, string) {
 }
 
 func TestNewPushEventCapsCommitText(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	// A one-line message far past every limit, ending in multi-byte runes.
 	msg := strings.Repeat("é", 100<<10)
 	path, head := gitRepoWithCommits(t, 1, msg)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.Equal(len(ev.Commits), 1)
 	c := ev.Commits[0]
@@ -69,12 +70,13 @@ func TestNewPushEventCapsCommitText(t *testing.T) {
 }
 
 func TestNewPushEventCapsTotalCommitSize(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	// 20 commits whose capped text alone is past the push event budget.
 	path, head := gitRepoWithCommits(t, 20, strings.Repeat("x", 100<<10))
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.True(len(ev.Commits) > 1)
 	is.True(len(ev.Commits) < 20)

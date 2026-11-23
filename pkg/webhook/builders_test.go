@@ -2,7 +2,6 @@ package webhook
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -31,10 +30,11 @@ func (e *testEnv) sender() fakeUser {
 }
 
 func TestNewBranchTagEventCreate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/heads/dev", zeroHash, "1111111111111111111111111111111111111111")
+	ev, err := e.s.NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/heads/dev", zeroHash, "1111111111111111111111111111111111111111")
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventBranchTagCreate)
 	is.True(ev.Created)
@@ -48,10 +48,11 @@ func TestNewBranchTagEventCreate(t *testing.T) {
 }
 
 func TestNewBranchTagEventDelete(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/tags/v1", "1111111111111111111111111111111111111111", zeroHash)
+	ev, err := e.s.NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/tags/v1", "1111111111111111111111111111111111111111", zeroHash)
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventBranchTagDelete)
 	is.True(ev.Deleted)
@@ -59,31 +60,34 @@ func TestNewBranchTagEventDelete(t *testing.T) {
 }
 
 func TestNewBranchTagEventRejectsUpdate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
 	// Neither side is zero: that is a plain update, not a branch or tag event.
-	_, err := NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/heads/main",
+	_, err := e.s.NewBranchTagEvent(e.ctx, e.sender(), e.senderRepo(""), "refs/heads/main",
 		"1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222")
 	is.True(err != nil)
 	is.True(strings.Contains(err.Error(), "invalid branch or tag event"))
 }
 
 func TestNewBranchTagEventOwnerLookupFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewBranchTagEvent(e.ctx, e.sender(), e.ownerLess(), "refs/heads/dev", zeroHash, "1111111111111111111111111111111111111111")
+	_, err := e.s.NewBranchTagEvent(e.ctx, e.sender(), e.ownerLess(), "refs/heads/dev", zeroHash, "1111111111111111111111111111111111111111")
 	is.True(err != nil)
 }
 
 func TestNewCollaboratorEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	is.NoErr(e.ds.CreateUser(e.ctx, e.dbx, "bob", false, nil))
 	is.NoErr(e.ds.AddCollabByUsernameAndRepo(e.ctx, e.dbx, "bob", "repo", access.ReadWriteAccess))
 
-	ev, err := NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "bob", CollaboratorEventAdded)
+	ev, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "bob", CollaboratorEventAdded)
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventCollaborator)
 	is.Equal(ev.Action, CollaboratorEventAdded)
@@ -98,26 +102,29 @@ func TestNewCollaboratorEvent(t *testing.T) {
 }
 
 func TestNewCollaboratorEventUnknownCollaborator(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "nobody", CollaboratorEventRemoved)
+	_, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "nobody", CollaboratorEventRemoved)
 	is.True(err != nil)
 }
 
 func TestNewCollaboratorEventOwnerLookupFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewCollaboratorEvent(e.ctx, e.sender(), e.ownerLess(), "alice", CollaboratorEventAdded)
+	_, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.ownerLess(), "alice", CollaboratorEventAdded)
 	is.True(err != nil)
 }
 
 func TestNewRepositoryEventVisibilityChange(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), RepositoryEventActionVisibilityChange)
+	ev, err := e.s.NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), RepositoryEventActionVisibilityChange)
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventRepositoryVisibilityChange)
 	is.Equal(ev.Action, RepositoryEventActionVisibilityChange)
@@ -128,6 +135,7 @@ func TestNewRepositoryEventVisibilityChange(t *testing.T) {
 }
 
 func TestNewRepositoryEventOtherActions(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
@@ -136,7 +144,7 @@ func TestNewRepositoryEventOtherActions(t *testing.T) {
 		RepositoryEventActionRename,
 		RepositoryEventActionDefaultBranchChange,
 	} {
-		ev, err := NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), action)
+		ev, err := e.s.NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), action)
 		is.NoErr(err)
 		is.Equal(ev.EventType, EventRepository)
 		is.Equal(ev.Action, action)
@@ -145,10 +153,11 @@ func TestNewRepositoryEventOtherActions(t *testing.T) {
 
 // Events other than renames and default branch changes leave changes out.
 func TestNewRepositoryEventNoChanges(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), RepositoryEventActionDelete)
+	ev, err := e.s.NewRepositoryEvent(e.ctx, e.sender(), e.senderRepo(""), RepositoryEventActionDelete)
 	is.NoErr(err)
 	is.True(ev.Changes == nil)
 	b, err := json.Marshal(ev)
@@ -162,10 +171,11 @@ func TestNewRepositoryEventNoChanges(t *testing.T) {
 }
 
 func TestNewRepositoryRenameEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewRepositoryRenameEvent(e.ctx, e.sender(), e.senderRepo(""), "old-name")
+	ev, err := e.s.NewRepositoryRenameEvent(e.ctx, e.sender(), e.senderRepo(""), "old-name")
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventRepository)
 	is.Equal(ev.Action, RepositoryEventActionRename)
@@ -179,10 +189,11 @@ func TestNewRepositoryRenameEvent(t *testing.T) {
 }
 
 func TestNewDefaultBranchChangeEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	ev, err := NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.senderRepo(""), "master")
+	ev, err := e.s.NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.senderRepo(""), "master")
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventRepository)
 	is.Equal(ev.Action, RepositoryEventActionDefaultBranchChange)
@@ -195,29 +206,32 @@ func TestNewDefaultBranchChangeEvent(t *testing.T) {
 }
 
 func TestRepositoryChangeEventsOwnerLookupFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewRepositoryRenameEvent(e.ctx, e.sender(), e.ownerLess(), "old")
+	_, err := e.s.NewRepositoryRenameEvent(e.ctx, e.sender(), e.ownerLess(), "old")
 	is.True(err != nil)
-	_, err = NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.ownerLess(), "old")
+	_, err = e.s.NewDefaultBranchChangeEvent(e.ctx, e.sender(), e.ownerLess(), "old")
 	is.True(err != nil)
 }
 
 func TestNewRepositoryEventOwnerLookupFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewRepositoryEvent(e.ctx, e.sender(), e.ownerLess(), RepositoryEventActionDelete)
+	_, err := e.s.NewRepositoryEvent(e.ctx, e.sender(), e.ownerLess(), RepositoryEventActionDelete)
 	is.True(err != nil)
 }
 
 func TestNewPushEventFirstPush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventPush)
 	is.Equal(ev.Ref, "refs/heads/main")
@@ -240,12 +254,13 @@ func TestNewPushEventFirstPush(t *testing.T) {
 }
 
 func TestNewPushEventRangePush(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 	first := gitOutput(t, path, "rev-parse", "main~1")
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
 	is.NoErr(err)
 	// Only commits after `before` are listed.
 	is.Equal(len(ev.Commits), 1)
@@ -267,19 +282,20 @@ func commitOn(t *testing.T, path, parent, msg string) string {
 // A new branch lists only the commits no other branch or tag has, whether
 // the ref already points at after (post-receive) or not yet (update hook).
 func TestNewPushEventNewBranchListsOnlyNewCommits(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 	dev := commitOn(t, path, head, "dev commit")
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
 	is.NoErr(err)
 	is.Equal(len(ev.Commits), 1)
 	is.Equal(ev.Commits[0].ID, dev)
 	is.True(!ev.Forced)
 
 	runGit(t, path, "update-ref", "refs/heads/dev", dev)
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/dev", zeroHash, dev)
 	is.NoErr(err)
 	is.Equal(len(ev.Commits), 1)
 	is.Equal(ev.Commits[0].ID, dev)
@@ -287,19 +303,20 @@ func TestNewPushEventNewBranchListsOnlyNewCommits(t *testing.T) {
 	// Commits a tag already has are not new either.
 	runGit(t, path, "update-ref", "refs/heads/dev", head)
 	runGit(t, path, "update-ref", "refs/tags/v1", dev)
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/other", zeroHash, dev)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/other", zeroHash, dev)
 	is.NoErr(err)
 	is.Equal(len(ev.Commits), 0)
 }
 
 // A new branch at a commit another branch already has brings no commits.
 func TestNewPushEventNewBranchAtExistingCommit(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 	runGit(t, path, "update-ref", "refs/heads/copy", head)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/copy", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/copy", zeroHash, head)
 	is.NoErr(err)
 	is.Equal(len(ev.Commits), 0)
 	// An empty list, not null.
@@ -307,6 +324,7 @@ func TestNewPushEventNewBranchAtExistingCommit(t *testing.T) {
 }
 
 func TestNewPushEventForced(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
@@ -315,28 +333,29 @@ func TestNewPushEventForced(t *testing.T) {
 	unrelated := commitOn(t, path, "", "unrelated root")
 
 	// A fast-forward is not forced.
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
 	is.NoErr(err)
 	is.True(!ev.Forced)
 
 	// Rewriting the last commit is.
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, other)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, other)
 	is.NoErr(err)
 	is.True(ev.Forced)
 	is.Equal(len(ev.Commits), 1)
 	is.Equal(ev.Commits[0].ID, other)
 
 	// So is moving back, and moving to an unrelated history.
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, first)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, first)
 	is.NoErr(err)
 	is.True(ev.Forced)
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, unrelated)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, unrelated)
 	is.NoErr(err)
 	is.True(ev.Forced)
 }
 
 // Annotated tags are compared by the commits they point at.
 func TestNewPushEventForcedAnnotatedTag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
@@ -348,27 +367,28 @@ func TestNewPushEventForcedAnnotatedTag(t *testing.T) {
 	older := tagOn("main~1")
 	newer := tagOn(head)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", older, newer)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", older, newer)
 	is.NoErr(err)
 	is.True(!ev.Forced)
 
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", newer, older)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/tags/v1", newer, older)
 	is.NoErr(err)
 	is.True(ev.Forced)
 }
 
 func TestNewPushEventPusher(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.Equal(ev.Pusher.Username, "alice")
 	is.Equal(ev.Pusher.ID, e.owner.ID)
 
 	// A push without a user has an empty pusher.
-	ev, err = NewPushEvent(e.ctx, nil, e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err = e.s.NewPushEvent(e.ctx, nil, e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.Equal(ev.Pusher, User{})
 }
@@ -376,11 +396,12 @@ func TestNewPushEventPusher(t *testing.T) {
 // A push that deletes a branch or tag lists no commits, since there is no
 // revision range to walk, and says the ref was deleted.
 func TestNewPushEventDelete(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, zeroHash)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", head, zeroHash)
 	is.NoErr(err)
 	is.Equal(ev.EventType, EventPush)
 	is.Equal(ev.Before, head)
@@ -394,50 +415,55 @@ func TestNewPushEventDelete(t *testing.T) {
 }
 
 func TestNewPushEventCreatedFlag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, head := gitRepo(t)
 	first := gitOutput(t, path, "rev-parse", "main~1")
 
-	ev, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
+	ev, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, head)
 	is.NoErr(err)
 	is.True(ev.Created)
 	is.True(!ev.Deleted)
 
-	ev, err = NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
+	ev, err = e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", first, head)
 	is.NoErr(err)
 	is.True(!ev.Created)
 	is.True(!ev.Deleted)
 }
 
 func TestNewPushEventUnknownAfterFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	path, _ := gitRepo(t)
 
-	_, err := NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, "3333333333333333333333333333333333333333")
+	_, err := e.s.NewPushEvent(e.ctx, e.sender(), e.senderRepo(path), "refs/heads/main", zeroHash, "3333333333333333333333333333333333333333")
 	is.True(err != nil)
 }
 
 func TestNewPushEventOpenFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 	repo := e.senderRepo("")
 	repo.openErr = errors.New("cannot open repository")
 
-	_, err := NewPushEvent(e.ctx, e.sender(), repo, "refs/heads/main", zeroHash, "1111111111111111111111111111111111111111")
+	_, err := e.s.NewPushEvent(e.ctx, e.sender(), repo, "refs/heads/main", zeroHash, "1111111111111111111111111111111111111111")
 	is.True(err != nil)
 }
 
 func TestNewPushEventOwnerLookupFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newTestEnv(t)
 
-	_, err := NewPushEvent(e.ctx, e.sender(), e.ownerLess(), "refs/heads/main", zeroHash, "1111111111111111111111111111111111111111")
+	_, err := e.s.NewPushEvent(e.ctx, e.sender(), e.ownerLess(), "refs/heads/main", zeroHash, "1111111111111111111111111111111111111111")
 	is.True(err != nil)
 }
 
 func TestGetDefaultBranch(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	path, _ := gitRepo(t)
 
@@ -447,6 +473,7 @@ func TestGetDefaultBranch(t *testing.T) {
 }
 
 func TestGetDefaultBranchEmptyRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	empty := t.TempDir() + "/empty.git"
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
@@ -460,11 +487,12 @@ func TestGetDefaultBranchEmptyRepository(t *testing.T) {
 // A default branch that cannot be read leaves the payload's field empty but
 // is logged, not dropped silently.
 func TestDefaultBranchLogsError(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
-	ctx := log.WithContext(context.Background(), log.New(&logs))
+	s := NewSender(nil, nil, nil, log.New(&logs))
 
-	branch := defaultBranch(ctx, fakeRepo{name: "repo1", openErr: errors.New("boom")})
+	branch := s.defaultBranch(fakeRepo{name: "repo1", openErr: errors.New("boom")})
 	is.Equal(branch, "")
 	is.True(strings.Contains(logs.String(), "default branch"))
 	is.True(strings.Contains(logs.String(), "repo1"))
@@ -474,11 +502,12 @@ func TestDefaultBranchLogsError(t *testing.T) {
 	logs.Reset()
 	empty := t.TempDir() + "/empty.git"
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
-	is.Equal(defaultBranch(ctx, fakeRepo{path: empty}), "")
+	is.Equal(s.defaultBranch(fakeRepo{path: empty}), "")
 	is.Equal(logs.String(), "")
 }
 
 func TestGetDefaultBranchOpenErrorReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 
 	_, err := getDefaultBranch(fakeRepo{openErr: errors.New("boom")})

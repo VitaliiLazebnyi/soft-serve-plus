@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -26,46 +25,15 @@ func (*Store) CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url
 // CreateWebhookDelivery implements store.Store.
 //
 // A send that was in flight when its webhook was deleted fails the insert on
-// its foreign key. Nothing is written then, and no error is returned.
-//
-// On Postgres any error aborts the transaction it happens in, so inside a
-// transaction the insert runs under a savepoint and a foreign key violation
-// rolls back to it. The transaction can then go on, for example to prune.
+// its foreign key, with an error that matches db.ErrForeignKey; the caller
+// decides whether that is a failure (see the webhook package, for which it
+// is not).
 func (*Store) CreateWebhookDelivery(ctx context.Context, h db.Handler, d models.WebhookDelivery) error {
 	query := h.Rebind(`INSERT INTO webhook_deliveries (id, webhook_id, event, request_url, request_method, request_error, request_headers, request_body, response_status, response_headers, response_body)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`)
-	insert := func() error {
-		_, err := h.ExecContext(ctx, query, d.ID, d.WebhookID, d.Event, d.RequestURL, d.RequestMethod, d.RequestError,
-			d.RequestHeaders, d.RequestBody, d.ResponseStatus, d.ResponseHeaders, d.ResponseBody)
-		return err
-	}
-
-	tx, ok := h.(*db.Tx)
-	if !ok || tx.DriverName() != "postgres" {
-		if err := insert(); !isForeignKeyViolation(err) {
-			return err
-		}
-		return nil
-	}
-
-	if _, err := tx.ExecContext(ctx, `SAVEPOINT webhook_delivery;`); err != nil {
-		return err
-	}
-	err := insert()
-	if isForeignKeyViolation(err) {
-		_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT webhook_delivery;`)
-	}
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT webhook_delivery;`)
+	_, err := h.ExecContext(ctx, query, d.ID, d.WebhookID, d.Event, d.RequestURL, d.RequestMethod, d.RequestError,
+		d.RequestHeaders, d.RequestBody, d.ResponseStatus, d.ResponseHeaders, d.ResponseBody)
 	return err
-}
-
-// isForeignKeyViolation reports whether err, from a db.Handler, which maps
-// driver errors, is a foreign key violation.
-func isForeignKeyViolation(err error) bool {
-	return errors.Is(err, db.ErrForeignKey)
 }
 
 // CreateWebhookEvents implements store.Store.

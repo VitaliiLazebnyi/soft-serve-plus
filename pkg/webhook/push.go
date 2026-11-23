@@ -72,10 +72,10 @@ func (cs Commits) EncodeValues(key string, v *url.Values) error {
 }
 
 // NewPushEvent builds the payload for a push event.
-func NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
+func (s *Sender) NewPushEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) (PushEvent, error) {
 	event := EventPush
 
-	repository, err := newRepository(ctx, repo)
+	repository, err := s.newRepository(ctx, repo)
 	if err != nil {
 		return PushEvent{}, err
 	}

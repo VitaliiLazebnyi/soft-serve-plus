@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
+	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
 // Backend is the Soft Serve backend that handles users, repositories, and
@@ -32,6 +33,9 @@ type Backend struct {
 	// deliveries runs the webhook deliveries in the background, bounded, and
 	// tracks them so shutdown can wait for them.
 	deliveries *deliveryQueue
+
+	// webhooks builds, sends and records the webhook events.
+	webhooks *webhook.Sender
 
 	// imports counts the imports in flight and cancels them at shutdown.
 	imports *importTracker
@@ -97,6 +101,7 @@ func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Bac
 	if logger == nil {
 		logger = log.Default()
 	}
+	webhooks := webhook.NewSender(cfg, db, st, logger)
 	logger = logger.WithPrefix("backend")
 	b := &Backend{
 		cfg:    cfg,
@@ -105,6 +110,7 @@ func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Bac
 		logger: logger,
 
 		deliveries:       newDeliveryQueue(maxBackgroundDeliveries, maxQueuedDeliveries, logger),
+		webhooks:         webhooks,
 		imports:          newImportTracker(),
 		pushCreatedRetry: pushCreatedDirRetry,
 

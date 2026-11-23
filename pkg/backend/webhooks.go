@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -79,14 +78,11 @@ func (d *Backend) Webhook(ctx context.Context, repo proto.Repository, id int64) 
 			return err
 		}
 
-		wh = webhook.Hook{
-			Webhook:     h,
-			ContentType: webhook.ContentType(h.ContentType), //nolint:gosec
-			Events:      make([]webhook.Event, len(events)),
-		}
+		evs := make([]webhook.Event, len(events))
 		for i, e := range events {
-			wh.Events[i] = webhook.Event(e.Event)
+			evs[i] = webhook.Event(e.Event)
 		}
+		wh = webhook.NewHook(h, evs)
 
 		return nil
 	}); err != nil {
@@ -127,11 +123,7 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 			events[i] = webhook.Event(e.Event)
 		}
 
-		hooks[i] = webhook.Hook{
-			Webhook:     h,
-			ContentType: webhook.ContentType(h.ContentType), //nolint:gosec
-			Events:      events,
-		}
+		hooks[i] = webhook.NewHook(h, events)
 	}
 
 	return hooks, nil
@@ -302,18 +294,16 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 	case found:
 		ct = stored
 	}
-	wh.ContentType = int(ct)
-
-	var payload any
+	// The stored body is sent as it is. It is still checked to be what its
+	// content type says, so a body the server could not have written is
+	// refused rather than sent.
 	if ct == webhook.ContentTypeForm {
-		vals, err := neturl.ParseQuery(delivery.RequestBody)
-		if err != nil {
+		if _, err := neturl.ParseQuery(delivery.RequestBody); err != nil {
 			// The parse error quotes part of the body, so it is returned to
 			// the caller but not logged.
 			d.logger.Error("error parsing webhook form body", "delivery", delID, "webhook", id)
 			return err
 		}
-		payload = vals
 	} else {
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(delivery.RequestBody), &raw); err != nil {
@@ -321,7 +311,6 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 			d.logger.Error("error unmarshaling webhook payload", "delivery", delID, "webhook", id)
 			return err
 		}
-		payload = raw
 	}
 
 	// The redelivery keeps the GUID the receiver was first sent, so it can
@@ -335,7 +324,7 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 		}
 	}
 
-	return webhook.RedeliverWebhook(d.webhookContext(ctx), wh, webhook.Event(delivery.Event), payload, guid)
+	return d.webhooks.Redeliver(ctx, wh, webhook.Event(delivery.Event), ct, []byte(delivery.RequestBody), guid)
 }
 
 // webhookNotFound maps a missing webhook row to proto.ErrWebhookNotFound,
@@ -354,17 +343,6 @@ func deliveryNotFound(err error) error {
 		return proto.ErrDeliveryNotFound
 	}
 	return err
-}
-
-// webhookContext returns ctx carrying the backend's own config, database and
-// store. The webhook package reads them from the context: the store and
-// database to record the delivery, and the config for webhook.allowed_hosts.
-// Without them a caller's bare context would panic while recording and
-// ignore the allowlist the webhook's URL was validated against.
-func (d *Backend) webhookContext(ctx context.Context) context.Context {
-	ctx = config.WithContext(ctx, d.cfg)
-	ctx = db.WithContext(ctx, d.db)
-	return store.WithContext(ctx, d.store)
 }
 
 // storedContentType returns the Content-Type of a delivery from its stored
@@ -481,31 +459,54 @@ const ShutdownDeliveryTimeout = time.Minute
 // build and send its webhook event.
 const afterChangeTimeout = 30 * time.Second
 
-// AfterChangeContext returns a context for the reads made after a change is
+// afterChangeContext returns a context for the reads made after a change is
 // committed to build and send its webhook event. It keeps ctx's values but not
 // its cancellation, so a caller that goes away right after the commit, such as
 // an SSH client that disconnects, does not lose the event. The reads are
 // bounded by afterChangeTimeout instead. The caller must call the returned
 // cancel function.
-func AfterChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func afterChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), afterChangeTimeout)
 }
 
-// SendEventAfterChange sends the webhook event for a change that is already
-// committed, the same way the backend's own changes do. See sendAfterChange.
-func (d *Backend) SendEventAfterChange(ctx context.Context, ev webhook.EventPayload) {
+// SendBranchTagEvent sends the webhook event for the branch or tag ref that
+// user created (before is the zero ID) or deleted (after is the zero ID) in
+// repo, a change that is already committed, the same way the backend's own
+// changes do (see sendAfterChange). It returns an error only when the event
+// cannot be built.
+func (d *Backend) SendBranchTagEvent(ctx context.Context, user proto.User, repo proto.Repository, ref, before, after string) error {
+	ctx, cancel := afterChangeContext(ctx)
+	defer cancel()
+	ev, err := d.webhooks.NewBranchTagEvent(ctx, user, repo, ref, before, after)
+	if err != nil {
+		return err
+	}
 	d.sendAfterChange(ctx, ev)
+	return nil
+}
+
+// SendDefaultBranchChangeEvent sends the webhook event for user's change of
+// repo's default branch from oldBranch, as SendBranchTagEvent does.
+func (d *Backend) SendDefaultBranchChangeEvent(ctx context.Context, user proto.User, repo proto.Repository, oldBranch string) error {
+	ctx, cancel := afterChangeContext(ctx)
+	defer cancel()
+	ev, err := d.webhooks.NewDefaultBranchChangeEvent(ctx, user, repo, oldBranch)
+	if err != nil {
+		return err
+	}
+	d.sendAfterChange(ctx, ev)
+	return nil
 }
 
 // sendAfterChange sends the webhook event for a change that is already
 // committed. The subscribers are read now and the deliveries run in the
 // background, so the caller does not wait on receivers. Neither is cut short
-// by the caller's context ending (see AfterChangeContext). The change has
+// by the caller's context ending (see afterChangeContext). The change has
 // happened, so a failure is logged rather than returned.
 func (d *Backend) sendAfterChange(ctx context.Context, ev webhook.EventPayload) {
-	ctx, cancel := AfterChangeContext(ctx)
+	ctx, cancel := afterChangeContext(ctx)
 	defer cancel()
-	hooks, err := webhook.Subscribers(ctx, ev)
+	hooks, err := d.webhooks.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
 		return
@@ -559,9 +560,9 @@ func (d *Backend) deliverAfterChange(ctx context.Context, hooks []models.Webhook
 	send := func() {
 		var err error
 		if record {
-			err = webhook.Deliver(bg, hooks, ev)
+			err = d.webhooks.Deliver(bg, hooks, ev)
 		} else {
-			err = webhook.DeliverUnrecorded(bg, hooks, ev)
+			err = d.webhooks.DeliverUnrecorded(bg, hooks, ev)
 		}
 		if err != nil {
 			d.logEventNotDelivered(ev, err)
@@ -580,7 +581,7 @@ func (d *Backend) deliverAfterChange(ctx context.Context, hooks []models.Webhook
 		reason = errRepoDeliveriesFull
 	}
 	if reason != nil && record {
-		if err := webhook.RecordUndelivered(bg, hooks, ev, reason); err != nil {
+		if err := d.webhooks.RecordUndelivered(bg, hooks, ev, reason); err != nil {
 			d.logger.Error("dropped webhook event not recorded", "event", ev.Event(), "repo_id", ev.RepositoryID(), "err", err)
 		}
 	}

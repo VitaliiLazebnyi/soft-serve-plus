@@ -913,12 +913,12 @@ func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEven
 	case err != nil:
 		return nil, nil, err
 	}
-	ev, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
+	ev, err := d.webhooks.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), r, webhook.RepositoryEventActionDelete)
 	if err != nil {
 		d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
 		return nil, r, nil
 	}
-	hooks, err := webhook.Subscribers(ctx, ev)
+	hooks, err := d.webhooks.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
 		return nil, r, nil
@@ -1125,13 +1125,13 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 	// The rename is committed, so an event problem is logged, not returned.
 	// The event is for the row this call renamed: by the time the new name
 	// is looked up again, another repository can have it.
-	ctx, cancel := AfterChangeContext(ctx)
+	ctx, cancel := afterChangeContext(ctx)
 	defer cancel()
 	user := proto.UserFromContext(ctx)
 	renamed.Name = newName
 	repo := d.repoFromRow(newName, renamed)
 
-	wh, err := webhook.NewRepositoryRenameEvent(ctx, user, repo, oldName)
+	wh, err := d.webhooks.NewRepositoryRenameEvent(ctx, user, repo, oldName)
 	if err != nil {
 		d.logger.Error("rename committed but webhook event skipped", "repo", newName, "err", err)
 		return nil
@@ -1645,12 +1645,12 @@ func (d *Backend) setPrivate(ctx context.Context, name string, id int64, private
 	// meanwhile, and an event problem is logged, not returned. The event is
 	// for the row this call changed: by the time the name is looked up
 	// again, another repository can have it.
-	ctx, cancel := AfterChangeContext(ctx)
+	ctx, cancel := afterChangeContext(ctx)
 	defer cancel()
 	m.Private = private
 	repo := d.repoFromRow(name, m)
 
-	wh, err := webhook.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), repo, webhook.RepositoryEventActionVisibilityChange)
+	wh, err := d.webhooks.NewRepositoryEvent(ctx, proto.UserFromContext(ctx), repo, webhook.RepositoryEventActionVisibilityChange)
 	if err != nil {
 		d.logger.Error("visibility change committed but webhook event skipped", "repo", name, "err", err)
 		return nil
