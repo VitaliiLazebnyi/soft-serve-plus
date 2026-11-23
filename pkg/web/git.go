@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 
 	"charm.land/log/v2"
@@ -897,14 +896,11 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 		return
 	}
 
-	var version int
-	for _, p := range strings.Split(protocol, ":") {
-		if strings.HasPrefix(p, "version=") {
-			if v, _ := strconv.Atoi(p[8:]); v > version {
-				version = v
-			}
-		}
-	}
+	// Only before protocol v2 does the advertisement start with the
+	// service line, so it follows the version git serves: the one
+	// hooks.ProtocolEnv passes it. A header that asks for no version git
+	// knows gets v0.
+	version, _ := hooks.ProtocolVersion(protocol)
 
 	// The advertisement is streamed to the client as git writes it,
 	// rather than held in memory: a repository with many refs has a large
