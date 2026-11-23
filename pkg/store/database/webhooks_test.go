@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -636,4 +638,104 @@ func allDeliveries(ctx context.Context, dbx *db.DB, webhookID int64) ([]models.W
 	var ds []models.WebhookDelivery
 	err := dbx.SelectContext(ctx, &ds, dbx.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq;`), webhookID)
 	return ds, err
+}
+
+// The webhook cap holds when the database defaults to REPEATABLE READ. A
+// create that waited for LockAndCountWebhooks' row lock must count the
+// webhook the holder inserted; under REPEATABLE READ its snapshot predates
+// the wait, so it counted one fewer and a second create passed the cap.
+func TestLockAndCountWebhooksSeesHolderUnderRepeatableReadPostgres(t *testing.T) {
+	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
+		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")
+	}
+	ctx, dbx := newWebhookTestDB(t)
+	dbtest.SetDefaultIsolation(ctx, t, dbx, "repeatable read")
+	s := New(nil)
+
+	type result struct {
+		n   int
+		err error
+	}
+	waiter := make(chan result, 1)
+	err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+		var holder int
+		if err := tx.GetContext(ctx, &holder, `SELECT pg_backend_pid()`); err != nil {
+			return err
+		}
+		if n, err := s.LockAndCountWebhooks(ctx, tx, 7); err != nil || n != 0 {
+			t.Errorf("LockAndCountWebhooks() = %d, %v; want 0", n, err)
+		}
+
+		go func() {
+			var r result
+			r.err = dbx.TransactionContext(ctx, func(tx *db.Tx) error {
+				var err error
+				r.n, err = s.LockAndCountWebhooks(ctx, tx, 7)
+				return err
+			})
+			waiter <- r
+		}()
+
+		// Insert only once the other transaction waits for the lock.
+		deadline := time.Now().Add(time.Minute)
+		for {
+			var blocked bool
+			if err := dbx.GetContext(ctx, &blocked,
+				`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holder); err != nil {
+				return err
+			}
+			if blocked {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Error("the second LockAndCountWebhooks did not wait for the lock")
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		_, err := s.CreateWebhook(ctx, tx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := <-waiter
+	if r.err != nil || r.n != 1 {
+		t.Errorf("LockAndCountWebhooks() after waiting = %d, %v; want 1", r.n, r.err)
+	}
+}
+
+// Every field CreateWebhookDelivery takes is stored in its own column.
+func TestCreateWebhookDeliveryColumns(t *testing.T) {
+	ctx, dbx, s := newStoreTestDB(t)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	if err := s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
+		ID:              id,
+		WebhookID:       hook,
+		Event:           3,
+		RequestURL:      "u",
+		RequestMethod:   "PUT",
+		RequestError:    sql.NullString{String: "e", Valid: true},
+		RequestHeaders:  "rqh",
+		RequestBody:     "rqb",
+		ResponseStatus:  418,
+		ResponseHeaders: "rsh",
+		ResponseBody:    "rsb",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.GetWebhookDeliveryByID(ctx, dbx, hook, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ID != id || d.WebhookID != hook || d.Event != 3 || d.RequestURL != "u" || d.RequestMethod != "PUT" ||
+		!d.RequestError.Valid || d.RequestError.String != "e" || d.RequestHeaders != "rqh" || d.RequestBody != "rqb" ||
+		d.ResponseStatus != 418 || d.ResponseHeaders != "rsh" || d.ResponseBody != "rsb" {
+		t.Errorf("delivery = %+v", d)
+	}
 }
