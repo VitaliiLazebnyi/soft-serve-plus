@@ -73,12 +73,17 @@ func newLFSUploadEnvLogging(t *testing.T, logger *log.Logger) *lfsUploadEnv {
 // upload PUTs body to the basic upload route for oid, declaring size as the
 // content length.
 func (e *lfsUploadEnv) upload(oid string, size int64, body io.Reader) *httptest.ResponseRecorder {
+	return e.uploadWithToken(e.token, oid, size, body)
+}
+
+// uploadWithToken is upload, authenticated with token.
+func (e *lfsUploadEnv) uploadWithToken(token, oid string, size int64, body io.Reader) *httptest.ResponseRecorder {
 	req := httptest.NewRequestWithContext(e.ctx, http.MethodPut,
 		"/repo.git/info/lfs/objects/basic/"+oid, body)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.FormatInt(size, 10))
 	req.ContentLength = size
-	req.Header.Set("Authorization", "token "+e.token)
+	req.Header.Set("Authorization", "token "+token)
 	w := httptest.NewRecorder()
 	e.router.ServeHTTP(w, req)
 	return w
@@ -224,6 +229,64 @@ func (h *hookReader) Read(p []byte) (int, error) {
 	return h.r.Read(p)
 }
 
+// uploadFence holds uploads at their first body read until each of n uploads
+// has either reached that read or returned. An upload that fails before
+// reading its body, such as on a database error, still counts, so it cannot
+// leave the others waiting forever.
+type uploadFence struct {
+	mu      sync.Mutex
+	pending int
+	release chan struct{}
+}
+
+func newUploadFence(n int) *uploadFence {
+	return &uploadFence{pending: n, release: make(chan struct{})}
+}
+
+// done records that one upload reached the fence or returned.
+func (f *uploadFence) done() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pending--
+	if f.pending == 0 {
+		close(f.release)
+	}
+}
+
+// concurrentUpload is the outcome of one upload of uploadConcurrently.
+type concurrentUpload struct {
+	w *httptest.ResponseRecorder
+	// readBody says whether the handler read the body, that is, got past
+	// the existence check.
+	readBody bool
+}
+
+// uploadConcurrently uploads content once per token, concurrently. Every
+// upload that reads its body waits at its first read until each upload has
+// read its body or returned, so uploads that get past the existence check
+// all do so before any of them stores the object.
+func (e *lfsUploadEnv) uploadConcurrently(content string, tokens ...string) []concurrentUpload {
+	oid := sha256Hex(content)
+	fence := newUploadFence(len(tokens))
+	results := make([]concurrentUpload, len(tokens))
+	var wg sync.WaitGroup
+	for i, token := range tokens {
+		wg.Go(func() {
+			arrived := sync.OnceFunc(fence.done)
+			// Count this upload even if it returns without reading its body.
+			defer arrived()
+			body := &hookReader{r: strings.NewReader(content), hook: func() {
+				results[i].readBody = true
+				arrived()
+				<-fence.release
+			}}
+			results[i].w = e.uploadWithToken(token, oid, int64(len(content)), body)
+		})
+	}
+	wg.Wait()
+	return results
+}
+
 // TestLFSUploadConcurrentDuplicate checks that two uploads of the same object
 // that both get past the existence check both succeed. The second insert hits
 // the unique constraint, which used to be answered with a 500.
@@ -233,28 +296,41 @@ func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 	const content = "concurrent object"
 	oid := sha256Hex(content)
 
-	const n = 2
-	var started sync.WaitGroup
-	started.Add(n)
-	codes := make([]int, n)
-	var done sync.WaitGroup
-	for i := range n {
-		done.Add(1)
-		go func() {
-			defer done.Done()
-			body := &hookReader{r: strings.NewReader(content), hook: func() {
-				// Wait until every request is past the existence check.
-				started.Done()
-				started.Wait()
-			}}
-			w := e.upload(oid, int64(len(content)), body)
-			codes[i] = w.Code
-			if w.Code != http.StatusOK {
-				t.Errorf("upload %d: got status %d, want 200: %s", i, w.Code, w.Body.String())
-			}
-		}()
+	for i, r := range e.uploadConcurrently(content, e.token, e.token) {
+		if r.w.Code != http.StatusOK {
+			t.Errorf("upload %d: got status %d, want 200: %s", i, r.w.Code, r.w.Body.String())
+		}
+		if !r.readBody {
+			t.Errorf("upload %d returned without reading its body, so the uploads did not overlap", i)
+		}
 	}
-	done.Wait()
+
+	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err != nil {
+		t.Errorf("object not recorded: %v", err)
+	}
+	e.assertNoTempFiles(t)
+}
+
+// TestLFSUploadConcurrentEarlyFailureReleasesFence checks the fence of
+// uploadConcurrently: an upload that fails before reading its body must not
+// leave the other one waiting. TestLFSUploadConcurrentDuplicate used to hang
+// until the test timeout when one upload failed early.
+func TestLFSUploadConcurrentEarlyFailureReleasesFence(t *testing.T) {
+	t.Parallel()
+	e := newLFSUploadEnv(t)
+	const content = "fenced object"
+	oid := sha256Hex(content)
+
+	// The bad token fails authentication, before the body is read.
+	results := e.uploadConcurrently(content, e.token, "bad-token")
+	if r := results[0]; r.w.Code != http.StatusOK || !r.readBody {
+		t.Errorf("good upload: got status %d, read body %v; want 200 after reading the body: %s",
+			r.w.Code, r.readBody, r.w.Body.String())
+	}
+	if r := results[1]; r.w.Code != http.StatusForbidden || r.readBody {
+		t.Errorf("bad-token upload: got status %d, read body %v; want 403 without reading the body: %s",
+			r.w.Code, r.readBody, r.w.Body.String())
+	}
 
 	if _, err := e.datastore.GetLFSObjectByOid(e.ctx, e.env.dbx, e.repo.ID(), oid); err != nil {
 		t.Errorf("object not recorded: %v", err)
