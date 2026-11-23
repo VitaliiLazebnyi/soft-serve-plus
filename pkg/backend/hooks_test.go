@@ -264,7 +264,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 		calls++
 		return true
 	}); got != 2 {
-		t.Fatalf("e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\treturn true\n\t}) = %v, want %v", got, 2)
+		t.Fatalf("forEachPushEvent with a callback that always continues = %v, want %v", got, 2)
 	}
 	if got := calls; got != 2 {
 		t.Fatalf("calls = %v, want %v", got, 2)
@@ -277,7 +277,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 		cancel()
 		return true
 	}); got != 1 {
-		t.Fatalf("e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\tcancel()\n\t\treturn true\n\t}) = %v, want %v", got, 1)
+		t.Fatalf("forEachPushEvent with a callback that cancels the context = %v, want %v", got, 1)
 	}
 	if got := calls; got != 1 {
 		t.Fatalf("calls = %v, want %v", got, 1)

@@ -901,7 +901,7 @@ func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 			ran++
 			mu.Unlock()
 		}); got != enqueued {
-			t.Fatalf("q.enqueue(int64(i), func() {\n\t\t\tmu.Lock()\n\t\t\trunning++\n\t\t\tpeak = max(peak, running)\n\t\t\tmu.Unlock()\n\t\t\t<-release\n\t\t\tmu.Lock()\n\t\t\trunning--\n\t\t\tran++\n\t\t\tmu.Unlock()\n\t\t}) = %v, want %v", got, enqueued)
+			t.Fatalf("enqueue of job %d = %v, want %v", i, got, enqueued)
 		}
 	}
 	// enqueue starts a job's goroutine or queues it before it returns.
@@ -1008,7 +1008,7 @@ func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 		order = append(order, 1)
 		mu.Unlock()
 	}); got != enqueued {
-		t.Fatalf("q.enqueue(1, func() {\n\t\tstarted <- struct{}{}\n\t\t<-release\n\t\tmu.Lock()\n\t\torder = append(order, 1)\n\t\tmu.Unlock()\n\t}) = %v, want %v", got, enqueued)
+		t.Fatalf("enqueue of repository 1 job 1 = %v, want %v", got, enqueued)
 	}
 	<-started
 	for i := 2; i <= 4; i++ {
@@ -1017,7 +1017,7 @@ func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 			order = append(order, i)
 			mu.Unlock()
 		}); got != enqueued {
-			t.Fatalf("q.enqueue(1, func() {\n\t\t\tmu.Lock()\n\t\t\torder = append(order, i)\n\t\t\tmu.Unlock()\n\t\t}) = %v, want %v", got, enqueued)
+			t.Fatalf("enqueue of repository 1 job %d = %v, want %v", i, got, enqueued)
 		}
 	}
 
@@ -1376,7 +1376,7 @@ func TestRefusedCreateAndRenameSendNoRepositoryEvent(t *testing.T) {
 		_, err := e.be.CreateRepository(aliceCtx, "junk", alice, proto.RepositoryOptions{})
 		return err
 	}(), proto.ErrUnauthorized) {
-		t.Fatal("not true: errors.Is(func() error {\n\t\t_, err := e.be.CreateRepository(aliceCtx, \"junk\", alice, proto.RepositoryOptions{})\n\t\treturn err\n\t}(), proto.ErrUnauthorized)")
+		t.Fatal("not true: errors.Is(CreateRepository(aliceCtx, \"junk\", alice, …), proto.ErrUnauthorized)")
 	}
 	if !errors.Is(e.be.RenameRepository(aliceCtx, "mine", "renamed"), proto.ErrUnauthorized) {
 		t.Fatal("not true: errors.Is(e.be.RenameRepository(aliceCtx, \"mine\", \"renamed\"), proto.ErrUnauthorized)")
