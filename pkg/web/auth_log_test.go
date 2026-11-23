@@ -87,7 +87,7 @@ func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the sub
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", tc.header)
 
-			user, _, err := f.server.parseAuthHdr(req, f.server.requestLogger(req), []string{"secret"})
+			user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
 			is.Equal(err == nil && user != nil, tc.ok)
 
 			out := logs.String()
@@ -156,7 +156,7 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the su
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", header)
 
-			user, _, err := f.server.parseAuthHdr(req, f.server.requestLogger(req), []string{"secret"})
+			user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
 			is.True(err != nil || user == nil)
 
 			if out := logs.String(); strings.Contains(out, "ERRO") {

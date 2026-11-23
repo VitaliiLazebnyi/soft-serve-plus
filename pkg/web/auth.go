@@ -13,25 +13,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// authenticate authenticates the user from the request. A bearer token must
-// name one of repos in its audience, and its audience is returned; it is nil
-// for other credentials, which are not scoped to repositories. The error is
-// errInvalidToken or errInvalidPassword for bad credentials, errAuthUnavailable
-// when the credentials could not be checked, and proto.ErrUserNotFound
-// otherwise. logger is the request's logger.
-func (s *server) authenticate(r *http.Request, logger *log.Logger, repos ...string) (proto.User, []string, error) {
-	// Prefer the Authorization header
-	user, audience, err := s.parseAuthHdr(r, logger, repos)
-	if err != nil || user == nil {
-		if errors.Is(err, errInvalidToken) || errors.Is(err, errInvalidPassword) || errors.Is(err, errAuthUnavailable) {
-			return nil, nil, err
-		}
-		return nil, nil, proto.ErrUserNotFound
-	}
-
-	return user, audience, nil
-}
-
 // errAuthUnavailable is returned when credentials could not be checked
 // because a lookup failed, as when the database is down. The caller sent
 // credentials that may well be valid, so the request is neither anonymous
@@ -72,12 +53,13 @@ var errInvalidPassword = errors.New("invalid password")
 //     GitHub clients send it (e.g. "<token>:x-oauth-basic").
 //
 // Anything else is refused after at most two token lookups, which are
-// hashes, so a failed login costs no bcrypt and waits for nothing.
+// hashes, so a failed login costs no bcrypt and waits for nothing. Neither a
+// name nor a password is no login at all: a nil user and a nil error.
 func (s *server) parseUsernamePassword(ctx context.Context, logger *log.Logger, username, password string) (proto.User, error) {
 	be := s.be
 
 	if username == "" && password == "" {
-		return nil, proto.ErrUserNotFound
+		return nil, nil
 	}
 
 	// Clients that follow the GitHub convention send the access token as
@@ -121,16 +103,19 @@ func (s *server) parseUsernamePassword(ctx context.Context, logger *log.Logger, 
 	return nil, errInvalidPassword
 }
 
-// errInvalidHeader is returned when the authorization header is invalid.
-var errInvalidHeader = errors.New("invalid authorization header")
-
-// parseAuthHdr authenticates the Authorization header of r; see
-// authenticate. reqLogger is the request's logger.
-func (s *server) parseAuthHdr(r *http.Request, reqLogger *log.Logger, repos []string) (proto.User, []string, error) {
-	// Check for auth header
+// authenticate authenticates the caller of r from its Authorization header.
+// A bearer token must name one of repos in its audience, and its audience is
+// returned; it is nil for other credentials, which are not scoped to
+// repositories. A request without credentials, with a header that is missing
+// or malformed or a Basic login with neither name nor password, gets a nil
+// user and a nil error: it is anonymous. Otherwise the error is
+// errInvalidToken or errInvalidPassword for bad credentials and
+// errAuthUnavailable when the credentials could not be checked. reqLogger is
+// the request's logger.
+func (s *server) authenticate(r *http.Request, reqLogger *log.Logger, repos ...string) (proto.User, []string, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		return nil, nil, errInvalidHeader
+		return nil, nil, nil
 	}
 
 	ctx := r.Context()
@@ -139,7 +124,7 @@ func (s *server) parseAuthHdr(r *http.Request, reqLogger *log.Logger, repos []st
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 {
-		return nil, nil, errInvalidHeader
+		return nil, nil, nil
 	}
 
 	// Log only a known scheme: the rest of the header is a credential, and
@@ -204,7 +189,7 @@ func (s *server) parseAuthHdr(r *http.Request, reqLogger *log.Logger, repos []st
 	default:
 		username, password, ok := r.BasicAuth()
 		if !ok {
-			return nil, nil, errInvalidHeader
+			return nil, nil, nil
 		}
 
 		user, err := s.parseUsernamePassword(ctx, reqLogger, username, password)

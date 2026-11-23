@@ -68,3 +68,35 @@ func TestBadCredentialsAreNotAnonymous(t *testing.T) {
 		})
 	}
 }
+
+// A request without credentials is anonymous: authenticate gives it a nil
+// user and a nil error, which no caller can mistake for bad credentials or
+// for credentials that could not be checked.
+func TestAuthenticateWithoutCredentialsIsAnonymous(t *testing.T) {
+	t.Parallel()
+	f := newOracleFixture(t)
+	basic := func(user, pass string) string {
+		r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+		r.SetBasicAuth(user, pass)
+		return r.Header.Get("Authorization")
+	}
+	for name, header := range map[string]string{
+		"no header":      "",
+		"one word":       "Token",
+		"unknown scheme": "Digest abc",
+		"basic not b64":  "Basic !!!",
+		"basic empty":    basic("", ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
+			if header != "" {
+				req.Header.Set("Authorization", header)
+			}
+			user, audience, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
+			if user != nil || audience != nil || err != nil {
+				t.Errorf("authenticate(%q) = %v, %v, %v; want nil, nil, nil", header, user, audience, err)
+			}
+		})
+	}
+}
