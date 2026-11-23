@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -13,13 +14,13 @@ import (
 // --file`, which takes the same lock git does and replaces the file by
 // renaming, retrying on Windows while another process has it open. Like
 // --local it reads that one file, without its includes.
-// runConfig runs `git config --file <repo>/config` with args under r's
-// context. It returns git's output and its exit code, or an error when git
-// did not run or exited with a code not in ok.
-func (r *Repository) runConfig(ok []int, args ...string) ([]byte, int, error) {
+// runConfig runs `git config --file <repo>/config` with args under ctx. It
+// returns git's output and its exit code, or an error when git did not run
+// or exited with a code not in ok.
+func (r *Repository) runConfig(ctx context.Context, ok []int, args ...string) ([]byte, int, error) {
 	args = append([]string{"config", "--file", filepath.Join(r.Path, "config")}, args...)
 	var out, stderr bytes.Buffer
-	err := NewCommandWithContext(r.Context(), args...).RunInDirPipeline(&out, &stderr, r.Path)
+	err := NewCommandWithContext(ctx, args...).RunInDirPipeline(&out, &stderr, r.Path)
 	if err == nil {
 		return out.Bytes(), 0, nil
 	}
@@ -41,7 +42,7 @@ func (r *Repository) runConfig(ok []int, args ...string) ([]byte, int, error) {
 // as git does, and whether key is set there.
 func (r *Repository) ConfigGet(key string) (string, bool, error) {
 	// Exit code 1: the key is not set.
-	out, code, err := r.runConfig([]int{1}, "--null", "--get", "--end-of-options", key)
+	out, code, err := r.runConfig(r.ctx, []int{1}, "--null", "--get", "--end-of-options", key)
 	if err != nil || code == 1 {
 		return "", false, err
 	}
@@ -54,7 +55,7 @@ func (r *Repository) ConfigGet(key string) (string, bool, error) {
 // written, for example remote.Origin.url.
 func (r *Repository) ConfigGetRegexp(keyRegexp string) ([]ConfigEntry, error) {
 	// Exit code 1: nothing matches.
-	out, code, err := r.runConfig([]int{1}, "--null", "--get-regexp", "--end-of-options", keyRegexp)
+	out, code, err := r.runConfig(r.ctx, []int{1}, "--null", "--get-regexp", "--end-of-options", keyRegexp)
 	if err != nil || code == 1 {
 		return nil, err
 	}
@@ -67,17 +68,25 @@ func (r *Repository) ConfigGetRegexp(keyRegexp string) ([]ConfigEntry, error) {
 	return entries, nil
 }
 
+// writeContext is the context a config write runs under: r's values
+// without its cancellation. git writes the file through config.lock, and a
+// git killed mid-write would leave the lock behind and refuse every later
+// write, so a write finishes once started.
+func (r *Repository) writeContext() context.Context {
+	return context.WithoutCancel(r.ctx)
+}
+
 // ConfigSet sets key to value in the repository's config file, replacing
-// every value it had.
+// every value it had. See writeContext.
 func (r *Repository) ConfigSet(key, value string) error {
-	_, _, err := r.runConfig(nil, "--replace-all", "--end-of-options", key, value)
+	_, _, err := r.runConfig(r.writeContext(), nil, "--replace-all", "--end-of-options", key, value)
 	return err
 }
 
 // ConfigUnset removes every value of key from the repository's config file.
-// A key that is not set is not an error.
+// A key that is not set is not an error. See writeContext.
 func (r *Repository) ConfigUnset(key string) error {
 	// Exit code 5: the key is not set.
-	_, _, err := r.runConfig([]int{5}, "--unset-all", "--end-of-options", key)
+	_, _, err := r.runConfig(r.writeContext(), []int{5}, "--unset-all", "--end-of-options", key)
 	return err
 }

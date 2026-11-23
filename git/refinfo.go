@@ -43,7 +43,7 @@ var refInfoFields = []string{
 // commit each one points to. It runs a single git for-each-ref, however many
 // references there are.
 func (r *Repository) RefInfos(prefix string) ([]*RefInfo, error) {
-	out, err := git.NewCommandWithContext(r.Context(), "for-each-ref",
+	out, err := git.NewCommandWithContext(r.ctx, "for-each-ref",
 		"--format="+strings.Join(refInfoFields, "%00"), prefix).RunInDir(r.Path)
 	if err != nil {
 		return nil, err
@@ -56,10 +56,7 @@ func (r *Repository) RefInfos(prefix string) ([]*RefInfo, error) {
 		}
 		name, typ, id, author, committer := f[0], f[1], f[2], f[3], f[4]
 		info := &RefInfo{
-			Reference: &Reference{
-				Reference: &git.Reference{ID: id, Refspec: name},
-				path:      r.Path,
-			},
+			Reference: newReference(id, name),
 		}
 		if typ == "tag" {
 			info.TagSubject = f[9]

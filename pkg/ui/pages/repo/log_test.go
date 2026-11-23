@@ -88,7 +88,7 @@ func newTestLog(t *testing.T, dir string) *Log {
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "second")
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

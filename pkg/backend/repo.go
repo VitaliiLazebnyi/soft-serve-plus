@@ -295,7 +295,7 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 
 	// The callers log a failure: CreateRepository through clientError, and
 	// openRepoError the case it maps.
-	if _, err := git.Init(rp, true); err != nil {
+	if _, err := git.Init(ctx, rp, true); err != nil {
 		d.removeRepoDir(rp) //nolint:errcheck
 		return nil, openRepoError(d.logger, err, rp)
 	}
@@ -715,7 +715,7 @@ func (d *Backend) importRepository(ctx context.Context, user proto.User, imp imp
 	// can delete it and create another under the name, whose config this
 	// must not touch.
 	if imp.lfs != nil {
-		if err := setImportLFSURL(imp.path, imp.lfsEndpoint); err != nil {
+		if err := setImportLFSURL(ctx, imp.path, imp.lfsEndpoint); err != nil {
 			d.logger.Error("failed to set repository config", "err", err, "path", imp.path)
 			if rerr := d.removeRepoDir(imp.path); rerr != nil {
 				err = errors.Join(err, rerr)
@@ -789,8 +789,8 @@ func (d *Backend) removeFailedImport(ctx context.Context, r proto.Repository) {
 
 // setImportLFSURL sets lfs.url, where the mirror job later reads the LFS
 // endpoint, in the git config of the clone at dir.
-func setImportLFSURL(dir, endpoint string) error {
-	r, err := git.Open(dir)
+func setImportLFSURL(ctx context.Context, dir, endpoint string) error {
+	r, err := git.Open(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -1384,7 +1384,7 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	if err != nil {
 		return wrapRepoError(err)
 	}
-	_, rcfg, err := d.openRepoConfig(rp)
+	_, rcfg, err := d.openRepoConfig(ctx, rp)
 	if err != nil {
 		return err
 	}
@@ -1421,7 +1421,7 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 		if err != nil {
 			return err
 		}
-		r, rcfg, err := d.openRepoConfig(rp)
+		r, rcfg, err := d.openRepoConfig(ctx, rp)
 		if err != nil {
 			return err
 		}
@@ -1471,8 +1471,8 @@ func (c repoConfig) urls() []string {
 // openRepoConfig opens the repository at rp and reads its remotes and LFS
 // endpoint from its git config file. The raw errors carry the server data
 // path, so they are logged and a generic one is returned.
-func (d *Backend) openRepoConfig(rp string) (*git.Repository, repoConfig, error) {
-	r, err := git.Open(rp)
+func (d *Backend) openRepoConfig(ctx context.Context, rp string) (*git.Repository, repoConfig, error) {
+	r, err := git.Open(ctx, rp)
 	if err != nil {
 		d.logger.Error("failed to open repository", "err", err, "path", rp)
 		return nil, repoConfig{}, errRepoUpdate
@@ -1757,8 +1757,8 @@ func (r *repo) Name() string {
 // Open opens the repository.
 //
 // It implements proto.Repository.
-func (r *repo) Open() (*git.Repository, error) {
-	gr, err := git.Open(r.path)
+func (r *repo) Open(ctx context.Context) (*git.Repository, error) {
+	gr, err := git.Open(ctx, r.path)
 	if err != nil {
 		return nil, openRepoError(r.logger, err, r.path)
 	}
@@ -1824,12 +1824,12 @@ func (r *repo) UpdatedAt() time.Time {
 // A repository without refs, such as an empty import or mirror, has no
 // commit to date: there is nothing to record, and UpdatedAt keeps falling
 // back to the row.
-func (d *Backend) populateLastModified(_ context.Context, name string) error {
+func (d *Backend) populateLastModified(ctx context.Context, name string) error {
 	rp := d.repoPath(name)
 	if !hasRefs(rp) {
 		return nil
 	}
-	r, err := git.Open(rp)
+	r, err := git.Open(ctx, rp)
 	if err != nil {
 		return err
 	}

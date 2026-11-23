@@ -22,7 +22,7 @@ func TestMirrorRefusesRefDeletes(t *testing.T) {
 
 	_, err := be.CreateRepository(adminCtx, "m", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
-	r, err := git.Open(filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "m.git"))
+	r, err := git.Open(t.Context(), filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "m.git"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	is.NoErr(be.SetMirror(adminCtx, "m", true))

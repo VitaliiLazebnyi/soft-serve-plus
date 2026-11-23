@@ -91,7 +91,7 @@ func setupAttrRepo(t *testing.T, name string) (*Repository, *Reference) {
 	git("", "update-index", "--add", "--cacheinfo", "100644,"+blob+","+name)
 	git("", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "init")
 
-	repo, err := Open(repoPath)
+	repo, err := Open(t.Context(), repoPath)
 	if err != nil {
 		t.Fatalf("failed to open repository: %v", err)
 	}
@@ -103,9 +103,9 @@ func setupAttrRepo(t *testing.T, name string) (*Repository, *Reference) {
 }
 
 // TestCheckAttributesQuotedPath checks both the --source path and the
-// temporary-index fallback. It is not parallel because it swaps
-// attrSourceSupported.
-func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
+// temporary-index fallback.
+func TestCheckAttributesQuotedPath(t *testing.T) {
+	t.Parallel()
 	// Git for Windows rejects '"' and ':' in index paths (core.protectNTFS),
 	// so there the name relies on the non-ASCII character, which git quotes in
 	// plain output, plus a space.
@@ -115,9 +115,6 @@ func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
 	}
 	repo, ref := setupAttrRepo(t, name)
 
-	orig := attrSourceSupported
-	t.Cleanup(func() { attrSourceSupported = orig })
-
 	for _, tc := range []struct {
 		desc   string
 		source bool
@@ -126,14 +123,20 @@ func TestCheckAttributesQuotedPath(t *testing.T) { //nolint: paralleltest
 		{"index", false},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			if tc.source && !orig() {
+			t.Parallel()
+			if tc.source && !attrSourceSupported() {
 				t.Skip("git check-attr --source requires git 2.40")
 			}
-			attrSourceSupported = func() bool { return tc.source }
+			r := *repo
+			asked := false
+			r.attrSource = func() bool { asked = true; return tc.source }
 
-			attrs, err := repo.CheckAttributes(ref, name)
+			attrs, err := r.CheckAttributes(ref, name)
 			if err != nil {
 				t.Fatalf("CheckAttributes: %v", err)
+			}
+			if !asked {
+				t.Fatal("CheckAttributes did not ask the repository's attrSource")
 			}
 			got := map[string]string{}
 			for _, a := range attrs {

@@ -29,12 +29,11 @@ func (cmds *Commands) treeCommand() *cobra.Command {
 				path = args[2]
 			}
 
-			r, err := cmds.openRepository(cmd.Context(), rr)
+			// Stop git when the session goes away.
+			r, err := cmds.openRepository(ctx, rr)
 			if err != nil {
 				return err
 			}
-			// Stop git when the session goes away.
-			r = r.WithContext(ctx)
 
 			if ref == "" {
 				head, err := cmds.repoHead(cmd.Context(), rr, r)
@@ -42,7 +41,7 @@ func (cmds *Commands) treeCommand() *cobra.Command {
 					return err
 				}
 
-				ref = head.ID
+				ref = head.ID()
 			}
 
 			tree, err := cmds.readTree(ctx, rr, r, ref)

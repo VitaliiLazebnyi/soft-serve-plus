@@ -47,16 +47,11 @@ type Commits []*Commit
 // git-module cannot parse, or one without an author or committer, is an
 // ErrMalformedCommit. Its message names only the revision, since it reaches
 // SSH users; what the parser reported is logged.
-func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions) (c *Commit, err error) {
-	var opt git.CatFileCommitOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	opt.CommandOptions = r.withCtx(opt.CommandOptions)
+func (r *Repository) CatFileCommit(rev string) (c *Commit, err error) {
 	malformed := func(reason any) error {
 		// Debug, not Warn: nothing caches a failed parse, so anyone who
 		// can push such a commit could otherwise fill the log.
-		log.FromContext(r.Context()).Debug("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
+		log.FromContext(r.ctx).Debug("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
 		return fmt.Errorf("%w: %s", ErrMalformedCommit, rev)
 	}
 	defer func() {
@@ -64,7 +59,7 @@ func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions)
 			c, err = nil, malformed(p)
 		}
 	}()
-	c, err = r.Repository.CatFileCommit(rev, opt)
+	c, err = r.gm.CatFileCommit(rev, git.CatFileCommitOptions{CommandOptions: git.CommandOptions{Context: r.ctx}})
 	if err != nil {
 		if isParseError(err) {
 			return nil, malformed(err)
@@ -81,35 +76,42 @@ func (r *Repository) CatFileCommit(rev string, opts ...git.CatFileCommitOptions)
 
 // BranchCommit returns the commit the branch (a short name such as "main")
 // points to. See CatFileCommit.
-func (r *Repository) BranchCommit(branch string, opts ...git.CatFileCommitOptions) (*Commit, error) {
-	return r.CatFileCommit(RefsHeads+branch, opts...)
+func (r *Repository) BranchCommit(branch string) (*Commit, error) {
+	return r.CatFileCommit(RefsHeads + branch)
 }
 
 // TagCommit returns the commit the tag (a short name such as "v1.0.0")
 // points to. See CatFileCommit.
-func (r *Repository) TagCommit(tag string, opts ...git.CatFileCommitOptions) (*Commit, error) {
-	return r.CatFileCommit(RefsTags+tag, opts...)
+func (r *Repository) TagCommit(tag string) (*Commit, error) {
+	return r.CatFileCommit(RefsTags + tag)
 }
 
-// Log returns the commits reachable from rev, newest first, with the same
-// options as git-module's Log. It reads each commit through CatFileCommit,
-// under r's context, and leaves out the commits it cannot parse, so one
-// malformed commit does not hide the others.
-func (r *Repository) Log(rev string, opts ...git.LogOptions) ([]*Commit, error) {
-	var opt git.LogOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
+// LogOptions are the options of Log.
+type LogOptions struct {
+	// MaxCount is the most commits listed; 0 means no limit.
+	MaxCount int
+	// Skip is how many commits to skip before listing.
+	Skip int
+	// Args are more git log arguments, placed before the revision, such
+	// as "--not" and "--glob=refs/heads".
+	Args []string
+}
+
+// Log returns the commits reachable from rev, newest first. It reads each
+// commit through CatFileCommit, under r's context, and leaves out the
+// commits it cannot parse, so one malformed commit does not hide the
+// others.
+func (r *Repository) Log(rev string, opt LogOptions) ([]*Commit, error) {
 	ids, err := r.logIDs(rev, opt)
 	if err != nil {
 		return nil, err
 	}
 	commits := make([]*Commit, 0, len(ids))
 	for _, id := range ids {
-		if err := r.Context().Err(); err != nil {
+		if err := r.ctx.Err(); err != nil {
 			return nil, err
 		}
-		c, err := r.CatFileCommit(id, git.CatFileCommitOptions{Timeout: opt.Timeout}) //nolint:staticcheck
+		c, err := r.CatFileCommit(id)
 		if errors.Is(err, ErrMalformedCommit) {
 			continue
 		}
@@ -121,27 +123,17 @@ func (r *Repository) Log(rev string, opts ...git.LogOptions) ([]*Commit, error) 
 	return commits, nil
 }
 
-// CommitByRevision returns the newest commit reachable from rev, or, with
-// opt.Path, the newest that changed that path. A revision git cannot
-// resolve is an ErrRevisionNotExist and a commit it cannot parse an
-// ErrMalformedCommit.
-func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOptions) (*Commit, error) {
-	var opt git.CommitByRevisionOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	ids, err := r.logIDs(rev, git.LogOptions{
-		MaxCount:       1,
-		Path:           opt.Path,
-		Timeout:        opt.Timeout,
-		CommandOptions: opt.CommandOptions,
-	})
+// CommitByRevision returns the newest commit reachable from rev. A revision
+// git cannot resolve is an ErrRevisionNotExist and a commit it cannot parse
+// an ErrMalformedCommit.
+func (r *Repository) CommitByRevision(rev string) (*Commit, error) {
+	ids, err := r.logIDs(rev, LogOptions{MaxCount: 1})
 	if err != nil {
 		// git log exits with 128 for a revision it cannot resolve, but
 		// also for a repository it cannot read. Only a revision that does
 		// not resolve to a commit either is a missing revision.
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && r.revisionMissing(rev, opt) {
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && r.revisionMissing(rev) {
 			return nil, ErrRevisionNotExist
 		}
 		return nil, err
@@ -149,36 +141,23 @@ func (r *Repository) CommitByRevision(rev string, opts ...git.CommitByRevisionOp
 	if len(ids) == 0 {
 		return nil, ErrRevisionNotExist
 	}
-	return r.CatFileCommit(ids[0], git.CatFileCommitOptions{Timeout: opt.Timeout}) //nolint:staticcheck
+	return r.CatFileCommit(ids[0])
 }
 
 // revisionMissing reports whether git says rev names no commit. "rev-parse
 // --verify --quiet" exits with 1 for that, and with 128 for a fatal error
 // such as a repository it cannot read, which is not a missing revision; nor
 // is an existing ref whose object is gone (see refUnreadable).
-// It runs under the caller's context and timeout.
-func (r *Repository) revisionMissing(rev string, opt git.CommitByRevisionOptions) bool {
-	cmd := git.NewCommand("rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}").
-		AddOptions(r.withCtx(git.CommandOptions{
-			Context: opt.Context,
-			Timeout: opt.CommandOptions.Timeout,
-		}))
-	if opt.Timeout != 0 {
-		cmd = cmd.WithTimeout(opt.Timeout)
-	}
+func (r *Repository) revisionMissing(rev string) bool {
+	cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
 	err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
 		return false
 	}
 	// A ref whose object is gone does not resolve either; that is the
-	// repository's fault. It is checked under the same timeout: opt.Timeout,
-	// when set, overrides opt.CommandOptions.Timeout as above.
-	timeout := opt.CommandOptions.Timeout
-	if opt.Timeout != 0 {
-		timeout = opt.Timeout
-	}
-	return !r.refUnreadable(git.CommandOptions{Context: opt.Context, Timeout: timeout}, rev)
+	// repository's fault.
+	return !r.refUnreadable(rev)
 }
 
 // isParseError reports whether err is one of the errors git-module's commit
@@ -198,9 +177,9 @@ func isParseError(err error) bool {
 
 // logIDs runs git log for rev with opt, as git-module's Log does, and
 // returns the IDs it lists. Its error keeps git's *exec.ExitError.
-func (r *Repository) logIDs(rev string, opt git.LogOptions) ([]string, error) {
-	cmd := git.NewCommand("log").
-		AddOptions(r.withCtx(opt.CommandOptions)).
+func (r *Repository) logIDs(rev string, opt LogOptions) ([]string, error) {
+	cmd := NewCommandWithContext(r.ctx, "log").
+		AddArgs(opt.Args...).
 		AddArgs("--pretty=" + git.LogFormatHashOnly)
 	if opt.MaxCount > 0 {
 		cmd.AddArgs("--max-count=" + strconv.Itoa(opt.MaxCount))
@@ -208,27 +187,7 @@ func (r *Repository) logIDs(rev string, opt git.LogOptions) ([]string, error) {
 	if opt.Skip > 0 {
 		cmd.AddArgs("--skip=" + strconv.Itoa(opt.Skip))
 	}
-	if !opt.Since.IsZero() {
-		cmd.AddArgs("--since=" + opt.Since.Format(time.RFC3339))
-	}
-	if opt.GrepPattern != "" {
-		cmd.AddArgs("--grep=" + opt.GrepPattern)
-	}
-	if opt.RegexpIgnoreCase {
-		cmd.AddArgs("--regexp-ignore-case")
-	}
 	cmd.AddArgs("--end-of-options", rev, "--")
-	if opt.Path != "" {
-		// A path that starts with ':' would be read as pathspec magic.
-		path := opt.Path
-		if path[0] == ':' {
-			path = `\` + path
-		}
-		cmd.AddArgs(path)
-	}
-	if opt.Timeout != 0 {
-		cmd = cmd.WithTimeout(opt.Timeout)
-	}
 	var stdout, stderr bytes.Buffer
 	if err := cmd.RunInDirPipeline(&stdout, &stderr, r.Path); err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {

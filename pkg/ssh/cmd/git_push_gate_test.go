@@ -178,11 +178,11 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	cur, err := be.Repository(ctx, "shared")
 	is.NoErr(err) // created anew
 	is.True(cur.ID() != repo.ID())
-	r, err := cur.Open()
+	r, err := cur.Open(t.Context())
 	is.NoErr(err)
 	head, err := r.HEAD()
 	is.NoErr(err)
-	is.Equal(head.ID, commit) // with the pushed commit
+	is.Equal(head.ID(), commit) // with the pushed commit
 }
 
 // A push to a missing name creates the repository and then pushes to its
@@ -247,7 +247,7 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 	cur, err := be.Repository(ctx, "fresh")
 	is.NoErr(err)
 	is.Equal(cur.ID(), replacement.ID()) // the other repository is still there
-	r, err := cur.Open()
+	r, err := cur.Open(t.Context())
 	is.NoErr(err)
 	if _, err := r.HEAD(); err == nil {
 		t.Fatal("the push wrote to the repository that replaced the one it created")

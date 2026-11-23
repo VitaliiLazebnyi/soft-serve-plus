@@ -669,8 +669,8 @@ func repoURL(publicURL string, repo string) string {
 // defaultBranch returns repo's default branch for an event payload. An error
 // is logged and leaves the branch empty: the event is still worth sending
 // without it.
-func (s *Sender) defaultBranch(repo proto.Repository) string {
-	branch, err := getDefaultBranch(repo)
+func (s *Sender) defaultBranch(ctx context.Context, repo proto.Repository) string {
+	branch, err := getDefaultBranch(ctx, repo)
 	if err != nil {
 		s.logger.Warn("cannot read the default branch for the webhook payload",
 			"repo", repo.Name(), "err", err)
@@ -678,8 +678,8 @@ func (s *Sender) defaultBranch(repo proto.Repository) string {
 	return branch
 }
 
-func getDefaultBranch(repo proto.Repository) (string, error) {
-	branch, err := proto.RepositoryDefaultBranch(repo)
+func getDefaultBranch(ctx context.Context, repo proto.Repository) (string, error) {
+	branch, err := proto.RepositoryDefaultBranch(ctx, repo)
 	// XXX: we check for ErrReferenceNotExist here because we don't want to
 	// return an error if the repo is an empty repo.
 	// This means that the repo doesn't have a default branch yet and this is

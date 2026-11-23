@@ -41,11 +41,10 @@ func EnsureWithin(reposDir string, repo string) error {
 // branches, such as one that was only pushed tags or had its last branch
 // deleted, is left as is: there is nothing to point HEAD at yet.
 func EnsureDefaultBranch(ctx context.Context, repoPath string) error {
-	r, err := git.Open(repoPath)
+	r, err := git.Open(ctx, repoPath)
 	if err != nil {
 		return err
 	}
-	r = r.WithContext(ctx)
 	// HEAD resolves after almost every push, so look at it before listing
 	// the branches, of which there can be many.
 	_, headErr := r.HEAD()

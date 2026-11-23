@@ -566,19 +566,21 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 		}
 		// The entry was listed under the listing's context, which a later
 		// listing cancels; read the file under this load's.
-		fi := item.entry.WithContext(ctx).File()
-
-		var bin bool
 		r, err := openWithContext(ctx, repo)
-		if err == nil {
-			attrs, err := r.CheckAttributes(ref, fi.Path())
-			if err == nil {
-				for _, attr := range attrs {
-					if (attr.Name == "binary" && attr.Value == "set") ||
-						(attr.Name == "text" && attr.Value == "unset") {
-						bin = true
-						break
-					}
+		if err != nil {
+			return loadError(ctx, paneFiles, gen, err)
+		}
+		fi := r.EntryFile(item.entry)
+
+		// The attributes only mark a file binary; a failure to read them
+		// leaves the content sniffing below to decide.
+		var bin bool
+		if attrs, err := r.CheckAttributes(ref, fi.Path()); err == nil {
+			for _, attr := range attrs {
+				if (attr.Name == "binary" && attr.Value == "set") ||
+					(attr.Name == "text" && attr.Value == "unset") {
+					bin = true
+					break
 				}
 			}
 		}
@@ -632,7 +634,7 @@ func (f *Files) fetchBlameCmd() tea.Cmd {
 			return loadError(ctx, paneFiles, gen, err)
 		}
 
-		b, err := r.BlameFile(ref.ID, item.entry.File().Path())
+		b, err := r.BlameFile(ref.ID(), item.entry.File().Path())
 		if err != nil {
 			return loadError(ctx, paneFiles, gen, err)
 		}

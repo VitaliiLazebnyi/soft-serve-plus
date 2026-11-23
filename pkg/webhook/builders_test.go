@@ -467,7 +467,7 @@ func TestGetDefaultBranch(t *testing.T) {
 	is := is.New(t)
 	path, _ := gitRepo(t)
 
-	branch, err := getDefaultBranch(fakeRepo{path: path})
+	branch, err := getDefaultBranch(t.Context(), fakeRepo{path: path})
 	is.NoErr(err)
 	is.Equal(branch, "main")
 }
@@ -479,7 +479,7 @@ func TestGetDefaultBranchEmptyRepository(t *testing.T) {
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
 
 	// An empty repository has no branch yet: that is not an error.
-	branch, err := getDefaultBranch(fakeRepo{path: empty})
+	branch, err := getDefaultBranch(t.Context(), fakeRepo{path: empty})
 	is.NoErr(err)
 	is.Equal(branch, "")
 }
@@ -492,7 +492,7 @@ func TestDefaultBranchLogsError(t *testing.T) {
 	var logs bytes.Buffer
 	s := NewSender(nil, nil, nil, log.New(&logs))
 
-	branch := s.defaultBranch(fakeRepo{name: "repo1", openErr: errors.New("boom")})
+	branch := s.defaultBranch(t.Context(), fakeRepo{name: "repo1", openErr: errors.New("boom")})
 	is.Equal(branch, "")
 	is.True(strings.Contains(logs.String(), "default branch"))
 	is.True(strings.Contains(logs.String(), "repo1"))
@@ -502,7 +502,7 @@ func TestDefaultBranchLogsError(t *testing.T) {
 	logs.Reset()
 	empty := t.TempDir() + "/empty.git"
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
-	is.Equal(s.defaultBranch(fakeRepo{path: empty}), "")
+	is.Equal(s.defaultBranch(t.Context(), fakeRepo{path: empty}), "")
 	is.Equal(logs.String(), "")
 }
 
@@ -510,7 +510,7 @@ func TestGetDefaultBranchOpenErrorReturned(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 
-	_, err := getDefaultBranch(fakeRepo{openErr: errors.New("boom")})
+	_, err := getDefaultBranch(t.Context(), fakeRepo{openErr: errors.New("boom")})
 	is.True(err != nil)
 	is.True(strings.Contains(err.Error(), "boom"))
 }

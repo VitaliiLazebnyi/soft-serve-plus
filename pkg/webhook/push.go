@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/google/go-querystring/query"
@@ -95,7 +94,7 @@ func (s *Sender) NewPushEvent(ctx context.Context, user proto.User, repo proto.R
 	}
 
 	// Find commits.
-	r, err := repo.Open()
+	r, err := repo.Open(ctx)
 	if err != nil {
 		return PushEvent{}, err
 	}
@@ -131,11 +130,11 @@ func (s *Sender) NewPushEvent(ctx context.Context, user proto.User, repo proto.R
 		}
 	}
 
-	commits, err := r.Log(rev, gitm.LogOptions{
+	commits, err := r.Log(rev, git.LogOptions{
 		// XXX: limit to 20 commits for now
 		// TODO: implement a commits api
-		MaxCount:       20,
-		CommandOptions: gitm.CommandOptions{Args: args},
+		MaxCount: 20,
+		Args:     args,
 	})
 	if err != nil {
 		return PushEvent{}, err
@@ -215,9 +214,7 @@ func commitSize(c Commit) int {
 // whether before has a commit that after does not. Tag objects are peeled to
 // the commits they point at.
 func isForced(r *git.Repository, before, after string) (bool, error) {
-	n, err := r.RevListCount([]string{after + ".." + before}, gitm.RevListCountOptions{
-		CommandOptions: gitm.CommandOptions{Args: []string{"--max-count=1"}},
-	})
+	n, err := r.RevListCount(1, after+".."+before)
 	if err != nil {
 		return false, err
 	}

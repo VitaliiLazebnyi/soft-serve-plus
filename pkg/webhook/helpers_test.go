@@ -208,11 +208,11 @@ func (r fakeRepo) UserID() int64        { return r.userID }
 func (r fakeRepo) CreatedAt() time.Time { return time.Unix(1700000000, 0) }
 func (r fakeRepo) UpdatedAt() time.Time { return time.Unix(1700000100, 0) }
 
-func (r fakeRepo) Open() (*git.Repository, error) {
+func (r fakeRepo) Open(ctx context.Context) (*git.Repository, error) {
 	if r.openErr != nil {
 		return nil, r.openErr
 	}
-	return git.Open(r.path)
+	return git.Open(ctx, r.path)
 }
 
 var (
@@ -226,7 +226,7 @@ func gitRepo(t *testing.T) (string, string) {
 	t.Helper()
 	is := is.New(t)
 	dir := filepath.Join(t.TempDir(), "repo.git")
-	_, err := git.Init(dir, true)
+	_, err := git.Init(t.Context(), dir, true)
 	is.NoErr(err)
 	work := t.TempDir()
 	runGit(t, work, "init", "-q", "-b", "main")

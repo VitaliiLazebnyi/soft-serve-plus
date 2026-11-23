@@ -10,7 +10,7 @@ import (
 // context, so that they stop when the client disconnects instead of running
 // until git-module's one-minute default timeout.
 func openWithContext(ctx context.Context, repo Repository) (*git.Repository, error) {
-	r, err := repo.Open()
+	r, err := repo.Open(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -18,5 +18,5 @@ func openWithContext(ctx context.Context, repo Repository) (*git.Repository, err
 		// The load was cancelled while the repository opened.
 		return nil, err
 	}
-	return r.WithContext(ctx), nil
+	return r, nil
 }

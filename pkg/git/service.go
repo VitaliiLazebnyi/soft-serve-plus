@@ -83,8 +83,7 @@ func (s Service) Handler(ctx context.Context, cmd ServiceCommand) error {
 func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) error {
 	logger := scmd.Logger
 	if logger == nil {
-		// The SSH and HTTP callers still pass theirs in the context.
-		logger = log.FromContext(ctx)
+		logger = log.Default()
 	}
 	cmd := exec.CommandContext(ctx, "git")
 	cmd.Dir = scmd.Dir
@@ -197,7 +196,11 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	err = cmd.Wait()
 	// Ensure all of git's output is written before returning. Stdin is
 	// joined after that, see joinStdin.
-	waitOutput(ctx, copied, &progress, outs.close)
+	idle := scmd.outputIdleTimeout
+	if idle <= 0 {
+		idle = outputIdleTimeout
+	}
+	waitOutput(ctx, idle, copied, &progress, outs.close)
 	if stdinDone != nil {
 		joinStdin(scmd, stdinDone, &interrupted)
 	}
@@ -440,8 +443,8 @@ func (w progressWriter) Write(b []byte) (int, error) {
 
 // outputIdleTimeout is how long, after git exited, the copies of its output
 // may go without writing anything to the client before the handler stops
-// waiting for them. It is a variable for tests.
-var outputIdleTimeout = waitDelay
+// waiting for them. A test shortens it with ServiceCommand.outputIdleTimeout.
+const outputIdleTimeout = waitDelay
 
 // waitOutput waits, after git exited, for the copies of its output to the
 // client to finish. What git wrote is in the pipes by then, but a process
@@ -449,8 +452,8 @@ var outputIdleTimeout = waitDelay
 // a process running in the background, or the git wrapper on Windows when
 // git was killed. The copies then never finish on their own, so waitOutput
 // stops waiting once the context is done, since the output has nowhere to
-// go, or once the copies went outputIdleTimeout without writing to the
-// client, and calls closeOutput to close the pipes and end them.
+// go, or once the copies went idle (outputIdleTimeout) without writing to
+// the client, and calls closeOutput to close the pipes and end them.
 //
 // A slow client does not count as idle while a write to it is in progress,
 // and the next read of a pipe that still holds git's output returns at
@@ -463,8 +466,8 @@ var outputIdleTimeout = waitDelay
 // timeouts, which govern the connection itself. While a write to the
 // client is in progress the wait is bounded only by the context (and so by
 // those transport timeouts), as it already was while git ran.
-func waitOutput(ctx context.Context, copied <-chan struct{}, p *outputProgress, closeOutput func()) {
-	timer := time.NewTimer(outputIdleTimeout)
+func waitOutput(ctx context.Context, idle time.Duration, copied <-chan struct{}, p *outputProgress, closeOutput func()) {
+	timer := time.NewTimer(idle)
 	defer timer.Stop()
 	last := p.writes.Load()
 	for {
@@ -475,7 +478,7 @@ func waitOutput(ctx context.Context, copied <-chan struct{}, p *outputProgress, 
 		case <-timer.C:
 			if n := p.writes.Load(); n != last || p.writing.Load() > 0 {
 				last = n
-				timer.Reset(outputIdleTimeout)
+				timer.Reset(idle)
 				continue
 			}
 		}
@@ -679,9 +682,13 @@ type ServiceCommand struct {
 	JoinStdin bool
 
 	// Logger logs a panic in the handler's copies of git's input and
-	// output. When it is nil, the logger in the context is used.
+	// output. When it is nil, log.Default() is used.
 	Logger *log.Logger
 
 	// Modifier functions
 	CmdFunc func(*exec.Cmd)
+
+	// outputIdleTimeout, when more than 0, replaces outputIdleTimeout for
+	// this command. Only tests set it.
+	outputIdleTimeout time.Duration
 }

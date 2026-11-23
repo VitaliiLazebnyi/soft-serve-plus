@@ -320,7 +320,7 @@ func (m *MirrorPull) syncMirrorRepo(jobCtx context.Context, name string) (err er
 		logger.Debug("skipping repository that is no longer a mirror", "repo", name)
 		return errNotMirror
 	}
-	r, err := repo.Open()
+	r, err := repo.Open(ctx)
 	if err != nil {
 		logger.Error("error opening repository", "repo", name, "err", err)
 		return err
@@ -355,7 +355,7 @@ func (m *MirrorPull) syncMirrorRepo(jobCtx context.Context, name string) (err er
 	if !cfg.LFS.Enabled {
 		return nil
 	}
-	lfsEndpoint, _, err := r.WithContext(ctx).ConfigGet("lfs.url")
+	lfsEndpoint, _, err := r.ConfigGet("lfs.url")
 	if err != nil {
 		logger.Error("error getting git config", "repo", name, "err", err)
 		return err

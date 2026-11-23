@@ -350,6 +350,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 			Stderr: cmd.ErrOrStderr(),
 			Env:    envs,
 			Dir:    hooks.RepoPath(cfg, name),
+			Logger: logger,
 		},
 	}, nil
 }

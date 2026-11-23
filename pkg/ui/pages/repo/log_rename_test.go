@@ -65,7 +65,7 @@ func TestLogDiffRenameQuotedName(t *testing.T) {
 				t.Parallel()
 				dir := filepath.Join(t.TempDir(), "repo")
 				renameRepo(t, dir, d.from, d.to)
-				r, err := git.Open(dir)
+				r, err := git.Open(t.Context(), dir)
 				if err != nil {
 					t.Fatal(err)
 				}

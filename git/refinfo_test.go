@@ -57,8 +57,8 @@ func TestRefInfos(t *testing.T) {
 	for name, want := range map[string]struct {
 		commit, subject string
 	}{
-		"light":          {commit: head.ID},
-		"annotated":      {commit: head.ID, subject: "release one"},
+		"light":          {commit: head.ID()},
+		"annotated":      {commit: head.ID(), subject: "release one"},
 		"tree":           {},
 		"annotated-tree": {subject: "a tree"},
 	} {
@@ -84,7 +84,7 @@ func TestRefInfos(t *testing.T) {
 				name, info.AuthorWhen, info.CommitterWhen, authorDate, committerDate)
 		}
 	}
-	if got["annotated"].ID == head.ID {
+	if got["annotated"].ID() == head.ID() {
 		t.Error("annotated tag reference ID is the commit, not the tag object")
 	}
 
@@ -96,9 +96,9 @@ func TestRefInfos(t *testing.T) {
 		t.Fatalf("RefInfos(RefsHeads) = %d references; want 2", len(branches))
 	}
 	for _, info := range branches {
-		if !info.IsBranch() || info.CommitID != head.ID || info.ID != head.ID ||
+		if !info.IsBranch() || info.CommitID != head.ID() || info.ID() != head.ID() ||
 			info.TagSubject != "" || info.CommitterWhen.IsZero() {
-			t.Errorf("branch %q = %+v; want commit %s", info.Name(), info, head.ID)
+			t.Errorf("branch %q = %+v; want commit %s", info.Name(), info, head.ID())
 		}
 	}
 }

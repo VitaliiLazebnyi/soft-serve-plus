@@ -39,19 +39,18 @@ func (cmds *Commands) blobCommand() *cobra.Command {
 				fp = args[2]
 			}
 
-			r, err := cmds.openRepository(cmd.Context(), repo)
+			// Stop git when the session goes away.
+			r, err := cmds.openRepository(ctx, repo)
 			if err != nil {
 				return err
 			}
-			// Stop git when the session goes away.
-			r = r.WithContext(ctx)
 
 			if ref == "" {
 				head, err := cmds.repoHead(cmd.Context(), repo, r)
 				if err != nil {
 					return err
 				}
-				ref = head.ID
+				ref = head.ID()
 			}
 
 			tree, err := cmds.readTree(ctx, repo, r, ref)

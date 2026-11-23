@@ -91,7 +91,7 @@ func (s *Sender) newRepository(ctx context.Context, repo proto.Repository) (Repo
 		CreatedAt:   repo.CreatedAt(),
 		UpdatedAt:   repo.UpdatedAt(),
 	}
-	r.DefaultBranch = s.defaultBranch(repo)
+	r.DefaultBranch = s.defaultBranch(ctx, repo)
 
 	r.HTTPURL = repoURL(s.httpURL, repo.Name())
 	r.SSHURL = repoURL(s.sshURL, repo.Name())

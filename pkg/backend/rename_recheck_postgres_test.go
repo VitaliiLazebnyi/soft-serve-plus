@@ -72,7 +72,7 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 	is.NoErr(err) // the row and the directory are under the new name
 	_, err = os.Stat(filepath.Join(e.be.repoPath("new"), "HEAD"))
 	is.NoErr(err)
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err)
 }
 

@@ -40,7 +40,7 @@ type escapedRepo struct {
 	path string
 }
 
-func (r escapedRepo) Open() (*git.Repository, error) { return git.Open(r.path) }
+func (r escapedRepo) Open(ctx context.Context) (*git.Repository, error) { return git.Open(ctx, r.path) }
 
 // newEscapedRepo makes a repository where everything the TUI shows from git
 // carries hostile: commit subjects and bodies, author names, a file name, a

@@ -38,7 +38,7 @@ func setupTestRepo(t *testing.T) (*Repository, *Reference) {
 		}
 	}
 
-	repo, err := Open(repoPath)
+	repo, err := Open(t.Context(), repoPath)
 	if err != nil {
 		t.Fatalf("failed to open repository: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestOpenReportsGitReason(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
-	_, err := Open(repoPath)
+	_, err := Open(t.Context(), repoPath)
 	if !errors.Is(err, ErrNotAGitRepository) {
 		t.Fatalf("Open error = %v, want ErrNotAGitRepository", err)
 	}
@@ -122,7 +122,7 @@ func TestOpenReportsGitReason(t *testing.T) {
 
 // A repository without references has an empty list of them, not an error.
 func TestReferencesEmpty(t *testing.T) {
-	repo, err := Init(filepath.Join(t.TempDir(), "empty"), true)
+	repo, err := Init(t.Context(), filepath.Join(t.TempDir(), "empty"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestOpenLocal(t *testing.T) {
 		{"git directory subdirectory", filepath.Join(repo.Path, ".git", "refs"), filepath.Join(repo.Path, ".git"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := OpenLocal(tc.path)
+			r, err := OpenLocal(t.Context(), tc.path)
 			if err != nil {
 				t.Fatalf("OpenLocal(%q): %v", tc.path, err)
 			}
@@ -199,7 +199,7 @@ func TestOpenLocal(t *testing.T) {
 	}
 
 	t.Run("not a repository", func(t *testing.T) {
-		_, err := OpenLocal(t.TempDir())
+		_, err := OpenLocal(t.Context(), t.TempDir())
 		if !errors.Is(err, ErrNotAGitRepository) {
 			t.Fatalf("OpenLocal error = %v, want ErrNotAGitRepository", err)
 		}
@@ -210,7 +210,7 @@ func TestOpenLocal(t *testing.T) {
 		if err := os.WriteFile(f, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := OpenLocal(f)
+		_, err := OpenLocal(t.Context(), f)
 		if !errors.Is(err, ErrNotAGitRepository) || !strings.Contains(err.Error(), "is not a directory") {
 			t.Fatalf("OpenLocal error = %v, want ErrNotAGitRepository: ... is not a directory", err)
 		}
@@ -226,7 +226,7 @@ func TestLsTreeRejectsBadRefs(t *testing.T) {
 
 	for _, bad := range []string{
 		"^HEAD",
-		"^" + ref.ID,
+		"^" + ref.ID(),
 		"HEAD^@",
 		"HEAD^!",
 		"--git-dir",
@@ -244,7 +244,7 @@ func TestLsTreeRejectsBadRefs(t *testing.T) {
 		})
 	}
 
-	for _, good := range []string{"HEAD", ref.ID, ref.ID[:7], ref.Name().Short() + "~0", "HEAD^{tree}"} {
+	for _, good := range []string{"HEAD", ref.ID(), ref.ID()[:7], ref.Name().Short() + "~0", "HEAD^{tree}"} {
 		tree, err := repo.LsTree(good)
 		if err != nil {
 			t.Fatalf("LsTree(%q): %v", good, err)

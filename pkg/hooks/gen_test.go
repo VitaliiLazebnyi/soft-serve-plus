@@ -19,7 +19,7 @@ func TestGenerateHooks(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
 	repoPath := filepath.Join(tmp, "repos", "test.git")
-	_, err := git.Init(repoPath, true)
+	_, err := git.Init(t.Context(), repoPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
 	repoPath := filepath.Join(tmp, "repos", "my repo.git")
-	if _, err := git.Init(repoPath, true); err != nil {
+	if _, err := git.Init(t.Context(), repoPath, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := GenerateHooks(context.TODO(), cfg, "my repo"); err != nil {
@@ -303,7 +303,7 @@ func initRepo(t *testing.T) (*config.Config, string) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = tmp
 	repoPath := filepath.Join(tmp, "repos", "test.git")
-	if _, err := git.Init(repoPath, true); err != nil {
+	if _, err := git.Init(t.Context(), repoPath, true); err != nil {
 		t.Fatal(err)
 	}
 	return cfg, repoPath

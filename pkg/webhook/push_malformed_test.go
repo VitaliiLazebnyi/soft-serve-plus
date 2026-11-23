@@ -21,7 +21,7 @@ func TestNewPushEventSkipsMalformedCommits(t *testing.T) {
 			t.Parallel()
 			is := is.New(t)
 			dir := filepath.Join(t.TempDir(), "repo.git")
-			_, err := git.Init(dir, true)
+			_, err := git.Init(t.Context(), dir, true)
 			is.NoErr(err)
 			bad := gittest.Commit(t, dir, kind, gittest.Tree(t, dir, "f", "bad\n"), "bad")
 			top := gittest.Commit(t, dir, gittest.Valid, gittest.Tree(t, dir, "f", "top\n"), "top", bad)

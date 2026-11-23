@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -113,11 +112,7 @@ func (cmds *Commands) branchDefaultCommand() *cobra.Command {
 				}
 				oldBranch := git.ReferenceName(oldHead).Short()
 
-				if _, err := r.SymbolicRef(git.HEAD, gitm.RefsHeads+branch, gitm.SymbolicRefOptions{
-					CommandOptions: gitm.CommandOptions{
-						Context: ctx,
-					},
-				}); err != nil {
+				if _, err := r.SymbolicRef(git.HEAD, git.RefsHeads+branch); err != nil {
 					return cmds.gitFailed(ctx, "set default branch", rr.Name(), err)
 				}
 
@@ -193,12 +188,12 @@ func (cmds *Commands) branchDeleteCommand() *cobra.Command {
 			// logged, and the client gets a generic error. That
 			// includes a delete of the same branch that another
 			// session finished in between.
-			branchID, err := r.ShowRefVerify(git.RefsHeads+branch, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
+			branchID, err := r.ShowRefVerify(git.RefsHeads + branch)
 			if err != nil {
 				return cmds.gitFailed(ctx, "read branch", rr.Name(), err)
 			}
 
-			if err := r.DeleteBranch(branch, gitm.DeleteBranchOptions{Force: true}); err != nil {
+			if err := r.DeleteBranch(branch); err != nil {
 				return cmds.gitFailed(ctx, "delete branch", rr.Name(), err)
 			}
 

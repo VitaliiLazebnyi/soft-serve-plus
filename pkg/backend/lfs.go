@@ -107,7 +107,7 @@ func (d *Backend) storeRepoLFSObjects(ctx context.Context, repo proto.Repository
 	lfsRoot := filepath.Join(d.cfg.DataPath, "lfs", repoID)
 	logger := d.logger.WithPrefix("lfs")
 
-	r, err := repo.Open()
+	r, err := repo.Open(ctx)
 	if err != nil {
 		return err
 	}

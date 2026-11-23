@@ -142,8 +142,8 @@ func commandLengthMiddleware(sh ssh.Handler) ssh.Handler {
 }
 
 // loggerMiddleware puts the server's logger on the session context, for
-// the packages the commands call that log with log.FromContext, such as
-// pkg/git and pkg/lfs. The server's other dependencies are its fields; the
+// the git package, which logs a commit it cannot parse with
+// log.FromContext on the context the repository was opened with. The server's other dependencies are its fields; the
 // session context carries only what belongs to the connection and the
 // session: the user, the key and cancellation. The session context is
 // shared by every session on the connection, so the session itself is

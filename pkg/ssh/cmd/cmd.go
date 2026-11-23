@@ -290,10 +290,10 @@ func (cmds *Commands) gitFailed(ctx context.Context, what, repo string, err erro
 // the client gets errGitFailed. The backend has already logged a directory
 // git does not accept; any other failure is logged here.
 func (cmds *Commands) openRepository(ctx context.Context, rr proto.Repository) (*git.Repository, error) {
-	r, err := rr.Open()
+	r, err := rr.Open(ctx)
 	switch {
 	case err == nil:
-		return r.WithContext(ctx), nil
+		return r, nil
 	case errors.Is(err, git.ErrNotAGitRepository):
 		return nil, errGitFailed
 	default:

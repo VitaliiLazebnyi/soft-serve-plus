@@ -40,7 +40,7 @@ func TestFilesListingTruncated(t *testing.T) {
 	gitRun(t, dir, "read-tree", "--prefix=big/", out(in.String(), "mktree"))
 	gitRun(t, dir, "commit", "-q", "-m", "big")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	gitRun(t, dir, "commit", "-q", "-m", "first")
 
 	r := openRepo{path: dir}
-	gr, err := r.Open()
+	gr, err := r.Open(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +133,14 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	if msg, ok := sel("bin.dat").(errorMsg); !ok || !errors.Is(msg.err, errBinaryFile) {
 		t.Errorf("bin.dat: got %#v, want errBinaryFile", msg)
 	}
+
+	// A file is read through the repository the load opens, under the
+	// load's context, so a repository that no longer opens fails the load
+	// rather than reading through the listing's.
+	f.repo = openRepo{path: filepath.Join(dir, "missing")}
+	if msg := sel("small.txt"); !isErrorMsg(msg) {
+		t.Errorf("small.txt in a repository that does not open: got %T, want errorMsg", msg)
+	}
 }
 
 // A file listing that fails to load must report an ErrorMsg, so the error is
@@ -144,7 +152,7 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "main", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +241,7 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	gitRun(t, dir, "add", "README")
 	gitRun(t, dir, "commit", "-q", "-m", "first")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +297,7 @@ func TestFilesNonASCIIName(t *testing.T) {
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-q", "-m", "first")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,5 +348,11 @@ func TestFilesNonASCIIName(t *testing.T) {
 
 func isBlame(msg any) bool {
 	_, ok := msg.(FileBlameMsg)
+	return ok
+}
+
+// isErrorMsg reports whether msg is an errorMsg.
+func isErrorMsg(msg any) bool {
+	_, ok := msg.(errorMsg)
 	return ok
 }

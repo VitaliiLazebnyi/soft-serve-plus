@@ -21,7 +21,7 @@ type openRepo struct {
 	path string
 }
 
-func (r openRepo) Open() (*git.Repository, error) { return git.Open(r.path) }
+func (r openRepo) Open(ctx context.Context) (*git.Repository, error) { return git.Open(ctx, r.path) }
 
 // gitRun runs git in dir and fails the test on error.
 func gitRun(t *testing.T, dir string, args ...string) {
@@ -46,7 +46,7 @@ func TestDefaultRef(t *testing.T) {
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
 	gitRun(t, dir, "branch", "dev")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestDefaultRef(t *testing.T) {
 	if err != nil || ref == nil || ref.Name().Short() != "dev" {
 		t.Fatalf("defaultRef with a dangling HEAD = %v, %v; want dev", ref, err)
 	}
-	if ref.ID == "" {
+	if ref.ID() == "" {
 		t.Fatal("defaultRef with a dangling HEAD returned a reference without a commit")
 	}
 
@@ -112,8 +112,8 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 	for _, it := range msg.items {
 		item := it.(RefItem)
-		if item.CommitID != ref.Ref.ID {
-			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.Ref.ID)
+		if item.CommitID != ref.Ref.ID() {
+			t.Errorf("tag %s has commit %q; want %q", item.Short(), item.CommitID, ref.Ref.ID())
 		}
 		if want := map[string]string{"v1": "release notes", "v0": ""}[item.Short()]; item.TagSubject != want {
 			t.Errorf("tag %s has subject %q; want %q", item.Short(), item.TagSubject, want)
@@ -124,7 +124,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	if r.isLoading {
 		t.Fatal("the tags are still loading after RefItemsMsg")
 	}
-	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.Ref.ID[:7]) {
+	if view := r.View(); !strings.Contains(view, "release notes") || !strings.Contains(view, ref.Ref.ID()[:7]) {
 		t.Errorf("the Tags pane %q lacks the tag subject or the commit", view)
 	}
 
@@ -194,19 +194,20 @@ func TestDefaultRefDetachedHEAD(t *testing.T) {
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "second")
 	gitRun(t, dir, "checkout", "-q", "--detach", "HEAD~1")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := r.RevParse("HEAD")
+	out, err := exec.CommandContext(t.Context(), "git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := strings.TrimSpace(string(out))
 
 	switch msg := updateRefCmd(t.Context(), openRepo{path: dir}, 0)().(type) {
 	case RefMsg:
 		ref := msg.Ref
-		if ref == nil || ref.Name().String() != git.HEAD || ref.ID != want {
+		if ref == nil || ref.Name().String() != git.HEAD || ref.ID() != want {
 			t.Fatalf("updateRefCmd with a detached HEAD = %v; want HEAD at %s", msg, want)
 		}
 		if _, err := r.TreePath(ref, ""); err != nil {

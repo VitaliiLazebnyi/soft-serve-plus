@@ -32,7 +32,7 @@ func setupBlameRepo(t *testing.T) (*Repository, *Reference) {
 			}
 		}
 	}
-	repo, err := Open(repo.Path)
+	repo, err := Open(t.Context(), repo.Path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -46,11 +46,11 @@ func setupBlameRepo(t *testing.T) (*Repository, *Reference) {
 func TestBlameFileMatchesGitModule(t *testing.T) {
 	repo, head := setupBlameRepo(t)
 
-	got, err := repo.WithContext(context.Background()).BlameFile(head.ID, "f.txt")
+	got, err := repo.BlameFile(head.ID(), "f.txt")
 	if err != nil {
 		t.Fatalf("BlameFile: %v", err)
 	}
-	want, err := repo.Repository.BlameFile(head.ID, "f.txt")
+	want, err := repo.gm.BlameFile(head.ID(), "f.txt")
 	if err != nil {
 		t.Fatalf("git-module BlameFile: %v", err)
 	}
@@ -103,7 +103,12 @@ func TestBlameFileStopsResolvingCommitsOnCancel(t *testing.T) {
 	repo, head := setupBlameRepo(t)
 
 	ctx := &cancelAfterCtx{Context: context.Background(), n: 2}
-	b, err := repo.WithContext(ctx).BlameFile(head.ID, "f.txt")
+	repo, err := Open(ctx, repo.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.calls.Store(0)
+	b, err := repo.BlameFile(head.ID(), "f.txt")
 	if err == nil {
 		t.Fatalf("BlameFile with a context cancelled mid-way returned %v; want an error", b)
 	}

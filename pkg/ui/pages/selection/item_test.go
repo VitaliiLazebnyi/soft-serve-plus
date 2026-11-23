@@ -32,13 +32,13 @@ func (r fakeRepo) Description() string {
 	}
 	return r.description
 }
-func (r fakeRepo) IsPrivate() bool                { return r.private }
-func (r fakeRepo) IsMirror() bool                 { return false }
-func (r fakeRepo) IsHidden() bool                 { return false }
-func (r fakeRepo) UserID() int64                  { return 1 }
-func (r fakeRepo) CreatedAt() time.Time           { return time.Time{} }
-func (r fakeRepo) UpdatedAt() time.Time           { return time.Time{} }
-func (r fakeRepo) Open() (*git.Repository, error) { return nil, nil }
+func (r fakeRepo) IsPrivate() bool                               { return r.private }
+func (r fakeRepo) IsMirror() bool                                { return false }
+func (r fakeRepo) IsHidden() bool                                { return false }
+func (r fakeRepo) UserID() int64                                 { return 1 }
+func (r fakeRepo) CreatedAt() time.Time                          { return time.Time{} }
+func (r fakeRepo) UpdatedAt() time.Time                          { return time.Time{} }
+func (r fakeRepo) Open(context.Context) (*git.Repository, error) { return nil, nil }
 
 var _ proto.Repository = fakeRepo{}
 

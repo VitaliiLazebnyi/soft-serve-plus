@@ -791,7 +791,8 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 	version := r.Header.Get("Git-Protocol")
 
 	cmd := git.ServiceCommand{
-		Dir: dir,
+		Dir:    dir,
+		Logger: logger,
 	}
 
 	switch service {
@@ -825,8 +826,7 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 	cmd.JoinStdin = true
 	cmd.Stdout = w
 
-	// pkg/git logs on the logger in the context.
-	err := s.runService(log.WithContext(ctx, logger), service, cmd)
+	err := s.runService(ctx, service, cmd)
 	if service == git.ReceivePackService {
 		if err == nil {
 			if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
@@ -884,8 +884,7 @@ func (s *server) afterPush(ctx context.Context, logger *log.Logger, repo proto.R
 
 func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	logger := gr.logger
-	// pkg/git logs on the logger in the context.
-	ctx := log.WithContext(r.Context(), logger)
+	ctx := r.Context()
 	dir, repoName, file, service := gr.dir, gr.name, gr.file, gr.service
 	protocol := r.Header.Get("Git-Protocol")
 
@@ -918,6 +917,7 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 		Stdout: refs,
 		Dir:    dir,
 		Args:   []string{"--stateless-rpc", "--advertise-refs"},
+		Logger: logger,
 	}
 
 	// A ref advertisement runs no hooks, for receive-pack either.
