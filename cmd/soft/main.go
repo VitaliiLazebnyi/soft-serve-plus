@@ -2,7 +2,8 @@
 // serve), its maintenance commands (soft admin) and a local repository
 // browser (soft browse). Its hook commands (soft hook) are run only by the
 // hook scripts of a repository whose hooks an older server generated, until
-// soft admin sync-hooks replaces them with scripts that call no soft process.
+// soft admin sync-hooks or soft serve --sync-hooks replaces them with scripts
+// that call no soft process.
 package main
 
 import (

@@ -1,5 +1,6 @@
 // Package hook is the soft hook command, which the hook scripts of older
-// generated repositories run, until soft admin sync-hooks rewrites them.
+// generated repositories run, until soft admin sync-hooks or soft serve
+// --sync-hooks rewrites them.
 package hook
 
 import (
@@ -25,12 +26,13 @@ import (
 var ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be run by git from a Soft Serve Plus server")
 
 // The hook commands are run by the hook scripts of a repository whose hooks
-// an older server generated, until "soft admin sync-hooks" replaces them
-// with the scripts of hooks.Generate, which call no soft process. Each
-// does what such a script does: post-receive writes the ref lines to
-// $SOFT_SERVE_PUSH_REFS, so the server sends the push's webhooks, and every
-// hook runs the custom hook. The server does the rest once receive-pack has
-// exited, so none opens the database.
+// an older server generated, until "soft admin sync-hooks" or
+// "soft serve --sync-hooks" replaces them with the scripts of
+// hooks.Generate, which call no soft process. Each does what such a script
+// does: post-receive writes the ref lines to $SOFT_SERVE_PUSH_REFS, so the
+// server sends the push's webhooks, and every hook runs the custom hook. The
+// server does the rest once receive-pack has exited, so none opens the
+// database.
 
 // Env is what the hook commands run with: the server's config and the hook
 // log. soft's main fills it in before it runs a hook command, from the file
