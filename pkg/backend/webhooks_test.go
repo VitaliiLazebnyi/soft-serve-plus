@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"charm.land/log/v2"
-	charmlog "charm.land/log/v2"
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -722,9 +721,9 @@ func TestRedeliverRecordsNewDelivery(t *testing.T) {
 // test swaps the global default logger and must not run in parallel.
 func TestRedeliverDoesNotLogPayload(t *testing.T) {
 	e := newWebhookEnv(t)
-	prev := charmlog.Default()
-	charmlog.SetDefault(charmlog.New(e.logs))
-	t.Cleanup(func() { charmlog.SetDefault(prev) })
+	prev := log.Default()
+	log.SetDefault(log.New(e.logs))
+	t.Cleanup(func() { log.SetDefault(prev) })
 	id := e.createHook(t, whURL, webhook.EventPush)
 	const hookURL = "http://127.0.0.1:1/secret-path?token=hook-token"
 	if err := e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
@@ -1730,7 +1729,7 @@ func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
 // The queue never runs more than its workers at once, and runs every job.
 func TestDeliveryQueueBoundsWorkers(t *testing.T) {
 	t.Parallel()
-	q := newDeliveryQueue(2, 100, charmlog.New(io.Discard))
+	q := newDeliveryQueue(2, 100, log.New(io.Discard))
 	var mu sync.Mutex
 	running, peak, ran := 0, 0, 0
 	// Every job runs until release, so the first ones are still running
@@ -1800,7 +1799,7 @@ func blocker(started chan<- struct{}, release <-chan struct{}) func() {
 // a backlog of deliveries that do not return.
 func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 	t.Parallel()
-	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
+	q := newDeliveryQueue(8, 100, log.New(io.Discard))
 	q.maxRepoRunning = 2
 	started := make(chan struct{}, 5)
 	release := make(chan struct{})
@@ -1843,7 +1842,7 @@ func TestDeliveryQueueCapsRunningPerRepo(t *testing.T) {
 // receiver before an earlier one, since each carries the state at its change.
 func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 	t.Parallel()
-	q := newDeliveryQueue(8, 100, charmlog.New(io.Discard))
+	q := newDeliveryQueue(8, 100, log.New(io.Discard))
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var mu sync.Mutex
@@ -1889,7 +1888,7 @@ func TestDeliveryQueueSendsRepoEventsInOrder(t *testing.T) {
 // one is refused, while other repositories can still queue theirs.
 func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
 	t.Parallel()
-	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
+	q := newDeliveryQueue(1, 100, log.New(io.Discard))
 	q.maxRepo = 3
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -1925,7 +1924,7 @@ func TestDeliveryQueueCapsPendingPerRepo(t *testing.T) {
 // with a long backlog does not hold back one that queued later.
 func TestDeliveryQueueTakesReposInTurn(t *testing.T) {
 	t.Parallel()
-	q := newDeliveryQueue(1, 100, charmlog.New(io.Discard))
+	q := newDeliveryQueue(1, 100, log.New(io.Discard))
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	if got := q.enqueue(0, blocker(started, release)); got != enqueued {
