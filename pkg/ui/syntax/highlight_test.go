@@ -11,6 +11,7 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/charmbracelet/soft-serve/internal/testregexp"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest/uiwait"
 )
 
@@ -560,3 +561,7 @@ func TestTokenisePanicShowsPlain(t *testing.T) {
 	}
 	waitSlots(t)
 }
+
+// These tests check chroma's tokens, which must not depend on its regex
+// timeout.
+func init() { testregexp.DisableTimeouts() }
