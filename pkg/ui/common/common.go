@@ -6,7 +6,6 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/keymap"
@@ -97,22 +96,6 @@ func (c *Common) CloneCmd(publicURL, name string) string {
 		return ""
 	}
 	return fmt.Sprintf("git clone %s", RepoURL(publicURL, name))
-}
-
-// IsFileMarkdown returns true if the file is markdown.
-// It uses chroma lexers to analyze and determine the language.
-func IsFileMarkdown(content, ext string) bool {
-	var lang string
-	lexer := lexers.Match(ext)
-	if lexer == nil {
-		// Only the start of the file: some analysers take time quadratic
-		// in their input.
-		lexer = analyse(content)
-	}
-	if lexer != nil && lexer.Config() != nil {
-		lang = lexer.Config().Name
-	}
-	return lang == "markdown"
 }
 
 // ScrollPercent returns a string representing the scroll percentage of the

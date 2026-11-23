@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // The settings rows that recorded which keys the admin key sync attached
@@ -18,7 +18,7 @@ import (
 func TestPublicKeySyncedUser(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

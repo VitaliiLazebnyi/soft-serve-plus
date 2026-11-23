@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // A SQLite database used with foreign keys off, as a custom data source left
@@ -159,7 +159,7 @@ func assertNoOrphans(t *testing.T, ctx context.Context, dbx *db.DB) {
 func TestMigrateDownAndUpKeepsRows(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

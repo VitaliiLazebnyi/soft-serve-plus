@@ -13,7 +13,6 @@ import (
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -89,7 +88,7 @@ func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) {
 		c.AdminOnlyCreate = true
-		c.InitialAdminKeys = append(c.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub))
+		c.InitialAdminKeys = append(c.InitialAdminKeys, proto.MarshalAuthorizedKey(pub))
 	})
 	userCtx := withUser(t, ctx, be, "keyholder", false)
 	keyCtx := context.WithValue(userCtx, ssh.ContextKeyPublicKey, pub)
@@ -122,7 +121,7 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	ctx, be := newAuthTestContext(t)
 	// Added after the first migration, so no account owns it yet.
 	cfg := cmdsOf(ctx).cfg
-	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(adminPub))
+	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(adminPub))
 	is.NoErr(cfg.Validate())
 
 	session := func(name string, admin bool) context.Context {
@@ -141,19 +140,19 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	}
 
 	workerCtx := session("worker", false)
-	is.True(errors.Is(runPubkey(workerCtx, "add", sshutils.MarshalAuthorizedKey(adminPub)), errListedAdminKey))
+	is.True(errors.Is(runPubkey(workerCtx, "add", proto.MarshalAuthorizedKey(adminPub)), errListedAdminKey))
 	taken := newEd25519Signer(t)
 	_, err := be.CreateUser(ctx, "other", proto.UserOptions{PublicKeys: []gossh.PublicKey{taken.PublicKey()}})
 	is.NoErr(err)
-	_, err = runPubkeyIn(workerCtx, proofFor(t, taken, "worker"), "add", sshutils.MarshalAuthorizedKey(taken.PublicKey()))
+	_, err = runPubkeyIn(workerCtx, proofFor(t, taken, "worker"), "add", proto.MarshalAuthorizedKey(taken.PublicKey()))
 	is.True(errors.Is(err, errPubkeyTaken))
 	worker, err := be.User(ctx, "worker")
 	is.NoErr(err)
 	keys := worker.PublicKeys()
 	is.Equal(len(keys), 1)
 	fresh := newEd25519Signer(t)
-	_, err = runPubkeyIn(workerCtx, proofFor(t, fresh, "worker"), "add", sshutils.MarshalAuthorizedKey(fresh.PublicKey()))
+	_, err = runPubkeyIn(workerCtx, proofFor(t, fresh, "worker"), "add", proto.MarshalAuthorizedKey(fresh.PublicKey()))
 	is.NoErr(err)
 
-	is.NoErr(runPubkey(session("boss", true), "add", sshutils.MarshalAuthorizedKey(adminPub)))
+	is.NoErr(runPubkey(session("boss", true), "add", proto.MarshalAuthorizedKey(adminPub)))
 }

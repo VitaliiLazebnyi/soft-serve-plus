@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
+
 	"charm.land/ssh"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -42,7 +43,7 @@ func TestSessionContextPerSession(t *testing.T) {
 			return
 		}
 		var proto string
-		if sess := sshutils.SessionFromContext(ctx); sess != nil {
+		if sess := cmd.SessionFromContext(ctx); sess != nil {
 			for _, env := range sess.Environ() {
 				if v, ok := strings.CutPrefix(env, "GIT_PROTOCOL="); ok {
 					proto = v

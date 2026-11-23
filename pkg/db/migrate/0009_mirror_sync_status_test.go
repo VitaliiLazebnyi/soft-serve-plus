@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // Repositories get a last sync time, empty until a sync succeeds, and a last
@@ -16,7 +16,7 @@ import (
 func TestMirrorSyncStatus(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

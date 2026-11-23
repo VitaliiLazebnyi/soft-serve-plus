@@ -14,12 +14,12 @@ import (
 	"unicode/utf8"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 )
@@ -42,7 +42,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { admin.Close() }) //nolint:errcheck
-	name, err := sstest.CreateDB(ctx, admin, "softserve_test")
+	name, err := dbtest.CreateDB(ctx, admin, "softserve_test")
 	is.NoErr(err)
 	t.Cleanup(func() {
 		if _, err := admin.ExecContext(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
@@ -51,7 +51,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	})
 
 	// The data source is a URL or a key=value string, as in
-	// pkg/db/internal/test, which this package cannot import.
+	// internal/dbtest.
 	testDSN := strings.TrimSpace(dsn) + " dbname=" + name
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		u, err := url.Parse(dsn)

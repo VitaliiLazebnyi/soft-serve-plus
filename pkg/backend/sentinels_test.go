@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
 )
@@ -103,7 +102,7 @@ func TestRepositoryChangesHideServerFaults(t *testing.T) {
 
 	// Refusals are returned as they are, with their own text.
 	_, err = be.CreateRepository(ctx, "-bad", alice, proto.RepositoryOptions{})
-	is.True(errors.Is(err, utils.ErrInvalidRepo))
+	is.True(errors.Is(err, proto.ErrInvalidRepo))
 	is.Equal(err.Error(), "repo path segments cannot start with a hyphen")
 	is.True(errors.Is(be.RenameRepository(asAdmin(t, be, ctx), "missing", "other"), proto.ErrRepoNotFound))
 }

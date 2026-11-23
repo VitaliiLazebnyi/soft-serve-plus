@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -32,7 +31,7 @@ func TestReadableForUser(t *testing.T) {
 	otherKey := newTestPublicKey(t)
 	adminKey := newTestPublicKey(t)
 	listedKey := newTestPublicKey(t)
-	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(listedKey)))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(listedKey)))
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []ssh.PublicKey{ownerKey}})
 	is.NoErr(err)

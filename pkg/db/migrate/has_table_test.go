@@ -8,9 +8,9 @@ import (
 	"io"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -21,7 +21,7 @@ import (
 func TestHasTable(t *testing.T) {
 	t.Parallel()
 	ctx := context.TODO()
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

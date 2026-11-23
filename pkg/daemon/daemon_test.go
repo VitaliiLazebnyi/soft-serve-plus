@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -28,7 +29,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
@@ -64,7 +64,7 @@ func runTests(m *testing.M) int {
 	// timed out between its steps. A test that waits for the idle timeout
 	// serves its own daemon (startIdleDaemon).
 	cfg.Git.IdleTimeout = 600
-	cfg.Git.ListenAddr = fmt.Sprintf("127.0.0.1:%d", test.RandomPort()) // RandomPort checks only loopback
+	cfg.Git.ListenAddr = fmt.Sprintf("127.0.0.1:%d", testnet.RandomPort()) // RandomPort checks only loopback
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}

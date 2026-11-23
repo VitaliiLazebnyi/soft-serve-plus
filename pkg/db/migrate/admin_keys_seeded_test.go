@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -67,7 +67,7 @@ func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
 	}
 	fp := func(ak string) string {
 		t.Helper()
-		pk, _, err := sshutils.ParseAuthorizedKey(ak)
+		pk, _, err := proto.ParseAuthorizedKey(ak)
 		if err != nil {
 			t.Fatal(err)
 		}

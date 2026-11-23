@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 )
 
 type filesView int
@@ -611,7 +612,7 @@ func (f *Files) selectFileCmd(item FileItem, filePath string, index int) tea.Cmd
 			path:       filePath,
 			index:      index,
 			load:       load,
-			isMarkdown: common.IsFileMarkdown(content, name),
+			isMarkdown: syntax.IsFileMarkdown(content, name),
 			gen:        gen,
 		}
 	}

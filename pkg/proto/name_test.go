@@ -1,0 +1,223 @@
+package proto
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestValidateRepo(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		for _, repo := range []string{
+			"lower",
+			"Upper",
+			"with-dash",
+			"with/slash",
+			"withnumb3r5",
+			"with.dot",
+			"with_underline",
+			"a/b/c",
+			"foo.github/bar",
+			"gitfoo/bar.gitx",
+		} {
+			t.Run(repo, func(t *testing.T) {
+				if err := ValidateRepo(repo); err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			})
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		for _, repo := range []string{
+			"with$",
+			"with@",
+			"with!",
+			"",
+			".",
+			"..",
+			"nested.git/refs/heads/x",
+			"A.GIT/b",
+			"victim.git/hooks",
+			"foo/.git",
+			"foo/../bar",
+			"foo//bar",
+			"/leading",
+			"trailing/",
+			"suffix.git",
+			"double.git.git",
+			"-leading-dash",
+			"a/-b",
+			"...",
+			"a/.../b",
+		} {
+			t.Run(repo, func(t *testing.T) {
+				if err := ValidateRepo(repo); err == nil {
+					t.Error("expected an error, got nil")
+				}
+			})
+		}
+	})
+}
+
+func TestSanitizeRepo(t *testing.T) {
+	cases := []struct {
+		in, out string
+	}{
+		{"lower", "lower"},
+		{"Upper", "Upper"},
+		{"with/slash", "with/slash"},
+		{"with.dot", "with.dot"},
+		{"/with_forward_slash", "with_forward_slash"},
+		{"withgitsuffix.git", "withgitsuffix"},
+		{"double.git.git", "double"},
+		{"triple.git.git.git", "triple"},
+		{"..git", ""},
+		{".git", ""},
+		{"foo/.git", "foo"},
+		{"foo/../bar", "bar"},
+		{"../../etc", "etc"},
+		{"trailing/", "trailing"},
+		{"nested.git/refs/heads/x", "nested.git/refs/heads/x"},
+		{"a/..git", "a"},
+		{"a/b/...git", "a"},
+		{"a/b/..git", "a/b"},
+		{"foo.git/.git", "foo"},
+		{strings.Repeat(".git", 20000), ""},
+		{strings.Repeat("/.git", 20000), ""},
+		{"x" + strings.Repeat(".git", 20000), "x"},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			got := SanitizeRepo(c.in)
+			if got != c.out {
+				t.Errorf("expected %q, got %q", c.out, got)
+			}
+			if again := SanitizeRepo(got); again != got {
+				t.Errorf("not a fixed point: %q -> %q", got, again)
+			}
+		})
+	}
+}
+
+// Authentication failures log the username only when it is valid, so
+// credentials sent in the username field must never pass.
+func TestValidateUsernameRejectsCredentials(t *testing.T) {
+	for _, s := range []string{
+		"ss_x",
+		"ss_0123456789abcdef0123456789abcdef",
+		"eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2ln",
+	} {
+		if err := ValidateUsername(s); err == nil {
+			t.Errorf("ValidateUsername(%q) = nil, want an error", s)
+		}
+	}
+	if err := ValidateUsername("stranger"); err != nil {
+		t.Errorf("ValidateUsername(%q) = %v, want nil", "stranger", err)
+	}
+}
+
+// A repository whose name breaks the rules for new names can still be
+// named, to rename it, but not one that is unsafe as a path.
+func TestValidateExistingRepo(t *testing.T) {
+	for _, repo := range []string{"-foo", "a/-b", "...", "a/.../b", "lower"} {
+		if err := ValidateExistingRepo(repo); err != nil {
+			t.Errorf("ValidateExistingRepo(%q) = %v, want nil", repo, err)
+		}
+	}
+	for _, repo := range []string{"", "..", "foo/../bar", "suffix.git", "with$"} {
+		if err := ValidateExistingRepo(repo); err == nil {
+			t.Errorf("ValidateExistingRepo(%q) = nil, want an error", repo)
+		}
+	}
+}
+
+func TestValidateNewUsername(t *testing.T) {
+	for _, name := range []string{
+		"admin",
+		"user-1",
+		"андрей",    // Cyrillic only
+		"ελένη",     // Greek only
+		"山田太郎",      // Han
+		"やまだ-taro",  // Hiragana and Latin
+		"김철수",       // Hangul
+		"mañana",    // Latin with a diacritic
+		"testuser1", // digits are of no script
+	} {
+		if err := ValidateNewUsername(name); err != nil {
+			t.Errorf("ValidateNewUsername(%q) = %v, want nil", name, err)
+		}
+	}
+	for _, name := range []string{
+		"\u0430dmin",   // Cyrillic a, then Latin
+		"adm\u0456n",   // Latin with a Cyrillic i
+		"\u03b1lpha",   // Greek alpha, then Latin
+		"\u0430\u03b1", // Cyrillic and Greek
+		"\u0430\u5c71", // Cyrillic and Han
+		"1abc",         // not a letter first
+		"\u0663abc",    // an Arabic-Indic digit first
+	} {
+		if err := ValidateNewUsername(name); err == nil {
+			t.Errorf("ValidateNewUsername(%q) = nil, want an error", name)
+		}
+	}
+	// Existing accounts are still looked up: mixed scripts, a first byte
+	// that older versions took for a Latin-1 letter (0xD9), and a first
+	// letter whose first byte is not one (Hebrew, 0xD7).
+	for _, name := range []string{"\u0430dmin", "\u0663abc", "\u05d0\u05d1\u05d2"} {
+		if err := ValidateUsername(name); err != nil {
+			t.Errorf("ValidateUsername(%q) = %v, want nil", name, err)
+		}
+	}
+	if err := ValidateNewUsername("\u05d0\u05d1\u05d2"); err != nil {
+		t.Errorf("ValidateNewUsername(%q) = %v, want nil", "\u05d0\u05d1\u05d2", err)
+	}
+	for _, name := range []string{"1abc", "-abc", "\u05c0abc"} { // U+05C0 is Hebrew punctuation, lead byte 0xD7
+		if err := ValidateUsername(name); err == nil {
+			t.Errorf("ValidateUsername(%q) = nil, want an error", name)
+		}
+	}
+}
+
+// New names must start with a letter character, decoded as a whole rune
+// rather than read from its first byte.
+func TestValidateNewUsernameFirstCharacter(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		username string
+		valid    bool
+	}{
+		{"alice", true},
+		{"אבי", true},      // Hebrew: lead byte 0xD7 is '×', not a letter
+		{"ñandu", true},    // Latin-1 letter
+		{"Ωμέγα-2", true},  // Greek letters
+		{"٣abc", false},    // Arabic-Indic digit: lead byte 0xD9 is 'Ù'
+		{"०abc", false},    // Devanagari digit
+		{"1abc", false},    // ASCII digit
+		{"-abc", false},    // hyphen
+		{"\xffabc", false}, // invalid UTF-8
+		{"a\xffbc", false}, // invalid UTF-8 later on
+	} {
+		err := ValidateNewUsername(tc.username)
+		if tc.valid && err != nil {
+			t.Errorf("ValidateNewUsername(%q) = %v, want nil", tc.username, err)
+		}
+		if !tc.valid && err == nil {
+			t.Errorf("ValidateNewUsername(%q) = nil, want an error", tc.username)
+		}
+	}
+}
+
+// A new repository name has at most MaxRepoSegments segments; an existing
+// one may have more.
+func TestValidateRepoSegmentCount(t *testing.T) {
+	deepest := strings.TrimSuffix(strings.Repeat("a/", MaxRepoSegments), "/")
+	if err := ValidateRepo(deepest); err != nil {
+		t.Fatalf("ValidateRepo(%d segments) = %v, want nil", MaxRepoSegments, err)
+	}
+	tooDeep := deepest + "/a"
+	if err := ValidateRepo(tooDeep); err == nil {
+		t.Fatalf("ValidateRepo(%d segments) = nil, want an error", MaxRepoSegments+1)
+	}
+	if err := ValidateExistingRepo(tooDeep); err != nil {
+		t.Fatalf("ValidateExistingRepo(%d segments) = %v, want nil", MaxRepoSegments+1, err)
+	}
+}

@@ -9,7 +9,7 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -87,7 +87,7 @@ func (s *server) goGetHandler(w http.ResponseWriter, r *http.Request, logger *lo
 		// few copies of the name, so trying every parent of a deep package
 		// path would make the work quadratic in its length; no new
 		// repository is named deeper than those parents (see
-		// utils.MaxRepoSegments).
+		// proto.MaxRepoSegments).
 		name := ""
 		for _, candidate := range pathAncestors(repo) {
 			if ctx.Err() != nil {
@@ -102,7 +102,7 @@ func (s *server) goGetHandler(w http.ResponseWriter, r *http.Request, logger *lo
 				return
 			}
 			if found != nil {
-				name = utils.SanitizeRepo(candidate)
+				name = proto.SanitizeRepo(candidate)
 				break
 			}
 		}

@@ -5,8 +5,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // maxMirrorErrorLen caps the error RecordMirrorSync keeps: it can carry what
@@ -38,7 +38,7 @@ func (d *Backend) RecordMirrorSync(ctx context.Context, r proto.Repository, sync
 	if syncErr != nil {
 		// Valid UTF-8 first, so the cut below lands between characters;
 		// the store makes it so too, and drops NUL bytes.
-		msg = utils.StorableText(syncErr.Error())
+		msg = db.StorableText(syncErr.Error())
 		if msg == "" {
 			msg = "sync failed"
 		}
@@ -55,7 +55,7 @@ func (d *Backend) RecordMirrorSync(ctx context.Context, r proto.Repository, sync
 
 // MirrorSyncStatus returns the outcome of the syncs of the mirror name.
 func (d *Backend) MirrorSyncStatus(ctx context.Context, name string) (MirrorSync, error) {
-	m, err := d.store.GetRepoByName(ctx, d.db, utils.SanitizeRepo(name))
+	m, err := d.store.GetRepoByName(ctx, d.db, proto.SanitizeRepo(name))
 	if err != nil {
 		return MirrorSync{}, wrapRepoError(err)
 	}

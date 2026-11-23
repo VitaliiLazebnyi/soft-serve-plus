@@ -27,7 +27,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/web"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
@@ -252,8 +251,8 @@ func ensureDefaultRepo(ctx context.Context, cfg *config.Config, be *backend.Back
 		return
 	}
 
-	name := utils.SanitizeRepo(cfg.DefaultRepo)
-	if err := utils.ValidateRepo(name); err != nil {
+	name := proto.SanitizeRepo(cfg.DefaultRepo)
+	if err := proto.ValidateRepo(name); err != nil {
 		logger.Warn("invalid default_repo, skipping", "name", cfg.DefaultRepo, "err", err)
 		return
 	}

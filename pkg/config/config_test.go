@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
 	"go.yaml.in/yaml/v4"
@@ -92,7 +92,7 @@ func TestAdminKeysReturnsCopy(t *testing.T) {
 
 	got := cfg.AdminKeys()
 	got[0], got[1] = got[1], nil
-	if !slices.EqualFunc(cfg.AdminKeys(), want, sshutils.KeysEqual) {
+	if !slices.EqualFunc(cfg.AdminKeys(), want, proto.KeysEqual) {
 		t.Error("changing the returned slice changed the config's admin keys")
 	}
 }
@@ -634,14 +634,14 @@ func TestAdminKeysParsedOnlyByValidate(t *testing.T) {
 	is.NoErr(cfg.Validate())
 	keys := cfg.AdminKeys()
 	is.Equal(len(keys), 1)
-	is.Equal(strings.TrimSpace(sshutils.MarshalAuthorizedKey(keys[0])), k1)
+	is.Equal(strings.TrimSpace(proto.MarshalAuthorizedKey(keys[0])), k1)
 
 	// k1 has no "/", so its text is a file name in the data directory.
 	is.NoErr(os.WriteFile(filepath.Join(dp, k1), []byte(k2+"\n"), 0o600))
 
 	keys = cfg.AdminKeys()
 	is.Equal(len(keys), 1)
-	is.Equal(strings.TrimSpace(sshutils.MarshalAuthorizedKey(keys[0])), k1)
+	is.Equal(strings.TrimSpace(proto.MarshalAuthorizedKey(keys[0])), k1)
 	is.Equal(cfg.UnreadableAdminKeyFiles(), []string(nil))
 	is.Equal(cfg.IgnoredAdminKeys(), 0)
 }

@@ -17,6 +17,7 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -25,7 +26,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
@@ -103,7 +103,7 @@ func (d *Backend) validateImportRemote(ctx context.Context, remote string, polic
 // redactRemote strips any user info and query from a remote URL so it can be
 // logged: either can hold a token. scp-style remotes pass through unchanged.
 func redactRemote(remote string) string {
-	return utils.RedactURL(remote)
+	return ssrf.RedactURL(remote)
 }
 
 // checkCanCreate refuses the creation of a new repository name by user, the
@@ -254,13 +254,13 @@ func (d *Backend) CreateRepository(ctx context.Context, name string, user proto.
 
 // createUserRepository is CreateRepository without the mapping of errors.
 func (d *Backend) createUserRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions) (proto.Repository, error) {
-	if err := d.checkCanClaim(ctx, user, utils.SanitizeRepo(name)); err != nil {
+	if err := d.checkCanClaim(ctx, user, proto.SanitizeRepo(name)); err != nil {
 		return nil, err
 	}
 	// Report an invalid name before the limit, as ImportRepository does.
 	// createRepository sanitizes and validates again; both are idempotent.
-	name = utils.SanitizeRepo(name)
-	if err := utils.ValidateRepo(name); err != nil {
+	name = proto.SanitizeRepo(name)
+	if err := proto.ValidateRepo(name); err != nil {
 		return nil, err
 	}
 	limited := d.repoLimited(ctx, user)
@@ -283,8 +283,8 @@ func (d *Backend) CreateSystemRepository(ctx context.Context, name string, user 
 // createRepository creates an empty repository. limited says whether
 // max_repos_per_user applies (see repoLimited).
 func (d *Backend) createRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
-	name = utils.SanitizeRepo(name)
-	if err := utils.ValidateRepo(name); err != nil {
+	name = proto.SanitizeRepo(name)
+	if err := proto.ValidateRepo(name); err != nil {
 		return nil, err
 	}
 
@@ -413,8 +413,8 @@ func renameOntoClaim(op, np string, claimed *bool) error {
 // records the repository.
 func (d *Backend) registerRepository(ctx context.Context, name string, user proto.User, opts proto.RepositoryOptions, limited bool) (proto.Repository, error) {
 	rp := d.repoPath(name)
-	opts.ProjectName = utils.Sanitize(opts.ProjectName)
-	opts.Description = utils.Sanitize(opts.Description)
+	opts.ProjectName = termtext.Sanitize(opts.ProjectName)
+	opts.Description = termtext.Sanitize(opts.Description)
 
 	var userID int64
 	if user != nil {
@@ -549,8 +549,8 @@ func (d *Backend) ImportRepository(ctx context.Context, name string, user proto.
 
 // importUserRepository is ImportRepository without the mapping of errors.
 func (d *Backend) importUserRepository(ctx context.Context, name string, user proto.User, remote string, opts proto.RepositoryOptions) (proto.Repository, error) {
-	name = utils.SanitizeRepo(name)
-	if err := utils.ValidateRepo(name); err != nil {
+	name = proto.SanitizeRepo(name)
+	if err := proto.ValidateRepo(name); err != nil {
 		return nil, err
 	}
 
@@ -573,7 +573,7 @@ func (d *Backend) importUserRepository(ctx context.Context, name string, user pr
 		return nil, proto.ErrImportsDisabled
 	}
 
-	remote = utils.Sanitize(remote)
+	remote = termtext.Sanitize(remote)
 	policy, mirrorRestricted := d.importRemotePolicy(ctx, user, opts.Mirror)
 	// checkRemote validates one user-supplied remote, explaining a refusal
 	// that only the mirror rule caused.
@@ -858,7 +858,7 @@ var errRepoKept = errors.New("repository kept")
 // directory without a row is left alone, and reported when the server
 // starts (see OrphanRepositoryDirs).
 func (d *Backend) deleteRepository(ctx context.Context, name string, id int64, keep func(tx *db.Tx, m models.Repo) (bool, error)) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 
 	ev, r, err := d.deleteEvent(ctx, name)
 	if err != nil {
@@ -1003,14 +1003,14 @@ func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName 
 
 // renameRepository is RenameRepository without the mapping of errors.
 func (d *Backend) renameRepository(ctx context.Context, oldName string, newName string) error {
-	oldName = utils.SanitizeRepo(oldName)
+	oldName = proto.SanitizeRepo(oldName)
 	// The repository may predate the rules for new names.
-	if err := utils.ValidateExistingRepo(oldName); err != nil {
+	if err := proto.ValidateExistingRepo(oldName); err != nil {
 		return err
 	}
 
-	newName = utils.SanitizeRepo(newName)
-	if err := utils.ValidateRepo(newName); err != nil {
+	newName = proto.SanitizeRepo(newName)
+	if err := proto.ValidateRepo(newName); err != nil {
 		return err
 	}
 
@@ -1217,7 +1217,7 @@ func (d *Backend) Repositories(ctx context.Context) ([]proto.Repository, error) 
 
 // Repository returns a repository by name.
 func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository, error) {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	rp := d.repoPath(name)
 	if !d.repoDirFound(rp) {
 		return nil, proto.ErrRepoNotFound
@@ -1244,7 +1244,7 @@ func (d *Backend) Repository(ctx context.Context, name string) (proto.Repository
 // git.ErrNotAGitRepository of openRepoError), or that say the client went
 // away.
 var refusals = []error{
-	utils.ErrInvalidRepo,
+	proto.ErrInvalidRepo,
 	proto.ErrUnauthorized,
 	proto.ErrRepoExist,
 	proto.ErrRepoNotFound,
@@ -1331,7 +1331,7 @@ func (d *Backend) SetResolvedHidden(ctx context.Context, r proto.Repository, hid
 }
 
 func (d *Backend) setHidden(ctx context.Context, name string, id int64, hidden bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.lockResolved(ctx, tx, name, id); err != nil {
@@ -1373,7 +1373,7 @@ var errRepoChangedDuringMirror = errors.New("repository changed while switching 
 // Note: enabling mirror mode requires the repository to have been imported
 // with a remote URL. Use ImportRepository to create a new mirror.
 func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	rp := d.repoPath(name)
 
 	// The remotes are validated before the transaction opens. Validation
@@ -1592,8 +1592,8 @@ func (d *Backend) SetResolvedDescription(ctx context.Context, r proto.Repository
 }
 
 func (d *Backend) setDescription(ctx context.Context, name string, id int64, desc string) error {
-	name = utils.SanitizeRepo(name)
-	desc = utils.Sanitize(desc)
+	name = proto.SanitizeRepo(name)
+	desc = termtext.Sanitize(desc)
 
 	return wrapRepoError(d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.lockResolved(ctx, tx, name, id); err != nil {
@@ -1615,7 +1615,7 @@ func (d *Backend) SetResolvedPrivate(ctx context.Context, r proto.Repository, pr
 }
 
 func (d *Backend) setPrivate(ctx context.Context, name string, id int64, private bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 
 	var changed bool
 	var m models.Repo
@@ -1672,8 +1672,8 @@ func (d *Backend) SetResolvedProjectName(ctx context.Context, r proto.Repository
 }
 
 func (d *Backend) setProjectName(ctx context.Context, repo string, id int64, name string) error {
-	repo = utils.SanitizeRepo(repo)
-	name = utils.Sanitize(name)
+	repo = proto.SanitizeRepo(repo)
+	name = termtext.Sanitize(name)
 
 	return wrapRepoError(
 		d.db.TransactionContext(ctx, func(tx *db.Tx) error {

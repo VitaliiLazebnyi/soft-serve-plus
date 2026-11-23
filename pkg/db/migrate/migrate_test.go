@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // testEnv returns the Env migrations get from Migrate with cfg and the
@@ -25,7 +25,7 @@ func testEnv(cfg *config.Config) Env {
 func TestMigrate(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,12 +61,12 @@ func TestMigrateConcurrent(t *testing.T) {
 func testMigrateConcurrent(t *testing.T, isolation string) {
 	t.Helper()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if isolation != "" {
-		test.SetDefaultIsolation(ctx, t, dbx, isolation)
+		dbtest.SetDefaultIsolation(ctx, t, dbx, isolation)
 	}
 
 	const n = 4
@@ -109,7 +109,7 @@ func testMigrateConcurrent(t *testing.T, isolation string) {
 func TestMigrateRefusesNewerDatabase(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestMigrateRefusesNewerDatabase(t *testing.T) {
 func TestRollbackRefusesNewerDatabase(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestRollbackRefusesNewerDatabase(t *testing.T) {
 func TestRollbackByVersion(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestRollbackByVersion(t *testing.T) {
 func TestRollbackReportsQueryError(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestRollbackReportsQueryError(t *testing.T) {
 func TestRollbackAllThenMigrate(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestRollbackAllThenMigrate(t *testing.T) {
 func TestMigrateOverLeftoverTables(t *testing.T) {
 	t.Parallel()
 	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
-	dbx, err := test.Open(ctx, t)
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

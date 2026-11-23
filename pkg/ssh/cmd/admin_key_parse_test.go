@@ -10,7 +10,7 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -28,7 +28,7 @@ func slashFreeKey(t *testing.T) (gossh.PublicKey, string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ak := strings.TrimSpace(sshutils.MarshalAuthorizedKey(signer.PublicKey()))
+		ak := strings.TrimSpace(proto.MarshalAuthorizedKey(signer.PublicKey()))
 		if !strings.Contains(ak, "/") {
 			return signer.PublicKey(), ak
 		}

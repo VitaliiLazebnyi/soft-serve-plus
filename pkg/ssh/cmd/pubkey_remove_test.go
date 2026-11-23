@@ -9,7 +9,6 @@ import (
 	"charm.land/ssh"
 	"github.com/charmbracelet/keygen"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -52,11 +51,11 @@ func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
 	}
 
 	// Only key: refused as the last key.
-	if err := runPubkey(ctx1, "remove", sshutils.MarshalAuthorizedKey(k1)); !errors.Is(err, errRemoveLastKey) {
+	if err := runPubkey(ctx1, "remove", proto.MarshalAuthorizedKey(k1)); !errors.Is(err, errRemoveLastKey) {
 		t.Fatalf("removing the only key: got %v, want errRemoveLastKey", err)
 	}
 	// A trailing comment does not change the key.
-	if err := runPubkey(ctx1, "remove", sshutils.MarshalAuthorizedKey(k1), "laptop"); !errors.Is(err, errRemoveLastKey) {
+	if err := runPubkey(ctx1, "remove", proto.MarshalAuthorizedKey(k1), "laptop"); !errors.Is(err, errRemoveLastKey) {
 		t.Fatalf("removing the only key with a comment: got %v, want errRemoveLastKey", err)
 	}
 	if n := keyCount(); n != 1 {
@@ -67,7 +66,7 @@ func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
 	if err := be.AddPublicKey(ctx, "alice", k2); err != nil {
 		t.Fatal(err)
 	}
-	if err := runPubkey(ctx1, "remove", sshutils.MarshalAuthorizedKey(k1)); !errors.Is(err, errRemoveSessionKey) {
+	if err := runPubkey(ctx1, "remove", proto.MarshalAuthorizedKey(k1)); !errors.Is(err, errRemoveSessionKey) {
 		t.Fatalf("removing the session key: got %v, want errRemoveSessionKey", err)
 	}
 	if n := keyCount(); n != 2 {
@@ -75,14 +74,14 @@ func TestPubkeyRemoveRefusesSessionAndLastKey(t *testing.T) {
 	}
 
 	// Connected with the other key, the old one can be removed (rotation).
-	if err := runPubkey(ctx2, "remove", sshutils.MarshalAuthorizedKey(k1)); err != nil {
+	if err := runPubkey(ctx2, "remove", proto.MarshalAuthorizedKey(k1)); err != nil {
 		t.Fatalf("removing another key: %v", err)
 	}
 	if n := keyCount(); n != 1 {
 		t.Fatalf("got %d keys, want 1", n)
 	}
 	// And now k2 is the last one.
-	if err := runPubkey(ctx2, "remove", sshutils.MarshalAuthorizedKey(k2)); !errors.Is(err, errRemoveLastKey) {
+	if err := runPubkey(ctx2, "remove", proto.MarshalAuthorizedKey(k2)); !errors.Is(err, errRemoveLastKey) {
 		t.Fatalf("removing the new only key: got %v, want errRemoveLastKey", err)
 	}
 }

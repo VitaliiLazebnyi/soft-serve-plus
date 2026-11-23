@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -41,7 +42,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
@@ -404,7 +404,7 @@ func newStartTestServer(t *testing.T, sshAddr, gitAddr, httpAddr, statsAddr stri
 }
 
 func loopbackAddr() string {
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(test.RandomPort()))
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(testnet.RandomPort()))
 }
 
 // startAsync runs s.Start and returns a channel that receives its result.

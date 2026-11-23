@@ -16,12 +16,11 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -31,7 +30,7 @@ import (
 func openDB(t *testing.T, ctx context.Context) *db.DB {
 	t.Helper()
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
-		dbx, err := test.OpenSqlite(ctx, t)
+		dbx, err := dbtest.OpenSqlite(ctx, t)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +45,7 @@ func openDB(t *testing.T, ctx context.Context) *db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, err := sstest.CreateDB(ctx, admin, "softserve_migrate_test")
+	name, err := dbtest.CreateDB(ctx, admin, "softserve_migrate_test")
 	if err != nil {
 		admin.Close() //nolint:errcheck
 		t.Fatal(err)
@@ -81,7 +80,7 @@ func newAuthorizedKey(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sshutils.MarshalAuthorizedKey(pk)
+	return proto.MarshalAuthorizedKey(pk)
 }
 
 type ownerRow struct {
@@ -557,7 +556,7 @@ func TestAdminKeyNotRemovedWhileAKeyFileCannotBeRead(t *testing.T) {
 	if o, ok := ownerOf(t, dbx, ak); !ok || o.Username != "admin" {
 		t.Errorf("key owner with the file missing = %+v, %v; want it kept on admin", o, ok)
 	}
-	pk, _, err := sshutils.ParseAuthorizedKey(ak)
+	pk, _, err := proto.ParseAuthorizedKey(ak)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +634,7 @@ func TestAdminKeyAddedByHandIsKept(t *testing.T) {
 
 	pk := func(ak string) ssh.PublicKey {
 		t.Helper()
-		k, _, err := sshutils.ParseAuthorizedKey(ak)
+		k, _, err := proto.ParseAuthorizedKey(ak)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -700,7 +699,7 @@ func TestAdminKeyReaddedByHandDuringRemovalIsKept(t *testing.T) {
 	ak := newAuthorizedKey(t)
 	cfg.InitialAdminKeys = []string{ak}
 	boot(t, ctx, cfg, dbx)
-	pk, _, err := sshutils.ParseAuthorizedKey(ak)
+	pk, _, err := proto.ParseAuthorizedKey(ak)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +810,7 @@ func TestAdminKeySyncLeavesConfigAlone(t *testing.T) {
 		}
 	}
 
-	if got := cfg.AdminKeys(); !slices.EqualFunc(got, want, sshutils.KeysEqual) {
+	if got := cfg.AdminKeys(); !slices.EqualFunc(got, want, proto.KeysEqual) {
 		t.Error("the sync reordered the config's admin keys")
 	}
 	for _, dbx := range dbs {

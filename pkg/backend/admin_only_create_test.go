@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -301,7 +300,7 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 			cfg.AdminOnlyCreate = true
 
 			pub := newTestPublicKey(t)
-			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(pub)))
+			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
 
 			var user proto.User
 			if registered {
@@ -358,7 +357,7 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 	is.NoErr(err)
 
 	// The operator lists the key after mallory attached it.
-	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, sshutils.MarshalAuthorizedKey(claimed)))
+	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(claimed)))
 
 	// Load the users the way the HTTP layer does: by name (password, JWT)
 	// and by access token.
@@ -412,7 +411,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 
 	orig := cfg.InitialAdminKeys
 	setAdminKeys(t, cfg, append(append([]string{}, orig...),
-		sshutils.MarshalAuthorizedKey(claimed), sshutils.MarshalAuthorizedKey(bossKey)))
+		proto.MarshalAuthorizedKey(claimed), proto.MarshalAuthorizedKey(bossKey)))
 
 	for range 3 {
 		_, err = be.UserByPublicKey(ctx, claimed)
@@ -446,7 +445,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 
 	// Promoting the owner (the fix when the key is theirs) resolves the
 	// listed key to them again, keeping their account.
-	setAdminKeys(t, cfg, append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(claimed)))
+	setAdminKeys(t, cfg, append(append([]string{}, orig...), proto.MarshalAuthorizedKey(claimed)))
 	is.NoErr(be.SetAdmin(ctx, "mallory", true))
 	u, err = be.UserByPublicKey(ctx, claimed)
 	is.NoErr(err)
@@ -480,7 +479,7 @@ func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
 	is.NoErr(err)
 
 	orig := cfg.InitialAdminKeys
-	listed := append(append([]string{}, orig...), sshutils.MarshalAuthorizedKey(key))
+	listed := append(append([]string{}, orig...), proto.MarshalAuthorizedKey(key))
 	setAdminKeys(t, cfg, listed)
 
 	lookup := func(owner string) {

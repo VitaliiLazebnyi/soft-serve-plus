@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +47,7 @@ var repoProperties = []repoProperty{
 		aliases: []string{"desc"},
 		short:   "Set or get the description for a repository",
 		need:    access.ReadWriteAccess,
-		get:     func(r proto.Repository) string { return utils.Sanitize(r.Description()) },
+		get:     func(r proto.Repository) string { return termtext.Sanitize(r.Description()) },
 		setText: func(ctx context.Context, be *backend.Backend, r proto.Repository, v string) error {
 			return be.SetResolvedDescription(ctx, r, v)
 		},
@@ -85,7 +85,7 @@ var repoProperties = []repoProperty{
 		aliases: []string{"project"},
 		short:   "Set or get the project name for a repository",
 		need:    access.ReadWriteAccess,
-		get:     func(r proto.Repository) string { return utils.Sanitize(r.ProjectName()) },
+		get:     func(r proto.Repository) string { return termtext.Sanitize(r.ProjectName()) },
 		setText: func(ctx context.Context, be *backend.Backend, r proto.Repository, v string) error {
 			return be.SetResolvedProjectName(ctx, r, v)
 		},

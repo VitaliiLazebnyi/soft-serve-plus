@@ -10,18 +10,17 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
 // AddCollaborator adds a collaborator to a repository.
 func (d *Backend) AddCollaborator(ctx context.Context, repo string, username string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	r, err := d.Repository(ctx, utils.SanitizeRepo(repo))
+	r, err := d.Repository(ctx, proto.SanitizeRepo(repo))
 	if err != nil {
 		return err
 	}
@@ -32,7 +31,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 // looked up and authorized before: see lockResolved.
 func (d *Backend) AddResolvedCollaborator(ctx context.Context, r proto.Repository, username string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 	return d.addCollaborator(ctx, r, username, level)
@@ -87,7 +86,7 @@ type Collaborator struct {
 // Collaborators returns the collaborators of a repository with their access
 // levels.
 func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborator, error) {
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 	var users []models.User
 	var collabs []models.Collab
 	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
@@ -156,11 +155,11 @@ func (d *Backend) IsCollaborator(ctx context.Context, r proto.Repository, user p
 // RemoveCollaborator removes a collaborator from a repository.
 func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	r, err := d.Repository(ctx, utils.SanitizeRepo(repo))
+	r, err := d.Repository(ctx, proto.SanitizeRepo(repo))
 	if err != nil {
 		return err
 	}
@@ -171,7 +170,7 @@ func (d *Backend) RemoveCollaborator(ctx context.Context, repo string, username 
 // caller looked up and authorized before: see lockResolved.
 func (d *Backend) RemoveResolvedCollaborator(ctx context.Context, r proto.Repository, username string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 	return d.removeCollaborator(ctx, r, username)

@@ -46,18 +46,18 @@ jobs:
       # SOFT_SERVE_DB_DRIVER=postgres and use this as the data source; the
       # others leave the driver unset and run on SQLite.
       POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
-      # The packages whose tests open their database with dbtest (or
-      # pkg/db/internal/test) and so run on Postgres when
-      # SOFT_SERVE_DB_DRIVER=postgres. Every other package's tests ignore
-      # the variable, so running them again on Postgres would only repeat
-      # the SQLite run.
+      # The packages whose tests open their database with internal/dbtest
+      # and so run on Postgres when SOFT_SERVE_DB_DRIVER=postgres. Every
+      # other package's tests ignore the variable, so running them again on
+      # Postgres would only repeat the SQLite run.
       POSTGRES_PACKAGES: >-
         ./pkg/backend
         ./pkg/daemon
         ./pkg/db/...
         ./pkg/ssh/...
         ./pkg/store/...
-        ./pkg/test
+        ./pkg/ui
+        ./internal/dbtest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

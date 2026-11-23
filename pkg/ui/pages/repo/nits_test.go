@@ -252,7 +252,7 @@ func TestStatusBarRefreshedOnEveryResult(t *testing.T) {
 }
 
 // SanitizeText removes bidirectional controls along with what
-// utils.Sanitize removes, and keeps joiners that emoji need.
+// termtext.Sanitize removes, and keeps joiners that emoji need.
 func TestSanitizeTextBidi(t *testing.T) {
 	t.Parallel()
 	in := "a\u202eb\x1b[31mc\u200dd\u061ce\u200ff"

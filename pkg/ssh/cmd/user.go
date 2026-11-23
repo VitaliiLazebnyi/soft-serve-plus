@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 )
@@ -22,19 +21,19 @@ import (
 // valid key is used. Input that fits neither, or both, is rejected.
 func splitUserCreateKey(key string, args []string) (string, ssh.PublicKey, error) {
 	if len(args) == 1 {
-		pk, _, err := sshutils.ParseAuthorizedKey(key)
+		pk, _, err := proto.ParseAuthorizedKey(key)
 		return args[0], pk, err
 	}
 
 	// A complete key in the flag leaves no key words in args, so the
 	// extra arguments are a mistake.
-	if _, _, err := sshutils.ParseAuthorizedKey(key); err == nil {
+	if _, _, err := proto.ParseAuthorizedKey(key); err == nil {
 		return "", nil, fmt.Errorf("accepts 1 arg(s), received %d", len(args))
 	}
 
 	last := len(args) - 1
-	pkFirst, _, errFirst := sshutils.ParseAuthorizedKey(key + " " + strings.Join(args[1:], " "))
-	pkLast, _, errLast := sshutils.ParseAuthorizedKey(key + " " + strings.Join(args[:last], " "))
+	pkFirst, _, errFirst := proto.ParseAuthorizedKey(key + " " + strings.Join(args[1:], " "))
+	pkLast, _, errLast := proto.ParseAuthorizedKey(key + " " + strings.Join(args[:last], " "))
 	switch {
 	case errFirst == nil && errLast == nil:
 		return "", nil, errors.New("cannot tell the username from the public key; quote the key, for example -k \"ssh-ed25519 AAAA...\"")
@@ -148,7 +147,7 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			be := cmds.be
 			username := args[0]
 			pubkey := strings.Join(args[1:], " ")
-			pk, _, err := sshutils.ParseAuthorizedKey(pubkey)
+			pk, _, err := proto.ParseAuthorizedKey(pubkey)
 			if err != nil {
 				return err
 			}
@@ -166,7 +165,7 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			be := cmds.be
 			username := args[0]
 			pubkey := strings.Join(args[1:], " ")
-			pk, _, err := sshutils.ParseAuthorizedKey(pubkey)
+			pk, _, err := proto.ParseAuthorizedKey(pubkey)
 			if err != nil {
 				return err
 			}
@@ -215,7 +214,7 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			cmd.Printf("Admin: %t\n", isAdmin)
 			cmd.Printf("Public keys:\n")
 			for _, pk := range user.PublicKeys() {
-				cmd.Printf("  %s\n", sshutils.MarshalAuthorizedKey(pk))
+				cmd.Printf("  %s\n", proto.MarshalAuthorizedKey(pk))
 			}
 
 			return nil

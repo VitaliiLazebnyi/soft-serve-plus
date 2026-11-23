@@ -11,10 +11,11 @@ import (
 	"charm.land/glamour/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	vp "github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -123,8 +124,8 @@ type Code struct {
 	ShowLineNumber  bool
 	NoContentStyle  lipgloss.Style
 	UseGlamour      bool
-	// HighlightBudget is each render's common.Budget, nil outside tests.
-	HighlightBudget common.Budget
+	// HighlightBudget is each render's syntax.Budget, nil outside tests.
+	HighlightBudget syntax.Budget
 }
 
 // New returns a new Code.
@@ -139,7 +140,7 @@ func New(c *common.Common, content, extension string) *Code {
 		Viewport:        vp.New(c),
 		NoContentStyle:  c.Styles.NoContent.SetString("No Content."),
 	}
-	r.styleConfig = common.StyleConfig()
+	r.styleConfig = syntax.StyleConfig()
 	return r
 }
 
@@ -173,7 +174,7 @@ func (r *Code) SetMarkdownContent(c, ext string, isMarkdown bool) tea.Cmd {
 // per SetContent.
 func (r *Code) markdown() bool {
 	if r.isMarkdown == nil {
-		md := common.IsFileMarkdown(r.content, r.extension)
+		md := syntax.IsFileMarkdown(r.content, r.extension)
 		r.isMarkdown = &md
 	}
 	return *r.isMarkdown
@@ -363,7 +364,7 @@ type renderJob struct {
 	width       int
 	tabWidth    int
 	styleConfig gansi.StyleConfig
-	budget      common.Budget
+	budget      syntax.Budget
 }
 
 // run renders the content: sanitised, highlighted or rendered as markdown
@@ -373,7 +374,7 @@ func (j renderJob) run() RenderedMsg {
 	var msg RenderedMsg
 	// File contents come from the repository and must not reach the
 	// terminal as escape sequences; chroma and glamour pass them through.
-	content := utils.Sanitize(j.content)
+	content := termtext.Sanitize(j.content)
 	// FIXME chroma & glamour might break wrapping when using tabs since tab
 	// width depends on the terminal. This is a workaround to replace tabs
 	// with spaces.
@@ -394,7 +395,7 @@ func (j renderJob) run() RenderedMsg {
 		strings.Count(content, "\n") <= GlamourMaxLines && markdownNestingOK(content) {
 		md := j.isMarkdown
 		if md == nil {
-			v := common.IsFileMarkdown(content, j.extension)
+			v := syntax.IsFileMarkdown(content, j.extension)
 			md = &v
 			msg.markdown = md
 		}
@@ -432,7 +433,7 @@ func (j renderJob) run() RenderedMsg {
 	}
 	highlighted := false
 	if small && longest <= HighlightLineMax && strings.Count(content, "\n") <= HighlightMaxLines {
-		if out, ok := common.Highlight(j.styleConfig, j.extension, content, j.lineNumbers, j.budget); ok {
+		if out, ok := syntax.Highlight(j.styleConfig, j.extension, content, j.lineNumbers, j.budget); ok {
 			content, highlighted = out, true
 		}
 	}

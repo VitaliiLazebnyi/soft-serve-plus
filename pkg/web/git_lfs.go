@@ -18,8 +18,8 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -59,7 +59,7 @@ func (s *server) lfsActionAuthFor(r *http.Request, logger *log.Logger, repo stri
 		return lfsActionAuth{}
 	}
 
-	claims, err := s.parseJWT(logger, credential, []string{utils.SanitizeRepo(repo)})
+	claims, err := s.parseJWT(logger, credential, []string{proto.SanitizeRepo(repo)})
 	if err != nil {
 		return lfsActionAuth{}
 	}

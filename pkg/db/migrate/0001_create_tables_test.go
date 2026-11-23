@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/internal/test"
 )
 
 // openLegacySqlite opens a sqlite database holding a Soft Serve v0.6 "user"
 // table with the given users, which the first migration imports.
 func openLegacySqlite(t *testing.T, ctx context.Context, users ...ownerRow) *db.DB {
 	t.Helper()
-	dbx, err := test.OpenSqlite(ctx, t)
+	dbx, err := dbtest.OpenSqlite(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestFirstMigrationMarksRecordedKeysOnlyWithoutLegacyTables(t *testing.T) {
 		t.Errorf("logs = %q; want a warning about the imported admin key", logs)
 	}
 
-	fresh, err := test.OpenSqlite(ctx, t)
+	fresh, err := dbtest.OpenSqlite(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}

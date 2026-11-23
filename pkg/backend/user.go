@@ -8,12 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -24,7 +23,7 @@ func (d *Backend) IsAdminKey(pk ssh.PublicKey) bool {
 		return false
 	}
 	for _, k := range d.cfg.AdminKeys() {
-		if sshutils.KeysEqual(pk, k) {
+		if proto.KeysEqual(pk, k) {
 			return true
 		}
 	}
@@ -45,7 +44,7 @@ func (d *Backend) IsServerAdmin(ctx context.Context, user proto.User) bool {
 	if isAccountAdmin(user) {
 		return true
 	}
-	return d.IsAdminKey(sshutils.PublicKeyFromContext(ctx))
+	return d.IsAdminKey(proto.PublicKeyFromContext(ctx))
 }
 
 // isAccountAdmin reports whether user's account has the admin flag. Readable
@@ -108,7 +107,7 @@ func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.U
 
 // readable is Readable with the caller's admin status already decided.
 func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel, error) {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	r, collab, err := d.repositoryWithCollab(ctx, name, user)
 	if err != nil {
 		return nil, access.NoAccess, fmt.Errorf("look up repository %q: %w", name, err)
@@ -321,7 +320,7 @@ func (d *Backend) ReadableRepositoriesForUser(ctx context.Context, user proto.Us
 // User finds a user by username.
 func (d *Backend) User(ctx context.Context, username string) (proto.User, error) {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return nil, err
 	}
 
@@ -426,7 +425,7 @@ func (d *Backend) UserByPublicKey(ctx context.Context, pk ssh.PublicKey) (proto.
 	// refused with an error saying how to fix it.
 	if !m.Admin && d.IsAdminKey(pk) {
 		d.logger.Warn("admin key is owned by a non-admin account; refusing sessions with it until an admin runs `user set-admin` on that account or removes the key from it",
-			"username", m.Username, "pk", sshutils.MarshalAuthorizedKey(pk))
+			"username", m.Username, "pk", proto.MarshalAuthorizedKey(pk))
 		return nil, &AdminKeyNonAdminOwnerError{Username: m.Username}
 	}
 
@@ -491,7 +490,7 @@ func (d *Backend) Users(ctx context.Context) ([]string, error) {
 // AddPublicKey adds a public key to a user.
 func (d *Backend) AddPublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -545,9 +544,9 @@ func (d *Backend) AddOwnPublicKey(ctx context.Context, user proto.User, sessionK
 
 // CreateUser creates a new user.
 func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.UserOptions) (proto.User, error) {
-	username = utils.Sanitize(username)
+	username = termtext.Sanitize(username)
 	username = strings.ToLower(username)
-	if err := utils.ValidateNewUsername(username); err != nil {
+	if err := proto.ValidateNewUsername(username); err != nil {
 		return nil, err
 	}
 
@@ -563,7 +562,7 @@ func (d *Backend) CreateUser(ctx context.Context, username string, opts proto.Us
 // DeleteUser deletes a user.
 func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -605,7 +604,7 @@ func (d *Backend) DeleteUser(ctx context.Context, username string) error {
 // RemovePublicKey removes a public key from a user.
 func (d *Backend) RemovePublicKey(ctx context.Context, username string, pk ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -647,7 +646,7 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, user proto.User, pk ss
 			return err
 		}
 		if len(keys) <= 1 && slices.ContainsFunc(keys, func(k ssh.PublicKey) bool {
-			return sshutils.KeysEqual(k, pk)
+			return proto.KeysEqual(k, pk)
 		}) {
 			return ErrLastPublicKey
 		}
@@ -658,7 +657,7 @@ func (d *Backend) RemoveOwnPublicKey(ctx context.Context, user proto.User, pk ss
 // SetUsername sets the username of a user.
 func (d *Backend) SetUsername(ctx context.Context, username string, newUsername string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -683,7 +682,7 @@ func (d *Backend) SetOwnUsername(ctx context.Context, user proto.User, newUserna
 // SetAdmin sets the admin flag of a user.
 func (d *Backend) SetAdmin(ctx context.Context, username string, admin bool) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 

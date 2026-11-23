@@ -21,7 +21,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v4"
@@ -1162,7 +1162,7 @@ func (c *Config) parseLists() error {
 	keys := parseAuthKeys(c.InitialAdminKeys, c.DataPath)
 	pks := make([]string, 0, len(keys.pks))
 	for _, key := range keys.pks {
-		pks = append(pks, sshutils.MarshalAuthorizedKey(key))
+		pks = append(pks, proto.MarshalAuthorizedKey(key))
 	}
 	c.InitialAdminKeys = pks
 	c.adminKeys = keys.pks
@@ -1222,7 +1222,7 @@ func parseAuthKeys(aks []string, dataPath string) authKeys {
 				if line == "" || strings.HasPrefix(line, "#") {
 					continue
 				}
-				pk, _, err := sshutils.ParseAuthorizedKey(line)
+				pk, _, err := proto.ParseAuthorizedKey(line)
 				if err != nil {
 					bad = append(bad, line)
 					continue
@@ -1244,7 +1244,7 @@ func parseAuthKeys(aks []string, dataPath string) authKeys {
 			continue
 		}
 
-		pk, _, err := sshutils.ParseAuthorizedKey(key)
+		pk, _, err := proto.ParseAuthorizedKey(key)
 		switch {
 		case err == nil:
 			// Compare the key itself, not its text: a key file, a comment

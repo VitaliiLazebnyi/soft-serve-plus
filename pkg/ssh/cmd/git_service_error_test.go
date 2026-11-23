@@ -11,7 +11,6 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 )
 
 // requestSession is an ssh.Session whose SendRequest fails with err, as a
@@ -41,7 +40,7 @@ func TestGitServiceErrorClosedChannel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
-			ctx := context.WithValue(t.Context(), sshutils.ContextKeySession, ssh.Session(requestSession{err: tc.sendErr}))
+			ctx := context.WithValue(t.Context(), ContextKeySession, ssh.Session(requestSession{err: tc.sendErr}))
 
 			err := gitServiceError(ctx, logger, gitserve.UploadPackService, "r", failed)
 			if tc.gone {

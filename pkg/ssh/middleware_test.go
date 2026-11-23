@@ -17,7 +17,6 @@ import (
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -203,7 +202,7 @@ func TestAuthenticationRefusesClaimedAdminKey(t *testing.T) {
 	adminKey := newSigner(t)
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(adminKey.PublicKey())}
+	cfg.InitialAdminKeys = []string{proto.MarshalAuthorizedKey(adminKey.PublicKey())}
 	addr, ctx := startTestServer(t, cfg)
 	be := depsOf(ctx).be
 

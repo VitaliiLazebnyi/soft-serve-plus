@@ -11,7 +11,6 @@ import (
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -67,7 +66,7 @@ func TestPubkeyAddNeedsProof(t *testing.T) {
 	}
 
 	key := newEd25519Signer(t)
-	authorized := sshutils.MarshalAuthorizedKey(key.PublicKey())
+	authorized := proto.MarshalAuthorizedKey(key.PublicKey())
 	other := newEd25519Signer(t)
 	for _, tc := range []struct {
 		name  string
@@ -94,13 +93,13 @@ func TestPubkeyAddNeedsProof(t *testing.T) {
 	// echo ends the name with a newline; that is accepted too.
 	key2 := newEd25519Signer(t)
 	_, err = runPubkeyIn(aliceCtx, sshsigSign(t, key2, pubkeyProofNamespace, "sha256", "", []byte("alice\n")), "add",
-		sshutils.MarshalAuthorizedKey(key2.PublicKey()))
+		proto.MarshalAuthorizedKey(key2.PublicKey()))
 	is.NoErr(err)
 	is.Equal(keysOf("alice"), 3)
 
 	// An admin attaches keys without a proof.
 	adminCtx, _ := keySession(t, ctx, be, "boss", true)
-	_, err = runPubkeyIn(adminCtx, nil, "add", sshutils.MarshalAuthorizedKey(newEd25519Signer(t).PublicKey()))
+	_, err = runPubkeyIn(adminCtx, nil, "add", proto.MarshalAuthorizedKey(newEd25519Signer(t).PublicKey()))
 	is.NoErr(err)
 	is.Equal(keysOf("boss"), 2)
 }
@@ -115,7 +114,7 @@ func TestPubkeyAddTakenKeyIsGeneric(t *testing.T) {
 	adminCtx, _ := keySession(t, ctx, be, "boss", true)
 
 	key := newEd25519Signer(t)
-	authorized := sshutils.MarshalAuthorizedKey(key.PublicKey())
+	authorized := proto.MarshalAuthorizedKey(key.PublicKey())
 	_, err := be.CreateUser(ctx, "victim", proto.UserOptions{PublicKeys: []gossh.PublicKey{key.PublicKey()}})
 	is.NoErr(err)
 
@@ -129,7 +128,7 @@ func TestPubkeyAddTakenKeyIsGeneric(t *testing.T) {
 	}
 	// The caller's own key gets the same answer.
 	_, err = runPubkeyIn(aliceCtx, proofFor(t, aliceKey, "alice"), "add",
-		sshutils.MarshalAuthorizedKey(aliceKey.PublicKey()))
+		proto.MarshalAuthorizedKey(aliceKey.PublicKey()))
 	is.True(errors.Is(err, errPubkeyTaken))
 }
 
@@ -146,11 +145,11 @@ func TestPubkeyAddAfterSessionKeyRemoved(t *testing.T) {
 	is.NoErr(be.AddPublicKey(ctx, "alice", keep.PublicKey()))
 
 	// The admin removes the session's key, as after it was compromised.
-	is.NoErr(be.RemovePublicKey(ctx, "alice", sshutils.PublicKeyFromContext(aliceCtx)))
+	is.NoErr(be.RemovePublicKey(ctx, "alice", proto.PublicKeyFromContext(aliceCtx)))
 
 	key := newEd25519Signer(t)
 	for _, sess := range []context.Context{aliceCtx, proto.WithUserContext(adminCtx, proto.UserFromContext(aliceCtx))} {
-		_, err := runPubkeyIn(sess, proofFor(t, key, "alice"), "add", sshutils.MarshalAuthorizedKey(key.PublicKey()))
+		_, err := runPubkeyIn(sess, proofFor(t, key, "alice"), "add", proto.MarshalAuthorizedKey(key.PublicKey()))
 		is.True(errors.Is(err, backend.ErrSessionKeyRemoved))
 	}
 	u, err := be.User(ctx, "alice")

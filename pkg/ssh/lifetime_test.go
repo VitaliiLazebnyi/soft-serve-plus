@@ -9,7 +9,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -29,7 +28,7 @@ func startLifetimeServer(t *testing.T, lifetime time.Duration) lifetimeServer {
 	ls := lifetimeServer{alice: newSigner(t), admin: newSigner(t)}
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	cfg.InitialAdminKeys = []string{sshutils.MarshalAuthorizedKey(ls.admin.PublicKey())}
+	cfg.InitialAdminKeys = []string{proto.MarshalAuthorizedKey(ls.admin.PublicKey())}
 	ctx := serverContext(t, cfg, log.Default())
 	s, err := newTestSSHServer(ctx)
 	if err != nil {

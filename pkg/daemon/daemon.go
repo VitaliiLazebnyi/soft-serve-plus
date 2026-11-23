@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -510,7 +510,7 @@ func parseRequest(line []byte) (gitRequest, error) {
 
 	req := gitRequest{
 		service: service,
-		name:    utils.SanitizeRepo(string(opts[0])),
+		name:    proto.SanitizeRepo(string(opts[0])),
 		host:    strings.TrimPrefix(string(opts[1]), "host="),
 	}
 	if len(opts) > 2 {

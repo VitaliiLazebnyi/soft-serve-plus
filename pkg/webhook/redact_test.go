@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/matryer/is"
 )
 
@@ -48,7 +48,7 @@ func TestRedactURLErrorKeepsChain(t *testing.T) {
 	is := is.New(t)
 	in := &url.Error{Op: "Post", URL: "https://hooks.slack.com/services/T000/B000/XXXX", Err: context.DeadlineExceeded}
 
-	err := utils.RedactURLError(in, redactURL)
+	err := ssrf.RedactURLError(in, redactURL)
 	is.True(!strings.Contains(err.Error(), "XXXX"))
 	is.True(!strings.Contains(err.Error(), "services"))
 	is.True(strings.Contains(err.Error(), "hooks.slack.com"))
@@ -62,17 +62,17 @@ func TestRedactURLErrorKeepsChain(t *testing.T) {
 	_, perr := url.Parse("https://example.com:SECRETPORT/x") //nolint:staticcheck // invalid on purpose
 	is.True(perr != nil)
 	is.True(strings.Contains(perr.Error(), "SECRETPORT"))
-	rerr := utils.RedactURLError(perr, redactURL)
+	rerr := ssrf.RedactURLError(perr, redactURL)
 	is.True(!strings.Contains(rerr.Error(), "SECRETPORT"))
-	is.True(errors.Is(rerr, utils.ErrInvalidURL))
+	is.True(errors.Is(rerr, ssrf.ErrInvalidURL))
 	is.True(errors.Is(rerr, ErrInvalidURL))              // the same error, through ssrf
 	_, perr = url.Parse("https://example.com/%zzSECRET") //nolint:staticcheck // invalid on purpose
 	is.True(perr != nil)
-	is.True(!strings.Contains(utils.RedactURLError(perr, redactURL).Error(), "zz"))
+	is.True(!strings.Contains(ssrf.RedactURLError(perr, redactURL).Error(), "zz"))
 
 	other := errors.New("other")
-	is.Equal(utils.RedactURLError(other, redactURL), other)
-	is.Equal(utils.RedactURLError(nil, redactURL), nil)
+	is.Equal(ssrf.RedactURLError(other, redactURL), other)
+	is.Equal(ssrf.RedactURLError(nil, redactURL), nil)
 }
 
 // secretPath and secretQuery stand for the tokens receivers such as Slack put
@@ -178,7 +178,7 @@ func TestDeliverUnparsableURLRedactsURL(t *testing.T) {
 
 	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
 	is.True(err != nil)
-	is.True(errors.Is(err, utils.ErrInvalidURL))
+	is.True(errors.Is(err, ssrf.ErrInvalidURL))
 	is.Equal(err.Error(), fmt.Sprintf("webhook %d: parse \"[redacted]\": invalid URL", w.ID))
 	assertRedacted(err.Error())
 

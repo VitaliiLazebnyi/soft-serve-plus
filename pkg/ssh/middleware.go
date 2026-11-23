@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/spf13/cobra"
@@ -373,7 +372,7 @@ func redactURLArg(arg string) string {
 // OpenSSH with ControlMaster) would otherwise have each session read another
 // session's environment, e.g. its GIT_PROTOCOL.
 func sessionContext(s ssh.Session) context.Context {
-	return context.WithValue(s.Context(), sshutils.ContextKeySession, s)
+	return context.WithValue(s.Context(), cmd.ContextKeySession, s)
 }
 
 // unknownCommand is the metric label for a command the server does not have.
@@ -415,7 +414,7 @@ func (srv *Server) loggingMiddleware(sh ssh.Handler) ssh.Handler {
 		}
 
 		ct := time.Now()
-		hpk := sshutils.MarshalAuthorizedKey(s.PublicKey())
+		hpk := proto.MarshalAuthorizedKey(s.PublicKey())
 		ptyReq, _, isPty := s.Pty()
 		addr := s.RemoteAddr().String()
 		user := proto.UserFromContext(ctx)

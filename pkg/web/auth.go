@@ -10,7 +10,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -85,7 +84,7 @@ func (s *server) parseUsernamePassword(ctx context.Context, logger *log.Logger, 
 	// the username, so the username is logged only when it is a valid one:
 	// tokens ("ss_...") and JWTs never are. The client address is already
 	// on the request logger.
-	if utils.ValidateUsername(username) == nil {
+	if proto.ValidateUsername(username) == nil {
 		logger = logger.With("username", username)
 	}
 
@@ -181,7 +180,7 @@ func (s *server) parseAuthHdr(r *http.Request, reqLogger *log.Logger, repos []st
 		// lookup would refuse it with an error that is not
 		// proto.ErrUserNotFound.
 		parts := strings.SplitN(claims.Subject, "#", 2)
-		if len(parts) != 2 || utils.ValidateUsername(parts[0]) != nil {
+		if len(parts) != 2 || proto.ValidateUsername(parts[0]) != nil {
 			logger.Info("invalid jwt subject", "subject", claims.Subject)
 			return nil, nil, errInvalidToken
 		}
