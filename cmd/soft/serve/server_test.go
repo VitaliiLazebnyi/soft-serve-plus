@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/dsa" //nolint:staticcheck // the test needs a DSA key
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
 	"errors"
@@ -1015,30 +1018,66 @@ func TestReadmeStopMatchesDrain(t *testing.T) {
 	}
 }
 
-// A host key the token signer cannot use, here a DSA key, which the SSH
-// library would still serve, stops the server at start: the SSH server
+// A host key the server cannot use stops it at start: the SSH server
 // presents the key the tokens are signed with, so there is no serving SSH
-// without it (tracker 343(a)).
+// without one that signs tokens too (tracker 343(a)). There are two gates:
+//   - a DSA key, which the SSH library would still serve, is refused by the
+//     config loader before any signer is built;
+//   - an ECDSA key on P-224, which the config loader accepts, is refused by
+//     jwk.NewSigner, so this case is the one that reaches the signer check.
 func TestNewServerRefusesUnusableHostKey(t *testing.T) {
-	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
-	ctx = backend.WithContext(ctx, be)
-	ctx = db.WithContext(ctx, dbx)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
-	if err := os.MkdirAll(filepath.Dir(cfg.SSH.KeyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfg.SSH.KeyPath, dsaKeyPEM(t), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	for _, tc := range []struct {
+		name  string
+		key   func(*testing.T) []byte
+		check func(*testing.T, error)
+	}{
+		{"dsa refused by the config loader", dsaKeyPEM, func(t *testing.T, err error) {
+			t.Helper()
+			if !strings.Contains(err.Error(), "unsupported key type") {
+				t.Errorf("NewServer: %v, want the config loader's unsupported key type error", err)
+			}
+		}},
+		{"ecdsa p-224 refused by the token signer", p224KeyPEM, func(t *testing.T, err error) {
+			t.Helper()
+			if !errors.Is(err, jwk.ErrHostKey) {
+				t.Errorf("NewServer: %v, want the token signer's error wrapping %v", err, jwk.ErrHostKey)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cfg, be, dbx := setupTestBackendWithDB(t)
+			ctx = backend.WithContext(ctx, be)
+			ctx = db.WithContext(ctx, dbx)
+			ctx = log.WithContext(ctx, log.New(io.Discard))
+			if err := os.MkdirAll(filepath.Dir(cfg.SSH.KeyPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(cfg.SSH.KeyPath, tc.key(t), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	s, err := NewServer(ctx)
-	if err == nil {
-		_ = s.Close()
-		t.Fatal("NewServer started with a DSA host key")
+			s, err := NewServer(ctx)
+			if err == nil {
+				_ = s.Close()
+				t.Fatal("NewServer started with an unusable host key")
+			}
+			tc.check(t, err)
+		})
 	}
-	if !strings.Contains(err.Error(), "unsupported key type") {
-		t.Errorf("NewServer: %v, want an unsupported key type error", err)
+}
+
+// p224KeyPEM returns a new ECDSA private key on P-224 in SEC 1 PEM form.
+func p224KeyPEM(t *testing.T) []byte {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
+	der, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
 }
 
 // dsaKeyPEM returns a new DSA private key in the PEM form OpenSSH wrote.
