@@ -133,6 +133,14 @@ func TestSelectFileSizeLimit(t *testing.T) {
 	if msg, ok := sel("bin.dat").(errorMsg); !ok || !errors.Is(msg.err, errBinaryFile) {
 		t.Errorf("bin.dat: got %#v, want errBinaryFile", msg)
 	}
+
+	// A file is read through the repository the load opens, under the
+	// load's context, so a repository that no longer opens fails the load
+	// rather than reading through the listing's.
+	f.repo = openRepo{path: filepath.Join(dir, "missing")}
+	if msg := sel("small.txt"); !isErrorMsg(msg) {
+		t.Errorf("small.txt in a repository that does not open: got %T, want errorMsg", msg)
+	}
 }
 
 // A file listing that fails to load must report an ErrorMsg, so the error is
@@ -340,5 +348,11 @@ func TestFilesNonASCIIName(t *testing.T) {
 
 func isBlame(msg any) bool {
 	_, ok := msg.(FileBlameMsg)
+	return ok
+}
+
+// isErrorMsg reports whether msg is an errorMsg.
+func isErrorMsg(msg any) bool {
+	_, ok := msg.(errorMsg)
 	return ok
 }

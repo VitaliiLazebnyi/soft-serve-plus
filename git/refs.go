@@ -36,10 +36,19 @@ func (r *Repository) StashList() ([]*git.Stash, error) {
 	return r.gm.StashList(git.StashListOptions{CommandOptions: git.CommandOptions{Context: r.ctx}})
 }
 
-// Tags returns the names of the repository's tags, newest version first, as
-// git-module sorts them.
+// Tags returns the names of the repository's tags, the most recently
+// created first.
+//
+// It runs git tag itself rather than git-module's Tags, which first runs
+// `git version` without a context, to choose a sort git has had since 2.5,
+// and keeps a failure of it for the life of the process.
 func (r *Repository) Tags() ([]string, error) {
-	return r.gm.Tags(git.TagsOptions{CommandOptions: git.CommandOptions{Context: r.ctx}})
+	out, err := NewCommandWithContext(r.ctx, "tag", "--list", "--sort=-creatordate").RunInDir(r.Path)
+	if err != nil {
+		return nil, err
+	}
+	tags := strings.Split(string(out), "\n")
+	return tags[:len(tags)-1], nil
 }
 
 // ShowRefVerify returns the object ID the full ref name refspec, such as
