@@ -1,3 +1,7 @@
+// Package git reads git repositories for the server and soft browse:
+// references, commits, trees, blobs, diffs and blame, through git-module and
+// the git binary, bounded in time by the caller's context and in size by
+// the package's limits.
 package git
 
 import (

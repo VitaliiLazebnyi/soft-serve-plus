@@ -20,7 +20,7 @@ import (
 // tree`, and ten thousand lines are already more than anyone scrolls.
 // Together with maxTreeTextBytes it bounds the memory of one listing to a few
 // MiB (an entry costs about two hundred bytes plus its name and its path),
-// where a tree with half a million entries used to cost hundreds of MiB.
+// whatever the size of the tree.
 const MaxTreeEntries = 10_000
 
 // maxTreeTextBytes is the most bytes of names and paths a directory listing

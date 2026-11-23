@@ -1,3 +1,6 @@
+// Package ssh is the server's SSH transport: authentication, connection
+// and session limits, and the middleware that runs git, the commands of
+// pkg/ssh/cmd or the TUI for each session.
 package ssh
 
 import (
@@ -139,7 +142,8 @@ func newServer(cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backe
 		wish.WithMiddleware(mw...),
 	}
 
-	// TODO: Support a real PTY in future version.
+	// The server allocates no real pty: sessions that ask for one get an
+	// emulated pty, which is all the TUI needs.
 	opts = append(opts, ssh.EmulatePty())
 
 	s.srv, err = wish.NewServer(opts...)

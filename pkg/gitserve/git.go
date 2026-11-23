@@ -1,3 +1,6 @@
+// Package gitserve runs git's server side for the transports: the
+// upload-pack, upload-archive and receive-pack services, their environment,
+// and the pkt-line errors sent to clients.
 package gitserve
 
 import (

@@ -118,7 +118,7 @@ var patchArgs = []string{"--binary"}
 // diffCommand returns a diff-tree command with diffArgs, mode (diffViewArgs
 // or patchArgs) and then args. It is plumbing, so porcelain settings such
 // as diff.noprefix do not change it; user and system config are left out
-// too, as before.
+// too.
 func (r *Repository) diffCommand(mode []string, args ...string) *git.Command {
 	return git.NewCommand("-c", "core.quotePath=false", "diff-tree").
 		AddOptions(git.CommandOptions{

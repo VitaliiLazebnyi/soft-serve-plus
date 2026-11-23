@@ -171,7 +171,7 @@ func gitAccess(anonymous bool, repo proto.Repository, have, need access.Level) e
 }
 
 // gitLookupFailed logs err, from looking up repository repo, and returns
-// git.ErrSystemMalfunction for the client: the lookup failed, so the
+// gitserve.ErrSystemMalfunction for the client: the lookup failed, so the
 // repository is neither known missing nor known unreadable. A lookup the
 // client canceled is logged at Debug.
 func gitLookupFailed(ctx context.Context, logger *log.Logger, repo string, err error) error {
@@ -617,7 +617,7 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service gitserve
 // beginPush marks a push or LFS upload of r to repo as running; see
 // backend.BeginPush. A repository gone or replaced meanwhile is
 // proto.ErrRepoNotFound; a failed lookup of it is logged, and the client
-// gets git.ErrSystemMalfunction (see gitLookupFailed).
+// gets gitserve.ErrSystemMalfunction (see gitLookupFailed).
 func (cmds *Commands) beginPush(r *gitRequest, repo proto.Repository) (func(), error) {
 	if cmds.beforeBeginPush != nil {
 		cmds.beforeBeginPush()
