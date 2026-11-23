@@ -83,3 +83,56 @@ func TestServerConnDeadlineSubSecond(t *testing.T) {
 		})
 	}
 }
+
+// moveConn records the deadlines set on it, and takes every write and
+// answers every read at once.
+type moveConn struct {
+	net.Conn
+	deadlines []time.Time
+}
+
+func (c *moveConn) SetDeadline(t time.Time) error {
+	c.deadlines = append(c.deadlines, t)
+	return nil
+}
+
+func (c *moveConn) Write(p []byte) (int, error) { return len(p), nil }
+func (c *moveConn) Read(p []byte) (int, error)  { return len(p), nil }
+
+// TestServerConnMovesIdleDeadline checks that every read and every write
+// after the request moves the connection's deadline to the idle timeout
+// from then, so that upload-pack's keepalives keep a quiet fetch from
+// reaching the idle timeout, which TestQuietCloneSlowPack, whose connection
+// keeps no deadlines, cannot show.
+//
+// Each deadline is compared with the time taken before the call, so a
+// stall only moves it later.
+func TestServerConnMovesIdleDeadline(t *testing.T) {
+	t.Parallel()
+	const idle = time.Hour
+	for _, op := range []string{"read", "write"} {
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			mc := &moveConn{}
+			c := &serverConn{Conn: mc, idleTimeout: idle}
+			for i := 1; i <= 3; i++ {
+				before := time.Now()
+				var err error
+				if op == "read" {
+					_, err = c.Read(make([]byte, 5))
+				} else {
+					_, err = c.Write([]byte("0005\x01"))
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(mc.deadlines) != i {
+					t.Fatalf("after %d %ss, %d deadlines set, want %d", i, op, len(mc.deadlines), i)
+				}
+				if got, want := mc.deadlines[i-1], before.Add(idle); got.Before(want) {
+					t.Fatalf("%s %d: deadline %v, want the idle timeout after the %s, from %v", op, i, got, op, want)
+				}
+			}
+		})
+	}
+}
