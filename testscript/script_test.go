@@ -964,12 +964,12 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 		Use:  "curl",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			url, err := url.Parse(args[0])
+			u, err := url.Parse(args[0])
 			if err != nil {
 				return err
 			}
 
-			req, err := http.NewRequest(method, url.String(), nil) //nolint:noctx
+			req, err := http.NewRequest(method, u.String(), nil) //nolint:noctx
 			if err != nil {
 				return err
 			}
@@ -979,7 +979,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, u.String())
 			}
 
 			for _, header := range headers {
@@ -990,7 +990,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 				req.Header.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
 			}
 
-			if userInfo := url.User; userInfo != nil {
+			if userInfo := u.User; userInfo != nil {
 				password, _ := userInfo.Password()
 				req.SetBasicAuth(userInfo.Username(), password)
 			}

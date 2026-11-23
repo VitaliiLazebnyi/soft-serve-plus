@@ -58,14 +58,14 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 				return err
 			}
 
-			table := table.New().Headers("ID", "URL", "Events", "Active", "Created At", "Updated At")
+			tbl := table.New().Headers("ID", "URL", "Events", "Active", "Created At", "Updated At")
 			for _, h := range webhooks {
 				events := make([]string, len(h.Events))
 				for i, e := range h.Events {
 					events[i] = e.String()
 				}
 
-				table = table.Row(
+				tbl = tbl.Row(
 					strconv.FormatInt(h.ID, 10),
 					termtext.Sanitize(h.URL),
 					strings.Join(events, ","),
@@ -74,7 +74,7 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 					humanize.Time(h.UpdatedAt),
 				)
 			}
-			cmd.Println(table)
+			cmd.Println(tbl)
 			return nil
 		}),
 	}
@@ -281,20 +281,20 @@ func (cmds *Commands) webhookDeliveriesListCommand() *cobra.Command {
 				return err
 			}
 
-			table := table.New().Headers("Status", "ID", "Event", "Created At")
+			tbl := table.New().Headers("Status", "ID", "Event", "Created At")
 			for _, d := range dels {
 				status := "❌"
 				if d.ResponseStatus >= 200 && d.ResponseStatus < 300 {
 					status = "✅"
 				}
-				table = table.Row(
+				tbl = tbl.Row(
 					status,
 					d.ID.String(),
 					d.Event.String(),
 					humanize.Time(d.CreatedAt),
 				)
 			}
-			cmd.Println(table)
+			cmd.Println(tbl)
 			return nil
 		}),
 	}

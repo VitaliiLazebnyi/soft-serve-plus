@@ -62,12 +62,12 @@ func TestMethodNotAllowed(t *testing.T) {
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
 
-	for _, proto := range []struct {
+	for _, tc := range []struct {
 		name         string
 		major, minor int
 	}{{"HTTP/1.0", 1, 0}, {"HTTP/1.1", 1, 1}, {"HTTP/2.0", 2, 0}} {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/secret.git/info/lfs/objects/batch", nil)
-		req.Proto, req.ProtoMajor, req.ProtoMinor = proto.name, proto.major, proto.minor
+		req.Proto, req.ProtoMajor, req.ProtoMinor = tc.name, tc.major, tc.minor
 		w := httptest.NewRecorder()
 		f.handler.ServeHTTP(w, req)
 		is.Equal(w.Code, http.StatusMethodNotAllowed)
