@@ -377,7 +377,7 @@ func (m *MirrorPull) syncMirrorRepo(jobCtx context.Context, name string) (err er
 	// refused: objects are fetched over http(s) only.
 	if v.Transport == ssrf.GitTransportSSH {
 		logger.Warn("skipping lfs sync", "repo", name, "err", lfs.ErrUnsupportedEndpoint)
-		return
+		return nil
 	}
 
 	ep, err := lfs.NewEndpoint(lfsEndpoint)

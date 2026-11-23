@@ -91,14 +91,12 @@ func New(c *common.Common) *Selection {
 }
 
 func (s *Selection) getMargins() (wm, hm int) {
-	wm = 0
-	hm = s.common.Styles.Tabs.GetVerticalFrameSize() +
-		s.common.Styles.Tabs.GetHeight()
 	if s.activePane == selectorPane && s.IsFiltering() {
 		// hide tabs when filtering
-		hm = 0
+		return 0, 0
 	}
-	return
+	return 0, s.common.Styles.Tabs.GetVerticalFrameSize() +
+		s.common.Styles.Tabs.GetHeight()
 }
 
 // FilterState returns the current filter state.

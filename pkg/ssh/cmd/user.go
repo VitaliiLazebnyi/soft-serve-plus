@@ -59,9 +59,26 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 		PersistentPreRunE: cmds.checkIfServerAdmin,
 	}
 
+	cmd.AddCommand(
+		cmds.userCreateCommand(),
+		cmds.userAddPubkeyCommand(),
+		cmds.userInfoCommand(),
+		cmds.userListCommand(),
+		cmds.userDeleteCommand(),
+		cmds.userRemovePubkeyCommand(),
+		cmds.userSetAdminCommand(),
+		cmds.userSetUsernameCommand(),
+	)
+
+	return cmd
+}
+
+// userCreateCommand returns "user create", which creates a user, an admin
+// with -a, with the public key given with -k.
+func (cmds *Commands) userCreateCommand() *cobra.Command {
 	var admin bool
 	var key string
-	userCreateCommand := &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "create USERNAME",
 		Short: "Create a new user",
 		// The SSH server splits the remote command on spaces, so an
@@ -100,10 +117,14 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 		},
 	}
 
-	userCreateCommand.Flags().BoolVarP(&admin, "admin", "a", false, "make the user an admin")
-	userCreateCommand.Flags().StringVarP(&key, "key", "k", "", "add a public key to the user")
+	cmd.Flags().BoolVarP(&admin, "admin", "a", false, "make the user an admin")
+	cmd.Flags().StringVarP(&key, "key", "k", "", "add a public key to the user")
+	return cmd
+}
 
-	userDeleteCommand := &cobra.Command{
+// userDeleteCommand returns "user delete", which deletes a user.
+func (cmds *Commands) userDeleteCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "delete USERNAME",
 		Short: "Delete a user",
 		Args:  cobra.ExactArgs(1),
@@ -115,8 +136,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return be.DeleteUser(ctx, username)
 		},
 	}
+}
 
-	userListCommand := &cobra.Command{
+// userListCommand returns "user list", which lists the users.
+func (cmds *Commands) userListCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List users",
@@ -137,8 +161,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
 
-	userAddPubkeyCommand := &cobra.Command{
+// userAddPubkeyCommand returns "user add-pubkey", which adds a public key to a user.
+func (cmds *Commands) userAddPubkeyCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "add-pubkey USERNAME AUTHORIZED_KEY",
 		Short: "Add a public key to a user",
 		Args:  cobra.MinimumNArgs(2),
@@ -155,8 +182,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return be.AddPublicKey(ctx, username, pk)
 		},
 	}
+}
 
-	userRemovePubkeyCommand := &cobra.Command{
+// userRemovePubkeyCommand returns "user remove-pubkey", which removes a public key from a user.
+func (cmds *Commands) userRemovePubkeyCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "remove-pubkey USERNAME AUTHORIZED_KEY",
 		Short: "Remove a public key from a user",
 		Args:  cobra.MinimumNArgs(2),
@@ -173,8 +203,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return be.RemovePublicKey(ctx, username, pk)
 		},
 	}
+}
 
-	userSetAdminCommand := &cobra.Command{
+// userSetAdminCommand returns "user set-admin", which makes a user an admin, or not.
+func (cmds *Commands) userSetAdminCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "set-admin USERNAME [true|false]",
 		Short: "Make a user an admin",
 		Args:  cobra.ExactArgs(2),
@@ -190,8 +223,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return be.SetAdmin(ctx, username, admin)
 		},
 	}
+}
 
-	userInfoCommand := &cobra.Command{
+// userInfoCommand returns "user info", which shows a user.
+func (cmds *Commands) userInfoCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "info USERNAME",
 		Short: "Show information about a user",
 		Args:  cobra.ExactArgs(1),
@@ -220,8 +256,11 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
 
-	userSetUsernameCommand := &cobra.Command{
+// userSetUsernameCommand returns "user set-username", which renames a user.
+func (cmds *Commands) userSetUsernameCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "set-username USERNAME NEW_USERNAME",
 		Short: "Change a user's username",
 		Args:  cobra.ExactArgs(2),
@@ -234,17 +273,4 @@ func (cmds *Commands) UserCommand() *cobra.Command {
 			return be.SetUsername(ctx, username, newUsername)
 		},
 	}
-
-	cmd.AddCommand(
-		userCreateCommand,
-		userAddPubkeyCommand,
-		userInfoCommand,
-		userListCommand,
-		userDeleteCommand,
-		userRemovePubkeyCommand,
-		userSetAdminCommand,
-		userSetUsernameCommand,
-	)
-
-	return cmd
 }
