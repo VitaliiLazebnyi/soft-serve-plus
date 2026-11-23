@@ -22,6 +22,7 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -1395,4 +1396,386 @@ func TestSendWebhookCapsStoredResponseHeaders(t *testing.T) {
 	is.Equal(ds[0].ResponseStatus, http.StatusOK)
 	is.True(len(ds[0].ResponseHeaders) <= maxStoredHeaders+len(truncatedHeadersMarker))
 	is.True(strings.HasSuffix(ds[0].ResponseHeaders, truncatedHeadersMarker))
+}
+
+func TestRedactURL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"https://hooks.slack.com/services/T000/B000/XXXX", "https://hooks.slack.com/[redacted]"},
+		{"https://example.com/hook?token=XXXX", "https://example.com/[redacted]"},
+		{"https://example.com?token=XXXX", "https://example.com/[redacted]"},
+		{"https://example.com/#XXXX", "https://example.com/[redacted]"},
+		{"https://user:XXXX@example.com:8443/", "https://example.com:8443"},
+		// net/http prints a username in full (only a password is masked).
+		{"https://XXXX@example.com/x", "https://example.com/[redacted]"},
+		{"https://XXXX@example.com", "https://example.com"},
+		{"https://example.com", "https://example.com"},
+		{"https://example.com/", "https://example.com"},
+		{"http://[::1", "[redacted]"},
+		{"not a url XXXX", "[redacted]"},
+		{"", "[redacted]"},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			t.Parallel()
+			is := is.New(t)
+			is.Equal(redactURL(c.in), c.want)
+		})
+	}
+}
+
+func TestRedactURLErrorKeepsChain(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	in := &url.Error{Op: "Post", URL: "https://hooks.slack.com/services/T000/B000/XXXX", Err: context.DeadlineExceeded}
+
+	err := ssrf.RedactURLError(in, redactURL)
+	is.True(!strings.Contains(err.Error(), "XXXX"))
+	is.True(!strings.Contains(err.Error(), "services"))
+	is.True(strings.Contains(err.Error(), "hooks.slack.com"))
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	var uerr *url.Error
+	is.True(errors.As(err, &uerr))
+	is.True(uerr.Timeout())
+	is.Equal(in.URL, "https://hooks.slack.com/services/T000/B000/XXXX") // the original is not changed
+
+	// A parse error's own message can quote part of the URL.
+	_, perr := url.Parse("https://example.com:SECRETPORT/x") //nolint:staticcheck // invalid on purpose
+	is.True(perr != nil)
+	is.True(strings.Contains(perr.Error(), "SECRETPORT"))
+	rerr := ssrf.RedactURLError(perr, redactURL)
+	is.True(!strings.Contains(rerr.Error(), "SECRETPORT"))
+	is.True(errors.Is(rerr, ssrf.ErrInvalidURL))
+	is.True(errors.Is(rerr, ErrInvalidURL))              // the same error, through ssrf
+	_, perr = url.Parse("https://example.com/%zzSECRET") //nolint:staticcheck // invalid on purpose
+	is.True(perr != nil)
+	is.True(!strings.Contains(ssrf.RedactURLError(perr, redactURL).Error(), "zz"))
+
+	other := errors.New("other")
+	is.Equal(ssrf.RedactURLError(other, redactURL), other)
+	is.Equal(ssrf.RedactURLError(nil, redactURL), nil)
+}
+
+// secretPath and secretQuery stand for the tokens receivers such as Slack put
+// in a webhook URL.
+const (
+	secretPath  = "/services/T000/B000/PATHSECRET"
+	secretQuery = "?token=QUERYSECRET"
+)
+
+func assertNoSecret(t *testing.T, s string) {
+	t.Helper()
+	for _, secret := range []string{"PATHSECRET", "QUERYSECRET", "services", "USERSECRET"} {
+		if strings.Contains(s, secret) {
+			t.Fatalf("%q contains %q", s, secret)
+		}
+	}
+}
+
+// A failed unrecorded send returns an error for the caller to log; it must
+// not reveal the token in the webhook URL's path, query or user info. The
+// token is the username here: net/http masks a password itself but prints a
+// username in full.
+func TestDeliverUnrecordedTransportErrorRedactsURL(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	base := strings.Replace(closingServer(t), "http://", "http://USERSECRET@", 1)
+	w := e.newWebhook(t, base+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
+
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	is.True(err != nil)
+	assertNoSecret(t, err.Error())
+	is.True(strings.Contains(err.Error(), "[redacted]"))
+	// With the URL redacted, the error names the webhook instead.
+	is.True(strings.Contains(err.Error(), fmt.Sprintf("webhook %d: ", w.ID)))
+	var uerr *url.Error
+	is.True(errors.As(err, &uerr))
+}
+
+// A send that runs out of time still reports a deadline error through the
+// redacted error, and the recorded error text is redacted too.
+func TestDeliverTimeoutRedactsURLAndKeepsDeadline(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	e.s.sendTimeout = 200 * time.Millisecond
+	w := e.newWebhook(t, hangingServer(t)+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
+
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	is.True(err != nil)
+	assertNoSecret(t, err.Error())
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	var nerr net.Error
+	is.True(errors.As(err, &nerr))
+	is.True(nerr.Timeout())
+
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.True(strings.Contains(ds[0].RequestError.String, "deadline exceeded"))
+	assertNoSecret(t, ds[0].RequestError.String)
+}
+
+// A cancelled send keeps context.Canceled in the chain.
+func TestDeliverUnrecordedCancelKeepsCanceled(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	srv, _ := newReceiver(t, 200, "")
+	w := e.newWebhook(t, srv.URL+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
+	ctx, cancel := context.WithCancel(e.ctx)
+	cancel()
+
+	err := e.s.DeliverUnrecorded(ctx, []models.Webhook{w}, samplePayloadFor(e))
+	is.True(err != nil)
+	assertNoSecret(t, err.Error())
+	is.True(errors.Is(err, context.Canceled))
+}
+
+// A stored webhook URL that cannot be parsed fails in http.NewRequest. The
+// parse error quotes part of the URL (here the port), so both the returned and
+// the recorded error must say only "invalid URL" and carry no part of it.
+func TestDeliverUnparsableURLRedactsURL(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	w := e.newWebhook(t, "http://USERSECRET@example.com:PORTSECRET"+secretPath+secretQuery, "", ContentTypeJSON, EventPush)
+
+	assertRedacted := func(s string) {
+		t.Helper()
+		assertNoSecret(t, s)
+		for _, part := range []string{"PORTSECRET", "example.com"} {
+			if strings.Contains(s, part) {
+				t.Fatalf("%q contains %q", s, part)
+			}
+		}
+		is.True(strings.Contains(s, "invalid URL"))
+	}
+
+	err := e.s.DeliverUnrecorded(e.ctx, []models.Webhook{w}, samplePayloadFor(e))
+	is.True(err != nil)
+	is.True(errors.Is(err, ssrf.ErrInvalidURL))
+	is.Equal(err.Error(), fmt.Sprintf("webhook %d: parse \"[redacted]\": invalid URL", w.ID))
+	assertRedacted(err.Error())
+
+	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.Equal(ds[0].ResponseStatus, 0)
+	assertRedacted(ds[0].RequestError.String)
+}
+
+// A body cut off at maxResponseBody is cut before a character the limit
+// falls inside, so a UTF-8 body stays valid UTF-8.
+func TestReadResponseBodyCutsOnRuneBoundary(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	// "€" is three bytes and maxResponseBody is not a multiple of three, so
+	// the limit falls inside one.
+	is.True(maxResponseBody%3 != 0)
+	body := strings.Repeat("€", maxResponseBody/3+10)
+
+	got, err := readResponseBody(strings.NewReader(body))
+	is.NoErr(err)
+	is.True(utf8.ValidString(got))
+	is.Equal(got, strings.Repeat("€", maxResponseBody/3)+truncatedMarker)
+}
+
+func TestStorableText(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"plain", "plain"},
+		{"caf\xe9", "caf�"},
+		{"a\x00b", "ab"},
+		{"\xe2\x82", "�"},
+		{"ok €", "ok €"},
+	} {
+		got := storableText(tc.in)
+		if got != tc.want {
+			t.Errorf("storableText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A response with a Latin-1 header and a body holding a NUL and invalid UTF-8
+// is still recorded, as text Postgres accepts.
+func TestSendWebhookStoresInvalidUTF8ResponseAsText(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.useHTTPClient(t)
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Name", "caf\xe9")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("a\x00b\xffc"))
+	}))
+	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventPush)
+
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventPush, samplePayloadFor(e)))
+
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	d := ds[0]
+	is.Equal(d.ResponseStatus, http.StatusOK)
+	is.Equal(d.ResponseBody, "ab�c")
+	is.True(strings.Contains(d.ResponseHeaders, "X-Name: caf�\n"))
+	for _, s := range []string{d.RequestHeaders, d.RequestBody, d.ResponseHeaders, d.ResponseBody, d.RequestError.String} {
+		is.True(utf8.ValidString(s))
+		is.True(!strings.Contains(s, "\x00"))
+	}
+}
+
+// TestSSRFProtection is an integration test verifying the webhook send path
+// blocks private IPs end-to-end (models.Webhook -> secureHTTPClient -> ssrf).
+// Each row must fail with ssrf.ErrPrivateIP, which only the SSRF check
+// produces: a dial to these addresses fails anyway on most machines, so an
+// error alone would pass without the protection. The loopback row targets a
+// listener that must not be reached. Public destinations are covered in
+// pkg/ssrf, where the connection attempt can be stubbed; nothing here leaves
+// the machine.
+func TestSSRFProtection(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name       string
+		webhookURL string
+	}{
+		{"block loopback", srv.URL + "/webhook"},
+		{"block metadata", "http://169.254.169.254/latest/meta-data/"},
+		{"block private", "http://10.0.0.1:8080/webhook"},
+		{"block IPv4-mapped loopback", "http://[::ffff:127.0.0.1]:8080/webhook"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := models.Webhook{
+				URL:         tt.webhookURL,
+				ContentType: int(ContentTypeJSON),
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), "POST", w.URL, nil)
+			if err != nil {
+				t.Fatalf("failed to create request: %v", err)
+			}
+
+			resp, err := NewSender(nil, nil, nil, nil).client.Do(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if !errors.Is(err, ssrf.ErrPrivateIP) {
+				t.Errorf("%s: err = %v, want ssrf.ErrPrivateIP", tt.name, err)
+			}
+		})
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("loopback listener reached %d times", n)
+	}
+}
+
+// setAllowedHosts sets webhook.allowed_hosts on the test config and parses it
+// the way the server does, and builds the test's Sender again with it.
+func (e *testEnv) setAllowedHosts(t *testing.T, entries ...string) {
+	t.Helper()
+	e.cfg.Webhook.AllowedHosts = entries
+	if err := e.cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	// The list is read when a Sender is built, as at start-up.
+	e.s = NewSender(e.cfg, e.dbx, e.ds, nil)
+}
+
+// TestSendWebhookAllowedHosts sends to a loopback receiver through the real
+// SSRF-protected client: it is reached only while webhook.allowed_hosts
+// covers it. The Sender reads the list when it is built.
+func TestSendWebhookAllowedHosts(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	// The SSRF checks run on the socket, so this receiver is on loopback
+	// TCP, not the in-memory network newReceiver uses.
+	rec := &recorder{status: http.StatusOK}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+	w := e.newWebhook(t, srv.URL+"/hook", "", ContentTypeJSON, EventBranchTagCreate)
+
+	// Not listed: refused at send time, recorded with the reason.
+	is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+	is.Equal(rec.calls, 0)
+	ds := e.deliveries(t, w.ID)
+	is.Equal(len(ds), 1)
+	is.True(ds[0].RequestError.Valid)
+	is.True(strings.Contains(ds[0].RequestError.String, ssrf.ErrPrivateIP.Error()))
+
+	// Listed: delivered. A loopback connect can fail outright while the
+	// machine is busy with other loopback connections (see memnet_test.go),
+	// so a send that fails for a reason other than the allowlist is tried
+	// again, for up to a minute.
+	e.setAllowedHosts(t, "127.0.0.0/8")
+	calls := func() int {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.calls
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		is.NoErr(e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, samplePayload()))
+		ds = e.deliveries(t, w.ID)
+		last := ds[len(ds)-1]
+		if calls() > 0 {
+			is.Equal(last.ResponseStatus, http.StatusOK)
+			is.True(!last.RequestError.Valid)
+			break
+		}
+		if strings.Contains(last.RequestError.String, ssrf.ErrPrivateIP.Error()) || time.Now().After(deadline) {
+			t.Fatalf("listed send not delivered: status %d, error %q", last.ResponseStatus, last.RequestError.String)
+		}
+		// A failure that comes back at once would otherwise spin and
+		// record a delivery row per try.
+		time.Sleep(100 * time.Millisecond)
+	}
+	is.Equal(calls(), 1)
+
+	// Removed from the list again: the stored webhook is refused, since
+	// the current config applies to every delivery.
+	e.setAllowedHosts(t, "10.0.0.0/8")
+	err := e.s.sendPayload(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
+	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+	is.Equal(calls(), 1)
+}
+
+// TestSendWebhookAllowedHostsKeepsMetadataBlocked checks that a broad entry
+// does not open the cloud metadata address.
+func TestSendWebhookAllowedHostsKeepsMetadataBlocked(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	e := newTestEnv(t)
+	e.setAllowedHosts(t, "0.0.0.0/0")
+	w := e.newWebhook(t, "http://169.254.169.254/latest/meta-data/", "", ContentTypeJSON, EventBranchTagCreate)
+	err := e.s.sendPayload(e.ctx, w, EventBranchTagCreate, samplePayload(), false)
+	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+}
+
+func TestValidateWebhookURLAllowing(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	allowed, err := ssrf.ParseAllowedHosts([]string{"127.0.0.1"})
+	is.NoErr(err)
+	is.NoErr(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", allowed))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://127.0.0.1:8080/hook", nil), ErrPrivateIP))
+	is.True(errors.Is(ValidateWebhookURLAllowing(context.Background(), "http://169.254.169.254/", allowed), ErrPrivateIP))
 }
