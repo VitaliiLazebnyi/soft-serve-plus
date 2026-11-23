@@ -14,7 +14,7 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
@@ -220,7 +220,7 @@ func TestGitServiceLookupFailure(t *testing.T) {
 
 			breakTable(t, ctx, "collabs")
 			err = runGit(callerCtx, tc.cmd, tc.args...)
-			is.True(errors.Is(err, git.ErrSystemMalfunction))
+			is.True(errors.Is(err, gitserve.ErrSystemMalfunction))
 			is.Equal(logs.count("ERRO"), 1)
 			is.True(strings.Contains(logs.String(), "failed to look up repository"))
 		})
@@ -241,7 +241,7 @@ func TestGitServiceOutageSameAnswer(t *testing.T) {
 	breakTable(t, ctx, "repos")
 	for _, c := range []context.Context{ctx, strangerCtx} {
 		for _, name := range []string{"repo", "ghost"} {
-			is.True(errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), git.ErrSystemMalfunction))
+			is.True(errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), gitserve.ErrSystemMalfunction))
 		}
 	}
 }
@@ -258,13 +258,13 @@ func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
 	cancel()
 
 	is.True(errors.Is(lookupFailed(ctx, logger, "look up repository", context.Canceled), errLookupFailed))
-	is.True(errors.Is(gitLookupFailed(ctx, logger, "repo", context.Canceled), git.ErrSystemMalfunction))
+	is.True(errors.Is(gitLookupFailed(ctx, logger, "repo", context.Canceled), gitserve.ErrSystemMalfunction))
 	is.True(strings.Contains(buf.String(), "DEBU"))
 	is.True(!strings.Contains(buf.String(), "ERRO"))
 
 	buf.Reset()
 	is.True(errors.Is(lookupFailed(context.Background(), logger, "look up repository", errors.New("db down")), errLookupFailed))
-	is.True(errors.Is(gitLookupFailed(context.Background(), logger, "repo", errors.New("db down")), git.ErrSystemMalfunction))
+	is.True(errors.Is(gitLookupFailed(context.Background(), logger, "repo", errors.New("db down")), gitserve.ErrSystemMalfunction))
 	is.Equal(strings.Count(buf.String(), "ERRO"), 2)
 }
 

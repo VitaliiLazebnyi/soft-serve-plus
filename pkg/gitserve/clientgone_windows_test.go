@@ -1,6 +1,6 @@
 //go:build windows
 
-package git
+package gitserve
 
 import (
 	"syscall"

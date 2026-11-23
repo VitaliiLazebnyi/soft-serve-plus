@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // TestHandlerPanicRecovered checks that a panic while a connection is
@@ -50,7 +50,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	// The slot is free again: with a limit of 1, the next client is
 	// served rather than refused.
 	waitConns(t, d, 0, idleWait)
-	c2 := dialHeld(t, addr, request, git.ErrNotAuthed)
+	c2 := dialHeld(t, addr, request, gitserve.ErrNotAuthed)
 	_ = c2.Close()
 
 	// The panic is logged by safego.Run's recover, which runs after

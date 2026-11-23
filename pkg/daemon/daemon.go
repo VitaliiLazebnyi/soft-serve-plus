@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/soft-serve/internal/safego"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
@@ -207,11 +207,11 @@ func (d *GitDaemon) Serve(listener net.Listener) error {
 		ctx, cancel := d.requestContext()
 		c := d.newServerConn(conn, cancel)
 		if err := d.conns.Add(c, d.cfg.Git.MaxConnections, d.cfg.Git.MaxConnectionsPerIP); err != nil {
-			if errors.Is(err, git.ErrMaxConnections) {
+			if errors.Is(err, gitserve.ErrMaxConnections) {
 				// Close connection if there are too many open connections,
 				// in all or from its address.
 				d.logger.Debugf("git: %v, closing %s", err, conn.RemoteAddr())
-				d.refuseAsync(c, git.ErrMaxConnections)
+				d.refuseAsync(c, gitserve.ErrMaxConnections)
 			} else {
 				c.Close() //nolint: errcheck
 			}
@@ -248,7 +248,7 @@ func (d *GitDaemon) newServerConn(conn net.Conn, cancel context.CancelFunc) *ser
 // progress, which must not wait on a client; the answer to a client's
 // request goes through refuse.
 func (d *GitDaemon) fatal(c net.Conn, err error) {
-	git.WritePktlineErr(c, err) //nolint: errcheck
+	gitserve.WritePktlineErr(c, err) //nolint: errcheck
 	if err := c.Close(); err != nil {
 		d.logger.Debugf("git: error closing connection: %v", err)
 	}
@@ -310,7 +310,7 @@ func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
 // holds its connection unanswered no longer than it could already by
 // sending the request line late, however long the access checks took.
 func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
-	git.WritePktlineErr(c, err) //nolint: errcheck
+	gitserve.WritePktlineErr(c, err) //nolint: errcheck
 	now := d.now()
 	deadline := earliest(now.Add(d.refuseLinger), until, c.maxDeadline)
 	if deadline.After(now) {
@@ -439,7 +439,7 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok
 	// Read the request line on this goroutine. The connection's deadlines
 	// bound the read, and closing the connection on Close unblocks it, so
 	// there is nothing to wait on beside it.
-	line, err := git.ReadPkt(c)
+	line, err := gitserve.ReadPkt(c)
 	// The read is over: from here on reads and writes only have to keep
 	// the connection from going idle. A refusal of the request may still
 	// wait on the client until the request deadline.
@@ -453,10 +453,10 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok
 	case errors.Is(err, io.EOF):
 		// The client hung up without sending a request.
 	case errors.As(err, &nerr) && nerr.Timeout():
-		d.refuse(c, git.ErrTimeout, until)
-	case errors.Is(err, git.ErrInvalidPktLen), isErrorLine(err):
+		d.refuse(c, gitserve.ErrTimeout, until)
+	case errors.Is(err, gitserve.ErrInvalidPktLen), isErrorLine(err):
 		d.logger.Debugf("git: invalid request from %s: %v", c.RemoteAddr(), err)
-		d.refuse(c, git.ErrInvalidRequest, until)
+		d.refuse(c, gitserve.ErrInvalidRequest, until)
 	default:
 		// The connection was reset, cut short, or closed by the server:
 		// there is no one to answer.
@@ -467,7 +467,7 @@ func (d *GitDaemon) readRequest(c *serverConn) (line []byte, until time.Time, ok
 
 // gitRequest is a parsed git:// request line.
 type gitRequest struct {
-	service git.Service
+	service gitserve.Service
 	// name is the repository, sanitized.
 	name string
 	// host is the host the client named, as it sent it.
@@ -479,7 +479,7 @@ type gitRequest struct {
 // counter returns the metric that counts the served requests of the
 // request's service.
 func (r gitRequest) counter() *prometheus.CounterVec {
-	if r.service == git.UploadArchiveService {
+	if r.service == gitserve.UploadArchiveService {
 		return uploadArchiveGitCounter
 	}
 	return uploadPackGitCounter
@@ -491,21 +491,21 @@ func (r gitRequest) counter() *prometheus.CounterVec {
 func parseRequest(line []byte) (gitRequest, error) {
 	split := bytes.SplitN(line, []byte{' '}, 2)
 	if len(split) != 2 {
-		return gitRequest{}, git.ErrInvalidRequest
+		return gitRequest{}, gitserve.ErrInvalidRequest
 	}
 
-	service := git.Service(split[0])
+	service := gitserve.Service(split[0])
 	switch service {
-	case git.UploadPackService, git.UploadArchiveService:
-	case git.ReceivePackService:
+	case gitserve.UploadPackService, gitserve.UploadArchiveService:
+	case gitserve.ReceivePackService:
 		return gitRequest{}, ErrPushNotSupported
 	default:
-		return gitRequest{}, git.ErrInvalidRequest
+		return gitRequest{}, gitserve.ErrInvalidRequest
 	}
 
 	opts := bytes.SplitN(split[1], []byte{0}, 3)
 	if len(opts) < 2 {
-		return gitRequest{}, git.ErrInvalidRequest
+		return gitRequest{}, gitserve.ErrInvalidRequest
 	}
 
 	req := gitRequest{
@@ -532,9 +532,9 @@ func (d *GitDaemon) repoDir(req gitRequest) string {
 // authorize returns nil if the daemon may serve req, and otherwise the error
 // to answer the client with.
 func (d *GitDaemon) authorize(ctx context.Context, req gitRequest) error {
-	if err := git.EnsureWithin(d.reposDir(), req.name+".git"); err != nil {
+	if err := gitserve.EnsureWithin(d.reposDir(), req.name+".git"); err != nil {
 		d.logger.Debugf("git: error ensuring repo path: %v", err)
-		return git.ErrNotAuthed
+		return gitserve.ErrNotAuthed
 	}
 
 	// The daemon is always anonymous, so a repository it cannot read
@@ -548,10 +548,10 @@ func (d *GitDaemon) authorize(ctx context.Context, req gitRequest) error {
 		} else {
 			d.logger.Error("git: failed to look up repository", "repo", req.name, "err", err)
 		}
-		return git.ErrSystemMalfunction
+		return gitserve.ErrSystemMalfunction
 	}
 	if !ok {
-		return git.ErrNotAuthed
+		return gitserve.ErrNotAuthed
 	}
 	return nil
 }
@@ -575,7 +575,7 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 	// anonymous clients.
 	stderr := d.logger.With("addr", c.RemoteAddr(), "service", service, "repo", name).
 		StandardLog(log.StandardLogOptions{ForceLevel: log.WarnLevel}).Writer()
-	cmd := git.ServiceCommand{
+	cmd := gitserve.ServiceCommand{
 		Stdin:  c,
 		Stdout: c,
 		Stderr: stderr,
@@ -601,10 +601,10 @@ func (d *GitDaemon) serve(ctx context.Context, c *serverConn, req gitRequest) {
 		}
 		// Before that, the client gets a fixed message rather than
 		// the error itself.
-		if errors.Is(err, git.ErrInvalidRepo) {
-			d.refuse(c, git.ErrInvalidRepo, time.Time{})
+		if errors.Is(err, gitserve.ErrInvalidRepo) {
+			d.refuse(c, gitserve.ErrInvalidRepo, time.Time{})
 		} else {
-			d.refuse(c, git.ErrSystemMalfunction, time.Time{})
+			d.refuse(c, gitserve.ErrSystemMalfunction, time.Time{})
 		}
 	}
 }
@@ -684,7 +684,7 @@ func (d *GitDaemon) Shutdown(ctx context.Context) error {
 
 // isErrorLine reports whether err is an ERR packet the client sent.
 func isErrorLine(err error) bool {
-	var el *git.PktlineError
+	var el *gitserve.PktlineError
 	return errors.As(err, &el)
 }
 

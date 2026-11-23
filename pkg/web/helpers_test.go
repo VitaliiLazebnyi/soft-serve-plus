@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -191,7 +191,7 @@ func (s *server) serveRoute(h gitHandler, w http.ResponseWriter, r *http.Request
 		logger:  s.requestLogger(r),
 		name:    vars["repo"],
 		dir:     vars["dir"],
-		service: git.Service(vars["service"]),
+		service: gitserve.Service(vars["service"]),
 		user:    rc.user,
 		repo:    rc.repo,
 		level:   rc.level,

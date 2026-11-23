@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -60,7 +60,7 @@ func newRequestTestDaemon(t *testing.T) (*GitDaemon, *syncBuffer) {
 
 // request asks d for repo with service and returns the first line it
 // answers with, after the connection is closed.
-func request(t *testing.T, d *GitDaemon, service git.Service, repo string) string {
+func request(t *testing.T, d *GitDaemon, service gitserve.Service, repo string) string {
 	t.Helper()
 	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
 	if err != nil {
@@ -79,7 +79,7 @@ func request(t *testing.T, d *GitDaemon, service git.Service, repo string) strin
 
 // sampleCount returns how many observations the request duration histogram
 // holds for service.
-func sampleCount(t *testing.T, service git.Service) uint64 {
+func sampleCount(t *testing.T, service gitserve.Service) uint64 {
 	t.Helper()
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(requestSeconds)
@@ -135,11 +135,11 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}
 	d, logs := newRequestTestDaemon(t)
 
-	before := sampleCount(t, git.UploadPackService)
-	if got := request(t, d, git.UploadPackService, "accepted-missing"); got != git.ErrNotAuthed.Error() {
-		t.Fatalf("missing repo: got %q, want %q", got, git.ErrNotAuthed)
+	before := sampleCount(t, gitserve.UploadPackService)
+	if got := request(t, d, gitserve.UploadPackService, "accepted-missing"); got != gitserve.ErrNotAuthed.Error() {
+		t.Fatalf("missing repo: got %q, want %q", got, gitserve.ErrNotAuthed)
 	}
-	if got := request(t, d, git.UploadPackService, "accepted-public"); got == git.ErrNotAuthed.Error() {
+	if got := request(t, d, gitserve.UploadPackService, "accepted-public"); got == gitserve.ErrNotAuthed.Error() {
 		t.Fatalf("public repo was refused: %q", got)
 	}
 
@@ -149,7 +149,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	waitConns(t, d, 0, idleWait)
 	// Other tests' requests may finish meanwhile, so only check that this
 	// one was counted.
-	if got := sampleCount(t, git.UploadPackService) - before; got < 1 {
+	if got := sampleCount(t, gitserve.UploadPackService) - before; got < 1 {
 		t.Errorf("request duration observations = %d, want at least 1", got)
 	}
 

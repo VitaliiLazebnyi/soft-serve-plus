@@ -1,6 +1,6 @@
 //go:build linux
 
-package git
+package gitserve
 
 import (
 	"bytes"

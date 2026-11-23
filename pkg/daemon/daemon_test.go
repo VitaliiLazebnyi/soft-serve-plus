@@ -25,7 +25,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
@@ -162,7 +162,7 @@ func startIdleDaemon(t *testing.T) string {
 // readPktline reads one pkt-line. An ERR packet is returned as a
 // *git.PktlineError carrying the daemon's message.
 func readPktline(c net.Conn) (string, error) {
-	line, err := git.ReadPkt(c)
+	line, err := gitserve.ReadPkt(c)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +172,7 @@ func readPktline(c net.Conn) (string, error) {
 // wantErrLine fails the test unless err is an ERR packet carrying want.
 func wantErrLine(t *testing.T, what string, err error, want error) {
 	t.Helper()
-	var errLine *git.PktlineError
+	var errLine *gitserve.PktlineError
 	if !errors.As(err, &errLine) {
 		t.Errorf("%s: expected ERR %q, got %v", what, want, err)
 		return
@@ -190,7 +190,7 @@ func TestIdleTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a timeout, got line %q", line)
 	}
-	wantErrLine(t, "idle connection", err, git.ErrTimeout)
+	wantErrLine(t, "idle connection", err, gitserve.ErrTimeout)
 }
 
 // TestBadRequests verifies the daemon answers malformed requests and pushes
@@ -204,9 +204,9 @@ func TestBadRequests(t *testing.T) {
 		// Only the bad length prefix is sent: bytes the daemon never reads
 		// would make Windows reset the connection when the daemon closes it,
 		// discarding the reply before the client reads it.
-		{"invalid pkt-len", []byte("zzzz"), git.ErrInvalidRequest},
-		{"client error packet", []byte(pkt("ERR boom\n")), git.ErrInvalidRequest},
-		{"unknown service", []byte(pkt("git-frobnicate /repo.git\x00")), git.ErrInvalidRequest},
+		{"invalid pkt-len", []byte("zzzz"), gitserve.ErrInvalidRequest},
+		{"client error packet", []byte(pkt("ERR boom\n")), gitserve.ErrInvalidRequest},
+		{"unknown service", []byte(pkt("git-frobnicate /repo.git\x00")), gitserve.ErrInvalidRequest},
 		{"push", []byte(pkt("git-receive-pack /repo.git\x00host=localhost\x00")), ErrPushNotSupported},
 	}
 	for _, tc := range cases {
@@ -263,9 +263,9 @@ func TestRefusalSurvivesLateInput(t *testing.T) {
 	conn.waitRead(t, sent)
 	line, err := readPktline(c)
 	if err == nil {
-		t.Fatalf("expected ERR %q, got line %q", git.ErrNotAuthed, line)
+		t.Fatalf("expected ERR %q, got line %q", gitserve.ErrNotAuthed, line)
 	}
-	wantErrLine(t, "late input", err, git.ErrNotAuthed)
+	wantErrLine(t, "late input", err, gitserve.ErrNotAuthed)
 }
 
 // recordingListener is a listener whose connections record what the daemon
@@ -435,8 +435,8 @@ func TestFailedRequestDoesNotLeak(t *testing.T) {
 	idle := dial()
 	defer idle.Close() //nolint:errcheck
 	_ = idle.SetDeadline(time.Now().Add(idleWait))
-	if _, err := readPktline(idle); err == nil || !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
-		t.Errorf("idle connection: expected %q, got %v", git.ErrTimeout, err)
+	if _, err := readPktline(idle); err == nil || !strings.Contains(err.Error(), gitserve.ErrTimeout.Error()) {
+		t.Errorf("idle connection: expected %q, got %v", gitserve.ErrTimeout, err)
 	}
 
 	// Reset the connection before sending anything.
@@ -524,10 +524,10 @@ func TestInvalidRepo(t *testing.T) {
 	} {
 		line, err := requestUploadPack(t, tc.repo)
 		if err == nil {
-			t.Errorf("%s: expected ERR %q, got line %q", tc.what, git.ErrNotAuthed, line)
+			t.Errorf("%s: expected ERR %q, got line %q", tc.what, gitserve.ErrNotAuthed, line)
 			continue
 		}
-		wantErrLine(t, tc.what, err, git.ErrNotAuthed)
+		wantErrLine(t, tc.what, err, gitserve.ErrNotAuthed)
 	}
 
 	// A public repository is served: the daemon advertises its references,
@@ -601,7 +601,7 @@ func TestGitStderrNotSentToClient(t *testing.T) {
 	}
 	// Everything the daemon sent must parse as pkt-lines.
 	for r := bytes.NewReader(out); ; {
-		_, err := git.ReadPkt(r)
+		_, err := gitserve.ReadPkt(r)
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -628,7 +628,7 @@ func TestGitFailureFixedMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := readAll(t, pkt("git-upload-pack /broken.git\x00host=localhost\x00"))
-	want := pkt("ERR " + git.ErrSystemMalfunction.Error() + "\n")
+	want := pkt("ERR " + gitserve.ErrSystemMalfunction.Error() + "\n")
 	if !bytes.HasPrefix(out, []byte(want)) {
 		t.Errorf("expected %q, got %q", want, out)
 	}
@@ -792,7 +792,7 @@ func wantServed(t *testing.T, what string, c net.Conn) {
 		t.Fatalf("%s: write request: %v", what, err)
 	}
 	_, err := readPktline(c)
-	wantErrLine(t, what, err, git.ErrNotAuthed)
+	wantErrLine(t, what, err, gitserve.ErrNotAuthed)
 }
 
 // isRefusal reports whether err, from reading a connection's first answer,
@@ -801,9 +801,9 @@ func wantServed(t *testing.T, what string, c net.Conn) {
 // progress, the end of the stream or a reset that cost the client the
 // refusal. A kept connection gets none of these before it sends a request.
 func isRefusal(err error) bool {
-	var errLine *git.PktlineError
+	var errLine *gitserve.PktlineError
 	if errors.As(err, &errLine) {
-		return errLine.Text == git.ErrMaxConnections.Error()
+		return errLine.Text == gitserve.ErrMaxConnections.Error()
 	}
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || isReset(err)
 }
@@ -822,7 +822,7 @@ func TestMaxConnections(t *testing.T) {
 		for i := range limit {
 			kept[i] = holdSlot(t, d, addr)
 		}
-		over := dialHeld(t, addr, "", git.ErrMaxConnections)
+		over := dialHeld(t, addr, "", gitserve.ErrMaxConnections)
 		if out, err := io.ReadAll(over); err != nil || (len(out) != 0 && string(out) != "0000") {
 			t.Fatalf("limit %d: after the refusal: read %q, %v; want the end of the stream", limit, out, err)
 		}
@@ -913,7 +913,7 @@ func TestMaxConnectionsBurst(t *testing.T) {
 		if a.i != i {
 			t.Fatalf("connection %d answered %v while connection %d waited for an answer", a.i, a.err, i)
 		}
-		wantErrLine(t, fmt.Sprintf("kept connection %d", i), a.err, git.ErrNotAuthed)
+		wantErrLine(t, fmt.Sprintf("kept connection %d", i), a.err, gitserve.ErrNotAuthed)
 	}
 }
 
@@ -981,12 +981,12 @@ func TestRequestTimeout(t *testing.T) {
 		if errors.As(err, &ne) && ne.Timeout() {
 			t.Fatalf("the daemon kept a partial request line open for %s", idleWait)
 		}
-		if !strings.Contains(err.Error(), git.ErrTimeout.Error()) {
+		if !strings.Contains(err.Error(), gitserve.ErrTimeout.Error()) {
 			if isReset(err) {
 				t.Logf("read: %v; trying again", err)
 				return false
 			}
-			t.Fatalf("expected the daemon to report %q, got %v", git.ErrTimeout, err)
+			t.Fatalf("expected the daemon to report %q, got %v", gitserve.ErrTimeout, err)
 		}
 		return true
 	})

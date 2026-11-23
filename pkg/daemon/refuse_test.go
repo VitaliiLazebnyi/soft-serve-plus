@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // TestRefusalEndsAtRequestDeadline checks that a refusal after access checks
@@ -40,7 +40,7 @@ func TestRefusalEndsAtRequestDeadline(t *testing.T) {
 		t.Fatalf("write request: %v", err)
 	}
 	_, err = readPktline(c)
-	wantErrLine(t, "missing repo", err, git.ErrNotAuthed)
+	wantErrLine(t, "missing repo", err, gitserve.ErrNotAuthed)
 	// The client neither sends nor hangs up, so only the end of the
 	// refusal's wait closes the connection.
 	waitConns(t, d, 0, idleWait)
@@ -121,7 +121,7 @@ func TestMaxConnectionsRefusalSurvivesLateInput(t *testing.T) {
 	}
 	holdSlot(t, d, addr)
 	accepted() // the held one
-	c := dialHeld(t, addr, "", git.ErrMaxConnections)
+	c := dialHeld(t, addr, "", gitserve.ErrMaxConnections)
 	refused := accepted() // accepted before it was refused
 	sent := 0
 	for i := range 20 {
@@ -147,7 +147,7 @@ func TestMaxConnectionsRefusalsDoNotBlockAccept(t *testing.T) {
 	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) { d.refuseLinger = time.Hour })
 	held := holdSlot(t, d, addr)
 	for range maxRefusing + 4 {
-		dialHeld(t, addr, "", git.ErrMaxConnections)
+		dialHeld(t, addr, "", gitserve.ErrMaxConnections)
 	}
 	// The first maxRefusing refusals still wait on their clients; the
 	// rest were closed at once.

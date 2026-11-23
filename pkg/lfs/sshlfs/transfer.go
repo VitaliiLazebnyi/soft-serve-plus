@@ -20,7 +20,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
@@ -155,7 +155,7 @@ func lfsTransferError(ctx context.Context, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, errLFSCommandTooLarge) {
 		return err
 	}
-	if ctx.Err() != nil || git.ClientGone(err) {
+	if ctx.Err() != nil || gitserve.ClientGone(err) {
 		return fmt.Errorf("%w: client went away: %w", context.Canceled, err)
 	}
 	return err

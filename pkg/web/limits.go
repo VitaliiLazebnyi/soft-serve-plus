@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/internal/clientaddr"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // requestLimits bounds how many git and LFS requests the HTTP server serves
@@ -97,7 +97,7 @@ func (l *requestLimits) serve(w http.ResponseWriter, r *http.Request, next http.
 			// the idle timeout.
 			w.Header().Set("Connection", "close")
 		}
-		http.Error(w, git.ErrMaxConnections.Error(), http.StatusServiceUnavailable)
+		http.Error(w, gitserve.ErrMaxConnections.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer release()

@@ -10,7 +10,7 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 )
 
@@ -43,7 +43,7 @@ func TestGitServiceErrorClosedChannel(t *testing.T) {
 			logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
 			ctx := context.WithValue(t.Context(), sshutils.ContextKeySession, ssh.Session(requestSession{err: tc.sendErr}))
 
-			err := gitServiceError(ctx, logger, git.UploadPackService, "r", failed)
+			err := gitServiceError(ctx, logger, gitserve.UploadPackService, "r", failed)
 			if tc.gone {
 				if !errors.Is(err, context.Canceled) || !errors.Is(err, failed) {
 					t.Fatalf("err = %v, want context.Canceled wrapping the git failure", err)
@@ -53,8 +53,8 @@ func TestGitServiceErrorClosedChannel(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, git.ErrSystemMalfunction) {
-				t.Fatalf("err = %v, want %v", err, git.ErrSystemMalfunction)
+			if !errors.Is(err, gitserve.ErrSystemMalfunction) {
+				t.Fatalf("err = %v, want %v", err, gitserve.ErrSystemMalfunction)
 			}
 			if !strings.Contains(logs.String(), "ERRO") {
 				t.Fatalf("a server failure was not logged as an error:\n%s", logs.String())

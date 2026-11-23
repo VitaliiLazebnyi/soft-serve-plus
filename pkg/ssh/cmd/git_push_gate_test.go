@@ -15,7 +15,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
@@ -308,7 +308,7 @@ func TestBeginPushLookupFailure(t *testing.T) {
 			c.SetErr(io.Discard)
 			c.SetArgs(tc.args)
 			err := c.ExecuteContext(adminCtx)
-			is.True(errors.Is(err, git.ErrSystemMalfunction))
+			is.True(errors.Is(err, gitserve.ErrSystemMalfunction))
 			is.True(!strings.Contains(err.Error(), "/server/path"))
 			is.Equal(logs.count("ERRO"), 1)
 			is.True(strings.Contains(logs.String(), "/server/path"))

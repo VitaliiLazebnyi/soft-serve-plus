@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
@@ -64,8 +64,8 @@ func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 
 	var refsFile string
 	orig := f.server.runService
-	f.server.runService = func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
-		if service != git.ReceivePackService {
+	f.server.runService = func(ctx context.Context, service gitserve.Service, cmd gitserve.ServiceCommand) error {
+		if service != gitserve.ReceivePackService {
 			return orig(ctx, service, cmd)
 		}
 		for _, kv := range cmd.Env {

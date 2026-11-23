@@ -8,7 +8,7 @@ import (
 
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -28,8 +28,8 @@ func TestGitDenyReadAdminKeyIsNotAnonymous(t *testing.T) {
 		ctx  context.Context
 		want error
 	}{
-		{"anonymous", ctx, git.ErrNotAuthed},
-		{"admin key", context.WithValue(ctx, ssh.ContextKeyPublicKey, pub), git.ErrInvalidRepo},
+		{"anonymous", ctx, gitserve.ErrNotAuthed},
+		{"admin key", context.WithValue(ctx, ssh.ContextKeyPublicKey, pub), gitserve.ErrInvalidRepo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			is := is.New(t)

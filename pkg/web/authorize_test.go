@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // TestAuthorize pins the decision order for every kind of caller against
@@ -25,14 +25,14 @@ func TestAuthorize(t *testing.T) {
 	rpc := gitRouteFor(t, "/{service:(?:git-upload-archive|git-upload-pack|git-receive-pack)$}")
 	basic := gitRouteFor(t, "/info/lfs/objects/basic/{oid:[0-9a-f]{64}$}")
 	routes := []route{
-		{"fetch advert", infoRefs.access(http.MethodGet, git.UploadPackService)},
-		{"fetch rpc", rpc.access(http.MethodPost, git.UploadPackService)},
-		{"push advert", infoRefs.access(http.MethodGet, git.ReceivePackService)},
-		{"push rpc", rpc.access(http.MethodPost, git.ReceivePackService)},
+		{"fetch advert", infoRefs.access(http.MethodGet, gitserve.UploadPackService)},
+		{"fetch rpc", rpc.access(http.MethodPost, gitserve.UploadPackService)},
+		{"push advert", infoRefs.access(http.MethodGet, gitserve.ReceivePackService)},
+		{"push rpc", rpc.access(http.MethodPost, gitserve.ReceivePackService)},
 		{"lfs batch", gitRouteFor(t, "/info/lfs/objects/batch").access(http.MethodPost, "")},
 		{"lfs upload", basic.access(http.MethodPut, "")},
 		{"lfs lock", gitRouteFor(t, "/info/lfs/locks").access(http.MethodPost, "")},
-		{"push advert head", infoRefs.access(http.MethodHead, git.ReceivePackService)},
+		{"push advert head", infoRefs.access(http.MethodHead, gitserve.ReceivePackService)},
 	}
 
 	type caller struct {
@@ -131,9 +131,9 @@ func TestAuthorize(t *testing.T) {
 	}
 	for _, rt := range gitRoutes {
 		for _, method := range rt.allowed() {
-			for _, service := range []git.Service{"", git.UploadPackService, git.UploadArchiveService, git.ReceivePackService} {
+			for _, service := range []gitserve.Service{"", gitserve.UploadPackService, gitserve.UploadArchiveService, gitserve.ReceivePackService} {
 				need := rt.access(method, service)
-				wantCreate := rt.service && service == git.ReceivePackService && method != http.MethodHead
+				wantCreate := rt.service && service == gitserve.ReceivePackService && method != http.MethodHead
 				if need.create != wantCreate {
 					t.Errorf("%s %s %q: create = %v, want %v", method, rt.path, service, need.create, wantCreate)
 				}
