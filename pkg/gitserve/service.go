@@ -85,25 +85,7 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 	if logger == nil {
 		logger = log.Default()
 	}
-	cmd := exec.CommandContext(ctx, "git")
-	cmd.Dir = scmd.Dir
-	cmd.Args = append(cmd.Args, []string{
-		// Enable partial clones
-		"-c", "uploadpack.allowFilter=true",
-		// Enable push options
-		"-c", "receive.advertisePushOptions=true",
-		// Disable LFS filters
-		"-c", "filter.lfs.required=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=",
-	}...)
-	for _, kv := range scmd.Config {
-		cmd.Args = append(cmd.Args, "-c", kv)
-	}
-	cmd.Args = append(cmd.Args, svc.Name())
-	cmd.Args = append(cmd.Args, scmd.Args...)
-	cmd.Args = append(cmd.Args, ".")
-	// git.WithServerConfig keeps automatic maintenance after a push in the
-	// foreground, so it does not leave an orphan (see git.ServerConfig).
-	cmd.Env = git.WithServerConfig(serviceEnv(os.Environ(), scmd.Env))
+	cmd := gitCommand(ctx, svc, scmd)
 
 	// stdin is git's input pipe, set below once the output pipes are.
 	var stdin io.WriteCloser
@@ -230,6 +212,31 @@ func gitServiceHandler(ctx context.Context, svc Service, scmd ServiceCommand) er
 		}
 		return fmt.Errorf("%s: %w", svc, err)
 	}
+}
+
+// gitCommand returns the git command that runs svc in scmd.Dir under ctx,
+// with scmd's arguments, config and environment on top of the server's.
+func gitCommand(ctx context.Context, svc Service, scmd ServiceCommand) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Dir = scmd.Dir
+	cmd.Args = append(cmd.Args, []string{
+		// Enable partial clones
+		"-c", "uploadpack.allowFilter=true",
+		// Enable push options
+		"-c", "receive.advertisePushOptions=true",
+		// Disable LFS filters
+		"-c", "filter.lfs.required=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=",
+	}...)
+	for _, kv := range scmd.Config {
+		cmd.Args = append(cmd.Args, "-c", kv)
+	}
+	cmd.Args = append(cmd.Args, svc.Name())
+	cmd.Args = append(cmd.Args, scmd.Args...)
+	cmd.Args = append(cmd.Args, ".")
+	// git.WithServerConfig keeps automatic maintenance after a push in the
+	// foreground, so it does not leave an orphan (see git.ServerConfig).
+	cmd.Env = git.WithServerConfig(serviceEnv(os.Environ(), scmd.Env))
+	return cmd
 }
 
 // stdinInterruptInterval is how often joinStdin sets a read deadline in the
