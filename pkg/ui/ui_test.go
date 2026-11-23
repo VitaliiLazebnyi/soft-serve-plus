@@ -11,43 +11,11 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
-
-// newTestUIConfig returns a config whose data, and SQLite database, are in
-// a directory of the test's own.
-func newTestUIConfig(t *testing.T) *config.Config {
-	t.Helper()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	return cfg
-}
-
-// newTestUIBackend returns a backend on a fresh database for cfg, for
-// building a UI.
-func newTestUIBackend(t *testing.T, cfg *config.Config) *backend.Backend {
-	t.Helper()
-	ctx := t.Context()
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dbx.Close() })
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	return backend.New(cfg, dbx, database.New(nil), log.Default())
-}
 
 // The subtests run one at a time: building the UI pages writes the shared
 // style config.
@@ -76,8 +44,8 @@ func TestUIErrorScreenHidesInternalErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			cfg := newTestUIConfig(t)
-			uc, err := common.New(t.Context(), cfg, newTestUIBackend(t, cfg), log.New(&buf))
+			e := backendtest.New(t)
+			uc, err := common.New(t.Context(), e.Cfg, e.Backend, log.New(&buf))
 			if err != nil {
 				t.Fatal(err)
 			}

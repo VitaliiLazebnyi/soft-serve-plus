@@ -289,7 +289,7 @@ func TestDeleteRepositoryRemovesWebhookRows(t *testing.T) {
 		"SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?",
 	} {
 		var n int
-		is.NoErr(e.be.db.GetContext(e.ctx, &n, q, id))
+		is.NoErr(e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind(q), id))
 		is.Equal(n, 0)
 	}
 }
@@ -526,18 +526,27 @@ func TestDeleteRepositoryKeepsGoingWhenEventBuildFails(t *testing.T) {
 }
 
 // corruptOwner removes the repository owner's row with foreign keys switched
-// off, which is the only way to make event building fail. The pool is pinned
-// to one connection so the pragma applies to the statements that follow it.
+// off, which is the only way to make event building fail. On SQLite the pool
+// is pinned to one connection so the pragma applies to the statements that
+// follow it; on Postgres the replica role, which skips foreign key checks,
+// is set for the deleting transaction only (it needs a superuser).
 func corruptOwner(t *testing.T, e whEnv) {
 	t.Helper()
-	is := is.New(t)
+	const del = "DELETE FROM users WHERE username = 'admin'"
+	if e.be.db.DriverName() == "postgres" {
+		if err := e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+			if _, err := tx.ExecContext(e.ctx, "SET LOCAL session_replication_role = replica"); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(e.ctx, del)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	e.be.db.SetMaxOpenConns(1)
-	_, err := e.be.db.ExecContext(e.ctx, "PRAGMA foreign_keys = OFF")
-	is.NoErr(err)
-	_, err = e.be.db.ExecContext(e.ctx, "DELETE FROM users WHERE username = 'admin'")
-	is.NoErr(err)
-	_, err = e.be.db.ExecContext(e.ctx, "PRAGMA foreign_keys = ON")
-	is.NoErr(err)
+	execAll(t, e.ctx, e.be.db, []string{"PRAGMA foreign_keys = OFF", del, "PRAGMA foreign_keys = ON"})
 }
 
 // Adding or removing a collaborator whose event cannot be built still commits
@@ -604,7 +613,9 @@ func TestSetPrivateReturnsEventBuildFailure(t *testing.T) {
 
 // If the collaborator row vanishes between the lookup and the delete, the
 // removal reports not found. A trigger deletes the row first, so the outer
-// delete matches nothing.
+// delete matches nothing. On Postgres the trigger skips the outer delete of
+// the row it removed, which would fail otherwise, and does not fire for its
+// own delete.
 func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -612,8 +623,12 @@ func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
 	is.NoErr(err)
 	is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "bob", access.ReadWriteAccess))
-	_, err = e.be.db.ExecContext(e.ctx, "CREATE TRIGGER vanish BEFORE DELETE ON collabs BEGIN DELETE FROM collabs WHERE rowid = OLD.rowid; END;")
-	is.NoErr(err)
+	execAll(t, e.ctx, e.be.db, byDriver(e.be.db,
+		[]string{"CREATE TRIGGER vanish BEFORE DELETE ON collabs BEGIN DELETE FROM collabs WHERE rowid = OLD.rowid; END;"},
+		[]string{
+			"CREATE FUNCTION vanish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN DELETE FROM collabs WHERE id = OLD.id; RETURN NULL; END $$;",
+			"CREATE TRIGGER vanish BEFORE DELETE ON collabs FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE FUNCTION vanish();",
+		}))
 
 	is.True(errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound))
 }
@@ -1023,7 +1038,7 @@ func TestEventsWithoutUserHaveEmptySender(t *testing.T) {
 
 	is.Equal(sortedEvents(e.deliveredEvents(t, id)), sortedEvents([]webhook.Event{webhook.EventRepositoryVisibilityChange, webhook.EventRepository}))
 	var bodies []string
-	is.NoErr(e.be.db.SelectContext(e.ctx, &bodies, "SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?", id))
+	is.NoErr(e.be.db.SelectContext(e.ctx, &bodies, e.be.db.Rebind("SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?"), id))
 	for _, b := range bodies {
 		is.True(strings.Contains(b, `"sender":{"id":0,"username":""}`))
 	}
@@ -1046,7 +1061,7 @@ func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 	is.NoErr(e.be.webhooks.Deliver(e.ctx, whs, ev))
 
 	var n int
-	is.NoErr(e.be.db.GetContext(e.ctx, &n, "SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?", id))
+	is.NoErr(e.be.db.GetContext(e.ctx, &n, e.be.db.Rebind("SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?"), id))
 	is.Equal(n, 0)
 }
 

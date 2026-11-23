@@ -7,14 +7,12 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 )
 
@@ -84,33 +82,23 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.Store) store.Store, logger *log.Logger) (context.Context, *backend.Backend) {
 	t.Helper()
 	is := is.New(t)
-	ctx := context.Background()
-
-	dbx, err := dbtest.Open(ctx, t)
-	is.NoErr(err)
-
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-	if tweak != nil {
-		tweak(cfg)
-	}
-	// Validate parses the admin keys a tweak may list.
-	is.NoErr(cfg.Validate())
-
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	var st store.Store = database.New(nil)
-	if wrap != nil {
-		st = wrap(st)
-	}
 	if logger == nil {
 		logger = log.New(io.Discard)
 	}
-	be := backend.New(cfg, dbx, st, logger)
-	cmds, err := New(Deps{Config: cfg, Backend: be, DB: dbx, Store: st, Logger: logger})
+	// The tweak runs before the config is validated, which parses the admin
+	// keys it may list.
+	opts := []backendtest.Option{backendtest.WithLogger(logger)}
+	if tweak != nil {
+		opts = append(opts, backendtest.WithConfig(tweak))
+	}
+	if wrap != nil {
+		opts = append(opts, backendtest.WithStore(wrap))
+	}
+	e := backendtest.New(t, opts...)
+	cmds, err := New(Deps{Config: e.Cfg, Backend: e.Backend, DB: e.DB, Store: e.Store, Logger: logger})
 	is.NoErr(err)
 
-	return withCommands(ctx, cmds), be
+	return withCommands(e.Ctx, cmds), e.Backend
 }
 
 // levelOf is the access level Backend.Readable gives user's account on repo.

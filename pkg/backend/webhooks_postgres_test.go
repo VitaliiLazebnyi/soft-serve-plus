@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -14,19 +13,15 @@ import (
 	"unicode/utf8"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
 )
 
-// newPostgresWebhookEnv is newWebhookEnv on a disposable Postgres database on
-// the server named by SOFT_SERVE_DB_DATA_SOURCE. The test is skipped unless
+// newPostgresWebhookEnv is newWebhookEnv, logging to the default logger,
+// for a test that needs Postgres. The test is skipped unless
 // SOFT_SERVE_DB_DRIVER is "postgres".
 func newPostgresWebhookEnv(t *testing.T) whEnv {
 	t.Helper()
@@ -35,43 +30,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	}
 	is := is.New(t)
 	ctx := context.Background()
-
-	dsn := os.Getenv("SOFT_SERVE_DB_DATA_SOURCE")
-	if dsn == "" {
-		dsn = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
-	}
-	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { admin.Close() }) //nolint:errcheck
-	name, err := dbtest.CreateDB(ctx, admin, "softserve_test")
-	is.NoErr(err)
-	t.Cleanup(func() {
-		if _, err := admin.ExecContext(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
-			t.Error("failed to drop database", name, err)
-		}
-	})
-
-	// The data source is a URL or a key=value string, as in
-	// internal/dbtest.
-	testDSN := strings.TrimSpace(dsn) + " dbname=" + name
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		u, err := url.Parse(dsn)
-		is.NoErr(err)
-		u.Path = "/" + name
-		testDSN = u.String()
-	}
-
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = "postgres"
-	cfg.DB.DataSource = testDSN
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New(nil)
-	be := New(cfg, dbx, dbstore, log.Default())
+	be, cfg := openTestBackend(t, log.Default(), "")
 
 	user, err := be.User(ctx, "admin")
 	is.NoErr(err)

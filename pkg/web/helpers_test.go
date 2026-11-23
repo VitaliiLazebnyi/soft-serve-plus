@@ -12,23 +12,21 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/keygen"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
-// testEnv is what a test server is built from: a config with its own data
-// directory, a migrated SQLite database, its store and a backend over them.
+// testEnv is what a test server is built from: a backendtest.Env.
 type testEnv struct {
 	// ctx is the context of the test's own calls to the backend.
 	ctx       context.Context
@@ -52,26 +50,8 @@ func newTestEnv(t testing.TB) *testEnv {
 // logger.
 func newTestEnvLogging(t testing.TB, logger *log.Logger) *testEnv {
 	t.Helper()
-	ctx := context.Background()
-
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	datastore := database.New(nil)
-	be := backend.New(cfg, dbx, datastore, logger)
-	return &testEnv{ctx: ctx, cfg: cfg, dbx: dbx, datastore: datastore, be: be, logger: logger}
+	e := backendtest.New(t, backendtest.WithLogger(logger))
+	return &testEnv{ctx: e.Ctx, cfg: e.Cfg, dbx: e.DB, datastore: e.Store, be: e.Backend, logger: logger}
 }
 
 // useStore makes datastore the store of the env's backend and of the

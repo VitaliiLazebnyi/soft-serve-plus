@@ -2,7 +2,6 @@ package sshlfs
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,34 +16,22 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	_ "modernc.org/sqlite"
 )
 
 // newLFSUploadTransfer returns an upload-session lfsTransfer backed by a
-// migrated SQLite database holding repository 1 ("repo1"), and the context
+// backendtest database holding repository 1 ("repo1"), and the context
 // it was built from.
 func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, TransferDeps) {
 	t.Helper()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	ctx := context.Background()
-	dbx, err := db.Open(ctx, "sqlite", dp+"/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	datastore := database.New(nil)
+	e := backendtest.New(t)
+	ctx, cfg, dbx, datastore := e.Ctx, e.Cfg, e.DB, e.Store
+	dp := cfg.DataPath
 	if err := datastore.CreateUser(ctx, dbx, "owner", false, nil); err != nil {
 		t.Fatal(err)
 	}

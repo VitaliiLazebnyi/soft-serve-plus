@@ -16,13 +16,11 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // fakeSSH is an ssh client that runs the remote command locally, so a test
@@ -59,25 +57,10 @@ func refs(t *testing.T, dir string) string {
 // server with its own data path and database.
 func newMirrorJobContext(t *testing.T) (context.Context, *config.Config, *backend.Backend) {
 	t.Helper()
-	ctx := t.Context()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-
-	// The server's own SQLite settings: the job's workers look up mirror
-	// owners concurrently and rely on busy_timeout to take turns.
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = filepath.Join(cfg.DataPath, "soft-serve.db") + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dbx.Close() })
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	st := database.New(nil)
-	be := backend.New(cfg, dbx, st, log.New(io.Discard))
-	return ctx, cfg, be
+	// On SQLite, the job's workers look up mirror owners concurrently and
+	// rely on the busy timeout db.Open sets to take turns.
+	e := backendtest.New(t, backendtest.WithLogger(log.New(io.Discard)))
+	return t.Context(), e.Cfg, e.Backend
 }
 
 // newTestMirrorPull returns the mirror-pull job of cfg and be, logging to w.

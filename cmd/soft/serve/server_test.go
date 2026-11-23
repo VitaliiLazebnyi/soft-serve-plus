@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
@@ -36,7 +37,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/cron"
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -56,26 +56,10 @@ func setupTestBackend(tb testing.TB) (context.Context, *config.Config, *backend.
 
 func setupTestBackendWithDB(tb testing.TB) (context.Context, *config.Config, *backend.Backend, *db.DB) {
 	tb.Helper()
-	is := is.New(tb)
-
-	cfg := config.DefaultConfig()
-	cfg.DataPath = tb.TempDir()
-	is.NoErr(cfg.Validate())
-
-	ctx := context.Background()
-
-	is.NoErr(os.MkdirAll(cfg.DataPath, os.ModePerm))
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	tb.Cleanup(func() { dbx.Close() }) //nolint: errcheck
-
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-
 	// The backend logs to the default logger when it is built, as the
 	// server's does.
-	be := backend.New(cfg, dbx, database.New(nil), log.Default())
-
-	return ctx, cfg, be, dbx
+	e := backendtest.New(tb, backendtest.WithLogger(log.Default()))
+	return e.Ctx, e.Cfg, e.Backend, e.DB
 }
 
 func TestWarnIfAnonAdminAccess(t *testing.T) {

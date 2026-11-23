@@ -10,11 +10,7 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -23,22 +19,8 @@ import (
 // session (the keyless setting) and a TUI session with an unregistered key
 // (the anonymous level). The cause stays in the server log.
 func TestSessionAccessCheckFailure(t *testing.T) {
-	ctx := context.Background()
-	dbx, err := dbtest.Open(ctx, t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	st := database.New(nil)
-	be := backend.New(cfg, dbx, st, log.Default())
+	e := backendtest.New(t, backendtest.WithLogger(log.Default()))
+	ctx, cfg, dbx, st, be := e.Ctx, e.Cfg, e.DB, e.Store, e.Backend
 	logs := &syncBuffer{}
 
 	// Authentication lets every client in, so the session handlers decide.

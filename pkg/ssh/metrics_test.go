@@ -11,12 +11,8 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spf13/cobra"
@@ -58,22 +54,12 @@ func TestPublicKeyCounterCountsKeyAuth(t *testing.T) {
 // not be counted as one, allowed or not.
 func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	is := is.New(t)
-	ctx := context.Background()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, log.Default())
-	is.True(be.AllowKeyless(ctx))
+	e := backendtest.New(t, backendtest.WithLogger(log.Default()))
+	be := e.Backend
+	is.True(be.AllowKeyless(e.Ctx))
 
 	s := &Server{be: be}
-	hs := handlerServer(t, cfg, dbx, dbstore, be, log.Default())
+	hs := handlerServer(t, e.Cfg, e.DB, e.Store, be, log.Default())
 	srv := &ssh.Server{
 		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			s.Exit(0) //nolint:errcheck

@@ -81,10 +81,7 @@ func TestDeleteRepositoryFailureKeepsLFSObjects(t *testing.T) {
 	_, files := lfsDeleteFixture(t, be)
 	ctx := backendTestContext(be, cfg)
 
-	if _, err := be.db.ExecContext(ctx, `CREATE TRIGGER block_repo_delete BEFORE DELETE ON repos
-		BEGIN SELECT RAISE(ABORT, 'blocked'); END;`); err != nil {
-		t.Fatal(err)
-	}
+	refuseTrigger(t, ctx, be.db, "block_repo_delete", "BEFORE", "DELETE", "repos")
 	if err := be.DeleteRepository(ctx, "lfsrepo"); err == nil {
 		t.Fatal("DeleteRepository succeeded although the row delete was blocked")
 	}

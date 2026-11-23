@@ -25,7 +25,7 @@ func TestRemoveCollaboratorEventNamesStoredUsername(t *testing.T) {
 	e.awaitDeliveries(t, id, webhook.EventCollaborator)
 
 	var body string
-	is.NoErr(e.be.db.GetContext(e.ctx, &body, "SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?", id))
+	is.NoErr(e.be.db.GetContext(e.ctx, &body, e.be.db.Rebind("SELECT request_body FROM webhook_deliveries WHERE webhook_id = ?"), id))
 	is.True(strings.Contains(body, `"username":"bob"`))
 	is.True(!strings.Contains(body, "BOB"))
 }
@@ -33,10 +33,7 @@ func TestRemoveCollaboratorEventNamesStoredUsername(t *testing.T) {
 // refuseRepoUpdate makes every update of column on repos fail.
 func refuseRepoUpdate(t *testing.T, e whEnv, column string) {
 	t.Helper()
-	is := is.New(t)
-	_, err := e.be.db.ExecContext(e.ctx, "CREATE TRIGGER refuse_update BEFORE UPDATE OF "+column+
-		" ON repos BEGIN SELECT RAISE(ABORT, 'refused'); END")
-	is.NoErr(err)
+	refuseTrigger(t, e.ctx, e.be.db, "refuse_update", "BEFORE", "UPDATE OF "+column, "repos")
 }
 
 // A description the database refuses leaves the stored one as it was.

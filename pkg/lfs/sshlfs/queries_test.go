@@ -13,14 +13,12 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
-	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/storage"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // lookupCountingStore counts the per-item lookups of the SSH transfer.
@@ -44,19 +42,9 @@ func (s *lookupCountingStore) GetUserByID(ctx context.Context, h db.Handler, id 
 // name their owners from the lock query, not one lookup per object or lock.
 func TestLFSTransferLooksUpTogether(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db"), db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	base := database.New(nil)
+	e := backendtest.New(t)
+	ctx, cfg, dbx, base := e.Ctx, e.Cfg, e.DB, e.Store
+	dp := cfg.DataPath
 	admin, err := base.FindUserByUsername(ctx, dbx, "admin")
 	if err != nil {
 		t.Fatal(err)

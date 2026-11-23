@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	charmlog "charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
@@ -18,9 +19,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// newTestBackend returns a Backend backed by a real, freshly migrated SQLite
-// database, along with the *config.Config it was constructed with (so tests
-// can mutate AnonAccess/AllowKeyless directly to simulate config overrides).
+// newTestBackend returns a Backend on a freshly migrated test database
+// from dbtest (Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite
+// otherwise), along with the *config.Config it was constructed with (so
+// tests can mutate AnonAccess/AllowKeyless directly to simulate config
+// overrides). AdminOnlyCreate is left at its default (off); tests of the
+// restricted policy turn it on themselves.
+//
+// The packages outside pkg/backend use internal/backendtest, which this
+// package's tests cannot import.
 func newTestBackend(t *testing.T) (*Backend, *config.Config) {
 	t.Helper()
 	return newTestBackendWithLog(t, nil)
@@ -34,34 +41,42 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 	return newTestBackendWithQuery(t, logs, "")
 }
 
-// newTestBackendWithQuery is newTestBackendWithLog with query, which starts
-// with "&", added to the SQLite data source, such as to set its journal mode.
+// newTestBackendWithQuery is newTestBackendWithLog, on a SQLite database
+// whose data source has query, which starts with "&", added, such as to set
+// its journal mode, when query is not empty.
 func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backend, *config.Config) {
 	t.Helper()
-	is := is.New(t)
-	ctx := context.Background()
-
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" + query
-	// AdminOnlyCreate is left at its default (off); tests of the restricted
-	// policy turn it on themselves.
-
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New(nil)
 	var logger *charmlog.Logger
 	if logs != nil {
 		logger = charmlog.New(logs)
 	}
-	be := New(cfg, dbx, dbstore, logger)
+	return openTestBackend(t, logger, query)
+}
 
-	return be, cfg
+// openTestBackend is newTestBackendWithQuery with the backend logging to
+// logger; nil is the default logger.
+func openTestBackend(t *testing.T, logger *charmlog.Logger, query string) (*Backend, *config.Config) {
+	t.Helper()
+	is := is.New(t)
+	ctx := context.Background()
+
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	var dbx *db.DB
+	var err error
+	if query == "" {
+		dbx, cfg.DB.DataSource, err = dbtest.OpenSource(ctx, t)
+		is.NoErr(err)
+	} else {
+		cfg.DB.DataSource = cfg.DataPath + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" + query
+		dbx, err = db.Open(ctx, "sqlite", cfg.DB.DataSource, db.Options{})
+		is.NoErr(err)
+		t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
+	}
+	cfg.DB.Driver = dbx.DriverName()
+
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+	return New(cfg, dbx, database.New(nil), logger), cfg
 }
 
 // levelOf is the access level Readable gives user's account on repo.

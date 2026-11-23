@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"charm.land/ssh"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
@@ -42,13 +44,11 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	}
 
 	is := is.New(t)
-	cfg := newTestUIConfig(t)
 	adminKey := uiTestKey(t)
-	cfg.InitialAdminKeys = []string{proto.MarshalAuthorizedKey(adminKey)}
-	is.NoErr(cfg.Validate())
-
-	ctx := t.Context()
-	be := newTestUIBackend(t, cfg)
+	e := backendtest.New(t, backendtest.WithConfig(func(cfg *config.Config) {
+		cfg.InitialAdminKeys = []string{proto.MarshalAuthorizedKey(adminKey)}
+	}))
+	ctx, cfg, be := t.Context(), e.Cfg, e.Backend
 
 	pk := uiTestKey(t)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []gossh.PublicKey{pk}})
