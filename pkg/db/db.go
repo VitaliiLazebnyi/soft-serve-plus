@@ -246,6 +246,10 @@ const (
 // next to one of them would run first and then be undone on every new
 // connection. A foreign_keys setting that is not one of the driver's true
 // values counts as off.
+//
+// A setting counts only if it sets something: a _pragma without a value
+// reads the pragma, and the driver applies nothing for an empty key, so the
+// connection would keep SQLite's default (a busy timeout of 0).
 func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 	set := func(v string) {
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(v), `'"`)) {
@@ -270,14 +274,24 @@ func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 				set(value)
 			}
 		case "busy_timeout":
-			busy = true
+			busy = busy || value != ""
 		case "journal_mode":
-			journal = true
+			journal = journal || value != ""
 		}
 	}
-	busy = busy || q.Has("_busy_timeout") || q.Has("_timeout")
-	journal = journal || q.Has("_journal_mode") || q.Has("_journal")
+	busy = busy || driverKey(q, "_busy_timeout", "_timeout") != ""
+	journal = journal || driverKey(q, "_journal_mode", "_journal") != ""
 	return fk, busy, journal
+}
+
+// driverKey returns the value the SQLite driver takes for a setting it reads
+// from key or its alias: the first value of the alias if the query has it,
+// else the first of key.
+func driverKey(q url.Values, key, alias string) string {
+	if q.Has(alias) {
+		return q.Get(alias)
+	}
+	return q.Get(key)
 }
 
 // sqliteReadOnly reports whether a SQLite data source, dsn with its query q,

@@ -768,6 +768,17 @@ func TestSqliteDSN(t *testing.T) {
 		"soft-serve.db?_timeout=100":                  "soft-serve.db?_timeout=100&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
 		"soft-serve.db?_fk=1&_pragma=busy_timeout(1)": "soft-serve.db?_fk=1&_pragma=busy_timeout(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
 		"soft-serve.db?_pragma=foreign_keys(on)":      "soft-serve.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		// A setting without a value sets nothing: the driver applies no
+		// empty key, and a _pragma without a value only reads the pragma.
+		// Of a key and its alias, the driver takes the alias.
+		"soft-serve.db?_busy_timeout=":              "soft-serve.db?_busy_timeout=&" + added,
+		"soft-serve.db?_timeout=":                   "soft-serve.db?_timeout=&" + added,
+		"soft-serve.db?_busy_timeout=100&_timeout=": "soft-serve.db?_busy_timeout=100&_timeout=&" + added,
+		"soft-serve.db?_pragma=busy_timeout":        "soft-serve.db?_pragma=busy_timeout&" + added,
+		"soft-serve.db?_pragma=busy_timeout()":      "soft-serve.db?_pragma=busy_timeout()&" + added,
+		"soft-serve.db?_journal_mode=":              "soft-serve.db?_journal_mode=&" + added,
+		"soft-serve.db?_journal=":                   "soft-serve.db?_journal=&" + added,
+		"soft-serve.db?_pragma=journal_mode":        "soft-serve.db?_pragma=journal_mode&" + added,
 		// A journal mode the data source sets is kept.
 		"soft-serve.db?_pragma=journal_mode(DELETE)": "soft-serve.db?_pragma=journal_mode(DELETE)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"soft-serve.db?_pragma=Journal_Mode = wal":   "soft-serve.db?_pragma=Journal_Mode = wal&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
@@ -1082,6 +1093,25 @@ func TestOpenSqliteJournalModeKeys(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A busy timeout setting without a value sets nothing, so the connection
+// still gets the default one rather than SQLite's 0.
+func TestOpenSqliteEmptyBusyTimeoutGetsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, q := range []string{"_busy_timeout=", "_timeout=", "_pragma=busy_timeout"} {
+		d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "soft.db")+"?"+q, Options{})
+		if err != nil {
+			t.Errorf("Open(%s): %v", q, err)
+			continue
+		}
+		var busy int
+		if err := d.GetContext(ctx, &busy, "PRAGMA busy_timeout"); err != nil || busy != defaultSqliteBusyTimeout {
+			t.Errorf("%s: busy_timeout = %d, %v; want %d", q, busy, err, defaultSqliteBusyTimeout)
+		}
+		d.Close() //nolint:errcheck
 	}
 }
 
