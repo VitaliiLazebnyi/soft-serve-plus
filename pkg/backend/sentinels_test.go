@@ -61,7 +61,7 @@ func TestRenameOntoRowWithoutDirectory(t *testing.T) {
 	is.True(errors.Is(be.RenameRepository(ctx, "a", "taken"), proto.ErrRepoExist))
 	r, err := be.Repository(ctx, "a")
 	is.NoErr(err)
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err) // the directory moved back with the claim given up
 }
 

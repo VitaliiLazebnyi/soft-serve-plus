@@ -98,7 +98,7 @@ func TestEnsureWithinGood(t *testing.T) {
 
 func TestEnsureDefaultBranchEmpty(t *testing.T) {
 	tmp := t.TempDir()
-	r, err := git.Init(tmp, false)
+	r, err := git.Init(t.Context(), tmp, false)
 	if err != nil {
 		t.Fatal(err)
 	}

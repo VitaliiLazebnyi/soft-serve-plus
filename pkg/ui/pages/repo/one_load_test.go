@@ -26,12 +26,12 @@ type gatedRepo struct {
 	waiting *atomic.Int32
 }
 
-func (r gatedRepo) Open() (*git.Repository, error) {
+func (r gatedRepo) Open(ctx context.Context) (*git.Repository, error) {
 	if r.gating.Load() {
 		r.waiting.Add(1)
 		<-r.gate
 	}
-	return r.diskRepo.Open()
+	return r.diskRepo.Open(ctx)
 }
 
 // gitLog puts a git on PATH that records each of its commands in a file
@@ -131,7 +131,7 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 		gate:     make(chan struct{}),
 		waiting:  new(atomic.Int32),
 	}
-	gr, err := repo.Open()
+	gr, err := repo.Open(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

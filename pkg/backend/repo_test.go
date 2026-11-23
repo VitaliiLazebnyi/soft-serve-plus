@@ -366,7 +366,7 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 		t.Helper()
 		_, err := seedCreate(be, ctx, name, owner, proto.RepositoryOptions{})
 		is.NoErr(err)
-		r, err := git.Open(be.repoPath(name))
+		r, err := git.Open(t.Context(), be.repoPath(name))
 		is.NoErr(err)
 		is.NoErr(r.ConfigSet("remote.origin.url", remote))
 		if lfsURL != "" {
@@ -390,7 +390,7 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	is.True(errors.Is(err, proto.ErrUnauthorized))
 	is.True(errors.Is(err, errMirrorOwnerNotAdmin))
 	is.True(!isMirror("alice-ssh"))
-	r, err := git.Open(be.repoPath("alice-ssh"))
+	r, err := git.Open(t.Context(), be.repoPath("alice-ssh"))
 	is.NoErr(err)
 	_, set, err := r.ConfigGet("remote.origin.mirror")
 	is.NoErr(err)
@@ -453,7 +453,7 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 	is.NoErr(err)
 	_, err = seedCreate(be, ctx, "slow", admin, proto.RepositoryOptions{})
 	is.NoErr(err)
-	r, err := git.Open(be.repoPath("slow"))
+	r, err := git.Open(t.Context(), be.repoPath("slow"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 

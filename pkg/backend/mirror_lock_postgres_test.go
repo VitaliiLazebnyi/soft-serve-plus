@@ -30,7 +30,7 @@ func TestSetMirrorLocksCheckedRowPostgres(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
-	r, err := git.Open(e.be.repoPath("repo"))
+	r, err := git.Open(t.Context(), e.be.repoPath("repo"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	e.be.validateGitRemote = func(context.Context, string, ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {

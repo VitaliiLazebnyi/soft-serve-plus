@@ -59,7 +59,7 @@ func setupQuotedNamesRepo(t *testing.T, paths ...string) (*Repository, *Referenc
 	}
 	run("", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "init")
 
-	repo, err := Open(repoPath)
+	repo, err := Open(t.Context(), repoPath)
 	if err != nil {
 		t.Fatalf("failed to open repository: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestTreeQuotedNames(t *testing.T) {
 		if want := "content of " + p + "\n"; string(bts) != want {
 			t.Errorf("Contents(%q) = %q, want %q", p, bts, want)
 		}
-		if _, err := repo.BlameFile(ref.ID, te.File().Path()); err != nil {
+		if _, err := repo.BlameFile(ref.ID(), te.File().Path()); err != nil {
 			t.Errorf("BlameFile(%q) failed: %v", p, err)
 		}
 	}
@@ -208,7 +208,7 @@ func newFilesRepo(t *testing.T, files map[string][]byte) (*Repository, *Referenc
 		}
 	}
 
-	repo, err := Open(repoPath)
+	repo, err := Open(t.Context(), repoPath)
 	if err != nil {
 		t.Fatalf("failed to open repository: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestContentsPreallocates(t *testing.T) {
 			t.Fatalf("git %s failed: %v\n%s", args[0], err, out)
 		}
 	}
-	r := repo.WithContext(context.Background())
+	r := repo
 	head, err := r.HEAD()
 	if err != nil {
 		t.Fatalf("HEAD: %v", err)

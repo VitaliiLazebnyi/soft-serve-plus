@@ -33,7 +33,7 @@ var Command = &cobra.Command{
 			return err
 		}
 
-		r, err := git.OpenLocal(abs)
+		r, err := git.OpenLocal(cmd.Context(), abs)
 		if err != nil {
 			return fmt.Errorf("failed to open repository: %w", err)
 		}
@@ -281,9 +281,10 @@ func (r repository) Name() string {
 	return filepath.Base(r.r.Path)
 }
 
-// Open implements repo.Repository.
-func (r repository) Open() (*git.Repository, error) {
-	return r.r, nil
+// Open implements repo.Repository. It opens the repository again, bound
+// to ctx, the context of the UI load that asks for it.
+func (r repository) Open(ctx context.Context) (*git.Repository, error) {
+	return git.OpenLocal(ctx, r.r.Path)
 }
 
 // ProjectName implements repo.Repository.

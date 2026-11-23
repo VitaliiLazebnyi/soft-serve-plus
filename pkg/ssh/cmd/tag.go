@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -35,7 +34,7 @@ func (cmds *Commands) tagListCommand() *cobra.Command {
 				return err
 			}
 
-			tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
+			tags, err := r.Tags()
 			if err != nil {
 				return cmds.gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
@@ -73,7 +72,7 @@ func (cmds *Commands) tagDeleteCommand() *cobra.Command {
 			}
 
 			tag := args[1]
-			tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
+			tags, err := r.Tags()
 			if err != nil {
 				return cmds.gitFailed(cmd.Context(), "list tags", rr.Name(), err)
 			}
@@ -97,7 +96,7 @@ func (cmds *Commands) tagDeleteCommand() *cobra.Command {
 			// gets a generic error. So is a delete of the same tag that
 			// another session finished in between: this one then fails
 			// with errGitFailed, and git's error is logged at Error.
-			tagID, err := r.ShowRefVerify(git.RefsTags+tag, gitm.ShowRefVerifyOptions{CommandOptions: gitm.CommandOptions{Context: ctx}})
+			tagID, err := r.ShowRefVerify(git.RefsTags + tag)
 			if err != nil {
 				return cmds.gitFailed(ctx, "read tag", rr.Name(), err)
 			}

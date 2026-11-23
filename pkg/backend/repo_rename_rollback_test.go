@@ -54,7 +54,7 @@ func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 	is.True(os.IsNotExist(err))
 	_, err = os.Lstat(filepath.Join(cfg.DataPath, "repos", "other"))
 	is.True(os.IsNotExist(err)) // no empty group left behind
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err)
 }
 
@@ -79,7 +79,7 @@ func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 	is.NoErr(be.RenameRepository(ctx, "old", "new"))
 	r, err := be.Repository(ctx, "new")
 	is.NoErr(err) // the row and the directory are under the new name
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err)
 	_, err = os.Lstat(be.repoPath("old"))
 	is.True(os.IsNotExist(err))

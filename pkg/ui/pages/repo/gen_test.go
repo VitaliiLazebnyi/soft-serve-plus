@@ -18,8 +18,8 @@ type diskRepo struct {
 	name, path string
 }
 
-func (r diskRepo) Name() string                   { return r.name }
-func (r diskRepo) Open() (*git.Repository, error) { return git.Open(r.path) }
+func (r diskRepo) Name() string                                      { return r.name }
+func (r diskRepo) Open(ctx context.Context) (*git.Repository, error) { return git.Open(ctx, r.path) }
 
 // newDiskRepo creates a repository with a README on its branch.
 func newDiskRepo(t *testing.T, name, branch, readme string) diskRepo {
@@ -104,7 +104,7 @@ func TestRepoDropsLateMessages(t *testing.T) {
 	// Switch B to another ref; the readme of the previous one arrives
 	// late.
 	lateReadmeTrunk := readme.updateReadmeCmd()
-	rr, err := b.Open()
+	rr, err := b.Open(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

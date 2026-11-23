@@ -26,7 +26,7 @@ func TestFilesFileLoadKeepsListing(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "bin.dat"), "\x00\x01\x02binary")
 	gitRun(t, dir, "add", "-A")
 	gitRun(t, dir, "commit", "-q", "-m", "first")
-	gr, err := git.Open(dir)
+	gr, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

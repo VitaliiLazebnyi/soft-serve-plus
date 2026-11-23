@@ -50,7 +50,7 @@ func newDriveRepo(t *testing.T) *git.Repository {
 	gitCmd("-C", dir, "tag", "v1")
 	write("file.txt", "stashed\n")
 	gitCmd("-C", dir, "stash", "push", "-q", "-m", "stash-subject")
-	r, err := git.OpenLocal(dir)
+	r, err := git.OpenLocal(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

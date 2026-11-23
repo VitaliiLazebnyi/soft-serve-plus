@@ -21,6 +21,9 @@ func diffStat(d *Diff) string  { return d.Stat }
 type diffRepo struct {
 	t   *testing.T
 	dir string
+	// limits, when set, replaces the diff limits of the repositories open
+	// returns.
+	limits *DiffLimits
 }
 
 func newDiffRepo(t *testing.T) *diffRepo {
@@ -75,9 +78,12 @@ func (r *diffRepo) commit(msg string) *Commit {
 
 func (r *diffRepo) open() *Repository {
 	r.t.Helper()
-	repo, err := Open(r.dir)
+	repo, err := Open(r.t.Context(), r.dir)
 	if err != nil {
 		r.t.Fatal(err)
+	}
+	if r.limits != nil {
+		repo.diffLimits = *r.limits
 	}
 	return repo
 }
@@ -292,14 +298,13 @@ func TestDiffTotalCap(t *testing.T) {
 	}
 }
 
-// setDiffLimits sets the default diff limits for one test.
-func setDiffLimits(t *testing.T, l DiffLimits) {
-	t.Helper()
-	prev := DefaultDiffLimits()
-	DiffMaxFiles, DiffMaxFileLines, DiffMaxLineBytes, DiffMaxBytes = l.Files, l.FileLines, l.LineBytes, l.Bytes
-	t.Cleanup(func() {
-		DiffMaxFiles, DiffMaxFileLines, DiffMaxLineBytes, DiffMaxBytes = prev.Files, prev.FileLines, prev.LineBytes, prev.Bytes
-	})
+// withMaxBytes returns r with its repositories' total diff cap lowered to n,
+// the other limits left at their defaults.
+func (r *diffRepo) withMaxBytes(n int) *diffRepo {
+	l := DefaultDiffLimits()
+	l.Bytes = n
+	r.limits = &l
+	return r
 }
 
 // capsRepo returns a commit changing four files: a.txt with 2 lines,
@@ -385,8 +390,9 @@ func TestDiffCaps(t *testing.T) {
 
 // The default limits apply to Diff; PatchLimits caps only the total.
 func TestDiffDefaultAndPatchLimits(t *testing.T) {
-	setDiffLimits(t, DiffLimits{Files: 1000, FileLines: 10, LineBytes: 1000, Bytes: 1 << 20})
+	t.Parallel()
 	r, c := capsRepo(t)
+	r.limits = &DiffLimits{Files: 1000, FileLines: 10, LineBytes: 1000, Bytes: 1 << 20}
 	if d := r.diff(c); !d.Truncated || strings.Contains(d.Patch, "+line 49\n") {
 		t.Errorf("Diff ignores DiffMaxFileLines:\n%s", d.Patch)
 	}
@@ -407,12 +413,9 @@ func TestDiffDefaultAndPatchLimits(t *testing.T) {
 // over the size cap, before or after: --binary would spend seconds and
 // gigabytes encoding it only for the result to be cut.
 func TestPatchRefusesLargeBlob(t *testing.T) {
-	prev := DiffMaxBytes
-	DiffMaxBytes = 2000
-	t.Cleanup(func() { DiffMaxBytes = prev })
-
+	t.Parallel()
 	big := strings.Repeat("\x00binary\x01", 1000) // 8000 bytes
-	r := newDiffRepo(t)
+	r := newDiffRepo(t).withMaxBytes(2000)
 	r.put("small.txt", "small\n")
 	r.commit("root")
 	r.put("big.bin", big)
@@ -460,14 +463,11 @@ func TestPatchRefusesLargeBlob(t *testing.T) {
 // would reach cat-file as revisions, where ":/text" walks the whole history
 // and "HEAD:big.bin" names a large blob that is not part of the change.
 func TestPatchHeaderLikePath(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("git refuses ':' in a path on Windows")
 	}
-	prev := DiffMaxBytes
-	DiffMaxBytes = 2000
-	t.Cleanup(func() { DiffMaxBytes = prev })
-
-	r := newDiffRepo(t)
+	r := newDiffRepo(t).withMaxBytes(2000)
 	r.put("big.bin", strings.Repeat("\x00binary\x01", 1000))
 	r.commit("root")
 	for _, path := range []string{
@@ -490,6 +490,7 @@ func TestPatchHeaderLikePath(t *testing.T) {
 // file) well over twice its patch; a patch that fits its cap must not be
 // refused for it.
 func TestPatchMassRenameFits(t *testing.T) {
+	t.Parallel()
 	r := newDiffRepo(t)
 	for i := range 50 {
 		r.put(fmt.Sprintf("a%02d", i), fmt.Sprintf("content %d\n", i))
@@ -505,15 +506,13 @@ func TestPatchMassRenameFits(t *testing.T) {
 		t.Fatalf("Patch = %+v, %v", full, err)
 	}
 
-	prev := DiffMaxBytes
-	DiffMaxBytes = len(full.Patch) + 100
-	t.Cleanup(func() { DiffMaxBytes = prev })
-	d, err := r.open().Patch(c)
+	limit := len(full.Patch) + 100
+	d, err := r.withMaxBytes(limit).open().Patch(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Truncated {
-		t.Errorf("a %d-byte rename patch under a %d-byte cap was refused", len(full.Patch), DiffMaxBytes)
+		t.Errorf("a %d-byte rename patch under a %d-byte cap was refused", len(full.Patch), limit)
 	}
 }
 
@@ -719,15 +718,14 @@ func TestDiffHugeMemory(t *testing.T) {
 			r.put("big.txt", tc.content)
 			r.put("z.txt", "after\n")
 			c := r.commit("big")
+			const patchCap = 1 << 20
+			if tc.patch {
+				// Under the total cap the big file alone is over it.
+				r.withMaxBytes(patchCap)
+			}
 			repo := r.open()
 			var d *Diff
 			var err error
-			if tc.patch {
-				// Under the total cap the big file alone is over it.
-				prev := DiffMaxBytes
-				DiffMaxBytes = 1 << 20
-				t.Cleanup(func() { DiffMaxBytes = prev })
-			}
 			n := allocated(func() {
 				if tc.patch {
 					d, err = repo.Patch(c)
@@ -742,7 +740,7 @@ func TestDiffHugeMemory(t *testing.T) {
 				t.Errorf("allocated %d bytes for a %d byte file", n, size)
 			}
 			if tc.patch {
-				if !d.Truncated || len(d.Patch) > DiffMaxBytes+len(DiffTruncated) {
+				if !d.Truncated || len(d.Patch) > patchCap+len(DiffTruncated) {
 					t.Errorf("Truncated = %v, %d bytes", d.Truncated, len(d.Patch))
 				}
 				return

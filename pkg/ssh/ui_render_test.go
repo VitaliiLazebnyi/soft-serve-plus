@@ -22,7 +22,7 @@ func commitTo(t *testing.T, ui *UI, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gr, err := r.Open()
+	gr, err := r.Open(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -55,7 +56,7 @@ type Repository interface {
 	ProjectName() string
 	Description() string
 	IsPrivate() bool
-	Open() (*git.Repository, error)
+	Open(ctx context.Context) (*git.Repository, error)
 }
 
 // RepoMsg is a message that contains a repository.

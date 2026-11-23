@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	gitm "github.com/aymanbagabas/git-module"
-
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -76,7 +74,7 @@ func (cmds *Commands) RepoCommand() *cobra.Command {
 				if err != nil {
 					return cmds.gitFailed(ctx, "list branches", rr.Name(), err)
 				}
-				tags, err := r.Tags(gitm.TagsOptions{CommandOptions: gitm.CommandOptions{Context: cmd.Context()}})
+				tags, err := r.Tags()
 				if err != nil {
 					return cmds.gitFailed(ctx, "list tags", rr.Name(), err)
 				}

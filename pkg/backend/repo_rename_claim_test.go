@@ -45,7 +45,7 @@ func TestRenameRepositoryClaimsNewPath(t *testing.T) {
 
 	r, err := be.Repository(ctx, "c")
 	is.NoErr(err)
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err)
 }
 
@@ -68,7 +68,7 @@ func TestRenameRepositoryFailureReleasesClaim(t *testing.T) {
 	is.True(errors.Is(err, os.ErrNotExist)) // the claim was given up
 	r, err := be.Repository(ctx, "a")
 	is.NoErr(err)
-	_, err = r.Open()
+	_, err = r.Open(t.Context())
 	is.NoErr(err)
 }
 

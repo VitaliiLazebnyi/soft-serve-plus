@@ -51,7 +51,7 @@ func TestOpenErrorLoggedNotLeaked(t *testing.T) {
 			t.Fatal(err)
 		}
 		logStart := len(logs.String())
-		_, err = r.Open()
+		_, err = r.Open(t.Context())
 		check(t, err, logStart)
 	})
 

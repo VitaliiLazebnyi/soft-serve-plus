@@ -21,7 +21,7 @@ func TestRenderCommitShowsAuthorDate(t *testing.T) {
 	gitRun(t, filepath.Dir(dir), "init", "-q", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first", "--date", "2001-02-03T04:05:06Z")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestRenderCommitShowsAuthorDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := r.CatFileCommit(head.ID)
+	c, err := r.CatFileCommit(head.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

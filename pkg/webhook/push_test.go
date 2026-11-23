@@ -28,7 +28,7 @@ func gitRepoWithCommits(t *testing.T, n int, msg string) (string, string) {
 	t.Helper()
 	is := is.New(t)
 	dir := filepath.Join(t.TempDir(), "repo.git")
-	_, err := git.Init(dir, true)
+	_, err := git.Init(t.Context(), dir, true)
 	is.NoErr(err)
 	work := t.TempDir()
 	msgFile := filepath.Join(t.TempDir(), "msg")

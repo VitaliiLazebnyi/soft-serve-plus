@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"context"
 	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
@@ -31,8 +32,9 @@ type Repository interface {
 	// UpdatedAt returns the time the repository was last updated.
 	// If the repository has never been updated, it returns the time it was created.
 	UpdatedAt() time.Time
-	// Open returns the underlying git.Repository.
-	Open() (*git.Repository, error)
+	// Open returns the underlying git.Repository, whose git commands run
+	// under ctx (see git.Open).
+	Open(ctx context.Context) (*git.Repository, error)
 }
 
 // RepositoryOptions are options for creating a new repository.
@@ -46,9 +48,10 @@ type RepositoryOptions struct {
 	LFSEndpoint string
 }
 
-// RepositoryDefaultBranch returns the default branch of a repository.
-func RepositoryDefaultBranch(repo Repository) (string, error) {
-	r, err := repo.Open()
+// RepositoryDefaultBranch returns the default branch of a repository, read
+// under ctx.
+func RepositoryDefaultBranch(ctx context.Context, repo Repository) (string, error) {
+	r, err := repo.Open(ctx)
 	if err != nil {
 		return "", err
 	}

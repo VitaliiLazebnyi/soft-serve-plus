@@ -26,7 +26,7 @@ func TestHTTPMirrorRefusesPush(t *testing.T) {
 	_, err := f.be.CreateRepository(ownerCtx, "m", f.owner, proto.RepositoryOptions{})
 	is.NoErr(err)
 	is.NoErr(f.be.AddCollaborator(ownerCtx, "m", "stranger", access.ReadWriteAccess))
-	r, err := gitb.Open(filepath.Join(f.env.cfg.DataPath, "repos", "m.git"))
+	r, err := gitb.Open(t.Context(), filepath.Join(f.env.cfg.DataPath, "repos", "m.git"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
 	is.NoErr(f.be.SetMirror(ownerCtx, "m", true))

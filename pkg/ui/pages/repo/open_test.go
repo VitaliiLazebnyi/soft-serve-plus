@@ -27,9 +27,6 @@ func TestOpenWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWithContext: %v", err)
 	}
-	if r.Context() != live {
-		t.Fatal("openWithContext did not bind the context")
-	}
 	cancelLive()
 	if _, err := r.HEAD(); err == nil {
 		t.Fatal("HEAD with a cancelled context succeeded; want an error")

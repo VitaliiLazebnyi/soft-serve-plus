@@ -155,7 +155,7 @@ func TestRegisterRepositoryAdoptsClaimedPath(t *testing.T) {
 	rp := filepath.Join(cfg.DataPath, "repos", "imported.git")
 	is.NoErr(claimRepoPath(rp))
 	is.True(errors.Is(claimRepoPath(rp), proto.ErrRepoExist))
-	_, err = git.Init(rp, true)
+	_, err = git.Init(t.Context(), rp, true)
 	is.NoErr(err)
 
 	r, err := be.registerRepository(ctx, "imported", owner, proto.RepositoryOptions{Private: true}, false)

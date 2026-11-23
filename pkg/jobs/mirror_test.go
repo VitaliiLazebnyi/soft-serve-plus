@@ -26,7 +26,7 @@ func newRepoWithRemotes(t *testing.T, remotes map[string]string) *git.Repository
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "repo.git")
-	if _, err := git.Init(path, true); err != nil {
+	if _, err := git.Init(t.Context(), path, true); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func newRepoWithRemotes(t *testing.T, remotes map[string]string) *git.Repository
 		}
 	}
 
-	r, err := git.Open(path)
+	r, err := git.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

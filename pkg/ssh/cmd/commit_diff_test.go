@@ -131,13 +131,12 @@ func TestRepoCommitPatchApplies(t *testing.T) {
 // into git apply, a cut patch would apply the files before the cut and
 // succeed. The view for reading is cut and says so, and does not fail.
 func TestRepoCommitPatchTruncated(t *testing.T) {
-	// Not parallel: it lowers the package variable git.DiffMaxBytes.
-	prev := sgit.DiffMaxBytes
-	sgit.DiffMaxBytes = 300
-	t.Cleanup(func() { sgit.DiffMaxBytes = prev })
-
+	t.Parallel()
 	ctx, git := diffRepo(t)
-	blob := git(strings.Repeat("a line of text\n", 100), "hash-object", "-w", "--stdin")
+	// A blob just over the patch cap, of short lines that compress well.
+	line := "a line of text\n"
+	big := strings.Repeat(line, sgit.DiffMaxBytes/len(line)+1)
+	blob := git(big, "hash-object", "-w", "--stdin")
 	git("", "update-index", "--add", "--cacheinfo", "100644,"+blob+",big.txt")
 	git("", "commit", "-q", "-m", "big")
 	git("", "push", "-q", "origin", "main")

@@ -15,10 +15,24 @@ const (
 	RefsTags = git.RefsTags
 )
 
-// Reference is a wrapper around git.Reference with helper methods.
+// Reference is a reference of a repository, such as a branch or a tag, and
+// the object it points to.
 type Reference struct {
-	*git.Reference
-	path string // repo path
+	// id is the ID of the object the reference points to.
+	id string
+	// refspec is the reference's full name, such as refs/heads/main.
+	refspec string
+}
+
+// NewReference returns the reference named refspec, a full name such as
+// refs/heads/main, that points to the object id.
+func NewReference(id, refspec string) *Reference {
+	return &Reference{id: id, refspec: refspec}
+}
+
+// ID returns the ID of the object the reference points to.
+func (r *Reference) ID() string {
+	return r.id
 }
 
 // ReferenceName is a Refspec wrapper.
@@ -36,15 +50,15 @@ func (r ReferenceName) Short() string {
 
 // Name returns the reference name i.e. refs/heads/master.
 func (r *Reference) Name() ReferenceName {
-	return ReferenceName(r.Refspec)
+	return ReferenceName(r.refspec)
 }
 
 // IsBranch returns true if the reference is a branch.
 func (r *Reference) IsBranch() bool {
-	return strings.HasPrefix(r.Refspec, git.RefsHeads)
+	return strings.HasPrefix(r.refspec, git.RefsHeads)
 }
 
 // IsTag returns true if the reference is a tag.
 func (r *Reference) IsTag() bool {
-	return strings.HasPrefix(r.Refspec, git.RefsTags)
+	return strings.HasPrefix(r.refspec, git.RefsTags)
 }

@@ -170,7 +170,7 @@ func bigTreeRepo(t *testing.T, n int, extra ...string) (*Repository, string) {
 		fmt.Fprintf(&in, "100644 blob %s\t%s\n", blob, name)
 	}
 	id := gitRun(t, dir, in.String(), "mktree")
-	repo, err := Open(dir)
+	repo, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestTreeEntriesNameBudget(t *testing.T) {
 		fmt.Fprintf(&in, "100644 blob %s\t%04d%s\n", blob, i, strings.Repeat("n", nameLen-4))
 	}
 	id := gitRun(t, dir, in.String(), "mktree")
-	repo, err := Open(dir)
+	repo, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestTreeEntriesPathBudget(t *testing.T) {
 	for i := depth - 1; i >= 0; i-- {
 		id = gitRun(t, dir, "040000 tree "+id+"\t"+parts[i]+"\n", "mktree")
 	}
-	repo, err := Open(dir)
+	repo, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestTreeEntriesMissingBlob(t *testing.T) {
 	blob := gitRun(t, dir, "x", "hash-object", "-w", "--stdin")
 	const missing = "0123456789abcdef0123456789abcdef01234567"
 	id := gitRun(t, dir, "100644 blob "+missing+"\tgone\n100644 blob "+blob+"\there\n", "mktree", "--missing")
-	repo, err := Open(dir)
+	repo, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

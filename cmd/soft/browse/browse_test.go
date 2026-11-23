@@ -83,7 +83,7 @@ func TestRefAfterRepo(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

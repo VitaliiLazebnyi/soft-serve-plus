@@ -10,7 +10,7 @@ import (
 
 func initBareRepo(t *testing.T) *Repository {
 	t.Helper()
-	r, err := Init(filepath.Join(t.TempDir(), "repo"), true)
+	r, err := Init(t.Context(), filepath.Join(t.TempDir(), "repo"), true)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}

@@ -12,8 +12,8 @@ import (
 	"github.com/aymanbagabas/git-module"
 )
 
-// Default caps on a diff; see DiffLimits. They are variables for tests.
-var (
+// Default caps on a diff; see DiffLimits.
+const (
 	// DiffMaxFiles is the most files a diff shows.
 	DiffMaxFiles = 1000
 	// DiffMaxFileLines is the most lines of one file's patch a diff shows.
@@ -60,7 +60,13 @@ func DefaultDiffLimits() DiffLimits {
 // applied: only the total size is capped, as cutting a file or a line would
 // make the patch useless to git apply.
 func PatchLimits() DiffLimits {
-	return DiffLimits{Bytes: DiffMaxBytes}
+	return patchLimits(DefaultDiffLimits())
+}
+
+// patchLimits returns the limits of a patch for the diff limits l: only its
+// total.
+func patchLimits(l DiffLimits) DiffLimits {
+	return DiffLimits{Bytes: l.Bytes}
 }
 
 // Diff is a diff as git prints it, cut to its limits.
@@ -117,7 +123,7 @@ func (r *Repository) diffCommand(mode []string, args ...string) *git.Command {
 	return git.NewCommand("-c", "core.quotePath=false", "diff-tree").
 		AddOptions(git.CommandOptions{
 			Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
-			Context: r.Context(),
+			Context: r.ctx,
 		}).
 		AddArgs(diffArgs...).
 		AddArgs(mode...).
@@ -141,7 +147,7 @@ func commitDiffArgs(commit *Commit) ([]string, error) {
 // Diff returns the diff of commit against its first parent, or for a root
 // commit against nothing, with DefaultDiffLimits.
 func (r *Repository) Diff(commit *Commit) (*Diff, error) {
-	return r.DiffLimited(commit, DefaultDiffLimits())
+	return r.DiffLimited(commit, r.diffLimits)
 }
 
 // DiffLimited returns the diff of commit against its first parent, or for a
@@ -168,7 +174,7 @@ func (r *Repository) Patch(commit *Commit) (*Diff, error) {
 	if err != nil {
 		return nil, err
 	}
-	limits := PatchLimits()
+	limits := patchLimits(r.diffLimits)
 	if limits.Bytes > 0 {
 		fits, err := r.changedBlobsFit(args, int64(limits.Bytes))
 		if err != nil {
@@ -241,7 +247,7 @@ const rawListingFactor = 5
 func (r *Repository) plainCommand(args ...string) *git.Command {
 	return git.NewCommand(args...).AddOptions(git.CommandOptions{
 		Envs:    []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
-		Context: r.Context(),
+		Context: r.ctx,
 	})
 }
 
@@ -317,7 +323,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 // DefaultDiffLimits.
 func (r *Repository) StashDiff(index int) (*Diff, error) {
 	stash := "stash@{" + strconv.Itoa(index) + "}"
-	return r.runDiff(r.diffCommand(diffViewArgs, "--end-of-options", stash+"^1", stash), DefaultDiffLimits())
+	return r.runDiff(r.diffCommand(diffViewArgs, "--end-of-options", stash+"^1", stash), r.diffLimits)
 }
 
 // runDiff runs cmd and returns its output cut to limits. Once the output is

@@ -35,7 +35,7 @@ func newPointerRepo(t *testing.T) *git.Repository {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	repo, err := git.Open(dir)
+	repo, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

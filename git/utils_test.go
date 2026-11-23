@@ -39,7 +39,7 @@ func setupTreeRepo(t *testing.T, entries map[string][2]string) (*Repository, *Re
 	}
 	gitRun(t, dir, "", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "init")
 
-	repo, err := Open(dir)
+	repo, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

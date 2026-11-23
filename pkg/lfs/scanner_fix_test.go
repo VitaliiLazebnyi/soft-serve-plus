@@ -102,7 +102,7 @@ func TestSearchPointerBlobsIgnoresReplaceRefs(t *testing.T) {
 	large := run(p.String()+strings.Repeat("x", 4*blobSizeCutoff), "hash-object", "-w", "--stdin")
 	run("", "replace", pointerBlob, large)
 
-	repo, err := git.Open(work)
+	repo, err := git.Open(t.Context(), work)
 	if err != nil {
 		t.Fatal(err)
 	}

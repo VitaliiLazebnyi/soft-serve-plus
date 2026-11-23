@@ -14,7 +14,7 @@ func TestServerReadsIgnoreReplaceRefs(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 	r := readmeRepo(t, map[string]string{"README.md": "real"})
-	rr, err := r.Open()
+	rr, err := r.Open(t.Context())
 	is.NoErr(err)
 	dir := rr.Path
 	head := gitIn(t, dir, "", "rev-parse", "HEAD")

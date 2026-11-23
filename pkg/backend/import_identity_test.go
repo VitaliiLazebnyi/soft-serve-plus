@@ -66,7 +66,7 @@ func TestFailedImportDeletesByIdentity(t *testing.T) {
 
 	// The import set its LFS endpoint in its own clone only, not in the
 	// config of the repository now under the name.
-	gr, err := r.Open()
+	gr, err := r.Open(t.Context())
 	is.NoErr(err)
 	lfsURL, _, err := gr.ConfigGet("lfs.url")
 	is.NoErr(err)

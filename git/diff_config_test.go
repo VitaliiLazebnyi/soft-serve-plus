@@ -64,7 +64,7 @@ func TestDiffIgnoresOutputConfig(t *testing.T) {
 	write("three\n")
 	run("-c", "user.email=test@example.com", "-c", "user.name=Test", "stash", "-q")
 
-	repo, err := Open(repoPath)
+	repo, err := Open(t.Context(), repoPath)
 	if err != nil {
 		t.Fatal(err)
 	}

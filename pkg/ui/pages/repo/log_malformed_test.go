@@ -26,7 +26,7 @@ func TestLogSkipsMalformedCommit(t *testing.T) {
 			gittest.Git(t, dir, nil, "update-ref", "refs/heads/main", top)
 			gittest.Git(t, dir, nil, "symbolic-ref", "HEAD", "refs/heads/main")
 
-			r, err := git.Open(dir)
+			r, err := git.Open(t.Context(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}

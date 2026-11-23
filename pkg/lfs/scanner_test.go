@@ -77,7 +77,7 @@ func TestSearchPointerBlobsCancel(t *testing.T) {
 		}
 	}
 
-	repo, err := git.Open(work)
+	repo, err := git.Open(t.Context(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSearchPointerBlobsFindsOnlySmallPointers(t *testing.T) {
 		t.Errorf("the scan's rev-list lists the large blob %s a tag names", largeBlob)
 	}
 
-	repo, err := git.Open(work)
+	repo, err := git.Open(t.Context(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestSearchPointerBlobsBetween(t *testing.T) {
 		run("commit", "-q", "-m", fmt.Sprintf("add pointer %d", i))
 		tips = append(tips, run("rev-parse", "HEAD"))
 	}
-	repo, err := git.Open(work)
+	repo, err := git.Open(t.Context(), work)
 	if err != nil {
 		t.Fatal(err)
 	}

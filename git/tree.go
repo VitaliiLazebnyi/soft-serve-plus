@@ -43,8 +43,9 @@ type Tree struct {
 	// id is the tree object's full hex ID.
 	id string
 	// Path is the tree's path from the root tree, "" for the root.
-	Path       string
-	Repository *Repository
+	Path string
+	// repo is the repository the tree was read from.
+	repo *Repository
 }
 
 // TreeEntry is an entry of a tree: a file, a directory, a symlink or a
@@ -113,27 +114,27 @@ func (es Entries) Sort() {
 
 // File is a file of a tree, read through its entry.
 type File struct {
-	Entry *TreeEntry
+	entry *TreeEntry
 }
 
 // Name returns the name of the file.
 func (f *File) Name() string {
-	return f.Entry.Name()
+	return f.entry.Name()
 }
 
 // Path returns the full path of the file.
 func (f *File) Path() string {
-	return f.Entry.path
+	return f.entry.path
 }
 
 // ID returns the ID of the file's blob.
 func (f *File) ID() *git.SHA1 {
-	return f.Entry.ID()
+	return f.entry.ID()
 }
 
 // Size returns the size of the file's blob.
 func (f *File) Size() int64 {
-	return f.Entry.Size()
+	return f.entry.Size()
 }
 
 // cleanTreePath cleans a path relative to a tree. It returns "" for the
@@ -164,7 +165,7 @@ func (e *TreeEntry) Tree() (*Tree, error) {
 	if !e.IsTree() {
 		return nil, ErrRevisionNotExist
 	}
-	return &Tree{id: e.id, Path: e.path, Repository: e.repo}, nil
+	return &Tree{id: e.id, Path: e.path, repo: e.repo}, nil
 }
 
 // Entries returns the entries of the tree, in git's order, read by one git
@@ -204,7 +205,7 @@ func (t *Tree) TreeEntry(path string) (*TreeEntry, error) {
 			typ:  git.ObjectTree,
 			id:   t.id,
 			path: t.Path,
-			repo: t.Repository,
+			repo: t.repo,
 		}, nil
 	}
 	// Without -t, git prints the entry at the path alone, not the trees on
@@ -231,15 +232,15 @@ func (t *Tree) lsTree(path string, limit int) (Entries, bool, error) {
 		args = append(args, "--", path)
 	}
 	// Literal pathspecs: a name such as ":(glob)x" or "*" is a name.
-	cmd := NewCommandWithContext(t.Repository.Context(), args...).AddEnvs(
+	cmd := NewCommandWithContext(t.repo.ctx, args...).AddEnvs(
 		"GIT_LITERAL_PATHSPECS=1",
 		"GIT_GLOB_PATHSPECS=0",
 		"GIT_NOGLOB_PATHSPECS=0",
 		"GIT_ICASE_PATHSPECS=0",
 	)
-	p := &lsTreeParser{repo: t.Repository, dir: t.Path, limit: limit}
+	p := &lsTreeParser{repo: t.repo, dir: t.Path, limit: limit}
 	var stderr bytes.Buffer
-	err := cmd.RunInDirPipeline(p, &stderr, t.Repository.Path)
+	err := cmd.RunInDirPipeline(p, &stderr, t.repo.Path)
 	switch {
 	case p.err != nil:
 		return nil, false, p.err
@@ -426,8 +427,8 @@ func IsBinary(r io.Reader) (bool, error) {
 // stderr. It runs under the context of the repository the file was read
 // from.
 func (f *File) Pipeline(stdout, stderr io.Writer) error {
-	r := f.Entry.repo
-	return git.NewCommandWithContext(r.Context(), "show", f.Entry.id).
+	r := f.entry.repo
+	return git.NewCommandWithContext(r.ctx, "show", f.entry.id).
 		RunInDirPipeline(stdout, stderr, r.Path)
 }
 
@@ -450,9 +451,20 @@ func (e *TreeEntry) Mode() fs.FileMode {
 	}
 }
 
-// File returns the file for the TreeEntry.
+// File returns the file for the TreeEntry, read through the repository
+// the entry was listed from, under that repository's context.
 func (e *TreeEntry) File() *File {
-	return &File{Entry: e}
+	return &File{entry: e}
+}
+
+// EntryFile returns the file for e, read through r, under r's context, in
+// place of the repository e was listed from. It is for an entry listed
+// under a context that has since ended, such as a TUI listing a later one
+// replaced.
+func (r *Repository) EntryFile(e *TreeEntry) *File {
+	ee := *e
+	ee.repo = r
+	return &File{entry: &ee}
 }
 
 // Contents returns the contents of the file.

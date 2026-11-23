@@ -21,7 +21,7 @@ func TestLsTreeCorruptRefsIsNotMissing(t *testing.T) {
 	gittest.Git(t, bare, nil, "update-ref", "refs/heads/main", root)
 	gittest.Git(t, bare, nil, "symbolic-ref", "HEAD", "refs/heads/main")
 
-	repo, err := Open(bare)
+	repo, err := Open(t.Context(), bare)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestLsTreeMissingTreeIsNotMissingRevision(t *testing.T) {
 	blob := gittest.Git(t, bare, nil, "rev-parse", tree+":f")
 	gittest.Git(t, bare, nil, "update-ref", "refs/heads/main", root)
 
-	repo, err := Open(bare)
+	repo, err := Open(t.Context(), bare)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 	if err := os.Remove(filepath.Join(detached, "objects", dcommit[:2], dcommit[2:])); err != nil {
 		t.Fatal(err)
 	}
-	drepo, err := Open(detached)
+	drepo, err := Open(t.Context(), detached)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestMissingCommitObjectOfRef(t *testing.T) {
 		t.Errorf("CommitByRevision(HEAD) of a detached HEAD without its commit: err = %v, want git's failure", err)
 	}
 
-	repo, err := Open(bare)
+	repo, err := Open(t.Context(), bare)
 	if err != nil {
 		t.Fatal(err)
 	}

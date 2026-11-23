@@ -58,7 +58,7 @@ func cmdTestRepo(t *testing.T) (openRepo, *git.Reference) {
 	gitRun(t, dir, "add", "file.txt")
 	gitRun(t, dir, "commit", "-q", "-m", "first")
 
-	r, err := git.Open(dir)
+	r, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 	}
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-q", "-m", "first")
-	gr, err := git.Open(dir)
+	gr, err := git.Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

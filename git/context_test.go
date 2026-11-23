@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	gitm "github.com/aymanbagabas/git-module"
@@ -23,31 +24,34 @@ func commitN(t *testing.T, path string, n int) {
 	}
 }
 
-func TestWithContextCopies(t *testing.T) {
+// Open runs git under its context, so a done context fails it.
+func TestOpenUnderCancelledContext(t *testing.T) {
+	t.Parallel()
 	repo, _ := setupTestRepo(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	rc := repo.WithContext(ctx)
-	if rc == repo {
-		t.Fatal("WithContext returned the same repository")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := Open(ctx, repo.Path); err == nil {
+		t.Fatal("Open under a cancelled context succeeded; want an error")
 	}
-	if rc.Context() != ctx {
-		t.Fatal("WithContext did not set the context")
+	if _, err := OpenLocal(ctx, repo.Path); err == nil {
+		t.Fatal("OpenLocal under a cancelled context succeeded; want an error")
 	}
-	if repo.Context() != context.Background() {
-		t.Fatal("WithContext changed the original repository's context")
-	}
-	if rc.Path != repo.Path || rc.IsBare != repo.IsBare || rc.Repository != repo.Repository {
-		t.Fatal("WithContext did not keep the repository")
+	if _, err := Init(ctx, filepath.Join(t.TempDir(), "new"), true); err == nil {
+		t.Fatal("Init under a cancelled context succeeded; want an error")
 	}
 }
 
-// An entry listed under one context reads its contents under another.
-func TestTreeEntryWithContext(t *testing.T) {
+// An entry listed under one context reads its contents through a
+// repository opened under another.
+func TestEntryFileReadsUnderRepositoryContext(t *testing.T) {
+	t.Parallel()
 	repo, ref := setupTestRepo(t)
-	listed, cancel := context.WithCancel(context.Background())
-	tree, err := repo.WithContext(listed).TreePath(ref, "dot_config")
+	listed, cancel := context.WithCancel(t.Context())
+	lr, err := Open(listed, repo.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := lr.TreePath(ref, "dot_config")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +63,12 @@ func TestTreeEntryWithContext(t *testing.T) {
 	if _, err := ents[0].File().Contents(); err == nil {
 		t.Fatal("read an entry under a cancelled context")
 	}
-	c, err := ents[0].WithContext(context.Background()).File().Contents()
+	c, err := repo.EntryFile(ents[0]).Contents()
 	if err != nil || string(c) != "test content" {
-		t.Fatalf("contents under a new context = %q, %v", c, err)
+		t.Fatalf("contents through a live repository = %q, %v", c, err)
 	}
 	if _, err := ents[0].File().Contents(); err == nil {
-		t.Fatal("WithContext changed the original entry's context")
+		t.Fatal("EntryFile changed the entry's own repository")
 	}
 }
 
@@ -87,9 +91,6 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 		t.Fatalf("Contents with a live context = %q, %v; want %q", got, err, "test content")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
 	cases := map[string]func(r *Repository) error{
 		"HEAD":         func(r *Repository) error { _, err := r.HEAD(); return err },
 		"References":   func(r *Repository) error { _, err := r.References(); return err },
@@ -101,26 +102,26 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 			_, err := r.CommitsByPage(head, 1, 10)
 			return err
 		},
-		"CatFileCommit":   func(r *Repository) error { _, err := r.CatFileCommit(head.ID); return err },
-		"Diff":            func(r *Repository) error { _, err := r.Diff(&Commit{ID: gitm.MustIDFromString(head.ID)}); return err },
-		"BlameFile":       func(r *Repository) error { _, err := r.BlameFile(head.ID, "dot_config/bat"); return err },
+		"CatFileCommit":   func(r *Repository) error { _, err := r.CatFileCommit(head.ID()); return err },
+		"Diff":            func(r *Repository) error { _, err := r.Diff(&Commit{ID: gitm.MustIDFromString(head.ID())}); return err },
+		"BlameFile":       func(r *Repository) error { _, err := r.BlameFile(head.ID(), "dot_config/bat"); return err },
 		"CheckAttributes": func(r *Repository) error { _, err := r.CheckAttributes(head, "dot_config/bat"); return err },
 		"SymbolicRef":     func(r *Repository) error { _, err := r.SymbolicRef("HEAD", ""); return err },
 		"Contents": func(r *Repository) error {
 			e := *entry
-			e.repo = entry.repo.WithContext(ctx)
+			e.repo = r
 			_, err := e.Contents()
 			return err
 		},
 		"Entries": func(r *Repository) error {
 			tr := *tree
-			tr.Repository = r
+			tr.repo = r
 			_, err := tr.Entries()
 			return err
 		},
 		"TreeEntry": func(r *Repository) error {
 			tr := *tree
-			tr.Repository = r
+			tr.repo = r
 			_, err := tr.TreeEntry("bat")
 			return err
 		},
@@ -128,11 +129,13 @@ func TestCancelledContextStopsCommands(t *testing.T) {
 	for name, fn := range cases {
 		// Open the repository afresh for each case: git-module caches trees
 		// and commits per repository, and a cache hit runs no git command.
-		fresh, err := Open(live.Path)
+		ctx, cancel := context.WithCancel(t.Context())
+		fresh, err := Open(ctx, live.Path)
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		if err := fn(fresh.WithContext(ctx)); err == nil {
+		cancel()
+		if err := fn(fresh); err == nil {
 			t.Errorf("%s with a cancelled context succeeded; want an error", name)
 		}
 	}
@@ -146,7 +149,7 @@ func TestCommitsByPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HEAD: %v", err)
 	}
-	r := repo.WithContext(context.Background())
+	r := repo
 
 	for _, tc := range []struct{ page, size, want int }{
 		{1, 2, 2},
@@ -159,7 +162,7 @@ func TestCommitsByPage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CommitsByPage(%d, %d): %v", tc.page, tc.size, err)
 		}
-		want, err := r.Repository.CommitsByPage(head.Name().String(), tc.page, tc.size)
+		want, err := r.gm.CommitsByPage(head.Name().String(), tc.page, tc.size)
 		if err != nil {
 			t.Fatalf("git-module CommitsByPage(%d, %d): %v", tc.page, tc.size, err)
 		}

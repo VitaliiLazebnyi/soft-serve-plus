@@ -10,18 +10,18 @@ import (
 
 // Opener is a repository LatestFile and Readme can read: they only open it.
 type Opener interface {
-	Open() (*git.Repository, error)
+	Open(ctx context.Context) (*git.Repository, error)
 }
 
 // LatestFile returns the contents of the latest file at the specified path in
 // the repository and its file path. Files larger than maxSize bytes are not
 // read (see git.LatestFile). Its git commands stop when ctx is done.
 func LatestFile(ctx context.Context, r Opener, ref *git.Reference, pattern string, maxSize int64) (string, string, error) {
-	repo, err := r.Open()
+	repo, err := r.Open(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	return git.LatestFile(repo.WithContext(ctx), ref, pattern, maxSize)
+	return git.LatestFile(repo, ref, pattern, maxSize)
 }
 
 // Readme returns the repository's README and its path. It looks in the

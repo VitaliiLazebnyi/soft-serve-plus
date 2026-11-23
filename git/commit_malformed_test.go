@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	gitm "github.com/aymanbagabas/git-module"
 	"github.com/charmbracelet/soft-serve/git/gittest"
 )
 
@@ -44,7 +43,7 @@ func malformedRepo(t *testing.T) (r *Repository, history []string, valid map[str
 	gittest.Git(t, dir, nil, "update-ref", RefsHeads+"main", tip)
 	gittest.Git(t, dir, nil, "symbolic-ref", "HEAD", RefsHeads+"main")
 
-	r, err := Open(dir)
+	r, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +69,7 @@ func TestMalformedCommitIsAnError(t *testing.T) {
 				t.Parallel()
 				// A fresh repository each time: git-module caches
 				// the commits it parsed.
-				fresh, err := Open(r.Path)
+				fresh, err := Open(t.Context(), r.Path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -114,7 +113,7 @@ func TestLogSkipsMalformedCommits(t *testing.T) {
 		}
 	}
 
-	commits, err := r.Log("main")
+	commits, err := r.Log("main", LogOptions{})
 	check("Log", commits, err)
 
 	head, err := r.HEAD()
@@ -124,8 +123,8 @@ func TestLogSkipsMalformedCommits(t *testing.T) {
 	page, err := r.CommitsByPage(head, 1, len(history))
 	check("CommitsByPage", page, err)
 
-	// The options git-module's Log takes still apply.
-	commits, err = r.Log("main", gitm.LogOptions{MaxCount: 1})
+	// The options Log takes apply.
+	commits, err = r.Log("main", LogOptions{MaxCount: 1})
 	if err != nil || len(commits) != 1 || commits[0].ID.String() != history[0] {
 		t.Fatalf("Log(MaxCount 1) = %v, %v; want %s", commits, err, history[0])
 	}
@@ -175,7 +174,7 @@ func TestCommitByRevisionUnreadable(t *testing.T) {
 	missing := strings.Repeat("1", 40)
 	id := gittest.Commit(t, dir, gittest.Valid, gittest.Tree(t, dir, "f", "x\n"), "orphan", missing)
 	gittest.Git(t, dir, nil, "update-ref", RefsHeads+"main", id)
-	r, err := Open(dir)
+	r, err := Open(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
