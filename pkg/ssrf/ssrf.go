@@ -189,14 +189,19 @@ var errRedirected = errors.New("connection handed to the test dialer")
 // toTestDialer makes the attempt t, the first one the checks let through
 // while internal/testdial had a Func set, with that Func, and reports
 // whether it did: it does not when no attempt was redirected, or when the
-// Func was removed meanwhile.
-func toTestDialer(ctx context.Context, t *dialTarget, _ net.Conn) (net.Conn, bool, error) {
+// Func was removed meanwhile. conn is what the dial returned: an attempt
+// checked before the Func was set can have connected, and as the Func's
+// connection is returned instead, conn is closed.
+func toTestDialer(ctx context.Context, t *dialTarget, conn net.Conn) (net.Conn, bool, error) {
 	if t == nil {
 		return nil, false, nil
 	}
 	fn := testdial.Load()
 	if fn == nil {
 		return nil, false, nil
+	}
+	if conn != nil {
+		_ = conn.Close()
 	}
 	c, err := fn(ctx, t.network, t.address)
 	return c, true, err
