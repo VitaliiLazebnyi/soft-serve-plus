@@ -151,7 +151,7 @@ func (r *Repository) HEAD() (*Reference, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewReference(hash, rn), nil
+	return newReference(hash, rn), nil
 }
 
 // DetachedHEAD returns a reference named "HEAD" to the commit HEAD points
@@ -163,7 +163,7 @@ func (r *Repository) DetachedHEAD() (*Reference, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewReference(hash, HEAD), nil
+	return newReference(hash, HEAD), nil
 }
 
 // References returns the references for a repository. It returns an empty
@@ -183,7 +183,7 @@ func (r *Repository) References() ([]*Reference, error) {
 	}
 	rrefs := make([]*Reference, 0, len(refs))
 	for _, ref := range refs {
-		rrefs = append(rrefs, NewReference(ref.ID, ref.Refspec))
+		rrefs = append(rrefs, newReference(ref.ID, ref.Refspec))
 	}
 	return rrefs, nil
 }

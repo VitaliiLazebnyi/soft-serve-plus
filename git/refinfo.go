@@ -56,7 +56,7 @@ func (r *Repository) RefInfos(prefix string) ([]*RefInfo, error) {
 		}
 		name, typ, id, author, committer := f[0], f[1], f[2], f[3], f[4]
 		info := &RefInfo{
-			Reference: NewReference(id, name),
+			Reference: newReference(id, name),
 		}
 		if typ == "tag" {
 			info.TagSubject = f[9]

@@ -24,9 +24,9 @@ type Reference struct {
 	refspec string
 }
 
-// NewReference returns the reference named refspec, a full name such as
+// newReference returns the reference named refspec, a full name such as
 // refs/heads/main, that points to the object id.
-func NewReference(id, refspec string) *Reference {
+func newReference(id, refspec string) *Reference {
 	return &Reference{id: id, refspec: refspec}
 }
 
