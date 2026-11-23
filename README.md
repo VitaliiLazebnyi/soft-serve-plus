@@ -439,7 +439,9 @@ db:
   # them off is refused), a busy database is waited on for 5 seconds unless
   # the data source sets its own busy_timeout, and the database is in WAL
   # mode unless the data source sets its own journal_mode. On a network file
-  # system, add "&_pragma=journal_mode(DELETE)".
+  # system (NFS, SMB), add "&_pragma=journal_mode(DELETE)" before the first
+  # start of a version with WAL as the default: that start switches an
+  # existing database to WAL.
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
@@ -769,7 +771,9 @@ puts two conditions on the data directory:
 - it is on a local disk. WAL shares its index through a memory-mapped `-shm`
   file, which network file systems such as NFS or SMB do not support. Local
   disks on Linux, macOS and Windows are fine. On a network file system, add
-  `&_pragma=journal_mode(DELETE)` to `db.data_source`;
+  `&_pragma=journal_mode(DELETE)` to `db.data_source` before upgrading, that
+  is, before the first start of this version: that start switches an
+  existing database to WAL;
 - backups include the `-wal` file. Copy `soft-serve.db`, `soft-serve.db-wal`
   and `soft-serve.db-shm` together while the server is stopped, or use
   `sqlite3 soft-serve.db ".backup backup.db"` while it runs. A copy of

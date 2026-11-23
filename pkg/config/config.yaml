@@ -237,7 +237,9 @@ db:
   # them off is refused), a busy database is waited on for 5 seconds unless
   # the data source sets its own busy_timeout, and the database is in WAL
   # mode unless the data source sets its own journal_mode. On a network file
-  # system, add "&_pragma=journal_mode(DELETE)".
+  # system (NFS, SMB), add "&_pragma=journal_mode(DELETE)" before the first
+  # start of a version with WAL as the default: that start switches an
+  # existing database to WAL.
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
