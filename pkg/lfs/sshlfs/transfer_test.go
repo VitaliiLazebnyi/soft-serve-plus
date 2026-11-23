@@ -670,6 +670,34 @@ func TestLFSLockOwnership(t *testing.T) {
 	expect("other unlock own", session("other", unlock(strconv.FormatInt(otherLock.ID, 10))), pkt("status 200\n"))
 }
 
+// A lock ID or cursor past what the lock ID column holds (a 32-bit SERIAL on
+// Postgres) names no lock, on both drivers: the list after it is empty and
+// an unlock of it is not found, rather than a server error.
+func TestLFSLockIDsBeyondColumnRange(t *testing.T) {
+	t.Parallel()
+	tr, deps := newLFSUploadTransfer(t)
+	owner, err := database.New(nil).FindUserByUsername(t.Context(), deps.DB, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utr := *tr
+	utr.user = lfsLockTestUser{id: owner.ID, name: owner.Username}
+	for _, tc := range []struct{ name, cmd, want string }{
+		{"list after 2^31", pkt("list-lock\n") + pkt("cursor=2147483648\n") + "0000", pkt("status 200\n")},
+		{"list after 2^63-1", pkt("list-lock\n") + pkt("cursor=9223372036854775807\n") + "0000", pkt("status 200\n")},
+		{"unlock 2^31", pkt("unlock 2147483648\n") + "0000", pkt("status 404\n")},
+	} {
+		var out bytes.Buffer
+		p := transfer.NewProcessor(transfer.NewPktline(strings.NewReader(tc.cmd+pkt("quit\n")+"0000"), &out, nil), &utr, nil)
+		if err := p.ProcessCommands(lfs.OperationUpload); err != nil {
+			t.Fatalf("%s: ProcessCommands: %v", tc.name, err)
+		}
+		if got := strings.TrimSuffix(out.String(), pkt("status 200\n")+"0000"); !strings.HasPrefix(got, tc.want) {
+			t.Errorf("%s: response %q, want it to start with %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestLFSLockFromIDRejectsInvalidID checks that unlocking by an ID that is
 // not a number is a client error (400) rather than an internal one (500).
 // The backend has no database on purpose: a refused ID must not reach it.

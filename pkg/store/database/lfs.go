@@ -19,6 +19,12 @@ func (*Store) CreateLFSLockForUser(ctx context.Context, h db.Handler, repoID int
 }
 
 // lfsLocks selects locks with their owner's username, for the lock reads.
+//
+// The queries compare lfs_locks.id with CAST(? AS BIGINT), not with ?. A
+// lock ID or cursor comes from the client, and lfs_locks.id is a 32-bit
+// SERIAL on Postgres, which types a bare parameter after the column and
+// refuses a value past 2^31-1 as out of range. As BIGINT it compares like
+// any other number, so such an ID names no lock, as it does on SQLite.
 const lfsLocks = `SELECT lfs_locks.*, users.username AS owner_name
 	FROM lfs_locks INNER JOIN users ON users.id = lfs_locks.user_id`
 
@@ -37,7 +43,7 @@ func (*Store) GetLFSLocks(ctx context.Context, h db.Handler, repoID int64, after
 
 	var locks []models.LFSLock
 	query := h.Rebind(lfsLocks + `
-		WHERE lfs_locks.repo_id = ? AND lfs_locks.id > ?
+		WHERE lfs_locks.repo_id = ? AND lfs_locks.id > CAST(? AS BIGINT)
 		ORDER BY lfs_locks.id ASC
 		LIMIT ?;
 	`)
@@ -59,7 +65,7 @@ func (*Store) GetLFSLockForPath(ctx context.Context, h db.Handler, repoID int64,
 func (*Store) GetLFSLockByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.LFSLock, error) {
 	var lock models.LFSLock
 	query := h.Rebind(lfsLocks + `
-		WHERE lfs_locks.id = ? AND lfs_locks.repo_id = ?;
+		WHERE lfs_locks.id = CAST(? AS BIGINT) AND lfs_locks.repo_id = ?;
 	`)
 	err := h.GetContext(ctx, &lock, query, id, repoID)
 	return lock, err
@@ -69,7 +75,7 @@ func (*Store) GetLFSLockByID(ctx context.Context, h db.Handler, repoID int64, id
 func (*Store) DeleteLFSLock(ctx context.Context, h db.Handler, repoID int64, id int64) error {
 	query := h.Rebind(`
 		DELETE FROM lfs_locks
-		WHERE repo_id = ? AND id = ?;
+		WHERE repo_id = ? AND id = CAST(? AS BIGINT);
 	`)
 	_, err := h.ExecContext(ctx, query, repoID, id)
 	return err

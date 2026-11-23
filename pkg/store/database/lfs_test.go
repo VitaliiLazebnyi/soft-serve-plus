@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"slices"
 	"strconv"
 	"testing"
@@ -363,5 +364,33 @@ func TestCreatesReturnTheirRow(t *testing.T) {
 	}
 	if tok.ID == 0 || tok.Name != "t" || tok.UserID != owner || tok.Token != "hash" || !tok.ExpiresAt.Valid || !tok.ExpiresAt.Time.Equal(expires) {
 		t.Errorf("CreateAccessToken() = %+v", tok)
+	}
+}
+
+// A lock ID or cursor past what the lock ID column holds (a 32-bit SERIAL on
+// Postgres) names no lock, on both drivers: lookups find nothing, a delete
+// deletes nothing and the page after it is empty, rather than failing with
+// "out of range".
+func TestLFSLockIDsBeyondColumnRange(t *testing.T) {
+	t.Parallel()
+	ctx, dbx, s := newStoreTestDB(t)
+	const owner = 100 // see newWebhookTestDB
+	l, err := s.CreateLFSLockForUser(ctx, dbx, 7, owner, "a.bin", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{math.MaxInt32 + 1, math.MaxInt64} {
+		if ls, err := s.GetLFSLocks(ctx, dbx, 7, id, 10); err != nil || len(ls) != 0 {
+			t.Errorf("GetLFSLocks(after %d) = %d locks, %v; want 0, nil", id, len(ls), err)
+		}
+		if _, err := s.GetLFSLockByID(ctx, dbx, 7, id); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("GetLFSLockByID(%d) error = %v, want %v", id, err, db.ErrRecordNotFound)
+		}
+		if err := s.DeleteLFSLock(ctx, dbx, 7, id); err != nil {
+			t.Errorf("DeleteLFSLock(%d) = %v, want nil", id, err)
+		}
+	}
+	if ls, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10); err != nil || len(ls) != 1 || ls[0].ID != l.ID {
+		t.Errorf("GetLFSLocks(after 0) = %+v, %v; want the lock %d", ls, err, l.ID)
 	}
 }
