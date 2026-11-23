@@ -46,18 +46,26 @@ jobs:
       # SOFT_SERVE_DB_DRIVER=postgres and use this as the data source; the
       # others leave the driver unset and run on SQLite.
       POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
-      # The packages whose tests open their database with internal/dbtest
-      # and so run on Postgres when SOFT_SERVE_DB_DRIVER=postgres. Every
-      # other package's tests ignore the variable, so running them again on
-      # Postgres would only repeat the SQLite run.
+      # The packages whose tests open their database with internal/dbtest,
+      # most through internal/backendtest, and so run on Postgres when
+      # SOFT_SERVE_DB_DRIVER=postgres. Every other package's tests ignore
+      # the variable, so running them again on Postgres would only repeat
+      # the SQLite run. The scripts (./testscript) have steps of their own.
       POSTGRES_PACKAGES: >-
+        ./cmd/soft/serve
+        ./internal/backendtest
+        ./internal/dbtest
         ./pkg/backend
         ./pkg/daemon
         ./pkg/db/...
+        ./pkg/jobs
+        ./pkg/lfs/sshlfs
         ./pkg/ssh/...
         ./pkg/store/...
         ./pkg/ui
-        ./internal/dbtest
+        ./pkg/ui/pages/selection
+        ./pkg/web
+        ./pkg/webhook
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,7 +94,7 @@ jobs:
         run: |
           mkdir -p coverage/unit-postgres
           # POSTGRES_PACKAGES is a list of patterns: split it into words.
-          # -timeout only bounds a hang: these packages take about a minute
+          # -timeout only bounds a hang: these packages take about 90 seconds
           # with -race locally, and a slow runner must not trip it.
           # shellcheck disable=SC2086
           SOFT_SERVE_DB_DATA_SOURCE="$POSTGRES_DSN" \
