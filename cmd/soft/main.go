@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/cmd"
 	"github.com/charmbracelet/soft-serve/cmd/soft/admin"
 	"github.com/charmbracelet/soft-serve/cmd/soft/browse"
 	"github.com/charmbracelet/soft-serve/cmd/soft/hook"
@@ -47,8 +46,11 @@ var (
 		},
 	}
 
+	// hookEnv is what hookCmd runs with; run fills it in for a hook.
+	hookEnv = &hook.Env{}
+
 	// hookCmd is the hook command in rootCmd's tree.
-	hookCmd = hook.NewCommand()
+	hookCmd = hook.NewCommand(hookEnv)
 
 	manCmd = &cobra.Command{
 		Use:    "man",
@@ -127,9 +129,9 @@ func rootArgs(cmd *cobra.Command, args []string) error {
 func init() {
 	rootCmd.AddCommand(
 		manCmd,
-		serve.NewCommand(),
+		serve.NewCommand(loadServerConfig),
 		hookCmd,
-		admin.NewCommand(),
+		admin.NewCommand(loadServerConfig),
 		browse.Command,
 	)
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
@@ -157,15 +159,15 @@ func main() {
 
 // run runs the soft command args and returns the exit status. Only the
 // commands that act on the server's data load the server config and open
-// its log: serve and admin's subcommands do it themselves (cmd.LoadConfig),
-// and a hook here, from the file the server writes for hooks. Any other
-// command, such as --version, man or a local browse, reads neither.
+// its log: serve and admin's subcommands do it themselves, with
+// loadServerConfig, and a hook here, from the file the server writes for
+// hooks. Any other command, such as --version, man or a local browse,
+// reads neither.
 func run(ctx context.Context, args []string) int {
 	rootCmd.SetArgs(args)
 	if isHookCommand(args) {
-		var f *os.File
-		var ok bool
-		if ctx, f, ok = hookContext(ctx); !ok {
+		f, ok := loadHookEnv(hookEnv)
+		if !ok {
 			return 1
 		}
 		if f != nil {
@@ -182,13 +184,35 @@ func run(ctx context.Context, args []string) int {
 	return 0
 }
 
-// hookContext returns ctx with the config and logger of a `soft hook`
-// command, and the hook log file to close. It reports false when the config
-// cannot be loaded; the error is then in the hook log and the client is told
-// only that the server failed.
-func hookContext(ctx context.Context) (context.Context, *os.File, bool) {
+// loadServerConfig is the cmd.Loader of serve and admin's subcommands: it
+// loads the server config with config.Load, opens the log it describes and
+// makes that the default logger. A log file that cannot be opened is
+// warned about, and the log goes to stderr.
+func loadServerConfig() (*config.Config, *log.Logger, func() error, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	logger, f, err := newLogger(cfg)
+	if err != nil {
+		// logger still writes to stderr.
+		logger.Warn("failed to open log file, logging to stderr", "err", err)
+	}
+	log.SetDefault(logger)
+	var closeLog func() error
+	if f != nil {
+		closeLog = f.Close
+	}
+	return cfg, logger, closeLog, nil
+}
+
+// loadHookEnv fills env with the config and logger of a `soft hook`
+// command, and returns the hook log file to close. It reports false when
+// the config cannot be loaded; the error is then in the hook log and the
+// client is told only that the server failed.
+func loadHookEnv(env *hook.Env) (*os.File, bool) {
 	cfg, cfgErr := loadHookConfig()
-	logger, f, err := cmd.NewLogger(cfg)
+	logger, f, err := newLogger(cfg)
 	if err != nil {
 		// A hook's stderr is relayed to the git client as "remote:"
 		// lines. Don't send it server paths or server logs; drop the
@@ -206,12 +230,11 @@ func hookContext(ctx context.Context) (context.Context, *os.File, bool) {
 		if f != nil {
 			f.Close() //nolint: errcheck
 		}
-		return ctx, nil, false
+		return nil, false
 	}
 
-	ctx = config.WithContext(ctx, cfg)
-	ctx = log.WithContext(ctx, logger)
-	return ctx, f, true
+	env.Config, env.Logger = cfg, logger
+	return f, true
 }
 
 // isHookCommand reports whether args run the hook command or one of its

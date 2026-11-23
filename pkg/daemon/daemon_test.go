@@ -68,7 +68,6 @@ func runTests(m *testing.M) int {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		log.Fatal(err)
@@ -77,7 +76,7 @@ func runTests(m *testing.M) int {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		log.Fatal(err)
 	}
-	datastore := database.New()
+	datastore := database.New(nil)
 	be := backend.New(cfg, dbx, datastore, nil)
 	testBackend = be
 	d, err := NewGitDaemon(cfg, be, nil)

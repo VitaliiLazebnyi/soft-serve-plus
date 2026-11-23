@@ -75,7 +75,7 @@ func newMirrorJobContext(t *testing.T) (context.Context, *config.Config, *backen
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New()
+	st := database.New(nil)
 	be := backend.New(cfg, dbx, st, log.New(io.Discard))
 	return ctx, cfg, be
 }

@@ -11,13 +11,14 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
-// When an admin command fails, it still closes the database: cobra skips
-// the command's PersistentPostRunE, which closes it otherwise.
+// When an admin command fails, it still closes the database and the log:
+// cobra skips a command's PersistentPostRunE, which used to close them.
 func TestAdminErrorClosesDB(t *testing.T) {
 	// Run twice, each with its own data path. Regression: the admin command
 	// tree was package-level, and cobra keeps a subcommand's context from
@@ -35,43 +36,44 @@ func testAdminErrorClosesDB(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
-	createDB(t, ctx, cfg)
+	createDB(t, t.Context(), cfg)
+	var loaded *config.Config
+	closed := false
+	load := func() (*config.Config, *log.Logger, func() error, error) {
+		loaded = cfg
+		// The Env closes the log after the database.
+		return cfg, log.New(io.Discard), func() error { closed = true; return nil }, nil
+	}
 
 	// A fresh database has no migrations to roll back.
-	command := NewCommand()
+	command := NewCommand(load)
 	command.SetArgs([]string{"rollback", "--yes"})
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	rollback, err := command.ExecuteContextC(ctx)
+	err := command.ExecuteContext(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "rollback:") {
 		t.Fatalf("admin rollback returned %v, want a rollback error", err)
 	}
 
-	if got := config.FromContext(rollback.Context()).DataPath; got != dataPath {
-		t.Errorf("rollback ran with data path %s, want this run's %s", got, dataPath)
+	if loaded == nil || loaded.DataPath != dataPath {
+		t.Errorf("rollback ran with config %+v, want this run's data path %s", loaded, dataPath)
 	}
-	dbx := db.FromContext(rollback.Context())
-	if dbx == nil {
-		t.Fatal("no database in the command context")
-	}
-	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("database ping returned %v, want it closed", err)
+	if !closed {
+		t.Fatal("the failed rollback left its database and log open")
 	}
 }
 
-func newAdminContext(t *testing.T) context.Context {
+// newAdminLoader returns a Loader for a new data path with an empty
+// database.
+func newAdminLoader(t *testing.T) cmd.Loader {
 	t.Helper()
 	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
-	createDB(t, ctx, cfg)
-	return ctx
+	createDB(t, t.Context(), cfg)
+	return cmd.Given(cfg, log.New(io.Discard))
 }
 
 // createDB creates cfg's empty database, as the server's first start does:
@@ -102,14 +104,14 @@ func TestAdminRollbackAsksForConfirmation(t *testing.T) {
 		{"confirmed", "yes\n", "rollback: "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := newAdminContext(t)
+			load := newAdminLoader(t)
 			var stderr strings.Builder
-			command := NewCommand()
+			command := NewCommand(load)
 			command.SetArgs([]string{"rollback"})
 			command.SetIn(strings.NewReader(tc.input))
 			command.SetOut(io.Discard)
 			command.SetErr(&stderr)
-			err := command.ExecuteContext(ctx)
+			err := command.ExecuteContext(t.Context())
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("admin rollback returned %v, want %q", err, tc.want)
 			}
@@ -123,12 +125,11 @@ func TestAdminRollbackAsksForConfirmation(t *testing.T) {
 // An unknown admin subcommand is an error rather than the help and a
 // successful exit.
 func TestAdminRejectsUnknownSubcommand(t *testing.T) {
-	ctx := newAdminContext(t)
-	command := NewCommand()
+	command := NewCommand(newAdminLoader(t))
 	command.SetArgs([]string{"rollbak"})
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	err := command.ExecuteContext(ctx)
+	err := command.ExecuteContext(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("admin rollbak returned %v, want an unknown command error", err)
 	}
@@ -147,12 +148,11 @@ func TestAdminRefusesMissingDataPathOrDatabase(t *testing.T) {
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(io.Discard))
-			command := NewCommand()
+			command := NewCommand(cmd.Given(cfg, log.New(io.Discard)))
 			command.SetArgs([]string{sub})
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
-			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "does not exist") {
+			if err := command.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "does not exist") {
 				t.Fatalf("admin %s returned %v, want a missing data directory error", sub, err)
 			}
 			if _, err := os.Stat(dp); !errors.Is(err, fs.ErrNotExist) {
@@ -166,12 +166,11 @@ func TestAdminRefusesMissingDataPathOrDatabase(t *testing.T) {
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(io.Discard))
-			command := NewCommand()
+			command := NewCommand(cmd.Given(cfg, log.New(io.Discard)))
 			command.SetArgs([]string{sub})
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
-			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "database") {
+			if err := command.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "database") {
 				t.Fatalf("admin %s returned %v, want a missing database error", sub, err)
 			}
 			if _, err := os.Stat(filepath.Join(dp, "soft-serve.db")); !errors.Is(err, fs.ErrNotExist) {

@@ -19,7 +19,7 @@ func TestLockAndCountWebhooksSeesHolderUnderRepeatableReadPostgres(t *testing.T)
 	}
 	ctx, dbx := newWebhookTestDB(t)
 	dbtest.SetDefaultIsolation(ctx, t, dbx, "repeatable read")
-	s := New()
+	s := New(nil)
 
 	type result struct {
 		n   int

@@ -22,7 +22,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/matryer/is"
@@ -93,7 +92,6 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 	if err := cfg.Validate(); err != nil {
 		tb.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		tb.Fatal(err)
@@ -102,12 +100,11 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		tb.Fatal(err)
 	}
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	dbstore := database.New(nil)
+	be := backend.New(cfg, dbx, dbstore, log.Default())
 	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
 	return &ssh.Server{
-		Handler: hs.loggerMiddleware(tui(hs)(func(s ssh.Session) {
+		Handler: tui(hs)(func(s ssh.Session) {
 			_, _, active := s.Pty()
 			if !active {
 				tb.Error("session has no pty")
@@ -115,7 +112,7 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 				return
 			}
 			_ = s.Exit(0)
-		})),
+		}),
 	}
 }
 
@@ -429,7 +426,7 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	d := depsOf(serverContext(t, cfg, log.Default()))
 	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
 	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(func(s ssh.Session) {
+		Handler: func(s ssh.Session) {
 			p, ui, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
@@ -440,7 +437,7 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 			cancel()
 			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, ui.common.Context().Err(), s.Context().Err())
 			_ = s.Exit(0)
-		}),
+		},
 	}
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
@@ -466,7 +463,7 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 	ctx := serverContext(t, cfg, log.Default())
 	hs := handlerServer(t, cfg, depsOf(ctx).dbx, depsOf(ctx).st, depsOf(ctx).be, log.Default())
 	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(func(s ssh.Session) {
+		Handler: func(s ssh.Session) {
 			p, ui, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
@@ -476,7 +473,7 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 			ui.common.Zone.Close()
 			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", ui.width, ui.height)
 			_ = s.Exit(0)
-		}),
+		},
 	}
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
@@ -540,7 +537,7 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 	type errs struct{ ui, conn error }
 	after := make(chan errs, 1)
 	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
+		Handler: tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
 			p, ui, cancel := hs.newSessionProgram(s)
 			if ui != nil {
 				uiCtx <- ui.common.Context()
@@ -560,7 +557,7 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 			e.conn = s.Context().Err()
 			after <- e
 			_ = s.Exit(0)
-		})),
+		}),
 	}
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)

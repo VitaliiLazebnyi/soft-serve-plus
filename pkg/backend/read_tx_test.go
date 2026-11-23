@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
@@ -25,9 +24,7 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
-	// The webhook methods take the database and store from the context.
-	ctx := db.WithContext(context.Background(), be.db)
-	ctx = store.WithContext(ctx, be.store)
+	ctx := context.Background()
 
 	// Both differ from what the lookups fall back to on an error.
 	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))

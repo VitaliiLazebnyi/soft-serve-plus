@@ -12,28 +12,25 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/spf13/cobra"
 )
 
-// NewCommand returns a new serve command.
+// NewCommand returns a new serve command, which loads the server's config
+// and logger with load (see cmd.OpenEnv).
 //
 // Each call builds a new command, so its flags start from their defaults:
 // cobra does not reset a flag a previous run set.
-func NewCommand() *cobra.Command {
+func NewCommand(load cmd.Loader) *cobra.Command {
 	var syncHooks bool
 	command := &cobra.Command{
-		Use:                "serve",
-		Short:              "Start the server",
-		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.InitBackendContext,
-		PersistentPostRunE: cmd.CloseDBContext,
-		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
-			return runServe(c, syncHooks)
+		Use:   "serve",
+		Short: "Start the server",
+		Args:  cobra.NoArgs,
+		RunE: cmd.WithEnv(load, true, func(c *cobra.Command, _ []string, env *cmd.Env) error {
+			return runServe(c.Context(), env, syncHooks)
 		}),
 	}
 	command.Flags().BoolVarP(&syncHooks, "sync-hooks", "", false, "synchronize hooks for all repositories before running the server")
@@ -41,37 +38,34 @@ func NewCommand() *cobra.Command {
 	return command
 }
 
-// runServe starts the server and serves until it stops or a signal stops
-// it, then shuts it down. With syncHooks it first regenerates the hooks of
-// every repository.
-func runServe(c *cobra.Command, syncHooks bool) error {
-	ctx := c.Context()
+// runServe starts the server env describes and serves until it stops or a
+// signal stops it, then shuts it down. With syncHooks it first regenerates
+// the hooks of every repository.
+func runServe(ctx context.Context, env *cmd.Env, syncHooks bool) error {
 	// Use the config the database and backend were set up with,
 	// so hooks and directories land under the same data path.
-	cfg := config.FromContext(ctx)
-	if err := prepareDataPath(ctx, cfg); err != nil {
+	cfg := env.Config
+	if err := prepareDataPath(cfg, env.Logger); err != nil {
 		return err
 	}
 
-	db := db.FromContext(ctx)
-	if err := migrate.Migrate(ctx, db, cfg, log.FromContext(ctx)); err != nil {
+	if err := migrate.Migrate(ctx, env.DB, cfg, env.Logger); err != nil {
 		return fmt.Errorf("migration error: %w", err)
 	}
 	// Reconcile initial_admin_keys on every start, not only on the
 	// first migration, so keys added to the config later become
 	// admin keys. "soft admin migrate" does not do this.
-	if err := migrate.SyncAdminKeys(ctx, db, cfg, log.FromContext(ctx)); err != nil {
+	if err := migrate.SyncAdminKeys(ctx, env.DB, cfg, env.Logger); err != nil {
 		return fmt.Errorf("sync initial admin keys: %w", err)
 	}
 
-	s, err := NewServer(ctx)
+	s, err := NewServer(ctx, cfg, env.DB, env.Store, env.Backend, env.Logger)
 	if err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}
 
 	if syncHooks {
-		be := backend.FromContext(ctx)
-		if err := cmd.InitializeHooks(ctx, cfg, be); err != nil {
+		if err := cmd.InitializeHooks(ctx, cfg, env.Backend, env.Logger); err != nil {
 			_ = s.Close()
 			return fmt.Errorf("initialize hooks: %w", err)
 		}
@@ -86,9 +80,9 @@ func runServe(c *cobra.Command, syncHooks bool) error {
 	s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
 
 	started := make(chan error, 1)
-	go func() {
-		started <- s.Start()
-	}()
+	go func(ctx context.Context) {
+		started <- s.Start(ctx)
+	}(ctx)
 	// The error the server stopped with is returned only after the
 	// shutdown, which runs either way.
 	serverErr := waitForStop(s, started, sigs, testStop)
@@ -97,17 +91,17 @@ func runServe(c *cobra.Command, syncHooks bool) error {
 	// second interrupt or terminate signal stops that wait.
 	abort, stopWaiting := abortOnSignal(sigs.term, s.logger)
 	defer stopWaiting()
-	ctx, cancel := context.WithTimeout(ctx, drainTimeout)
+	// A context of its own: the goroutine above still holds ctx.
+	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
-	return errors.Join(serverErr, s.Shutdown(ctx, abort))
+	return errors.Join(serverErr, s.Shutdown(drainCtx, abort))
 }
 
 // prepareDataPath warns about the settings the server ignores, and writes
 // what the data directory needs before the server starts: the default config
 // file, the custom hooks directory with its sample, the log directory and
 // the hook config, and removes stale push refs files.
-func prepareDataPath(ctx context.Context, cfg *config.Config) error {
-	logger := log.FromContext(ctx)
+func prepareDataPath(cfg *config.Config, logger *log.Logger) error {
 	warnIgnoredSettings(logger, cfg)
 	if !cfg.Exist() {
 		if err := cfg.WriteDefaultFile(); err != nil {

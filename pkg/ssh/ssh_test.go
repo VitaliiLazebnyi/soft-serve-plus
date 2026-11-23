@@ -3,7 +3,6 @@ package ssh
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net"
 	"os"
@@ -11,12 +10,7 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"charm.land/ssh"
-	"charm.land/wish/v2/testsession"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -76,37 +70,6 @@ func TestNewServerNeedsConfigAndHostKey(t *testing.T) {
 	}
 	if _, err := NewServer(d.cfg, d.dbx, d.st, d.be, nil, d.tokens, d.logger); !errors.Is(err, errNilHostKey) {
 		t.Errorf("NewServer without a host key: %v, want %v", err, errNilHostKey)
-	}
-}
-
-// The session context carries the session's user, but none of the server's
-// dependencies: the middleware and commands take those from the server
-// (R63, SSH-17).
-func TestSessionContextHasNoServerDependencies(t *testing.T) {
-	t.Parallel()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	d := depsOf(serverContext(t, cfg, log.Default()))
-	hs := handlerServer(t, d.cfg, d.dbx, d.st, d.be, d.logger)
-	sess := testsession.New(t, &ssh.Server{
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
-			ctx := sessionContext(s)
-			_, _ = fmt.Fprintf(s, "config=%t db=%t store=%t backend=%t",
-				config.FromContext(ctx) != nil, db.FromContext(ctx) != nil,
-				store.FromContext(ctx) != nil, backend.FromContext(ctx) != nil)
-			_ = s.Exit(0)
-		})),
-	}, &gossh.ClientConfig{
-		User:            "test",
-		Auth:            []gossh.AuthMethod{gossh.KeyboardInteractive(noAnswers)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec // test server
-	})
-	out, err := sess.Output("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "config=false db=false store=false backend=false"; string(out) != want {
-		t.Errorf("session context: %s, want %s", out, want)
 	}
 }
 

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -14,7 +13,6 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
@@ -22,66 +20,66 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// CloseDBOnError closes the database when the wrapped RunE fails, since
-// cobra skips PersistentPostRunE then, and leaves it open otherwise.
-func TestCloseDBOnError(t *testing.T) {
+// WithEnv closes the Env it opened, the database and the log, whether its
+// run fails or not, and returns run's error.
+func TestWithEnvClosesEnv(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		runErr     error
-		wantClosed bool
+		name   string
+		runErr error
 	}{
-		{name: "error", runErr: errors.New("boom"), wantClosed: true},
-		{name: "success", runErr: nil, wantClosed: false},
+		{name: "error", runErr: errors.New("boom")},
+		{name: "success", runErr: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			dbx, err := db.Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
-			if err != nil {
-				t.Fatal(err)
+			cfg := testConfig(t, t.TempDir())
+			logClosed := false
+			load := func() (*config.Config, *log.Logger, func() error, error) {
+				return cfg, log.New(io.Discard), func() error { logClosed = true; return nil }, nil
 			}
-			t.Cleanup(func() { _ = dbx.Close() })
-
+			var dbx *db.DB
+			run := WithEnv(load, true, func(_ *cobra.Command, _ []string, env *Env) error {
+				dbx = env.DB
+				return tc.runErr
+			})
 			c := &cobra.Command{}
-			c.SetContext(db.WithContext(ctx, dbx))
-			run := CloseDBOnError(func(*cobra.Command, []string) error { return tc.runErr })
+			c.SetContext(t.Context())
 			if err := run(c, nil); !errors.Is(err, tc.runErr) {
 				t.Fatalf("run returned %v, want %v", err, tc.runErr)
 			}
-
-			err = dbx.PingContext(ctx)
-			closed := err != nil && strings.Contains(err.Error(), "closed")
-			if closed != tc.wantClosed {
-				t.Fatalf("database ping returned %v, want closed=%v", err, tc.wantClosed)
+			err := dbx.PingContext(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "closed") {
+				t.Errorf("database ping returned %v, want it closed", err)
+			}
+			if !logClosed {
+				t.Error("the log was left open")
 			}
 		})
 	}
 }
 
-// InitBackendContext applies the db pool settings from the config to the
-// database it opens.
-func TestInitBackendContextAppliesPoolLimits(t *testing.T) {
+// OpenEnv applies the db pool settings from the config to the database it
+// opens.
+func TestOpenEnvAppliesPoolLimits(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.DB.MaxOpenConns = 7
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c := &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), cfg))
-	if err := InitBackendContext(c, nil); err != nil {
+	env, err := OpenEnv(t.Context(), Given(cfg, nil), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	dbx := db.FromContext(c.Context())
-	t.Cleanup(func() { _ = dbx.Close() })
-	if got := dbx.Stats().MaxOpenConnections; got != 7 {
+	t.Cleanup(func() { _ = env.Close() })
+	if got := env.DB.Stats().MaxOpenConnections; got != 7 {
 		t.Errorf("MaxOpenConnections = %d, want 7", got)
 	}
 }
 
-// InitBackendContext creates a missing data directory that only the
+// OpenEnv for serve creates a missing data directory that only the
 // server's user can open, since it holds private repositories and the
 // database.
-func TestInitBackendContextCreatesPrivateDataPath(t *testing.T) {
+func TestOpenEnvCreatesPrivateDataPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permissions")
 	}
@@ -90,12 +88,11 @@ func TestInitBackendContextCreatesPrivateDataPath(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c := &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), cfg))
-	if err := InitBackendContext(c, nil); err != nil {
+	env, err := OpenEnv(t.Context(), Given(cfg, nil), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.FromContext(c.Context()).Close() })
+	t.Cleanup(func() { _ = env.Close() })
 	fi, err := os.Stat(cfg.DataPath)
 	if err != nil {
 		t.Fatal(err)
@@ -105,60 +102,20 @@ func TestInitBackendContextCreatesPrivateDataPath(t *testing.T) {
 	}
 }
 
-// LoadConfig loads the config from the config file and the environment,
-// opens the log it names, and puts both in the command's context; the log
-// file is closed with the database (R60).
-func TestLoadConfig(t *testing.T) {
-	old := log.Default()
-	t.Cleanup(func() { log.SetDefault(old) })
-	dp := t.TempDir()
-	t.Setenv("SOFT_SERVE_DATA_PATH", dp)
-	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", "")
-	t.Setenv("SOFT_SERVE_LOG_PATH", "")
-	t.Setenv("SOFT_SERVE_NAME", "from env")
-	if err := os.WriteFile(filepath.Join(dp, "config.yaml"), []byte("name: from file\nlog:\n  path: soft.log\n"), 0o600); err != nil {
-		t.Fatal(err)
+// Given gives its config and logger, the default logger for a nil one, and
+// refuses a nil config.
+func TestGiven(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := log.New(io.Discard)
+	got, gotLogger, closeLog, err := Given(cfg, logger)()
+	if err != nil || got != cfg || gotLogger != logger || closeLog != nil {
+		t.Errorf("Given(cfg, logger)() = %p, %p, %v, %v; want cfg and logger", got, gotLogger, closeLog != nil, err)
 	}
-	c := &cobra.Command{}
-	c.SetContext(context.Background())
-	if err := LoadConfig(c); err != nil {
-		t.Fatal(err)
+	if _, gotLogger, _, _ := Given(cfg, nil)(); gotLogger != log.Default() {
+		t.Error("Given(cfg, nil) did not give the default logger")
 	}
-	cfg := config.FromContext(c.Context())
-	if cfg == nil || cfg.Name != "from env" || cfg.Log.Path != filepath.Join(dp, "soft.log") {
-		t.Fatalf("config in the context = %+v, want the file's log path and the environment's name", cfg)
-	}
-	// The context carries the logger: with the default one replaced, the
-	// command still logs to the file.
-	log.SetDefault(log.New(io.Discard))
-	log.FromContext(c.Context()).Info("logged to the file")
-	if err := CloseDBContext(c, nil); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(cfg.Log.Path)
-	if err != nil || !strings.Contains(string(data), "logged to the file") {
-		t.Errorf("log file = %q, %v; want the logged line", data, err)
-	}
-
-	// A context that already holds a config keeps it.
-	mine := config.DefaultConfig()
-	c = &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), mine))
-	if err := LoadConfig(c); err != nil {
-		t.Fatal(err)
-	}
-	if config.FromContext(c.Context()) != mine {
-		t.Error("LoadConfig replaced the context's config")
-	}
-
-	// A config the server cannot use is an error.
-	if err := os.WriteFile(filepath.Join(dp, "config.yaml"), []byte("log:\n  format: pretty\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c = &cobra.Command{}
-	c.SetContext(context.Background())
-	if err := LoadConfig(c); err == nil || !strings.Contains(err.Error(), "log.format") {
-		t.Errorf("LoadConfig() = %v, want a log.format error", err)
+	if _, _, _, err := Given(nil, logger)(); !errors.Is(err, config.ErrNilConfig) {
+		t.Errorf("Given(nil, logger)() = %v, want %v", err, config.ErrNilConfig)
 	}
 }
 
@@ -176,48 +133,42 @@ func testConfig(t *testing.T, dp string) *config.Config {
 // The maintenance commands refuse a data directory or SQLite database that
 // does not exist, and create neither, where they used to create an empty
 // one and act on it (R46, CFG-7). serve still creates them.
-func TestOpenBackendContextRefusesMissingDataPath(t *testing.T) {
+func TestOpenEnvRefusesMissingDataPath(t *testing.T) {
 	dp := filepath.Join(t.TempDir(), "data")
-	c := &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), testConfig(t, dp)))
-	err := OpenBackendContext(c, nil)
+	_, err := OpenEnv(t.Context(), Given(testConfig(t, dp), nil), false)
 	if err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_DATA_PATH") || !strings.Contains(err.Error(), dp) {
-		t.Fatalf("OpenBackendContext() = %v, want an error naming the data directory and SOFT_SERVE_DATA_PATH", err)
+		t.Fatalf("OpenEnv() = %v, want an error naming the data directory and SOFT_SERVE_DATA_PATH", err)
 	}
 	if _, err := os.Stat(dp); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the missing data directory was created: %v", err)
 	}
 }
 
-func TestOpenBackendContextRefusesMissingDatabase(t *testing.T) {
+func TestOpenEnvRefusesMissingDatabase(t *testing.T) {
 	dp := t.TempDir()
 	cfg := testConfig(t, dp)
 	file := filepath.Join(dp, "soft-serve.db")
-	c := &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), cfg))
-	err := OpenBackendContext(c, nil)
+	_, err := OpenEnv(t.Context(), Given(cfg, nil), false)
 	if err == nil || !strings.Contains(err.Error(), file) {
-		t.Fatalf("OpenBackendContext() = %v, want an error naming %s", err, file)
+		t.Fatalf("OpenEnv() = %v, want an error naming %s", err, file)
 	}
 	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the missing database was created: %v", err)
 	}
 
 	// Once serve has created it, a maintenance command opens it.
-	c = &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), cfg))
-	if err := InitBackendContext(c, nil); err != nil {
+	env, err := OpenEnv(t.Context(), Given(cfg, nil), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CloseDBContext(c, nil); err != nil {
+	if err := env.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c = &cobra.Command{}
-	c.SetContext(config.WithContext(context.Background(), cfg))
-	if err := OpenBackendContext(c, nil); err != nil {
-		t.Fatalf("OpenBackendContext() on an existing database = %v", err)
+	env, err = OpenEnv(t.Context(), Given(cfg, nil), false)
+	if err != nil {
+		t.Fatalf("OpenEnv() on an existing database = %v", err)
 	}
-	if err := CloseDBContext(c, nil); err != nil {
+	if err := env.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -249,19 +200,18 @@ func TestSqliteFile(t *testing.T) {
 // errors are returned together (R47, CFG-8).
 func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
 	cfg := testConfig(t, t.TempDir())
-	c := &cobra.Command{}
 	var logs bytes.Buffer
-	ctx := log.WithContext(config.WithContext(context.Background(), cfg), log.New(&logs))
-	c.SetContext(ctx)
-	if err := InitBackendContext(c, nil); err != nil {
+	logger := log.New(&logs)
+	ctx := t.Context()
+	env, err := OpenEnv(ctx, Given(cfg, logger), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = CloseDBContext(c, nil) })
-	ctx = c.Context()
-	if err := migrate.Migrate(ctx, db.FromContext(ctx), cfg, nil); err != nil {
+	t.Cleanup(func() { _ = env.Close() })
+	if err := migrate.Migrate(ctx, env.DB, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	be := backend.FromContext(ctx)
+	be := env.Backend
 	owner, err := be.DefaultAdmin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +237,7 @@ func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = InitializeHooks(ctx, cfg, be)
+	err = InitializeHooks(ctx, cfg, be, logger)
 	if err == nil || !strings.Contains(err.Error(), "a-broken") || strings.Contains(err.Error(), "c-ok") {
 		t.Errorf("InitializeHooks() = %v, want only a-broken's error", err)
 	}
@@ -321,5 +271,21 @@ func TestCheckDataPathPostgres(t *testing.T) {
 	cfg.DataPath = filepath.Join(cfg.DataPath, "missing")
 	if err := checkDataPath(cfg); err == nil || !strings.Contains(err.Error(), "SOFT_SERVE_DATA_PATH") {
 		t.Errorf("checkDataPath() with Postgres and no data directory = %v, want the data directory error", err)
+	}
+}
+
+// A Loader that gives no config and no error is refused, and what it gave
+// to close is closed, rather than OpenEnv panicking on the nil config.
+func TestOpenEnvRefusesNilConfig(t *testing.T) {
+	closed := false
+	load := func() (*config.Config, *log.Logger, func() error, error) {
+		return nil, nil, func() error { closed = true; return nil }, nil
+	}
+	env, err := OpenEnv(t.Context(), load, true)
+	if !errors.Is(err, config.ErrNilConfig) || env != nil {
+		t.Fatalf("OpenEnv() = %v, %v; want %v", env, err, config.ErrNilConfig)
+	}
+	if !closed {
+		t.Error("the loader's log was left open")
 	}
 }

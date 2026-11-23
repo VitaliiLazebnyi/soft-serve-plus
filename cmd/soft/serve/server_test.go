@@ -40,7 +40,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -64,7 +63,6 @@ func setupTestBackendWithDB(tb testing.TB) (context.Context, *config.Config, *ba
 	is.NoErr(cfg.Validate())
 
 	ctx := context.Background()
-	ctx = config.WithContext(ctx, cfg)
 
 	is.NoErr(os.MkdirAll(cfg.DataPath, os.ModePerm))
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
@@ -73,9 +71,9 @@ func setupTestBackendWithDB(tb testing.TB) (context.Context, *config.Config, *ba
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	// The backend logs to the default logger when it is built, as the
+	// server's does.
+	be := backend.New(cfg, dbx, database.New(nil), log.Default())
 
 	return ctx, cfg, be, dbx
 }
@@ -393,16 +391,13 @@ func newStartTestServer(t *testing.T, sshAddr, gitAddr, httpAddr, statsAddr stri
 	t.Helper()
 	is := is.New(t)
 	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
-	ctx = backend.WithContext(ctx, be)
-	ctx = db.WithContext(ctx, dbx)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
 
 	cfg.SSH.ListenAddr = sshAddr
 	cfg.Git.ListenAddr = gitAddr
 	cfg.HTTP.ListenAddr = httpAddr
 	cfg.Stats.ListenAddr = statsAddr
 
-	s, err := NewServer(ctx)
+	s, err := NewServer(ctx, cfg, dbx, database.New(nil), be, log.New(io.Discard))
 	is.NoErr(err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
@@ -415,7 +410,7 @@ func loopbackAddr() string {
 // startAsync runs s.Start and returns a channel that receives its result.
 func startAsync(s *Server) <-chan error {
 	errc := make(chan error, 1)
-	go func() { errc <- s.Start() }()
+	go func() { errc <- s.Start(context.Background()) }()
 	return errc
 }
 
@@ -656,21 +651,14 @@ func requireServerClosed(t *testing.T, name string, serve func(net.Listener) err
 // closes the servers it already built instead of dropping them.
 func TestNewServerClosesWhatItBuiltOnError(t *testing.T) {
 	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
-	ctx = backend.WithContext(ctx, be)
-	ctx = db.WithContext(ctx, dbx)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
 	cfg.HTTP.TLSCertPath = filepath.Join(t.TempDir(), "missing.crt")
 	cfg.HTTP.TLSKeyPath = filepath.Join(t.TempDir(), "missing.key")
 
 	var closed []*Server
-	orig := closeFailedServer
-	closeFailedServer = func(s *Server) {
+	s, err := newServer(ctx, cfg, dbx, database.New(nil), be, log.New(io.Discard), func(s *Server) {
 		closed = append(closed, s)
-		orig(s)
-	}
-	t.Cleanup(func() { closeFailedServer = orig })
-
-	s, err := NewServer(ctx)
+		closeServer(s)
+	})
 	if err == nil || !strings.Contains(err.Error(), "create cert reloader") {
 		t.Fatalf("NewServer returned %v, want a cert reloader error", err)
 	}
@@ -692,10 +680,7 @@ func TestNewServerClosesWhatItBuiltOnError(t *testing.T) {
 // server NewServer failed to finish, here one that got no further than its
 // Git daemon.
 func TestCloseSkipsServersNotBuilt(t *testing.T) {
-	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
-	ctx = backend.WithContext(ctx, be)
-	ctx = db.WithContext(ctx, dbx)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	_, cfg, be, dbx := setupTestBackendWithDB(t)
 
 	if err := ensureKey(cfg.SSH.KeyPath, "ssh host key"); err != nil {
 		t.Fatal(err)
@@ -708,7 +693,7 @@ func TestCloseSkipsServersNotBuilt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshSrv, err := sshsrv.NewServer(cfg, dbx, store.FromContext(ctx), be, hostKey, tokens, log.New(io.Discard))
+	sshSrv, err := sshsrv.NewServer(cfg, dbx, database.New(nil), be, hostKey, tokens, log.New(io.Discard))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -922,7 +907,7 @@ func TestCloseStopsDeliveries(t *testing.T) {
 	if err := s.Config.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), s.Config)
+	ctx := context.Background()
 	owner, err := s.Backend.DefaultAdmin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -970,11 +955,13 @@ func TestWaitAtLeast(t *testing.T) {
 	}
 }
 
-// NewServer creates the client key, and reads the host key once: a bearer
-// request does not read the file, and the key stays the one the SSH server
-// serves until a restart (tracker 343(a), CFG-16).
+// NewServer creates the client key, and reads the host key once: the SSH
+// server keeps presenting the key it started with after the file is gone,
+// as the token signer keeps signing with it, until a restart (tracker
+// 343(a), CFG-16).
 func TestNewServerLoadsKeys(t *testing.T) {
-	s := newStartTestServer(t, loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr())
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
 	if _, err := os.Stat(s.Config.SSH.ClientKeyPath); err != nil {
 		t.Errorf("no client key: %v", err)
 	}
@@ -982,12 +969,46 @@ func TestNewServerLoadsKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantPub, err := gossh.NewPublicKey(want.CryptoPublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(s.Config.SSH.KeyPath); err != nil {
 		t.Fatal(err)
 	}
-	got, err := config.KeyPair(s.Config)
-	if err != nil || got != want {
-		t.Errorf("KeyPair() after the key file went = %p, %v; want the key read at start %p", got, err, want)
+	if _, err := config.KeyPair(s.Config); err == nil {
+		t.Fatal("KeyPair() read a key file that is gone")
+	}
+
+	errc := startAsync(s)
+	var presented gossh.PublicKey
+	var client *gossh.Client
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
+		client, err = gossh.Dial("tcp", sshAddr, &gossh.ClientConfig{
+			User: "test",
+			HostKeyCallback: func(_ string, _ net.Addr, key gossh.PublicKey) error {
+				presented = key
+				return nil
+			},
+			Timeout: time.Minute,
+		})
+		if presented != nil {
+			break
+		}
+		select {
+		case err := <-errc:
+			t.Fatalf("Start returned %v before the SSH server accepted connections", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cannot connect to the SSH server: %v", err)
+		}
+	}
+	if client != nil {
+		_ = client.Close()
+	}
+	if !bytes.Equal(presented.Marshal(), wantPub.Marshal()) {
+		t.Error("the SSH server does not present the host key read at start")
 	}
 }
 
@@ -1046,9 +1067,6 @@ func TestNewServerRefusesUnusableHostKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cfg, be, dbx := setupTestBackendWithDB(t)
-			ctx = backend.WithContext(ctx, be)
-			ctx = db.WithContext(ctx, dbx)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
 			if err := os.MkdirAll(filepath.Dir(cfg.SSH.KeyPath), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -1056,7 +1074,7 @@ func TestNewServerRefusesUnusableHostKey(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			s, err := NewServer(ctx)
+			s, err := NewServer(ctx, cfg, dbx, database.New(nil), be, log.New(io.Discard))
 			if err == nil {
 				_ = s.Close()
 				t.Fatal("NewServer started with an unusable host key")
@@ -1098,4 +1116,27 @@ func dsaKeyPEM(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "DSA PRIVATE KEY", Bytes: der})
+}
+
+// NewServer refuses a nil config with config.ErrNilConfig, and a nil
+// database, store or backend, rather than fail at their first use.
+func TestNewServerRefusesNilDependencies(t *testing.T) {
+	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
+	st := database.New(nil)
+	discard := log.New(io.Discard)
+	if _, err := NewServer(ctx, nil, dbx, st, be, discard); !errors.Is(err, config.ErrNilConfig) {
+		t.Errorf("NewServer(nil config) = %v, want %v", err, config.ErrNilConfig)
+	}
+	for name, build := range map[string]func() (*Server, error){
+		"database": func() (*Server, error) { return NewServer(ctx, cfg, nil, st, be, discard) },
+		"store":    func() (*Server, error) { return NewServer(ctx, cfg, dbx, nil, be, discard) },
+		"backend":  func() (*Server, error) { return NewServer(ctx, cfg, dbx, st, nil, discard) },
+	} {
+		if s, err := build(); err == nil || !strings.Contains(err.Error(), name) {
+			if s != nil {
+				_ = s.Close()
+			}
+			t.Errorf("NewServer(nil %s) = %v, want an error naming it", name, err)
+		}
+	}
 }

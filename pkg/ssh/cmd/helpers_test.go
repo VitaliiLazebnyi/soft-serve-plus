@@ -42,20 +42,19 @@ func withTestBackend(ctx context.Context, be *backend.Backend) context.Context {
 	return withCommands(ctx, &c)
 }
 
-// withTestStore returns ctx whose commands use st, which git-lfs-transfer
-// takes from its context.
+// withTestStore returns ctx whose commands use st, which they hand to
+// git-lfs-transfer.
 func withTestStore(ctx context.Context, st store.Store) context.Context {
 	c := *cmdsOf(ctx)
 	c.store = st
 	return withCommands(ctx, &c)
 }
 
-// withTestLogger returns ctx whose commands log to logger, as do the
-// packages they call that log with log.FromContext.
+// withTestLogger returns ctx whose commands log to logger.
 func withTestLogger(ctx context.Context, logger *log.Logger) context.Context {
 	c := *cmdsOf(ctx)
 	c.logger = logger
-	return withCommands(log.WithContext(ctx, logger), &c)
+	return withCommands(ctx, &c)
 }
 
 // newAuthTestContext returns a context carrying the Commands of a server
@@ -100,7 +99,7 @@ func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.S
 	is.NoErr(cfg.Validate())
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	var st store.Store = database.New()
+	var st store.Store = database.New(nil)
 	if wrap != nil {
 		st = wrap(st)
 	}
@@ -111,7 +110,7 @@ func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.S
 	cmds, err := New(Deps{Config: cfg, Backend: be, DB: dbx, Store: st, Logger: logger})
 	is.NoErr(err)
 
-	return withCommands(log.WithContext(ctx, logger), cmds), be
+	return withCommands(ctx, cmds), be
 }
 
 // levelOf is the access level Backend.Readable gives user's account on repo.

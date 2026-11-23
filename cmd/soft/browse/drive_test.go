@@ -1,6 +1,7 @@
 package browse
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,5 +136,33 @@ func TestBrowseDrivesEveryTab(t *testing.T) {
 	send(enter)
 	if v := view(); !strings.Contains(v, "file.txt") {
 		t.Fatalf("files of the branch not shown:\n%s", v)
+	}
+}
+
+// Each load opens the repository again under its own context, so a load
+// that was cancelled, as when a later one replaces it or the program
+// exits, runs no git; one opened under a live context still reads, and
+// stops once that context ends.
+func TestRepositoryOpenBindsLoadContext(t *testing.T) {
+	t.Parallel()
+	repo := repository{r: newDriveRepo(t)}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := repo.Open(cancelled); err == nil {
+		t.Fatal("Open under a cancelled load context succeeded")
+	}
+
+	live, stop := context.WithCancel(t.Context())
+	r, err := repo.Open(live)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := r.HEAD(); err != nil {
+		t.Fatalf("HEAD under a live load context: %v", err)
+	}
+	stop()
+	if _, err := r.HEAD(); err == nil {
+		t.Fatal("HEAD after the load context ended succeeded")
 	}
 }

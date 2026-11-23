@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -35,13 +34,11 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New()
-	ctx = store.WithContext(ctx, st)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
+	st := database.New(nil)
+	be := backend.New(cfg, dbx, st, log.Default())
 	logs := &syncBuffer{}
 
 	// Authentication lets every client in, so the session handlers decide.
@@ -51,9 +48,9 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		KeyboardInteractiveHandler: func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool {
 			return true
 		},
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
 			_ = s.Exit(0)
-		}))),
+		})),
 	}
 	addr := testsession.Listen(t, srv)
 

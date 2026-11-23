@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -65,22 +64,20 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	dbstore := database.New(nil)
+	be := backend.New(cfg, dbx, dbstore, log.Default())
 	is.True(be.AllowKeyless(ctx))
 
 	s := &Server{be: be}
 	hs := handlerServer(t, cfg, dbx, dbstore, be, log.Default())
 	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			s.Exit(0) //nolint:errcheck
-		})),
+		}),
 	}
 	is.NoErr(srv.SetOption(ssh.KeyboardInteractiveAuth(s.KeyboardInteractiveHandler)))
 

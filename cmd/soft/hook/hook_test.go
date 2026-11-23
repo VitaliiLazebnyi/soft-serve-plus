@@ -13,7 +13,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	_ "modernc.org/sqlite" // sqlite driver
 )
@@ -143,15 +142,14 @@ func testHookErrorReturned(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hooksPath, "post-update"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	env := &Env{Config: cfg, Logger: log.New(io.Discard)}
 
-	command := NewCommand()
+	command := NewCommand(env)
 	command.SetArgs([]string{"post-update"})
 	command.SetIn(strings.NewReader(""))
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	if err := command.ExecuteContext(ctx); err == nil {
+	if err := command.ExecuteContext(t.Context()); err == nil {
 		t.Fatal("hook returned nil for a failing custom hook")
 	}
 }
@@ -185,20 +183,17 @@ func TestHooksOpenNoDatabase(t *testing.T) {
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			ctx := config.WithContext(context.Background(), cfg)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
+			env := &Env{Config: cfg, Logger: log.New(io.Discard)}
 
-			command := NewCommand()
+			command := NewCommand(env)
 			command.SetArgs(append([]string{tc.name}, tc.args...))
 			command.SetIn(strings.NewReader(tc.input))
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
-			sub, err := command.ExecuteContextC(ctx)
-			if err != nil {
+			// A hook's Env holds no database; nothing it runs opens one
+			// in the data path either.
+			if err := command.ExecuteContext(t.Context()); err != nil {
 				t.Fatalf("hook: %v", err)
-			}
-			if dbx := db.FromContext(sub.Context()); dbx != nil {
-				t.Error("the hook opened the database")
 			}
 			entries, err := os.ReadDir(cfg.DataPath)
 			if err != nil {
@@ -250,20 +245,19 @@ func TestHookFailsOnUnreadableInput(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			ctx := config.WithContext(context.Background(), cfg)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
+			env := &Env{Config: cfg, Logger: log.New(io.Discard)}
 
 			zero := strings.Repeat("0", 40)
 			one := strings.Repeat("1", 40)
 			input := zero + " " + one + " refs/heads/a\n" +
 				zero + " " + one + " refs/heads/" + strings.Repeat("b", 70<<10) + "\n" +
 				zero + " " + one + " refs/heads/c\n"
-			command := NewCommand()
+			command := NewCommand(env)
 			command.SetArgs([]string{name})
 			command.SetIn(strings.NewReader(input))
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
-			if err := command.ExecuteContext(ctx); err == nil || !strings.Contains(err.Error(), "hook input") {
+			if err := command.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "hook input") {
 				t.Fatalf("hook returned %v for input it could not read", err)
 			}
 			if _, err := os.Stat(marker); err == nil {
@@ -276,7 +270,7 @@ func TestHookFailsOnUnreadableInput(t *testing.T) {
 // The ignored --config flag is marked deprecated, so cobra hides it and says
 // so when it is used.
 func TestConfigFlagDeprecated(t *testing.T) {
-	f := NewCommand().PersistentFlags().Lookup("config")
+	f := NewCommand(&Env{}).PersistentFlags().Lookup("config")
 	if f == nil {
 		t.Fatal("no --config flag")
 	}
@@ -296,15 +290,14 @@ func TestHookRefusesWithoutDataPath(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	env := &Env{Config: cfg, Logger: log.New(io.Discard)}
 
-	command := NewCommand()
+	command := NewCommand(env)
 	command.SetArgs([]string{"pre-receive"})
 	command.SetIn(strings.NewReader(""))
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	if err := command.ExecuteContext(ctx); !errors.Is(err, ErrNoDataPath) {
+	if err := command.ExecuteContext(t.Context()); !errors.Is(err, ErrNoDataPath) {
 		t.Fatalf("hook returned %v, want %v", err, ErrNoDataPath)
 	}
 

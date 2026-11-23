@@ -52,7 +52,7 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	s := database.New()
+	s := database.New(nil)
 
 	var repoID, userID int64
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {

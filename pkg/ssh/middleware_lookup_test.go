@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite"
@@ -35,7 +34,6 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	ctx = config.WithContext(ctx, cfg)
 
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
@@ -45,9 +43,8 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	dbstore := database.New(nil)
+	be := backend.New(cfg, dbx, dbstore, log.Default())
 
 	newKey := func(name string) gossh.Signer {
 		t.Helper()
@@ -74,14 +71,14 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	hs := handlerServer(t, cfg, dbx, dbstore, be, log.New(logs))
 	srv := &ssh.Server{
 		PublicKeyHandler: (&Server{}).PublicKeyHandler,
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()
 			}
 			_, _ = s.Write([]byte(name))
 			_ = s.Exit(0)
-		})),
+		}),
 	}
 	addr := testsession.Listen(t, srv)
 

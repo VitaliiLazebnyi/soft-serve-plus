@@ -46,7 +46,7 @@ func newTestBackend(t *testing.T) *testServer {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	be := backend.New(cfg, dbx, database.New(), log.Default())
+	be := backend.New(cfg, dbx, database.New(nil), log.Default())
 	return &testServer{cfg: cfg, db: dbx, be: be}
 }
 

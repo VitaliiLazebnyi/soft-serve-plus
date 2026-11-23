@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	sstest "github.com/charmbracelet/soft-serve/pkg/test"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -65,16 +64,13 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	cfg.DataPath = t.TempDir()
 	cfg.DB.Driver = "postgres"
 	cfg.DB.DataSource = testDSN
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := New(cfg, dbx, dbstore, log.FromContext(ctx))
-	ctx = db.WithContext(ctx, dbx)
+	dbstore := database.New(nil)
+	be := New(cfg, dbx, dbstore, log.Default())
 
 	user, err := be.User(ctx, "admin")
 	is.NoErr(err)

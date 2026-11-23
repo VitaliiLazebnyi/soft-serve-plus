@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	gossh "golang.org/x/crypto/ssh"
@@ -54,7 +53,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	}
 
 	srv := &ssh.Server{
-		Handler: (&Server{logger: log.Default()}).loggerMiddleware(handler),
+		Handler: handler,
 	}
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {

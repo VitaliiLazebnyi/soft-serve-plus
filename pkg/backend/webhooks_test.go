@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
 	"github.com/matryer/is"
@@ -62,9 +61,7 @@ func newWebhookEnv(t *testing.T) whEnv {
 	is := is.New(t)
 	logs := &syncBuffer{}
 	be, cfg := newTestBackendWithLog(t, logs)
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = db.WithContext(ctx, be.db)
-	ctx = store.WithContext(ctx, be.store)
+	ctx := context.Background()
 	admin, err := be.User(ctx, "admin")
 	is.NoErr(err)
 	ctx = proto.WithUserContext(ctx, admin)

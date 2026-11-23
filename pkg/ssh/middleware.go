@@ -141,20 +141,6 @@ func commandLengthMiddleware(sh ssh.Handler) ssh.Handler {
 	}
 }
 
-// loggerMiddleware puts the server's logger on the session context, for
-// the git package, which logs a commit it cannot parse with
-// log.FromContext on the context the repository was opened with. The server's other dependencies are its fields; the
-// session context carries only what belongs to the connection and the
-// session: the user, the key and cancellation. The session context is
-// shared by every session on the connection, so the session itself is
-// added per session by sessionContext instead.
-func (srv *Server) loggerMiddleware(sh ssh.Handler) ssh.Handler {
-	return func(s ssh.Session) {
-		s.Context().SetValue(log.ContextKey, srv.logger)
-		sh(s)
-	}
-}
-
 // maxSuggestionArgLength is the longest argument, in bytes, for which the
 // command handler still suggests a command name for an unknown command.
 const maxSuggestionArgLength = 64

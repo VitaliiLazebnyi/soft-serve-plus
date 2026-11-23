@@ -41,7 +41,7 @@ func TestLFSLockOnDeletedRepository(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New()
+	st := database.New(nil)
 
 	admin, err := st.FindUserByUsername(ctx, dbx, "admin")
 	if err != nil {

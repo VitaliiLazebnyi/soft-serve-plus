@@ -99,7 +99,7 @@ func newTestEnvOn(t *testing.T, cfg *config.Config, dbx *db.DB) *testEnv {
 	ctx := context.Background()
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	ds := database.New()
+	ds := database.New(nil)
 
 	is.NoErr(ds.CreateUser(ctx, dbx, "alice", false, nil))
 	owner, err := ds.FindUserByUsername(ctx, dbx, "alice")

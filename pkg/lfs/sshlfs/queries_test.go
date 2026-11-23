@@ -56,7 +56,7 @@ func TestLFSTransferLooksUpTogether(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	base := database.New()
+	base := database.New(nil)
 	admin, err := base.FindUserByUsername(ctx, dbx, "admin")
 	if err != nil {
 		t.Fatal(err)

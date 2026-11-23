@@ -46,12 +46,12 @@ type Commits []*Commit
 // CatFileCommit returns the commit for the given revision. A commit
 // git-module cannot parse, or one without an author or committer, is an
 // ErrMalformedCommit. Its message names only the revision, since it reaches
-// SSH users; what the parser reported is logged.
+// SSH users; what the parser reported is logged on the default logger.
 func (r *Repository) CatFileCommit(rev string) (c *Commit, err error) {
 	malformed := func(reason any) error {
 		// Debug, not Warn: nothing caches a failed parse, so anyone who
 		// can push such a commit could otherwise fill the log.
-		log.FromContext(r.ctx).Debug("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
+		log.Debug("cannot parse commit", "path", r.Path, "rev", rev, "reason", reason)
 		return fmt.Errorf("%w: %s", ErrMalformedCommit, rev)
 	}
 	defer func() {

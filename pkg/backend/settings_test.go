@@ -49,13 +49,12 @@ func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backe
 	// AdminOnlyCreate is left at its default (off); tests of the restricted
 	// policy turn it on themselves.
 
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	var logger *charmlog.Logger
 	if logs != nil {
 		logger = charmlog.New(logs)
