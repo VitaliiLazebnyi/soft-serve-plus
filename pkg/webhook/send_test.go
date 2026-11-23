@@ -96,7 +96,7 @@ func TestSendWebhookJSONDelivered(t *testing.T) {
 	is.Equal(rec.method, http.MethodPost)
 	is.Equal(rec.header.Get("Content-Type"), ContentTypeJSON.String())
 	is.Equal(rec.header.Get("X-SoftServe-Event"), EventBranchTagCreate.String())
-	is.True(strings.HasPrefix(rec.header.Get("User-Agent"), "SoftServe/"))
+	is.Equal(rec.header.Get("User-Agent"), "SoftServe/"+testVersion)
 	// The delivery ID is a random (version 4) UUID: a version 1 UUID would
 	// embed the server's MAC address and clock in every request.
 	delID, err := uuid.Parse(rec.header.Get("X-SoftServe-Delivery"))

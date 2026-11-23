@@ -54,6 +54,9 @@ func (s *Sender) sendWebhook(ctx context.Context, w models.Webhook, event Event,
 	return s.sendPayload(ctx, w, event, payload, true)
 }
 
+// testVersion is the server version of newTestEnv's Sender.
+const testVersion = "1.2.3-test"
+
 // newTestEnv builds a test environment. The owner user and a repository named
 // "repo" owned by that user are created.
 func newTestEnv(t *testing.T) *testEnv {
@@ -68,6 +71,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg.HTTP.PublicURL = "http://127.0.0.1:23232"
 	cfg.SSH.PublicURL = "ssh://127.0.0.1:23231"
 	cfg.Git.PublicURL = "git://127.0.0.1:9418"
+	cfg.Version = testVersion
 
 	ctx := context.Background()
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})

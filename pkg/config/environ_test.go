@@ -29,6 +29,8 @@ var environExcluded = map[string]string{
 	// (SOFT_SERVE_LOG_PATH=<data>/log/hooks.log) and appends Environ after
 	// it, so emitting the server's log path would override that.
 	"Log.Path": "hooks log to their own file",
+	// The binary's version, which the soft command sets, not a setting.
+	"Version": "not a setting",
 }
 
 // roundTripConfig returns a valid config whose every field, except those in

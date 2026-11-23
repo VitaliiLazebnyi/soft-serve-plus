@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
 func TestIsHookCommand(t *testing.T) {
@@ -117,12 +115,5 @@ func TestNonServerCommandsLoadNoConfig(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// main gives webhook requests its version for their User-Agent.
-func TestWebhookVersionSet(t *testing.T) {
-	if webhook.Version == "" || webhook.Version != Version {
-		t.Errorf("webhook.Version = %q, want main's Version %q", webhook.Version, Version)
 	}
 }
