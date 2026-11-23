@@ -1242,26 +1242,26 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		cfg.DB.DataSource = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
 	}
 
-	dbUrl, err := url.Parse(cfg.DB.DataSource)
+	dbURL, err := url.Parse(cfg.DB.DataSource)
 	if err != nil {
 		return nil, err
 	}
 
-	scheme := dbUrl.Scheme
+	scheme := dbURL.Scheme
 	if scheme == "" {
 		scheme = "postgres"
 	}
 
-	host := dbUrl.Hostname()
+	host := dbURL.Hostname()
 	if host == "" {
 		host = "localhost"
 	}
 
 	connInfo := fmt.Sprintf("host=%s sslmode=disable", host)
-	username := dbUrl.User.Username()
+	username := dbURL.User.Username()
 	if username != "" {
 		connInfo += fmt.Sprintf(" user=%s", username)
-		password, ok := dbUrl.User.Password()
+		password, ok := dbURL.User.Password()
 		if ok {
 			username = fmt.Sprintf("%s:%s", username, password)
 			connInfo += fmt.Sprintf(" password=%s", password)
@@ -1272,7 +1272,7 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		username = "postgres@"
 	}
 
-	port := dbUrl.Port()
+	port := dbURL.Port()
 	if port != "" {
 		connInfo += fmt.Sprintf(" port=%s", port)
 		port = fmt.Sprintf(":%s", port)

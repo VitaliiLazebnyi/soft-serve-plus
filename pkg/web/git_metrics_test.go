@@ -21,8 +21,8 @@ import (
 // counters are the process's, and other tests fetch the same names, so the
 // tests that read them do not run in parallel.
 func httpGitCounts(repo string) (fetches, pushes float64) {
-	return testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(repo, "info/refs")),
-		testutil.ToFloat64(gitHttpReceiveCounter.WithLabelValues(repo))
+	return testutil.ToFloat64(gitHTTPUploadCounter.WithLabelValues(repo, "info/refs")),
+		testutil.ToFloat64(gitHTTPReceiveCounter.WithLabelValues(repo))
 }
 
 // Fetches and pushes over HTTP are counted on their ref advertisement only:
@@ -197,12 +197,12 @@ func TestHTTPCountersLabelledByRepository(t *testing.T) {
 	is.Equal(testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)))
 
 	fetches, _ := httpGitCounts(name)
-	series = testutil.CollectAndCount(gitHttpUploadCounter)
+	series = testutil.CollectAndCount(gitHTTPUploadCounter)
 	refs := []string{"/" + name, "/" + name + ".git", "/" + name + ".git.git", "/" + name + "/.git"}
 	for _, p := range refs {
 		is.Equal(f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
 	}
-	is.Equal(testutil.CollectAndCount(gitHttpUploadCounter)-series, 0)
+	is.Equal(testutil.CollectAndCount(gitHTTPUploadCounter)-series, 0)
 	gotFetches, _ := httpGitCounts(name)
 	is.Equal(gotFetches-fetches, float64(len(refs)))
 }

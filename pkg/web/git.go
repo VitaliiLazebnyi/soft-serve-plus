@@ -143,16 +143,14 @@ func (g gitRoute) allowed() []string {
 }
 
 var (
-	//nolint:revive
-	gitHttpReceiveCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	gitHTTPReceiveCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "http",
 		Name:      "git_receive_pack_total",
 		Help:      "The total number of git push requests",
 	}, []string{"repo"})
 
-	//nolint:revive
-	gitHttpUploadCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	gitHTTPUploadCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "soft_serve",
 		Subsystem: "http",
 		Name:      "git_upload_pack_total",
@@ -250,7 +248,7 @@ var gitRoutes = []gitRoute{
 	// wraps each of them in withAccess.
 	{
 		method:  []string{http.MethodPost},
-		handler: (*server).serviceRpc,
+		handler: (*server).serviceRPC,
 		path:    "/{service:(?:git-upload-archive|git-upload-pack|git-receive-pack)$}",
 		service: true,
 	},
@@ -738,8 +736,7 @@ func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Reque
 	route.handler(s, w, r, gr)
 }
 
-//nolint:revive
-func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
+func (s *server) serviceRPC(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
 	cfg := s.cfg
 	logger := gr.logger
@@ -951,9 +948,9 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 	// as over SSH.
 	switch service {
 	case gitserve.UploadPackService:
-		gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
+		gitHTTPUploadCounter.WithLabelValues(repoName, file).Inc()
 	case gitserve.ReceivePackService:
-		gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
+		gitHTTPReceiveCounter.WithLabelValues(repoName).Inc()
 	}
 
 	refs.begin()
