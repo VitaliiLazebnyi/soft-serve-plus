@@ -68,7 +68,7 @@ type Request struct {
 const dataSourceEnv = "SOFT_SERVE_DB_DATA_SOURCE="
 
 // Env returns the environment git receive-pack and the hooks it runs get
-// for req, on top of the server's own (see pkg/git's serviceEnv):
+// for req, on top of the server's own (see pkg/gitserve's serviceEnv):
 //
 //   - SOFT_SERVE_REPO_NAME, SOFT_SERVE_REPO_PATH and SOFT_SERVE_LOG_PATH;
 //   - SOFT_SERVE_PUBLIC_KEY over SSH, empty for a keyless session;

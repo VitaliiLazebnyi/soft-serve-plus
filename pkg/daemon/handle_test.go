@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // TestRequestLineAnswers pins the answer to each kind of request line, as
@@ -21,12 +21,12 @@ func TestRequestLineAnswers(t *testing.T) {
 		line string
 		want error // nil: served
 	}{
-		{"no space", "git-upload-pack", git.ErrInvalidRequest},
-		{"no host parameter", "git-upload-pack /answers-public.git", git.ErrInvalidRequest},
-		{"unknown service", "git-upload-anything /answers-public.git\x00host=localhost\x00", git.ErrInvalidRequest},
+		{"no space", "git-upload-pack", gitserve.ErrInvalidRequest},
+		{"no host parameter", "git-upload-pack /answers-public.git", gitserve.ErrInvalidRequest},
+		{"unknown service", "git-upload-anything /answers-public.git\x00host=localhost\x00", gitserve.ErrInvalidRequest},
 		{"push", "git-receive-pack /answers-public.git\x00host=localhost\x00", ErrPushNotSupported},
-		{"missing repo", "git-upload-pack /answers-missing.git\x00host=localhost\x00", git.ErrNotAuthed},
-		{"missing repo, archive", "git-upload-archive /answers-missing.git\x00host=localhost\x00", git.ErrNotAuthed},
+		{"missing repo", "git-upload-pack /answers-missing.git\x00host=localhost\x00", gitserve.ErrNotAuthed},
+		{"missing repo, archive", "git-upload-archive /answers-missing.git\x00host=localhost\x00", gitserve.ErrNotAuthed},
 		{"public repo", "git-upload-pack /answers-public.git\x00host=localhost\x00", nil},
 		{"public repo without .git", "git-upload-pack /answers-public\x00host=localhost\x00", nil},
 		{"public repo, empty host", "git-upload-pack /answers-public.git\x00\x00", nil},

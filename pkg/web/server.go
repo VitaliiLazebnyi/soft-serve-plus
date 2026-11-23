@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/gorilla/mux"
@@ -40,7 +40,7 @@ type server struct {
 	// runService runs a service RPC's git. A test stands in for git with
 	// it, as for a push whose client went away after its refs were
 	// updated.
-	runService func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error
+	runService func(ctx context.Context, service gitserve.Service, cmd gitserve.ServiceCommand) error
 	// beforePushCreate, when set, runs in withAccess after a push to a
 	// missing name was authorized and before the repository is created.
 	beforePushCreate func()
@@ -67,7 +67,7 @@ func newServer(cfg *config.Config, be *backend.Backend, dbx *db.DB, datastore lf
 		logger:    logger,
 		pending:   newPushCreates(be, logger),
 		limits:    newRequestLimits(cfg.HTTP),
-		runService: func(ctx context.Context, service git.Service, cmd git.ServiceCommand) error {
+		runService: func(ctx context.Context, service gitserve.Service, cmd gitserve.ServiceCommand) error {
 			return service.Handler(ctx, cmd)
 		},
 	}

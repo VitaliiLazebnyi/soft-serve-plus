@@ -160,7 +160,7 @@ func joiningBody() bool {
 	for _, g := range strings.Split(string(buf), "\n\n") {
 		header, stack, _ := strings.Cut(g, "\n")
 		if strings.Contains(header, "[chan receive") &&
-			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/git.joinStdin(") &&
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/gitserve.joinStdin(") &&
 			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*server).serviceRpc(") {
 			return true
 		}

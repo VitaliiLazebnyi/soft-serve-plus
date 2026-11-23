@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 	"github.com/spf13/cobra"
@@ -53,9 +53,9 @@ func TestSSHLFSAuthenticateWithoutAccount(t *testing.T) {
 		want     error
 	}{
 		{"pub", "download", errLFSAuthNoAccount},
-		{"pub", "upload", git.ErrNotAuthed},
-		{"priv", "download", git.ErrNotAuthed},
-		{"ghost", "download", git.ErrNotAuthed},
+		{"pub", "upload", gitserve.ErrNotAuthed},
+		{"priv", "download", gitserve.ErrNotAuthed},
+		{"ghost", "download", gitserve.ErrNotAuthed},
 	} {
 		t.Run(tc.repo+" "+tc.op, func(t *testing.T) {
 			var out bytes.Buffer

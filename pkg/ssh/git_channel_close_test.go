@@ -128,7 +128,7 @@ func copyBlockedOnWindow() bool {
 	return goroutineBlocked("[sync.Cond.Wait",
 		"golang.org/x/crypto/ssh.(*window).reserve(",
 		"charm.land/ssh.(*session).Write(",
-		"github.com/charmbracelet/soft-serve/pkg/git.progressWriter.Write(",
+		"github.com/charmbracelet/soft-serve/pkg/gitserve.progressWriter.Write(",
 	)
 }
 

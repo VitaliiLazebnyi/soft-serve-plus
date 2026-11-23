@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // fakeAddrListener gives each accepted connection the remote address the
@@ -74,7 +74,7 @@ func perAddrDaemon(t *testing.T, limit, perAddr int) (*GitDaemon, func(addr neti
 func wantRefused(t *testing.T, what string, c net.Conn) {
 	t.Helper()
 	_, err := readPktline(c)
-	wantErrLine(t, what, err, git.ErrMaxConnections)
+	wantErrLine(t, what, err, gitserve.ErrMaxConnections)
 }
 
 // TestMaxConnectionsPerIP checks that one address cannot take every slot:
@@ -166,7 +166,7 @@ func TestConnectionsPerAddr(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The IPv4-mapped form is the same address.
-	if err := m.Add(c3, 10, 2); !errors.Is(err, errMaxConnectionsPerIP) || !errors.Is(err, git.ErrMaxConnections) {
+	if err := m.Add(c3, 10, 2); !errors.Is(err, errMaxConnectionsPerIP) || !errors.Is(err, gitserve.ErrMaxConnections) {
 		t.Fatalf("Add over the share = %v, want errMaxConnectionsPerIP", err)
 	}
 	// A pipe has no IP address and counts only towards the total.

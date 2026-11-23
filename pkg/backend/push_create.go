@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	gitsvc "github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
@@ -176,7 +176,7 @@ func (d *Backend) headOnPushedBranch(ctx context.Context, name string, created p
 	if err != nil || m.ID != created.ID() {
 		return
 	}
-	if err := gitsvc.EnsureDefaultBranch(ctx, d.repoPath(name)); err != nil {
+	if err := gitserve.EnsureDefaultBranch(ctx, d.repoPath(name)); err != nil {
 		d.logger.Warn("failed to set the default branch of a repository created by a push", "repo", name, "err", err)
 	}
 }

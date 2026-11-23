@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/internal/clientaddr"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 )
 
 // errMaxConnectionsPerIP is returned by connections.Add for a connection
 // over its address's share. It wraps git.ErrMaxConnections, which is what the
 // client is told.
-var errMaxConnectionsPerIP = fmt.Errorf("%w from one address", git.ErrMaxConnections)
+var errMaxConnectionsPerIP = fmt.Errorf("%w from one address", gitserve.ErrMaxConnections)
 
 // connections is a net.Conn pool that is safe for concurrent use. It counts
 // the connections in all and from each client address.
@@ -69,7 +69,7 @@ func (m *connections) Add(c net.Conn, limit, perAddr int) error {
 		return ErrServerClosed
 	}
 	if len(m.m) >= limit {
-		return git.ErrMaxConnections
+		return gitserve.ErrMaxConnections
 	}
 	if keyed && m.perAddr[key] >= perAddr {
 		return errMaxConnectionsPerIP

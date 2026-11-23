@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
@@ -63,20 +63,20 @@ func TestAuthorizeLookupFailure(t *testing.T) {
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
 			ctx, d, dbx, logs := newLookupTestDaemon(t)
-			public := gitRequest{service: git.UploadPackService, name: "public"}
+			public := gitRequest{service: gitserve.UploadPackService, name: "public"}
 			if err := d.authorize(ctx, public); err != nil {
 				t.Fatalf("authorize = %v, want nil", err)
 			}
-			if err := d.authorize(ctx, gitRequest{service: git.UploadPackService, name: "ghost"}); !errors.Is(err, git.ErrNotAuthed) {
-				t.Fatalf("authorize(ghost) = %v, want %v", err, git.ErrNotAuthed)
+			if err := d.authorize(ctx, gitRequest{service: gitserve.UploadPackService, name: "ghost"}); !errors.Is(err, gitserve.ErrNotAuthed) {
+				t.Fatalf("authorize(ghost) = %v, want %v", err, gitserve.ErrNotAuthed)
 			}
 
 			if _, err := dbx.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone"); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{"public", "ghost"} {
-				if err := d.authorize(ctx, gitRequest{service: git.UploadPackService, name: name}); !errors.Is(err, git.ErrSystemMalfunction) {
-					t.Fatalf("authorize(%s) with the lookup failing = %v, want %v", name, err, git.ErrSystemMalfunction)
+				if err := d.authorize(ctx, gitRequest{service: gitserve.UploadPackService, name: name}); !errors.Is(err, gitserve.ErrSystemMalfunction) {
+					t.Fatalf("authorize(%s) with the lookup failing = %v, want %v", name, err, gitserve.ErrSystemMalfunction)
 				}
 			}
 			if !strings.Contains(logs.String(), "failed to look up repository") {
@@ -92,8 +92,8 @@ func TestAuthorizeLookupCanceled(t *testing.T) {
 	ctx, d, _, logs := newLookupTestDaemon(t)
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := d.authorize(cctx, gitRequest{service: git.UploadPackService, name: "public"}); !errors.Is(err, git.ErrSystemMalfunction) {
-		t.Fatalf("authorize with the client gone = %v, want %v", err, git.ErrSystemMalfunction)
+	if err := d.authorize(cctx, gitRequest{service: gitserve.UploadPackService, name: "public"}); !errors.Is(err, gitserve.ErrSystemMalfunction) {
+		t.Fatalf("authorize with the client gone = %v, want %v", err, gitserve.ErrSystemMalfunction)
 	}
 	out := logs.String()
 	if !strings.Contains(out, "repository lookup canceled") || strings.Contains(out, "ERRO") {

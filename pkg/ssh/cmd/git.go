@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/lfs/sshlfs"
@@ -108,14 +108,14 @@ var (
 // GitUploadPackCommand returns a cobra command for git-upload-pack.
 func (cmds *Commands) GitUploadPackCommand() *cobra.Command {
 	return gitCommand("git-upload-pack REPO", "Git upload pack", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
-		return cmds.runUploadPack(cmd, args, git.UploadPackService)
+		return cmds.runUploadPack(cmd, args, gitserve.UploadPackService)
 	})
 }
 
 // GitUploadArchiveCommand returns a cobra command for git-upload-archive.
 func (cmds *Commands) GitUploadArchiveCommand() *cobra.Command {
 	return gitCommand("git-upload-archive REPO", "Git upload archive", cobra.ExactArgs(1), func(cmd *cobra.Command, args []string) error {
-		return cmds.runUploadPack(cmd, args, git.UploadArchiveService)
+		return cmds.runUploadPack(cmd, args, gitserve.UploadArchiveService)
 	})
 }
 
@@ -127,14 +127,14 @@ func (cmds *Commands) GitReceivePackCommand() *cobra.Command {
 // GitLFSAuthenticateCommand returns a cobra command for git-lfs-authenticate.
 func (cmds *Commands) GitLFSAuthenticateCommand() *cobra.Command {
 	return gitCommand("git-lfs-authenticate REPO OPERATION", "Git LFS authenticate", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
-		return cmds.runLFS(cmd, args, git.LFSAuthenticateService)
+		return cmds.runLFS(cmd, args, gitserve.LFSAuthenticateService)
 	})
 }
 
 // GitLFSTransfer returns a cobra command for git-lfs-transfer.
 func (cmds *Commands) GitLFSTransfer() *cobra.Command {
 	return gitCommand("git-lfs-transfer REPO OPERATION", "Git LFS transfer", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
-		return cmds.runLFS(cmd, args, git.LFSTransferService)
+		return cmds.runLFS(cmd, args, gitserve.LFSTransferService)
 	})
 }
 
@@ -156,7 +156,7 @@ var errLFSAuthNoAccount = errors.New("git-lfs-authenticate needs an account: reg
 // gitDenyRead is denyReadAs for git services: ErrNotAuthed when anonymous,
 // ErrInvalidRepo otherwise.
 func gitDenyRead(anonymous bool) error {
-	return denyReadAs(anonymous, git.ErrNotAuthed, git.ErrInvalidRepo)
+	return denyReadAs(anonymous, gitserve.ErrNotAuthed, gitserve.ErrInvalidRepo)
 }
 
 // gitAccess authorizes a git service that needs level need on repo, which
@@ -167,7 +167,7 @@ func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLe
 		return gitDenyRead(anonymous)
 	}
 	if have < need {
-		return git.ErrNotAuthed
+		return gitserve.ErrNotAuthed
 	}
 	return nil
 }
@@ -182,7 +182,7 @@ func gitLookupFailed(ctx context.Context, logger *log.Logger, repo string, err e
 	} else {
 		logger.Error("failed to look up repository", "repo", repo, "err", err)
 	}
-	return git.ErrSystemMalfunction
+	return gitserve.ErrSystemMalfunction
 }
 
 // gitServiceError logs a failed git service and returns the error for the
@@ -195,7 +195,7 @@ func gitLookupFailed(ctx context.Context, logger *log.Logger, repo string, err e
 // before the cancellation reached the service, as git's own failure, with
 // ctx done or the channel closed. None of these is a server failure, so they
 // are logged at Debug and not reported as one.
-func gitServiceError(ctx context.Context, logger *log.Logger, service git.Service, repo string, err error) error {
+func gitServiceError(ctx context.Context, logger *log.Logger, service gitserve.Service, repo string, err error) error {
 	if !errors.Is(err, context.Canceled) && (ctx.Err() != nil || channelClosed(ctx)) {
 		err = fmt.Errorf("client went away: %w (%w)", context.Canceled, err)
 	}
@@ -205,7 +205,7 @@ func gitServiceError(ctx context.Context, logger *log.Logger, service git.Servic
 	}
 
 	logger.Error("failed to handle git service", "service", service, "err", err, "repo", repo)
-	return git.ErrSystemMalfunction
+	return gitserve.ErrSystemMalfunction
 }
 
 // channelClosed reports whether the client has closed the session's channel,
@@ -245,7 +245,7 @@ type gitRequest struct {
 	cfg       *config.Config
 	// protocol is the session's GIT_PROTOCOL, or "".
 	protocol string
-	scmd     git.ServiceCommand
+	scmd     gitserve.ServiceCommand
 }
 
 // hookEnv returns the environment receive-pack and its hooks run with, refs
@@ -302,7 +302,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 	// repo should be in the form of "repo.git"
 	name := utils.SanitizeRepo(args[0])
 	user := proto.UserFromContext(ctx)
-	if err := git.EnsureWithin(hooks.ReposPath(cfg), name+".git"); err != nil {
+	if err := gitserve.EnsureWithin(hooks.ReposPath(cfg), name+".git"); err != nil {
 		return nil, err
 	}
 
@@ -343,7 +343,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 		// As in denyRead, a server admin is never anonymous: nothing is
 		// hidden from them.
 		anonymous: user == nil && !cmds.isServerAdmin(ctx),
-		scmd: git.ServiceCommand{
+		scmd: gitserve.ServiceCommand{
 			Stdin:  cmd.InOrStdin(),
 			Stdout: cmd.OutOrStdout(),
 			Stderr: cmd.ErrOrStderr(),
@@ -362,7 +362,7 @@ func (r *gitRequest) setRepo(repo proto.Repository, level access.AccessLevel) {
 
 // runUploadPack runs git-upload-pack or git-upload-archive, which read the
 // repository.
-func (cmds *Commands) runUploadPack(cmd *cobra.Command, args []string, service git.Service) error {
+func (cmds *Commands) runUploadPack(cmd *cobra.Command, args []string, service gitserve.Service) error {
 	r, err := cmds.newGitRequest(cmd, args)
 	if err != nil {
 		return err
@@ -372,7 +372,7 @@ func (cmds *Commands) runUploadPack(cmd *cobra.Command, args []string, service g
 	}
 
 	counter, seconds := uploadPackCounter, uploadPackSeconds
-	if service == git.UploadArchiveService {
+	if service == gitserve.UploadArchiveService {
 		counter, seconds = uploadArchiveCounter, uploadArchiveSeconds
 	}
 	counter.Inc()
@@ -465,7 +465,7 @@ func (cmds *Commands) runReceivePack(cmd *cobra.Command, args []string) error {
 	refs := r.newPushRefs()
 	defer r.afterPush(refs)
 	r.scmd.Env = r.hookEnv(refs)
-	if err := git.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
+	if err := gitserve.ReceivePackService.Handler(r.ctx, r.scmd); err != nil {
 		if created != nil {
 			// The push may have failed because the session ended, so the
 			// removal must not use its context. It must run after the
@@ -475,14 +475,14 @@ func (cmds *Commands) runReceivePack(cmd *cobra.Command, args []string) error {
 			endPush = func() {}
 			removePushCreated(context.WithoutCancel(r.ctx), r, created)
 		}
-		return gitServiceError(r.ctx, r.logger, git.ReceivePackService, r.name, err)
+		return gitServiceError(r.ctx, r.logger, gitserve.ReceivePackService, r.name, err)
 	}
 
 	// The push succeeded, so HEAD is fixed even if the client has gone
 	// meanwhile, as the failure path does.
-	if err := git.EnsureDefaultBranch(context.WithoutCancel(r.ctx), r.scmd.Dir); err != nil {
+	if err := gitserve.EnsureDefaultBranch(context.WithoutCancel(r.ctx), r.scmd.Dir); err != nil {
 		r.logger.Error("failed to ensure default branch", "err", err, "repo", r.name)
-		return git.ErrSystemMalfunction
+		return gitserve.ErrSystemMalfunction
 	}
 	return nil
 }
@@ -533,7 +533,7 @@ func removePushCreated(ctx context.Context, r *gitRequest, created proto.Reposit
 
 // runLFS runs git-lfs-transfer or git-lfs-authenticate for the operation
 // args[1] names.
-func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Service) error {
+func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service gitserve.Service) error {
 	r, err := cmds.newGitRequest(cmd, args)
 	if err != nil {
 		return err
@@ -547,10 +547,10 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Serv
 	case lfs.OperationUpload:
 		need = access.ReadWriteAccess
 	default:
-		return git.ErrInvalidRequest
+		return gitserve.ErrInvalidRequest
 	}
 
-	if service == git.LFSAuthenticateService {
+	if service == gitserve.LFSAuthenticateService {
 		// git-lfs-authenticate issues a token for the account, and the
 		// HTTP LFS endpoint checks that token against the account's own
 		// access; it knows nothing about admin keys. Authorize with the
@@ -581,7 +581,7 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service git.Serv
 		}
 		return sshlfs.Transfer(r.ctx, r.scmd.Stdin, r.scmd.Stdout, deps, r.repo, r.user, operation)
 	}
-	if service == git.LFSAuthenticateService {
+	if service == gitserve.LFSAuthenticateService {
 		// A caller without an account that may read the repository, such
 		// as an unregistered key on a public repository with anonymous
 		// access, has no account to issue a token for. Say so instead of

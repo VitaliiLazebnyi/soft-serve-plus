@@ -14,7 +14,7 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/git"
+	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -66,7 +66,7 @@ type gitRequest struct {
 	file string
 	// service is the git service named by the RPC path or, on the ref
 	// advertisement, by ?service=; empty on other routes.
-	service git.Service
+	service gitserve.Service
 	user    proto.User
 	// repo is nil until withAccess finds the caller may read it.
 	repo  proto.Repository
@@ -86,7 +86,7 @@ func (g gitRoute) newRequest(r *http.Request) *gitRequest {
 		// The RPC route carries the service in its path; the
 		// caller-supplied ?service= only means something on the ref
 		// advertisement.
-		service: git.Service(vars["service"]),
+		service: gitserve.Service(vars["service"]),
 		name:    utils.SanitizeRepo(repo),
 	}
 	if gr.service == "" && gr.file == "info/refs" {
@@ -107,9 +107,9 @@ type routeAccess struct {
 }
 
 // access returns the access a request with method and service needs.
-func (g gitRoute) access(method string, service git.Service) routeAccess {
+func (g gitRoute) access(method string, service gitserve.Service) routeAccess {
 	a := routeAccess{lfs: g.lfs, write: slices.Contains(g.write, method)}
-	if g.service && service == git.ReceivePackService {
+	if g.service && service == gitserve.ReceivePackService {
 		a.write = true
 		// HEAD is answered like GET, but only to check the route, so it
 		// does not create the repository.
@@ -241,8 +241,8 @@ func isGoGet(r *http.Request) bool {
 
 // isSmartService reports whether service is one a smart HTTP ref
 // advertisement is served for.
-func isSmartService(service git.Service) bool {
-	return service == git.UploadPackService || service == git.ReceivePackService
+func isSmartService(service gitserve.Service) bool {
+	return service == gitserve.UploadPackService || service == gitserve.ReceivePackService
 }
 
 var gitRoutes = []gitRoute{
@@ -716,7 +716,7 @@ func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Reque
 	// push, ref advertisement included, before git asks for the pack.
 	// Only a caller allowed to write gets here, so the answer tells
 	// them nothing they could not read from the repository already.
-	if gr.service == git.ReceivePackService && repo != nil && repo.IsMirror() {
+	if gr.service == gitserve.ReceivePackService && repo != nil && repo.IsMirror() {
 		logger.Info("refusing push to a mirror", "repo", repoName)
 		// git shows a text/plain error body to the user.
 		http.Error(w, proto.ErrMirrorReadOnly.Error(), http.StatusForbidden)
@@ -763,7 +763,7 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 		gz, err := gzip.NewReader(r.Body)
 		if err != nil {
 			logger.Debugf("bad gzip request body: %v", err)
-			if service == git.ReceivePackService {
+			if service == gitserve.ReceivePackService {
 				gr.pushFailed = true
 			}
 			renderStatus(w, http.StatusBadRequest)
@@ -790,13 +790,13 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 
 	version := r.Header.Get("Git-Protocol")
 
-	cmd := git.ServiceCommand{
+	cmd := gitserve.ServiceCommand{
 		Dir:    dir,
 		Logger: logger,
 	}
 
 	switch service {
-	case git.UploadPackService, git.ReceivePackService:
+	case gitserve.UploadPackService, gitserve.ReceivePackService:
 		cmd.Args = append(cmd.Args, "--stateless-rpc")
 	}
 
@@ -804,7 +804,7 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 	// a file its post-receive hook writes the updated refs to.
 	cmd.Env = hooks.ProtocolEnv(version)
 	var refs *hooks.PushRefs
-	if service == git.ReceivePackService {
+	if service == gitserve.ReceivePackService {
 		refs = newPushRefs(cfg, logger, repoName)
 		if refs != nil {
 			defer removePushRefs(logger, refs)
@@ -827,9 +827,9 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 	cmd.Stdout = w
 
 	err := s.runService(ctx, service, cmd)
-	if service == git.ReceivePackService {
+	if service == gitserve.ReceivePackService {
 		if err == nil {
-			if err := git.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
+			if err := gitserve.EnsureDefaultBranch(ctx, cmd.Dir); err != nil {
 				logger.Errorf("failed to ensure default branch: %s", err)
 			}
 		}
@@ -844,7 +844,7 @@ func (s *server) serviceRpc(w http.ResponseWriter, r *http.Request, gr *gitReque
 			return
 		}
 		logger.Errorf("failed to handle service: %v", err)
-		if service == git.ReceivePackService {
+		if service == gitserve.ReceivePackService {
 			gr.pushFailed = true
 		}
 		return
@@ -910,10 +910,10 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
 		w.WriteHeader(http.StatusOK)
 		if version < 2 {
-			git.WritePktline(w, "# service="+service.String()) //nolint: errcheck
+			gitserve.WritePktline(w, "# service="+service.String()) //nolint: errcheck
 		}
 	}}
-	cmd := git.ServiceCommand{
+	cmd := gitserve.ServiceCommand{
 		Stdout: refs,
 		Dir:    dir,
 		Args:   []string{"--stateless-rpc", "--advertise-refs"},
@@ -934,7 +934,7 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 		case errors.Is(err, context.Canceled):
 			// The client went away before git was done.
 			logger.Debugf("service cancelled: %v", err)
-		case errors.Is(err, git.ErrInvalidRepo):
+		case errors.Is(err, gitserve.ErrInvalidRepo):
 			renderNotFound(w, r)
 		default:
 			logger.Errorf("failed to advertise refs: %v", err)
@@ -951,9 +951,9 @@ func (s *server) getInfoRefs(w http.ResponseWriter, r *http.Request, gr *gitRequ
 	// A push with nothing to send sends no RPC, and is still counted,
 	// as over SSH.
 	switch service {
-	case git.UploadPackService:
+	case gitserve.UploadPackService:
 		gitHttpUploadCounter.WithLabelValues(repoName, file).Inc()
-	case git.ReceivePackService:
+	case gitserve.ReceivePackService:
 		gitHttpReceiveCounter.WithLabelValues(repoName).Inc()
 	}
 
@@ -989,13 +989,13 @@ func (a *advertisement) Write(p []byte) (int, error) {
 // It never reads the request body: this runs before the method check and
 // authentication, and parsing a form would let any caller spool a multipart
 // body of any size to a temp file that is never removed.
-func getServiceType(r *http.Request) git.Service {
+func getServiceType(r *http.Request) gitserve.Service {
 	service := r.URL.Query().Get("service")
 	if !strings.HasPrefix(service, "git-") {
 		return ""
 	}
 
-	return git.Service(service)
+	return gitserve.Service(service)
 }
 
 // hasMediaType reports whether the request body has the media type want,
