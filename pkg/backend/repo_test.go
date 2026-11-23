@@ -149,8 +149,8 @@ func TestValidateImportRemote(t *testing.T) {
 }
 
 // TestImportRepositoryCloneFailure verifies that a failed clone returns to the
-// caller promptly with a fixed error and leaves nothing behind, and no
-// goroutine.
+// caller within a minute with the fixed ErrImportFailed, not git's message, and
+// leaves neither a repository row nor a directory behind.
 func TestImportRepositoryCloneFailure(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("ssh"); err != nil {
