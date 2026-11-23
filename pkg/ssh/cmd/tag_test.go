@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git/gittest"
-	"github.com/matryer/is"
 )
 
 // TestDeleteTagNotOnCommit deletes tags that point at a tree, at a blob,
@@ -17,7 +17,6 @@ import (
 // The event carries the ID the tag ref held.
 func TestDeleteTagNotOnCommit(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
@@ -37,8 +36,12 @@ func TestDeleteTagNotOnCommit(t *testing.T) {
 	n := 0
 	for ref, target := range want {
 		gittest.Git(t, bare, nil, "update-ref", ref, target)
-		is.NoErr(runRepo(t, ownerCtx, "tag", "delete", "hooks", strings.TrimPrefix(ref, "refs/tags/")))
-		is.True(!gitRefExists(t, bare, ref))
+		if err := runRepo(t, ownerCtx, "tag", "delete", "hooks", strings.TrimPrefix(ref, "refs/tags/")); err != nil {
+			t.Fatal(err)
+		}
+		if gitRefExists(t, bare, ref) {
+			t.Fatal("not true: !gitRefExists(t, bare, ref)")
+		}
 		n++
 		// Each delete's delivery is recorded in the background; let it
 		// finish before the next delete, as TestDeleteRefAtMalformedCommit
@@ -48,20 +51,32 @@ func TestDeleteTagNotOnCommit(t *testing.T) {
 
 	be.WaitForDeliveries(context.Background())
 	r, err := be.Repository(ownerCtx, "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
-	is.NoErr(err)
-	is.Equal(len(ds), len(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(ds), len(want); got != want {
+		t.Fatalf("len(ds) = %v, want %v", got, want)
+	}
 	got := map[string]string{}
 	for _, d := range ds {
 		full, err := be.WebhookDelivery(ownerCtx, r, id, d.ID)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var payload struct {
 			Ref    string `json:"ref"`
 			Before string `json:"before"`
 		}
-		is.NoErr(json.Unmarshal([]byte(full.RequestBody), &payload))
+		if err := json.Unmarshal([]byte(full.RequestBody), &payload); err != nil {
+			t.Fatal(err)
+		}
 		got[payload.Ref] = payload.Before
 	}
-	is.Equal(got, want)
+	if got, want := got, want; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got = %v, want %v", got, want)
+	}
 }

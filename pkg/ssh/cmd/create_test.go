@@ -17,7 +17,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -27,56 +26,83 @@ import (
 // does, and the admin-only restriction does not apply.
 func TestUsersCreateRepositoriesWhenFlagOff(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = false })
 	userCtx := withUser(t, ctx, be, "worker", false)
 
-	is.NoErr(runRepo(t, userCtx, "create", "mine", "-p"))
+	if err := runRepo(t, userCtx, "create", "mine", "-p"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := be.Repository(ctx, "mine")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // With the flag off, a registered owner may rename their repository to a new
 // name, as upstream allows.
 func TestUsersRenameToNewNameWhenFlagOff(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = false })
 	userCtx := withUser(t, ctx, be, "worker", false)
 
-	is.NoErr(runRepo(t, userCtx, "create", "mine"))
-	is.NoErr(runRepo(t, userCtx, "rename", "mine", "renamed"))
+	if err := runRepo(t, userCtx, "create", "mine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, userCtx, "rename", "mine", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := be.Repository(ctx, "renamed")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "mine")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 func TestOnlyAdminsCreateRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = true })
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	userCtx := withUser(t, ctx, be, "worker", false)
 
 	// Non-admin: create and import of a new name are refused, nothing is made.
-	is.True(errors.Is(runRepo(t, userCtx, "create", "junk"), proto.ErrUnauthorized))
-	is.True(errors.Is(runRepo(t, userCtx, "create", "junk2", "-p"), proto.ErrUnauthorized))
-	is.True(errors.Is(runRepo(t, userCtx, "import", "junk3", "https://example.invalid/x.git"), proto.ErrUnauthorized))
+	if !errors.Is(runRepo(t, userCtx, "create", "junk"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(runRepo(t, userCtx, \"create\", \"junk\"), proto.ErrUnauthorized)")
+	}
+	if !errors.Is(runRepo(t, userCtx, "create", "junk2", "-p"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(runRepo(t, userCtx, \"create\", \"junk2\", \"-p\"), proto.ErrUnauthorized)")
+	}
+	if !errors.Is(runRepo(t, userCtx, "import", "junk3", "https://example.invalid/x.git"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(runRepo(t, userCtx, \"import\", \"junk3\", \"https://example.invalid/x.git\"), proto.ErrUnauthorized)")
+	}
 	for _, n := range []string{"junk", "junk2", "junk3"} {
 		_, err := be.Repository(ctx, n)
-		is.True(err != nil)
+		if err == nil {
+			t.Fatal("not true: err != nil")
+		}
 	}
 
 	// Admin: create works.
-	is.NoErr(runRepo(t, adminCtx, "create", "real", "-p"))
+	if err := runRepo(t, adminCtx, "create", "real", "-p"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := be.Repository(ctx, "real")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A read-write collaborator still works on an existing repo, but cannot rename it to a new name.
-	is.NoErr(runRepo(t, adminCtx, "collab", "add", "real", "worker", "read-write"))
-	is.NoErr(runRepo(t, userCtx, "description", "real", "hello"))
-	is.True(errors.Is(runRepo(t, userCtx, "rename", "real", "elsewhere"), proto.ErrUnauthorized))
+	if err := runRepo(t, adminCtx, "collab", "add", "real", "worker", "read-write"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, userCtx, "description", "real", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(runRepo(t, userCtx, "rename", "real", "elsewhere"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(runRepo(t, userCtx, \"rename\", \"real\", \"elsewhere\"), proto.ErrUnauthorized)")
+	}
 }
 
 // A key added to initial_admin_keys after the first migration never reaches
@@ -85,11 +111,14 @@ func TestOnlyAdminsCreateRepositories(t *testing.T) {
 // end to end, not just pass the SSH gate.
 func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	signer, err := gossh.NewSignerFromKey(priv)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pub := signer.PublicKey()
 
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) {
@@ -99,13 +128,23 @@ func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 	userCtx := withUser(t, ctx, be, "keyholder", false)
 	keyCtx := context.WithValue(userCtx, ssh.ContextKeyPublicKey, pub)
 
-	is.True(errors.Is(runRepo(t, userCtx, "create", "nokey"), proto.ErrUnauthorized))
+	if !errors.Is(runRepo(t, userCtx, "create", "nokey"), proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(runRepo(t, userCtx, \"create\", \"nokey\"), proto.ErrUnauthorized)")
+	}
 
-	is.NoErr(runRepo(t, keyCtx, "create", "made"))
-	is.NoErr(runRepo(t, keyCtx, "rename", "made", "made-again"))
+	if err := runRepo(t, keyCtx, "create", "made"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, keyCtx, "rename", "made", "made-again"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "made-again")
-	is.NoErr(err)
-	is.True(!errors.Is(runRepo(t, keyCtx, "import", "imported", "https://example.invalid/x.git"), proto.ErrUnauthorized))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errors.Is(runRepo(t, keyCtx, "import", "imported", "https://example.invalid/x.git"), proto.ErrUnauthorized) {
+		t.Fatal("not true: !errors.Is(runRepo(t, keyCtx, \"import\", \"imported\", \"https://example.invalid/x.git\"), proto.ErrUnauthorized)")
+	}
 }
 
 // A non-admin may not attach a key listed in initial_admin_keys to their
@@ -115,12 +154,15 @@ func TestAdminKeyCreatesRepositoriesWhenFlagOn(t *testing.T) {
 // are unaffected.
 func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	newKey := func() gossh.PublicKey {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		signer, err := gossh.NewSignerFromKey(priv)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return signer.PublicKey()
 	}
 	adminPub := newKey()
@@ -128,12 +170,16 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	// Added after the first migration, so no account owns it yet.
 	cfg := cmdsOf(ctx).cfg
 	cfg.InitialAdminKeys = append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(adminPub))
-	is.NoErr(cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 
 	session := func(name string, admin bool) context.Context {
 		pk := newKey()
 		u, err := be.CreateUser(ctx, name, proto.UserOptions{Admin: admin, PublicKeys: []gossh.PublicKey{pk}})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return context.WithValue(proto.WithUserContext(ctx, u), ssh.ContextKeyPublicKey, pk)
 	}
 	runPubkey := func(ctx context.Context, args ...string) error {
@@ -146,21 +192,35 @@ func TestPubkeyAddRefusesAdminKeyForNonAdmin(t *testing.T) {
 	}
 
 	workerCtx := session("worker", false)
-	is.True(errors.Is(runPubkey(workerCtx, "add", proto.MarshalAuthorizedKey(adminPub)), errListedAdminKey))
+	if !errors.Is(runPubkey(workerCtx, "add", proto.MarshalAuthorizedKey(adminPub)), errListedAdminKey) {
+		t.Fatal("not true: errors.Is(runPubkey(workerCtx, \"add\", proto.MarshalAuthorizedKey(adminPub)), errListedAdminKey)")
+	}
 	taken := newEd25519Signer(t)
 	_, err := be.CreateUser(ctx, "other", proto.UserOptions{PublicKeys: []gossh.PublicKey{taken.PublicKey()}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = runPubkeyIn(workerCtx, proofFor(t, taken, "worker"), "add", proto.MarshalAuthorizedKey(taken.PublicKey()))
-	is.True(errors.Is(err, errPubkeyTaken))
+	if !errors.Is(err, errPubkeyTaken) {
+		t.Fatal("not true: errors.Is(err, errPubkeyTaken)")
+	}
 	worker, err := be.User(ctx, "worker")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	keys := worker.PublicKeys()
-	is.Equal(len(keys), 1)
+	if got := len(keys); got != 1 {
+		t.Fatalf("len(keys) = %v, want %v", got, 1)
+	}
 	fresh := newEd25519Signer(t)
 	_, err = runPubkeyIn(workerCtx, proofFor(t, fresh, "worker"), "add", proto.MarshalAuthorizedKey(fresh.PublicKey()))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(runPubkey(session("boss", true), "add", proto.MarshalAuthorizedKey(adminPub)))
+	if err := runPubkey(session("boss", true), "add", proto.MarshalAuthorizedKey(adminPub)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // anonFailsAfterStore answers the first ok reads of the anon-access setting
@@ -198,7 +258,6 @@ func TestCreateLookupFailureAnswer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			reads := &atomic.Int32{}
 			// Fail from the second read on: the first is the command's own
 			// access gate, the second the backend's creation check.
@@ -212,16 +271,28 @@ func TestCreateLookupFailureAnswer(t *testing.T) {
 			})
 			userCtx := withUser(t, ctx, be, "alice", false)
 			_, err := be.CreateRepository(userCtx, "mine", proto.UserFromContext(userCtx), proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			reads.Store(0)
 
 			err = tc.run(userCtx)
-			is.True(errors.Is(err, tc.want))
-			is.True(!strings.Contains(err.Error(), "settings"))
-			is.Equal(logs.count("ERRO"), 1)
-			is.True(strings.Contains(logs.String(), "settings"))
+			if !errors.Is(err, tc.want) {
+				t.Fatal("not true: errors.Is(err, tc.want)")
+			}
+			if strings.Contains(err.Error(), "settings") {
+				t.Fatal("not true: !strings.Contains(err.Error(), \"settings\")")
+			}
+			if got := logs.count("ERRO"); got != 1 {
+				t.Fatalf("logs.count(\"ERRO\") = %v, want %v", got, 1)
+			}
+			if !strings.Contains(logs.String(), "settings") {
+				t.Fatal("not true: strings.Contains(logs.String(), \"settings\")")
+			}
 			_, err = be.Repository(ctx, "new")
-			is.True(errors.Is(err, proto.ErrRepoNotFound))
+			if !errors.Is(err, proto.ErrRepoNotFound) {
+				t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+			}
 		})
 	}
 }

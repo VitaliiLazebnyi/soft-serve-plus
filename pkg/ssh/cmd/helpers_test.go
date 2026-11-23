@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // commandsKey is the context key of the Commands a test's commands are
@@ -81,7 +80,6 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 // The Commands have no token signer; a test of jwt sets one.
 func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.Store) store.Store, logger *log.Logger) (context.Context, *backend.Backend) {
 	t.Helper()
-	is := is.New(t)
 	if logger == nil {
 		logger = log.New(io.Discard)
 	}
@@ -96,7 +94,9 @@ func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.S
 	}
 	e := backendtest.New(t, opts...)
 	cmds, err := New(Deps{Config: e.Cfg, Backend: e.Backend, DB: e.DB, Store: e.Store, Logger: logger})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return withCommands(e.Ctx, cmds), e.Backend
 }
@@ -129,9 +129,10 @@ func collabOf(t *testing.T, be *backend.Backend, ctx context.Context, repo, user
 // withUser creates a user and returns a context authenticated as them.
 func withUser(t *testing.T, ctx context.Context, be *backend.Backend, username string, admin bool) context.Context {
 	t.Helper()
-	is := is.New(t)
 	user, err := be.CreateUser(ctx, username, proto.UserOptions{Admin: admin})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return proto.WithUserContext(ctx, user)
 }
 

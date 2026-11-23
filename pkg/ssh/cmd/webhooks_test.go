@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +24,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
-	"github.com/matryer/is"
 	"github.com/spf13/cobra"
 	_ "modernc.org/sqlite"
 )
@@ -43,7 +43,6 @@ import (
 // disclosure of private repository event payloads.
 func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
 	// The victim owns a private repository with a webhook, and that webhook
@@ -51,12 +50,20 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 	victimCtx := withUser(t, ctx, be, "victim", false)
 	victim := proto.UserFromContext(victimCtx)
 	victimRepo, err := be.CreateRepository(victimCtx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
-	is.NoErr(be.CreateWebhook(victimCtx, victimRepo, backend.WebhookInput{URL: "http://93.184.216.34/hook", ContentType: webhook.ContentTypeJSON, Secret: "s3cret", Events: []webhook.Event{webhook.EventPush}, Active: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.CreateWebhook(victimCtx, victimRepo, backend.WebhookInput{URL: "http://93.184.216.34/hook", ContentType: webhook.ContentTypeJSON, Secret: "s3cret", Events: []webhook.Event{webhook.EventPush}, Active: true}); err != nil {
+		t.Fatal(err)
+	}
 
 	victimHooks, err := be.ListWebhooks(victimCtx, victimRepo)
-	is.NoErr(err)
-	is.Equal(len(victimHooks), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(victimHooks); got != 1 {
+		t.Fatalf("len(victimHooks) = %v, want %v", got, 1)
+	}
 	victimHookID := victimHooks[0].ID
 
 	const (
@@ -64,7 +71,7 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 		secretSignature = "X-SoftServe-Signature: sha256=leaked-signature\n"
 	)
 	deliveryID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
-	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
+	if err := cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              deliveryID,
 		WebhookID:       victimHookID,
 		Event:           int(webhook.EventPush),
@@ -75,14 +82,18 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 		ResponseStatus:  200,
 		ResponseHeaders: "Content-Type: text/plain\n",
 		ResponseBody:    "victim response body",
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// The attacker owns their own repository, so they hold admin access to
 	// it, but they have no access at all to the victim's repository.
 	attackerCtx := withUser(t, ctx, be, "attacker", false)
 	attacker := proto.UserFromContext(attackerCtx)
 	_, err = be.CreateRepository(attackerCtx, "attacker-repo", attacker, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	hookID := strconv.FormatInt(victimHookID, 10)
 
@@ -110,13 +121,17 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 
 	// The owner can still read their own webhook's deliveries.
 	stdout, _, err = runRepoOutput(t, victimCtx, "webhook", "deliveries", "list", "victim-repo", hookID)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(stdout, deliveryID.String()) {
 		t.Errorf("owner could not list own deliveries, got: %q", stdout)
 	}
 
 	stdout, _, err = runRepoOutput(t, victimCtx, "webhook", "deliveries", "get", "victim-repo", hookID, deliveryID.String())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(stdout, secretBody) {
 		t.Errorf("owner could not read own delivery body, got: %q", stdout)
 	}
@@ -135,21 +150,25 @@ const (
 // returns that user's context.
 func whRepo(t *testing.T, ctx context.Context, be *backend.Backend) context.Context {
 	t.Helper()
-	is := is.New(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "hooks", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return ownerCtx
 }
 
 // whHooks returns the webhooks of repository "hooks" as the backend sees them.
 func whHooks(t *testing.T, ctx context.Context, be *backend.Backend, repo string) []webhook.Hook {
 	t.Helper()
-	is := is.New(t)
 	r, err := be.Repository(ctx, repo)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hooks, err := be.ListWebhooks(ctx, r)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return hooks
 }
 
@@ -183,11 +202,12 @@ var whSeq atomic.Int64
 // a repository cannot hold two webhooks with the same URL, and returns its ID.
 func whCreate(t *testing.T, ctx context.Context, be *backend.Backend, extra ...string) int64 {
 	t.Helper()
-	is := is.New(t)
 	url := fmt.Sprintf("%s?n=%d", whURL, whSeq.Add(1))
 	args := append([]string{"webhook", "create", "hooks", url}, extra...)
 	_, _, err := runRepoOutput(t, ctx, args...)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, h := range whHooks(t, ctx, be, "hooks") {
 		if h.URL == url {
 			return h.ID
@@ -202,13 +222,18 @@ func whCreate(t *testing.T, ctx context.Context, be *backend.Backend, extra ...s
 // the network, and are recorded as failed deliveries.
 func whPointAtLoopback(t *testing.T, ctx context.Context, repo string, hookID int64) {
 	t.Helper()
-	is := is.New(t)
 	be := cmdsOf(ctx).be
 	r, err := be.Repository(ctx, repo)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	h, err := be.Webhook(ctx, r, hookID)
-	is.NoErr(err)
-	is.NoErr(cmdsOf(ctx).store.UpdateWebhookByID(ctx, cmdsOf(ctx).db, models.Webhook{ID: hookID, RepoID: r.ID(), URL: "http://127.0.0.1:1/", Secret: h.Secret, ContentType: int(h.ContentType), Active: h.Active}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdsOf(ctx).store.UpdateWebhookByID(ctx, cmdsOf(ctx).db, models.Webhook{ID: hookID, RepoID: r.ID(), URL: "http://127.0.0.1:1/", Secret: h.Secret, ContentType: int(h.ContentType), Active: h.Active}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // whAwaitDeliveries waits until the webhook has at least n recorded
@@ -236,8 +261,7 @@ func whAwaitDeliveries(t *testing.T, ctx context.Context, be *backend.Backend, r
 
 func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.UUID, status int) {
 	t.Helper()
-	is := is.New(t)
-	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
+	if err := cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              id,
 		WebhookID:       hookID,
 		Event:           int(webhook.EventPush),
@@ -248,49 +272,76 @@ func whInsertDelivery(t *testing.T, ctx context.Context, hookID int64, id uuid.U
 		ResponseStatus:  status,
 		ResponseHeaders: "X-Reply: yes\n",
 		ResponseBody:    "reply body",
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWebhookCreatePersistsEveryFlag(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
 	stdout, stderr, err := runRepoOutput(t, ownerCtx, "webhook", "create", "hooks", whURL,
 		"-e", "push", "-e", "repository", "-s", "topsecret", "-c", "form", "-a=false")
-	is.NoErr(err)
-	is.Equal(stdout, "")
-	is.Equal(stderr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout; got != "" {
+		t.Fatalf("stdout = %v, want %v", got, "")
+	}
+	if got := stderr; got != "" {
+		t.Fatalf("stderr = %v, want %v", got, "")
+	}
 
 	hooks := whHooks(t, ownerCtx, be, "hooks")
-	is.Equal(len(hooks), 1)
+	if got := len(hooks); got != 1 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 1)
+	}
 	h := hooks[0]
-	is.Equal(h.URL, whURL)
-	is.Equal(h.Secret, "topsecret")
-	is.Equal(h.ContentType, webhook.ContentTypeForm)
-	is.Equal(h.Active, false)
-	is.Equal(eventNames(h.Events), []string{"push", "repository"})
+	if got := h.URL; got != whURL {
+		t.Fatalf("h.URL = %v, want %v", got, whURL)
+	}
+	if got := h.Secret; got != "topsecret" {
+		t.Fatalf("h.Secret = %v, want %v", got, "topsecret")
+	}
+	if got := h.ContentType; got != webhook.ContentTypeForm {
+		t.Fatalf("h.ContentType = %v, want %v", got, webhook.ContentTypeForm)
+	}
+	if got := h.Active; got != false {
+		t.Fatalf("h.Active = %v, want %v", got, false)
+	}
+	if got, want := eventNames(h.Events), ([]string{"push", "repository"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("eventNames(h.Events) = %v, want %v", got, want)
+	}
 }
 
 func TestWebhookCreateDefaults(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "create", "hooks", whURL))
+	if err := runRepo(t, ownerCtx, "webhook", "create", "hooks", whURL); err != nil {
+		t.Fatal(err)
+	}
 
 	h := whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.ContentType, webhook.ContentTypeJSON)
-	is.Equal(h.Active, true)
-	is.Equal(h.Secret, "")
-	is.Equal(len(h.Events), 0)
+	if got := h.ContentType; got != webhook.ContentTypeJSON {
+		t.Fatalf("h.ContentType = %v, want %v", got, webhook.ContentTypeJSON)
+	}
+	if got := h.Active; got != true {
+		t.Fatalf("h.Active = %v, want %v", got, true)
+	}
+	if got := h.Secret; got != "" {
+		t.Fatalf("h.Secret = %v, want %v", got, "")
+	}
+	if got := len(h.Events); got != 0 {
+		t.Fatalf("len(h.Events) = %v, want %v", got, 0)
+	}
 }
 
 func TestWebhookCreateContentTypeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
@@ -298,19 +349,28 @@ func TestWebhookCreateContentTypeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 	whCreate(t, ownerCtx, be, "-c", "Form")
 
 	hooks := whHooks(t, ownerCtx, be, "hooks")
-	is.Equal(len(hooks), 2)
-	is.Equal(hooks[0].ContentType, webhook.ContentTypeJSON)
-	is.Equal(hooks[1].ContentType, webhook.ContentTypeForm)
+	if got := len(hooks); got != 2 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 2)
+	}
+	if got := hooks[0].ContentType; got != webhook.ContentTypeJSON {
+		t.Fatalf("hooks[0].ContentType = %v, want %v", got, webhook.ContentTypeJSON)
+	}
+	if got := hooks[1].ContentType; got != webhook.ContentTypeForm {
+		t.Fatalf("hooks[1].ContentType = %v, want %v", got, webhook.ContentTypeForm)
+	}
 }
 
 func TestWebhookCreateTrimsURL(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "create", "hooks", "  "+whURL+"  "))
-	is.Equal(whHooks(t, ownerCtx, be, "hooks")[0].URL, whURL)
+	if err := runRepo(t, ownerCtx, "webhook", "create", "hooks", "  "+whURL+"  "); err != nil {
+		t.Fatal(err)
+	}
+	if got := whHooks(t, ownerCtx, be, "hooks")[0].URL; got != whURL {
+		t.Fatalf("whHooks(t, ownerCtx, be, \"hooks\")[0].URL = %v, want %v", got, whURL)
+	}
 }
 
 // Every invalid create input is refused for its own reason and leaves nothing
@@ -337,37 +397,42 @@ func TestWebhookCreateRejectsInvalidInput(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			before := whSnapshot(t, ownerCtx, be)
 
 			_, _, err := runRepoOutput(t, ownerCtx, tc.args...)
-			is.True(err != nil)
+			if err == nil {
+				t.Fatal("not true: err != nil")
+			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %q does not contain %q", err, tc.want)
 			}
-			is.Equal(whSnapshot(t, ownerCtx, be), before)
+			if got := whSnapshot(t, ownerCtx, be); got != before {
+				t.Fatalf("whSnapshot(t, ownerCtx, be) = %v, want %v", got, before)
+			}
 		})
 	}
 }
 
 func TestWebhookCreateReportsUnknownEventAndContentType(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
 	err := runRepo(t, ownerCtx, "webhook", "create", "hooks", whURL, "-e", "bogus")
-	is.True(errors.Is(err, webhook.ErrInvalidEvent))
+	if !errors.Is(err, webhook.ErrInvalidEvent) {
+		t.Fatal("not true: errors.Is(err, webhook.ErrInvalidEvent)")
+	}
 
 	err = runRepo(t, ownerCtx, "webhook", "create", "hooks", whURL, "-c", "xml")
-	is.True(errors.Is(err, webhook.ErrInvalidContentType))
+	if !errors.Is(err, webhook.ErrInvalidContentType) {
+		t.Fatal("not true: errors.Is(err, webhook.ErrInvalidContentType)")
+	}
 }
 
 func TestWebhookListOutputsRowsWithoutSecrets(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
@@ -375,83 +440,128 @@ func TestWebhookListOutputsRowsWithoutSecrets(t *testing.T) {
 	whCreate(t, ownerCtx, be, "-e", "repository")
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "list", "hooks")
-	is.NoErr(err)
-	is.True(strings.Contains(stdout, "ID"))
-	is.True(strings.Contains(stdout, "Events"))
-	is.True(strings.Contains(stdout, "push"))
-	is.True(strings.Contains(stdout, "repository"))
-	is.True(strings.Contains(stdout, "false"))
-	is.True(strings.Contains(stdout, "true"))
-	is.True(strings.Contains(stdout, whURL))
-	is.True(!strings.Contains(stdout, "hidden-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "ID") {
+		t.Fatal("not true: strings.Contains(stdout, \"ID\")")
+	}
+	if !strings.Contains(stdout, "Events") {
+		t.Fatal("not true: strings.Contains(stdout, \"Events\")")
+	}
+	if !strings.Contains(stdout, "push") {
+		t.Fatal("not true: strings.Contains(stdout, \"push\")")
+	}
+	if !strings.Contains(stdout, "repository") {
+		t.Fatal("not true: strings.Contains(stdout, \"repository\")")
+	}
+	if !strings.Contains(stdout, "false") {
+		t.Fatal("not true: strings.Contains(stdout, \"false\")")
+	}
+	if !strings.Contains(stdout, "true") {
+		t.Fatal("not true: strings.Contains(stdout, \"true\")")
+	}
+	if !strings.Contains(stdout, whURL) {
+		t.Fatal("not true: strings.Contains(stdout, whURL)")
+	}
+	if strings.Contains(stdout, "hidden-secret") {
+		t.Fatal("not true: !strings.Contains(stdout, \"hidden-secret\")")
+	}
 }
 
 func TestWebhookListEmptyRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "list", "hooks")
-	is.NoErr(err)
-	is.True(strings.Contains(stdout, "ID"))
-	is.True(!strings.Contains(stdout, whURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "ID") {
+		t.Fatal("not true: strings.Contains(stdout, \"ID\")")
+	}
+	if strings.Contains(stdout, whURL) {
+		t.Fatal("not true: !strings.Contains(stdout, whURL)")
+	}
 }
 
 func TestWebhookDeleteRemovesOnlyThatWebhook(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 
 	first := whCreate(t, ownerCtx, be)
 	second := whCreate(t, ownerCtx, be)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "delete", "hooks", strconv.FormatInt(first, 10)))
+	if err := runRepo(t, ownerCtx, "webhook", "delete", "hooks", strconv.FormatInt(first, 10)); err != nil {
+		t.Fatal(err)
+	}
 	hooks := whHooks(t, ownerCtx, be, "hooks")
-	is.Equal(len(hooks), 1)
-	is.Equal(hooks[0].ID, second)
+	if got := len(hooks); got != 1 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 1)
+	}
+	if got := hooks[0].ID; got != second {
+		t.Fatalf("hooks[0].ID = %v, want %v", got, second)
+	}
 }
 
 func TestWebhookDeleteRejectsBadIDs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whCreate(t, ownerCtx, be)
 	before := whSnapshot(t, ownerCtx, be)
 
 	err := runRepo(t, ownerCtx, "webhook", "delete", "hooks", "abc")
-	is.True(err != nil)
-	is.True(strings.Contains(err.Error(), "invalid webhook ID"))
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if !strings.Contains(err.Error(), "invalid webhook ID") {
+		t.Fatal("not true: strings.Contains(err.Error(), \"invalid webhook ID\")")
+	}
 
-	is.True(runRepo(t, ownerCtx, "webhook", "delete", "hooks", "999999") != nil)
-	is.Equal(whSnapshot(t, ownerCtx, be), before)
+	if runRepo(t, ownerCtx, "webhook", "delete", "hooks", "999999") == nil {
+		t.Fatal("not true: runRepo(t, ownerCtx, \"webhook\", \"delete\", \"hooks\", \"999999\") != nil")
+	}
+	if got := whSnapshot(t, ownerCtx, be); got != before {
+		t.Fatalf("whSnapshot(t, ownerCtx, be) = %v, want %v", got, before)
+	}
 }
 
 // A webhook ID from another repository must not be deletable through this
 // repository.
 func TestWebhookDeleteIsScopedToRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	_, err := be.CreateRepository(ownerCtx, "other", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	otherHook := whCreate(t, ownerCtx, be)
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "create", "other", whURL))
+	if err := runRepo(t, ownerCtx, "webhook", "create", "other", whURL); err != nil {
+		t.Fatal(err)
+	}
 	otherHooks := whHooks(t, ownerCtx, be, "other")
-	is.Equal(len(otherHooks), 1)
+	if got := len(otherHooks); got != 1 {
+		t.Fatalf("len(otherHooks) = %v, want %v", got, 1)
+	}
 	id := otherHooks[0].ID
-	is.True(id != otherHook)
+	if id == otherHook {
+		t.Fatal("not true: id != otherHook")
+	}
 
-	is.True(runRepo(t, ownerCtx, "webhook", "delete", "hooks", strconv.FormatInt(id, 10)) != nil)
-	is.Equal(len(whHooks(t, ownerCtx, be, "other")), 1)
+	if runRepo(t, ownerCtx, "webhook", "delete", "hooks", strconv.FormatInt(id, 10)) == nil {
+		t.Fatal("not true: runRepo(t, ownerCtx, \"webhook\", \"delete\", \"hooks\", strconv.FormatInt(id, 10)) != nil")
+	}
+	if got := len(whHooks(t, ownerCtx, be, "other")); got != 1 {
+		t.Fatalf("len(whHooks(t, ownerCtx, be, \"other\")) = %v, want %v", got, 1)
+	}
 }
 
 func TestWebhookUpdateChangesOnlyRequestedFields(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be, "-s", "old", "-e", "push", "-c", "json", "-a=true")
@@ -459,32 +569,55 @@ func TestWebhookUpdateChangesOnlyRequestedFields(t *testing.T) {
 
 	originalURL := whHooks(t, ownerCtx, be, "hooks")[0].URL
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", ids, "-a=false"))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", ids, "-a=false"); err != nil {
+		t.Fatal(err)
+	}
 	h := whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.Active, false)
-	is.Equal(h.URL, originalURL)
-	is.Equal(h.Secret, "old")
-	is.Equal(h.ContentType, webhook.ContentTypeJSON)
-	is.Equal(eventNames(h.Events), []string{"push"})
+	if got := h.Active; got != false {
+		t.Fatalf("h.Active = %v, want %v", got, false)
+	}
+	if got := h.URL; got != originalURL {
+		t.Fatalf("h.URL = %v, want %v", got, originalURL)
+	}
+	if got := h.Secret; got != "old" {
+		t.Fatalf("h.Secret = %v, want %v", got, "old")
+	}
+	if got := h.ContentType; got != webhook.ContentTypeJSON {
+		t.Fatalf("h.ContentType = %v, want %v", got, webhook.ContentTypeJSON)
+	}
+	if got, want := eventNames(h.Events), ([]string{"push"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("eventNames(h.Events) = %v, want %v", got, want)
+	}
 }
 
 func TestWebhookUpdateChangesEveryFlag(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be, "-s", "old", "-e", "push", "-c", "json")
 	ids := strconv.FormatInt(id, 10)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", ids,
-		"-u", whURLOther+"/new", "-s", "new", "-c", "FORM", "-e", "repository", "-e", "collaborator", "-a", "false"))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", ids,
+		"-u", whURLOther+"/new", "-s", "new", "-c", "FORM", "-e", "repository", "-e", "collaborator", "-a", "false"); err != nil {
+		t.Fatal(err)
+	}
 
 	h := whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.URL, whURLOther+"/new")
-	is.Equal(h.Secret, "new")
-	is.Equal(h.ContentType, webhook.ContentTypeForm)
-	is.Equal(eventNames(h.Events), []string{"collaborator", "repository"})
-	is.Equal(h.Active, false)
+	if got, want := h.URL, whURLOther+"/new"; got != want {
+		t.Fatalf("h.URL = %v, want %v", got, want)
+	}
+	if got := h.Secret; got != "new" {
+		t.Fatalf("h.Secret = %v, want %v", got, "new")
+	}
+	if got := h.ContentType; got != webhook.ContentTypeForm {
+		t.Fatalf("h.ContentType = %v, want %v", got, webhook.ContentTypeForm)
+	}
+	if got, want := eventNames(h.Events), ([]string{"collaborator", "repository"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("eventNames(h.Events) = %v, want %v", got, want)
+	}
+	if got := h.Active; got != false {
+		t.Fatalf("h.Active = %v, want %v", got, false)
+	}
 }
 
 func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
@@ -500,7 +633,6 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 	for name, flags := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			id := whCreate(t, ownerCtx, be, "-e", "push")
@@ -508,8 +640,12 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 
 			args := append([]string{"webhook", "update", "hooks", strconv.FormatInt(id, 10)}, flags...)
 			_, _, err := runRepoOutput(t, ownerCtx, args...)
-			is.True(err != nil)
-			is.Equal(whSnapshot(t, ownerCtx, be), before)
+			if err == nil {
+				t.Fatal("not true: err != nil")
+			}
+			if got := whSnapshot(t, ownerCtx, be); got != before {
+				t.Fatalf("whSnapshot(t, ownerCtx, be) = %v, want %v", got, before)
+			}
 		})
 	}
 }
@@ -518,7 +654,6 @@ func TestWebhookUpdateRejectsInvalidInput(t *testing.T) {
 // the flag, and leave the webhook as it was rather than switching it off.
 func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be, "-e", "push", "-a=true")
@@ -530,27 +665,33 @@ func TestWebhookUpdateRejectsNonBooleanActive(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "--active: invalid boolean value") {
 			t.Errorf("--active %q: err = %v, want the shared invalid boolean value error, naming the flag", v, err)
 		}
-		is.Equal(whSnapshot(t, ownerCtx, be), before)
+		if got := whSnapshot(t, ownerCtx, be); got != before {
+			t.Fatalf("whSnapshot(t, ownerCtx, be) = %v, want %v", got, before)
+		}
 	}
 }
 
 func TestWebhookUpdateRejectsBadIDs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whCreate(t, ownerCtx, be)
 
 	err := runRepo(t, ownerCtx, "webhook", "update", "hooks", "abc", "-a=false")
-	is.True(err != nil)
-	is.True(strings.Contains(err.Error(), "invalid webhook ID"))
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if !strings.Contains(err.Error(), "invalid webhook ID") {
+		t.Fatal("not true: strings.Contains(err.Error(), \"invalid webhook ID\")")
+	}
 
-	is.True(runRepo(t, ownerCtx, "webhook", "update", "hooks", "999999", "-a=false") != nil)
+	if runRepo(t, ownerCtx, "webhook", "update", "hooks", "999999", "-a=false") == nil {
+		t.Fatal("not true: runRepo(t, ownerCtx, \"webhook\", \"update\", \"hooks\", \"999999\", \"-a=false\") != nil")
+	}
 }
 
 func TestWebhookDeliveriesListShowsStatusRows(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
@@ -563,16 +704,26 @@ func TestWebhookDeliveriesListShowsStatusRows(t *testing.T) {
 	whInsertDelivery(t, ctx, id, noneID, 0)
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "list", "hooks", strconv.FormatInt(id, 10))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{okID.String(), badID.String(), noneID.String(), "push"} {
-		is.True(strings.Contains(stdout, want))
+		if !strings.Contains(stdout, want) {
+			t.Fatal("not true: strings.Contains(stdout, want)")
+		}
 	}
 	okRow := rowContaining(stdout, okID.String())
 	badRow := rowContaining(stdout, badID.String())
 	noneRow := rowContaining(stdout, noneID.String())
-	is.True(strings.Contains(okRow, "✅"))
-	is.True(strings.Contains(badRow, "❌"))
-	is.True(strings.Contains(noneRow, "❌"))
+	if !strings.Contains(okRow, "✅") {
+		t.Fatal("not true: strings.Contains(okRow, \"✅\")")
+	}
+	if !strings.Contains(badRow, "❌") {
+		t.Fatal("not true: strings.Contains(badRow, \"❌\")")
+	}
+	if !strings.Contains(noneRow, "❌") {
+		t.Fatal("not true: strings.Contains(noneRow, \"❌\")")
+	}
 }
 
 // rowContaining returns the rendered table line that holds needle.
@@ -587,19 +738,21 @@ func rowContaining(out, needle string) string {
 
 func TestWebhookDeliveriesListWithoutDeliveries(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "list", "hooks", strconv.FormatInt(id, 10))
-	is.NoErr(err)
-	is.True(strings.Contains(stdout, "Status"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "Status") {
+		t.Fatal("not true: strings.Contains(stdout, \"Status\")")
+	}
 }
 
 func TestWebhookDeliveriesRejectBadIDs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be), 10)
@@ -613,13 +766,14 @@ func TestWebhookDeliveriesRejectBadIDs(t *testing.T) {
 		{"webhook", "deliveries", "redeliver", "hooks", id, "not-a-uuid"},
 	} {
 		err := runRepo(t, ownerCtx, args...)
-		is.True(err != nil)
+		if err == nil {
+			t.Fatal("not true: err != nil")
+		}
 	}
 }
 
 func TestWebhookDeliveriesGetPrintsEverySection(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
@@ -627,7 +781,9 @@ func TestWebhookDeliveriesGetPrintsEverySection(t *testing.T) {
 	whInsertDelivery(t, ctx, id, delID, 200)
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "get", "hooks", strconv.FormatInt(id, 10), delID.String())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"ID: " + delID.String(),
 		"Event: push",
@@ -645,7 +801,9 @@ func TestWebhookDeliveriesGetPrintsEverySection(t *testing.T) {
 	} {
 		// Whole-line match: "Event: push" is a substring of the header line
 		// "X-SoftServe-Event: push", so substring matching cannot tell them apart.
-		is.True(hasLine(stdout, want))
+		if !hasLine(stdout, want) {
+			t.Fatal("not true: hasLine(stdout, want)")
+		}
 	}
 }
 
@@ -663,44 +821,65 @@ func hasLine(out, want string) bool {
 // the active flag matches that webhook.
 func TestWebhookListRowsDescribeEachWebhook(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	const inactiveURL = whURL + "?n=inactive"
 	const activeURL = whURL + "?n=active"
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "create", "hooks", inactiveURL, "-e", "push", "-e", "repository", "-a=false"))
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "create", "hooks", activeURL, "-e", "collaborator"))
+	if err := runRepo(t, ownerCtx, "webhook", "create", "hooks", inactiveURL, "-e", "push", "-e", "repository", "-a=false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, ownerCtx, "webhook", "create", "hooks", activeURL, "-e", "collaborator"); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "list", "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	inactiveRow := rowContaining(stdout, inactiveURL)
 	activeRow := rowContaining(stdout, activeURL)
-	is.True(strings.Contains(inactiveRow, "push,repository"))
-	is.True(strings.Contains(inactiveRow, "false"))
-	is.True(!strings.Contains(inactiveRow, "true"))
-	is.True(strings.Contains(activeRow, "collaborator"))
-	is.True(strings.Contains(activeRow, "true"))
-	is.True(!strings.Contains(activeRow, "false"))
+	if !strings.Contains(inactiveRow, "push,repository") {
+		t.Fatal("not true: strings.Contains(inactiveRow, \"push,repository\")")
+	}
+	if !strings.Contains(inactiveRow, "false") {
+		t.Fatal("not true: strings.Contains(inactiveRow, \"false\")")
+	}
+	if strings.Contains(inactiveRow, "true") {
+		t.Fatal("not true: !strings.Contains(inactiveRow, \"true\")")
+	}
+	if !strings.Contains(activeRow, "collaborator") {
+		t.Fatal("not true: strings.Contains(activeRow, \"collaborator\")")
+	}
+	if !strings.Contains(activeRow, "true") {
+		t.Fatal("not true: strings.Contains(activeRow, \"true\")")
+	}
+	if strings.Contains(activeRow, "false") {
+		t.Fatal("not true: !strings.Contains(activeRow, \"false\")")
+	}
 }
 
 // Updating only the URL or secret must keep an inactive webhook inactive.
 func TestWebhookUpdateKeepsInactiveState(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be, "-a=false"), 10)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-s", "rotated"))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-s", "rotated"); err != nil {
+		t.Fatal(err)
+	}
 	h := whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.Active, false)
-	is.Equal(h.Secret, "rotated")
+	if got := h.Active; got != false {
+		t.Fatalf("h.Active = %v, want %v", got, false)
+	}
+	if got := h.Secret; got != "rotated" {
+		t.Fatalf("h.Secret = %v, want %v", got, "rotated")
+	}
 }
 
 // Delivery rows are successful only for 2xx statuses.
 func TestWebhookDeliveriesStatusBoundaries(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
@@ -715,30 +894,36 @@ func TestWebhookDeliveriesStatusBoundaries(t *testing.T) {
 	}
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "list", "hooks", strconv.FormatInt(id, 10))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for status, mark := range cases {
 		row := rowContaining(stdout, ids[status].String())
-		is.True(strings.Contains(row, mark))
+		if !strings.Contains(row, mark) {
+			t.Fatal("not true: strings.Contains(row, mark)")
+		}
 	}
 }
 
 func TestWebhookDeliveriesGetUnknownDelivery(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be), 10)
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "get", "hooks", id, "00000000-0000-0000-0000-0000000000ff")
-	is.True(err != nil)
-	is.Equal(stdout, "")
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if got := stdout; got != "" {
+		t.Fatalf("stdout = %v, want %v", got, "")
+	}
 }
 
 // A delivery belonging to one webhook must not be readable or redeliverable
 // through another webhook of the same repository.
 func TestWebhookDeliveriesAreScopedToWebhook(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	a := whCreate(t, ownerCtx, be)
@@ -748,13 +933,16 @@ func TestWebhookDeliveriesAreScopedToWebhook(t *testing.T) {
 
 	bs := strconv.FormatInt(b, 10)
 	_, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "get", "hooks", bs, delID.String())
-	is.True(err != nil)
-	is.True(runRepo(t, ownerCtx, "webhook", "deliveries", "redeliver", "hooks", bs, delID.String()) != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if runRepo(t, ownerCtx, "webhook", "deliveries", "redeliver", "hooks", bs, delID.String()) == nil {
+		t.Fatal("not true: runRepo(t, ownerCtx, \"webhook\", \"deliveries\", \"redeliver\", \"hooks\", bs, delID.String()) != nil")
+	}
 }
 
 func TestWebhookRedeliverRecordsNewDelivery(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
@@ -763,11 +951,17 @@ func TestWebhookRedeliverRecordsNewDelivery(t *testing.T) {
 	delID := uuid.MustParse("00000000-0000-0000-0000-0000000000f1")
 	whInsertDelivery(t, ctx, id, delID, 200)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "deliveries", "redeliver", "hooks", ids, delID.String()))
+	if err := runRepo(t, ownerCtx, "webhook", "deliveries", "redeliver", "hooks", ids, delID.String()); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, _, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "list", "hooks", ids)
-	is.NoErr(err)
-	is.Equal(strings.Count(stdout, "push"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(stdout, "push"); got != 2 {
+		t.Fatalf("strings.Count(stdout, \"push\") = %v, want %v", got, 2)
+	}
 }
 
 func TestWebhookCommandsRequireAdminAccess(t *testing.T) {
@@ -779,9 +973,10 @@ func TestWebhookCommandsRequireAdminAccess(t *testing.T) {
 	whInsertDelivery(t, ownerCtx, id, uuid.MustParse(delID), 200)
 
 	reader := func(t *testing.T) context.Context {
-		is := is.New(t)
 		rc := withUser(t, ctxBase, beBase, "reader", false)
-		is.NoErr(beBase.AddCollaborator(ownerCtx, "hooks", "reader", access.ReadOnlyAccess))
+		if err := beBase.AddCollaborator(ownerCtx, "hooks", "reader", access.ReadOnlyAccess); err != nil {
+			t.Fatal(err)
+		}
 		return rc
 	}
 	stranger := func(t *testing.T) context.Context {
@@ -790,7 +985,6 @@ func TestWebhookCommandsRequireAdminAccess(t *testing.T) {
 
 	for name, who := range map[string]func(*testing.T) context.Context{"read-only collaborator": reader, "stranger": stranger} {
 		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
 			ctx := who(t)
 			before := whSnapshot(t, ownerCtx, beBase)
 
@@ -804,84 +998,117 @@ func TestWebhookCommandsRequireAdminAccess(t *testing.T) {
 				{"webhook", "deliveries", "redeliver", "hooks", ids, delID},
 			} {
 				err := runRepo(t, ctx, args...)
-				is.True(err != nil)
+				if err == nil {
+					t.Fatal("not true: err != nil")
+				}
 			}
-			is.Equal(whSnapshot(t, ownerCtx, beBase), before)
+			if got := whSnapshot(t, ownerCtx, beBase); got != before {
+				t.Fatalf("whSnapshot(t, ownerCtx, beBase) = %v, want %v", got, before)
+			}
 		})
 	}
 }
 
 func TestWebhookServerAdminCanManageAnyRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	rootCtx := withUser(t, ctx, be, "root", true)
 
-	is.NoErr(runRepo(t, rootCtx, "webhook", "create", "hooks", whURL, "-e", "push"))
+	if err := runRepo(t, rootCtx, "webhook", "create", "hooks", whURL, "-e", "push"); err != nil {
+		t.Fatal(err)
+	}
 	id := whHooks(t, ownerCtx, be, "hooks")[0].ID
 	ids := strconv.FormatInt(id, 10)
 
-	is.NoErr(runRepo(t, rootCtx, "webhook", "update", "hooks", ids, "-a=false"))
-	is.Equal(whHooks(t, ownerCtx, be, "hooks")[0].Active, false)
-	is.NoErr(runRepo(t, rootCtx, "webhook", "delete", "hooks", ids))
-	is.Equal(len(whHooks(t, ownerCtx, be, "hooks")), 0)
+	if err := runRepo(t, rootCtx, "webhook", "update", "hooks", ids, "-a=false"); err != nil {
+		t.Fatal(err)
+	}
+	if got := whHooks(t, ownerCtx, be, "hooks")[0].Active; got != false {
+		t.Fatalf("whHooks(t, ownerCtx, be, \"hooks\")[0].Active = %v, want %v", got, false)
+	}
+	if err := runRepo(t, rootCtx, "webhook", "delete", "hooks", ids); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(whHooks(t, ownerCtx, be, "hooks")); got != 0 {
+		t.Fatalf("len(whHooks(t, ownerCtx, be, \"hooks\")) = %v, want %v", got, 0)
+	}
 }
 
 func TestWebhookCommandsOnMissingRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	rootCtx := withUser(t, ctx, be, "root", true)
 
 	for _, c := range []context.Context{ownerCtx, rootCtx} {
-		is.True(runRepo(t, c, "webhook", "list", "ghost") != nil)
-		is.True(runRepo(t, c, "webhook", "create", "ghost", whURL) != nil)
-		is.True(runRepo(t, c, "webhook", "delete", "ghost", "1") != nil)
+		if runRepo(t, c, "webhook", "list", "ghost") == nil {
+			t.Fatal("not true: runRepo(t, c, \"webhook\", \"list\", \"ghost\") != nil")
+		}
+		if runRepo(t, c, "webhook", "create", "ghost", whURL) == nil {
+			t.Fatal("not true: runRepo(t, c, \"webhook\", \"create\", \"ghost\", whURL) != nil")
+		}
+		if runRepo(t, c, "webhook", "delete", "ghost", "1") == nil {
+			t.Fatal("not true: runRepo(t, c, \"webhook\", \"delete\", \"ghost\", \"1\") != nil")
+		}
 	}
 }
 
 func TestWebhookSecretIsNeverPrinted(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	const secret = "never-print-me"
 
 	stdout, stderr, err := runRepoOutput(t, ownerCtx, "webhook", "create", "hooks", whURL, "-s", secret)
-	is.NoErr(err)
-	is.True(!strings.Contains(stdout, secret) && !strings.Contains(stderr, secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+		t.Fatal("not true: !strings.Contains(stdout, secret) && !strings.Contains(stderr, secret)")
+	}
 	id := strconv.FormatInt(whHooks(t, ownerCtx, be, "hooks")[0].ID, 10)
 
 	stdout, stderr, err = runRepoOutput(t, ownerCtx, "webhook", "update", "hooks", id, "-s", secret+"2")
-	is.NoErr(err)
-	is.True(!strings.Contains(stdout, secret) && !strings.Contains(stderr, secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+		t.Fatal("not true: !strings.Contains(stdout, secret) && !strings.Contains(stderr, secret)")
+	}
 
 	stdout, _, err = runRepoOutput(t, ownerCtx, "webhook", "list", "hooks")
-	is.NoErr(err)
-	is.True(!strings.Contains(stdout, secret))
-	is.True(!strings.Contains(stdout, secret+"2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, secret) {
+		t.Fatal("not true: !strings.Contains(stdout, secret)")
+	}
+	if strings.Contains(stdout, secret+"2") {
+		t.Fatal("not true: !strings.Contains(stdout, secret+\"2\")")
+	}
 }
 
 // create trims surrounding whitespace from the URL, so update should accept
 // the same padded URL and store it trimmed.
 func TestWebhookUpdateTrimsURLLikeCreate(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be), 10)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-u", "  "+whURLOther+"/padded  "))
-	is.Equal(whHooks(t, ownerCtx, be, "hooks")[0].URL, whURLOther+"/padded")
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-u", "  "+whURLOther+"/padded  "); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := whHooks(t, ownerCtx, be, "hooks")[0].URL, whURLOther+"/padded"; got != want {
+		t.Fatalf("whHooks(t, ownerCtx, be, \"hooks\")[0].URL = %v, want %v", got, want)
+	}
 }
 
 // requireRepo normally resolves the repository before RunE runs. Each leaf
 // command must still refuse to run when no repository was resolved.
 func TestWebhookRunEFailsWithoutResolvedRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := newAuthTestContext(t)
 
 	var leaves []*cobra.Command
@@ -896,24 +1123,31 @@ func TestWebhookRunEFailsWithoutResolvedRepository(t *testing.T) {
 	}
 	walk(cmdsOf(ctx).webhookCommand())
 	// list, create, delete, update, deliveries list, redeliver, get.
-	is.Equal(len(leaves), 7)
+	if got := len(leaves); got != 7 {
+		t.Fatalf("len(leaves) = %v, want %v", got, 7)
+	}
 
 	for _, c := range leaves {
 		c.SetContext(ctx)
 		err := c.RunE(c, []string{"hooks", "1", "00000000-0000-0000-0000-000000000001"})
-		is.True(err != nil)
+		if err == nil {
+			t.Fatal("not true: err != nil")
+		}
 	}
 }
 
 func TestWebhookUpdateContentTypeJSON(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be, "-c", "form"), 10)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-c", " Json "))
-	is.Equal(whHooks(t, ownerCtx, be, "hooks")[0].ContentType, webhook.ContentTypeJSON)
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-c", " Json "); err != nil {
+		t.Fatal(err)
+	}
+	if got := whHooks(t, ownerCtx, be, "hooks")[0].ContentType; got != webhook.ContentTypeJSON {
+		t.Fatalf("whHooks(t, ownerCtx, be, \"hooks\")[0].ContentType = %v, want %v", got, webhook.ContentTypeJSON)
+	}
 }
 
 // failingWebhookStore fails the webhook listing query and delegates everything
@@ -928,7 +1162,6 @@ func (failingWebhookStore) GetWebhooksByRepoID(context.Context, db.Handler, int6
 
 func TestWebhookListReportsStoreFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	// The backend lists webhooks through its own store, not the context's,
@@ -938,16 +1171,21 @@ func TestWebhookListReportsStoreFailure(t *testing.T) {
 	failCtx := withTestBackend(withTestStore(ownerCtx, failStore), failBe)
 
 	stdout, _, err := runRepoOutput(t, failCtx, "webhook", "list", "hooks")
-	is.True(err != nil)
-	is.True(strings.Contains(err.Error(), "store unavailable"))
-	is.Equal(stdout, "")
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if !strings.Contains(err.Error(), "store unavailable") {
+		t.Fatal("not true: strings.Contains(err.Error(), \"store unavailable\")")
+	}
+	if got := stdout; got != "" {
+		t.Fatalf("stdout = %v, want %v", got, "")
+	}
 }
 
 // whPushRefs pushes one commit to the "hooks" repository as the branches main,
 // feature and other, and the tag v1. main is the default branch.
 func whPushRefs(t *testing.T, ctx context.Context) {
 	t.Helper()
-	is := is.New(t)
 	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git")
 	work := t.TempDir()
 	git := func(args ...string) {
@@ -965,7 +1203,9 @@ func whPushRefs(t *testing.T, ctx context.Context) {
 	git("commit", "-q", "--allow-empty", "-m", "first")
 	git("tag", "v1")
 	git("push", "-q", bare, "main", "main:feature", "main:other", "v1")
-	is.NoErr(exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run()) //nolint:noctx
+	if err := exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run(); err != nil { //nolint:noctx
+		t.Fatal(err)
+	}
 }
 
 // Branch delete, tag delete and default branch change send their events
@@ -973,7 +1213,6 @@ func whPushRefs(t *testing.T, ctx context.Context) {
 // cancel them, and once shutdown has closed the queue no new one starts.
 func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whPushRefs(t, ownerCtx)
@@ -984,7 +1223,9 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 	run := func(args ...string) {
 		t.Helper()
 		sess, cancel := context.WithCancel(ownerCtx)
-		is.NoErr(runRepo(t, sess, args...))
+		if err := runRepo(t, sess, args...); err != nil {
+			t.Fatal(err)
+		}
 		cancel()
 	}
 	// Each change waits for the one before it to be recorded: under a
@@ -999,10 +1240,14 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 
 	be.WaitForDeliveries(context.Background())
 	r, err := be.Repository(ownerCtx, "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events := func() []string {
 		ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		out := make([]string, 0, len(ds))
 		for _, d := range ds {
 			out = append(out, d.Event.String())
@@ -1010,37 +1255,58 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 		sort.Strings(out)
 		return out
 	}
-	is.Equal(events(), []string{"branch_tag_delete", "branch_tag_delete", "repository"})
+	if got, want := events(), ([]string{"branch_tag_delete", "branch_tag_delete", "repository"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events() = %v, want %v", got, want)
+	}
 
 	// The queue is closed now, as during shutdown: the change still happens,
 	// but its event is skipped.
 	run("branch", "delete", "hooks", "main")
-	is.Equal(events(), []string{"branch_tag_delete", "branch_tag_delete", "repository"})
+	if got, want := events(), ([]string{"branch_tag_delete", "branch_tag_delete", "repository"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events() = %v, want %v", got, want)
+	}
 }
 
 // An empty --secret or --events given to update clears the stored value;
 // leaving the flag out keeps it.
 func TestWebhookUpdateClearsSecretAndEvents(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := strconv.FormatInt(whCreate(t, ownerCtx, be, "-s", "old", "-e", "push", "-e", "repository"), 10)
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "--secret="))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "--secret="); err != nil {
+		t.Fatal(err)
+	}
 	h := whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.Secret, "")
-	is.Equal(eventNames(h.Events), []string{"push", "repository"})
+	if got := h.Secret; got != "" {
+		t.Fatalf("h.Secret = %v, want %v", got, "")
+	}
+	if got, want := eventNames(h.Events), ([]string{"push", "repository"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("eventNames(h.Events) = %v, want %v", got, want)
+	}
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-s", "new", "--events="))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-s", "new", "--events="); err != nil {
+		t.Fatal(err)
+	}
 	h = whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.Secret, "new")
-	is.Equal(len(h.Events), 0)
+	if got := h.Secret; got != "new" {
+		t.Fatalf("h.Secret = %v, want %v", got, "new")
+	}
+	if got := len(h.Events); got != 0 {
+		t.Fatalf("len(h.Events) = %v, want %v", got, 0)
+	}
 
-	is.NoErr(runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-e", "push", "-s", ""))
+	if err := runRepo(t, ownerCtx, "webhook", "update", "hooks", id, "-e", "push", "-s", ""); err != nil {
+		t.Fatal(err)
+	}
 	h = whHooks(t, ownerCtx, be, "hooks")[0]
-	is.Equal(h.Secret, "")
-	is.Equal(eventNames(h.Events), []string{"push"})
+	if got := h.Secret; got != "" {
+		t.Fatalf("h.Secret = %v, want %v", got, "")
+	}
+	if got, want := eventNames(h.Events), ([]string{"push"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("eventNames(h.Events) = %v, want %v", got, want)
+	}
 }
 
 // An empty value for a flag that cannot be empty is refused, not silently
@@ -1058,18 +1324,21 @@ func TestWebhookUpdateRejectsEmptyRequiredFlags(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			id := whCreate(t, ownerCtx, be, "-s", "keep", "-e", "push")
 			before := whSnapshot(t, ownerCtx, be)
 
 			_, _, err := runRepoOutput(t, ownerCtx, "webhook", "update", "hooks", strconv.FormatInt(id, 10), tc.flag)
-			is.True(err != nil)
+			if err == nil {
+				t.Fatal("not true: err != nil")
+			}
 			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
 				t.Fatalf("error %q does not contain %q", err, tc.want)
 			}
-			is.Equal(whSnapshot(t, ownerCtx, be), before)
+			if got := whSnapshot(t, ownerCtx, be); got != before {
+				t.Fatalf("whSnapshot(t, ownerCtx, be) = %v, want %v", got, before)
+			}
 		})
 	}
 }
@@ -1096,33 +1365,47 @@ func TestParseWebhookContentType(t *testing.T) {
 // A default branch change says which branch was the default before.
 func TestDefaultBranchEventNamesPreviousBranch(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whPushRefs(t, ownerCtx)
 	id := whCreate(t, ownerCtx, be, "-e", "repository")
 	whPointAtLoopback(t, ownerCtx, "hooks", id)
 
-	is.NoErr(runRepo(t, ownerCtx, "branch", "default", "hooks", "feature"))
+	if err := runRepo(t, ownerCtx, "branch", "default", "hooks", "feature"); err != nil {
+		t.Fatal(err)
+	}
 	be.WaitForDeliveries(context.Background())
 
 	r, err := be.Repository(ownerCtx, "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 1 {
+		t.Fatalf("len(ds) = %v, want %v", got, 1)
+	}
 	d, err := be.WebhookDelivery(ownerCtx, r, id, ds[0].ID)
-	is.NoErr(err)
-	is.True(strings.Contains(d.RequestBody, `"action":"default_branch_change"`))
-	is.True(strings.Contains(d.RequestBody, `"default_branch":"feature"`))
-	is.True(strings.Contains(d.RequestBody, `"changes":{"default_branch":{"from":"main"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(d.RequestBody, `"action":"default_branch_change"`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"action\":\"default_branch_change\"`)")
+	}
+	if !strings.Contains(d.RequestBody, `"default_branch":"feature"`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"default_branch\":\"feature\"`)")
+	}
+	if !strings.Contains(d.RequestBody, `"changes":{"default_branch":{"from":"main"}}`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"changes\":{\"default_branch\":{\"from\":\"main\"}}`)")
+	}
 }
 
 // Deleting an annotated tag sends the tag object as "before", the same id a
 // push that deletes the tag sends, not the commit it points at.
 func TestTagDeleteEventNamesTagObject(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	whPushRefs(t, ownerCtx)
@@ -1140,21 +1423,35 @@ func TestTagDeleteEventNamesTagObject(t *testing.T) {
 	gitOut("tag", "-a", "-m", "annotated", "v2", "main")
 	tagObj := gitOut("rev-parse", "refs/tags/v2")
 	commit := gitOut("rev-parse", "refs/tags/v2^{commit}")
-	is.True(tagObj != commit)
+	if tagObj == commit {
+		t.Fatal("not true: tagObj != commit")
+	}
 
 	id := whCreate(t, ownerCtx, be, "-e", "branch_tag_delete")
 	whPointAtLoopback(t, ownerCtx, "hooks", id)
-	is.NoErr(runRepo(t, ownerCtx, "tag", "delete", "hooks", "v2"))
+	if err := runRepo(t, ownerCtx, "tag", "delete", "hooks", "v2"); err != nil {
+		t.Fatal(err)
+	}
 	be.WaitForDeliveries(context.Background())
 
 	r, err := be.Repository(ownerCtx, "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 1 {
+		t.Fatalf("len(ds) = %v, want %v", got, 1)
+	}
 	d, err := be.WebhookDelivery(ownerCtx, r, id, ds[0].ID)
-	is.NoErr(err)
-	is.True(strings.Contains(d.RequestBody, `"before":"`+tagObj+`"`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(d.RequestBody, `"before":"`+tagObj+`"`) {
+		t.Fatal("not true: strings.Contains(d.RequestBody, `\"before\":\"`+tagObj+`\"`)")
+	}
 }
 
 // cancelAfterRefChangeStore cancels the session context on the first user
@@ -1223,7 +1520,6 @@ func TestBranchAndTagEventsSentWhenSessionEndsAfterRefChange(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			ownerCtx := whRepo(t, ctx, be)
 			whPushRefs(t, ownerCtx)
@@ -1243,19 +1539,29 @@ func TestBranchAndTagEventsSentWhenSessionEndsAfterRefChange(t *testing.T) {
 			stBe := backend.New(cmdsOf(ownerCtx).cfg, cmdsOf(ownerCtx).db, st, nil)
 			sess = withTestBackend(withTestStore(sess, st), stBe)
 
-			is.NoErr(runRepo(t, sess, tc.args...))
-			is.True(sess.Err() != nil) // the session ended after the ref change
+			if err := runRepo(t, sess, tc.args...); err != nil {
+				t.Fatal(err)
+			}
+			if sess.Err() == nil {
+				t.Fatal("not true: sess.Err() != nil")
+			} // the session ended after the ref change
 
 			stBe.WaitForDeliveries(context.Background())
 			r, err := be.Repository(ownerCtx, "hooks")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			ds, err := be.ListWebhookDeliveries(ownerCtx, r, id)
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			events := make([]string, 0, len(ds))
 			for _, d := range ds {
 				events = append(events, d.Event.String())
 			}
-			is.Equal(events, []string{tc.event})
+			if got, want := events, ([]string{tc.event}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("events = %v, want %v", got, want)
+			}
 		})
 	}
 }
