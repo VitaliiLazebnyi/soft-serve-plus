@@ -1088,7 +1088,7 @@ func TestQuietCloneSlowPack(t *testing.T) {
 
 	const idleTimeout = 2
 	conns := make(chan *stillConn, 1)
-	_, addr := startDaemonOn(t, 1, stillConns(conns), func(d *GitDaemon) { d.cfg.Git.IdleTimeout = idleTimeout })
+	_, addr := startDaemonOn(t, 1, stillConns(t, conns), func(d *GitDaemon) { d.cfg.Git.IdleTimeout = idleTimeout })
 
 	// Hold the pack back until the test releases it. The hook records
 	// the keepalive interval upload-pack runs with and that the pack is
@@ -1144,8 +1144,15 @@ func TestQuietCloneSlowPack(t *testing.T) {
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := <-cloned; r.err != nil {
-		t.Fatalf("clone failed: %v\n%s", r.err, r.out)
+	// The connection keeps no deadlines, so the wait for the clone has
+	// to have its own.
+	select {
+	case r := <-cloned:
+		if r.err != nil {
+			t.Fatalf("clone failed: %v\n%s", r.err, r.out)
+		}
+	case <-time.After(idleWait):
+		t.Fatalf("the clone did not finish %s after the pack was released", idleWait)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "README")); err != nil {
 		t.Errorf("clone is missing README: %v", err)
@@ -1165,7 +1172,7 @@ func TestNoErrAfterOutput(t *testing.T) {
 	const name = "idleafteradvert"
 	ensureRepo(t, name)
 	conns := make(chan *stillConn, 1)
-	_, addr := startDaemonOn(t, 1, stillConns(conns))
+	_, addr := startDaemonOn(t, 1, stillConns(t, conns))
 	c := dialDaemonAt(t, addr)
 	if _, err := io.WriteString(c, pkt("git-upload-pack /"+name+".git\x00")); err != nil {
 		t.Fatal(err)
@@ -1192,18 +1199,22 @@ func TestNoErrAfterOutput(t *testing.T) {
 }
 
 // stillConns returns a listener wrapper for startDaemonOn that makes each
-// connection a stillConn and sends it on conns.
-func stillConns(conns chan<- *stillConn) func(net.Listener) net.Listener {
+// connection a stillConn and sends it on conns, which has room for every
+// connection the test expects; see stillListener.
+func stillConns(t *testing.T, conns chan<- *stillConn) func(net.Listener) net.Listener {
 	return func(inner net.Listener) net.Listener {
-		return &stillListener{Listener: inner, conns: conns}
+		return &stillListener{Listener: inner, conns: conns, t: t}
 	}
 }
 
 // stillListener is a listener whose connections are stillConns. It sends
-// each one on conns.
+// each one on conns. A connection that finds conns full is one the test
+// did not expect: it fails the test, and is served all the same, so that
+// the accept loop, and with it the daemon's shutdown, never waits on conns.
 type stillListener struct {
 	net.Listener
 	conns chan<- *stillConn
+	t     *testing.T
 }
 
 func (l *stillListener) Accept() (net.Conn, error) {
@@ -1212,7 +1223,11 @@ func (l *stillListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	sc := &stillConn{Conn: c}
-	l.conns <- sc
+	select {
+	case l.conns <- sc:
+	default:
+		l.t.Errorf("unexpected connection from %s", c.RemoteAddr())
+	}
 	return sc, nil
 }
 
