@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
-	"github.com/matryer/is"
 )
 
 // locksFixture is a server, and a user who owns a repository holding two
@@ -32,15 +31,18 @@ type locksFixture struct {
 // newLocksFixture returns a new fixture.
 func newLocksFixture(t *testing.T) *locksFixture {
 	t.Helper()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, repo.ID(), owner.ID(), "a.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}

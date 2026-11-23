@@ -23,7 +23,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,28 +32,43 @@ import (
 // a Basic login with a bad password.
 func TestBadCredentialsAreNotAnonymous(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	ctx := f.ctx
-	is.NoErr(f.be.SetAnonAccess(ctx, access.ReadWriteAccess))
+	if err := f.be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	stranger, err := f.be.User(ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A JWT whose user was deleted, and one whose user was deleted and
 	// then replaced by another of the same name.
 	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	goneJWT := f.mintJWT(t, gone, "new", "secret")
-	is.NoErr(f.be.DeleteUser(ctx, "gone"))
+	if err := f.be.DeleteUser(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
 	reborn, err := f.be.CreateUser(ctx, "reborn", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rebornJWT := f.mintJWT(t, reborn, "new", "secret")
-	is.NoErr(f.be.DeleteUser(ctx, "reborn"))
+	if err := f.be.DeleteUser(ctx, "reborn"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateUser(ctx, "reborn", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
@@ -72,15 +86,20 @@ func TestBadCredentialsAreNotAnonymous(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			w := f.do(http.MethodGet, "/new.git/info/refs?service=git-receive-pack", header)
-			is.Equal(w.Code, http.StatusForbidden)
-			is.True(!f.exists("new"))
+			if got := w.Code; got != http.StatusForbidden {
+				t.Fatalf("w.Code = %v, want %v", got, http.StatusForbidden)
+			}
+			if f.exists("new") {
+				t.Fatal("not true: !f.exists(\"new\")")
+			}
 
 			// A private repository answers 403 too, not the 401
 			// credentials challenge an anonymous caller gets.
 			w = f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", header)
-			is.Equal(w.Code, http.StatusForbidden)
+			if got := w.Code; got != http.StatusForbidden {
+				t.Fatalf("w.Code = %v, want %v", got, http.StatusForbidden)
+			}
 		})
 	}
 }
@@ -238,15 +257,18 @@ func TestBasicNonTokenLoginHoldsSlotBriefly(t *testing.T) {
 // password hash written into the database by hand does not let its user in.
 func TestBasicAuthTokenForms(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	ctx := f.ctx
 	f.env.storePasswordHash(t, "stranger", "stranger-password")
 	f.env.storePasswordHash(t, "owner", "owner-password")
 	stranger, err := f.be.User(ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name    string
@@ -277,21 +299,28 @@ func TestBasicAuthTokenForms(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.SetBasicAuth(tc.user, tc.pass)
 
 			user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
 			if tc.want == "" {
-				is.True(user == nil)
+				if user != nil {
+					t.Fatal("not true: user == nil")
+				}
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err = %v, want %v", err, tc.wantErr)
 				}
 				return
 			}
-			is.NoErr(err)
-			is.True(user != nil)
-			is.Equal(user.Username(), tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if user == nil {
+				t.Fatal("not true: user != nil")
+			}
+			if got := user.Username(); got != tc.want {
+				t.Fatalf("user.Username() = %v, want %v", got, tc.want)
+			}
 		})
 	}
 }
@@ -302,12 +331,15 @@ func TestBasicAuthTokenForms(t *testing.T) {
 // so a token holder cannot use it to find out which usernames exist.
 func TestBasicAuthTokenIgnoresUsername(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	stranger, err := f.be.User(f.ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateRepository(f.ctx, "mine", stranger, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 		r.SetBasicAuth(user, pass)
@@ -318,7 +350,9 @@ func TestBasicAuthTokenIgnoresUsername(t *testing.T) {
 	// comes with the token.
 	const mine = "/mine.git/info/refs?service=git-upload-pack"
 	want := answerOf(f.do(http.MethodGet, mine, basic("stranger", f.token)))
-	is.Equal(want.code, http.StatusOK)
+	if got := want.code; got != http.StatusOK {
+		t.Fatalf("want.code = %v, want %v", got, http.StatusOK)
+	}
 	for _, name := range []string{"owner", "Owner", "git", "nosuchuser", ""} {
 		got := answerOf(f.do(http.MethodGet, mine, basic(name, f.token)))
 		if got != want {
@@ -329,7 +363,9 @@ func TestBasicAuthTokenIgnoresUsername(t *testing.T) {
 	// A registered name and a free one get the same answer, on a
 	// repository the token's owner may read and on one they may not.
 	_, err = f.be.CreateUser(f.ctx, "git", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{mine, "/secret.git/info/refs?service=git-upload-pack"} {
 		registered := answerOf(f.do(http.MethodGet, path, basic("owner", f.token)))
 		placeholder := answerOf(f.do(http.MethodGet, path, basic("git", f.token)))
@@ -350,7 +386,6 @@ func TestBasicAuthTokenIgnoresUsername(t *testing.T) {
 // parallel with others.
 func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -359,7 +394,9 @@ func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the sub
 	ctx := f.ctx
 	f.env.storePasswordHash(t, "stranger", "hunter2-password")
 	stranger, err := f.be.User(ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	jwt := f.mintJWT(t, stranger, "secret")
 
 	const (
@@ -406,13 +443,14 @@ func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the sub
 		{"malformed", badToken + " x", false, "other", []string{badToken}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			is := is.New(t)
 			logs.Reset()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", tc.header)
 
 			user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
-			is.Equal(err == nil && user != nil, tc.ok)
+			if got := err == nil && user != nil; got != tc.ok {
+				t.Fatalf("err == nil && user != nil = %v, want %v", got, tc.ok)
+			}
 
 			out := logs.String()
 			for _, s := range tc.secrets {
@@ -430,7 +468,9 @@ func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the sub
 			if _, cred, _ := strings.Cut(tc.header, " "); tc.scheme != "other" && strings.Contains(out, cred) {
 				t.Errorf("auth log contains the header credential:\n%s", out)
 			}
-			is.True(strings.Contains(out, "scheme="+tc.scheme))
+			if !strings.Contains(out, "scheme="+tc.scheme) {
+				t.Fatal("not true: strings.Contains(out, \"scheme=\"+tc.scheme)")
+			}
 		})
 	}
 }
@@ -442,7 +482,6 @@ func TestAuthDoesNotLogCredentials(t *testing.T) { //nolint:tparallel // the sub
 // parallel with others.
 func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -450,13 +489,21 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the su
 	f := newOracleFixtureLogging(t, logger)
 	ctx := f.ctx
 	stranger, err := f.be.User(ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expired, err := f.be.CreateAccessToken(ctx, stranger, "old", time.Now().Add(-time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	gone, err := f.be.CreateUser(ctx, "gone", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	goneJWT := f.mintJWT(t, gone, "secret")
-	is.NoErr(f.be.DeleteUser(ctx, "gone"))
+	if err := f.be.DeleteUser(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
 
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
@@ -475,13 +522,14 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the su
 		"basic expired as username":   basic(expired, ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
 			logs.Reset()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", header)
 
 			user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
-			is.True(err != nil || user == nil)
+			if err == nil && user != nil {
+				t.Fatal("not true: err != nil || user == nil")
+			}
 
 			if out := logs.String(); strings.Contains(out, "ERRO") {
 				t.Errorf("failed login logged at error level:\n%s", out)
@@ -503,7 +551,6 @@ func TestFailedAuthNotLoggedAsError(t *testing.T) { //nolint:tparallel // the su
 // an anonymous request, and the server logs the fault at error level.
 func TestBearerWithoutHostKey(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -511,25 +558,35 @@ func TestBearerWithoutHostKey(t *testing.T) {
 	f := newOracleFixtureLogging(t, logger)
 	ctx := f.ctx
 	stranger, err := f.be.User(ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bearer := "Bearer " + f.mintJWT(t, stranger, "secret")
 
 	// The server reads its host key once, when it is built.
-	is.NoErr(os.Remove(f.env.cfg.SSH.KeyPath))
+	if err := os.Remove(f.env.cfg.SSH.KeyPath); err != nil {
+		t.Fatal(err)
+	}
 	s := f.env.server(t)
 
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", bearer)
 	_, _, err = s.authenticate(req, s.requestLogger(req), "secret")
-	is.True(errors.Is(err, errInvalidToken))
-	is.True(errors.Is(err, jwk.ErrHostKey))
+	if !errors.Is(err, errInvalidToken) {
+		t.Fatal("not true: errors.Is(err, errInvalidToken)")
+	}
+	if !errors.Is(err, jwk.ErrHostKey) {
+		t.Fatal("not true: errors.Is(err, jwk.ErrHostKey)")
+	}
 
 	logs.Reset()
 	req = httptest.NewRequestWithContext(ctx, http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", nil)
 	req.Header.Set("Authorization", bearer)
 	w := httptest.NewRecorder()
 	s.router().ServeHTTP(w, req)
-	is.Equal(w.Code, http.StatusForbidden) // anonymous would get 401
+	if got := w.Code; got != http.StatusForbidden {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusForbidden)
+	} // anonymous would get 401
 	if out := logs.String(); !strings.Contains(out, "ERRO") || !strings.Contains(out, "host key") {
 		t.Errorf("missing host key not logged at error level:\n%s", out)
 	}
@@ -567,16 +624,19 @@ func TestBasicAuthLogsTokenOwner(t *testing.T) {
 // parallel with others.
 func TestAuthDatabaseErrorIsUnavailable(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
 
 	f := newOracleFixtureLogging(t, logger)
 	stranger, err := f.be.User(f.ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateRepository(f.ctx, "mine", stranger, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bearer := "Bearer " + f.mintJWT(t, stranger, "mine")
 	basic := func(user, pass string) string {
 		r := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
@@ -584,7 +644,9 @@ func TestAuthDatabaseErrorIsUnavailable(t *testing.T) { //nolint:tparallel // th
 		return r.Header.Get("Authorization")
 	}
 
-	is.NoErr(f.env.dbx.Close())
+	if err := f.env.dbx.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	creds := map[string]string{
 		"token":             "Token " + f.token,
@@ -628,14 +690,25 @@ func TestAuthDatabaseErrorIsUnavailable(t *testing.T) { //nolint:tparallel // th
 			if w.Code != http.StatusServiceUnavailable {
 				t.Fatalf("lfs: got %d, want 503", w.Code)
 			}
-			is := is.New(t)
-			is.True(w.Header().Get("Retry-After") != "")
-			is.Equal(w.Header().Get("LFS-Authenticate"), "")
-			is.Equal(w.Header().Get("WWW-Authenticate"), "")
-			is.Equal(w.Header().Get("Content-Type"), lfs.MediaType)
+			if w.Header().Get("Retry-After") == "" {
+				t.Fatal("not true: w.Header().Get(\"Retry-After\") != \"\"")
+			}
+			if got := w.Header().Get("LFS-Authenticate"); got != "" {
+				t.Fatalf("w.Header().Get(\"LFS-Authenticate\") = %v, want %v", got, "")
+			}
+			if got := w.Header().Get("WWW-Authenticate"); got != "" {
+				t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, "")
+			}
+			if got := w.Header().Get("Content-Type"); got != lfs.MediaType {
+				t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, lfs.MediaType)
+			}
 			var body lfs.ErrorResponse
-			is.NoErr(json.Unmarshal(w.Body.Bytes(), &body))
-			is.True(body.Message != "")
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Message == "" {
+				t.Fatal("not true: body.Message != \"\"")
+			}
 		})
 	}
 }
@@ -644,19 +717,27 @@ func TestAuthDatabaseErrorIsUnavailable(t *testing.T) { //nolint:tparallel // th
 // expired token is a failed login.
 func TestLookupFailed(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
-	is.True(!lookupFailed(nil))
-	is.True(!lookupFailed(proto.ErrUserNotFound))
-	is.True(!lookupFailed(proto.ErrTokenExpired))
-	is.True(lookupFailed(errors.New("sql: database is closed")))
-	is.True(lookupFailed(context.DeadlineExceeded))
+	if lookupFailed(nil) {
+		t.Fatal("not true: !lookupFailed(nil)")
+	}
+	if lookupFailed(proto.ErrUserNotFound) {
+		t.Fatal("not true: !lookupFailed(proto.ErrUserNotFound)")
+	}
+	if lookupFailed(proto.ErrTokenExpired) {
+		t.Fatal("not true: !lookupFailed(proto.ErrTokenExpired)")
+	}
+	if !lookupFailed(errors.New("sql: database is closed")) {
+		t.Fatal("not true: lookupFailed(errors.New(\"sql: database is closed\"))")
+	}
+	if !lookupFailed(context.DeadlineExceeded) {
+		t.Fatal("not true: lookupFailed(context.DeadlineExceeded)")
+	}
 }
 
 // A lookup the client canceled by going away is not logged as a server
 // error, though it is still answered as unavailable.
 func TestAuthUnavailableCanceled(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -664,14 +745,24 @@ func TestAuthUnavailableCanceled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	cancel()
 	err := authUnavailable(ctx, logger, context.Canceled)
-	is.True(errors.Is(err, errAuthUnavailable))
-	is.True(errors.Is(err, context.Canceled))
-	is.True(!strings.Contains(logs.String(), "ERRO"))
+	if !errors.Is(err, errAuthUnavailable) {
+		t.Fatal("not true: errors.Is(err, errAuthUnavailable)")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("not true: errors.Is(err, context.Canceled)")
+	}
+	if strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"ERRO\")")
+	}
 
 	logs.Reset()
 	err = authUnavailable(context.Background(), logger, errors.New("sql: database is closed"))
-	is.True(errors.Is(err, errAuthUnavailable))
-	is.True(hasLogLine(logs.String(), "ERRO", "failed to look up credentials"))
+	if !errors.Is(err, errAuthUnavailable) {
+		t.Fatal("not true: errors.Is(err, errAuthUnavailable)")
+	}
+	if !hasLogLine(logs.String(), "ERRO", "failed to look up credentials") {
+		t.Fatal("not true: hasLogLine(logs.String(), \"ERRO\", \"failed to look up credentials\")")
+	}
 }
 
 // hasLogLine reports whether out has a line that holds level and msg.
@@ -690,7 +781,6 @@ func hasLogLine(out, level, msg string) bool {
 // proto.ErrUserNotFound, and that is not a server fault either.
 func TestBearerInvalidSubjectUsername(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -704,7 +794,9 @@ func TestBearerInvalidSubjectUsername(t *testing.T) {
 		req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", bearer)
 		user, _, err := f.server.authenticate(req, f.server.requestLogger(req), "secret")
-		is.True(user == nil)
+		if user != nil {
+			t.Fatal("not true: user == nil")
+		}
 		if !errors.Is(err, errInvalidToken) {
 			t.Errorf("subject %q: err = %v, want %v", subject, err, errInvalidToken)
 		}
@@ -727,23 +819,32 @@ func TestBearerInvalidSubjectUsername(t *testing.T) {
 // fails is answered the same way. The fault is logged at error level.
 func TestRepositoryLookupErrorIsUnavailable(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
 
 	f := newOracleFixtureLogging(t, logger)
 	auth := "Token " + f.token
-	is.Equal(f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusNotFound)
+	if got := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodGet, \"/secret.git/info/refs?service=git-upload-pack\", auth).Code = %v, want %v", got, http.StatusNotFound)
+	}
 
 	dbx := f.env.dbx
 	_, err := dbx.ExecContext(f.ctx, "ALTER TABLE collabs RENAME TO collabs_gone")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth)
-	is.Equal(w.Code, http.StatusServiceUnavailable)
-	is.Equal(w.Header().Get("Retry-After"), authRetryAfter)
-	is.Equal(w.Header().Get("WWW-Authenticate"), "")
+	if got := w.Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusServiceUnavailable)
+	}
+	if got := w.Header().Get("Retry-After"); got != authRetryAfter {
+		t.Fatalf("w.Header().Get(\"Retry-After\") = %v, want %v", got, authRetryAfter)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, "")
+	}
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/secret.git/info/lfs/objects/batch",
 		strings.NewReader(`{"operation":"download","objects":[]}`))
@@ -752,13 +853,23 @@ func TestRepositoryLookupErrorIsUnavailable(t *testing.T) {
 	req.Header.Set("Content-Type", lfs.MediaType)
 	lw := httptest.NewRecorder()
 	f.handler.ServeHTTP(lw, req)
-	is.Equal(lw.Code, http.StatusServiceUnavailable)
+	if got := lw.Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("lw.Code = %v, want %v", got, http.StatusServiceUnavailable)
+	}
 	var body lfs.ErrorResponse
-	is.NoErr(json.Unmarshal(lw.Body.Bytes(), &body))
-	is.True(body.Message != "")
+	if err := json.Unmarshal(lw.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Message == "" {
+		t.Fatal("not true: body.Message != \"\"")
+	}
 
-	is.Equal(f.do(http.MethodGet, "/secret/pkg?go-get=1", auth).Code, http.StatusServiceUnavailable)
-	is.True(hasLogLine(logs.String(), "ERRO", "failed to look up repository"))
+	if got := f.do(http.MethodGet, "/secret/pkg?go-get=1", auth).Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("f.do(http.MethodGet, \"/secret/pkg?go-get=1\", auth).Code = %v, want %v", got, http.StatusServiceUnavailable)
+	}
+	if !hasLogLine(logs.String(), "ERRO", "failed to look up repository") {
+		t.Fatal("not true: hasLogLine(logs.String(), \"ERRO\", \"failed to look up repository\")")
+	}
 }
 
 // During an outage a missing name and an existing private one get the same
@@ -770,16 +881,21 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			f := newOracleFixture(t)
 			dbx := f.env.dbx
 			_, err := dbx.ExecContext(f.ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, auth := range []string{"", "Token " + f.token} {
 				for _, name := range []string{"secret", "ghost"} {
 					w := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", auth)
-					is.Equal(w.Code, http.StatusServiceUnavailable)
-					is.Equal(w.Header().Get("WWW-Authenticate"), "")
+					if got := w.Code; got != http.StatusServiceUnavailable {
+						t.Fatalf("w.Code = %v, want %v", got, http.StatusServiceUnavailable)
+					}
+					if got := w.Header().Get("WWW-Authenticate"); got != "" {
+						t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, "")
+					}
 				}
 			}
 		})
@@ -790,7 +906,6 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 // and still answered as unavailable.
 func TestLookupUnavailableCanceled(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
@@ -800,9 +915,15 @@ func TestLookupUnavailableCanceled(t *testing.T) {
 	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/refs", nil)
 	w := httptest.NewRecorder()
 	lookupUnavailable(w, r, logger, "repo", context.Canceled, false)
-	is.Equal(w.Code, http.StatusServiceUnavailable)
-	is.True(hasLogLine(logs.String(), "DEBU", "repository lookup canceled"))
-	is.True(!strings.Contains(logs.String(), "ERRO"))
+	if got := w.Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusServiceUnavailable)
+	}
+	if !hasLogLine(logs.String(), "DEBU", "repository lookup canceled") {
+		t.Fatal("not true: hasLogLine(logs.String(), \"DEBU\", \"repository lookup canceled\")")
+	}
+	if strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"ERRO\")")
+	}
 }
 
 // TestParseJWTHostKeyTypes checks that tokens minted with the server's host
