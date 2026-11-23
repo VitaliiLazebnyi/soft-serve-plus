@@ -106,7 +106,7 @@ func TestMirrorPullFunc(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	admin, err := be.User(ctx, "admin")
@@ -174,7 +174,7 @@ func TestMirrorPullFunc(t *testing.T) {
 func TestMirrorPullRecoversWorkerPanic(t *testing.T) {
 	t.Parallel()
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	admin, err := be.User(ctx, "admin")
@@ -290,7 +290,7 @@ func TestMirrorPullReportsSSHLFSEndpoint(t *testing.T) {
 		t.Run(endpoint, func(t *testing.T) {
 			t.Parallel()
 			ctx, cfg, be := newMirrorJobContext(t)
-			if reason := be.ImportsDisabledReason(); reason != "" {
+			if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 				t.Skipf("mirror syncs are disabled here: %s", reason)
 			}
 			cfg.LFS.Enabled = true
@@ -329,7 +329,7 @@ func TestMirrorPullReportsSSHLFSEndpoint(t *testing.T) {
 func deadlineMirror(t *testing.T, logs *syncBuffer) (context.Context, *MirrorPull) {
 	t.Helper()
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	cfg.LFS.Enabled = true
@@ -426,7 +426,7 @@ func TestMirrorPullWithoutFetchRefspec(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	admin, err := be.User(ctx, "admin")
@@ -470,7 +470,7 @@ func TestMirrorPullWithoutFetchRefspec(t *testing.T) {
 func TestMirrorPullRereadsMirrorFlag(t *testing.T) {
 	t.Parallel()
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	admin, err := be.User(ctx, "admin")
@@ -518,7 +518,7 @@ func TestMirrorPullRereadsMirrorFlag(t *testing.T) {
 func TestMirrorPullRecordsOutcome(t *testing.T) {
 	t.Parallel()
 	ctx, cfg, be := newMirrorJobContext(t)
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 		t.Skipf("mirror syncs are disabled here: %s", reason)
 	}
 	admin, err := be.User(ctx, "admin")

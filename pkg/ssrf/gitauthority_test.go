@@ -99,7 +99,7 @@ func TestGitCurlHostMatchesPin(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	v, err := git.BinVersion()
+	v, err := git.BinVersion(t.Context())
 	if err != nil {
 		t.Fatalf("git version: %v", err)
 	}

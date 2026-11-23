@@ -211,7 +211,7 @@ func (m *MirrorPull) Run(ctx context.Context) {
 
 	// The same guards that protect imports protect syncs, and the same
 	// too-old git ignores them.
-	if reason := b.ImportsDisabledReason(); reason != "" {
+	if reason := b.ImportsDisabledReason(ctx); reason != "" {
 		logger.Warn("skipping mirror sync", "reason", reason)
 		return
 	}

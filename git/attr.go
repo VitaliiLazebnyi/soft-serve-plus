@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -23,16 +24,17 @@ var minAttrSourceVersion = Version{Major: 2, Minor: 40}
 var attrSource atomic.Int32
 
 // attrSourceSupported reports whether check-attr supports --source. It runs
-// `git version` only until it gets an answer. Repository.attrSource holds it,
-// so tests can exercise the temporary-index fallback on their own repository.
-func attrSourceSupported() bool {
+// `git version`, under ctx, only until it gets an answer: a run that ctx cut
+// short is not one. Repository.attrSource holds it, so tests can exercise
+// the temporary-index fallback on their own repository.
+func attrSourceSupported(ctx context.Context) bool {
 	switch attrSource.Load() {
 	case 1:
 		return true
 	case 2:
 		return false
 	}
-	v, err := BinVersion()
+	v, err := BinVersion(ctx)
 	if err != nil {
 		return false
 	}
@@ -52,7 +54,7 @@ func attrSourceSupported() bool {
 // NewCommand(r.ctx, ...) so that it stops when the SSH
 // session that asked for it disconnects.
 func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, error) {
-	if r.attrSource() {
+	if r.attrSource(r.ctx) {
 		out, err := NewCommand(r.ctx, "check-attr", "-z", "--source", ref.Name().String(), "-a", "--", path).
 			RunInDir(r.Path)
 		if err != nil {

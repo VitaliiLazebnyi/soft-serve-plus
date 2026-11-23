@@ -1,12 +1,11 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
-
-	"github.com/aymanbagabas/git-module"
 )
 
 // ErrVersionUnparseable is returned when `git version` output cannot be read.
@@ -51,12 +50,13 @@ func ParseVersion(s string) (Version, error) {
 }
 
 // BinVersion returns the version of the git binary in use. It runs
-// `git version` on every call and keeps nothing: git-module's own BinVersion
-// remembers its first result in a sync.Once, failures included, so a single
-// passing failure (fork EAGAIN under load) would stick until restart. Callers
-// that want to cache a successful result do so themselves.
-func BinVersion() (Version, error) {
-	out, err := git.NewCommand("version").Run()
+// `git version` under ctx, so it starts nothing for a caller that has gone,
+// on every call, and keeps nothing: git-module's own BinVersion remembers its
+// first result in a sync.Once, failures included, so a single passing
+// failure (fork EAGAIN under load) would stick until restart. Callers that
+// want to cache a successful result do so themselves.
+func BinVersion(ctx context.Context) (Version, error) {
+	out, err := NewCommand(ctx, "version").Run()
 	if err != nil {
 		return Version{}, fmt.Errorf("git version: %w", err)
 	}

@@ -568,7 +568,7 @@ func (d *Backend) importUserRepository(ctx context.Context, name string, user pr
 	}
 	defer slot.release()
 
-	if reason := d.ImportsDisabledReason(); reason != "" {
+	if reason := d.ImportsDisabledReason(ctx); reason != "" {
 		d.logger.Warn("refusing import", "name", name, "reason", reason)
 		return nil, proto.ErrImportsDisabled
 	}

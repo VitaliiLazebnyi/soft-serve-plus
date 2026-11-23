@@ -175,7 +175,7 @@ func newServer(ctx context.Context, cfg *config.Config, dbx *db.DB, st store.Sto
 
 	// The backend decides this on its own; surface it once at startup so the
 	// operator does not learn about it from the first failed import.
-	if reason := be.ImportsDisabledReason(); reason != "" {
+	if reason := be.ImportsDisabledReason(ctx); reason != "" {
 		logger.Error("imports and mirror syncs are disabled", "reason", reason)
 	}
 

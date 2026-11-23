@@ -74,7 +74,7 @@ func TestMirrorPullSyncsConcurrently(t *testing.T) {
 				t.Skip("GOMAXPROCS is 1: one mirror syncs at a time")
 			}
 			ctx, cfg, be := newMirrorJobContext(t)
-			if reason := be.ImportsDisabledReason(); reason != "" {
+			if reason := be.ImportsDisabledReason(context.Background()); reason != "" {
 				t.Skipf("mirror syncs are disabled here: %s", reason)
 			}
 			admin, err := be.User(ctx, "admin")
