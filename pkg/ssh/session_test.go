@@ -101,7 +101,7 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 		tb.Fatal(err)
 	}
 	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	be := backend.New(cfg, dbx, dbstore, log.Default())
 	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
 	return &ssh.Server{
 		Handler: tui(hs)(func(s ssh.Session) {

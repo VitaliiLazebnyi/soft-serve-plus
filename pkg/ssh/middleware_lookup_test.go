@@ -44,7 +44,7 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
+	be := backend.New(cfg, dbx, dbstore, log.Default())
 
 	newKey := func(name string) gossh.Signer {
 		t.Helper()

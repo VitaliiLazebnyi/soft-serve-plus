@@ -85,7 +85,6 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 				// A repository whose directory is a file makes generating
 				// its hooks fail.
 				ctx := context.Background()
-				ctx = log.WithContext(ctx, log.New(io.Discard))
 				dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 				if err != nil {
 					t.Fatal(err)

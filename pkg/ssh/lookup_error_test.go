@@ -38,7 +38,7 @@ func TestOpenRepoOutageSameAnswer(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := database.New(nil)
-			be := backend.New(cfg, dbx, st, log.FromContext(ctx))
+			be := backend.New(cfg, dbx, st, log.Default())
 			owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 			if err != nil {
 				t.Fatal(err)

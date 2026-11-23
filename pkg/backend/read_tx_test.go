@@ -24,7 +24,6 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
-	// The webhook methods take the database and store from the context.
 	ctx := context.Background()
 
 	// Both differ from what the lookups fall back to on an error.

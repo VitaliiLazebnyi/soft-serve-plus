@@ -38,7 +38,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := database.New(nil)
-	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
+	be := backend.New(cfg, dbx, st, log.Default())
 	logs := &syncBuffer{}
 
 	// Authentication lets every client in, so the session handlers decide.

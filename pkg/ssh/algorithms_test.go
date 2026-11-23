@@ -188,7 +188,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := log.WithContext(context.Background(), logger)
+	ctx := context.Background()
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		t.Fatal(err)

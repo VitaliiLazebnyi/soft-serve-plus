@@ -16,8 +16,8 @@ import (
 
 // TestWebhooksBareContext verifies that the webhook methods use the
 // backend's own database and store, so a caller whose context carries
-// neither still works. db.FromContext returns nil for such a context, so
-// reading the database from it panicked.
+// neither still works. Reading the database from such a context, as they
+// once did, gave nil and panicked.
 func TestWebhooksBareContext(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

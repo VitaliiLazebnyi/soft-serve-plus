@@ -70,7 +70,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New(nil)
-	be := New(cfg, dbx, dbstore, log.FromContext(ctx))
+	be := New(cfg, dbx, dbstore, log.Default())
 
 	user, err := be.User(ctx, "admin")
 	is.NoErr(err)
