@@ -16,6 +16,7 @@ import (
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
@@ -43,7 +44,7 @@ func (e whEnv) seedHookOn(t *testing.T, repo proto.Repository, events ...webhook
 	var id int64
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		var err error
-		id, err = e.be.store.CreateWebhook(e.ctx, tx, repo.ID(), "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		id, err = e.be.store.CreateWebhook(e.ctx, tx, models.Webhook{RepoID: repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		if err != nil {
 			return err
 		}

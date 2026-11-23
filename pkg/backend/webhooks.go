@@ -30,7 +30,7 @@ func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url 
 	events = dedupeEvents(events)
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		lastID, err := d.store.CreateWebhook(ctx, tx, repo.ID(), url, secret, int(contentType), active)
+		lastID, err := d.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: url, Secret: secret, ContentType: int(contentType), Active: active})
 		if err != nil {
 			return err
 		}
@@ -141,7 +141,7 @@ func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id i
 		// The webhook must belong to this repository: the update matches no
 		// row otherwise and fails with db.ErrRecordNotFound, before the event
 		// rewrite below can touch another repository's webhook.
-		if err := d.store.UpdateWebhookByID(ctx, tx, repo.ID(), id, url, secret, int(contentType), active); err != nil {
+		if err := d.store.UpdateWebhookByID(ctx, tx, models.Webhook{ID: id, RepoID: repo.ID(), URL: url, Secret: secret, ContentType: int(contentType), Active: active}); err != nil {
 			return webhookNotFound(err)
 		}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -115,7 +116,7 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 			return err
 		}
 
-		_, err = e.be.store.CreateWebhook(e.ctx, tx, e.repo.ID(), whURL+"/last", "", int(webhook.ContentTypeJSON), true)
+		_, err = e.be.store.CreateWebhook(e.ctx, tx, models.Webhook{RepoID: e.repo.ID(), URL: whURL + "/last", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		return err
 	}))
 

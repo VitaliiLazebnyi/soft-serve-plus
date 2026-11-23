@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
 // A write that matches no row reports db.ErrRecordNotFound rather than
@@ -15,7 +16,7 @@ func TestWritesToMissingRowsAreNotFound(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const repo = 7 // see newWebhookTestDB
 
-	hook, err := s.CreateWebhook(ctx, dbx, repo, "https://93.184.216.34/a", "", 0, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: repo, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestWritesToMissingRowsAreNotFound(t *testing.T) {
 		"SetRepoDescriptionByName": s.SetRepoDescriptionByName(ctx, dbx, "nope", "d"),
 		"SetRepoProjectNameByName": s.SetRepoProjectNameByName(ctx, dbx, "nope", "p"),
 		// Another repository's webhook is not this one's.
-		"UpdateWebhookByID":        s.UpdateWebhookByID(ctx, dbx, repo+1, hook, "https://93.184.216.34/b", "", 0, true),
+		"UpdateWebhookByID":        s.UpdateWebhookByID(ctx, dbx, models.Webhook{ID: hook, RepoID: repo + 1, URL: "https://93.184.216.34/b", ContentType: 0, Active: true}),
 		"DeleteWebhookForRepoByID": s.DeleteWebhookForRepoByID(ctx, dbx, repo+1, hook),
 	} {
 		if !errors.Is(err, db.ErrRecordNotFound) {

@@ -224,7 +224,7 @@ func (s *Sender) Redeliver(ctx context.Context, w models.Webhook, event Event, c
 
 // sendPayload encodes payload in w's content type and sends it, recording
 // the attempt when record is set.
-func (s *Sender) sendPayload(ctx context.Context, w models.Webhook, event Event, payload any, record bool) error {
+func (s *Sender) sendPayload(ctx context.Context, w models.Webhook, event Event, payload EventPayload, record bool) error {
 	ct := ContentType(w.ContentType) //nolint:gosec
 	body, err := encode(ct, payload)
 	if err != nil {
@@ -270,7 +270,7 @@ const (
 
 // encode encodes the payload of a new event in content type ct: JSON, or a
 // form built from the payload's url tags.
-func encode(ct ContentType, payload any) ([]byte, error) {
+func encode(ct ContentType, payload EventPayload) ([]byte, error) {
 	switch ct {
 	case ContentTypeJSON:
 		var buf bytes.Buffer

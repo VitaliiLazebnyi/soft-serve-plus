@@ -112,8 +112,7 @@ func whPointAtLoopback(t *testing.T, ctx context.Context, repo string, hookID in
 	is.NoErr(err)
 	h, err := be.Webhook(ctx, r, hookID)
 	is.NoErr(err)
-	is.NoErr(cmdsOf(ctx).store.UpdateWebhookByID(ctx, cmdsOf(ctx).db, r.ID(), hookID,
-		"http://127.0.0.1:1/", h.Secret, int(h.ContentType), h.Active))
+	is.NoErr(cmdsOf(ctx).store.UpdateWebhookByID(ctx, cmdsOf(ctx).db, models.Webhook{ID: hookID, RepoID: r.ID(), URL: "http://127.0.0.1:1/", Secret: h.Secret, ContentType: int(h.ContentType), Active: h.Active}))
 }
 
 // whAwaitDeliveries waits until the webhook has at least n recorded

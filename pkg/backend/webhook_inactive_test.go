@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -22,7 +23,7 @@ func (e whEnv) setHookActive(t *testing.T, id int64, active bool) {
 		if err != nil {
 			return err
 		}
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, h.URL, h.Secret, h.ContentType, active)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: h.URL, Secret: h.Secret, ContentType: h.ContentType, Active: active})
 	}))
 }
 
@@ -34,7 +35,7 @@ func (e whEnv) seedInactiveHook(t *testing.T, events ...webhook.Event) int64 {
 	var id int64
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		var err error
-		id, err = e.be.store.CreateWebhook(e.ctx, tx, e.repo.ID(), "http://127.0.0.1:2/", "", int(webhook.ContentTypeJSON), false)
+		id, err = e.be.store.CreateWebhook(e.ctx, tx, models.Webhook{RepoID: e.repo.ID(), URL: "http://127.0.0.1:2/", ContentType: int(webhook.ContentTypeJSON)})
 		if err != nil {
 			return err
 		}

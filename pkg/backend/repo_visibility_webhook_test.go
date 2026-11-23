@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/matryer/is"
@@ -29,7 +30,7 @@ func TestSetPrivateWebhookOnlyOnChange(t *testing.T) {
 	// Deliveries to this address fail fast, but are still recorded.
 	var hookID int64
 	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		hookID, err = be.store.CreateWebhook(ctx, tx, repo.ID(), "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		hookID, err = be.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		if err != nil {
 			return err
 		}

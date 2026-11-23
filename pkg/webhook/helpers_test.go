@@ -39,7 +39,7 @@ type testEnv struct {
 
 // newRequest encodes payload in w's content type and builds the request
 // that sends it, as a send does.
-func (e *testEnv) newRequest(w models.Webhook, event Event, payload any) (request, error) {
+func (e *testEnv) newRequest(w models.Webhook, event Event, payload EventPayload) (request, error) {
 	ct := ContentType(w.ContentType) //nolint:gosec
 	body, err := encode(ct, payload)
 	if err != nil {
@@ -50,7 +50,7 @@ func (e *testEnv) newRequest(w models.Webhook, event Event, payload any) (reques
 
 // sendWebhook encodes payload in w's content type, sends it and records the
 // attempt.
-func (s *Sender) sendWebhook(ctx context.Context, w models.Webhook, event Event, payload any) error {
+func (s *Sender) sendWebhook(ctx context.Context, w models.Webhook, event Event, payload EventPayload) error {
 	return s.sendPayload(ctx, w, event, payload, true)
 }
 
@@ -128,7 +128,7 @@ func (e *testEnv) newWebhook(t *testing.T, url, secret string, contentType Conte
 	for i, ev := range events {
 		ids[i] = int(ev)
 	}
-	id, err := e.ds.CreateWebhook(e.ctx, e.dbx, e.repo.ID, url, secret, int(contentType), true)
+	id, err := e.ds.CreateWebhook(e.ctx, e.dbx, models.Webhook{RepoID: e.repo.ID, URL: url, Secret: secret, ContentType: int(contentType), Active: true})
 	is.NoErr(err)
 	is.NoErr(e.ds.CreateWebhookEvents(e.ctx, e.dbx, id, ids))
 	w, err := e.ds.GetWebhookByID(e.ctx, e.dbx, e.repo.ID, id)

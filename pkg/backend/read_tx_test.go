@@ -47,7 +47,7 @@ func TestLookupsDoNotWaitForWriter(t *testing.T) {
 			return err
 		}
 		var err error
-		hookID, err = be.store.CreateWebhook(ctx, tx, repo.ID(), "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), false)
+		hookID, err = be.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON)})
 		if err != nil {
 			return err
 		}

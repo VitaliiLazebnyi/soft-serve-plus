@@ -10,11 +10,11 @@ import (
 )
 
 // CreateWebhook implements store.Store.
-func (*Store) CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url string, secret string, contentType int, active bool) (int64, error) {
+func (*Store) CreateWebhook(ctx context.Context, h db.Handler, w models.Webhook) (int64, error) {
 	var id int64
 	query := h.Rebind(`INSERT INTO webhooks (repo_id, url, secret, content_type, active, updated_at)
 			VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id;`)
-	err := h.GetContext(ctx, &id, query, repoID, url, secret, contentType, active)
+	err := h.GetContext(ctx, &id, query, w.RepoID, w.URL, w.Secret, w.ContentType, w.Active)
 	if err != nil {
 		return 0, err
 	}
@@ -216,9 +216,9 @@ func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler
 }
 
 // UpdateWebhookByID implements store.Store.
-func (*Store) UpdateWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64, url string, secret string, contentType int, active bool) error {
+func (*Store) UpdateWebhookByID(ctx context.Context, h db.Handler, w models.Webhook) error {
 	query := h.Rebind(`UPDATE webhooks SET url = ?, secret = ?, content_type = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND id = ?;`)
-	return affected(h.ExecContext(ctx, query, url, secret, contentType, active, repoID, id))
+	return affected(h.ExecContext(ctx, query, w.URL, w.Secret, w.ContentType, w.Active, w.RepoID, w.ID))
 }
 
 // placeholders returns n comma-separated "?" placeholders for an IN clause.

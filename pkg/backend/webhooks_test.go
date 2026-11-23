@@ -532,7 +532,7 @@ func TestRedeliverRecordsNewDelivery(t *testing.T) {
 	// Point the stored hook at a private address without validation, so the
 	// redelivery reaches the SSRF-protected client and fails there.
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 	delID := e.seedDelivery(t, id, "http://127.0.0.1:1/", `{"ref":"main"}`)
 
@@ -557,7 +557,7 @@ func TestRedeliverDoesNotLogPayload(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 	const hookURL = "http://127.0.0.1:1/secret-path?token=hook-token"
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, hookURL, "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: hookURL, ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 	const marker = "payload-marker-do-not-log"
 	delID := e.seedDelivery(t, id, hookURL, `{"ref":"main","commit":"`+marker+`"}`)
@@ -595,7 +595,7 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 			e := newWebhookEnv(t)
 			id := e.createHook(t, whURL, webhook.EventPush)
 			is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-				return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, whURL, "", int(tc.ct), true)
+				return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: whURL, ContentType: int(tc.ct), Active: true})
 			}))
 			delID := e.seedDelivery(t, id, whURL, tc.body)
 
@@ -619,7 +619,7 @@ func TestRedeliverFormWebhook(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeForm), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeForm), Active: true})
 	}))
 	const body = "n=1&ref=main"
 	delID := e.seedDelivery(t, id, "http://127.0.0.1:1/", body)
@@ -648,7 +648,7 @@ func TestRedeliverAfterPrune(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 	old := e.seedDelivery(t, id, "http://127.0.0.1:1/", `{"ref":"old"}`)
 	kept := e.seedDelivery(t, id, "http://127.0.0.1:1/", `{"ref":"new"}`)
@@ -851,7 +851,7 @@ func TestRedeliverMalformedFormBody(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeForm), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeForm), Active: true})
 	}))
 	delID := e.seedDelivery(t, id, "http://127.0.0.1:1/", "%zz=1")
 
@@ -883,7 +883,7 @@ func TestRedeliverUsesStoredContentTypeAfterWebhookChanged(t *testing.T) {
 		})
 	}))
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 
 	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID))
@@ -925,7 +925,7 @@ func TestRedeliverFallsBackOnUnknownStoredContentType(t *testing.T) {
 		})
 	}))
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 
 	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, delID))
@@ -964,7 +964,7 @@ func (e whEnv) redeliveredHeaders(t *testing.T, id int64, delID uuid.UUID) strin
 	t.Helper()
 	is := is.New(t)
 	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
-		return e.be.store.UpdateWebhookByID(e.ctx, tx, e.repo.ID(), id, "http://127.0.0.1:1/", "", int(webhook.ContentTypeJSON), true)
+		return e.be.store.UpdateWebhookByID(e.ctx, tx, models.Webhook{ID: id, RepoID: e.repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 	}))
 	before, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
 	is.NoErr(err)
