@@ -858,9 +858,10 @@ func TestBranchAndTagEventsUseBackgroundDeliveries(t *testing.T) {
 		is.NoErr(runRepo(t, sess, args...))
 		cancel()
 	}
-	// Each change waits for the one before it to be recorded: on SQLite
-	// without WAL a command's repository read waits out a record's commit,
-	// and one longer than busy_timeout reads as "repository not found".
+	// Each change waits for the one before it to be recorded: under a
+	// DELETE journal_mode data source a command's repository read waits out
+	// a record's commit, and one longer than busy_timeout fails the command
+	// with errLookupFailed.
 	run("branch", "delete", "hooks", "feature")
 	whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 1)
 	run("tag", "delete", "hooks", "v1")

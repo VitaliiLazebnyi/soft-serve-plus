@@ -87,9 +87,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // awaitDeliveries waits until the webhook has recorded exactly want. A test
 // that makes a second change after one that records a delivery in the
-// background waits here first: on SQLite without WAL the second change's
-// reads wait out the record's commit, and one longer than busy_timeout fails
-// them. A read that fails while a record commits is retried.
+// background waits here first: under a DELETE journal_mode data source the
+// second change's reads wait out the record's commit, and one longer than
+// busy_timeout fails them. A read that fails while a record commits is retried.
 func (e whEnv) awaitDeliveries(t *testing.T, hookID int64, want ...webhook.Event) {
 	t.Helper()
 	waitFor(t, "deliveries", func() bool {
