@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	charmlog "charm.land/log/v2"
@@ -227,5 +228,86 @@ func TestAllowKeylessConfigOverride(t *testing.T) {
 	cfg.AllowKeyless = nil
 	if got := be.AllowKeyless(ctx); got != true {
 		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, true)
+	}
+}
+
+// A settings lookup that fails is returned by the access checks rather than
+// read as "no anonymous access": that would refuse an anonymous reader of a
+// public repository, cap a registered user at read-only where anon-access
+// gives read-write, and list nothing for an anonymous caller, all with no
+// error. The wrappers other callers use still fail closed.
+func TestSettingsLookupErrorsReturned(t *testing.T) {
+	t.Parallel()
+	var logs syncBuffer
+	be := newLookupBackend(t, &logs)
+	ctx := context.Background()
+	_, err := be.CreateRepository(ctx, "public", defaultAdmin(t, be), proto.RepositoryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAllowKeyless(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOf(t, be, ctx, "public", alice); got != access.ReadWriteAccess {
+		t.Fatalf("levelOf(t, be, ctx, \"public\", alice) = %v, want %v", got, access.ReadWriteAccess)
+	}
+
+	breakTable(t, be, "settings")
+	for _, user := range []proto.User{nil, alice} {
+		_, _, err := be.Readable(ctx, "public", user)
+		if err == nil {
+			t.Fatal("not true: err != nil")
+		}
+	}
+	_, err = be.ReadableRepositories(ctx, nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	_, err = be.AllowKeylessSetting(ctx)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+
+	if got := be.AnonAccess(ctx); got != access.NoAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.NoAccess)
+	}
+	if be.AllowKeyless(ctx) {
+		t.Fatal("not true: !be.AllowKeyless(ctx)")
+	}
+	if !strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"ERRO\")")
+	}
+}
+
+// The fail-closed settings wrappers log a lookup the client canceled at
+// Debug, not as a server error.
+func TestSettingsLookupCanceledLoggedAtDebug(t *testing.T) {
+	t.Parallel()
+	var logs syncBuffer
+	be := newLookupBackend(t, &logs)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if got := be.AnonAccess(ctx); got != access.NoAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.NoAccess)
+	}
+	if be.AllowKeyless(ctx) {
+		t.Fatal("not true: !be.AllowKeyless(ctx)")
+	}
+	if !strings.Contains(logs.String(), "anon-access") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"anon-access\")")
+	}
+	if !strings.Contains(logs.String(), "allow-keyless") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"allow-keyless\")")
+	}
+	if strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"ERRO\")")
 	}
 }
