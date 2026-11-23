@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/matryer/is"
 )
 
 const zeroHash = "0000000000000000000000000000000000000000"
@@ -28,53 +27,73 @@ func (e *testEnv) sender() fakeUser {
 
 func TestGetDefaultBranch(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	path, _ := gitRepo(t)
 
 	branch, err := getDefaultBranch(t.Context(), fakeRepo{path: path})
-	is.NoErr(err)
-	is.Equal(branch, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := branch; got != "main" {
+		t.Fatalf("branch = %v, want %v", got, "main")
+	}
 }
 
 func TestGetDefaultBranchEmptyRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	empty := t.TempDir() + "/empty.git"
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
 
 	// An empty repository has no branch yet: that is not an error.
 	branch, err := getDefaultBranch(t.Context(), fakeRepo{path: empty})
-	is.NoErr(err)
-	is.Equal(branch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := branch; got != "" {
+		t.Fatalf("branch = %v, want %v", got, "")
+	}
 }
 
 // A default branch that cannot be read leaves the payload's field empty but
 // is logged, not dropped silently.
 func TestDefaultBranchLogsError(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	s := NewSender(nil, nil, nil, log.New(&logs))
 
 	branch := s.defaultBranch(t.Context(), fakeRepo{name: "repo1", openErr: errors.New("boom")})
-	is.Equal(branch, "")
-	is.True(strings.Contains(logs.String(), "default branch"))
-	is.True(strings.Contains(logs.String(), "repo1"))
-	is.True(strings.Contains(logs.String(), "boom"))
+	if got := branch; got != "" {
+		t.Fatalf("branch = %v, want %v", got, "")
+	}
+	if !strings.Contains(logs.String(), "default branch") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"default branch\")")
+	}
+	if !strings.Contains(logs.String(), "repo1") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"repo1\")")
+	}
+	if !strings.Contains(logs.String(), "boom") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"boom\")")
+	}
 
 	// An empty repository has no default branch yet: nothing to log.
 	logs.Reset()
 	empty := t.TempDir() + "/empty.git"
 	_ = gitOutput(t, t.TempDir(), "init", "-q", "--bare", empty)
-	is.Equal(s.defaultBranch(t.Context(), fakeRepo{path: empty}), "")
-	is.Equal(logs.String(), "")
+	if got := s.defaultBranch(t.Context(), fakeRepo{path: empty}); got != "" {
+		t.Fatalf("s.defaultBranch(t.Context(), fakeRepo{path: empty}) = %v, want %v", got, "")
+	}
+	if got := logs.String(); got != "" {
+		t.Fatalf("logs.String() = %v, want %v", got, "")
+	}
 }
 
 func TestGetDefaultBranchOpenErrorReturned(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 
 	_, err := getDefaultBranch(t.Context(), fakeRepo{openErr: errors.New("boom")})
-	is.True(err != nil)
-	is.True(strings.Contains(err.Error(), "boom"))
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatal("not true: strings.Contains(err.Error(), \"boom\")")
+	}
 }
