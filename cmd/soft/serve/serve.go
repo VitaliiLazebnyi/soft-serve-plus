@@ -81,7 +81,7 @@ func runServe(ctx context.Context, env *cmd.Env, syncHooks bool) error {
 
 	started := make(chan error, 1)
 	go func() {
-		started <- s.Start()
+		started <- s.Start(ctx)
 	}()
 	// The error the server stopped with is returned only after the
 	// shutdown, which runs either way.

@@ -410,7 +410,7 @@ func loopbackAddr() string {
 // startAsync runs s.Start and returns a channel that receives its result.
 func startAsync(s *Server) <-chan error {
 	errc := make(chan error, 1)
-	go func() { errc <- s.Start() }()
+	go func() { errc <- s.Start(context.Background()) }()
 	return errc
 }
 

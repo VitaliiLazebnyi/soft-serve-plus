@@ -45,7 +45,6 @@ type Server struct {
 	Backend     *backend.Backend
 
 	logger *log.Logger
-	ctx    context.Context
 	// jobCtx is the context the cron jobs run with, and stopJobs cancels it.
 	jobCtx   context.Context
 	stopJobs context.CancelFunc
@@ -98,7 +97,6 @@ func newServer(ctx context.Context, cfg *config.Config, dbx *db.DB, st store.Sto
 		Config:   cfg,
 		Backend:  be,
 		logger:   logger,
-		ctx:      ctx,
 		jobCtx:   jobCtx,
 		stopJobs: stopJobs,
 	}
@@ -312,8 +310,9 @@ func (s *Server) ReloadCertificates() error {
 // server down.
 //
 // Start returns nil without serving if Shutdown or Close has been called, and
-// an error if no server is enabled.
-func (s *Server) Start() error {
+// an error if no server is enabled. ctx bounds the binding of the
+// listeners; Shutdown and Close stop the servers.
+func (s *Server) Start(ctx context.Context) error {
 	type service struct {
 		name   string
 		addr   string
@@ -354,7 +353,7 @@ func (s *Server) Start() error {
 			closeAll()
 			return fmt.Errorf("start %s: listen address is empty", svc.name)
 		}
-		l, err := (&net.ListenConfig{}).Listen(s.ctx, "tcp", svc.addr)
+		l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", svc.addr)
 		if err != nil {
 			closeAll()
 			return fmt.Errorf("start %s: %w", svc.name, err)
