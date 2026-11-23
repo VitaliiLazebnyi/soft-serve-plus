@@ -3,14 +3,24 @@ package ssrf
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
 )
@@ -638,4 +648,800 @@ func TestValidateGitRemoteSSHUserAndZone(t *testing.T) {
 			t.Errorf("ValidateGitRemote(%q) error = %v, want %v", tt.remote, err, tt.err)
 		}
 	}
+}
+
+// minPinGitVersion is the first git with http.curloptResolve. The import gate
+// in pkg/backend (minImportGitVersion) must not admit anything older.
+var minPinGitVersion = git.Version{Major: 2, Minor: 37}
+
+// TestGitEnvPinHonouredByGit runs the installed git against a name under
+// .invalid, which never resolves (RFC 6761), with GitEnv pinning it to a local
+// server. Only a git that honours http.curloptResolve can reach the server; an
+// older one ignores the key silently and fails the lookup, which is the DNS
+// rebinding hole the import gate exists to close.
+func TestGitEnvPinHonouredByGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	v, err := git.BinVersion(t.Context())
+	if err != nil {
+		t.Fatalf("git version: %v", err)
+	}
+	if v.Less(minPinGitVersion) {
+		t.Skipf("git %s predates http.curloptResolve; imports are gated off for it", v)
+	}
+
+	tests := []struct {
+		name    string
+		pin     bool
+		reached bool
+	}{
+		{"pinned", true, true},
+		// The control: without the pin the name must not resolve, or the
+		// pinned case would prove nothing.
+		{"unpinned", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hits atomic.Int32
+			var host atomic.Value
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				host.Store(r.Host)
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(srv.Close)
+
+			_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			remote := "http://pinned.invalid:" + port + "/x.git"
+			u, err := url.Parse(remote)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var r ValidatedGitRemote
+			if tt.pin {
+				r = ValidatedGitRemote{
+					Transport: GitTransportHTTP,
+					Config:    curlResolvePin(u, netip.MustParseAddr("127.0.0.1")),
+				}
+			}
+
+			env := append(isolatedGitEnv(t), GitEnv(r)...)
+			run := func() []byte {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
+				cmd.Env = env
+				out, _ := cmd.CombinedOutput()
+				return out
+			}
+
+			if tt.reached {
+				runUntilReached(t, func() bool { return hits.Load() > 0 }, run)
+			} else if out := run(); hits.Load() > 0 {
+				t.Fatalf("server reached without the pin; git output:\n%s", out)
+			}
+			if tt.reached {
+				if got, want := host.Load(), "pinned.invalid:"+port; got != want {
+					t.Errorf("Host = %v, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// gitReachDeadline bounds how long runUntilReached runs git again.
+const gitReachDeadline = time.Minute
+
+// gitRetryPause is the pause between two runs of runUntilReached.
+const gitRetryPause = 250 * time.Millisecond
+
+// runUntilReached calls run, which runs git against a listener of the test,
+// until reached reports that the listener got git's request, and fails the
+// test if that has not happened within gitReachDeadline.
+//
+// The listeners are on loopback TCP. While many test processes open and close
+// loopback connections, macOS can stall a loopback connect for seconds, fail
+// it with ETIMEDOUT after about 7.8 seconds, or leave git with a socket whose
+// first write fails ("Socket is not connected"). git has to run as a
+// subprocess, so these tests cannot use an in-memory network. A run that
+// never got its request to the listener says nothing about the pin, so it is
+// run again after a short pause.
+//
+// A run that did reach the listener is never repeated: the caller then checks
+// what the listener got, so a request naming the wrong host still fails. A
+// pin that git ignores never reaches the listener either (the remote's name
+// does not resolve), so it fails here once the deadline passes, with git's
+// last output.
+func runUntilReached(t *testing.T, reached func() bool, run func() []byte) {
+	t.Helper()
+	deadline := time.Now().Add(gitReachDeadline)
+	for try := 1; ; try++ {
+		out := run()
+		if reached() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("git did not reach the listener in %d tries over %v; last git output:\n%s", try, gitReachDeadline, out)
+		}
+		t.Logf("try %d: git did not reach the listener, trying again; git output:\n%s", try, out)
+		time.Sleep(gitRetryPause)
+	}
+}
+
+// isolatedGitEnv returns an environment that keeps the developer's git
+// configuration and any proxy out of the test, so git talks to the test
+// server directly.
+func isolatedGitEnv(t *testing.T) []string {
+	t.Helper()
+	home := t.TempDir()
+	global := filepath.Join(home, "gitconfig")
+	if err := os.WriteFile(global, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + home,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + global,
+		"GIT_TERMINAL_PROMPT=0",
+		"NO_PROXY=*",
+		"no_proxy=*",
+	}
+	// PATH and, on Windows, the system variables git needs to start.
+	for _, k := range []string{"PATH", "SYSTEMROOT", "TEMP", "TMP"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
+// TestGitSSHDestinationMatchesValidation runs the installed git with a fake
+// ssh that records its arguments, for ssh remotes ValidateGitRemote accepts,
+// and checks that the destination git hands to ssh is the user and host that
+// were validated. It runs nothing over the network.
+func TestGitSSHDestinationMatchesValidation(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	// The fake ssh is a shell script, which git runs directly.
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake ssh is a shell script")
+	}
+	dir := t.TempDir()
+	fakeSSH := filepath.Join(dir, "ssh")
+	// One argument per line; then fail, so git stops.
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$FAKE_SSH_LOG\"\nexit 1\n"
+	if err := os.WriteFile(fakeSSH, []byte(script), 0o700); err != nil { // an executable script
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		remote string
+		dest   string // the destination argument git must pass
+		port   string // the -p value, or ""
+	}{
+		{"ssh://git@git.example/x.git", "git@git.example", ""},
+		{"ssh://git@git.example:2222/x.git?a#b", "git@git.example", "2222"},
+		{"ssh://g%69t@git.example/x.git", "git@git.example", ""},
+		{"git+ssh://git.example/x.git", "git.example", ""},
+		{"git@git.example:x.git", "git@git.example", ""},
+		{"[git@git.example:2222]:x.git", "git@git.example", "2222"},
+		{"git@git.example:x.git?y#z", "git@git.example", ""},
+	}
+	policy := GitRemotePolicy{AllowAnySSHHost: true, lookup: fakeLookup(nil)}
+	for _, tt := range tests {
+		if _, err := ValidateGitRemote(t.Context(), tt.remote, policy); err != nil {
+			t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)
+			continue
+		}
+		log := filepath.Join(dir, "log")
+		_ = os.Remove(log)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		cmd := exec.CommandContext(ctx, "git", "ls-remote", tt.remote)
+		cmd.Env = append(isolatedGitEnv(t), "GIT_SSH="+fakeSSH, "GIT_SSH_VARIANT=ssh", "FAKE_SSH_LOG="+log)
+		_ = cmd.Run()
+		cancel()
+		out, err := os.ReadFile(log)
+		if err != nil {
+			t.Errorf("%s: fake ssh not run: %v", tt.remote, err)
+			continue
+		}
+		args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		// The destination comes right before the remote command.
+		if len(args) < 2 || args[len(args)-2] != tt.dest {
+			t.Errorf("%s: ssh got %q, want destination %q", tt.remote, args, tt.dest)
+		}
+		port := ""
+		for i, a := range args {
+			if a == "-p" && i+1 < len(args) {
+				port = args[i+1]
+			}
+		}
+		if port != tt.port {
+			t.Errorf("%s: ssh got %q, want port %q", tt.remote, args, tt.port)
+		}
+	}
+}
+
+// TestGitCurlHostMatchesPin runs the installed git, through libcurl, against
+// http remotes of unusual but accepted shapes, with the host pinned to a
+// local server. A name under .invalid never resolves, so the server is
+// reached only if curl's host is the one the pin was written for, which is
+// the host Go validated.
+func TestGitCurlHostMatchesPin(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	v, err := git.BinVersion(t.Context())
+	if err != nil {
+		t.Fatalf("git version: %v", err)
+	}
+	if v.Less(minPinGitVersion) {
+		t.Skipf("git %s predates http.curloptResolve", v)
+	}
+	// A git built without curl has no http transport helper.
+	if !hasGitHTTPHelper(t) {
+		t.Skip("git has no http helper (git-remote-http)")
+	}
+
+	var mu sync.Mutex
+	var hosts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hosts = append(hosts, r.Host)
+		mu.Unlock()
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+
+	for _, remote := range []string{
+		"http://pinned.invalid:" + port + "/x.git",
+		"http://user@pinned.invalid:" + port + "/x.git",
+		"http://u%40x@pinned.invalid:" + port + "/x.git",
+		"http://pinned.invalid:" + port + "/x.git?a#b",
+		"http://PINNED.invalid:" + port + "/x.git",
+	} {
+		u, err := url.Parse(remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkAuthority(remote, u); err != nil {
+			t.Errorf("%s: %v", remote, err)
+			continue
+		}
+		mu.Lock()
+		hosts = nil
+		mu.Unlock()
+		r := ValidatedGitRemote{Transport: GitTransportHTTP, Config: curlResolvePin(u, netip.MustParseAddr("127.0.0.1"))}
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
+		cmd.Env = append(isolatedGitEnv(t), GitEnv(r)...)
+		out, _ := cmd.CombinedOutput()
+		cancel()
+		mu.Lock()
+		got := append([]string(nil), hosts...)
+		mu.Unlock()
+		// Only a missing helper skips; one that runs and fails (such as
+		// "remote helper 'http' aborted session") fails the test.
+		if len(got) == 0 && strings.Contains(string(out), "Unable to find remote helper") {
+			t.Skipf("git cannot run its http helper: %s", out)
+		}
+		if len(got) == 0 || !strings.EqualFold(got[0], u.Host) {
+			t.Errorf("%s: server saw hosts %q, want %q; git output:\n%s", remote, got, u.Host, out)
+		}
+	}
+}
+
+// hasGitHTTPHelper reports whether git's exec path holds git-remote-http,
+// which git runs for http remotes and which a git built without curl lacks.
+func hasGitHTTPHelper(t *testing.T) bool {
+	t.Helper()
+	// The same environment the test runs git with, so the probe sees the
+	// same GIT_EXEC_PATH.
+	cmd := exec.CommandContext(t.Context(), "git", "--exec-path")
+	cmd.Env = isolatedGitEnv(t)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	helper := filepath.Join(strings.TrimSpace(string(out)), "git-remote-http")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	_, err = os.Stat(helper)
+	return err == nil
+}
+
+// TestValidateGitRemoteAuthorityAsGitReadsIt covers remotes whose host part
+// Go's URL parser and git read differently. url.Parse ends the authority at
+// '?' or '#'; git takes everything up to the first '/' and hands it to ssh
+// (percent-decoded) as the destination, or dials it. What Go validated must
+// be exactly what git uses, or the remote is refused.
+func TestValidateGitRemoteAuthorityAsGitReadsIt(t *testing.T) {
+	t.Parallel()
+	lookup := fakeLookup(map[string][]string{
+		"git.example": {"140.82.112.3"},
+	})
+	anyHost := GitRemotePolicy{AllowAnySSHHost: true, lookup: lookup}
+	// ssh splits its destination at the last '@', so the text after '?'
+	// or '#' would pick the host and get past an allowlist naming the
+	// first one.
+	listed := GitRemotePolicy{AllowedSSHHosts: mustAllowedHosts(t, "git.example"), lookup: lookup}
+
+	tests := []struct {
+		remote string
+		policy GitRemotePolicy
+		err    error // nil: accepted
+	}{
+		// git passes the part after '?' or '#' on to ssh.
+		{"ssh://git@git.example#$(id)/x.git", anyHost, ErrInvalidURL},
+		{"ssh://git.example?;id/x.git", anyHost, ErrInvalidURL},
+		{"git+ssh://git@git.example#`id`/x.git", anyHost, ErrInvalidURL},
+		{"ssh+git://git@git.example?;touch${IFS}pwn@evil.example/x.git", anyHost, ErrInvalidURL},
+		{"ssh://git@git.example#@evil.example:2222/x.git", anyHost, ErrInvalidURL},
+		{"ssh://git@git.example?@evil.example/x.git", listed, ErrInvalidURL},
+		{"ssh://git@git.example#@evil.example/x.git", listed, ErrInvalidURL},
+		// The same split for http and git://: git reads the host up to the
+		// first '/'.
+		{"https://git.example?@evil.example/x.git", anyHost, ErrInvalidURL},
+		{"http://git.example#@evil.example/x.git", anyHost, ErrInvalidURL},
+		// Defence in depth: these two git:// rows were already refused by
+		// gitProtocolPin, whose path check sees Go's empty path; the host
+		// part check now refuses them first.
+		{"git://140.82.112.3?@10.0.0.1/x.git", anyHost, ErrInvalidURL},
+		{"git://git.example#@10.0.0.1/x.git", anyHost, ErrInvalidURL},
+		// url.Parse lowercases the scheme; git does not, and would look for
+		// a git-remote-SSH helper rather than run ssh.
+		{"SSH://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"Git+SSH://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"ssh+GIT://git@git.example/x.git", anyHost, ErrInvalidURL},
+		{"HTTPS://git.example/x.git", anyHost, ErrInvalidURL},
+		{"Git://git.example/x.git", anyHost, ErrInvalidURL},
+		// An empty user reaches ssh as "@host".
+		{"ssh://@git.example/x.git", anyHost, ErrInvalidURL},
+		{"@git.example:x.git", anyHost, ErrInvalidURL},
+		// An empty port reaches ssh as part of the host ("git.example:").
+		{"[git@git.example:]:x.git", anyHost, ErrInvalidURL},
+
+		// '?' and '#' after the first '/' are part of the path, for git as
+		// for Go, and percent-encoding reads the same to both.
+		{"ssh://git@git.example/x.git?a#b", anyHost, nil},
+		{"ssh://g%69t@git.example/x.git", anyHost, nil},
+		{"ssh://git@git.example:2222/x.git", anyHost, nil},
+		{"ssh://git@[2606:4700::1]:22/x.git", anyHost, nil},
+		{"ssh://git@git.example/x.git", listed, nil},
+		{"git@git.example:x.git", listed, nil},
+		{"[git@git.example:2222]:x.git", anyHost, nil},
+		{"https://git.example/x.git?a#b", anyHost, nil},
+		{"https://user@git.example:8443/x.git", anyHost, nil},
+		{"git://git.example:9418/x.git", anyHost, nil},
+	}
+	for _, tt := range tests {
+		_, err := ValidateGitRemote(t.Context(), tt.remote, tt.policy)
+		if tt.err == nil {
+			if err != nil {
+				t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)
+			}
+			continue
+		}
+		if !errors.Is(err, tt.err) {
+			t.Errorf("ValidateGitRemote(%q) error = %v, want %v", tt.remote, err, tt.err)
+		}
+	}
+}
+
+// TestValidateGitRemotePinsGitProtocol checks the configuration a git://
+// remote gets: its host as written is rewritten to the validated address.
+func TestValidateGitRemotePinsGitProtocol(t *testing.T) {
+	t.Parallel()
+	policy := GitRemotePolicy{AllowAnySSHHost: true, lookup: fakeLookup(map[string][]string{
+		"git.example": {"140.82.112.3"},
+		"GIT.Example": {"140.82.112.3"},
+		"v6.example":  {"2606:4700::1111"},
+	})}
+	tests := []struct {
+		remote string
+		want   []GitConfigEntry // nil: no configuration
+		err    error
+	}{
+		{"git://git.example/x.git", []GitConfigEntry{{Key: "url.git://140.82.112.3/.insteadOf", Value: "git://git.example/"}}, nil},
+		{"git://git.example:9418/x.git", []GitConfigEntry{{Key: "url.git://140.82.112.3:9418/.insteadOf", Value: "git://git.example:9418/"}}, nil},
+		{"git://GIT.Example:1234/a/b", []GitConfigEntry{{Key: "url.git://140.82.112.3:1234/.insteadOf", Value: "git://GIT.Example:1234/"}}, nil},
+		{"git://v6.example/x.git", []GitConfigEntry{{Key: "url.git://[2606:4700::1111]/.insteadOf", Value: "git://v6.example/"}}, nil},
+		// An IP literal is dialed as is.
+		{"git://140.82.112.3/x.git", nil, nil},
+		{"git://[2606:4700::1111]:9418/x.git", nil, nil},
+		// Shapes whose prefix could miss are refused, not left unpinned.
+		{"git://user@git.example/x.git", nil, ErrInvalidURL},
+		{"git://git.example", nil, ErrInvalidURL},
+		{"git://git.example?q/x.git", nil, ErrInvalidURL},
+		{"git://user@140.82.112.3/x.git", nil, ErrInvalidURL},
+	}
+	for _, tt := range tests {
+		v, err := ValidateGitRemote(t.Context(), tt.remote, policy)
+		if tt.err != nil {
+			if !errors.Is(err, tt.err) {
+				t.Errorf("ValidateGitRemote(%q) error = %v, want %v", tt.remote, err, tt.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)
+			continue
+		}
+		if v.Transport != GitTransportGit || !slices.Equal(v.Config, tt.want) {
+			t.Errorf("ValidateGitRemote(%q) = %v %v, want %v", tt.remote, v.Transport, v.Config, tt.want)
+		}
+	}
+}
+
+// gitDaemonStub accepts git:// connections on one loopback address and
+// records the first pkt-line of each: the request naming the repository and
+// the host git put in its URL (host=...). It answers nothing, so git fails
+// after sending it, which is all these tests need.
+type gitDaemonStub struct {
+	port     string
+	mu       sync.Mutex
+	requests []string
+}
+
+// newGitDaemonStub listens on ip (a loopback literal) at a free port. When
+// skipUnavailable is set, a failure to listen skips the test rather than
+// failing it, for an address family the machine may not have.
+func newGitDaemonStub(t *testing.T, ip string, skipUnavailable bool) *gitDaemonStub {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(ip, "0"))
+	if err != nil {
+		if skipUnavailable {
+			t.Skipf("cannot listen on %s: %v", ip, err)
+		}
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	s := &gitDaemonStub{port: port}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go s.serve(c)
+		}
+	}()
+	return s
+}
+
+func (s *gitDaemonStub) serve(c net.Conn) {
+	defer c.Close() //nolint:errcheck
+	_ = c.SetDeadline(time.Now().Add(time.Minute))
+	var hdr [4]byte
+	if _, err := io.ReadFull(c, hdr[:]); err != nil {
+		return
+	}
+	n, err := strconv.ParseUint(string(hdr[:]), 16, 16)
+	if err != nil || n < 4 {
+		return
+	}
+	line := make([]byte, n-4)
+	if _, err := io.ReadFull(c, line); err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.requests = append(s.requests, string(line))
+	s.mu.Unlock()
+}
+
+// reached reports whether the stub has recorded a request.
+func (s *gitDaemonStub) reached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.requests) > 0
+}
+
+func (s *gitDaemonStub) hosts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, r := range s.requests {
+		for _, f := range strings.Split(r, "\x00") {
+			if h, ok := strings.CutPrefix(f, "host="); ok {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// TestGitEnvPinHonouredForGitProtocol runs the installed git against git://
+// remotes with the configuration gitProtocolPin gives them, and checks where
+// git connected. The pin rewrites the remote to an IP literal before git
+// connects, so git resolves nothing: the listener must be reached, and the
+// request must name the pinned address rather than the remote's name.
+//
+// The tests are hermetic when the pin works: no name is ever looked up, so
+// neither DNS nor the hosts file is involved. If the pin were ignored, git
+// would look the name up itself and either fail (.invalid, RFC 6761) or send
+// host=<name>, and the test fails either way.
+func TestGitEnvPinHonouredForGitProtocol(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	run := func(t *testing.T, remote string, r ValidatedGitRemote) func() []byte {
+		t.Helper()
+		env := append(isolatedGitEnv(t), GitEnv(r)...)
+		return func() []byte {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "git", "ls-remote", remote)
+			cmd.Env = env
+			out, _ := cmd.CombinedOutput()
+			return out
+		}
+	}
+	pinned := func(t *testing.T, remote string, addr netip.Addr) ValidatedGitRemote {
+		t.Helper()
+		u, err := url.Parse(remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pin, err := gitProtocolPin(remote, u, addr)
+		if err != nil || len(pin) != 1 {
+			t.Fatalf("gitProtocolPin(%q) = %v, %v; want one entry", remote, pin, err)
+		}
+		return ValidatedGitRemote{Transport: GitTransportGit, Config: pin}
+	}
+
+	tests := []struct {
+		name string
+		ip   string // the listener's and the pin's address
+		host string // the remote's host, before the port
+		want string // host= expected, before the port
+		v6   bool
+	}{
+		// A name with no address at all.
+		{"name that does not resolve", "127.0.0.1", "pinned.invalid", "127.0.0.1", false},
+		// A name that would resolve to something of its own: the pin
+		// outranks whatever that answer is.
+		{"name that resolves", "127.0.0.1", "localhost", "127.0.0.1", false},
+		// An IPv6 pin is bracketed in the rewritten URL.
+		{"IPv6 address", "::1", "pinned.invalid", "[::1]", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newGitDaemonStub(t, tt.ip, tt.v6)
+			remote := "git://" + tt.host + ":" + s.port + "/x.git"
+			runUntilReached(t, s.reached, run(t, remote, pinned(t, remote, netip.MustParseAddr(tt.ip))))
+			if got, want := s.hosts(), []string{tt.want + ":" + s.port}; !slices.Equal(got, want) {
+				t.Fatalf("requests named %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// proxyEnvNames are the variables through which the server's environment
+// could route a git subprocess through a proxy.
+var proxyEnvNames = []string{
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+	"GIT_PROXY_COMMAND", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "HOME",
+}
+
+// serverEnv returns the test process's environment without any proxy
+// settings or git configuration of its own, plus extra, standing in for the
+// environment a server runs git with.
+func serverEnv(t *testing.T, extra ...string) []string {
+	t.Helper()
+	var env []string
+	for _, e := range os.Environ() {
+		name, _, _ := strings.Cut(e, "=")
+		drop := false
+		for _, p := range proxyEnvNames {
+			if strings.EqualFold(name, p) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			env = append(env, e)
+		}
+	}
+	home := t.TempDir()
+	return append(env, append([]string{
+		"HOME=" + home,
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+	}, extra...)...)
+}
+
+// countingListener accepts and immediately closes connections, counting them.
+func countingListener(t *testing.T) (addr string, count *atomic.Int32) {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	count = new(atomic.Int32)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			count.Add(1)
+			_ = c.Close()
+		}
+	}()
+	return ln.Addr().String(), count
+}
+
+// runGit runs git with env in dir (a new temporary directory if empty) and
+// returns its output, ignoring the outcome: the remotes here are not real
+// repositories, so only where git connected matters.
+func runGit(t *testing.T, env []string, dir string, args ...string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, _ := cmd.CombinedOutput()
+	t.Logf("git %s: %s", strings.Join(args, " "), out)
+	return out
+}
+
+// TestGitEnvBypassesProxy covers a proxy in the server's environment or git
+// configuration. A proxy resolves the remote's hostname itself, so the
+// validated address pin never applies and the fetch reaches whatever the
+// proxy can; GitEnv must make git connect directly.
+func TestGitEnvBypassesProxy(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	// Each case sets a proxy one way git can be told to use one, and runs
+	// git against http://pinned.invalid:<port>/org/repo.git, which the
+	// remote pins to the origin.
+	for _, tc := range []struct {
+		name string
+		// gitconfig is the global git configuration, with %[1]s for the
+		// proxy URL and %[2]d for the origin's port.
+		gitconfig string
+		// env is extra server environment, with %s for the proxy URL.
+		env []string
+		// user is the user name in the remote URL, if any.
+		user string
+		// run is how git reaches the remote: "ls-remote" (the default),
+		// "clone" as an import does, or "fetch" from a remote named
+		// upstream as a mirror sync does. The last two read
+		// remote.<name>.proxy.
+		run string
+	}{
+		{name: "environment", env: []string{"http_proxy=%s", "ALL_PROXY=%s"}},
+		{name: "http.proxy", gitconfig: "[http]\n\tproxy = %[1]s\n"},
+		// git picks among URL-scoped keys by specificity, not order, so
+		// these outrank a plain empty http.proxy.
+		{name: "url-scoped http.proxy", gitconfig: "[http \"http://pinned.invalid:%[2]d/org/repo.git\"]\n\tproxy = %[1]s\n"},
+		{name: "wildcard http.proxy", gitconfig: "[http \"http://*.invalid:%[2]d\"]\n\tproxy = %[1]s\n"},
+		{
+			name:      "user-scoped http.proxy",
+			gitconfig: "[http \"http://alice@pinned.invalid:%[2]d/org/repo.git\"]\n\tproxy = %[1]s\n",
+			user:      "alice:secret",
+		},
+		{
+			name:      "remote.<name>.proxy on clone",
+			gitconfig: "[clone]\n\tdefaultRemoteName = upstream\n[remote \"upstream\"]\n\tproxy = %[1]s\n",
+			run:       "clone",
+		},
+		{
+			name:      "remote.<name>.proxy on fetch",
+			gitconfig: "[remote \"upstream\"]\n\tproxy = %[1]s\n",
+			run:       "fetch",
+		},
+	} {
+		t.Run("http/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			var originHits atomic.Int32
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				originHits.Add(1)
+				http.NotFound(w, nil)
+			}))
+			t.Cleanup(origin.Close)
+			port := origin.Listener.Addr().(*net.TCPAddr).Port
+
+			proxyAddr, proxyHits := countingListener(t)
+			proxyURL := "http://" + proxyAddr
+
+			var extra []string
+			for _, e := range tc.env {
+				extra = append(extra, fmt.Sprintf(e, proxyURL))
+			}
+			env := serverEnv(t, extra...)
+			if tc.gitconfig != "" {
+				cfg := fmt.Sprintf(tc.gitconfig, proxyURL, port)
+				if err := os.WriteFile(gitConfigGlobal(env), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			remote := &url.URL{Scheme: "http", Host: fmt.Sprintf("pinned.invalid:%d", port), Path: "/org/repo.git"}
+			if user, pass, ok := strings.Cut(tc.user, ":"); ok {
+				remote.User = url.UserPassword(user, pass)
+			}
+			v := validatedHTTPRemote(remote, netip.MustParseAddr("127.0.0.1"))
+			var run func() []byte
+			switch tc.run {
+			case "clone":
+				env = append(env, GitEnv(v.ForClone())...)
+				run = func() []byte {
+					return runGit(t, env, "", "clone", "--mirror", remote.String(), filepath.Join(t.TempDir(), "repo.git"))
+				}
+			case "fetch":
+				env = append(env, GitEnv(v.Named("upstream"))...)
+				dir := t.TempDir()
+				runGit(t, env, dir, "init", "--bare")
+				runGit(t, env, dir, "remote", "add", "upstream", remote.String())
+				run = func() []byte { return runGit(t, env, dir, "fetch", "upstream") }
+			default:
+				env = append(env, GitEnv(v)...)
+				run = func() []byte { return runGit(t, env, "", "ls-remote", remote.String()) }
+			}
+			// A run that went through the proxy counts as reached, so it
+			// is not repeated and fails below.
+			runUntilReached(t, func() bool { return originHits.Load() > 0 || proxyHits.Load() > 0 }, run)
+
+			if n := proxyHits.Load(); n != 0 {
+				t.Errorf("git connected to the proxy %d times, want none", n)
+			}
+			if originHits.Load() == 0 {
+				t.Error("git never reached the pinned origin")
+			}
+		})
+	}
+
+	t.Run("git", func(t *testing.T) {
+		t.Parallel()
+		daemonAddr, daemonHits := countingListener(t)
+
+		// A proxy command that cannot run: if git uses it, it never reaches
+		// the daemon.
+		env := serverEnv(t, "GIT_PROXY_COMMAND=soft-serve-no-such-proxy-command")
+		env = append(env, GitEnv(ValidatedGitRemote{Transport: GitTransportGit})...)
+
+		runUntilReached(t, func() bool { return daemonHits.Load() > 0 }, func() []byte {
+			return runGit(t, env, "", "ls-remote", "git://"+daemonAddr+"/repo.git")
+		})
+
+		if daemonHits.Load() == 0 {
+			t.Error("git did not connect to the remote directly")
+		}
+	})
+}
+
+// gitConfigGlobal returns the GIT_CONFIG_GLOBAL path set in env.
+func gitConfigGlobal(env []string) string {
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "GIT_CONFIG_GLOBAL="); ok {
+			return v
+		}
+	}
+	return ""
 }
