@@ -95,6 +95,11 @@ func stuckSSHServer(t *testing.T) string {
 func TestCommandTimeout(t *testing.T) {
 	// Not parallel: it lowers commandTimeout, which every command reads.
 	// Parallel tests start only once it is done.
+	//
+	// 3 s is not a budget: every command these scripts run is meant to
+	// hang, so nothing has to finish inside it, and on a slow machine the
+	// bound fires all the same. The only other timer, ui -wait's
+	// uiWaitTimeout, is a minute, and hang below waits longer still.
 	saved := commandTimeout
 	commandTimeout = 3 * time.Second
 	t.Cleanup(func() { commandTimeout = saved })

@@ -108,11 +108,15 @@ func TestReceivePackMaintenanceDoesNotDetach(t *testing.T) {
 				t.Fatalf("push not accepted: %q\n%s", out.String(), stderr.String())
 			}
 
-			// A detached process is re-parented before receive-pack
-			// exits; give a slow one time all the same. Where one is
-			// wanted, wait for it up to a minute. Where none is, a second
-			// is a check that none appeared, which load can only make
-			// pass.
+			// A detached process is this process's child by the time the
+			// handler returns, however slow the machine: receive-pack waits
+			// for "git maintenance run --auto" (finish_command) before it
+			// exits, a detaching maintenance forks before its parent exits,
+			// and the kernel re-parents the fork to this subreaper before
+			// that exit can be waited for. So the first orphans call after
+			// the handler is already the check; the second of polling where
+			// none is wanted only adds to it, and it is not a budget that
+			// load could make pass. Where one is wanted, wait up to a minute.
 			wait := time.Second
 			if tc.wantOrphan {
 				wait = time.Minute

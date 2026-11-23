@@ -254,7 +254,10 @@ func TestRunMirrorGitStalledRemote(t *testing.T) {
 	})
 
 	// The sync's deadline stops the command, as it would a mirror whose
-	// sync runs out of time.
+	// sync runs out of time. The second is not a budget: the remote never
+	// sends the body it announced, so git cannot finish however long it
+	// runs, and once ctx is done RunRemoteGit wraps ctx's error in whatever
+	// git ended with, even if it had not started yet.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second) // meant to run out: the command stalls
 	defer cancel()
 	done := make(chan error, 1)
