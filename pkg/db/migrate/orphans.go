@@ -46,13 +46,12 @@ var loggedIDTables = map[string]bool{"public_keys": true, "access_tokens": true,
 // removeSqliteOrphans removes the rows of a SQLite database that refer to a
 // row that does not exist, before any pending migration runs.
 //
-// Foreign keys used to be enforced only by the default data source, so a
-// database used with a data source that left them off can hold such rows:
-// the keys and tokens of a deleted user, the collaborators, webhooks, LFS
-// objects and locks of a deleted repository, the deliveries of a deleted
-// webhook. With foreign keys now always enforced, they made the first
-// migration that copies a table fail, and an orphaned key could not be added
-// to another user.
+// A database used by an older server with a data source that left foreign
+// keys off can hold such rows: the keys and tokens of a deleted user, the
+// collaborators, webhooks, LFS objects and locks of a deleted repository,
+// the deliveries of a deleted webhook. db.Open always enforces foreign keys,
+// so such rows would make the first migration that copies a table fail, and
+// an orphaned key could not be added to another user.
 //
 // A repository whose owner was deleted is still a repository, with a
 // directory, so it is given to the first admin, and its name and former

@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
 
-// Error aliases for backward compatibility.
+// The URL errors of pkg/ssrf, under the names callers of this package use.
 var (
 	ErrInvalidScheme = ssrf.ErrInvalidScheme
 	ErrPrivateIP     = ssrf.ErrPrivateIP

@@ -131,8 +131,8 @@ func (s *Sender) NewPushEvent(ctx context.Context, user proto.User, repo proto.R
 	}
 
 	commits, err := r.Log(rev, git.LogOptions{
-		// XXX: limit to 20 commits for now
-		// TODO: implement a commits api
+		// A push event lists at most the 20 newest commits; there is no
+		// API to page through the rest.
 		MaxCount: 20,
 		Args:     args,
 	})

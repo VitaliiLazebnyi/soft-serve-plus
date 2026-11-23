@@ -1,3 +1,4 @@
+// Package keymap holds the TUI's key bindings.
 package keymap
 
 import "charm.land/bubbles/v2/key"

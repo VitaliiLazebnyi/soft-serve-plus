@@ -1,3 +1,5 @@
+// Package testscript runs the end-to-end tests in testdata: each script
+// starts a real soft serve and drives it with ssh, git and git-lfs.
 package testscript
 
 import (

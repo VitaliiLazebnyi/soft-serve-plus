@@ -1,3 +1,5 @@
+// Package webhook builds, signs, sends and records the server's webhook
+// events.
 package webhook
 
 import (
@@ -107,9 +109,8 @@ const (
 	// Every recorded delivery deletes the older ones, so events, including
 	// ones recorded without sending when the queue is full, cannot grow the
 	// deliveries table without limit. Migration 5
-	// (pkg/db/migrate/0005_webhook_delivery_retention_*.up.sql) trimmed
-	// existing tables once to the then value, 100; it is a snapshot and
-	// does not follow later changes here.
+	// (pkg/db/migrate/0005_webhook_delivery_retention_*.up.sql) trims to a
+	// literal 100 and does not follow this constant.
 	defaultMaxDeliveries = 100
 )
 
@@ -679,10 +680,8 @@ func (s *Sender) defaultBranch(ctx context.Context, repo proto.Repository) strin
 
 func getDefaultBranch(ctx context.Context, repo proto.Repository) (string, error) {
 	branch, err := proto.RepositoryDefaultBranch(ctx, repo)
-	// XXX: we check for ErrReferenceNotExist here because we don't want to
-	// return an error if the repo is an empty repo.
-	// This means that the repo doesn't have a default branch yet and this is
-	// the first push to it.
+	// An empty repository, as before its first push, has no default branch
+	// yet: that is "" and no error.
 	if err != nil && !errors.Is(err, git.ErrReferenceNotExist) {
 		return "", err
 	}

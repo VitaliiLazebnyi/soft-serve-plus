@@ -1,3 +1,4 @@
+// Package footer is the TUI component that shows the key help.
 package footer
 
 import (

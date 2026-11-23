@@ -1,3 +1,5 @@
+// Package db opens the server's SQLite or Postgres database and runs
+// queries and transactions on it, with tracing and its own error values.
 package db
 
 import (

@@ -25,8 +25,8 @@ import (
 // session, or a git command left waiting for the client's input, pauses the
 // clock indefinitely. Nothing here bounds that; max_timeout does, and it
 // defaults to 6 hours (config.DefaultMaxTimeout). What this does bound is
-// the keepalive-only attack of SSH-9, where a connection that runs no
-// command holds its place for as long as it likes.
+// a connection that runs no command and only answers keepalives, which
+// would otherwise hold its place for as long as it likes.
 const noAccountLifetime = 10 * time.Minute
 
 // connLifetimeKey is the connection context key of the connection's

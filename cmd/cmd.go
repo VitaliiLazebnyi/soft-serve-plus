@@ -1,3 +1,6 @@
+// Package cmd holds what the soft subcommands that act on the server's data
+// share: loading the config and logger, and opening the database, store and
+// backend for them.
 package cmd
 
 import (
@@ -55,12 +58,12 @@ type Env struct {
 
 // OpenEnv loads the config and logger with load and opens the database,
 // store and backend for them. A Loader that gives no config is
-// config.ErrNilConfig; no logger is log.Default(). With create, as for serve, it creates the
-// data directory and the database when they do not exist yet. Without it,
-// as for the maintenance commands (admin migrate, rollback and sync-hooks),
-// it refuses to run when the data directory or the SQLite database does not
-// exist, rather than create an empty one and act on it while the server's
-// real one is elsewhere (R46).
+// config.ErrNilConfig; no logger is log.Default(). With create, as for
+// serve, it creates the data directory and the database when they do not
+// exist yet. Without it, as for the maintenance commands (admin migrate,
+// rollback and sync-hooks), it refuses to run when the data directory or
+// the SQLite database does not exist, rather than create an empty one and
+// act on it while the server's real one is elsewhere.
 func OpenEnv(ctx context.Context, load Loader, create bool) (*Env, error) {
 	cfg, logger, closeLog, err := load()
 	if err != nil {
@@ -202,7 +205,7 @@ func sqliteFile(dsn string) string {
 // InitializeHooks writes the hooks of every repository. A repository whose
 // directory is missing is skipped with a warning: writing its hooks would
 // create a directory holding only hooks/, which the server then takes for
-// the repository (R47). A repository whose hooks cannot be written does not
+// the repository. A repository whose hooks cannot be written does not
 // stop the others; the errors are returned together.
 func InitializeHooks(ctx context.Context, cfg *config.Config, be *backend.Backend, logger *log.Logger) error {
 	if logger == nil {

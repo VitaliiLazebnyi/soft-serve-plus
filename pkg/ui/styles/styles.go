@@ -1,3 +1,4 @@
+// Package styles holds the TUI's lipgloss styles.
 package styles
 
 import (

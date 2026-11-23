@@ -23,6 +23,7 @@ func (s *server) serviceLfsLocks(w http.ResponseWriter, r *http.Request, gr *git
 	}
 }
 
+// serviceLfsLocksCreate creates a lock.
 // POST: /<repo>.git/info/lfs/locks
 func (s *server) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r, gr.logger) {
@@ -125,6 +126,7 @@ func locksLimit(limit int) (int, error) {
 	return lfs.ClampLocksLimit(limit), nil
 }
 
+// serviceLfsLocksGet lists locks.
 // GET: /<repo>.git/info/lfs/locks
 func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsAccepts(w, r, gr.logger) {
@@ -132,7 +134,8 @@ func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *
 	}
 
 	ctx := r.Context()
-	// TODO: respect refspec
+	// The refspec parameter is ignored: every lock of the repository is
+	// listed, whatever ref it was created on.
 	values := r.URL.Query()
 	path := values.Get("path")
 	var id int64
@@ -263,6 +266,7 @@ func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *
 	renderJSON(w, gr.logger, http.StatusOK, resp)
 }
 
+// serviceLfsLocksVerify lists the locks of the caller and of others, for a push.
 // POST: /<repo>.git/info/lfs/locks/verify
 func (s *server) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r, gr.logger) {
@@ -286,7 +290,8 @@ func (s *server) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	// TODO: refspec
+	// The request's ref is ignored, as in the lock list: every lock of the
+	// repository counts.
 	cursor, err := lfs.ParseLocksCursor(req.Cursor)
 	if err != nil {
 		renderJSON(w, gr.logger, http.StatusBadRequest, lfs.ErrorResponse{
@@ -343,6 +348,7 @@ func (s *server) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request, g
 	renderJSON(w, gr.logger, http.StatusOK, resp)
 }
 
+// serviceLfsLocksDelete deletes a lock.
 // POST: /<repo>.git/info/lfs/locks/:lockID/unlock
 func (s *server) serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r, gr.logger) {

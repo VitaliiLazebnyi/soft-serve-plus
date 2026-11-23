@@ -29,8 +29,8 @@ func (r *logWriter) Write(p []byte) (int, error) {
 	return written, err
 }
 
-// Note this is generally only called when sending an HTTP error, so it's
-// important to set the `code` value to 200 as a default.
+// WriteHeader records code for the request log. A handler that never calls
+// it answers 200, the code logWriter starts with.
 func (r *logWriter) WriteHeader(code int) {
 	r.code = code
 	r.ResponseWriter.WriteHeader(code)

@@ -1,3 +1,6 @@
+// Package common holds what the TUI's components share: the session's
+// dependencies, the component interfaces, error and load messages, and
+// rendering helpers.
 package common
 
 import (

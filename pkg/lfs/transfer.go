@@ -1,3 +1,6 @@
+// Package lfs implements Git LFS for the server: pointers and their
+// scanning, the batch and locks API types, storing verified objects, and a
+// client that fetches the objects of mirrors.
 package lfs
 
 // TransferBasic is the name of the Git LFS basic transfer protocol.

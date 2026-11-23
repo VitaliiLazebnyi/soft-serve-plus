@@ -15,8 +15,8 @@ import (
 )
 
 // errMaxConnectionsPerIP is returned by connections.Add for a connection
-// over its address's share. It wraps git.ErrMaxConnections, which is what the
-// client is told.
+// over its address's share. It wraps gitserve.ErrMaxConnections, which is
+// what the client is told.
 var errMaxConnectionsPerIP = fmt.Errorf("%w from one address", gitserve.ErrMaxConnections)
 
 // connections is a net.Conn pool that is safe for concurrent use. It counts
@@ -55,7 +55,7 @@ func clientPrefix(addr net.Addr) (netip.Prefix, bool) {
 }
 
 // Add adds c to the pool unless the pool already holds limit connections,
-// which returns git.ErrMaxConnections, or perAddr connections from c's
+// which returns gitserve.ErrMaxConnections, or perAddr connections from c's
 // address, which returns errMaxConnectionsPerIP, or CloseAll has run, which
 // returns ErrServerClosed. A perAddr of 0 sets no per-address limit.
 // Checking and adding under one lock keeps a burst of connections from all

@@ -1,3 +1,8 @@
+// Command soft is the Soft Serve Plus binary: it runs the server (soft
+// serve), its maintenance commands (soft admin) and a local repository
+// browser (soft browse). Its hook commands (soft hook) are run only by the
+// hook scripts of a repository whose hooks an older server generated, until
+// soft admin sync-hooks replaces them with scripts that call no soft process.
 package main
 
 import (
@@ -175,8 +180,7 @@ func run(ctx context.Context, args []string) int {
 		}
 	}
 
-	// GOMAXPROCS is left to the Go runtime: since Go 1.25 it follows the
-	// container's cgroup CPU limit and updates it when the limit changes.
+	// GOMAXPROCS is left to the runtime, which follows the cgroup CPU limit.
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		return 1

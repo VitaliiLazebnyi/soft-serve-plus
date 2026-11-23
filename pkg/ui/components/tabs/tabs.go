@@ -1,3 +1,4 @@
+// Package tabs is the TUI component for a row of tabs.
 package tabs
 
 import (

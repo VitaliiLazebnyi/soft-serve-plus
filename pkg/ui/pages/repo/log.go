@@ -140,7 +140,7 @@ func (l *Log) Path() string {
 	case logViewCommits:
 		return ""
 	default:
-		return "diff" // XXX: this is a place holder and doesn't mean anything
+		return "diff" // any non-empty path: a commit's diff is open
 	}
 }
 

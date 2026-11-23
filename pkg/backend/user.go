@@ -452,8 +452,7 @@ func (d *Backend) UserByAccessToken(ctx context.Context, token string) (proto.Us
 			return proto.ErrTokenExpired
 		}
 
-		// The token row names its user, so look the user up by ID instead
-		// of matching the token a second time.
+		// The token row names its user; look the user up by that ID.
 		m, err = d.store.GetUserByID(ctx, tx, t.UserID)
 		if err != nil {
 			return err

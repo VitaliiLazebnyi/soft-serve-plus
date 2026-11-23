@@ -1,3 +1,4 @@
+// Package viewport is the TUI component for scrollable text.
 package viewport
 
 import (

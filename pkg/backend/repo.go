@@ -1818,8 +1818,8 @@ func (r *repo) UpdatedAt() time.Time {
 
 // populateLastModified writes the time of the latest commit of the
 // repository name to its info/last-modified, where UpdatedAt reads it.
-// The post-update hook calls it after a push; an import and a mirror sync
-// run no hooks, so they call it themselves.
+// AfterPush calls it after a push that updated refs; an import and a mirror
+// sync call it themselves.
 //
 // A repository without refs, such as an empty import or mirror, has no
 // commit to date: there is nothing to record, and UpdatedAt keeps falling

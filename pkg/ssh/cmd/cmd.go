@@ -1,3 +1,5 @@
+// Package cmd holds the commands an SSH session runs, such as repo,
+// user, token and webhook, and the git and LFS commands they dispatch to.
 package cmd
 
 import (

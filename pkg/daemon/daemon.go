@@ -1,3 +1,4 @@
+// Package daemon serves repositories over the git:// protocol, read-only.
 package daemon
 
 import (
@@ -269,7 +270,7 @@ const (
 // Such a connection is not counted against max_connections, so at most
 // maxRefusing of them are refused this way at once, which bounds the file
 // descriptors they hold; past that, c gets the error and is closed at once,
-// and the client may lose the error to a reset as it did before.
+// and the client may lose the error to a reset.
 func (d *Server) refuseAsync(c *serverConn, err error) {
 	select {
 	case d.refusing <- struct{}{}:

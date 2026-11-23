@@ -1,3 +1,5 @@
+// Package database implements store.Store with SQL that runs on both SQLite
+// and Postgres.
 package database
 
 import (

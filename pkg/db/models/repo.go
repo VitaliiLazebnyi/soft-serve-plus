@@ -1,3 +1,4 @@
+// Package models holds the database rows as Go structs.
 package models
 
 import (

@@ -1,3 +1,8 @@
+// Package backend is the server's business logic. The SSH, HTTP and git
+// daemon transports, the TUI and the jobs call it to read and change
+// repositories, users, collaborators, settings, access tokens, LFS objects
+// and webhooks; it decides who may do what and keeps the database and the
+// repository directories in step.
 package backend
 
 import (
