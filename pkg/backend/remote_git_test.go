@@ -20,7 +20,7 @@ func TestRunRemoteGitRedactsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close() //nolint:errcheck,gosec
+	ln.Close() //nolint:errcheck
 
 	err = RunRemoteGit(t.Context(), t.TempDir(), nil, "ls-remote", "--", "http://user:secret@"+addr+"/x.git?token=abc")
 	if err == nil {

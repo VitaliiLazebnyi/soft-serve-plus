@@ -44,7 +44,7 @@ func TestSSHServerRefusesOverlongCommand(t *testing.T) {
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {

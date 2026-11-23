@@ -87,7 +87,7 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 		Auth: []gossh.AuthMethod{gossh.KeyboardInteractive(func(string, string, []string, []bool) ([]string, error) {
 			return nil, nil
 		})},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	is.NoErr(sess.Run(""))
 	gotAllowed, gotRefused := publicKeyCounts()

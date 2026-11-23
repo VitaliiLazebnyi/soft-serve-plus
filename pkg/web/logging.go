@@ -61,7 +61,7 @@ func newLoggingMiddleware(next http.Handler, logger *log.Logger) http.Handler {
 		elapsed := time.Since(start)
 		logger.Debug("response",
 			"status", fmt.Sprintf("%d %s", writer.code, http.StatusText(writer.code)),
-			"bytes", humanize.Bytes(uint64(writer.bytes)), //nolint:gosec
+			"bytes", humanize.Bytes(uint64(writer.bytes)), //nolint:gosec // a sum of byte counts Write returned, never negative
 			"time", elapsed)
 	})
 }

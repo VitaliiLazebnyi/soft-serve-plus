@@ -49,7 +49,7 @@ func gitLog(t *testing.T) func(sub string) int {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "git.log")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\nexec '" + real + "' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable script
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o700); err != nil { // an executable script
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

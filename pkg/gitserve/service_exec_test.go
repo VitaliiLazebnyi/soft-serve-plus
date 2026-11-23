@@ -346,14 +346,14 @@ func quarantineBytes(t *testing.T, dir string) int64 {
 		// A file can go while the walk runs; what is left still counts.
 		_ = filepath.WalkDir(q, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
-				return nil //nolint: nilerr // see above
+				return nil // see above
 			}
 			// The size from the open file, not from the directory
 			// listing: NTFS updates a listed size lazily, so the
 			// pack index-pack is writing can be listed as empty.
 			f, err := os.Open(path)
 			if err != nil {
-				return nil //nolint: nilerr // see above
+				return nil // see above
 			}
 			defer f.Close() //nolint: errcheck
 			if info, err := f.Stat(); err == nil {

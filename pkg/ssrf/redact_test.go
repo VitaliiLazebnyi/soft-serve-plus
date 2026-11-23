@@ -67,7 +67,7 @@ func TestRedactURLError(t *testing.T) {
 	}
 
 	other := errors.New("other")
-	if got := RedactURLError(other, RedactURL); got != other { //nolint:errorlint
+	if got := RedactURLError(other, RedactURL); got != other {
 		t.Errorf("other error = %v, want it unchanged", got)
 	}
 	if got := RedactURLError(nil, RedactURL); got != nil {

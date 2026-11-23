@@ -44,7 +44,7 @@ func superviseIfInit() {
 		// The server must outlive any context: it stops when it is sent
 		// a signal, never because this process gave up on it.
 		newChild := func() *exec.Cmd {
-			child := exec.CommandContext(context.Background(), exe, os.Args[1:]...)
+			child := exec.CommandContext(context.Background(), exe, os.Args[1:]...) //nolint:gosec // this binary again, with the arguments it was started with
 			child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return child
 		}

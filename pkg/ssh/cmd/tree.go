@@ -100,7 +100,7 @@ func printEntries(cmd *cobra.Command, ents git.Entries) {
 	for _, ent := range ents {
 		ssize := "-"
 		if size := ent.Size(); size != 0 {
-			ssize = humanize.Bytes(uint64(size)) //nolint:gosec
+			ssize = humanize.Bytes(uint64(size)) //nolint:gosec // a blob's size is never negative
 		}
 		cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, termtext.Filename(ent.Name()))
 	}

@@ -37,7 +37,7 @@ func TestGitSSHDestinationMatchesValidation(t *testing.T) {
 	fakeSSH := filepath.Join(dir, "ssh")
 	// One argument per line; then fail, so git stops.
 	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$FAKE_SSH_LOG\"\nexit 1\n"
-	if err := os.WriteFile(fakeSSH, []byte(script), 0o700); err != nil { //nolint:gosec // an executable script
+	if err := os.WriteFile(fakeSSH, []byte(script), 0o700); err != nil { // an executable script
 		t.Fatal(err)
 	}
 

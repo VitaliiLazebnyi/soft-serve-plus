@@ -300,7 +300,7 @@ func dialWith(t *testing.T, addr string, kex, ciphers, macs []string) error {
 		},
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {
@@ -351,7 +351,7 @@ func dialWithSigner(addr string, signer gossh.Signer) error {
 	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err == nil {

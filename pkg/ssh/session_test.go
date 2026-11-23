@@ -136,7 +136,7 @@ func TestBubbleTeaMiddlewareClosesZoneManager(t *testing.T) {
 	cc, chans, reqs, err := gossh.NewClientConn(conn, addr, &gossh.ClientConfig{
 		User:            "testuser",
 		Auth:            []gossh.AuthMethod{gossh.Password("testpass")},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
 
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +568,7 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {

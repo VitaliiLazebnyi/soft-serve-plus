@@ -8,7 +8,7 @@ linters:
     # - godox
     # - gomoddirectives
     - goprintffuncname
-    # - gosec
+    - gosec
     - misspell
     # - nakedret
     # - nestif
@@ -25,6 +25,11 @@ linters:
     - whitespace
     # - wrapcheck
   settings:
+    gosec:
+      excludes:
+        # Unchecked errors: errcheck is on and reports them, with its own
+        # exclusions and nolint comments; G104 would report each one again.
+        - G104
     staticcheck:
       checks:
         # golangci-lint's defaults.
@@ -40,11 +45,22 @@ linters:
   exclusions:
     generated: lax
     presets:
+      # This preset also hides gosec's G103, G204 and G304. The 15 findings
+      # it hides outside test files were reviewed as false positives: git
+      # run with argument lists, the operator's custom hook, and paths the
+      # operator configures or the server owns.
       - common-false-positives
     rules:
       - text: '(slog|log)\.\w+'
         linters:
           - noctx
+      # Test code: it runs commands built from test constants, writes
+      # fixtures under t.TempDir with whatever modes the case needs, carries
+      # fake credentials and test-only host-key callbacks, and never runs in
+      # a server. gosec's findings there are all of those kinds.
+      - path: _test\.go
+        linters:
+          - gosec
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

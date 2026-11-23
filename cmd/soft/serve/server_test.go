@@ -812,7 +812,7 @@ func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
 		client, err = gossh.Dial("tcp", addr, &gossh.ClientConfig{
 			User:            "test",
 			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-			HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec // test server
+			HostKeyCallback: gossh.InsecureIgnoreHostKey(), // test server
 			Timeout:         time.Minute,
 		})
 		if err == nil {

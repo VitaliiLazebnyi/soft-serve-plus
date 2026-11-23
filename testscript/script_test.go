@@ -861,7 +861,7 @@ func newWebhookReceiver(ctx context.Context) (*webhookReceiver, error) {
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	r.srv = &http.Server{ //nolint:gosec // a test receiver; every request is answered at once
+	r.srv = &http.Server{ // a test receiver; every request is answered at once
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			_, _ = io.Copy(io.Discard, req.Body)
 			r.mu.Lock()

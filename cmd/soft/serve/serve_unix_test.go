@@ -23,7 +23,7 @@ import (
 func servedCertCN(addr string) (string, error) {
 	d := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 5 * time.Second}, // one attempt; waitServedCert retries for a minute
-		Config:    &tls.Config{InsecureSkipVerify: true}, //nolint: gosec // self-signed test certificate
+		Config:    &tls.Config{InsecureSkipVerify: true}, // self-signed test certificate
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // one attempt; waitServedCert retries for a minute
 	defer cancel()

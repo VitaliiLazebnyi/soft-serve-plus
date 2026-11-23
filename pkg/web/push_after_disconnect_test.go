@@ -23,7 +23,7 @@ func commitInRepo(t *testing.T, dir string) string {
 	t.Helper()
 	run := func(stdin string, args ...string) string {
 		t.Helper()
-		cmd := exec.CommandContext(t.Context(), "git", append([]string{"--git-dir", dir}, args...)...) //nolint:gosec
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"--git-dir", dir}, args...)...)
 		cmd.Env = append(os.Environ(),
 			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
@@ -77,7 +77,7 @@ func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 			t.Error("receive-pack got no refs file")
 			return context.Canceled
 		}
-		ref := exec.CommandContext(t.Context(), "git", "--git-dir", dir, "update-ref", "refs/heads/main", commit) //nolint:gosec
+		ref := exec.CommandContext(t.Context(), "git", "--git-dir", dir, "update-ref", "refs/heads/main", commit)
 		ref.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 		if err := ref.Run(); err != nil {
 			t.Errorf("update-ref: %v", err)

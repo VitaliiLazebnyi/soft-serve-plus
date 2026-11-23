@@ -63,7 +63,7 @@ func TestSecureClientRefusesBlockedLiterals(t *testing.T) {
 			_ = conn.Close()
 		}
 		// Bare, so the delivery record does not name the address refused.
-		if err != ErrPrivateIP { //nolint:errorlint // the bare sentinel is the point
+		if err != ErrPrivateIP { // the bare sentinel is the point
 			t.Errorf("dial %s: err = %v, want exactly ErrPrivateIP", addr, err)
 		}
 	}

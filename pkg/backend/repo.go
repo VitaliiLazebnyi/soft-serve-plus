@@ -308,7 +308,7 @@ func (d *Backend) createRepository(ctx context.Context, name string, user proto.
 // makes this safe on case- and normalization-insensitive volumes.
 func claimRepoPath(rp string) error {
 	return withRepoParent(rp, func() error {
-		if err := os.Mkdir(rp, os.ModePerm); err != nil {
+		if err := os.Mkdir(rp, os.ModePerm); err != nil { //nolint:gosec // git's modes, less the umask, as for the files git writes in the repository; the data directory is created 0o700
 			if errors.Is(err, fs.ErrExist) {
 				return proto.ErrRepoExist
 			}
@@ -331,7 +331,7 @@ const repoParentAttempts = 5
 func withRepoParent(p string, place func() error) error {
 	var err error
 	for range repoParentAttempts {
-		if err = os.MkdirAll(filepath.Dir(p), os.ModePerm); err != nil {
+		if err = os.MkdirAll(filepath.Dir(p), os.ModePerm); err != nil { //nolint:gosec // as for the repository directory (see claimRepoPath)
 			return err
 		}
 		if err = place(); !errors.Is(err, fs.ErrNotExist) {
@@ -1838,10 +1838,12 @@ func (d *Backend) populateLastModified(ctx context.Context, name string) error {
 		return err
 	}
 	fp := filepath.Join(rp, "info", "last-modified")
-	if err := os.MkdirAll(filepath.Dir(fp), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fp), os.ModePerm); err != nil { //nolint:gosec // as the repository directory: git's modes, less the umask
 		return err
 	}
-	return os.WriteFile(fp, []byte(t.Format(time.RFC3339)), os.ModePerm) //nolint:gosec
+	// 0o666 less the umask, as git writes the files beside it. The time of
+	// the latest commit is no secret to anyone who can read the objects.
+	return os.WriteFile(fp, []byte(t.Format(time.RFC3339)), 0o666) //nolint:gosec // see above
 }
 
 func readOneline(path string) (string, error) {

@@ -26,7 +26,7 @@ func CountGit(t *testing.T) func() []string {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shQuote(log) + "\nexec " + shQuote(gitPath) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec // a test git wrapper must be executable
 		t.Fatalf("writing the git wrapper: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

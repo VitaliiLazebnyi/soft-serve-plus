@@ -135,7 +135,7 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			return nil, err //nolint:wrapcheck
+			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()

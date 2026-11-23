@@ -44,7 +44,7 @@ func RedactURL(rawURL string) string {
 // errors.Is and errors.As (context.DeadlineExceeded, net.Error timeouts and
 // so on) still work. Any other error is returned unchanged.
 func RedactURLError(err error, redact func(string) string) error {
-	uerr, ok := err.(*url.Error) //nolint:errorlint // only the top-level error is replaced
+	uerr, ok := err.(*url.Error) // only the top-level error is replaced
 	if !ok {
 		return err
 	}

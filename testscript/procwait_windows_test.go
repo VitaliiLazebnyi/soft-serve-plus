@@ -15,7 +15,7 @@ const errorInvalidParameter = syscall.Errno(87)
 // waitExit waits until p has exited, without reaping it, so that testscript
 // can still collect its exit status.
 func waitExit(p *os.Process, timeout time.Duration) error {
-	h, err := syscall.OpenProcess(syscall.SYNCHRONIZE, false, uint32(p.Pid)) //nolint:gosec
+	h, err := syscall.OpenProcess(syscall.SYNCHRONIZE, false, uint32(p.Pid))
 	if errors.Is(err, errorInvalidParameter) {
 		return nil // no such process: it has already exited and been released
 	}

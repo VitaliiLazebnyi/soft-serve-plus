@@ -41,7 +41,7 @@ func TestDownloadCapsObjectErrorMessage(t *testing.T) {
 			Error:   &ObjectError{Code: http.StatusNotFound, Message: longRemoteText},
 		}}}
 		w.Header().Set("Content-Type", MediaType)
-		json.NewEncoder(w).Encode(res) //nolint: errcheck,gosec
+		json.NewEncoder(w).Encode(res) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 	c := plainClient(t, srv.URL+"/x.git")
@@ -65,14 +65,14 @@ func TestDownloadCapsErrorResponseMessage(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorResponse{Message: longRemoteText}) //nolint: errcheck,gosec
+		json.NewEncoder(w).Encode(ErrorResponse{Message: longRemoteText}) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 	c := &HTTPClient{client: srv.Client(), logger: log.New(io.Discard)}
 
 	rc, err := c.download(t.Context(), &Link{Href: srv.URL + "/obj"})
 	if err == nil {
-		rc.Close() //nolint: errcheck,gosec
+		rc.Close() //nolint:errcheck
 		t.Fatal("download succeeded")
 	}
 	assertCapped(t, "error", err.Error())
@@ -86,7 +86,7 @@ func rawStatusServer(t *testing.T, code int, reason string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() }) //nolint: errcheck,gosec
+	t.Cleanup(func() { l.Close() }) //nolint:errcheck
 	go func() {
 		for {
 			conn, err := l.Accept()
@@ -124,7 +124,7 @@ func TestCapsRemoteStatus(t *testing.T) {
 		c := plainClient(t, "http://unused.invalid/x.git")
 		rc, err := c.download(t.Context(), &Link{Href: rawStatusServer(t, http.StatusNotFound, reason) + "/obj"})
 		if err == nil {
-			rc.Close() //nolint: errcheck,gosec
+			rc.Close() //nolint:errcheck
 			t.Fatal("download succeeded")
 		}
 		assertCapped(t, "download error", err.Error())
@@ -150,7 +150,7 @@ func TestBatchResponseLimitIsOneMiB(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", MediaType)
-		io.WriteString(w, `{"transfer":"basic","objects":[]`+strings.Repeat(" ", 1<<20)+`}`) //nolint: errcheck,gosec
+		io.WriteString(w, `{"transfer":"basic","objects":[]`+strings.Repeat(" ", 1<<20)+`}`) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 	c := plainClient(t, srv.URL+"/x.git")
@@ -196,7 +196,7 @@ func TestBatchCapsRemoteNames(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", MediaType)
 				body := map[string]any{"objects": []any{}, field: longRemoteText[:64<<10] + "\x1b[2J"}
-				json.NewEncoder(w).Encode(body) //nolint: errcheck,gosec
+				json.NewEncoder(w).Encode(body) //nolint:errcheck
 			}))
 			t.Cleanup(srv.Close)
 			c := plainClient(t, srv.URL+"/x.git")
@@ -221,7 +221,7 @@ func TestDownloadLogsUnrequestedOidEscaped(t *testing.T) {
 			Pointer: Pointer{Oid: oid, Size: 1},
 		}}}
 		w.Header().Set("Content-Type", MediaType)
-		json.NewEncoder(w).Encode(res) //nolint: errcheck,gosec
+		json.NewEncoder(w).Encode(res) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 	logger, logs := debugLogger()

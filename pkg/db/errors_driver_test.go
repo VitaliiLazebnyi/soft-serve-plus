@@ -72,7 +72,7 @@ func TestWrapErrorConstraintViolations(t *testing.T) {
 				}
 				return
 			}
-			if got != err { //nolint:errorlint
+			if got != err {
 				t.Errorf("WrapError(%v) = %v, want the error unchanged", err, got)
 			}
 		})
@@ -94,7 +94,7 @@ func TestWrapErrorPostgresCodes(t *testing.T) {
 		if want != nil && !errors.Is(got, want) {
 			t.Errorf("WrapError(pq code %s) = %v, want %v", code, got, want)
 		}
-		if want == nil && got != error(err) { //nolint:errorlint
+		if want == nil && got != error(err) {
 			t.Errorf("WrapError(pq code %s) = %v, want the error unchanged", code, got)
 		}
 	}

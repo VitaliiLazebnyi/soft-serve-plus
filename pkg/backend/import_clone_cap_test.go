@@ -27,7 +27,7 @@ exit 128
 // mirror sync's output, rather than buffered in full and logged.
 func TestCloneImportCapsOutput(t *testing.T) {
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeChattyGit), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeChattyGit), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -67,7 +67,7 @@ exit 128
 // redaction keeps.
 func TestCloneImportCutURLKeepsNoToken(t *testing.T) {
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeURLGit), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeURLGit), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

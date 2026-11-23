@@ -48,7 +48,7 @@ func newLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
 			return logger, nil, err
 		}
 		var err error
-		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // group-readable, as system logs are, for an operator group
 		if err != nil {
 			return logger, nil, err
 		}

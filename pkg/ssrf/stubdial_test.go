@@ -114,7 +114,7 @@ func serveStubDNS(conn net.Conn, table map[string][]string) {
 		if resp == nil {
 			return
 		}
-		out := binary.BigEndian.AppendUint16(nil, uint16(len(resp))) //nolint:gosec // a DNS message is short
+		out := binary.BigEndian.AppendUint16(nil, uint16(len(resp))) // a DNS message is short
 		if _, err := conn.Write(append(out, resp...)); err != nil {
 			return
 		}
@@ -172,7 +172,7 @@ func stubDNSAnswer(q []byte, table map[string][]string) []byte {
 	resp := append([]byte(nil), q[0:2]...) // ID
 	resp = binary.BigEndian.AppendUint16(resp, flags)
 	resp = binary.BigEndian.AppendUint16(resp, 1)                  // QDCOUNT
-	resp = binary.BigEndian.AppendUint16(resp, uint16(len(rdata))) //nolint:gosec // a short table
+	resp = binary.BigEndian.AppendUint16(resp, uint16(len(rdata))) // a short table
 	resp = binary.BigEndian.AppendUint16(resp, 0)                  // NSCOUNT
 	resp = binary.BigEndian.AppendUint16(resp, 0)                  // ARCOUNT
 	resp = append(resp, question...)
@@ -181,7 +181,7 @@ func stubDNSAnswer(q []byte, table map[string][]string) []byte {
 		resp = binary.BigEndian.AppendUint16(resp, qtype)
 		resp = binary.BigEndian.AppendUint16(resp, 1)               // class IN
 		resp = binary.BigEndian.AppendUint32(resp, 60)              // TTL
-		resp = binary.BigEndian.AppendUint16(resp, uint16(len(rd))) //nolint:gosec // 4 or 16
+		resp = binary.BigEndian.AppendUint16(resp, uint16(len(rd))) // 4 or 16
 		resp = append(resp, rd...)
 	}
 	return resp

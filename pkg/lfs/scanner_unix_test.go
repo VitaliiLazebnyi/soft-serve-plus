@@ -29,7 +29,7 @@ func TestSearchPointerBlobsPanicReapsGit(t *testing.T) {
 	bin := t.TempDir()
 	pids := filepath.Join(t.TempDir(), "pids")
 	script := fmt.Sprintf("#!/bin/sh\necho $$ >> %q\nexec %q \"$@\"\n", pids, realGit)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -37,7 +37,7 @@ func TestSearchPointerBlobsPanicReapsGit(t *testing.T) {
 	pointerChan := make(chan PointerBlob)
 	errChan := make(chan error, 1)
 	go searchPointerBlobs(t.Context(), log.New(io.Discard), panickingReader, repo, []string{"--all"}, "", pointerChan, errChan)
-	for range pointerChan { //nolint:revive // drain until closed
+	for range pointerChan { // drain until closed
 	}
 	if err := <-errChan; err == nil {
 		t.Fatal("the panic was not reported")

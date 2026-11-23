@@ -43,7 +43,7 @@ func decodeJSONLimit(r io.Reader, limit int64, v any) error {
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return errResponseTooLarge
 	}
-	return err //nolint:wrapcheck
+	return err
 }
 
 // remoteText returns s, text a remote sent, cut to maxRemoteText bytes, at a

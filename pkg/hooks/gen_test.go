@@ -77,7 +77,7 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	binOut := filepath.Join(t.TempDir(), "bin")
 	hookOut := filepath.Join(t.TempDir(), "custom")
 	bin := filepath.Join(tmp, "soft bin")
-	if err := os.WriteFile(bin, []byte(recorder), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(bin, []byte(recorder), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	customDir := filepath.Join(tmp, "hooks")
@@ -86,7 +86,7 @@ func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	}
 	allHooks := []string{PreReceiveHook, UpdateHook, PostReceiveHook, PostUpdateHook}
 	for _, hn := range allHooks {
-		if err := os.WriteFile(filepath.Join(customDir, hn), []byte(recorder), 0o755); err != nil { //nolint:gosec
+		if err := os.WriteFile(filepath.Join(customDir, hn), []byte(recorder), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

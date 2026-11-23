@@ -87,16 +87,16 @@ type stallTimeoutConn struct {
 
 func (c *stallTimeoutConn) Read(b []byte) (int, error) {
 	if err := c.Conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
-		return 0, err //nolint:wrapcheck
+		return 0, err
 	}
-	return c.Conn.Read(b) //nolint:wrapcheck
+	return c.Conn.Read(b)
 }
 
 func (c *stallTimeoutConn) Write(b []byte) (int, error) {
 	if err := c.Conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
-		return 0, err //nolint:wrapcheck
+		return 0, err
 	}
-	return c.Conn.Write(b) //nolint:wrapcheck
+	return c.Conn.Write(b)
 }
 
 // batch performs a batch request to the LFS server.

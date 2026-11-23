@@ -117,13 +117,13 @@ func scanPointerBlobs(ctx context.Context, dir string, revArgs []string, stdin s
 	// ends of, so every end is closed whatever fails to start.
 	ids, idsWriter, err := os.Pipe()
 	if err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 	out, outWriter, err := os.Pipe()
 	if err != nil {
 		_ = ids.Close()
 		_ = idsWriter.Close()
-		return err //nolint:wrapcheck
+		return err
 	}
 	defer out.Close() //nolint:errcheck
 	revList.Stdout = idsWriter
@@ -246,7 +246,7 @@ func parseCatFileBatch(r io.Reader, read pointerReader, found func(PointerBlob) 
 			if errors.Is(err, io.EOF) && header == "" {
 				return nil
 			}
-			return err //nolint:wrapcheck
+			return err
 		}
 		fields := strings.Fields(header)
 		if len(fields) != 3 {
@@ -266,14 +266,14 @@ func parseCatFileBatch(r io.Reader, read pointerReader, found func(PointerBlob) 
 		if typ != "blob" || size > blobSizeCutoff {
 			// The content and its trailing newline.
 			if _, err := io.CopyN(io.Discard, br, size+1); err != nil {
-				return err //nolint:wrapcheck
+				return err
 			}
 			continue
 		}
 
 		content := buf[:size+1]
 		if _, err := io.ReadFull(br, content); err != nil {
-			return err //nolint:wrapcheck
+			return err
 		}
 		pointer, _ := read(content[:size])
 		if !pointer.IsValid() {
