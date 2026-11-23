@@ -111,21 +111,21 @@ func (c *loggedConn) SetDeadline(t time.Time) error {
 	c.log.deadlines++
 	c.deadline = t
 	c.log.mu.Unlock()
-	return c.Conn.SetDeadline(t) //nolint:wrapcheck
+	return c.Conn.SetDeadline(t)
 }
 
 func (c *loggedConn) Read(b []byte) (int, error) {
 	c.log.mu.Lock()
 	c.log.readDeadlines = append(c.log.readDeadlines, c.deadline)
 	c.log.mu.Unlock()
-	return c.Conn.Read(b) //nolint:wrapcheck
+	return c.Conn.Read(b)
 }
 
 func (c *loggedConn) Write(b []byte) (int, error) {
 	c.log.mu.Lock()
 	c.log.writeDeadlines = append(c.log.writeDeadlines, c.deadline)
 	c.log.mu.Unlock()
-	return c.Conn.Write(b) //nolint:wrapcheck
+	return c.Conn.Write(b)
 }
 
 func TestHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
@@ -207,7 +207,7 @@ func TestHTTPClientSlowRequestBodyCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PUT: %v", err)
 	}
-	res.Body.Close() //nolint:errcheck,gosec
+	res.Body.Close() //nolint:errcheck
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
@@ -244,7 +244,7 @@ func TestHTTPClientStalledTransferFails(t *testing.T) {
 			rc, err := a.download(ctx, &Link{Href: srv.URL})
 			if err == nil {
 				_, err = io.ReadAll(rc)
-				rc.Close() //nolint:errcheck,gosec
+				rc.Close() //nolint:errcheck
 			}
 			if err == nil {
 				t.Fatal("transfer succeeded, want a stall error")
@@ -402,7 +402,7 @@ func TestTransferRedactsHref(t *testing.T) {
 			var objectErr error
 			err := c.Download(t.Context(), []Pointer{testPointer}, func(_ Pointer, content io.ReadCloser, objectError error) error {
 				if content != nil {
-					content.Close() //nolint: errcheck,gosec
+					content.Close() //nolint:errcheck
 				}
 				objectErr = objectError
 				return nil
@@ -472,7 +472,7 @@ func TestNewHTTPClientDoesNotRewrapTransport(t *testing.T) {
 	t.Cleanup(func() { tr.DialContext = old })
 	tr.DialContext = func(context.Context, string, string) (net.Conn, error) {
 		c, s := net.Pipe()
-		t.Cleanup(func() { s.Close() }) //nolint:errcheck,gosec
+		t.Cleanup(func() { s.Close() }) //nolint:errcheck
 		return c, nil
 	}
 
@@ -556,7 +556,7 @@ func TestSecureHTTPClientIsSSRFProtected(t *testing.T) {
 	}
 	res, err := secureHTTPClient.Do(req)
 	if err == nil {
-		res.Body.Close() //nolint:errcheck,gosec
+		res.Body.Close() //nolint:errcheck
 	}
 	if !errors.Is(err, ssrf.ErrPrivateIP) {
 		t.Fatalf("request to loopback: err = %v, want %v", err, ssrf.ErrPrivateIP)
@@ -589,7 +589,7 @@ func objectServer(t *testing.T, respond func(req BatchRequest, base string) Batc
 			return
 		}
 		w.Header().Set("Content-Type", MediaType)
-		json.NewEncoder(w).Encode(respond(req, srv.URL)) //nolint: errcheck,gosec
+		json.NewEncoder(w).Encode(respond(req, srv.URL)) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func(oid string) int {
@@ -622,7 +622,7 @@ func collect(t *testing.T, results map[string]downloadResult) DownloadCallback {
 		r.err = objectError
 		if content != nil {
 			b, err := io.ReadAll(content)
-			content.Close() //nolint: errcheck,gosec
+			content.Close() //nolint:errcheck
 			if err != nil {
 				t.Errorf("reading %s: %v", p.Oid, err)
 			}

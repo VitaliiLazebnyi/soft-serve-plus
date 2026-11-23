@@ -57,7 +57,7 @@ func NewHook(w models.Webhook, events []Event) Hook {
 		Active:      w.Active,
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
-		ContentType: ContentType(w.ContentType), //nolint:gosec
+		ContentType: ContentType(w.ContentType), //nolint:gosec // the column holds a ContentType the server wrote (int8 range)
 		Events:      events,
 	}
 }
@@ -226,7 +226,7 @@ func (s *Sender) Redeliver(ctx context.Context, w models.Webhook, event Event, c
 // sendPayload encodes payload in w's content type and sends it, recording
 // the attempt when record is set.
 func (s *Sender) sendPayload(ctx context.Context, w models.Webhook, event Event, payload EventPayload, record bool) error {
-	ct := ContentType(w.ContentType) //nolint:gosec
+	ct := ContentType(w.ContentType) //nolint:gosec // the column holds a ContentType the server wrote (int8 range)
 	body, err := encode(ct, payload)
 	if err != nil {
 		return err
@@ -539,7 +539,7 @@ var ErrTooManyWebhooks = fmt.Errorf("a repository can have at most %d webhooks",
 func (s *Sender) RecordUndelivered(ctx context.Context, hooks []models.Webhook, payload EventPayload, reason error) error {
 	var errs []error
 	for _, w := range hooks {
-		ct := ContentType(w.ContentType) //nolint:gosec
+		ct := ContentType(w.ContentType) //nolint:gosec // the column holds a ContentType the server wrote (int8 range)
 		body, err := encode(ct, payload)
 		var req request
 		if err == nil {

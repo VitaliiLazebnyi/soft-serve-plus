@@ -57,7 +57,7 @@ func TestEnsureDefaultBranch(t *testing.T) {
 
 // N:git: EnsureDefaultBranch listed every branch after each push before it
 // looked at HEAD. With a HEAD that resolves it lists none.
-func TestEnsureDefaultBranchValidHeadListsNothing(t *testing.T) { //nolint: paralleltest
+func TestEnsureDefaultBranchValidHeadListsNothing(t *testing.T) {
 	branches := make([]string, 2000)
 	for i := range branches {
 		branches[i] = fmt.Sprintf("b%04d", i)

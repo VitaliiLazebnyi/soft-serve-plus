@@ -64,7 +64,7 @@ func runCommand(t *testing.T, addr string, command string, auth ...gossh.AuthMet
 	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            auth,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {

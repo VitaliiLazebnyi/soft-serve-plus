@@ -174,7 +174,7 @@ func sqliteDSN(dsn string) (string, error) {
 		var err error
 		if q, err = url.ParseQuery(dsn[i+1:]); err != nil {
 			// The driver rejects it too, with its own error.
-			return dsn, nil //nolint:nilerr
+			return dsn, nil
 		}
 	}
 	var add []string

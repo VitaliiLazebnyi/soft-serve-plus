@@ -112,7 +112,7 @@ func TestBlameFileStopsResolvingCommitsOnCancel(t *testing.T) {
 	if err == nil {
 		t.Fatalf("BlameFile with a context cancelled mid-way returned %v; want an error", b)
 	}
-	if err != context.Canceled { //nolint:errorlint
+	if err != context.Canceled {
 		t.Fatalf("BlameFile error = %v; want %v", err, context.Canceled)
 	}
 	if n := ctx.calls.Load(); n != 3 {

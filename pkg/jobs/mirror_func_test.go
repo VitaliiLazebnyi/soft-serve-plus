@@ -100,7 +100,7 @@ func TestMirrorPullFunc(t *testing.T) {
 
 	// git resolves the ssh client the job configures through PATH.
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(fakeSSH), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(fakeSSH), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -420,7 +420,7 @@ func TestMirrorPullWithoutFetchRefspec(t *testing.T) {
 		t.Skip("the fake ssh client is a shell script")
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(fakeSSH), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(fakeSSH), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

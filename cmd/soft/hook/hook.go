@@ -127,7 +127,7 @@ func recordPushRefs(logger *log.Logger, refs []byte) {
 	if path == "" {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // the server names the file for this hook; whoever sets the hook's environment runs as the server's user already
 	if err == nil {
 		_, err = f.Write(refs)
 		if cerr := f.Close(); err == nil {

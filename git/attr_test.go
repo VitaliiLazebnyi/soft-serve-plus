@@ -152,7 +152,7 @@ func TestCheckAttributesQuotedPath(t *testing.T) {
 
 // N:git: CheckAttributes ran `git version` on every call, one extra process
 // each time a file is opened. The version is read once.
-func TestCheckAttributesReadsVersionOnce(t *testing.T) { //nolint: paralleltest
+func TestCheckAttributesReadsVersionOnce(t *testing.T) {
 	repo, ref := setupAttrRepo(t, "a.bin")
 	calls := gittest.CountGit(t)
 	for i := range 3 {

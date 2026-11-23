@@ -49,7 +49,7 @@ func newGitFence(t *testing.T) *gitFence {
 		";;\n" +
 		"esac\n" +
 		"exec " + quote(gitPath) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -104,7 +104,7 @@ func (f *gitFence) commands(t *testing.T) []string {
 //
 // The test cannot tell how soon the held git ends: git-module stops every
 // git it runs after one minute, bound or not, with the same kill.
-func TestRepoCommandsStartNoGitAfterSessionEnds(t *testing.T) { //nolint:paralleltest // t.Setenv
+func TestRepoCommandsStartNoGitAfterSessionEnds(t *testing.T) { // serial: t.Setenv
 	ctx, head := viewRepo(t)
 	fence := newGitFence(t)
 	for _, args := range [][]string{
@@ -135,7 +135,7 @@ func TestRepoCommandsStartNoGitAfterSessionEnds(t *testing.T) { //nolint:paralle
 			cancel()
 			// The held git may be dead already, which fails the write.
 			_, _ = w.WriteString("go\n")
-			w.Close() //nolint:errcheck,gosec
+			w.Close() //nolint:errcheck
 
 			var cmdErr error
 			select {

@@ -28,7 +28,7 @@ while [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done
 // server, or killing it outright.
 func TestRunMirrorGitTerminatesOnCancel(t *testing.T) {
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeSlowGit), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fakeSlowGit), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

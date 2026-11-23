@@ -26,7 +26,7 @@ func TestRandomPortPanicsWhenItCannotBind(t *testing.T) {
 		}
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestRandomPortPanicsWhenItCannotBind$") //nolint:gosec,noctx
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRandomPortPanicsWhenItCannotBind$") //nolint:noctx
 	cmd.Env = append(os.Environ(), "RANDOMPORT_RLIMIT_CHILD=1")
 	done := make(chan struct{})
 	var out []byte

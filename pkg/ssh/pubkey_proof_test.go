@@ -60,7 +60,7 @@ func TestPubkeyAddProofOverSSH(t *testing.T) {
 	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "alice",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {

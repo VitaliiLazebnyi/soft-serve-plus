@@ -120,8 +120,7 @@ func prepareDataPath(cfg *config.Config, logger *log.Logger) error {
 		}
 		// Generate update hook example without executable permissions
 		hookPath := filepath.Join(customHooksPath, "update.sample")
-		//nolint: gosec
-		if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil {
+		if err := os.WriteFile(hookPath, []byte(updateHookExample), 0o644); err != nil { //nolint:gosec // an example for the operator, in a directory only the server's user can enter
 			return fmt.Errorf("failed to generate update hook example: %w", err)
 		}
 	}

@@ -31,6 +31,6 @@ func terminateOnCancel(cmd *exec.Cmd) {
 			// The group is gone: git and its helpers have exited.
 			return os.ErrProcessDone
 		}
-		return err //nolint:wrapcheck
+		return err
 	}
 }

@@ -36,7 +36,7 @@ func blockLsTree(t *testing.T) string {
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	script := "#!/bin/sh\nfor a in \"$@\"; do\n\tif [ \"$a\" = ls-tree ]; then\n\t\t: > " + quote(marker) +
 		"\n\t\texec sleep 300\n\tfi\ndone\nexec " + quote(gitPath) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -46,7 +46,7 @@ func blockLsTree(t *testing.T) string {
 // R10: `repo tree` and `repo blob` run git under the session's context, so
 // git stops when the session ends instead of running on to git-module's
 // one-minute timeout.
-func TestRepoTreeAndBlobStopWithSession(t *testing.T) { //nolint:paralleltest
+func TestRepoTreeAndBlobStopWithSession(t *testing.T) {
 	ctx, _ := viewRepo(t)
 	marker := blockLsTree(t)
 	for _, args := range [][]string{{"tree", "view"}, {"blob", "view", "README.md"}} {

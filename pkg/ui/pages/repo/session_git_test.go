@@ -43,7 +43,7 @@ func holdGit(t *testing.T, sub string) (fifo, held string, commands func() []str
 		"\tread -r _ < " + quote(fifo) + "\n" +
 		"fi\n" +
 		"exec " + quote(gitPath) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -60,7 +60,7 @@ func holdGit(t *testing.T, sub string) (fifo, held string, commands func() []str
 // in the show-ref that lists the references, the session ends there, as
 // when the client disconnects, and the held git is let go: no git starts
 // after that, so the default reference is not looked up.
-func TestRefLoadStartsNoGitAfterSessionEnds(t *testing.T) { //nolint:paralleltest // t.Setenv
+func TestRefLoadStartsNoGitAfterSessionEnds(t *testing.T) { // serial: t.Setenv
 	dir := filepath.Join(t.TempDir(), "repo")
 	gitRun(t, filepath.Dir(dir), "init", "-q", "-b", "trunk", dir)
 	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "first")
@@ -85,7 +85,7 @@ func TestRefLoadStartsNoGitAfterSessionEnds(t *testing.T) { //nolint:paralleltes
 	}
 	cancel()
 	_, _ = w.WriteString("go\n")
-	w.Close() //nolint:errcheck,gosec
+	w.Close() //nolint:errcheck
 
 	var msg tea.Msg
 	select {

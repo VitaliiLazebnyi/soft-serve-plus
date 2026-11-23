@@ -54,7 +54,7 @@ func NewPushRefs(cfg *config.Config) (*PushRefs, error) {
 	// by an older server or by hand, is made private again. Windows has
 	// no such modes.
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory: its owner needs x to enter it
 			return nil, fmt.Errorf("make push refs directory private: %w", err)
 		}
 	}

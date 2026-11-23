@@ -82,7 +82,7 @@ func tryDialAuth(t *testing.T, addr string, auth gossh.AuthMethod) (*gossh.Clien
 	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{auth},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {

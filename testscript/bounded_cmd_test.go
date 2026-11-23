@@ -28,7 +28,7 @@ func fakeGit(t *testing.T, body string) map[string]string {
 		t.Skip("the fake git is a shell script")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil { //nolint:gosec // an executable
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil { // an executable
 		t.Fatal(err)
 	}
 	return map[string]string{

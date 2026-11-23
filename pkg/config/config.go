@@ -842,7 +842,7 @@ func (c *Config) locateFile() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
 	}
-	if _, err := os.Stat(path); err != nil && path != def {
+	if _, err := os.Stat(path); err != nil && path != def { //nolint:gosec // the operator names the config file
 		return "", fmt.Errorf("config file set by SOFT_SERVE_CONFIG_LOCATION: %w", err)
 	}
 	return path, nil

@@ -40,7 +40,7 @@ type testEnv struct {
 // newRequest encodes payload in w's content type and builds the request
 // that sends it, as a send does.
 func (e *testEnv) newRequest(w models.Webhook, event Event, payload EventPayload) (request, error) {
-	ct := ContentType(w.ContentType) //nolint:gosec
+	ct := ContentType(w.ContentType)
 	body, err := encode(ct, payload)
 	if err != nil {
 		return request{}, err

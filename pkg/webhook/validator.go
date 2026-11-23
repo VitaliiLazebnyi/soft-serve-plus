@@ -21,5 +21,5 @@ var (
 // webhook create or update whose caller goes away stops waiting for the
 // resolver.
 func ValidateWebhookURLAllowing(ctx context.Context, rawURL string, allowed ssrf.AllowedHosts) error {
-	return ssrf.ValidateURLAllowing(ctx, rawURL, allowed) //nolint:wrapcheck
+	return ssrf.ValidateURLAllowing(ctx, rawURL, allowed)
 }

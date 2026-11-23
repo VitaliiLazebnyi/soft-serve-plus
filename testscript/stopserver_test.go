@@ -40,7 +40,7 @@ func TestWaitClosed(t *testing.T) {
 // waitExit returns once a process has exited and keeps waiting while it runs,
 // without taking the exit status from the code that waits on it.
 func TestWaitExit(t *testing.T) {
-	cmd := exec.Command(os.Args[0], "-test.run=^$") //nolint:gosec,noctx
+	cmd := exec.Command(os.Args[0], "-test.run=^$") //nolint:noctx
 	cmd.Env = append(os.Environ(), "WAITEXIT_CHILD=1")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

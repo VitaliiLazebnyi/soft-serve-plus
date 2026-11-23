@@ -28,7 +28,7 @@ const (
 // cmd.InitializeHooks for every repository. The context is unused.
 func Generate(_ context.Context, cfg *config.Config, repo string) error {
 	hooksPath := filepath.Join(RepoPath(cfg, repo), "hooks")
-	if err := os.MkdirAll(hooksPath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(hooksPath, os.ModePerm); err != nil { //nolint:gosec // git's modes, less the umask, as for the repository it is in
 		return err
 	}
 
@@ -48,7 +48,7 @@ func Generate(_ context.Context, cfg *config.Config, repo string) error {
 
 		// Create ${hook}.d directory.
 		hp += ".d"
-		if err := os.MkdirAll(hp, os.ModePerm); err != nil {
+		if err := os.MkdirAll(hp, os.ModePerm); err != nil { //nolint:gosec // see above
 			return err
 		}
 

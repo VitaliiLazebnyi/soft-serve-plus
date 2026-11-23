@@ -83,7 +83,7 @@ func TestLatestFileBadPattern(t *testing.T) {
 
 // N:git: LatestFile piped a matching file twice, once to sniff it and once
 // to read it. It reads it once.
-func TestLatestFileReadsOnce(t *testing.T) { //nolint: paralleltest
+func TestLatestFileReadsOnce(t *testing.T) {
 	repo, ref := setupTreeRepo(t, map[string][2]string{"README.md": {"100644", "# hello\n"}})
 	calls := gittest.CountGit(t)
 	if _, _, err := LatestFile(repo, ref, "README*", 0); err != nil {

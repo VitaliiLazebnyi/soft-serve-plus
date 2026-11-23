@@ -69,7 +69,7 @@ func RandomPort() int {
 	lock.Lock()
 	defer lock.Unlock()
 	for range maxAttempts {
-		port := minPort + rand.IntN(maxPort-minPort) //nolint:gosec
+		port := minPort + rand.IntN(maxPort-minPort) //nolint:gosec // spreads test ports; nothing depends on it being unpredictable
 		if _, ok := used[port]; ok {
 			continue
 		}

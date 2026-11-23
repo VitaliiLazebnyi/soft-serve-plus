@@ -22,7 +22,7 @@ import (
 // fifo nobody writes, so only the end of the request can end it: the
 // handler then stops git (see pkg/gitserve's gitServiceHandler). Unbound, git
 // and the handler would wait on the fifo for good.
-func TestInfoRefsGitEndsWithRequest(t *testing.T) { //nolint:paralleltest // t.Setenv
+func TestInfoRefsGitEndsWithRequest(t *testing.T) { // serial: t.Setenv
 	f := newOracleFixture(t)
 	const name = "held"
 	if _, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{}); err != nil {
@@ -45,7 +45,7 @@ func TestInfoRefsGitEndsWithRequest(t *testing.T) { //nolint:paralleltest // t.S
 		"*' upload-pack '*) : > " + quote(held) + "; read -r _ < " + quote(fifo) + ";;\n" +
 		"esac\n" +
 		"exec " + quote(gitPath) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

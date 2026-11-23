@@ -138,7 +138,6 @@ func testHookErrorReturned(t *testing.T) {
 	if err := os.MkdirAll(hooksPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	//nolint: gosec
 	if err := os.WriteFile(filepath.Join(hooksPath, "post-update"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +239,6 @@ func TestHookFailsOnUnreadableInput(t *testing.T) {
 				if err := os.MkdirAll(hooksPath, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				//nolint: gosec
 				if err := os.WriteFile(filepath.Join(hooksPath, name), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
 					t.Fatal(err)
 				}

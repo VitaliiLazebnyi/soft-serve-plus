@@ -59,7 +59,7 @@ func TestDBNameUniqueAcrossProcesses(t *testing.T) {
 		}
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDBNameUniqueAcrossProcesses$") //nolint:gosec,noctx
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDBNameUniqueAcrossProcesses$") //nolint:noctx
 	cmd.Env = append(os.Environ(), "SOFT_SERVE_TEST_DBNAME_CHILD=1")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -286,7 +286,7 @@ func (d *Backend) RedeliverWebhookDelivery(ctx context.Context, repo proto.Repos
 	// the stored Content-Type header and fall back to the webhook's only when
 	// that header is missing.
 	// An unrecognized stored value is treated like a missing one.
-	ct := webhook.ContentType(wh.ContentType) //nolint:gosec
+	ct := webhook.ContentType(wh.ContentType) //nolint:gosec // the column holds a ContentType the server wrote (int8 range)
 	stored, found, err := storedContentType(delivery.RequestHeaders)
 	switch {
 	case err != nil:
@@ -418,7 +418,7 @@ func (d *Backend) webhookAllowedHosts() ssrf.AllowedHosts {
 func validateWebhookInput(ctx context.Context, allowed ssrf.AllowedHosts, url string, contentType webhook.ContentType, events []webhook.Event) error {
 	// Validate webhook URL to prevent SSRF attacks.
 	if err := webhook.ValidateWebhookURLAllowing(ctx, url, allowed); err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 	if contentType.String() == "" {
 		return webhook.ErrInvalidContentType
