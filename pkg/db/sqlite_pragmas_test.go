@@ -32,6 +32,14 @@ func TestSqliteDSN(t *testing.T) {
 		"soft-serve.db?_pragma=Journal_Mode = wal":   "soft-serve.db?_pragma=Journal_Mode = wal&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"soft-serve.db?_journal_mode=DELETE":         "soft-serve.db?_journal_mode=DELETE&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"soft-serve.db?_journal=TRUNCATE":            "soft-serve.db?_journal=TRUNCATE&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		// A pragma that names the schema counts as the plain one.
+		"soft-serve.db?_pragma=main.journal_mode(DELETE)": "soft-serve.db?_pragma=main.journal_mode(DELETE)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"soft-serve.db?_pragma=main.busy_timeout(100)":    "soft-serve.db?_pragma=main.busy_timeout(100)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_pragma=main.foreign_keys(1)":      "soft-serve.db?_pragma=main.foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		// The driver passes mode and immutable to SQLite only in a "file:"
+		// URI; it drops them from a plain path, which opens read-write.
+		"soft-serve.db?mode=ro":     "soft-serve.db?mode=ro&" + added,
+		"soft-serve.db?immutable=1": "soft-serve.db?immutable=1&" + added,
 		// A read-only database cannot switch its journal mode.
 		"file:soft-serve.db?mode=ro":     "file:soft-serve.db?mode=ro&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"file:soft-serve.db?immutable=1": "file:soft-serve.db?immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
@@ -55,6 +63,10 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 		"soft-serve.db?_pragma=foreign_keys(1)&_fk=0",
 		"soft-serve.db?_foreign_keys=false",
 		"soft-serve.db?_pragma=foreign_keys(1)&_pragma=foreign_keys(no)",
+		// The driver sorts the _pragma list, so an added foreign_keys(1)
+		// would run first and this one would win.
+		"soft-serve.db?_pragma=main.foreign_keys(0)",
+		"soft-serve.db?_pragma=MAIN.Foreign_Keys = off",
 	} {
 		if _, err := sqliteDSN(dsn); !errors.Is(err, errSqliteForeignKeysOff) {
 			t.Errorf("sqliteDSN(%q) error = %v, want %v", dsn, err, errSqliteForeignKeysOff)
@@ -248,21 +260,26 @@ func TestSqliteReadDoesNotWaitForCommit(t *testing.T) {
 	}
 }
 
-// A journal mode set with the driver's own _journal_mode or _journal key is
-// the data source's mode, as one set with a _pragma is. The driver applies
+// A journal mode set with the driver's own _journal_mode or _journal key, or
+// with a _pragma that names the schema, is the data source's mode, as one
+// set with a plain _pragma is. The driver applies
 // those keys after the _pragma list, so a journal_mode(WAL) added next to
 // them made every new connection switch the database to WAL and back. A
 // switch needs the database to itself: a connection opened while another
 // held a read transaction failed with "database is locked".
 func TestOpenSqliteJournalModeKeys(t *testing.T) {
 	t.Parallel()
-	for _, key := range []string{"_journal_mode", "_journal"} {
-		t.Run(key, func(t *testing.T) {
+	for name, query := range map[string]string{
+		"_journal_mode":     "_journal_mode=DELETE",
+		"_journal":          "_journal=DELETE",
+		"main.journal_mode": "_pragma=main.journal_mode(DELETE)",
+	} {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "soft.db")
 			// A short busy timeout: the failure this checks for waits it out.
-			d, err := Open(ctx, "sqlite", path+"?_pragma=busy_timeout(100)&"+key+"=DELETE", Options{})
+			d, err := Open(ctx, "sqlite", path+"?_pragma=busy_timeout(100)&"+query, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
