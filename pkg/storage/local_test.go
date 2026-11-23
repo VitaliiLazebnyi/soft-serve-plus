@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// Names handed to LocalStorage come from LFS object IDs, which are attacker
+// Names handed to Local come from LFS object IDs, which are attacker
 // controlled. None of them may resolve outside the root.
-func TestLocalStorageConfinesToRoot(t *testing.T) {
+func TestLocalConfinesToRoot(t *testing.T) {
 	outside := t.TempDir()
 	root := filepath.Join(outside, "root")
 	secret := filepath.Join(outside, "secret")
@@ -32,7 +32,7 @@ func TestLocalStorageConfinesToRoot(t *testing.T) {
 		names = append(names, "/etc/passwd")
 	}
 
-	l := NewLocalStorage(root)
+	l := NewLocal(root)
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			if _, err := l.Open(name); !errors.Is(err, ErrPathTraversal) {
@@ -70,13 +70,13 @@ func TestLocalStorageConfinesToRoot(t *testing.T) {
 // Where a leading slash carries no volume name, "/etc/passwd" is a relative
 // name rather than an absolute one. It must still land under the root, which is
 // the property that matters on those platforms.
-func TestLocalStorageConfinesRootedRelativeNames(t *testing.T) {
+func TestLocalConfinesRootedRelativeNames(t *testing.T) {
 	if filepath.IsAbs("/etc/passwd") {
 		t.Skip("a leading slash is absolute here, covered by the rejection test")
 	}
 
 	root := t.TempDir()
-	l := NewLocalStorage(root)
+	l := NewLocal(root)
 	if _, err := l.Put("/etc/passwd", strings.NewReader("x")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -89,9 +89,9 @@ func TestLocalStorageConfinesRootedRelativeNames(t *testing.T) {
 // of an LFS upload: stage under "incomplete", then rename into place. Names
 // crossing the Storage boundary are relative, so callers must not feed back the
 // absolute path an opened Object reports.
-func TestLocalStorageRoundTrip(t *testing.T) {
+func TestLocalRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	l := NewLocalStorage(root)
+	l := NewLocal(root)
 
 	if _, err := l.Put("incomplete/tmp", strings.NewReader("hello")); err != nil {
 		t.Fatal(err)

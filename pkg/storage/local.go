@@ -12,21 +12,21 @@ import (
 // ErrPathTraversal is returned when a path attempts to escape the storage root.
 var ErrPathTraversal = errors.New("path traversal detected")
 
-// LocalStorage is a storage implementation that stores objects on the local
+// Local is a storage implementation that stores objects on the local
 // filesystem.
-type LocalStorage struct {
+type Local struct {
 	root string
 }
 
-var _ Storage = (*LocalStorage)(nil)
+var _ Storage = (*Local)(nil)
 
-// NewLocalStorage creates a new LocalStorage.
-func NewLocalStorage(root string) *LocalStorage {
-	return &LocalStorage{root: root}
+// NewLocal creates a new Local.
+func NewLocal(root string) *Local {
+	return &Local{root: root}
 }
 
 // Delete implements Storage.
-func (l *LocalStorage) Delete(name string) error {
+func (l *Local) Delete(name string) error {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return err
@@ -35,7 +35,7 @@ func (l *LocalStorage) Delete(name string) error {
 }
 
 // Open implements Storage.
-func (l *LocalStorage) Open(name string) (Object, error) {
+func (l *Local) Open(name string) (Object, error) {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func (l *LocalStorage) Open(name string) (Object, error) {
 }
 
 // Stat implements Storage.
-func (l *LocalStorage) Stat(name string) (fs.FileInfo, error) {
+func (l *Local) Stat(name string) (fs.FileInfo, error) {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ const (
 )
 
 // Put implements Storage.
-func (l *LocalStorage) Put(name string, r io.Reader) (int64, error) {
+func (l *Local) Put(name string, r io.Reader) (int64, error) {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return 0, err
@@ -90,7 +90,7 @@ func (l *LocalStorage) Put(name string, r io.Reader) (int64, error) {
 }
 
 // Exists implements Storage.
-func (l *LocalStorage) Exists(name string) (bool, error) {
+func (l *Local) Exists(name string) (bool, error) {
 	name, err := l.fixPath(name)
 	if err != nil {
 		return false, err
@@ -106,7 +106,7 @@ func (l *LocalStorage) Exists(name string) (bool, error) {
 }
 
 // Rename implements Storage.
-func (l *LocalStorage) Rename(oldName, newName string) error {
+func (l *Local) Rename(oldName, newName string) error {
 	oldName, err := l.fixPath(oldName)
 	if err != nil {
 		return err
@@ -124,7 +124,7 @@ func (l *LocalStorage) Rename(oldName, newName string) error {
 
 // fixPath resolves the given path relative to the storage root and ensures
 // it does not escape outside the root directory.
-func (l *LocalStorage) fixPath(name string) (string, error) {
+func (l *Local) fixPath(name string) (string, error) {
 	name = strings.ReplaceAll(name, "/", string(os.PathSeparator))
 	if filepath.IsAbs(name) {
 		return "", ErrPathTraversal

@@ -35,7 +35,7 @@ func TestStoreObjectRenameOntoFIFO(t *testing.T) {
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	strg := failRenameStorage{storage.NewLocalStorage(root)}
+	strg := failRenameStorage{storage.NewLocal(root)}
 	datastore := &memLFSStore{objects: map[string]int64{}}
 
 	done := make(chan error, 1)

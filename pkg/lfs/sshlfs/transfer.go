@@ -133,7 +133,7 @@ func Transfer(ctx context.Context, in io.Reader, out io.Writer, deps TransferDep
 		dbx:     deps.DB,
 		store:   deps.Store,
 		logger:  logger,
-		storage: storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID)),
+		storage: storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID)),
 		repo:    repo,
 		user:    user,
 		op:      op,

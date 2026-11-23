@@ -79,7 +79,7 @@ func TestStoreObjectRenameFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
-			local := storage.NewLocalStorage(root)
+			local := storage.NewLocal(root)
 			if tc.dest != "" {
 				if _, err := local.Put(objPath, strings.NewReader(tc.dest)); err != nil {
 					t.Fatal(err)
@@ -123,7 +123,7 @@ func TestHasObject(t *testing.T) {
 	sum := sha256.Sum256([]byte(content))
 	p := Pointer{Oid: hex.EncodeToString(sum[:]), Size: int64(len(content))}
 	root := t.TempDir()
-	strg := storage.NewLocalStorage(root)
+	strg := storage.NewLocal(root)
 	objPath := filepath.Join(root, "objects", p.Oid[0:2], p.Oid[2:4], p.Oid)
 
 	check := func(name string, want bool) {
@@ -171,7 +171,7 @@ func TestStoreObjectReadFailure(t *testing.T) {
 	datastore := &memLFSStore{objects: map[string]int64{}}
 
 	r := io.MultiReader(strings.NewReader(content[:4]), iotest.ErrReader(io.ErrUnexpectedEOF))
-	err := StoreObject(context.Background(), storage.NewLocalStorage(root), nil, datastore, 1, oid, int64(len(content)), r)
+	err := StoreObject(context.Background(), storage.NewLocal(root), nil, datastore, 1, oid, int64(len(content)), r)
 	if !errors.Is(err, ErrObjectRead) || !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("StoreObject => %v, want ErrObjectRead wrapping io.ErrUnexpectedEOF", err)
 	}
@@ -303,7 +303,7 @@ func TestStoreObjectConcurrentRename(t *testing.T) {
 	root := t.TempDir()
 	const n = 4
 	strg := &windowsRenameStorage{
-		Storage:  storage.NewLocalStorage(root),
+		Storage:  storage.NewLocal(root),
 		others:   n - 1,
 		inFlight: map[string]bool{},
 	}

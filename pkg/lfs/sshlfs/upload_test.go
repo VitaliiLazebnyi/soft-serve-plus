@@ -67,7 +67,7 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, TransferDeps) {
 		dbx:     dbx,
 		store:   datastore,
 		logger:  logger,
-		storage: storage.NewLocalStorage(filepath.Join(dp, "lfs", "1")),
+		storage: storage.NewLocal(filepath.Join(dp, "lfs", "1")),
 		repo:    lfsTestRepo{},
 		op:      lfs.OperationUpload,
 	}, deps
