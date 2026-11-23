@@ -459,84 +459,6 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	}
 }
 
-// bubbleTeaMiddleware cancels the UI's context once the TUI program has
-// exited, while the connection stays open, so the UI's git commands do not
-// run on until the client goes (UI-11, R57).
-func TestBubbleTeaMiddlewareEndsUIContextWithProgram(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	d := depsOf(serverContext(t, cfg, log.Default()))
-	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
-	uiCtxs := make(chan context.Context, 1)
-	hs.onUIContext = func(ctx context.Context) { uiCtxs <- ctx }
-	type errs struct{ ui, conn error }
-	after := make(chan errs, 1)
-	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
-			// The program has exited; the session's handler goes on.
-			var e errs
-			select {
-			case ctx := <-uiCtxs:
-				e.ui = ctx.Err()
-			default:
-				e.ui = errors.New("no UI context")
-			}
-			e.conn = s.Context().Err()
-			after <- e
-			_ = s.Exit(0)
-		})),
-	}
-	if err := ssh.EmulatePty()(srv); err != nil {
-		t.Fatal(err)
-	}
-	addr := testsession.Listen(t, srv)
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
-		User:            "test",
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
-		Timeout:         sessionLoopsWait,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	sess, err := client.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := sess.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.Shell(); err != nil {
-		t.Fatal(err)
-	}
-	// Quit the TUI, retrying until the program reads the key.
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	timeout := time.After(sessionLoopsWait)
-	var got errs
-wait:
-	for {
-		select {
-		case got = <-after:
-			break wait
-		case <-tick.C:
-			_, _ = io.WriteString(stdin, "q")
-		case <-timeout:
-			t.Fatal("TUI did not quit")
-		}
-	}
-	if !errors.Is(got.ui, context.Canceled) {
-		t.Errorf("UI context after the program exited: %v, want %v", got.ui, context.Canceled)
-	}
-	if got.conn != nil {
-		t.Errorf("connection context after the program exited: %v, want it open", got.conn)
-	}
-}
-
 // newSessionProgram gives the UI the clamped size.
 func TestNewSessionProgramClampsSize(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -598,23 +520,57 @@ func TestSessionFilter(t *testing.T) {
 
 // The TUI's git work belongs to the session, not to the connection: once the
 // program has exited, its context is done although the client keeps the
-// connection open, as a multiplexing client does.
+// connection open, as a multiplexing client does (UI-11, R57).
+//
+// The middleware cancels the UI's context when the program exits, before it
+// hands the session on, and not only in its deferred cleanup: the next
+// handler, which runs after the program and before that cleanup, already
+// sees the UI's context done. The context checked is the one the built UI
+// holds, and the test requires that the UI was built, so a TUI that fails
+// to start does not pass it.
 func TestTUIContextEndsWithSession(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	d := depsOf(serverContext(t, cfg, log.Default()))
+	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
+	// built gets the UI newSessionProgram returns, nil when it built none;
+	// uiCtx gets the built UI's context, for the next handler.
+	built := make(chan *UI, 1)
 	uiCtx := make(chan context.Context, 1)
-	srv := setupServerWith(t, func(hs *Server) func(ssh.Handler) ssh.Handler {
-		return tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
+	type errs struct{ ui, conn error }
+	after := make(chan errs, 1)
+	srv := &ssh.Server{
+		Handler: hs.loggerMiddleware(tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
 			p, ui, cancel := hs.newSessionProgram(s)
 			if ui != nil {
 				uiCtx <- ui.common.Context()
 			}
+			built <- ui
 			return p, ui, cancel
-		})
-	})
+		})(func(s ssh.Session) {
+			// The program has exited; the middleware's deferred cleanup
+			// has not run yet.
+			var e errs
+			select {
+			case ctx := <-uiCtx:
+				e.ui = ctx.Err()
+			default:
+				e.ui = errors.New("no UI was built")
+			}
+			e.conn = s.Context().Err()
+			after <- e
+			_ = s.Exit(0)
+		})),
+	}
+	if err := ssh.EmulatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
 	addr := testsession.Listen(t, srv)
 
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint: gosec
+		Timeout:         sessionLoopsWait,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -635,29 +591,29 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ctx context.Context
+	var ui *UI
 	select {
-	case ctx = <-uiCtx:
+	case ui = <-built:
 	case <-time.After(sessionLoopsWait):
-		t.Fatal("the TUI did not start")
+		t.Fatal("newSessionProgram was not called")
 	}
+	if ui == nil {
+		t.Fatal("the TUI did not start: newSessionProgram built no UI")
+	}
+	ctx := ui.common.Context()
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("the TUI's context is done while it runs: %v", err)
 	}
 
 	// Quit the TUI, retrying until the program reads the key.
-	done := make(chan error, 1)
-	go func() { done <- sess.Wait() }()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	timeout := time.After(sessionLoopsWait)
+	var got errs
 wait:
 	for {
 		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("session: %v", err)
-			}
+		case got = <-after:
 			break wait
 		case <-tick.C:
 			_, _ = io.WriteString(stdin, "q")
@@ -665,15 +621,22 @@ wait:
 			t.Fatal("TUI did not quit")
 		}
 	}
+	if !errors.Is(got.ui, context.Canceled) {
+		t.Errorf("UI context after the program exited, before the middleware's cleanup: %v, want %v", got.ui, context.Canceled)
+	}
+	if got.conn != nil {
+		t.Errorf("connection context after the program exited: %v, want it open", got.conn)
+	}
+	if err := sess.Wait(); err != nil {
+		t.Fatalf("session: %v", err)
+	}
 
 	// The session has ended and the connection is still open: a new
 	// session on it works.
 	if _, err := client.NewSession(); err != nil {
 		t.Fatalf("the connection did not stay open: %v", err)
 	}
-	select {
-	case <-ctx.Done():
-	case <-time.After(sessionLoopsWait):
-		t.Fatal("the TUI's context is not done after its session ended")
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Errorf("the TUI's context after its session ended: %v, want %v", ctx.Err(), context.Canceled)
 	}
 }

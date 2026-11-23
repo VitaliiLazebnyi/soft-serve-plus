@@ -135,9 +135,6 @@ func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *UI, context.
 	// when the program exits, so a client that keeps the connection open
 	// for its next session does not keep the UI's git commands running.
 	uiCtx, cancel := context.WithCancel(ctx)
-	if srv.onUIContext != nil {
-		srv.onUIContext(uiCtx)
-	}
 	c, err := common.New(uiCtx, srv.cfg, be, srv.logger)
 	if err != nil {
 		cancel()
