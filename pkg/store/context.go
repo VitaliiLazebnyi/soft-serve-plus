@@ -2,12 +2,12 @@ package store
 
 import "context"
 
-// ContextKey is the store context key.
-var ContextKey = &struct{ string }{"store"}
+// contextKey is the store context key.
+var contextKey = &struct{ string }{"store"}
 
 // FromContext returns the store from the given context.
 func FromContext(ctx context.Context) Store {
-	if s, ok := ctx.Value(ContextKey).(Store); ok {
+	if s, ok := ctx.Value(contextKey).(Store); ok {
 		return s
 	}
 
@@ -16,5 +16,5 @@ func FromContext(ctx context.Context) Store {
 
 // WithContext returns a new context with the given store.
 func WithContext(ctx context.Context, s Store) context.Context {
-	return context.WithValue(ctx, ContextKey, s)
+	return context.WithValue(ctx, contextKey, s)
 }

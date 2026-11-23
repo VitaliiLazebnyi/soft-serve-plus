@@ -2,12 +2,12 @@ package db
 
 import "context"
 
-// ContextKey is the key used to store the database in the context.
-var ContextKey = struct{ string }{"db"}
+// contextKey is the key used to store the database in the context.
+var contextKey = struct{ string }{"db"}
 
 // FromContext returns the database from the context.
 func FromContext(ctx context.Context) *DB {
-	if db, ok := ctx.Value(ContextKey).(*DB); ok {
+	if db, ok := ctx.Value(contextKey).(*DB); ok {
 		return db
 	}
 	return nil
@@ -15,5 +15,5 @@ func FromContext(ctx context.Context) *DB {
 
 // WithContext returns a new context with the database.
 func WithContext(ctx context.Context, db *DB) context.Context {
-	return context.WithValue(ctx, ContextKey, db)
+	return context.WithValue(ctx, contextKey, db)
 }
