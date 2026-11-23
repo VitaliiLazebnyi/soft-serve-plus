@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,10 +11,15 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
+	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
+	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // A directory with more than git.MaxTreeEntries entries is listed in
@@ -355,4 +361,234 @@ func isBlame(msg any) bool {
 func isErrorMsg(msg any) bool {
 	_, ok := msg.(errorMsg)
 	return ok
+}
+
+// renderAllocMax is the most bytes the render of a file of 1 MiB may
+// allocate, whatever the width. Rendering it inside Update would allocate
+// gigabytes, more the wider the terminal.
+const renderAllocMax = 160 << 20
+
+// newRenderFiles returns a Files pane width columns wide that has seen a
+// window size message.
+func newRenderFiles(t *testing.T, width int) *Files {
+	t.Helper()
+	f := NewFiles(uitest.NewCommon(t, context.Background(), nil, nil))
+	f.SetSize(width, 40)
+	f.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+	return f
+}
+
+// newUnboundedFiles is newRenderFiles with a free slot and no highlighting
+// budget, so that only a limit shows a file plain.
+func newUnboundedFiles(t *testing.T) *Files {
+	t.Helper()
+	uitest.WaitIdle(t, syntax.Tokenising)
+	f := newRenderFiles(t, 120)
+	f.code.HighlightBudget = uitest.Unbounded
+	return f
+}
+
+// openFile hands f a file's content and returns the command Update returned,
+// failing if Update allocated more than updateAllocMax.
+func openFile(t *testing.T, f *Files, content, name string) tea.Cmd {
+	t.Helper()
+	msg := FileContentMsg{content: content, ext: name, path: name, load: f.load, isMarkdown: syntax.IsFileMarkdown(content, name)}
+	var cmd tea.Cmd
+	if n := allocated(func() { cmd = f.Update(msg) }); n > updateAllocMax {
+		t.Fatalf("Update allocated %d bytes to open %s; want at most %d", n, name, updateAllocMax)
+	}
+	return cmd
+}
+
+// A file of 1 MiB of newlines is rendered in a command with bounded memory
+// at any width, its lines are numbered as they are shown rather than all at
+// once, and toggling the numbers does not render it in Update.
+//
+// Not parallel: it measures the bytes the process allocates.
+func TestFileOfNewlinesRendersOutsideUpdate(t *testing.T) {
+	content := strings.Repeat("\n", 1<<20)
+	for _, width := range []int{100, common.MaxWidth} {
+		f := newRenderFiles(t, width)
+		cmd := openFile(t, f, content, "empty.txt")
+		var n int
+		if a := allocated(func() { n = deliverAll(f, cmd) }); a > renderAllocMax {
+			t.Fatalf("width %d: the render allocated %d bytes; want at most %d", width, a, renderAllocMax)
+		}
+		if n == 0 {
+			t.Fatalf("width %d: no render result arrived as a message", width)
+		}
+		if f.activeView != filesViewContent {
+			t.Fatalf("width %d: view = %v; want the file", width, f.activeView)
+		}
+		if strings.Contains(f.code.GetContent(), "│") {
+			t.Fatalf("width %d: every line was numbered up front", width)
+		}
+		if v := ansi.Strip(f.code.View()); !strings.Contains(v, " 1 │") {
+			t.Fatalf("width %d: the shown lines have no numbers:\n%s", width, v)
+		}
+
+		// "l" hides the line numbers, then shows them again.
+		for _, numbered := range []bool{false, true} {
+			var cmd tea.Cmd
+			if a := allocated(func() { cmd = f.Update(tea.KeyPressMsg{Code: 'l', Text: "l"}) }); a > updateAllocMax {
+				t.Fatalf("width %d: Update allocated %d bytes for l; want at most %d", width, a, updateAllocMax)
+			}
+			if a := allocated(func() { deliverAll(f, cmd) }); a > renderAllocMax {
+				t.Fatalf("width %d: the render for l allocated %d bytes; want at most %d", width, a, renderAllocMax)
+			}
+			if got := strings.Contains(ansi.Strip(f.code.View()), " 1 │"); got != numbered {
+				t.Fatalf("width %d: line numbers shown = %v; want %v", width, got, numbered)
+			}
+		}
+	}
+}
+
+// A JavaScript file that is one identifier of 1 MiB took minutes to
+// highlight. It is shown without highlighting, in a command.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted,
+// so it would pass for the wrong reason.
+func TestFileWithLongLineNotHighlighted(t *testing.T) {
+	f := newRenderFiles(t, 120)
+	done := make(chan tea.Cmd, 1)
+	go func() {
+		done <- f.Update(FileContentMsg{content: strings.Repeat("a", 1<<20), ext: "big.js", path: "big.js", load: f.load})
+	}()
+	cmd, ok := uitest.Receive(done)
+	if !ok {
+		t.Fatal("Update did not return within a minute for a 1 MiB identifier")
+	}
+	rendered := make(chan struct{})
+	go func() { deliverAll(f, cmd); close(rendered) }()
+	if _, ok := uitest.Receive(rendered); !ok {
+		t.Fatal("the render did not finish within a minute for a 1 MiB identifier")
+	}
+	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "aaaa") {
+		t.Fatal("the long line was highlighted, or is missing")
+	}
+}
+
+// Ordinary files are highlighted; files over 256 KiB, or with a line over
+// 4 KiB, are not.
+//
+// Not parallel: the server highlights at most a few files at once, and
+// a parallel test holding the slots would leave this one unhighlighted.
+func TestFileHighlightLimit(t *testing.T) {
+	small := "package main\n\nfunc main() {}\n"
+	f := newUnboundedFiles(t)
+	deliverAll(f, openFile(t, f, small, "main.go"))
+	if !strings.Contains(f.code.GetContent(), "\x1b[") {
+		t.Fatal("a small Go file was not highlighted")
+	}
+
+	const line = "func f() {} // one of fewer than ten thousand lines\n"
+	for limit, content := range map[string]string{
+		"over 256 KiB":           strings.Repeat(line, (256<<10)/len(line)+1),
+		"with a line over 4 KiB": "func f() {} // " + strings.Repeat("a", 4<<10) + "\n",
+	} {
+		f = newUnboundedFiles(t)
+		deliverAll(f, openFile(t, f, content, "large.go"))
+		if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "func f() {}") {
+			t.Fatalf("a Go file %s was highlighted, or is missing", limit)
+		}
+	}
+}
+
+// codeRenders runs cmd and returns the code view renders it produces.
+func codeRenders(cmd tea.Cmd) []tea.Msg {
+	var out []tea.Msg
+	for _, m := range runCmd(cmd) {
+		if _, ok := m.(code.RenderedMsg); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// A file of many short lines is not highlighted, however small: chroma's
+// cost grows with its tokens.
+//
+// Not parallel: it measures the bytes the process allocates, and it needs
+// a free tokenising slot. The server highlights at most a few files at
+// once, and a parallel test holding the slots would leave this file
+// unhighlighted, so it would pass for the wrong reason.
+func TestFileOfManyLinesNotHighlighted(t *testing.T) {
+	f := newUnboundedFiles(t)
+	deliverAll(f, openFile(t, f, strings.Repeat("x := 1\n", 20000), "many.go"))
+	if c := f.code.GetContent(); strings.Contains(c, "\x1b[") || !strings.Contains(c, "x := 1") {
+		t.Fatal("a Go file of 20,000 lines was highlighted, or is missing")
+	}
+}
+
+// Pressing "l" over and over on a large file renders it once at a time:
+// presses while a render runs start none, and one render follows it.
+//
+// Not parallel: it measures the bytes the process allocates.
+func TestFileLineNumberTogglesRenderOneAtATime(t *testing.T) {
+	f := newRenderFiles(t, 120)
+	deliverAll(f, openFile(t, f, strings.Repeat("x\n", 1<<18), "big.txt"))
+	if f.activeView != filesViewContent {
+		t.Fatal("the file is not shown")
+	}
+	l := tea.KeyPressMsg{Code: 'l', Text: "l"}
+	first := f.Update(l)
+	var later []tea.Cmd
+	for range 39 {
+		later = append(later, f.Update(l))
+	}
+	rendered := 0
+	for _, cmd := range later {
+		rendered += len(codeRenders(cmd))
+	}
+	if rendered != 0 {
+		t.Fatalf("39 presses during a render started %d renders; want 0", rendered)
+	}
+	r := codeRenders(first)
+	if len(r) != 1 {
+		t.Fatalf("the first press rendered %d times; want 1", len(r))
+	}
+	next := codeRenders(f.Update(r[0]))
+	if len(next) != 1 {
+		t.Fatalf("%d renders followed the first; want 1", len(next))
+	}
+	if n := len(codeRenders(f.Update(next[0]))); n != 0 {
+		t.Fatalf("the last render started %d more", n)
+	}
+}
+
+// The Files pane decides glamour rendering and the preview key from the
+// markdown flag worked out when the file was loaded.
+func TestFilesUsesLoadedMarkdownFlag(t *testing.T) {
+	t.Parallel()
+	c := uitest.NewCommon(t, context.Background(), nil, nil)
+	f := NewFiles(c)
+	f.SetSize(80, 24)
+
+	f.Update(FileContentMsg{content: "# Title\n", ext: "README.md", isMarkdown: true, load: f.load})
+	if !f.code.UseGlamour {
+		t.Error("markdown file not rendered with glamour")
+	}
+	if !helpHasDesc(f.FullHelp(), preview.Help().Desc) {
+		t.Error("preview key missing from help for a markdown file")
+	}
+
+	f.Update(FileContentMsg{content: "package main\n", ext: "main.go", load: f.load})
+	if f.code.UseGlamour {
+		t.Error("non-markdown file rendered with glamour")
+	}
+	if helpHasDesc(f.FullHelp(), preview.Help().Desc) {
+		t.Error("preview key shown for a non-markdown file")
+	}
+}
+
+func helpHasDesc(groups [][]key.Binding, desc string) bool {
+	for _, g := range groups {
+		for _, k := range g {
+			if k.Help().Desc == desc {
+				return true
+			}
+		}
+	}
+	return false
 }
