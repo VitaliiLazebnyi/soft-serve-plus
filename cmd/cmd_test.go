@@ -289,3 +289,20 @@ func TestOpenEnvRefusesNilConfig(t *testing.T) {
 		t.Error("the loader's log was left open")
 	}
 }
+
+// A Loader that gives no logger gets log.Default(), which the Env's
+// commands then log to.
+func TestOpenEnvDefaultsNilLogger(t *testing.T) {
+	cfg := testConfig(t, t.TempDir())
+	load := func() (*config.Config, *log.Logger, func() error, error) {
+		return cfg, nil, nil, nil
+	}
+	env, err := OpenEnv(t.Context(), load, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = env.Close() })
+	if env.Logger != log.Default() {
+		t.Errorf("OpenEnv with a nil logger: Env.Logger = %p, want log.Default() %p", env.Logger, log.Default())
+	}
+}
