@@ -778,7 +778,9 @@ puts two conditions on the data directory:
 The mode is stored in the database file: an existing database switches to
 WAL on the first start of this version, and the `-wal` and `-shm` files
 appear next to it. To switch back, add `&_pragma=journal_mode(DELETE)` to
-`db.data_source` and restart the server.
+`db.data_source` and restart the server. The database file and its directory
+must be writable by the server, even for a server that only reads: a
+read-only database file no longer opens with the default data source.
 
 #### LFS Configuration
 
