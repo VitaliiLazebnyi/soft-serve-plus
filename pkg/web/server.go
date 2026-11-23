@@ -1,3 +1,5 @@
+// Package web is the server's HTTP transport: git's smart HTTP protocol,
+// the Git LFS batch, transfer and locks API, go-get, and health checks.
 package web
 
 import (

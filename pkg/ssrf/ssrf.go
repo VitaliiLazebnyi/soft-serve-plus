@@ -1,3 +1,6 @@
+// Package ssrf keeps the server's outbound connections, for webhooks, mirrors
+// and LFS, off private and internal addresses, apart from the destinations
+// an allowlist permits.
 package ssrf
 
 import (

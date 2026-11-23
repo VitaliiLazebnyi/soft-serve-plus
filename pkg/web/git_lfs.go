@@ -102,9 +102,9 @@ func lfsBodyTooLarge(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 	return true
 }
 
-// serviceLfsBatch handles a Git LFS batch requests.
+// serviceLfsBatch handles a Git LFS batch request. The request's ref is
+// ignored: objects belong to the repository, not to a ref.
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md
-// TODO: support refname
 // POST: /<repo>.git/info/lfs/objects/batch
 func (s *server) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	ctx := r.Context()
@@ -178,7 +178,7 @@ func (s *server) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *git
 	cfg := s.cfg
 	dbx := s.dbx
 	datastore := s.datastore
-	// TODO: support S3 storage
+	// Objects are stored on the local file system only.
 	repoID := strconv.FormatInt(repo.ID(), 10)
 	strg := storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID))
 
@@ -210,8 +210,7 @@ func (s *server) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *git
 
 	actionAuth := s.lfsActionAuthFor(r, gr.logger, repo.Name(), time.Now())
 	objects := make([]*lfs.ObjectResponse, 0, len(batchRequest.Objects))
-	// XXX: We don't support objects TTL for now, probably implement that with
-	// S3 using object "expires_at" & "expires_in"
+	// Actions carry no expiry (expires_at, expires_in).
 	switch batchRequest.Operation {
 	case lfs.OperationDownload:
 		for _, o := range batchRequest.Objects {
@@ -356,7 +355,7 @@ func lfsObjectPresent(strg storage.Storage, obj models.LFSObject, recorded bool,
 	return stat.Mode().IsRegular() && stat.Size() == p.Size, nil
 }
 
-// serviceLfsBasic implements Git LFS basic transfer API
+// serviceLfsBasic serves the Git LFS basic transfer API.
 // https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md
 func (s *server) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	switch r.Method {
@@ -367,6 +366,7 @@ func (s *server) serviceLfsBasic(w http.ResponseWriter, r *http.Request, gr *git
 	}
 }
 
+// serviceLfsBasicDownload sends an object.
 // GET: /<repo>.git/info/lfs/objects/basic/<oid>
 func (s *server) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	oid := mux.Vars(r)["oid"]
@@ -405,6 +405,7 @@ func (s *server) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request,
 	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
+// serviceLfsBasicUpload receives and stores an object.
 // PUT: /<repo>.git/info/lfs/objects/basic/<oid>
 func (s *server) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !hasMediaType(r, "application/octet-stream") {
@@ -491,6 +492,7 @@ func (s *server) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, g
 	renderStatus(w, http.StatusOK)
 }
 
+// serviceLfsBasicVerify checks that an uploaded object is stored.
 // POST: /<repo>.git/info/lfs/objects/basic/verify
 func (s *server) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request, gr *gitRequest) {
 	if !lfsMediaTypes(w, r, gr.logger) {

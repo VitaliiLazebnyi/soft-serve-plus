@@ -104,7 +104,8 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 	logger := c.logger
 	url := c.endpoint.JoinPath("objects", "batch").String()
 
-	// TODO: support ref
+	// The request names no ref: the server's objects belong to the
+	// repository.
 	request := &BatchRequest{
 		Operation: operation,
 		Transfers: []string{TransferBasic},
