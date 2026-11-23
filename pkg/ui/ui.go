@@ -110,7 +110,7 @@ func (ui *Model) getMargins() (wm, hm int) {
 		// the styles.
 		hm += ui.footer.Height()
 	}
-	return
+	return wm, hm
 }
 
 // ShortHelp implements help.KeyMap.

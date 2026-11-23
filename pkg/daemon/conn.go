@@ -154,25 +154,25 @@ type serverConn struct {
 
 var _ net.Conn = (*serverConn)(nil)
 
-func (c *serverConn) Write(p []byte) (n int, err error) {
+func (c *serverConn) Write(p []byte) (int, error) {
 	c.updateDeadline(false)
-	n, err = c.Conn.Write(p)
+	n, err := c.Conn.Write(p)
 	if n > 0 {
 		c.wrote.Store(true)
 	}
 	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
-	return
+	return n, err
 }
 
-func (c *serverConn) Read(b []byte) (n int, err error) {
+func (c *serverConn) Read(b []byte) (int, error) {
 	c.updateDeadline(true)
-	n, err = c.Conn.Read(b)
+	n, err := c.Conn.Read(b)
 	if isNetError(err) && c.closeCanceler != nil {
 		c.closeCanceler()
 	}
-	return
+	return n, err
 }
 
 // Wrote reports whether any output was written to the client. Once it was,
@@ -182,12 +182,12 @@ func (c *serverConn) Wrote() bool {
 	return c.wrote.Load()
 }
 
-func (c *serverConn) Close() (err error) {
-	err = c.Conn.Close()
+func (c *serverConn) Close() error {
+	err := c.Conn.Close()
 	if c.closeCanceler != nil {
 		c.closeCanceler()
 	}
-	return
+	return err
 }
 
 // updateDeadline sets the connection deadline to the earliest of the idle
