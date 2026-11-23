@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -54,29 +54,37 @@ func sameKeys(a, b []ssh.PublicKey) bool {
 // A repository needs an owner: repos.user_id is NOT NULL. CreateRepo says so
 // instead of sending an insert that cannot succeed.
 func TestCreateRepoRequiresOwner(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
 	_, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "ownerless", UserID: 0, Anonymous: true})
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 	if _, err := s.CreateRepo(ctx, dbx, models.Repo{Name: "owned", UserID: 100}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.GetRepoByName(ctx, dbx, "owned")
-	is.NoErr(err)
-	is.Equal(r.UserID, int64(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.UserID, int64(100); got != want {
+		t.Fatalf("r.UserID = %v, want %v", got, want)
+	}
 }
 
 // Changing a repository or a user moves its updated_at.
 func TestUpdatesSetUpdatedAt(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	old := "2001-01-01 00:00:00"
 	_, err := dbx.ExecContext(ctx, dbx.Rebind(`UPDATE repos SET updated_at = ?;`), old)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE users SET updated_at = ?;`), old)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cutoff := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	rs := &Store{}
@@ -88,100 +96,154 @@ func TestUpdatesSetUpdatedAt(t *testing.T) {
 		"project name": func(n string) error { return rs.SetRepoProjectNameByName(ctx, dbx, n, "p") },
 	} {
 		_, err := dbx.ExecContext(ctx, dbx.Rebind(`UPDATE repos SET updated_at = ? WHERE name = 'repo7';`), old)
-		is.NoErr(err)
-		is.NoErr(set("repo7"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := set("repo7"); err != nil {
+			t.Fatal(err)
+		}
 		r, err := rs.GetRepoByName(ctx, dbx, "repo7")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !r.UpdatedAt.After(cutoff) {
 			t.Errorf("setting the %s left updated_at at %v", name, r.UpdatedAt)
 		}
 	}
-	is.NoErr(rs.SetRepoNameByName(ctx, dbx, "repo8", "renamed"))
+	if err := rs.SetRepoNameByName(ctx, dbx, "repo8", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	r, err := rs.GetRepoByName(ctx, dbx, "renamed")
-	is.NoErr(err)
-	is.True(r.UpdatedAt.After(cutoff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.UpdatedAt.After(cutoff) {
+		t.Fatal("not true: r.UpdatedAt.After(cutoff)")
+	}
 
 	us := &Store{}
 	user := func(name string) models.User {
 		t.Helper()
 		u, err := us.FindUserByUsername(ctx, dbx, name)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return u
 	}
-	is.NoErr(us.SetAdminByUsername(ctx, dbx, "owner", true))
-	is.True(user("owner").UpdatedAt.After(cutoff))
+	if err := us.SetAdminByUsername(ctx, dbx, "owner", true); err != nil {
+		t.Fatal(err)
+	}
+	if !user("owner").UpdatedAt.After(cutoff) {
+		t.Fatal("not true: user(\"owner\").UpdatedAt.After(cutoff)")
+	}
 	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE users SET updated_at = ?;`), old)
-	is.NoErr(err)
-	is.NoErr(us.SetUsernameByUsername(ctx, dbx, "owner", "owner2"))
-	is.True(user("owner2").UpdatedAt.After(cutoff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := us.SetUsernameByUsername(ctx, dbx, "owner", "owner2"); err != nil {
+		t.Fatal(err)
+	}
+	if !user("owner2").UpdatedAt.After(cutoff) {
+		t.Fatal("not true: user(\"owner2\").UpdatedAt.After(cutoff)")
+	}
 }
 
 // allow_keyless is stored as the text "true" or "false", as migration 1
 // seeds it, on every driver.
 func TestAllowKeylessStoredAsText(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 	for _, allow := range []bool{false, true} {
-		is.NoErr(s.SetAllowKeylessAccess(ctx, dbx, allow))
+		if err := s.SetAllowKeylessAccess(ctx, dbx, allow); err != nil {
+			t.Fatal(err)
+		}
 		var raw string
-		is.NoErr(dbx.GetContext(ctx, &raw, `SELECT value FROM settings WHERE "key" = 'allow_keyless'`))
+		if err := dbx.GetContext(ctx, &raw, `SELECT value FROM settings WHERE "key" = 'allow_keyless'`); err != nil {
+			t.Fatal(err)
+		}
 		want := "false"
 		if allow {
 			want = "true"
 		}
-		is.Equal(raw, want)
+		if got := raw; got != want {
+			t.Fatalf("raw = %v, want %v", got, want)
+		}
 		got, err := s.GetAllowKeylessAccess(ctx, dbx)
-		is.NoErr(err)
-		is.Equal(got, allow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := got; got != allow {
+			t.Fatalf("got = %v, want %v", got, allow)
+		}
 	}
 }
 
 // An anon_access value that is no access level is an error, not a level
 // below no-access that the access checks would have to know about.
 func TestAnonAccessInvalidValue(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 	_, err := dbx.ExecContext(ctx, dbx.Rebind(`UPDATE settings SET value = ? WHERE "key" = 'anon_access'`), "everyone")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = s.GetAnonAccess(ctx, dbx)
-	is.True(errors.Is(err, access.ErrInvalidAccessLevel))
+	if !errors.Is(err, access.ErrInvalidAccessLevel) {
+		t.Fatal("not true: errors.Is(err, access.ErrInvalidAccessLevel)")
+	}
 }
 
 // lfs_locks.refname is nullable; a lock without one can still be read.
 func TestLFSLockWithoutRefname(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	_, err := dbx.ExecContext(ctx, `INSERT INTO lfs_locks (repo_id, user_id, path, refname, updated_at)
 		VALUES (7, 100, 'a.bin', NULL, CURRENT_TIMESTAMP);`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Store{}
 	locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, 10)
-	is.NoErr(err)
-	is.Equal(len(locks), 1)
-	is.True(!locks[0].Refname.Valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(locks); got != 1 {
+		t.Fatalf("len(locks) = %v, want %v", got, 1)
+	}
+	if locks[0].Refname.Valid {
+		t.Fatal("not true: !locks[0].Refname.Valid")
+	}
 
 	if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "b.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := s.GetLFSLockForPath(ctx, dbx, 7, "b.bin")
-	is.NoErr(err)
-	is.Equal(lock.Refname.String, "refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lock.Refname.String; got != "refs/heads/main" {
+		t.Fatalf("lock.Refname.String = %v, want %v", got, "refs/heads/main")
+	}
 }
 
 // A webhook subscribed to several of the requested events is returned once.
 func TestGetWebhooksByRepoIDWhereEventReturnsEachOnce(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 	id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
-	is.NoErr(err)
-	is.NoErr(s.CreateWebhookEvents(ctx, dbx, id, []int{1, 2, 3}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateWebhookEvents(ctx, dbx, id, []int{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
 
 	whs, err := s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{1, 2, 3})
-	is.NoErr(err)
-	is.Equal(idsOf(whs), []int64{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := idsOf(whs), ([]int64{id}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("idsOf(whs) = %v, want %v", got, want)
+	}
 }
 
 // vanishOnInsert installs a trigger that deletes webhook id when a delivery
@@ -266,7 +328,6 @@ func TestSettingsSettersRestoreMissingRows(t *testing.T) {
 // order and then updated, which on Postgres moves an updated row to the end
 // of a plain table scan.
 func TestUserVisibleListsAreOrdered(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	rs, us, cs, ts, ls := &Store{}, &Store{}, &Store{}, &Store{}, &Store{}
 
@@ -275,71 +336,119 @@ func TestUserVisibleListsAreOrdered(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "repo7", "moved"))
-	is.NoErr(rs.SetRepoDescriptionByName(ctx, dbx, "a", "moved"))
+	if err := rs.SetRepoDescriptionByName(ctx, dbx, "repo7", "moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetRepoDescriptionByName(ctx, dbx, "a", "moved"); err != nil {
+		t.Fatal(err)
+	}
 
 	repos, err := rs.GetAllRepos(ctx, dbx)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	userRepos, err := rs.GetUserRepos(ctx, dbx, 100)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, list := range [][]string{repoNames(repos), repoNames(userRepos)} {
-		is.Equal(list, []string{"a", "b", "c", "repo7", "repo8"})
+		if got, want := list, ([]string{"a", "b", "c", "repo7", "repo8"}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("list = %v, want %v", got, want)
+		}
 	}
 
 	for _, name := range []string{"zed", "amy"} {
-		is.NoErr(us.CreateUser(ctx, dbx, name, false, nil))
+		if err := us.CreateUser(ctx, dbx, name, false, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
-	is.NoErr(us.SetAdminByUsername(ctx, dbx, "amy", true))
+	if err := us.SetAdminByUsername(ctx, dbx, "amy", true); err != nil {
+		t.Fatal(err)
+	}
 	users, err := us.GetAllUsers(ctx, dbx)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var usernames []string
 	for _, u := range users {
 		usernames = append(usernames, u.Username)
 	}
-	is.Equal(usernames, []string{"admin", "amy", "owner", "zed"})
+	if got, want := usernames, ([]string{"admin", "amy", "owner", "zed"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("usernames = %v, want %v", got, want)
+	}
 
 	for _, name := range []string{"zed", "owner", "amy"} {
-		is.NoErr(cs.AddCollabByUsernameAndRepo(ctx, dbx, name, "repo7", access.ReadOnlyAccess))
+		if err := cs.AddCollabByUsernameAndRepo(ctx, dbx, name, "repo7", access.ReadOnlyAccess); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE collabs SET access_level = ? WHERE user_id = 100;`), access.ReadWriteAccess)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	collabs, err := cs.ListCollabsByRepo(ctx, dbx, "repo7")
-	is.NoErr(err)
-	is.Equal(len(collabs), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(collabs); got != 3 {
+		t.Fatalf("len(collabs) = %v, want %v", got, 3)
+	}
 	for i := 1; i < len(collabs); i++ {
-		is.True(collabs[i-1].ID < collabs[i].ID)
+		if collabs[i-1].ID >= collabs[i].ID {
+			t.Fatal("not true: collabs[i-1].ID < collabs[i].ID")
+		}
 	}
 	collabUsers, err := cs.ListCollabsByRepoAsUsers(ctx, dbx, "repo7")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	usernames = nil
 	for _, u := range collabUsers {
 		usernames = append(usernames, u.Username)
 	}
-	is.Equal(usernames, []string{"amy", "owner", "zed"})
+	if got, want := usernames, ([]string{"amy", "owner", "zed"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("usernames = %v, want %v", got, want)
+	}
 
 	var tokenIDs []int64
 	for i := range 3 {
 		tok, err := ts.CreateAccessToken(ctx, dbx, fmt.Sprintf("t%d", i), 100, fmt.Sprintf("hash%d", i), time.Time{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		tokenIDs = append(tokenIDs, tok.ID)
 	}
 	_, err = dbx.ExecContext(ctx, dbx.Rebind(`UPDATE access_tokens SET name = ? WHERE id = ?;`), "renamed", tokenIDs[0])
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tokens, err := ts.GetAccessTokensByUserID(ctx, dbx, 100)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var gotTokenIDs []int64
 	for _, tok := range tokens {
 		gotTokenIDs = append(gotTokenIDs, tok.ID)
 	}
-	is.Equal(gotTokenIDs, tokenIDs)
+	if got, want := gotTokenIDs, tokenIDs; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gotTokenIDs = %v, want %v", got, want)
+	}
 
 	for _, oid := range []string{"oid1", "oid2", "oid3"} {
-		is.NoErr(ls.CreateLFSObject(ctx, dbx, 7, oid, 1))
+		if err := ls.CreateLFSObject(ctx, dbx, 7, oid, 1); err != nil {
+			t.Fatal(err)
+		}
 	}
-	is.NoErr(ls.UpdateLFSObjectSize(ctx, dbx, 7, "oid1", 2))
+	if err := ls.UpdateLFSObjectSize(ctx, dbx, 7, "oid1", 2); err != nil {
+		t.Fatal(err)
+	}
 	objs, err := ls.GetLFSObjects(ctx, dbx, 7)
-	is.NoErr(err)
-	is.Equal(lfsOids(objs), []string{"oid1", "oid2", "oid3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lfsOids(objs), ([]string{"oid1", "oid2", "oid3"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lfsOids(objs) = %v, want %v", got, want)
+	}
 }
 
 func repoNames(repos []models.Repo) []string {
