@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/matryer/is"
 )
@@ -61,7 +62,7 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 		},
 		"webhook": func(t *testing.T, r proto.Repository) {
 			inTx(func(tx *db.Tx) error {
-				_, err := be.store.CreateWebhook(ctx, tx, r.ID(), "https://example.com/hook", "", 1, true)
+				_, err := be.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: r.ID(), URL: "https://example.com/hook", ContentType: 1, Active: true})
 				return err
 			})(t, r)
 		},

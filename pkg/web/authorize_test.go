@@ -40,7 +40,7 @@ func TestAuthorize(t *testing.T) {
 		anonymous bool
 		badCreds  bool
 		// level the caller gets for a missing repository
-		missing access.AccessLevel
+		missing access.Level
 	}
 	callers := []caller{
 		{"anonymous", true, false, access.ReadOnlyAccess},
@@ -82,7 +82,7 @@ func TestAuthorize(t *testing.T) {
 	tests := []struct {
 		name      string
 		route     route
-		level     access.AccessLevel
+		level     access.Level
 		anonymous bool
 		want      verdict
 	}{

@@ -56,7 +56,7 @@ func TestGitSSHDestinationMatchesValidation(t *testing.T) {
 	}
 	policy := GitRemotePolicy{AllowAnySSHHost: true, lookup: fakeLookup(nil)}
 	for _, tt := range tests {
-		if _, err := ValidateGitRemote(tt.remote, policy); err != nil {
+		if _, err := ValidateGitRemote(t.Context(), tt.remote, policy); err != nil {
 			t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)
 			continue
 		}
@@ -245,7 +245,7 @@ func TestValidateGitRemoteAuthorityAsGitReadsIt(t *testing.T) {
 		{"git://git.example:9418/x.git", anyHost, nil},
 	}
 	for _, tt := range tests {
-		_, err := ValidateGitRemote(tt.remote, tt.policy)
+		_, err := ValidateGitRemote(t.Context(), tt.remote, tt.policy)
 		if tt.err == nil {
 			if err != nil {
 				t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)

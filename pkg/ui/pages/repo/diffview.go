@@ -7,7 +7,6 @@ import (
 	gansi "charm.land/glamour/v2/ansi"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/internal/termtext"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
 	"github.com/charmbracelet/soft-serve/pkg/ui/syntax"
 )
@@ -80,16 +79,16 @@ func renderDiffView(header string, diff *git.Diff, st *styles.Styles, width int)
 	return strings.Join(parts, "\n")
 }
 
-func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
+func renderSummary(diff *git.Diff, st *styles.Styles, width int) string {
 	// The summary names files: like file names elsewhere, they lose
 	// bidirectional controls. The patch keeps them, as file contents do.
-	stats := strings.Split(common.SanitizeText(diff.Stat), "\n")
+	stats := strings.Split(termtext.Text(diff.Stat), "\n")
 	for i, line := range stats {
 		ch := strings.Split(line, "|")
 		if len(ch) > 1 && !git.IsBinaryStat(ch[len(ch)-1]) {
 			adddel := ch[len(ch)-1]
-			adddel = strings.ReplaceAll(adddel, "+", styles.Log.CommitStatsAdd.Render("+"))
-			adddel = strings.ReplaceAll(adddel, "-", styles.Log.CommitStatsDel.Render("-"))
+			adddel = strings.ReplaceAll(adddel, "+", st.Log.CommitStatsAdd.Render("+"))
+			adddel = strings.ReplaceAll(adddel, "-", st.Log.CommitStatsDel.Render("-"))
 			stats[i] = strings.Join(ch[:len(ch)-1], "|") + "|" + adddel
 		}
 	}

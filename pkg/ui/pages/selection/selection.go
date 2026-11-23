@@ -78,14 +78,14 @@ func New(c *common.Common) *Selection {
 	readme.UseGlamour = true
 	readme.NoContentStyle = c.Styles.NoContent.
 		SetString(defaultNoContent)
-	selector := selector.New(c,
+	picker := selector.New(c,
 		[]selector.IdentifiableItem{},
 		NewItemDelegate(c, &sel.activePane))
-	selector.SetShowTitle(false)
-	selector.SetShowHelp(false)
-	selector.SetShowStatusBar(false)
-	selector.DisableQuitKeybindings()
-	sel.selector = selector
+	picker.SetShowTitle(false)
+	picker.SetShowHelp(false)
+	picker.SetShowStatusBar(false)
+	picker.DisableQuitKeybindings()
+	sel.selector = picker
 	sel.readme = readme
 	return sel
 }
@@ -381,9 +381,9 @@ func (s *Selection) View() string {
 		))
 	}
 	if s.activePane != selectorPane || s.FilterState() != list.Filtering {
-		tabs := s.common.Styles.Tabs.Render(s.tabs.View())
+		tabsView := s.common.Styles.Tabs.Render(s.tabs.View())
 		view = lipgloss.JoinVertical(lipgloss.Left,
-			tabs,
+			tabsView,
 			view,
 		)
 	}

@@ -196,7 +196,7 @@ func (r *Repository) References() ([]*Reference, error) {
 // a single object ID, is an ErrRevisionNotExist.
 func (r *Repository) treeID(ref string) (string, error) {
 	var out, stderr bytes.Buffer
-	cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--end-of-options", ref+"^{tree}")
+	cmd := NewCommand(r.ctx, "rev-parse", "--verify", "--end-of-options", ref+"^{tree}")
 	if err := cmd.RunInDirPipeline(&out, &stderr, r.Path); err != nil {
 		// git exits with 128 when it cannot resolve the revision, but
 		// also when it cannot read the repository, such as one with
@@ -227,7 +227,7 @@ func (r *Repository) treeID(ref string) (string, error) {
 // tree missing from the repository, not a revision the client got wrong.
 func (r *Repository) treeMissing(ref string) bool {
 	resolves := func(rev string) (bool, bool) {
-		cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev)
+		cmd := NewCommand(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev)
 		err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
 		var exitErr *exec.ExitError
 		return err == nil, errors.As(err, &exitErr) && exitErr.ExitCode() == 1
@@ -250,7 +250,7 @@ func (r *Repository) refUnreadable(rev string) bool {
 	if !r.namesRef(rev) {
 		return false
 	}
-	cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{}")
+	cmd := NewCommand(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{}")
 	return cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path) != nil
 }
 
@@ -260,7 +260,7 @@ func (r *Repository) refUnreadable(rev string) bool {
 // nothing for a raw object ID or an expression such as main~1.
 func (r *Repository) namesRef(rev string) bool {
 	var out bytes.Buffer
-	cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", rev)
+	cmd := NewCommand(r.ctx, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", rev)
 	if err := cmd.RunInDirPipeline(&out, io.Discard, r.Path); err != nil {
 		return false
 	}

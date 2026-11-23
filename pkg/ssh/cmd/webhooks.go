@@ -49,7 +49,7 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 		Use:   "list REPOSITORY",
 		Short: "List repository webhooks",
 		Args:  cobra.ExactArgs(1),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -58,14 +58,14 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 				return err
 			}
 
-			table := table.New().Headers("ID", "URL", "Events", "Active", "Created At", "Updated At")
+			tbl := table.New().Headers("ID", "URL", "Events", "Active", "Created At", "Updated At")
 			for _, h := range webhooks {
 				events := make([]string, len(h.Events))
 				for i, e := range h.Events {
 					events[i] = e.String()
 				}
 
-				table = table.Row(
+				tbl = tbl.Row(
 					strconv.FormatInt(h.ID, 10),
 					termtext.Sanitize(h.URL),
 					strings.Join(events, ","),
@@ -74,7 +74,7 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 					humanize.Time(h.UpdatedAt),
 				)
 			}
-			cmd.Println(table)
+			cmd.Println(tbl)
 			return nil
 		}),
 	}
@@ -91,7 +91,7 @@ func (cmds *Commands) webhookCreateCommand() *cobra.Command {
 		Use:   "create REPOSITORY URL",
 		Short: "Create a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -151,7 +151,7 @@ func (cmds *Commands) webhookDeleteCommand() *cobra.Command {
 		Use:   "delete REPOSITORY WEBHOOK_ID",
 		Short: "Delete a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -177,7 +177,7 @@ func (cmds *Commands) webhookUpdateCommand() *cobra.Command {
 		Use:   "update REPOSITORY WEBHOOK_ID",
 		Short: "Update a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -267,7 +267,7 @@ func (cmds *Commands) webhookDeliveriesListCommand() *cobra.Command {
 		Use:   "list REPOSITORY WEBHOOK_ID",
 		Short: "List webhook deliveries",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -281,20 +281,20 @@ func (cmds *Commands) webhookDeliveriesListCommand() *cobra.Command {
 				return err
 			}
 
-			table := table.New().Headers("Status", "ID", "Event", "Created At")
+			tbl := table.New().Headers("Status", "ID", "Event", "Created At")
 			for _, d := range dels {
 				status := "❌"
 				if d.ResponseStatus >= 200 && d.ResponseStatus < 300 {
 					status = "✅"
 				}
-				table = table.Row(
+				tbl = tbl.Row(
 					status,
 					d.ID.String(),
 					d.Event.String(),
 					humanize.Time(d.CreatedAt),
 				)
 			}
-			cmd.Println(table)
+			cmd.Println(tbl)
 			return nil
 		}),
 	}
@@ -307,7 +307,7 @@ func (cmds *Commands) webhookDeliveriesRedeliverCommand() *cobra.Command {
 		Use:   "redeliver REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Redeliver a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -333,7 +333,7 @@ func (cmds *Commands) webhookDeliveriesGetCommand() *cobra.Command {
 		Use:   "get REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Get a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 

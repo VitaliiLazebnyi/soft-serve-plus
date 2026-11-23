@@ -140,7 +140,7 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := &loop{t: t, m: f, results: make(chan tea.Msg, 1000)}
-	l.deliver(RepoMsg(repo))
+	l.deliver(OpenedMsg(repo))
 	l.deliver(RefMsg{Ref: ref})
 	l.settle(repo.waiting)
 	selectItem(t, f.selector, "file.txt")

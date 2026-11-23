@@ -8,7 +8,7 @@ import (
 )
 
 // FormatLineNumber adds line numbers to a string.
-func FormatLineNumber(styles *styles.Styles, s string, color bool) (string, int) {
+func FormatLineNumber(st *styles.Styles, s string, color bool) (string, int) {
 	lines := strings.Split(s, "\n")
 	// NB: len() is not a particularly safe way to count string width (because
 	// it's counting bytes instead of runes) but in this case it's okay
@@ -18,8 +18,8 @@ func FormatLineNumber(styles *styles.Styles, s string, color bool) (string, int)
 		digit := fmt.Sprintf("%*d", mll, i+1)
 		bar := "│"
 		if color {
-			digit = styles.Code.LineDigit.Render(digit)
-			bar = styles.Code.LineBar.Render(bar)
+			digit = st.Code.LineDigit.Render(digit)
+			bar = st.Code.LineBar.Render(bar)
 		}
 		if i < len(lines)-1 || len(l) != 0 {
 			// If the final line was a newline we'll get an empty string for

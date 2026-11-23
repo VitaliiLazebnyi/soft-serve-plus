@@ -62,7 +62,7 @@ func isAccountAdmin(user proto.User) bool {
 //
 // The error is set when the anon-access setting could not be read; the
 // level is then NoAccess.
-func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) (access.AccessLevel, error) {
+func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) (access.Level, error) {
 	admin := d.IsServerAdmin(ctx, user)
 	if admin {
 		return access.AdminAccess, nil
@@ -87,7 +87,7 @@ func (d *Backend) BaseAccessLevelForUser(ctx context.Context, user proto.User) (
 //
 // Only the account counts, not an admin key on ctx: callers acting for an
 // SSH session use ReadableForUser.
-func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel, error) {
+func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (proto.Repository, access.Level, error) {
 	return d.readable(ctx, name, user, isAccountAdmin(user))
 }
 
@@ -101,12 +101,12 @@ func (d *Backend) Readable(ctx context.Context, name string, user proto.User) (p
 // that account mid-session keeps the session's user until it reconnects.
 // Collaborator rows, the repository's privacy and ownership are still read
 // fresh on every call.
-func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.AccessLevel, error) {
+func (d *Backend) ReadableForUser(ctx context.Context, name string, user proto.User) (proto.Repository, access.Level, error) {
 	return d.readable(ctx, name, user, d.IsServerAdmin(ctx, user))
 }
 
 // readable is Readable with the caller's admin status already decided.
-func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.AccessLevel, error) {
+func (d *Backend) readable(ctx context.Context, name string, user proto.User, admin bool) (proto.Repository, access.Level, error) {
 	name = proto.SanitizeRepo(name)
 	r, collab, err := d.repositoryWithCollab(ctx, name, user)
 	if err != nil {
@@ -137,7 +137,7 @@ func (d *Backend) readable(ctx context.Context, name string, user proto.User, ad
 //
 // Without it, this is upstream behaviour: registered users get read-write on
 // a missing name, and anonymous users get the anonymous level.
-func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.AccessLevel) access.AccessLevel {
+func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.Level) access.Level {
 	adminOnly := d.cfg.AdminOnlyCreate
 	switch {
 	case admin:
@@ -158,7 +158,7 @@ func (d *Backend) baseAccessLevel(user proto.User, admin bool, anon access.Acces
 // whether there is one.
 type collabRow struct {
 	row   bool
-	level access.AccessLevel
+	level access.Level
 	ok    bool
 }
 
@@ -194,7 +194,7 @@ func (d *Backend) repositoryWithCollab(ctx context.Context, name string, user pr
 // repository named name or nil when it does not exist, and on which user's
 // collaborator row is collab. admin is whether the caller is an admin, as
 // its caller decided. The error is set when a lookup failed.
-func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, collab collabRow, name string, user proto.User, admin bool) (access.AccessLevel, error) {
+func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, collab collabRow, name string, user proto.User, admin bool) (access.Level, error) {
 	if admin {
 		return access.AdminAccess, nil
 	}
@@ -222,7 +222,7 @@ func (d *Backend) accessLevel(ctx context.Context, r proto.Repository, collab co
 
 // repoAccessLevel is accessLevel for an existing repository r once the
 // anonymous level and user's collaborator row for r, if any, are known.
-func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess access.AccessLevel, isCollab bool) access.AccessLevel {
+func repoAccessLevel(r proto.Repository, user proto.User, anon, collabAccess access.Level, isCollab bool) access.Level {
 	// If the user is an admin, they have admin access.
 	if isAccountAdmin(user) {
 		return access.AdminAccess
@@ -277,13 +277,13 @@ func (d *Backend) ReadableRepositories(ctx context.Context, user proto.User) ([]
 	if err != nil {
 		return nil, err
 	}
-	var collabs map[int64]access.AccessLevel
+	var collabs map[int64]access.Level
 	if user != nil && user.ID() != 0 {
 		ms, err := d.store.ListCollabsByUserID(ctx, d.db, user.ID())
 		if err != nil {
 			return nil, err
 		}
-		collabs = make(map[int64]access.AccessLevel, len(ms))
+		collabs = make(map[int64]access.Level, len(ms))
 		for _, m := range ms {
 			collabs[m.RepoID] = m.AccessLevel
 		}

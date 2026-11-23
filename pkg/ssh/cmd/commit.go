@@ -25,7 +25,7 @@ func (cmds *Commands) commitCommand() *cobra.Command {
 		Use:   "commit REPOSITORY REVISION",
 		Short: "Print out a commit and its diff",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			rev := args[1]
 
 			r, err := cmds.openRepository(cmd.Context(), rr)

@@ -51,7 +51,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "sec", 1, true)
+	id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", Secret: "sec", ContentType: 1, Active: true})
 	is.NoErr(err)
 
 	wh, err := s.GetWebhookByID(ctx, dbx, 7, id)
@@ -66,7 +66,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	_, err = s.GetWebhookByID(ctx, dbx, 8, id)
 	is.True(errors.Is(err, db.ErrRecordNotFound))
 
-	is.NoErr(s.UpdateWebhookByID(ctx, dbx, 7, id, "https://93.184.216.35/b", "new", 0, false))
+	is.NoErr(s.UpdateWebhookByID(ctx, dbx, models.Webhook{ID: id, RepoID: 7, URL: "https://93.184.216.35/b", Secret: "new", ContentType: 0}))
 	wh, err = s.GetWebhookByID(ctx, dbx, 7, id)
 	is.NoErr(err)
 	is.Equal(wh.URL, "https://93.184.216.35/b")
@@ -75,7 +75,7 @@ func TestWebhookStoreRoundTrip(t *testing.T) {
 	is.True(!wh.Active)
 
 	// An update scoped to another repo changes nothing and reports the miss.
-	is.True(errors.Is(s.UpdateWebhookByID(ctx, dbx, 8, id, "https://93.184.216.36/c", "x", 0, true), db.ErrRecordNotFound))
+	is.True(errors.Is(s.UpdateWebhookByID(ctx, dbx, models.Webhook{ID: id, RepoID: 8, URL: "https://93.184.216.36/c", Secret: "x", ContentType: 0, Active: true}), db.ErrRecordNotFound))
 	wh, err = s.GetWebhookByID(ctx, dbx, 7, id)
 	is.NoErr(err)
 	is.Equal(wh.URL, "https://93.184.216.35/b")
@@ -100,9 +100,9 @@ func TestWebhookStoreEvents(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	is.NoErr(err)
-	other, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 0, true)
+	other, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.35/b", ContentType: 0, Active: true})
 	is.NoErr(err)
 
 	is.NoErr(s.CreateWebhookEvents(ctx, dbx, hook, []int{4, 5}))
@@ -123,7 +123,7 @@ func TestWebhookStoreEvents(t *testing.T) {
 	is.Equal(whs[0].ID, hook)
 
 	// An inactive webhook subscribed to the same event is left out.
-	inactive, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.36/c", "", 0, false)
+	inactive, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.36/c", ContentType: 0})
 	is.NoErr(err)
 	is.NoErr(s.CreateWebhookEvents(ctx, dbx, inactive, []int{4}))
 	whs, err = s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{4})
@@ -200,9 +200,9 @@ func TestWebhookStoreDeliveries(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	is.NoErr(err)
-	other, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 0, true)
+	other, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.35/b", ContentType: 0, Active: true})
 	is.NoErr(err)
 
 	okID := uuid.New()
@@ -286,7 +286,7 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	is.NoErr(err)
 	did := uuid.New()
 	is.NoErr(s.CreateWebhookDelivery(ctx, dbx, models.WebhookDelivery{
@@ -304,8 +304,8 @@ func TestWebhookStoreErrorsOnClosedDB(t *testing.T) {
 	_, checks["LockAndCountWebhooks"] = s.LockAndCountWebhooks(ctx, dbx, 7)
 	_, checks["GetWebhooksByRepoIDWhereEvent"] = s.GetWebhooksByRepoIDWhereEvent(ctx, dbx, 7, []int{4})
 	_, checks["GetActiveWebhookByIDWhereEvent"] = s.GetActiveWebhookByIDWhereEvent(ctx, dbx, 7, id, 4)
-	_, checks["CreateWebhook"] = s.CreateWebhook(ctx, dbx, 7, "u", "", 0, true)
-	checks["UpdateWebhookByID"] = s.UpdateWebhookByID(ctx, dbx, 7, id, "u", "", 0, true)
+	_, checks["CreateWebhook"] = s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "u", ContentType: 0, Active: true})
+	checks["UpdateWebhookByID"] = s.UpdateWebhookByID(ctx, dbx, models.Webhook{ID: id, RepoID: 7, URL: "u", ContentType: 0, Active: true})
 	checks["DeleteWebhookForRepoByID"] = s.DeleteWebhookForRepoByID(ctx, dbx, 7, id)
 	_, checks["GetWebhookEventsByWebhookID"] = s.GetWebhookEventsByWebhookID(ctx, dbx, id)
 	checks["CreateWebhookEvents"] = s.CreateWebhookEvents(ctx, dbx, id, []int{4})
@@ -336,7 +336,7 @@ func TestCreateWebhookDeliveryForeignKeyViolation(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
+	id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 1, Active: true})
 	is.NoErr(err)
 	vanishOnInsert(t, ctx, dbx, id)
 
@@ -381,7 +381,7 @@ func TestWebhookListsAreOrderedByID(t *testing.T) {
 	s := &Store{}
 	var ids []int64
 	for _, n := range []int{9, 10, 1} {
-		id, err := s.CreateWebhook(ctx, dbx, 7, fmt.Sprintf("https://93.184.216.34/?n=%d", n), "", 1, true)
+		id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: fmt.Sprintf("https://93.184.216.34/?n=%d", n), ContentType: 1, Active: true})
 		is.NoErr(err)
 		is.NoErr(s.CreateWebhookEvents(ctx, dbx, id, []int{3, 1, 2}))
 		ids = append(ids, id)
@@ -410,9 +410,9 @@ func TestWebhookStoreDeliveriesOrder(t *testing.T) {
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	is.NoErr(err)
-	other, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 0, true)
+	other, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.35/b", ContentType: 0, Active: true})
 	is.NoErr(err)
 
 	insert := func(webhookID int64) uuid.UUID {
@@ -478,7 +478,7 @@ func TestWebhookDeliveryListingsAreLimited(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 1, Active: true})
 	is.NoErr(err)
 
 	var ids []uuid.UUID
@@ -513,9 +513,9 @@ func TestPruneWebhookDeliveriesKeepsNewest(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 1, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 1, Active: true})
 	is.NoErr(err)
-	other, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.35/b", "", 1, true)
+	other, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.35/b", ContentType: 1, Active: true})
 	is.NoErr(err)
 
 	// Eight deliveries, recorded with descending IDs and created_at, and
@@ -621,10 +621,10 @@ func TestLockAndCountWebhooks(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(n, 0)
 	for i := range 3 {
-		_, err := s.CreateWebhook(ctx, dbx, 7, fmt.Sprintf("https://93.184.216.34/%d", i), "", 1, true)
+		_, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: fmt.Sprintf("https://93.184.216.34/%d", i), ContentType: 1, Active: true})
 		is.NoErr(err)
 	}
-	_, err = s.CreateWebhook(ctx, dbx, 8, "https://93.184.216.35/x", "", 1, true)
+	_, err = s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 8, URL: "https://93.184.216.35/x", ContentType: 1, Active: true})
 	is.NoErr(err)
 	n, err = s.LockAndCountWebhooks(ctx, dbx, 7)
 	is.NoErr(err)

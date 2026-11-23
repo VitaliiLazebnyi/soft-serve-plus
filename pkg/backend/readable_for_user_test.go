@@ -52,7 +52,7 @@ func TestReadableForUser(t *testing.T) {
 		return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "private", access.ReadWriteAccess)
 	}))
 
-	for _, anon := range []access.AccessLevel{access.NoAccess, access.ReadOnlyAccess} {
+	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
 		is.NoErr(be.SetAnonAccess(ctx, anon))
 		for _, name := range []string{"public", "private", "missing"} {
 			for _, tc := range []struct {
@@ -92,7 +92,7 @@ func TestReadableForUser(t *testing.T) {
 
 // expectReadable is the level TestReadableForUser expects caller to hold on
 // repo, with anon at most read-only and admin_only_create off.
-func expectReadable(repo, caller string, anon access.AccessLevel) access.AccessLevel {
+func expectReadable(repo, caller string, anon access.Level) access.Level {
 	switch {
 	case caller == "admin" || caller == "unowned admin key":
 		return access.AdminAccess

@@ -81,7 +81,7 @@ func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 	}
 
 	b := diskRepo{name: "broken-b", path: filepath.Join(t.TempDir(), "missing")}
-	if errs := p.deliver(RepoMsg(b)); errs == 0 {
+	if errs := p.deliver(OpenedMsg(b)); errs == 0 {
 		t.Fatal("the failed open reported no error")
 	}
 	p.wantView("failed repository", "broken-b")
@@ -116,7 +116,7 @@ func TestRepoFailedOpenHidesPreviousRepository(t *testing.T) {
 	}
 
 	// Opening a repository that loads brings the tabs and their help back.
-	p.settle(RepoMsg(p.repo))
+	p.settle(OpenedMsg(p.repo))
 	p.wantView("repository A again", "Commits", "readme-body")
 	if n := len(p.r.ShortHelp()); n <= len(p.r.commonHelp()) {
 		t.Fatalf("help offers %d keys after A opened again; want the tab's too", n)

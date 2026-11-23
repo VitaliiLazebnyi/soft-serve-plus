@@ -90,7 +90,7 @@ func TestStashPatchHighlightedOnce(t *testing.T) {
 	const width = 120
 	s := NewStash(uitest.NewCommon(t, context.Background(), nil, nil))
 	s.SetSize(width, 200)
-	s.Update(RepoMsg(openRepo{path: dir}))
+	s.Update(OpenedMsg(openRepo{path: dir}))
 	s.Update(s.fetchStashCmd()())
 	msg, ok := s.fetchStashPatchCmd()().(StashPatchMsg)
 	if !ok || msg.Diff == nil {

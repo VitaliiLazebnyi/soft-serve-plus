@@ -26,7 +26,7 @@ func (b *Blame) Line(i int) *Commit {
 // the per-commit reads, so a client that disconnects while a large file is
 // being blamed does not leave them running.
 func (r *Repository) BlameFile(rev, file string) (*Blame, error) {
-	stdout, err := NewCommandWithContext(r.ctx, "blame", "-l", "-s", rev, "--", file).RunInDir(r.Path)
+	stdout, err := NewCommand(r.ctx, "blame", "-l", "-s", rev, "--", file).RunInDir(r.Path)
 	if err != nil {
 		return nil, err
 	}

@@ -180,7 +180,7 @@ func (s *server) serviceLfsBatch(w http.ResponseWriter, r *http.Request, gr *git
 	datastore := s.datastore
 	// TODO: support S3 storage
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
+	strg := storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID))
 
 	baseHref := fmt.Sprintf("%s/%s/info/lfs/objects/basic", cfg.HTTP.PublicURL, name+".git")
 
@@ -375,7 +375,7 @@ func (s *server) serviceLfsBasicDownload(w http.ResponseWriter, r *http.Request,
 	cfg := s.cfg
 	logger := gr.logger.WithPrefix("http.lfs-basic")
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
+	strg := storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID))
 
 	// The object's database row may be missing (the batch API creates it
 	// lazily), so the stored file, not the row, is the source of truth for
@@ -424,7 +424,7 @@ func (s *server) serviceLfsBasicUpload(w http.ResponseWriter, r *http.Request, g
 	repo := gr.repo
 
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
+	strg := storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID))
 
 	defer r.Body.Close() //nolint: errcheck
 
@@ -529,7 +529,7 @@ func (s *server) serviceLfsBasicVerify(w http.ResponseWriter, r *http.Request, g
 	dbx := s.dbx
 	datastore := s.datastore
 	repoID := strconv.FormatInt(repo.ID(), 10)
-	strg := storage.NewLocalStorage(filepath.Join(cfg.DataPath, "lfs", repoID))
+	strg := storage.NewLocal(filepath.Join(cfg.DataPath, "lfs", repoID))
 	if stat, err := strg.Stat(path.Join("objects", pointer.RelativePath())); err == nil {
 		// Verify object is in the database.
 		obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), pointer.Oid)

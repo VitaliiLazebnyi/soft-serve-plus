@@ -72,7 +72,7 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 				// A config path that is a dangling symlink into a missing
 				// directory does not exist and cannot be written.
 				target := filepath.Join(t.TempDir(), "missing", "config.yaml")
-				if err := os.Symlink(target, cfg.ConfigPath()); err != nil {
+				if err := os.Symlink(target, cfg.FilePath()); err != nil {
 					t.Skipf("symlinks unsupported: %v", err)
 				}
 			},

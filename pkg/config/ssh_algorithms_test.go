@@ -42,7 +42,7 @@ func TestSSHPublicKeyAuthDefaultsExcludeSHA1(t *testing.T) {
 	if len(cfg.SSH.PublicKeyAuthAlgorithms) != 0 {
 		t.Fatalf("public key auth algorithms set by default: %v", cfg.SSH.PublicKeyAuthAlgorithms)
 	}
-	got := cfg.SSH.SSHPublicKeyAuthAlgorithms()
+	got := cfg.SSH.AcceptedPublicKeyAuthAlgorithms()
 	for _, a := range []string{ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA} { //nolint:staticcheck // checks the deprecated algorithm stays off
 		if slices.Contains(got, a) {
 			t.Errorf("default public key auth algorithms include %q", a)
@@ -68,13 +68,13 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataPath = dir
 	is.NoErr(parseFile(cfg, path))
-	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"ssh-ed25519", "ssh-rsa"})
+	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), []string{"ssh-ed25519", "ssh-rsa"})
 
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "rsa-sha2-512, ssh-dss")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
 	is.NoErr(parseEnv(cfg))
-	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), []string{"rsa-sha2-512", "ssh-dss"})
+	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), []string{"rsa-sha2-512", "ssh-dss"})
 
 	// Hooks re-read the config from the environment.
 	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss"))
@@ -86,7 +86,7 @@ func TestParseSSHAlgorithms(t *testing.T) {
 	cfg.DataPath = dir
 	is.NoErr(parseEnv(cfg))
 	is.Equal(len(cfg.SSH.PublicKeyAuthAlgorithms), 0)
-	is.Equal(cfg.SSH.SSHPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms())
+	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms())
 }
 
 func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {

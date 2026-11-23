@@ -51,7 +51,7 @@ func TestFilesListingTruncated(t *testing.T) {
 	ctx := t.Context()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(OpenedMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 
 	msg, ok := f.updateFilesCmd()().(FileItemsMsg)
@@ -174,7 +174,7 @@ func TestFilesUpdateFilesCmdReturnsErrorMsg(t *testing.T) {
 			t.Parallel()
 			f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 			f.SetSize(80, 40)
-			f.Update(RepoMsg(tc.repo))
+			f.Update(OpenedMsg(tc.repo))
 			f.Update(RefMsg{Ref: ref})
 			if f.activeView != filesViewLoading {
 				t.Fatalf("after RefMsg activeView = %v; want filesViewLoading", f.activeView)
@@ -253,14 +253,14 @@ func TestFilesListingErrorClearsPreviousItems(t *testing.T) {
 	ctx := t.Context()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(OpenedMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 	f.Update(f.updateFilesCmd()())
 	if n := len(f.selector.Items()); n != 1 {
 		t.Fatalf("after the first listing items = %d; want 1", n)
 	}
 
-	f.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
+	f.Update(OpenedMsg(openRepo{path: filepath.Join(dir, "missing")}))
 	f.Update(RefMsg{Ref: ref})
 	msg := f.updateFilesCmd()()
 	if _, ok := msg.(errorMsg); !ok {
@@ -309,7 +309,7 @@ func TestFilesNonASCIIName(t *testing.T) {
 	ctx := t.Context()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(OpenedMsg(openRepo{path: dir}))
 	f.Update(RefMsg{Ref: ref})
 
 	// Walk into the directory, then onto the file, like selecting them.

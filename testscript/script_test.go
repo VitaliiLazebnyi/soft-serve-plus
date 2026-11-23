@@ -365,9 +365,9 @@ func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, ne
 	}
 }
 
-// runSoft runs the soft command args over SSH as config says.
-func runSoft(ts *testscript.TestScript, neg bool, args []string, config *ssh.ClientConfig) {
-	cli, bound, err := dialSSH(ts, config)
+// runSoft runs the soft command args over SSH as clientCfg says.
+func runSoft(ts *testscript.TestScript, neg bool, args []string, clientCfg *ssh.ClientConfig) {
+	cli, bound, err := dialSSH(ts, clientCfg)
 	ts.Check(err)
 	defer cli.Close() //nolint:errcheck
 	defer bound.stop()
@@ -964,12 +964,12 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 		Use:  "curl",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			url, err := url.Parse(args[0])
+			u, err := url.Parse(args[0])
 			if err != nil {
 				return err
 			}
 
-			req, err := http.NewRequest(method, url.String(), nil) //nolint:noctx
+			req, err := http.NewRequest(method, u.String(), nil) //nolint:noctx
 			if err != nil {
 				return err
 			}
@@ -979,7 +979,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 			}
 
 			if verbose {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, url.String())
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "< %s %s\n", req.Method, u.String())
 			}
 
 			for _, header := range headers {
@@ -990,7 +990,7 @@ func cmdCurl(ts *testscript.TestScript, neg bool, args []string) {
 				req.Header.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
 			}
 
-			if userInfo := url.User; userInfo != nil {
+			if userInfo := u.User; userInfo != nil {
 				password, _ := userInfo.Password()
 				req.SetBasicAuth(userInfo.Username(), password)
 			}
@@ -1242,26 +1242,26 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		cfg.DB.DataSource = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
 	}
 
-	dbUrl, err := url.Parse(cfg.DB.DataSource)
+	dbURL, err := url.Parse(cfg.DB.DataSource)
 	if err != nil {
 		return nil, err
 	}
 
-	scheme := dbUrl.Scheme
+	scheme := dbURL.Scheme
 	if scheme == "" {
 		scheme = "postgres"
 	}
 
-	host := dbUrl.Hostname()
+	host := dbURL.Hostname()
 	if host == "" {
 		host = "localhost"
 	}
 
 	connInfo := fmt.Sprintf("host=%s sslmode=disable", host)
-	username := dbUrl.User.Username()
+	username := dbURL.User.Username()
 	if username != "" {
 		connInfo += fmt.Sprintf(" user=%s", username)
-		password, ok := dbUrl.User.Password()
+		password, ok := dbURL.User.Password()
 		if ok {
 			username = fmt.Sprintf("%s:%s", username, password)
 			connInfo += fmt.Sprintf(" password=%s", password)
@@ -1272,7 +1272,7 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 		username = "postgres@"
 	}
 
-	port := dbUrl.Port()
+	port := dbURL.Port()
 	if port != "" {
 		connInfo += fmt.Sprintf(" port=%s", port)
 		port = fmt.Sprintf(":%s", port)

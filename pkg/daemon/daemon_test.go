@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	testDaemon  *GitDaemon
+	testDaemon  *Server
 	testBackend *backend.Backend
 )
 
@@ -79,7 +79,7 @@ func runTests(m *testing.M) int {
 	datastore := database.New(nil)
 	be := backend.New(cfg, dbx, datastore, nil)
 	testBackend = be
-	d, err := NewGitDaemon(cfg, be, nil)
+	d, err := NewServer(cfg, be, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -132,7 +132,7 @@ const idleWait = time.Minute
 const patience = time.Hour
 
 // patient gives d the request and access timeouts patience.
-func patient(d *GitDaemon) {
+func patient(d *Server) {
 	d.requestTimeout = patience
 	d.accessTimeout = patience
 }
@@ -145,7 +145,7 @@ func startIdleDaemon(t *testing.T) string {
 	t.Helper()
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 1
-	d, err := NewGitDaemon(&cfg, testBackend, nil)
+	d, err := NewServer(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRefusalSurvivesLateInput(t *testing.T) {
 	conns := make(chan *recordedConn, 1)
 	_, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
 		return &recordingListener{Listener: inner, conns: conns}
-	}, func(d *GitDaemon) {
+	}, func(d *Server) {
 		// The daemon waits for the client to hang up however late the
 		// rest of the request comes.
 		d.refuseLinger = time.Hour
@@ -407,7 +407,7 @@ func clientGoroutines(t *testing.T) int {
 	}
 	var n int
 	for _, g := range strings.Split(buf.String(), "\n\n") {
-		if strings.Contains(g, "daemon.(*GitDaemon).handleClient") {
+		if strings.Contains(g, "daemon.(*Server).handleClient") {
 			n++
 		}
 	}
@@ -644,7 +644,7 @@ func TestGitFailureFixedMessage(t *testing.T) {
 // that Shutdown might already be waiting on, which the race detector reports.
 func TestServeRacingShutdown(t *testing.T) {
 	for i := range 100 {
-		d, err := NewGitDaemon(testDaemon.cfg, testBackend, nil)
+		d, err := NewServer(testDaemon.cfg, testBackend, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -735,14 +735,14 @@ func TestUploadPackCounted(t *testing.T) {
 // startLimitedDaemon serves a daemon allowing limit connections that never
 // time out, and returns it with its address. opts change the daemon before
 // it serves.
-func startLimitedDaemon(t *testing.T, limit int, opts ...func(*GitDaemon)) (*GitDaemon, string) {
+func startLimitedDaemon(t *testing.T, limit int, opts ...func(*Server)) (*Server, string) {
 	t.Helper()
 	return startDaemonOn(t, limit, nil, opts...)
 }
 
 // startDaemonOn is startLimitedDaemon serving on the listener wrap returns
 // for a loopback one, or on the loopback one if wrap is nil.
-func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener, opts ...func(*GitDaemon)) (*GitDaemon, string) {
+func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener, opts ...func(*Server)) (*Server, string) {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.DataPath = testDaemon.cfg.DataPath
@@ -752,7 +752,7 @@ func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewGitDaemon(cfg, testBackend, nil)
+	d, err := NewServer(cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,7 +948,7 @@ func TestRequestTimeout(t *testing.T) {
 	const requestTimeout = 2 * time.Second
 	cfg := *testDaemon.cfg
 	cfg.Git.IdleTimeout = 600
-	d, err := NewGitDaemon(&cfg, testBackend, nil)
+	d, err := NewServer(&cfg, testBackend, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,7 +1085,7 @@ func TestQuietCloneSlowPack(t *testing.T) {
 
 	const idleTimeout = 2
 	conns := make(chan *stillConn, 1)
-	_, addr := startDaemonOn(t, 1, stillConns(t, conns), func(d *GitDaemon) { d.cfg.Git.IdleTimeout = idleTimeout })
+	_, addr := startDaemonOn(t, 1, stillConns(t, conns), func(d *Server) { d.cfg.Git.IdleTimeout = idleTimeout })
 
 	// Hold the pack back until the test releases it. The hook records
 	// the keepalive interval upload-pack runs with and that the pack is

@@ -3,6 +3,7 @@ package statusbar
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -42,17 +43,17 @@ func (s *Model) SetSize(width, height int) {
 // they are stripped of escape sequences and control characters here, whatever
 // pane they come from.
 func (s *Model) SetStatus(key, value, info, extra string) {
-	s.key = common.SanitizeText(key)
-	s.value = common.SanitizeText(value)
-	s.info = common.SanitizeText(info)
-	s.extra = common.SanitizeText(extra)
+	s.key = termtext.Text(key)
+	s.value = termtext.Text(value)
+	s.info = termtext.Text(info)
+	s.extra = termtext.Text(extra)
 	s.msg = ""
 }
 
 // SetMessage shows a transient message in place of the status value until
 // the next SetStatus call. It is sanitised like the status values.
 func (s *Model) SetMessage(msg string) {
-	s.msg = common.SanitizeText(msg)
+	s.msg = termtext.Text(msg)
 }
 
 // Init implements common.Model.

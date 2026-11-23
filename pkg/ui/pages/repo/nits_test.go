@@ -63,7 +63,7 @@ func TestFilesSubmoduleIsUserError(t *testing.T) {
 	ctx := context.Background()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(repo))
+	f.Update(OpenedMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not load the reference")
@@ -248,19 +248,6 @@ func TestStatusBarRefreshedOnEveryResult(t *testing.T) {
 	want := fmt.Sprintf("p. 1/%d", (1000+per-1)/per)
 	if v := ansi.Strip(p.r.statusbar.View()); !strings.Contains(v, want) {
 		t.Fatalf("status bar after the count: %q; want %s", v, want)
-	}
-}
-
-// SanitizeText removes bidirectional controls along with what
-// termtext.Sanitize removes, and keeps joiners that emoji need.
-func TestSanitizeTextBidi(t *testing.T) {
-	t.Parallel()
-	in := "a\u202eb\x1b[31mc\u200dd\u061ce\u200ff"
-	if got, want := common.SanitizeText(in), "abc\u200ddef"; got != want {
-		t.Fatalf("SanitizeText(%q) = %q; want %q", in, got, want)
-	}
-	if got := common.SanitizeText("plain\ttext\n"); got != "plain\ttext\n" {
-		t.Fatalf("plain text changed to %q", got)
 	}
 }
 

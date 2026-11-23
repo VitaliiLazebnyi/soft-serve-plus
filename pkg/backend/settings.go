@@ -68,7 +68,7 @@ func (d *Backend) SetAllowKeyless(ctx context.Context, allow bool) error {
 //
 // A failed lookup denies anonymous access. The access checks use anonAccess
 // instead, so an outage is returned as an error, not answered as a refusal.
-func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
+func (d *Backend) AnonAccess(ctx context.Context) access.Level {
 	level, err := d.anonAccess(ctx)
 	if err != nil {
 		d.logLookupError(ctx, "error getting anon-access setting, denying anonymous access", err)
@@ -80,12 +80,12 @@ func (d *Backend) AnonAccess(ctx context.Context) access.AccessLevel {
 // AnonAccessSetting is AnonAccess with the error of a failed lookup
 // returned rather than read as "no access", for callers that answer a
 // client. It does not log the error.
-func (d *Backend) AnonAccessSetting(ctx context.Context) (access.AccessLevel, error) {
+func (d *Backend) AnonAccessSetting(ctx context.Context) (access.Level, error) {
 	return d.anonAccess(ctx)
 }
 
 // anonAccess is AnonAccessSetting.
-func (d *Backend) anonAccess(ctx context.Context) (access.AccessLevel, error) {
+func (d *Backend) anonAccess(ctx context.Context) (access.Level, error) {
 	if d.cfg.AnonAccess != nil {
 		return *d.cfg.AnonAccess, nil
 	}
@@ -98,7 +98,7 @@ func (d *Backend) anonAccess(ctx context.Context) (access.AccessLevel, error) {
 }
 
 // SetAnonAccess sets the level of anonymous access.
-func (d *Backend) SetAnonAccess(ctx context.Context, level access.AccessLevel) error {
+func (d *Backend) SetAnonAccess(ctx context.Context, level access.Level) error {
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return d.store.SetAnonAccess(ctx, tx, level)
 	})

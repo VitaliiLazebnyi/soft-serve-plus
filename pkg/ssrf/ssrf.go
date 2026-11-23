@@ -288,14 +288,9 @@ func isPrivateOrInternal(ip net.IP) bool {
 
 // ValidateURL validates that a URL is safe to make requests to.
 // It checks that the scheme is http/https, the hostname is not localhost,
-// and all resolved IPs are public.
-func ValidateURL(rawURL string) error {
-	return ValidateURLContext(context.Background(), rawURL)
-}
-
-// ValidateURLContext is ValidateURL with the hostname lookup bound to ctx, so
-// a caller that goes away stops waiting for the resolver.
-func ValidateURLContext(ctx context.Context, rawURL string) error {
+// and all resolved IPs are public. The hostname lookup is bound to ctx, so a
+// caller that goes away stops waiting for the resolver.
+func ValidateURL(ctx context.Context, rawURL string) error {
 	return validateURL(ctx, rawURL, nil, nil)
 }
 
@@ -303,17 +298,11 @@ func ValidateURLContext(ctx context.Context, rawURL string) error {
 // destinations that allowed permits let through (see
 // AllowedHosts.permitsHTTP). With an empty allowed it is ValidateURL. Every
 // address the hostname resolves to must be public or permitted.
-func ValidateURLAllowing(rawURL string, allowed AllowedHosts) error {
-	return ValidateURLAllowingContext(context.Background(), rawURL, allowed)
-}
-
-// ValidateURLAllowingContext is ValidateURLAllowing with the hostname lookup
-// bound to ctx, so a caller that goes away stops waiting for the resolver.
-func ValidateURLAllowingContext(ctx context.Context, rawURL string, allowed AllowedHosts) error {
+func ValidateURLAllowing(ctx context.Context, rawURL string, allowed AllowedHosts) error {
 	return validateURL(ctx, rawURL, allowed, nil)
 }
 
-// validateURL is ValidateURLAllowingContext with the resolver used for
+// validateURL is ValidateURLAllowing with the resolver used for
 // hostnames; nil means the package resolver (net.DefaultResolver outside
 // tests).
 func validateURL(ctx context.Context, rawURL string, allowed AllowedHosts, lookup lookupFunc) error {

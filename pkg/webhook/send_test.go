@@ -216,6 +216,19 @@ func TestSendWebhookInvalidContentTypeRejected(t *testing.T) {
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
 }
 
+// chanPayload is an EventPayload that JSON cannot encode.
+type chanPayload chan int
+
+func (chanPayload) Event() Event        { return EventBranchTagCreate }
+func (chanPayload) RepositoryID() int64 { return 0 }
+
+// intPayload is an EventPayload that a form cannot encode: query.Values only
+// accepts structs (or maps).
+type intPayload int
+
+func (intPayload) Event() Event        { return EventBranchTagCreate }
+func (intPayload) RepositoryID() int64 { return 0 }
+
 func TestSendWebhookJSONEncodeErrorReturned(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -225,7 +238,7 @@ func TestSendWebhookJSONEncodeErrorReturned(t *testing.T) {
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
 
 	// Channels cannot be encoded as JSON.
-	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, make(chan int))
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, chanPayload(make(chan int)))
 	is.True(err != nil)
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
@@ -240,7 +253,7 @@ func TestSendWebhookFormEncodeErrorReturned(t *testing.T) {
 	w := e.newWebhook(t, srv.URL, "", ContentTypeForm, EventBranchTagCreate)
 
 	// query.Values only accepts structs (or maps), not a bare int.
-	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, 5)
+	err := e.s.sendWebhook(e.ctx, w, EventBranchTagCreate, intPayload(5))
 	is.True(err != nil)
 	is.Equal(rec.calls, 0)
 	is.Equal(len(e.deliveries(t, w.ID)), 0)
@@ -590,7 +603,7 @@ func TestSendEventFailingWebhookDoesNotBlockOthers(t *testing.T) {
 
 	bad := e.newWebhook(t, srv.URL+"/bad", "", ContentTypeJSON, EventPush)
 	// Stored with an unknown content type: SendWebhook fails for it.
-	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, e.repo.ID, bad.ID, bad.URL, "", 99, true))
+	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, models.Webhook{ID: bad.ID, RepoID: e.repo.ID, URL: bad.URL, ContentType: 99, Active: true}))
 	good := e.newWebhook(t, srv.URL+"/good", "", ContentTypeJSON, EventPush)
 
 	err := e.s.sendEvent(e.ctx, samplePayloadFor(e))
@@ -1021,7 +1034,7 @@ func TestDeliverUsesCurrentWebhook(t *testing.T) {
 	oldSrv, oldRec := newReceiver(t, http.StatusOK, "")
 	newSrv, newRec := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, oldSrv.URL, "old-secret", ContentTypeJSON, EventPush)
-	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, e.repo.ID, w.ID, newSrv.URL, "new-secret", int(ContentTypeJSON), true))
+	is.NoErr(e.ds.UpdateWebhookByID(e.ctx, e.dbx, models.Webhook{ID: w.ID, RepoID: e.repo.ID, URL: newSrv.URL, Secret: "new-secret", ContentType: int(ContentTypeJSON), Active: true}))
 
 	is.NoErr(e.s.Deliver(e.ctx, []models.Webhook{w}, samplePayloadFor(e)))
 

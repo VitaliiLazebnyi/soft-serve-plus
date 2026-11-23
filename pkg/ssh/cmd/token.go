@@ -93,7 +93,7 @@ func (cmds *Commands) TokenCommand() *cobra.Command {
 			}
 
 			now := time.Now()
-			table := table.New().Headers("ID", "Name", "Created At", "Expires In")
+			tbl := table.New().Headers("ID", "Name", "Created At", "Expires In")
 			for _, token := range tokens {
 				expiresAt := "-"
 				if !token.ExpiresAt.IsZero() {
@@ -104,13 +104,13 @@ func (cmds *Commands) TokenCommand() *cobra.Command {
 					}
 				}
 
-				table = table.Row(strconv.FormatInt(token.ID, 10),
+				tbl = tbl.Row(strconv.FormatInt(token.ID, 10),
 					token.Name,
 					humanize.Time(token.CreatedAt),
 					expiresAt,
 				)
 			}
-			cmd.Println(table)
+			cmd.Println(tbl)
 			return nil
 		},
 	}

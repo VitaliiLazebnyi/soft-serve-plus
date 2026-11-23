@@ -141,7 +141,7 @@ func (p *pinPage) settle(msgs ...tea.Msg) {
 // open shows the repository and waits for every tab to load.
 func (p *pinPage) open() {
 	p.t.Helper()
-	p.settle(RepoMsg(p.repo))
+	p.settle(OpenedMsg(p.repo))
 }
 
 func (p *pinPage) view() string {
@@ -312,7 +312,7 @@ func TestPinLoadingAndSpinner(t *testing.T) {
 	p.r.Init()
 
 	// The page loads the reference first.
-	msgs := p.update(RepoMsg(p.repo))
+	msgs := p.update(OpenedMsg(p.repo))
 	p.wantView("repository", "loading")
 	pending := ticks(msgs)
 	if len(pending) == 0 {

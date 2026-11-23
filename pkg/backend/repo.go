@@ -40,7 +40,7 @@ import (
 // importRemotePolicy.
 func RemotePolicy(cfg *config.Config, user proto.User) ssrf.GitRemotePolicy {
 	return ssrf.GitRemotePolicy{
-		AllowedSSHHosts: cfg.SSH.AllowedHosts(),
+		AllowedSSHHosts: cfg.SSH.ParsedClientAllowedHosts(),
 		AllowAnySSHHost: user != nil && user.IsAdmin(),
 	}
 }
@@ -474,7 +474,7 @@ func (d *Backend) registerRepository(ctx context.Context, name string, user prot
 			}
 		}
 
-		return hooks.GenerateHooks(ctx, d.cfg, name)
+		return hooks.Generate(ctx, d.cfg, name)
 	}); err != nil {
 		// The callers log the failure: CreateRepository through
 		// clientError, an import where it registers.
@@ -918,12 +918,12 @@ func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEven
 		d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
 		return nil, r, nil
 	}
-	hooks, err := d.webhooks.Subscribers(ctx, ev)
+	subs, err := d.webhooks.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
 		return nil, r, nil
 	}
-	return &repoDeleteEvent{event: ev, hooks: hooks}, r, nil
+	return &repoDeleteEvent{event: ev, hooks: subs}, r, nil
 }
 
 // deleteRepoRow deletes the row of the repository name, if its ID is id
@@ -1826,7 +1826,7 @@ func (r *repo) UpdatedAt() time.Time {
 // back to the row.
 func (d *Backend) populateLastModified(ctx context.Context, name string) error {
 	rp := d.repoPath(name)
-	if !hasRefs(rp) {
+	if !hasRefs(ctx, rp) {
 		return nil
 	}
 	r, err := git.Open(ctx, rp)

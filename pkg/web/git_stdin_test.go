@@ -53,15 +53,15 @@ func (w *flushSignal) Flush() {
 
 // handled is what the test server saw of one request.
 type handled struct {
-	reading  bool  // the body was still being read when serviceRpc returned
+	reading  bool  // the body was still being read when serviceRPC returned
 	startErr error // the request context's error when the request came in
-	endErr   error // the request context's error when serviceRpc returned
+	endErr   error // the request context's error when serviceRPC returned
 }
 
-// newServiceRpcServer serves upload-pack for a new empty repository. Each
+// newServiceRPCServer serves upload-pack for a new empty repository. Each
 // request's flushSignal is sent on flushes, and what the server saw of it
 // on results.
-func newServiceRpcServer(t *testing.T) (srv *httptest.Server, flushes <-chan *flushSignal, results <-chan handled) {
+func newServiceRPCServer(t *testing.T) (srv *httptest.Server, flushes <-chan *flushSignal, results <-chan handled) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "repo.git")
 	if out, err := exec.CommandContext(t.Context(), "git", "init", "--bare", dir).CombinedOutput(); err != nil {
@@ -84,7 +84,7 @@ func newServiceRpcServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 			"dir":     dir,
 			"repo":    "repo",
 		})
-		s.serveRoute((*server).serviceRpc, fw, r, routeCaller{})
+		s.serveRoute((*server).serviceRPC, fw, r, routeCaller{})
 		h.reading = body.reading.Load()
 		h.endErr = r.Context().Err()
 		rc <- h
@@ -130,7 +130,7 @@ func waitHandled(t *testing.T, results <-chan handled) handled {
 	}
 }
 
-// checkHandled fails the test if the server read the body after serviceRpc
+// checkHandled fails the test if the server read the body after serviceRPC
 // returned or the request context was cancelled.
 func checkHandled(t *testing.T, name string, h handled) {
 	t.Helper()
@@ -145,7 +145,7 @@ func checkHandled(t *testing.T, name string, h handled) {
 	}
 }
 
-// joiningBody reports whether serviceRpc waits, once git has exited, for the
+// joiningBody reports whether serviceRPC waits, once git has exited, for the
 // copy of the request body to end.
 func joiningBody() bool {
 	buf := make([]byte, 1<<20)
@@ -161,7 +161,7 @@ func joiningBody() bool {
 		header, stack, _ := strings.Cut(g, "\n")
 		if strings.Contains(header, "[chan receive") &&
 			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/gitserve.joinStdin(") &&
-			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*server).serviceRpc(") {
+			strings.Contains(stack, "github.com/charmbracelet/soft-serve/pkg/web.(*server).serviceRPC(") {
 			return true
 		}
 	}
@@ -173,9 +173,9 @@ func joiningBody() bool {
 // read after the handler returns, or the deferred close of the gzip reader
 // racing that read. Waiting for it must not cancel the request context, and
 // the connection must still serve the next request.
-func TestServiceRpcJoinsBodyRead(t *testing.T) {
+func TestServiceRPCJoinsBodyRead(t *testing.T) {
 	t.Parallel()
-	srv, flushes, results := newServiceRpcServer(t)
+	srv, flushes, results := newServiceRPCServer(t)
 
 	pr, pw := io.Pipe()
 	defer pw.Close() //nolint: errcheck
@@ -253,9 +253,9 @@ func TestServiceRpcJoinsBodyRead(t *testing.T) {
 // still running. Requests like that, sent one after another on one
 // keep-alive connection as git clients do, must each start and end with a
 // live context, and keep the connection.
-func TestServiceRpcKeepAlive(t *testing.T) {
+func TestServiceRPCKeepAlive(t *testing.T) {
 	t.Parallel()
-	srv, flushes, results := newServiceRpcServer(t)
+	srv, flushes, results := newServiceRPCServer(t)
 
 	bodies := [][]byte{
 		[]byte("0000"),

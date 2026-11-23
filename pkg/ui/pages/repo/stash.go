@@ -66,13 +66,13 @@ type Stash struct {
 }
 
 // NewStash creates a new stash model.
-func NewStash(common *common.Common) *Stash {
-	vp := viewport.New(common)
-	selector := selector.NewPane(common, StashItemDelegate{common})
+func NewStash(c *common.Common) *Stash {
+	vp := viewport.New(c)
+	sel := selector.NewPane(c, StashItemDelegate{c})
 	return &Stash{
 		vp:     vp,
-		common: common,
-		list:   selector,
+		common: c,
+		list:   sel,
 	}
 }
 
@@ -169,7 +169,7 @@ func (s *Stash) Init() tea.Cmd {
 func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		s.repo = msg
 		s.clearPatch()
 	case RefMsg:

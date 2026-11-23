@@ -172,10 +172,10 @@ func TestValidateURLAllowing(t *testing.T) {
 	}
 
 	// The exported wrapper with an empty list behaves as ValidateURL.
-	if err := ValidateURLAllowing("http://127.0.0.1/hook", nil); !errors.Is(err, ErrPrivateIP) {
+	if err := ValidateURLAllowing(t.Context(), "http://127.0.0.1/hook", nil); !errors.Is(err, ErrPrivateIP) {
 		t.Errorf("ValidateURLAllowing(loopback, nil) = %v, want ErrPrivateIP", err)
 	}
-	if err := ValidateURLAllowing("http://127.0.0.1/hook", mustAllowedHosts(t, "127.0.0.0/8")); err != nil {
+	if err := ValidateURLAllowing(t.Context(), "http://127.0.0.1/hook", mustAllowedHosts(t, "127.0.0.0/8")); err != nil {
 		t.Errorf("ValidateURLAllowing(loopback, 127.0.0.0/8) = %v, want nil", err)
 	}
 }

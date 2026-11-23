@@ -18,16 +18,16 @@ type Env struct {
 	Logger *log.Logger
 }
 
-// MigrateFunc is a function that executes a migration.
-type MigrateFunc func(ctx context.Context, tx *db.Tx, env Env) error //nolint:revive
+// Func is a function that executes a migration.
+type Func func(ctx context.Context, tx *db.Tx, env Env) error
 
 // Migration is a struct that contains the name of the migration and the
 // function to execute it.
 type Migration struct {
 	Version  int64
 	Name     string
-	Migrate  MigrateFunc
-	Rollback MigrateFunc
+	Migrate  Func
+	Rollback Func
 }
 
 // Migrations is a database model to store migrations.

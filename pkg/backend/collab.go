@@ -14,7 +14,7 @@ import (
 )
 
 // AddCollaborator adds a collaborator to a repository.
-func (d *Backend) AddCollaborator(ctx context.Context, repo string, username string, level access.AccessLevel) error {
+func (d *Backend) AddCollaborator(ctx context.Context, repo string, username string, level access.Level) error {
 	username = strings.ToLower(username)
 	if err := proto.ValidateUsername(username); err != nil {
 		return err
@@ -29,7 +29,7 @@ func (d *Backend) AddCollaborator(ctx context.Context, repo string, username str
 
 // AddResolvedCollaborator is AddCollaborator for r, a repository the caller
 // looked up and authorized before: see lockResolved.
-func (d *Backend) AddResolvedCollaborator(ctx context.Context, r proto.Repository, username string, level access.AccessLevel) error {
+func (d *Backend) AddResolvedCollaborator(ctx context.Context, r proto.Repository, username string, level access.Level) error {
 	username = strings.ToLower(username)
 	if err := proto.ValidateUsername(username); err != nil {
 		return err
@@ -40,7 +40,7 @@ func (d *Backend) AddResolvedCollaborator(ctx context.Context, r proto.Repositor
 // addCollaborator adds username, valid and lowercase, as a collaborator of
 // r, and announces it. The row is added only while r still has its name:
 // the event names r, so the row must be r's.
-func (d *Backend) addCollaborator(ctx context.Context, r proto.Repository, username string, level access.AccessLevel) error {
+func (d *Backend) addCollaborator(ctx context.Context, r proto.Repository, username string, level access.Level) error {
 	repo := r.Name()
 	if err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		if _, err := d.lockResolved(ctx, tx, repo, r.ID()); err != nil {
@@ -80,7 +80,7 @@ func (d *Backend) addCollaborator(ctx context.Context, r proto.Repository, usern
 // Collaborator is a repository collaborator and their access level.
 type Collaborator struct {
 	Username    string
-	AccessLevel access.AccessLevel
+	AccessLevel access.Level
 }
 
 // Collaborators returns the collaborators of a repository with their access
@@ -108,7 +108,7 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 		return nil, wrapRepoError(err)
 	}
 
-	levels := make(map[int64]access.AccessLevel, len(collabs))
+	levels := make(map[int64]access.Level, len(collabs))
 	for _, c := range collabs {
 		levels[c.UserID] = c.AccessLevel
 	}
@@ -136,7 +136,7 @@ func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborato
 // session resolves its user once, and if that account is renamed and
 // another takes the old name, the session must keep its own account's
 // rows, not get the other account's.
-func (d *Backend) IsCollaborator(ctx context.Context, r proto.Repository, user proto.User) (access.AccessLevel, bool, error) {
+func (d *Backend) IsCollaborator(ctx context.Context, r proto.Repository, user proto.User) (access.Level, bool, error) {
 	if r == nil || user == nil || user.ID() == 0 {
 		return -1, false, nil
 	}

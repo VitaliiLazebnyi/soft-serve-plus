@@ -12,14 +12,14 @@ import (
 
 // LFS objects can hold private repository content, so objects and the
 // directories created for them are only accessible to the server's user.
-func TestLocalStoragePermissions(t *testing.T) {
+func TestLocalPermissions(t *testing.T) {
 	// Keep the umask from masking a mode that is too wide. The umask is per
 	// process, so this test must not run in parallel.
 	old := syscall.Umask(0)
 	t.Cleanup(func() { syscall.Umask(old) })
 
 	root := filepath.Join(t.TempDir(), "lfs", "1")
-	l := NewLocalStorage(root)
+	l := NewLocal(root)
 	if _, err := l.Put("incomplete/obj", strings.NewReader("data")); err != nil {
 		t.Fatal(err)
 	}

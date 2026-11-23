@@ -136,12 +136,12 @@ func TestRepoTreeTruncated(t *testing.T) {
 func treeRepo(t *testing.T) func(args ...string) (string, string, error) {
 	t.Helper()
 	ctx, git := diffRepoOnMain(t)
-	add := func(mode, content, path string) {
+	add := func(mode, content, p string) {
 		sha := content
 		if mode != "160000" {
 			sha = git(content, "hash-object", "-w", "--stdin")
 		}
-		git("", "update-index", "--add", "--cacheinfo", mode+","+sha+","+path)
+		git("", "update-index", "--add", "--cacheinfo", mode+","+sha+","+p)
 	}
 	add("100644", "zz", "Zeta.txt")
 	add("100644", "xxx", "alpha/x")

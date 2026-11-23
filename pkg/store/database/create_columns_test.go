@@ -47,7 +47,7 @@ func TestCreateRepoColumns(t *testing.T) {
 // Every field CreateWebhookDelivery takes is stored in its own column.
 func TestCreateWebhookDeliveryColumns(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
-	hook, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	hook, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}

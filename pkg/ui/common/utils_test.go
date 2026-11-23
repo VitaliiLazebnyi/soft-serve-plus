@@ -26,23 +26,3 @@ func TestRepoURL(t *testing.T) {
 		}
 	}
 }
-
-func TestDisplayFilename(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		in, want string
-	}{
-		{"file.txt", "file.txt"},
-		{`a"`, `a"`},
-		{`"a`, `"a`},
-		{"café.txt", "café.txt"},
-		{`a\b`, `a\b`},
-		{"a\tb", `a\tb`},
-		{"a\tb\"", `a\tb\"`},
-		{"\xffa", `\xffa`},
-	} {
-		if got := common.DisplayFilename(tc.in); got != tc.want {
-			t.Errorf("DisplayFilename(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}

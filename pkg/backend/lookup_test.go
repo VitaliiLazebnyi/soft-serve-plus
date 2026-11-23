@@ -36,13 +36,13 @@ func TestIsCollaboratorNotCollaborator(t *testing.T) {
 	level, isCollab, err := collabOf(t, be, ctx, "repo", "stranger")
 	is.NoErr(err)
 	is.True(!isCollab)
-	is.Equal(level, access.AccessLevel(-1))
+	is.Equal(level, access.Level(-1))
 
 	// A repository that does not exist has no collaborators either.
 	level, isCollab, err = collabOf(t, be, ctx, "missing", "collab")
 	is.NoErr(err)
 	is.True(!isCollab)
-	is.Equal(level, access.AccessLevel(-1))
+	is.Equal(level, access.Level(-1))
 
 	level, isCollab, err = collabOf(t, be, ctx, "repo", "collab")
 	is.NoErr(err)
@@ -161,7 +161,7 @@ func TestReadableReturnsLookupErrors(t *testing.T) {
 
 	// Without the collaborators table, the stranger's level is unknown.
 	breakTable(t, be, "collabs")
-	for _, readable := range []func(context.Context, string, proto.User) (proto.Repository, access.AccessLevel, error){be.Readable, be.ReadableForUser} {
+	for _, readable := range []func(context.Context, string, proto.User) (proto.Repository, access.Level, error){be.Readable, be.ReadableForUser} {
 		r, level, err := readable(ctx, "private", stranger)
 		is.True(err != nil)
 		is.True(r == nil)

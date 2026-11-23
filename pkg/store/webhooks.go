@@ -29,10 +29,14 @@ type WebhookStore interface {
 	// it is active and subscribes to event. It returns db.ErrRecordNotFound when the
 	// webhook does not exist, is inactive, or does not subscribe to event.
 	GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error)
-	// CreateWebhook creates a webhook.
-	CreateWebhook(ctx context.Context, h db.Handler, repoID int64, url string, secret string, contentType int, active bool) (int64, error)
-	// UpdateWebhookByID updates a webhook by its ID.
-	UpdateWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64, url string, secret string, contentType int, active bool) error
+	// CreateWebhook creates a webhook from w's RepoID, URL, Secret,
+	// ContentType and Active, and returns its ID. The other fields are
+	// ignored.
+	CreateWebhook(ctx context.Context, h db.Handler, w models.Webhook) (int64, error)
+	// UpdateWebhookByID sets the URL, Secret, ContentType and Active of the
+	// webhook w.ID of repository w.RepoID. It returns db.ErrRecordNotFound
+	// when that repository has no such webhook.
+	UpdateWebhookByID(ctx context.Context, h db.Handler, w models.Webhook) error
 	// DeleteWebhookForRepoByID deletes a webhook for a repository by its ID,
 	// with its events and deliveries.
 	DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error

@@ -35,7 +35,7 @@ import (
 // Server is the Soft Serve server.
 type Server struct {
 	SSHServer   *sshsrv.Server
-	GitDaemon   *daemon.GitDaemon
+	GitDaemon   *daemon.Server
 	HTTPServer  *web.HTTPServer
 	StatsServer *http.Server
 	CertLoader  *CertReloader
@@ -147,7 +147,7 @@ func newServer(ctx context.Context, cfg *config.Config, dbx *db.DB, st store.Sto
 		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
 
-	srv.GitDaemon, err = daemon.NewGitDaemon(cfg, be, baseLogger)
+	srv.GitDaemon, err = daemon.NewServer(cfg, be, baseLogger)
 	if err != nil {
 		return nil, fmt.Errorf("create git daemon: %w", err)
 	}

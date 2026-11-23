@@ -14,7 +14,7 @@ type RepositoryStore interface {
 	// GetRepoWithCollabByName is GetRepoByName that also returns, in the
 	// same query, the access level of userID's collaborator row on the
 	// repository, with ok false when userID has none.
-	GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (_ models.Repo, level access.AccessLevel, ok bool, _ error)
+	GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (_ models.Repo, level access.Level, ok bool, _ error)
 	GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error)
 	// GetRepoByIDForUpdate is GetRepoByID that also locks the row until the
 	// transaction ends, on Postgres, as GetRepoByNameForUpdate does. It

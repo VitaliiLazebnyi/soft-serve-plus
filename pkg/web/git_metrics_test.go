@@ -21,8 +21,8 @@ import (
 // counters are the process's, and other tests fetch the same names, so the
 // tests that read them do not run in parallel.
 func httpGitCounts(repo string) (fetches, pushes float64) {
-	return testutil.ToFloat64(gitHttpUploadCounter.WithLabelValues(repo, "info/refs")),
-		testutil.ToFloat64(gitHttpReceiveCounter.WithLabelValues(repo))
+	return testutil.ToFloat64(gitHTTPUploadCounter.WithLabelValues(repo, "info/refs")),
+		testutil.ToFloat64(gitHTTPReceiveCounter.WithLabelValues(repo))
 }
 
 // Fetches and pushes over HTTP are counted on their ref advertisement only:
@@ -94,7 +94,7 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 
 	srv := httptest.NewServer(f.handler)
 	t.Cleanup(srv.Close)
-	url := srv.URL + "/" + name + ".git"
+	repoURL := srv.URL + "/" + name + ".git"
 
 	// counted runs git and returns how much it added to the fetch counter.
 	counted := func(args ...string) float64 {
@@ -107,7 +107,7 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 	for _, version := range []string{"2", "0"} {
 		dst := filepath.Join(t.TempDir(), "clone")
 		// A clone sends ls-refs and fetch in protocol v2.
-		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", url, dst), 1.0)
+		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", repoURL, dst), 1.0)
 		// A fetch with nothing new sends no RPC in v0, and ls-refs in v2.
 		is.Equal(counted("-C", dst, "-c", "protocol.version="+version, "fetch", "-q", "origin"), 1.0)
 	}
@@ -197,12 +197,12 @@ func TestHTTPCountersLabelledByRepository(t *testing.T) {
 	is.Equal(testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)))
 
 	fetches, _ := httpGitCounts(name)
-	series = testutil.CollectAndCount(gitHttpUploadCounter)
+	series = testutil.CollectAndCount(gitHTTPUploadCounter)
 	refs := []string{"/" + name, "/" + name + ".git", "/" + name + ".git.git", "/" + name + "/.git"}
 	for _, p := range refs {
 		is.Equal(f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
 	}
-	is.Equal(testutil.CollectAndCount(gitHttpUploadCounter)-series, 0)
+	is.Equal(testutil.CollectAndCount(gitHTTPUploadCounter)-series, 0)
 	gotFetches, _ := httpGitCounts(name)
 	is.Equal(gotFetches-fetches, float64(len(refs)))
 }

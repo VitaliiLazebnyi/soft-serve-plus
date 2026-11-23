@@ -26,7 +26,7 @@ func (s *lookupCountingStore) GetRepoByName(ctx context.Context, h db.Handler, n
 	return s.Store.GetRepoByName(ctx, h, name)
 }
 
-func (s *lookupCountingStore) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.AccessLevel, bool, error) {
+func (s *lookupCountingStore) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.Level, bool, error) {
 	s.n.Add(1)
 	return s.Store.GetRepoWithCollabByName(ctx, h, name, userID)
 }
@@ -36,7 +36,7 @@ func (s *lookupCountingStore) GetCollabByUserIDAndRepoID(ctx context.Context, h 
 	return s.Store.GetCollabByUserIDAndRepoID(ctx, h, userID, repoID)
 }
 
-func (s *lookupCountingStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.AccessLevel, error) {
+func (s *lookupCountingStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.Level, error) {
 	s.n.Add(1)
 	return s.Store.GetAnonAccess(ctx, h)
 }

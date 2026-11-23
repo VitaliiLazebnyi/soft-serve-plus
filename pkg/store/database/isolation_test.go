@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 )
 
 // The webhook cap holds when the database defaults to REPEATABLE READ. A
@@ -62,7 +63,7 @@ func TestLockAndCountWebhooksSeesHolderUnderRepeatableReadPostgres(t *testing.T)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		_, err := s.CreateWebhook(ctx, tx, 7, "https://93.184.216.34/a", "", 0, true)
+		_, err := s.CreateWebhook(ctx, tx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 		return err
 	})
 	if err != nil {

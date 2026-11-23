@@ -192,7 +192,7 @@ func serverConfig(cfg *config.Config, logger *log.Logger) *gossh.ServerConfig {
 			Ciphers:      config.DefaultSSHCiphers(),
 			MACs:         config.DefaultSSHMACs(),
 		},
-		PublicKeyAuthAlgorithms: cfg.SSH.SSHPublicKeyAuthAlgorithms(),
+		PublicKeyAuthAlgorithms: cfg.SSH.AcceptedPublicKeyAuthAlgorithms(),
 	}
 	if config.IsDebug() {
 		sc.AuthLogCallback = func(conn gossh.ConnMetadata, method string, err error) {

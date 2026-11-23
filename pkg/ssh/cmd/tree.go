@@ -4,9 +4,9 @@ import (
 	"errors"
 
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +17,7 @@ func (cmds *Commands) treeCommand() *cobra.Command {
 		Use:   "tree REPOSITORY [REFERENCE] [PATH]",
 		Short: "Print repository tree at path",
 		Args:  cobra.RangeArgs(1, 3),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			path := ""
 			ref := ""
@@ -102,6 +102,6 @@ func printEntries(cmd *cobra.Command, ents git.Entries) {
 		if size := ent.Size(); size != 0 {
 			ssize = humanize.Bytes(uint64(size)) //nolint:gosec
 		}
-		cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, common.DisplayFilename(ent.Name()))
+		cmd.Printf("%s\t%s\t %s\n", ent.Mode(), ssize, termtext.Filename(ent.Name()))
 	}
 }

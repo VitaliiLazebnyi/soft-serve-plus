@@ -156,7 +156,7 @@ func TestUIRepoOpenDoesNotReadModel(t *testing.T) {
 			defer wg.Done()
 			msg = open()
 		}()
-		ui.Update(repo.RepoMsg(rb))
+		ui.Update(repo.OpenedMsg(rb))
 		wg.Wait()
 		m, ok := msg.(repoOpenedMsg)
 		if !ok || m.err != nil || m.repo == nil || m.repo.Name() != "a" {

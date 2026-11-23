@@ -20,13 +20,13 @@ func (*Store) GetAllowKeylessAccess(ctx context.Context, h db.Handler) (bool, er
 }
 
 // GetAnonAccess implements store.Store.
-func (*Store) GetAnonAccess(ctx context.Context, h db.Handler) (access.AccessLevel, error) {
+func (*Store) GetAnonAccess(ctx context.Context, h db.Handler) (access.Level, error) {
 	var level string
 	query := h.Rebind(`SELECT value FROM settings WHERE "key" = 'anon_access'`)
 	if err := h.GetContext(ctx, &level, query); err != nil {
 		return access.NoAccess, err
 	}
-	l, err := access.ParseAccessLevel(level)
+	l, err := access.ParseLevel(level)
 	if err != nil {
 		return access.NoAccess, fmt.Errorf("anon_access setting %q: %w", level, err)
 	}
@@ -41,7 +41,7 @@ func (*Store) SetAllowKeylessAccess(ctx context.Context, h db.Handler, allow boo
 }
 
 // SetAnonAccess implements store.Store.
-func (*Store) SetAnonAccess(ctx context.Context, h db.Handler, level access.AccessLevel) error {
+func (*Store) SetAnonAccess(ctx context.Context, h db.Handler, level access.Level) error {
 	return setSetting(ctx, h, "anon_access", level.String())
 }
 

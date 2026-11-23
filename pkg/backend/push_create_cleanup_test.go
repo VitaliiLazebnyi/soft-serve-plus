@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -24,10 +25,37 @@ func TestRepositoryHasRefsFailsSafe(t *testing.T) {
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "empty", defaultAdmin(t, be), proto.RepositoryOptions{})
 	is.NoErr(err)
-	is.True(!be.RepositoryHasRefs(r))
+	is.True(!be.RepositoryHasRefs(ctx, r))
 
 	is.NoErr(os.RemoveAll(be.repoPath("empty")))
-	is.True(be.RepositoryHasRefs(r))
+	is.True(be.RepositoryHasRefs(ctx, r))
+}
+
+// The check for refs runs under the removal's context: once that is done,
+// git is not asked, and the repository counts as having refs. So an empty
+// push-created repository is kept, and no delete is tried, rather than
+// checked without the context, after which a delete was tried and failed
+// with ctx's error.
+func TestRemovePushCreatedRepositoryCancelledKeeps(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	r, err := be.CreateRepository(ctx, "cancelled", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	deleteTried := false
+	be.beforePushCreatedDelete = func() { deleteTried = true }
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	removed, err := be.RemovePushCreatedRepository(cancelled, r)
+	is.NoErr(err)
+	is.True(!removed)
+	is.True(!deleteTried)
+	_, err = be.Repository(ctx, "cancelled")
+	is.NoErr(err) // the row is kept
+	_, err = os.Stat(be.repoPath("cancelled"))
+	is.NoErr(err) // and so is the directory
 }
 
 // commitTo points ref of the repository at dir at a new empty commit.

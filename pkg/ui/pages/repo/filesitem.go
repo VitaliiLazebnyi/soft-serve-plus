@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/dustin/go-humanize"
 )
@@ -27,7 +28,7 @@ func (i FileItem) ID() string {
 
 // Title returns the title of the file item.
 func (i FileItem) Title() string {
-	return common.DisplayFilename(i.entry.Name())
+	return termtext.Filename(i.entry.Name())
 }
 
 // Description returns the description of the file item.

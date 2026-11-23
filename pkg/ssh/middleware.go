@@ -266,7 +266,7 @@ func newRootCommand(cfg *config.Config, cmds *cmd.Commands, args []string) *cobr
 
 		if cfg.LFS.SSHEnabled {
 			rootCmd.AddCommand(
-				cmds.GitLFSTransfer(),
+				cmds.GitLFSTransferCommand(),
 			)
 		}
 	}

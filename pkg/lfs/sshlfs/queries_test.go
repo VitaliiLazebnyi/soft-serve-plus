@@ -69,7 +69,7 @@ func TestLFSTransferLooksUpTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	strg := storage.NewLocalStorage(filepath.Join(dp, "lfs", "1"))
+	strg := storage.NewLocal(filepath.Join(dp, "lfs", "1"))
 	var pointers []transfer.BatchItem
 	for _, content := range []string{"one", "two", "three"} {
 		sum := sha256.Sum256([]byte(content))

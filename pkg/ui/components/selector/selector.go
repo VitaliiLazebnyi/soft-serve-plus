@@ -59,17 +59,17 @@ type SelectMsg struct{ IdentifiableItem }
 type ActiveMsg struct{ IdentifiableItem }
 
 // New creates a new selector.
-func New(common *common.Common, items []IdentifiableItem, delegate ItemDelegate) *Selector {
+func New(c *common.Common, items []IdentifiableItem, delegate ItemDelegate) *Selector {
 	itms := make([]list.Item, len(items))
 	for i, item := range items {
 		itms[i] = item
 	}
-	prefix := common.Zone.NewPrefix()
-	l := list.New(itms, zoneDelegate{delegate, common, prefix}, 0, 0)
-	l.Styles.NoItems = common.Styles.NoContent
+	prefix := c.Zone.NewPrefix()
+	l := list.New(itms, zoneDelegate{delegate, c, prefix}, 0, 0)
+	l.Styles.NoItems = c.Styles.NoContent
 	s := &Selector{
 		Model:      &l,
-		common:     common,
+		common:     c,
 		zonePrefix: prefix,
 	}
 	return s

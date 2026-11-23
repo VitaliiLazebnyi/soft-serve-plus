@@ -1,19 +1,17 @@
-package common
+package termtext
 
 import (
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/charmbracelet/soft-serve/internal/termtext"
 )
 
-// DisplayFilename returns a file name that is safe to print in a terminal.
+// Filename returns a file name that is safe to print in a terminal.
 // Tree entry names are real (unquoted) names, so a name made of printable
 // characters, including non-ASCII ones, is returned as is; one with control
 // characters or invalid UTF-8 is escaped like a Go string literal.
-func DisplayFilename(s string) string {
+func Filename(s string) string {
 	if utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) < 0 {
 		return s
 	}
@@ -21,14 +19,13 @@ func DisplayFilename(s string) string {
 	return q[1 : len(q)-1]
 }
 
-// SanitizeText returns repository text, such as a commit subject, an author
-// or a description, ready to show: termtext.Sanitize removes escape sequences
-// and control characters, and SanitizeText also removes the Unicode
-// bidirectional controls, which would let the text reorder what is shown
-// around it in a terminal that implements bidi. DisplayFilename escapes them
-// in file names.
-func SanitizeText(s string) string {
-	s = termtext.Sanitize(s)
+// Text returns repository text, such as a commit subject, an author or a
+// description, ready to show: Sanitize removes escape sequences and control
+// characters, and Text also removes the Unicode bidirectional controls, which
+// would let the text reorder what is shown around it in a terminal that
+// implements bidi. Filename escapes them in file names.
+func Text(s string) string {
+	s = Sanitize(s)
 	if !strings.ContainsFunc(s, isBidiControl) {
 		return s
 	}

@@ -137,7 +137,7 @@ func TestGetWebhooksByRepoIDWhereEventReturnsEachOnce(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	id, err := s.CreateWebhook(ctx, dbx, 7, "https://93.184.216.34/a", "", 0, true)
+	id, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://93.184.216.34/a", ContentType: 0, Active: true})
 	is.NoErr(err)
 	is.NoErr(s.CreateWebhookEvents(ctx, dbx, id, []int{1, 2, 3}))
 

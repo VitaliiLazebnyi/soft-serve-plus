@@ -86,7 +86,7 @@ func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
 	stdin, stdinW := io.Pipe()
 	stdout, stdoutW := io.Pipe()
 
-	c := cmdsOf(adminCtx).GitLFSTransfer()
+	c := cmdsOf(adminCtx).GitLFSTransferCommand()
 	c.SilenceUsage = true
 	c.SilenceErrors = true
 	c.SetIn(stdin)
@@ -284,7 +284,7 @@ func TestBeginPushLookupFailure(t *testing.T) {
 	}{
 		{"push", true, (*Commands).GitReceivePackCommand, []string{"shared"}},
 		{"push to create", false, (*Commands).GitReceivePackCommand, []string{"shared"}},
-		{"lfs upload", true, (*Commands).GitLFSTransfer, []string{"shared", "upload"}},
+		{"lfs upload", true, (*Commands).GitLFSTransferCommand, []string{"shared", "upload"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

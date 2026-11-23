@@ -208,7 +208,7 @@ func (ui *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.err != nil {
 			msg = common.ErrorMsg{Err: m.err}
 		} else {
-			msg = repo.RepoMsg(m.repo)
+			msg = repo.OpenedMsg(m.repo)
 		}
 	}
 	cmds := make([]tea.Cmd, 0)
@@ -269,7 +269,7 @@ func (ui *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A render a tab started, which it waits for to start its next
 		// one, even after the user left the repository page.
 		cmds = append(cmds, ui.pages[repoPage].Update(msg))
-	case repo.RepoMsg:
+	case repo.OpenedMsg:
 		ui.activePage = repoPage
 		// Show the footer on repo page if show all is set.
 		ui.showFooter = ui.footer.ShowAll()

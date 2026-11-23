@@ -46,7 +46,7 @@ func (cmds *Commands) RepoCommand() *cobra.Command {
 			Use:   "info REPOSITORY",
 			Short: "Get information about a repository",
 			Args:  cobra.ExactArgs(1),
-			RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, level access.AccessLevel) error {
+			RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, level access.Level) error {
 				ctx := cmd.Context()
 				be := cmds.be
 

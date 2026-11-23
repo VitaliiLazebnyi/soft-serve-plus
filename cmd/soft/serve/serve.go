@@ -213,7 +213,7 @@ func abortOnSignal(sigs <-chan os.Signal, logger *log.Logger) (context.Context, 
 // instead.
 func warnIgnoredSettings(logger *log.Logger, cfg *config.Config) {
 	for _, k := range cfg.UnknownKeys() {
-		logger.Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.ConfigPath())
+		logger.Warn("ignoring unknown config key", "key", k.Key, "line", k.Line, "file", cfg.FilePath())
 	}
 	for _, r := range cfg.RemovedSettings() {
 		msg := "ignoring removed setting; unset the variable"

@@ -131,7 +131,7 @@ func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto
 	// between the two.
 	rp := d.repoPath(name)
 	refs := d.pushCreatedRefSnapshot(rp)
-	if hasRefs(rp) {
+	if hasRefs(ctx, rp) {
 		d.headOnPushedBranch(ctx, name, created)
 		return false, nil
 	}
@@ -294,10 +294,10 @@ func refsWritten(before, now refState) bool {
 }
 
 // RepositoryHasRefs reports whether the repository r has any ref. A
-// repository that cannot be read counts as having refs, so a push-created
-// repository is never removed by mistake.
-func (d *Backend) RepositoryHasRefs(r proto.Repository) bool {
-	return hasRefs(d.repoPath(r.Name()))
+// repository that cannot be read, or a check cut short by ctx, counts as
+// having refs, so a push-created repository is never removed by mistake.
+func (d *Backend) RepositoryHasRefs(ctx context.Context, r proto.Repository) bool {
+	return hasRefs(ctx, d.repoPath(r.Name()))
 }
 
 // pushCreatedRepositoryUsed reports whether m, the row now under created's
@@ -335,9 +335,10 @@ func (d *Backend) pushCreatedRepositoryUsed(ctx context.Context, tx *db.Tx, m mo
 
 // hasRefs reports whether the repository at dir has any ref. A repository
 // that cannot be read counts as having refs, so it is never removed by
-// mistake.
-func hasRefs(dir string) bool {
-	out, err := git.NewCommand("for-each-ref", "--count=1", "--format=%(refname)").RunInDir(dir)
+// mistake; so does one whose check ctx stopped, or that ctx was already done
+// for, since git was not asked.
+func hasRefs(ctx context.Context, dir string) bool {
+	out, err := git.NewCommand(ctx, "for-each-ref", "--count=1", "--format=%(refname)").RunInDir(dir)
 	if err != nil {
 		return true
 	}

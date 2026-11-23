@@ -31,7 +31,7 @@ func (cmds *Commands) branchListCommand() *cobra.Command {
 		Use:   "list REPOSITORY",
 		Short: "List repository branches",
 		Args:  cobra.ExactArgs(1),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.Level) error {
 			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
@@ -59,7 +59,7 @@ func (cmds *Commands) branchDefaultCommand() *cobra.Command {
 		Use:   "default REPOSITORY [BRANCH]",
 		Short: "Set or get the default branch",
 		Args:  cobra.RangeArgs(1, 2),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, level access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, level access.Level) error {
 			ctx := cmd.Context()
 
 			r, err := cmds.openRepository(cmd.Context(), rr)
@@ -139,7 +139,7 @@ func (cmds *Commands) branchDeleteCommand() *cobra.Command {
 		Aliases: []string{"remove", "rm", "del"},
 		Short:   "Delete a branch",
 		Args:    cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx, err := cmds.eventSenderContext(cmd.Context())
 			if err != nil {
 				return err

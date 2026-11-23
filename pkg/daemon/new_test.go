@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-// NewGitDaemon refuses a missing config or backend rather than build a
+// NewServer refuses a missing config or backend rather than build a
 // daemon that fails at its first request.
-func TestNewGitDaemonNilDependencies(t *testing.T) {
+func TestNewServerNilDependencies(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
@@ -23,9 +23,9 @@ func TestNewGitDaemonNilDependencies(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			d, err := NewGitDaemon(tc.cfg, tc.be, nil)
+			d, err := NewServer(tc.cfg, tc.be, nil)
 			if !errors.Is(err, tc.want) || d != nil {
-				t.Errorf("NewGitDaemon = %v, %v; want nil, %v", d, err, tc.want)
+				t.Errorf("NewServer = %v, %v; want nil, %v", d, err, tc.want)
 			}
 		})
 	}

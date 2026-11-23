@@ -44,7 +44,7 @@ func TestValidateGitRemotePinsGitProtocol(t *testing.T) {
 		{"git://user@140.82.112.3/x.git", nil, ErrInvalidURL},
 	}
 	for _, tt := range tests {
-		v, err := ValidateGitRemote(tt.remote, policy)
+		v, err := ValidateGitRemote(t.Context(), tt.remote, policy)
 		if tt.err != nil {
 			if !errors.Is(err, tt.err) {
 				t.Errorf("ValidateGitRemote(%q) error = %v, want %v", tt.remote, err, tt.err)

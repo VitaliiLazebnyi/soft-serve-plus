@@ -43,11 +43,11 @@ func DefaultSSHPublicKeyAuthAlgorithms() []string {
 	return slices.Clone(ssh.SupportedAlgorithms().PublicKeyAuths)
 }
 
-// SSHPublicKeyAuthAlgorithms returns the signature algorithms the SSH
+// AcceptedPublicKeyAuthAlgorithms returns the signature algorithms the SSH
 // server accepts for client public key authentication:
 // ssh.public_key_auth_algorithms, or DefaultSSHPublicKeyAuthAlgorithms when
 // it is empty.
-func (c *SSHConfig) SSHPublicKeyAuthAlgorithms() []string {
+func (c *SSHConfig) AcceptedPublicKeyAuthAlgorithms() []string {
 	if len(c.PublicKeyAuthAlgorithms) == 0 {
 		return DefaultSSHPublicKeyAuthAlgorithms()
 	}

@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -145,16 +146,16 @@ type Files struct {
 }
 
 // NewFiles creates a new files model.
-func NewFiles(common *common.Common) *Files {
+func NewFiles(c *common.Common) *Files {
 	f := &Files{
-		common:       common,
-		code:         code.New(common, "", ""),
+		common:       c,
+		code:         code.New(c, "", ""),
 		activeView:   filesViewLoading,
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.NewPane(common, FileItemDelegate{common})
-	f.selector = selector
+	sel := selector.NewPane(c, FileItemDelegate{c})
+	f.selector = sel
 	f.code.ShowLineNumber = f.lineNumber
 	// "b" toggles blame and "l" toggles line numbers in the content view, so
 	// they must not also page up or scroll right in the viewport.
@@ -171,11 +172,11 @@ func NewFiles(common *common.Common) *Files {
 
 // Path implements Pane.
 func (f *Files) Path() string {
-	path := f.path
-	if path == "." {
+	p := f.path
+	if p == "." {
 		return ""
 	}
-	return path
+	return p
 }
 
 // TabName returns the tab name.
@@ -287,7 +288,7 @@ func (f *Files) Init() tea.Cmd {
 func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		f.repo = msg
 	case RefMsg:
 		f.ref = msg.Ref
@@ -476,7 +477,7 @@ func (f *Files) StatusBarValue() string {
 		return " "
 	}
 	// File names may contain control characters; escape them for display.
-	return common.DisplayFilename(p)
+	return termtext.Filename(p)
 }
 
 // StatusBarInfo returns the status bar info.
@@ -503,7 +504,7 @@ func (f *Files) StatusBarInfo() string {
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
 	f.listing++
-	repo, ref, path, listing, gen := f.repo, f.ref, f.path, f.listing, f.gen
+	repo, ref, p, listing, gen := f.repo, f.ref, f.path, f.listing, f.gen
 	// The pane is about to list a directory: a file it was opening is no
 	// longer wanted.
 	f.fileLoad.Stop()
@@ -520,7 +521,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 		if err != nil {
 			return loadError(ctx, paneFiles, gen, err)
 		}
-		t, err := r.TreePath(ref, path)
+		t, err := r.TreePath(ref, p)
 		if err != nil {
 			return loadError(ctx, paneFiles, gen, err)
 		}
@@ -541,7 +542,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), listing: listing, dir: path, gen: gen, truncated: truncated}
+		return FileItemsMsg{items: append(dirs, files...), listing: listing, dir: p, gen: gen, truncated: truncated}
 	}
 }
 
@@ -657,10 +658,10 @@ func renderBlame(c *common.Common, f *FileItem, b *git.Blame) string {
 		if commit == nil {
 			break
 		}
-		who := common.SanitizeText(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
+		who := termtext.Text(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
 		line := fmt.Sprintf("%s %s %s",
 			c.Styles.Tree.Blame.Hash.Render(commit.ID.String()[:7]),
-			c.Styles.Tree.Blame.Message.Render(common.SanitizeText(commit.Summary())),
+			c.Styles.Tree.Blame.Message.Render(termtext.Text(commit.Summary())),
 			c.Styles.Tree.Blame.Who.Render(who),
 		)
 		if line != prev {

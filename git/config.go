@@ -20,7 +20,7 @@ import (
 func (r *Repository) runConfig(ctx context.Context, ok []int, args ...string) ([]byte, int, error) {
 	args = append([]string{"config", "--file", filepath.Join(r.Path, "config")}, args...)
 	var out, stderr bytes.Buffer
-	err := NewCommandWithContext(ctx, args...).RunInDirPipeline(&out, &stderr, r.Path)
+	err := NewCommand(ctx, args...).RunInDirPipeline(&out, &stderr, r.Path)
 	if err == nil {
 		return out.Bytes(), 0, nil
 	}

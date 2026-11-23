@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
@@ -159,7 +160,7 @@ func (m *model) Init() tea.Cmd {
 		m.footer.Init(),
 		// The repository page loads the ref to show itself.
 		func() tea.Msg {
-			return repo.RepoMsg(m.repo)
+			return repo.OpenedMsg(m.repo)
 		},
 	)
 }
@@ -242,7 +243,7 @@ func (m *model) View() tea.View {
 	case errorState:
 		err := m.common.Styles.ErrorTitle.Render("Bummer")
 		// A git error can carry bytes from the repository.
-		err += m.common.Styles.ErrorBody.Render(common.SanitizeText(m.error.Error()))
+		err += m.common.Styles.ErrorBody.Render(termtext.Text(m.error.Error()))
 		view = m.common.Styles.Error.
 			Width(m.width -
 				wm -

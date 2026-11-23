@@ -20,9 +20,9 @@ func TestAccessLevelCollaboratorPrivateRepo(t *testing.T) {
 	tests := []struct {
 		name    string
 		private bool
-		anon    access.AccessLevel
-		collab  access.AccessLevel
-		want    access.AccessLevel
+		anon    access.Level
+		collab  access.Level
+		want    access.Level
 	}{
 		{"private no-access collab, anon read-only", true, access.ReadOnlyAccess, access.NoAccess, access.NoAccess},
 		{"private read-only collab, anon read-write", true, access.ReadWriteAccess, access.ReadOnlyAccess, access.ReadOnlyAccess},
@@ -82,8 +82,8 @@ func TestAccessLevelPublicRepoNonCollaborator(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		anon access.AccessLevel
-		want access.AccessLevel
+		anon access.Level
+		want access.Level
 	}{
 		{"anon no-access", access.NoAccess, access.ReadOnlyAccess},
 		{"anon read-only", access.ReadOnlyAccess, access.ReadOnlyAccess},

@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
@@ -59,8 +60,8 @@ type Repository interface {
 	Open(ctx context.Context) (*git.Repository, error)
 }
 
-// RepoMsg is a message that contains a repository.
-type RepoMsg Repository //nolint:revive
+// OpenedMsg is a message that contains a repository.
+type OpenedMsg Repository
 
 // GoBackMsg is a message to go back to the previous view.
 type GoBackMsg struct{}
@@ -263,7 +264,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	// it is meant for, so that the active pane does not get it a second time.
 	routed := false
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		// Set the state to loading when we get a new repository.
 		r.gen++
 		r.selectedRepo = msg
@@ -397,7 +398,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		if v, ok := r.panes[r.activeTab].(codeView); ok && r.state != failedState && v.ownsRender(msg) {
 			r.setStatusBarInfo()
 		}
-	case RepoMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
+	case OpenedMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
 		selector.ActiveMsg, tea.KeyPressMsg, tea.MouseClickMsg,
 		tea.MouseWheelMsg:
 		r.setStatusBarInfo()
@@ -425,7 +426,7 @@ func (r *Repo) View() string {
 	mainStyle := r.common.Styles.Repo.Body.
 		Height(r.height - hm)
 	var main string
-	var statusbar string
+	var bar string
 	switch r.state {
 	case loadingState:
 		main = fmt.Sprintf("%s loading…", r.spinner.View())
@@ -442,7 +443,7 @@ func (r *Repo) View() string {
 		} else {
 			main = p.View()
 		}
-		statusbar = r.statusbar.View()
+		bar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
 		r.zonePrefix+"main",
@@ -456,7 +457,7 @@ func (r *Repo) View() string {
 		r.headerView(),
 		tabsView,
 		main,
-		statusbar,
+		bar,
 	)
 	return s.Render(view)
 }
@@ -466,13 +467,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.width)
-	header := common.SanitizeText(r.selectedRepo.ProjectName())
+	header := termtext.Text(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(common.SanitizeText(r.selectedRepo.Description()))
+	desc := strings.TrimSpace(termtext.Text(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -513,7 +514,7 @@ func (r *Repo) setStatusBarInfo() {
 	}
 
 	active := r.panes[r.activeTab]
-	key := r.selectedRepo.Name()
+	name := r.selectedRepo.Name()
 	value := active.StatusBarValue()
 	info := active.StatusBarInfo()
 	extra := "*"
@@ -521,7 +522,7 @@ func (r *Repo) setStatusBarInfo() {
 		extra += " " + r.ref.Name().Short()
 	}
 
-	r.statusbar.SetStatus(key, value, info, extra)
+	r.statusbar.SetStatus(name, value, info, extra)
 }
 
 // updatePane delivers msg to the tab id.

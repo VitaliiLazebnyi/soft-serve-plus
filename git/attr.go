@@ -49,11 +49,11 @@ func attrSourceSupported() bool {
 //
 // Every git command it runs, including any variant for newer git such as
 // `check-attr --source` (git >= 2.40), must be built with
-// NewCommandWithContext(r.ctx, ...) so that it stops when the SSH
+// NewCommand(r.ctx, ...) so that it stops when the SSH
 // session that asked for it disconnects.
 func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, error) {
 	if r.attrSource() {
-		out, err := NewCommandWithContext(r.ctx, "check-attr", "-z", "--source", ref.Name().String(), "-a", "--", path).
+		out, err := NewCommand(r.ctx, "check-attr", "-z", "--source", ref.Name().String(), "-a", "--", path).
 			RunInDir(r.Path)
 		if err != nil {
 			return nil, err
@@ -72,12 +72,12 @@ func (r *Repository) CheckAttributes(ref *Reference, path string) ([]Attribute, 
 	defer os.RemoveAll(dir) //nolint: errcheck
 
 	env := "GIT_INDEX_FILE=" + filepath.Join(dir, "index")
-	readTree := NewCommandWithContext(r.ctx, "read-tree", "--reset", "-i", ref.Name().String()).AddEnvs(env)
+	readTree := NewCommand(r.ctx, "read-tree", "--reset", "-i", ref.Name().String()).AddEnvs(env)
 	if _, err := readTree.RunInDir(r.Path); err != nil {
 		return nil, err
 	}
 
-	out, err := NewCommandWithContext(r.ctx, "check-attr", "-z", "--cached", "-a", "--", path).
+	out, err := NewCommand(r.ctx, "check-attr", "-z", "--cached", "-a", "--", path).
 		AddEnvs(env).RunInDir(r.Path)
 	if err != nil {
 		return nil, err
