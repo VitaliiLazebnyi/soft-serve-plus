@@ -5,26 +5,31 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
 func TestSqliteDSN(t *testing.T) {
 	t.Parallel()
-	const added = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
+	const added = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	for dsn, want := range map[string]string{
 		"soft-serve.db":                  "soft-serve.db?" + added,
 		"file:soft-serve.db?mode=rwc":    "file:soft-serve.db?mode=rwc&" + added,
 		":memory:":                       ":memory:?" + added,
 		`C:\data\soft serve\soft.db`:     `C:\data\soft serve\soft.db?` + added,
-		"soft-serve.db?_txlock=deferred": "soft-serve.db?_txlock=deferred&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)",
+		"soft-serve.db?_txlock=deferred": "soft-serve.db?_txlock=deferred&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)",
 		// The server's default data source keeps its pragmas.
-		"soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)": "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate",
+		"soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)": "soft-serve.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
 		// A busy timeout the data source sets is kept, in any of its forms.
-		"soft-serve.db?_pragma=busy_timeout(100)":     "soft-serve.db?_pragma=busy_timeout(100)&_pragma=foreign_keys(1)&_txlock=immediate",
-		"soft-serve.db?_pragma=BUSY_TIMEOUT = 0":      "soft-serve.db?_pragma=BUSY_TIMEOUT = 0&_pragma=foreign_keys(1)&_txlock=immediate",
-		"soft-serve.db?_busy_timeout=100":             "soft-serve.db?_busy_timeout=100&_pragma=foreign_keys(1)&_txlock=immediate",
-		"soft-serve.db?_timeout=100":                  "soft-serve.db?_timeout=100&_pragma=foreign_keys(1)&_txlock=immediate",
-		"soft-serve.db?_fk=1&_pragma=busy_timeout(1)": "soft-serve.db?_fk=1&_pragma=busy_timeout(1)&_txlock=immediate",
-		"soft-serve.db?_pragma=foreign_keys(on)":      "soft-serve.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"soft-serve.db?_pragma=busy_timeout(100)":     "soft-serve.db?_pragma=busy_timeout(100)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_pragma=BUSY_TIMEOUT = 0":      "soft-serve.db?_pragma=BUSY_TIMEOUT = 0&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_busy_timeout=100":             "soft-serve.db?_busy_timeout=100&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_timeout=100":                  "soft-serve.db?_timeout=100&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_fk=1&_pragma=busy_timeout(1)": "soft-serve.db?_fk=1&_pragma=busy_timeout(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		"soft-serve.db?_pragma=foreign_keys(on)":      "soft-serve.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		// A journal mode the data source sets is kept.
+		"soft-serve.db?_pragma=journal_mode(DELETE)": "soft-serve.db?_pragma=journal_mode(DELETE)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"soft-serve.db?_pragma=Journal_Mode = wal":   "soft-serve.db?_pragma=Journal_Mode = wal&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		// Starting with "?", the whole string is a file name to the driver.
 		"?odd": "?odd",
 	} {
@@ -110,11 +115,12 @@ func TestOpenSqliteBarePathEnforcesForeignKeysAndWaits(t *testing.T) {
 	}
 }
 
-// Write-ahead logging is opt-in, as the README describes: an existing
-// database switches to it when the data source asks, keeps its rows, keeps
-// foreign keys and the busy timeout, and stays in WAL mode when the pragma is
-// removed again.
-func TestOpenSqliteWALOptIn(t *testing.T) {
+// Write-ahead logging is the default, as the README describes: a database
+// made in rollback-journal mode switches to it on the next open and keeps
+// its rows, foreign keys and busy timeout, and a data source that names
+// another journal mode, as one on a network file system must, gets that mode
+// instead.
+func TestOpenSqliteWALDefault(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "soft.db")
@@ -135,9 +141,9 @@ func TestOpenSqliteWALOptIn(t *testing.T) {
 		return m
 	}
 
-	d := open(path)
+	d := open(path + "?_pragma=journal_mode(DELETE)")
 	if m := mode(d); m != "delete" {
-		t.Errorf("default journal mode = %q, want delete", m)
+		t.Errorf("journal mode asked for DELETE = %q, want delete", m)
 	}
 	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
 		t.Fatal(err)
@@ -147,7 +153,7 @@ func TestOpenSqliteWALOptIn(t *testing.T) {
 	}
 	d.Close() //nolint:errcheck
 
-	d = open(path + "?_pragma=journal_mode(WAL)")
+	d = open(path)
 	var fk, busy, n int
 	if err := d.GetContext(ctx, &fk, "PRAGMA foreign_keys"); err != nil {
 		t.Fatal(err)
@@ -159,14 +165,78 @@ func TestOpenSqliteWALOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m := mode(d); m != "wal" || fk != 1 || busy != defaultSqliteBusyTimeout || n != 1 {
-		t.Errorf("with WAL asked for: journal_mode %q, foreign_keys %d, busy_timeout %d, rows %d; want wal, 1, %d, 1",
+		t.Errorf("default: journal_mode %q, foreign_keys %d, busy_timeout %d, rows %d; want wal, 1, %d, 1",
 			m, fk, busy, n, defaultSqliteBusyTimeout)
 	}
 	d.Close() //nolint:errcheck
 
-	d = open(path)
+	d = open(path + "?_pragma=journal_mode(DELETE)")
 	defer d.Close() //nolint:errcheck
-	if m := mode(d); m != "wal" {
-		t.Errorf("journal mode after the pragma is removed = %q, want wal", m)
+	if m := mode(d); m != "delete" {
+		t.Errorf("journal mode asked for DELETE after WAL = %q, want delete", m)
+	}
+}
+
+// TestSqliteReadDoesNotWaitForCommit checks that, with the server's default
+// data source and with a bare path, a read goes on while another connection
+// holds the lock a commit takes. In rollback-journal mode a commit locks the
+// database file exclusively for all of its writes and syncs, and every read
+// waits for it, for busy_timeout at most and then with "database is
+// locked". On a slow disk a few commits in a row, such as a webhook
+// delivery's record and prune, kept a push's repository lookup out for that
+// long. BEGIN EXCLUSIVE takes the commit's lock at once and holds it until
+// the test lets go; the read must not wait for that.
+func TestSqliteReadDoesNotWaitForCommit(t *testing.T) {
+	t.Parallel()
+	for name, dsn := range map[string]string{
+		"default": config.DefaultConfig().DB.DataSource,
+		"bare":    "soft.db",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), dsn), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close() //nolint:errcheck
+			for _, q := range []string{"CREATE TABLE t (n INTEGER)", "INSERT INTO t (n) VALUES (1)"} {
+				if _, err := d.ExecContext(ctx, q); err != nil {
+					t.Fatalf("%s: %v", q, err)
+				}
+			}
+
+			w, err := d.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close() //nolint:errcheck
+			for _, q := range []string{"BEGIN EXCLUSIVE", "INSERT INTO t (n) VALUES (2)"} {
+				if _, err := w.ExecContext(ctx, q); err != nil {
+					t.Fatalf("%s: %v", q, err)
+				}
+			}
+
+			// The writer holds its lock until both reads are done.
+			var n, m int
+			if err := d.GetContext(ctx, &n, "SELECT COUNT(*) FROM t"); err != nil {
+				t.Errorf("read during a commit: %v", err)
+			}
+			if err := d.ReadTransactionContext(ctx, func(tx *Tx) error {
+				return tx.GetContext(ctx, &m, "SELECT COUNT(*) FROM t")
+			}); err != nil {
+				t.Errorf("read transaction during a commit: %v", err)
+			}
+			if n != 1 || m != 1 {
+				t.Errorf("reads during a commit saw %d and %d rows, want 1 (the committed ones)", n, m)
+			}
+
+			if _, err := w.ExecContext(ctx, "COMMIT"); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.GetContext(ctx, &n, "SELECT COUNT(*) FROM t"); err != nil || n != 2 {
+				t.Errorf("read after the commit: %d rows, %v; want 2", n, err)
+			}
+		})
 	}
 }

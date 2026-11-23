@@ -141,6 +141,14 @@ var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source
 //   - a busy timeout of five seconds, unless the data source sets one, so a
 //     statement that meets another process's write, such as a git hook's,
 //     waits for it instead of failing with "database is locked";
+//   - write-ahead logging, unless it sets a journal_mode. In SQLite's
+//     default rollback journal a commit locks the database file
+//     exclusively while it writes and syncs, and every read waits for it,
+//     for busy_timeout at most and then with "database is locked"; on a
+//     slow disk a few commits in a row are enough. With WAL, reads go on
+//     from the last commit while a write commits. The mode is stored in
+//     the database file, so a database that has been opened in WAL stays
+//     in it until a data source names another mode;
 //   - write transactions that begin IMMEDIATE, unless it sets _txlock. A
 //     deferred transaction that reads before it writes cannot upgrade to a
 //     write lock while another connection holds one: SQLite returns
@@ -165,7 +173,7 @@ func sqliteDSN(dsn string) (string, error) {
 		}
 	}
 	var add []string
-	fk, busy := sqlitePragmas(q)
+	fk, busy, journal := sqlitePragmas(q)
 	switch fk {
 	case pragmaOff:
 		return "", errSqliteForeignKeysOff
@@ -174,6 +182,9 @@ func sqliteDSN(dsn string) (string, error) {
 	}
 	if !busy {
 		add = append(add, "_pragma=busy_timeout("+strconv.Itoa(defaultSqliteBusyTimeout)+")")
+	}
+	if !journal {
+		add = append(add, "_pragma=journal_mode(WAL)")
 	}
 	if !q.Has("_txlock") {
 		add = append(add, "_txlock=immediate")
@@ -199,9 +210,9 @@ const (
 
 // sqlitePragmas returns what the query of a SQLite data source sets foreign
 // keys to, through the _fk and _foreign_keys keys or a _pragma, and whether
-// it sets a busy timeout. A foreign_keys setting that is not one of the
-// driver's true values counts as off.
-func sqlitePragmas(q url.Values) (fk pragmaState, busy bool) {
+// it sets a busy timeout and a journal mode. A foreign_keys setting that is
+// not one of the driver's true values counts as off.
+func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 	set := func(v string) {
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(v), `'"`)) {
 		case "1", "true", "on", "yes":
@@ -226,10 +237,12 @@ func sqlitePragmas(q url.Values) (fk pragmaState, busy bool) {
 			}
 		case "busy_timeout":
 			busy = true
+		case "journal_mode":
+			journal = true
 		}
 	}
 	busy = busy || q.Has("_busy_timeout") || q.Has("_timeout")
-	return fk, busy
+	return fk, busy, journal
 }
 
 // splitPragma splits a _pragma value, such as "busy_timeout(5000)" or

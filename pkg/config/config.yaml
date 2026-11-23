@@ -234,8 +234,10 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # With SQLite, foreign keys are always enforced (a data source that turns
-  # them off is refused), and a busy database is waited on for 5 seconds
-  # unless the data source sets its own busy_timeout.
+  # them off is refused), a busy database is waited on for 5 seconds unless
+  # the data source sets its own busy_timeout, and the database is in WAL
+  # mode unless the data source sets its own journal_mode. On a network file
+  # system, add "&_pragma=journal_mode(DELETE)".
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
