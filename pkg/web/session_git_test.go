@@ -49,6 +49,17 @@ func TestInfoRefsGitEndsWithRequest(t *testing.T) { //nolint:paralleltest // t.S
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// If the test fails with git still held, as when git is not bound to
+	// the request, let it go rather than leave the shell on the fifo. A
+	// non-blocking open fails when nothing waits on the fifo.
+	t.Cleanup(func() {
+		f, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return
+		}
+		_, _ = f.WriteString("go\n")
+		_ = f.Close()
+	})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

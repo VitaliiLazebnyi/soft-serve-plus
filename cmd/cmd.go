@@ -54,7 +54,8 @@ type Env struct {
 }
 
 // OpenEnv loads the config and logger with load and opens the database,
-// store and backend for them. With create, as for serve, it creates the
+// store and backend for them. A Loader that gives no config is
+// config.ErrNilConfig; no logger is log.Default(). With create, as for serve, it creates the
 // data directory and the database when they do not exist yet. Without it,
 // as for the maintenance commands (admin migrate, rollback and sync-hooks),
 // it refuses to run when the data directory or the SQLite database does not
@@ -65,7 +66,14 @@ func OpenEnv(ctx context.Context, load Loader, create bool) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
+	if logger == nil {
+		logger = log.Default()
+	}
 	env := &Env{Config: cfg, Logger: logger, closeLog: closeLog}
+	if cfg == nil {
+		env.Close() //nolint: errcheck
+		return nil, config.ErrNilConfig
+	}
 	if create {
 		err = createDataPath(cfg)
 	} else {

@@ -273,3 +273,19 @@ func TestCheckDataPathPostgres(t *testing.T) {
 		t.Errorf("checkDataPath() with Postgres and no data directory = %v, want the data directory error", err)
 	}
 }
+
+// A Loader that gives no config and no error is refused, and what it gave
+// to close is closed, rather than OpenEnv panicking on the nil config.
+func TestOpenEnvRefusesNilConfig(t *testing.T) {
+	closed := false
+	load := func() (*config.Config, *log.Logger, func() error, error) {
+		return nil, nil, func() error { closed = true; return nil }, nil
+	}
+	env, err := OpenEnv(t.Context(), load, true)
+	if !errors.Is(err, config.ErrNilConfig) || env != nil {
+		t.Fatalf("OpenEnv() = %v, %v; want %v", env, err, config.ErrNilConfig)
+	}
+	if !closed {
+		t.Error("the loader's log was left open")
+	}
+}
