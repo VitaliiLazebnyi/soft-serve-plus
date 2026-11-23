@@ -58,14 +58,36 @@ type Server struct {
 	closed    bool
 }
 
-// NewServer returns a new *Server configured to serve Soft Serve. The SSH
-// host key and the client key are created if they do not exist. It expects a
-// context with *backend.Backend, *log.Logger and *config.Config attached.
-func NewServer(ctx context.Context) (_ *Server, err error) {
-	cfg := config.FromContext(ctx)
-	be := backend.FromContext(ctx)
-	baseLogger := log.FromContext(ctx)
-	logger := baseLogger.WithPrefix("server")
+// NewServer returns a new *Server configured to serve Soft Serve with cfg,
+// the database dbx and store st, and the backend be built on them, logging
+// on logger. The SSH host key and the client key are created if they do not
+// exist. ctx is the server's lifetime: the cron jobs end with it, and the
+// start-up checks run under it.
+//
+// A nil config is config.ErrNilConfig, and a nil database, store or backend
+// an error; a nil logger is log.Default().
+func NewServer(ctx context.Context, cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, logger *log.Logger) (*Server, error) {
+	return newServer(ctx, cfg, dbx, st, be, logger, closeServer)
+}
+
+// newServer is NewServer, which closes a server it could not finish
+// building with closeFailed: closeServer, or a test's that records it.
+func newServer(ctx context.Context, cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backend, logger *log.Logger, closeFailed func(*Server)) (_ *Server, err error) {
+	switch {
+	case cfg == nil:
+		return nil, config.ErrNilConfig
+	case dbx == nil:
+		return nil, errors.New("serve: nil database")
+	case st == nil:
+		return nil, errors.New("serve: nil store")
+	case be == nil:
+		return nil, errors.New("serve: nil backend")
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
+	baseLogger := logger
+	logger = baseLogger.WithPrefix("server")
 	// The cron jobs run with a context Shutdown and Close cancel, so a
 	// running mirror sync starts no further git command or lfs request and
 	// ends rather than outlive the server and the database. A git command
@@ -85,7 +107,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	// it to the caller, which only gets the error.
 	defer func() {
 		if err != nil {
-			closeFailedServer(srv)
+			closeFailed(srv)
 		}
 	}()
 
@@ -113,9 +135,6 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 	if err := ensureKey(cfg.SSH.KeyPath, "ssh host key"); err != nil {
 		return nil, err
 	}
-	if err := cfg.LoadHostKey(); err != nil {
-		return nil, err
-	}
 	hostKey, err := config.KeyPair(cfg)
 	if err != nil {
 		return nil, err
@@ -126,7 +145,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, err
 	}
 
-	srv.SSHServer, err = sshsrv.NewServer(cfg, db.FromContext(ctx), store.FromContext(ctx), be, hostKey, tokens, log.FromContext(ctx))
+	srv.SSHServer, err = sshsrv.NewServer(cfg, dbx, st, be, hostKey, tokens, baseLogger)
 	if err != nil {
 		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
@@ -136,7 +155,7 @@ func NewServer(ctx context.Context) (_ *Server, err error) {
 		return nil, fmt.Errorf("create git daemon: %w", err)
 	}
 
-	srv.HTTPServer, err = web.NewHTTPServer(cfg, be, db.FromContext(ctx), store.FromContext(ctx), tokens, log.FromContext(ctx))
+	srv.HTTPServer, err = web.NewHTTPServer(cfg, be, dbx, st, tokens, baseLogger)
 	if err != nil {
 		return nil, fmt.Errorf("create http server: %w", err)
 	}
@@ -525,9 +544,8 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 	return errors.Join(errs...)
 }
 
-// closeFailedServer closes a server NewServer could not finish building.
-// Tests replace it to see which server NewServer closed.
-var closeFailedServer = func(s *Server) { _ = s.Close() }
+// closeServer closes a server NewServer could not finish building.
+func closeServer(s *Server) { _ = s.Close() }
 
 // Close stops the server at once: it is Shutdown with contexts that are
 // already done, so nothing is drained and no delivery is waited for. Its

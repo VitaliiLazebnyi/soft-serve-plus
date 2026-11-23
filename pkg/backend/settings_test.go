@@ -55,7 +55,7 @@ func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backe
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	var logger *charmlog.Logger
 	if logs != nil {
 		logger = charmlog.New(logs)

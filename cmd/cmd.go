@@ -20,149 +20,104 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewLogger returns the logger cfg's log settings describe. If the log file
-// cannot be opened, it returns the error together with a logger that writes
-// to stderr, so the caller can keep logging. The caller closes the file.
-func NewLogger(cfg *config.Config) (*log.Logger, *os.File, error) {
-	if cfg == nil {
-		return nil, nil, config.ErrNilConfig
-	}
-	logger := log.NewWithOptions(os.Stderr, log.Options{ReportTimestamp: true})
-	logger.SetTimeFormat(cfg.Log.TimeFormat)
+// Loader loads the server config and the logger a command that acts on the
+// server's data runs with. closeLog, which may be nil, closes what the
+// logger writes to, such as the log file. soft's main loads them from the
+// config file and the environment; a test gives its own with Given.
+type Loader func() (cfg *config.Config, logger *log.Logger, closeLog func() error, err error)
 
-	switch {
-	case config.IsVerbose():
-		logger.SetReportCaller(true)
-		fallthrough
-	case config.IsDebug():
-		logger.SetLevel(log.DebugLevel)
-	}
-
-	switch strings.ToLower(cfg.Log.Format) {
-	case "json":
-		logger.SetFormatter(log.JSONFormatter)
-	case "logfmt":
-		logger.SetFormatter(log.LogfmtFormatter)
-	case "text":
-		logger.SetFormatter(log.TextFormatter)
-	}
-
-	var f *os.File
-	if cfg.Log.Path != "" {
-		// A relative log path resolves into the data directory, which may
-		// not exist yet on a first run (the logger is created before
-		// anything else touches the data path). Create the parent
-		// directory private (0o700), the same mode the data path is
-		// created with, so a first run does not leave the data directory
-		// readable by other users.
-		if err := os.MkdirAll(filepath.Dir(cfg.Log.Path), 0o700); err != nil {
-			return logger, nil, err
+// Given returns a Loader that returns cfg and logger, and closes nothing. A
+// nil logger is log.Default().
+func Given(cfg *config.Config, logger *log.Logger) Loader {
+	return func() (*config.Config, *log.Logger, func() error, error) {
+		if cfg == nil {
+			return nil, nil, nil, config.ErrNilConfig
 		}
-		var err error
-		f, err = os.OpenFile(cfg.Log.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
-		if err != nil {
-			return logger, nil, err
+		if logger == nil {
+			logger = log.Default()
 		}
-		logger.SetOutput(f)
+		return cfg, logger, nil, nil
 	}
-
-	return logger, f, nil
 }
 
-// logFileKey is the context key of the log file LoadConfig opened.
-type logFileKey struct{}
+// Env is what a command that acts on the server's data runs with: the
+// config and logger its Loader gave, and the database, store and backend
+// OpenEnv opened for them. Close closes it.
+type Env struct {
+	Config  *config.Config
+	Logger  *log.Logger
+	DB      *db.DB
+	Store   store.Store
+	Backend *backend.Backend
 
-// LoadConfig loads the server config with config.Load and opens the server
-// log it describes, and puts both into c's context. Only the commands that
-// act on the server's data run it, through InitBackendContext: other
-// commands, such as --version, man and a local browse, neither read the
-// config nor create the log file. A context that already holds a config,
-// as a test's does, keeps it and its logger.
-func LoadConfig(c *cobra.Command) error {
-	ctx := c.Context()
-	if config.FromContext(ctx) != nil {
-		return nil
-	}
-	cfg, err := config.Load()
+	closeLog func() error
+}
+
+// OpenEnv loads the config and logger with load and opens the database,
+// store and backend for them. With create, as for serve, it creates the
+// data directory and the database when they do not exist yet. Without it,
+// as for the maintenance commands (admin migrate, rollback and sync-hooks),
+// it refuses to run when the data directory or the SQLite database does not
+// exist, rather than create an empty one and act on it while the server's
+// real one is elsewhere (R46).
+func OpenEnv(ctx context.Context, load Loader, create bool) (*Env, error) {
+	cfg, logger, closeLog, err := load()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	logger, f, err := NewLogger(cfg)
-	if err != nil {
-		// logger still writes to stderr.
-		logger.Warn("failed to open log file, logging to stderr", "err", err)
-	}
-	log.SetDefault(logger)
-	ctx = config.WithContext(ctx, cfg)
-	ctx = log.WithContext(ctx, logger)
-	if f != nil {
-		ctx = context.WithValue(ctx, logFileKey{}, f)
-	}
-	c.SetContext(ctx)
-	return nil
-}
-
-// closeLogFile closes the log file LoadConfig opened, if it did.
-func closeLogFile(ctx context.Context) {
-	if f, ok := ctx.Value(logFileKey{}).(*os.File); ok {
-		f.Close() //nolint: errcheck
-	}
-}
-
-// InitBackendContext loads the config (see LoadConfig) and opens the
-// database, store and backend into the command's context, creating the
-// data directory and the database when they do not exist yet. Only serve
-// creates them; the maintenance commands use OpenBackendContext.
-func InitBackendContext(cmd *cobra.Command, _ []string) error {
-	return initBackend(cmd, true)
-}
-
-// OpenBackendContext is InitBackendContext for the maintenance commands
-// (admin migrate, rollback and sync-hooks): it refuses to run when the data
-// directory or the SQLite database does not exist, rather than create an
-// empty one and act on it while the server's real one is elsewhere (R46).
-func OpenBackendContext(cmd *cobra.Command, _ []string) error {
-	return initBackend(cmd, false)
-}
-
-// initBackend is InitBackendContext, or OpenBackendContext when create is
-// false.
-func initBackend(cmd *cobra.Command, create bool) error {
-	if err := LoadConfig(cmd); err != nil {
-		return err
-	}
-	ctx := cmd.Context()
-	cfg := config.FromContext(ctx)
-	var err error
+	env := &Env{Config: cfg, Logger: logger, closeLog: closeLog}
 	if create {
 		err = createDataPath(cfg)
 	} else {
 		err = checkDataPath(cfg)
 	}
 	if err != nil {
-		closeLogFile(ctx)
-		return err
+		env.Close() //nolint: errcheck
+		return nil, err
 	}
-	logger := log.FromContext(ctx)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{
+	env.DB, err = db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{
 		Logger:       logger,
 		Trace:        config.IsVerbose(),
 		MaxOpenConns: cfg.DB.MaxOpenConns,
 	})
 	if err != nil {
-		closeLogFile(ctx)
-		return fmt.Errorf("open database: %w", err)
+		env.Close() //nolint: errcheck
+		return nil, fmt.Errorf("open database: %w", err)
 	}
+	env.Store = database.New(logger)
+	env.Backend = backend.New(cfg, env.DB, env.Store, logger)
+	return env, nil
+}
 
-	ctx = db.WithContext(ctx, dbx)
-	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(cfg, dbx, dbstore, logger)
-	ctx = backend.WithContext(ctx, be)
+// Close closes the database, and then what the logger writes to.
+func (e *Env) Close() error {
+	var err error
+	if e.DB != nil {
+		if cerr := e.DB.Close(); cerr != nil {
+			err = fmt.Errorf("close database: %w", cerr)
+		}
+	}
+	if e.closeLog != nil {
+		e.closeLog() //nolint: errcheck
+	}
+	return err
+}
 
-	cmd.SetContext(ctx)
-
-	return nil
+// WithEnv returns a cobra RunE that opens an Env (see OpenEnv), runs run
+// with it and closes it. When run fails, its error is returned and the
+// Env's close error dropped; otherwise the close error is returned.
+func WithEnv(load Loader, create bool, run func(c *cobra.Command, args []string, env *Env) error) func(*cobra.Command, []string) error {
+	return func(c *cobra.Command, args []string) error {
+		env, err := OpenEnv(c.Context(), load, create)
+		if err != nil {
+			return err
+		}
+		if err := run(c, args, env); err != nil {
+			env.Close() //nolint: errcheck
+			return err
+		}
+		return env.Close()
+	}
 }
 
 // createDataPath creates the data directory if it does not exist.
@@ -236,45 +191,20 @@ func sqliteFile(dsn string) string {
 	return filepath.FromSlash(path)
 }
 
-// CloseDBContext closes the database, and the log file LoadConfig opened.
-func CloseDBContext(cmd *cobra.Command, _ []string) error {
-	ctx := cmd.Context()
-	defer closeLogFile(ctx)
-	dbx := db.FromContext(ctx)
-	if dbx != nil {
-		if err := dbx.Close(); err != nil {
-			return fmt.Errorf("close database: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// CloseDBOnError wraps a command's RunE so that the database is closed when
-// it fails: cobra does not run PersistentPostRunE, which closes it
-// otherwise, when RunE returns an error.
-func CloseDBOnError(run func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
-	return func(c *cobra.Command, args []string) error {
-		err := run(c, args)
-		if err != nil {
-			_ = CloseDBContext(c, args)
-		}
-		return err
-	}
-}
-
 // InitializeHooks writes the hooks of every repository. A repository whose
 // directory is missing is skipped with a warning: writing its hooks would
 // create a directory holding only hooks/, which the server then takes for
 // the repository (R47). A repository whose hooks cannot be written does not
 // stop the others; the errors are returned together.
-func InitializeHooks(ctx context.Context, cfg *config.Config, be *backend.Backend) error {
+func InitializeHooks(ctx context.Context, cfg *config.Config, be *backend.Backend, logger *log.Logger) error {
+	if logger == nil {
+		logger = log.Default()
+	}
 	repos, err := be.Repositories(ctx)
 	if err != nil {
 		return err
 	}
 
-	logger := log.FromContext(ctx)
 	var errs []error
 	for _, repo := range repos {
 		dir := hooks.RepoPath(cfg, repo.Name())

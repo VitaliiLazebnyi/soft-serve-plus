@@ -46,7 +46,7 @@ func newTestUIBackend(t *testing.T, cfg *config.Config) *backend.Backend {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	return backend.New(cfg, dbx, database.New(), log.Default())
+	return backend.New(cfg, dbx, database.New(nil), log.Default())
 }
 
 // The subtests run one at a time: building the UI pages writes the shared

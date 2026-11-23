@@ -36,29 +36,17 @@ func (k *HostKey) CryptoPublicKey() crypto.PublicKey {
 	return k.priv.Public()
 }
 
-// LoadHostKey reads the SSH host key once, for KeyPair to return from then
-// on, error included. `soft serve` calls it at start, after creating the
-// key if there is none, and hands the key to the SSH server, so a
-// bearer-authenticated request does not read the file. A key replaced on
-// disk is used from the next start.
-func (c *Config) LoadHostKey() error {
-	c.hostKey, c.hostKeyErr = readHostKey(c.SSH.KeyPath)
-	c.hostKeyLoaded = true
-	return c.hostKeyErr
-}
-
-// KeyPair returns the server's SSH host key: the one LoadHostKey read, or,
-// for a config whose key was not loaded, the one at ssh.key_path now. The
-// file must exist and hold an unencrypted Ed25519, RSA or ECDSA key:
-// `soft serve` writes it on first start, and a key generated in memory here
-// would differ on every call, so tokens signed with it could never be
-// verified.
+// KeyPair reads the server's SSH host key at ssh.key_path. The file must
+// exist and hold an unencrypted Ed25519, RSA or ECDSA key: `soft serve`
+// writes it on first start, and a key generated in memory here would differ
+// on every call, so tokens signed with it could never be verified.
+//
+// `soft serve` reads it once, at start, and hands the key to the SSH server
+// and the token signer, so a key replaced on disk is used from the next
+// start.
 func KeyPair(cfg *Config) (*HostKey, error) {
 	if cfg == nil {
 		return nil, ErrNilConfig
-	}
-	if cfg.hostKeyLoaded {
-		return cfg.hostKey, cfg.hostKeyErr
 	}
 	return readHostKey(cfg.SSH.KeyPath)
 }

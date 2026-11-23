@@ -44,7 +44,7 @@ func newLFSUploadTransfer(t *testing.T) (*lfsTransfer, TransferDeps) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	datastore := database.New()
+	datastore := database.New(nil)
 	if err := datastore.CreateUser(ctx, dbx, "owner", false, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New()
+	st := database.New(nil)
 	ctx = store.WithContext(ctx, st)
 	be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 	logs := &syncBuffer{}

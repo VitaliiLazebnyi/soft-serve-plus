@@ -45,7 +45,7 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 

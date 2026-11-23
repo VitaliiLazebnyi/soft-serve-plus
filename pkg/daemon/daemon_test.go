@@ -77,7 +77,7 @@ func runTests(m *testing.M) int {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		log.Fatal(err)
 	}
-	datastore := database.New()
+	datastore := database.New(nil)
 	be := backend.New(cfg, dbx, datastore, nil)
 	testBackend = be
 	d, err := NewGitDaemon(cfg, be, nil)

@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"os"
@@ -15,7 +15,7 @@ func TestGoodNewLogger(t *testing.T) {
 		{},
 		{Log: config.LogConfig{Path: filepath.Join(t.TempDir(), "logfile.txt")}},
 	} {
-		_, f, err := NewLogger(c)
+		_, f, err := newLogger(c)
 		if err != nil {
 			t.Errorf("expected nil got %v", err)
 		}
@@ -32,7 +32,7 @@ func TestBadNewLogger(t *testing.T) {
 		nil,
 		{Log: config.LogConfig{Path: "\x00"}},
 	} {
-		_, f, err := NewLogger(c)
+		_, f, err := newLogger(c)
 		if err == nil {
 			t.Errorf("expected error got nil")
 		}
@@ -57,7 +57,7 @@ func TestNewLoggerCreatesMissingLogDir(t *testing.T) {
 		t.Fatalf("expected log path %q, got %q", want, cfg.Log.Path)
 	}
 
-	logger, f, err := NewLogger(cfg)
+	logger, f, err := newLogger(cfg)
 	if err != nil {
 		t.Fatalf("expected nil got %v", err)
 	}
@@ -91,7 +91,7 @@ func TestNewLoggerFallsBackToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &config.Config{Log: config.LogConfig{Path: filepath.Join(parent, "logfile.txt")}}
-	logger, f, err := NewLogger(c)
+	logger, f, err := newLogger(c)
 	if err == nil {
 		t.Fatal("expected error got nil")
 	}
@@ -110,7 +110,7 @@ func TestNewLoggerFileMode(t *testing.T) {
 		t.Skip("unix permissions")
 	}
 	path := filepath.Join(t.TempDir(), "soft-serve.log")
-	_, f, err := NewLogger(&config.Config{Log: config.LogConfig{Path: path}})
+	_, f, err := newLogger(&config.Config{Log: config.LogConfig{Path: path}})
 	if err != nil {
 		t.Fatal(err)
 	}

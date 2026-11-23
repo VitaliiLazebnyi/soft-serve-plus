@@ -1,8 +1,12 @@
 package database
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"testing"
+
+	"charm.land/log/v2"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/matryer/is"
@@ -34,4 +38,22 @@ func TestFindDefaultAdminUserID(t *testing.T) {
 	id, err := s.FindDefaultAdminUserID(ctx, dbx)
 	is.NoErr(err)
 	is.Equal(id, int64(250))
+}
+
+// A stored key that does not parse is skipped and logged on the store's
+// logger, not on one taken from the context.
+func TestListPublicKeysLogsOnStoreLogger(t *testing.T) {
+	is := is.New(t)
+	ctx, dbx := newWebhookTestDB(t)
+	var logs, ctxLogs bytes.Buffer
+	s := New(log.New(&logs))
+	ctx = log.WithContext(ctx, log.New(&ctxLogs))
+	_, err := dbx.ExecContext(ctx, `INSERT INTO public_keys (user_id, public_key, updated_at) VALUES (1, 'not a key', CURRENT_TIMESTAMP);`)
+	is.NoErr(err)
+	pks, err := s.ListPublicKeysByUserID(ctx, dbx, 1)
+	is.NoErr(err)
+	is.Equal(len(pks), 0)
+	is.True(strings.Contains(logs.String(), "skipping unparsable stored public key"))
+	is.True(strings.Contains(logs.String(), "store"))
+	is.Equal(ctxLogs.String(), "")
 }

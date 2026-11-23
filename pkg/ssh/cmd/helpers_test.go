@@ -100,7 +100,7 @@ func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.S
 	is.NoErr(cfg.Validate())
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	var st store.Store = database.New()
+	var st store.Store = database.New(nil)
 	if wrap != nil {
 		st = wrap(st)
 	}

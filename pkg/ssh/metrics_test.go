@@ -70,7 +70,7 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	is.True(be.AllowKeyless(ctx))

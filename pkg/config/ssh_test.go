@@ -72,61 +72,6 @@ func TestSSHKeyPairMissingFile(t *testing.T) {
 	}
 }
 
-// LoadHostKey reads the key once: KeyPair returns it after the file is
-// replaced, as the SSH server keeps its key until a restart, and a config
-// whose key was not loaded reads the file as it is (tracker 343(a)).
-func TestLoadHostKey(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "host_key")
-	first := writeTestHostKey(t, path)
-	cfg := &Config{SSH: SSHConfig{KeyPath: path}}
-	if err := cfg.LoadHostKey(); err != nil {
-		t.Fatalf("LoadHostKey: %v", err)
-	}
-
-	other := writeTestHostKey(t, filepath.Join(dir, "other_key"))
-	data, err := os.ReadFile(filepath.Join(dir, "other_key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := KeyPair(cfg)
-	if err != nil {
-		t.Fatalf("KeyPair: %v", err)
-	}
-	if !samePublicKey(got, first) {
-		t.Error("KeyPair() read the replaced file instead of returning the loaded key")
-	}
-	again, err := KeyPair(cfg)
-	if err != nil || again != got {
-		t.Errorf("KeyPair() = %p, %v; want the same loaded key %p", again, err, got)
-	}
-
-	fresh, err := KeyPair(&Config{SSH: SSHConfig{KeyPath: path}})
-	if err != nil {
-		t.Fatalf("KeyPair: %v", err)
-	}
-	if !samePublicKey(fresh, other) {
-		t.Error("KeyPair() of a config without a loaded key did not read the file")
-	}
-
-	// A key that could not be loaded stays an error, without reading the
-	// file again.
-	missing := &Config{SSH: SSHConfig{KeyPath: filepath.Join(dir, "missing")}}
-	if err := missing.LoadHostKey(); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("LoadHostKey() of a missing key = %v, want %v", err, fs.ErrNotExist)
-	}
-	if err := os.WriteFile(missing.SSH.KeyPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := KeyPair(missing); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("KeyPair() after a failed load = %v, want the load's error", err)
-	}
-}
-
 // The path is used as is. keygen.New expands environment variables, so a
 // path holding a literal "$" used to miss the file and silently generate a
 // throwaway key.

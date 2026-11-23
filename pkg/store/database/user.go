@@ -139,7 +139,7 @@ func (*Store) FindDefaultAdminUserID(ctx context.Context, h db.Handler) (int64, 
 }
 
 // ListPublicKeysByUserID implements store.Store.
-func (*Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64) ([]ssh.PublicKey, error) {
+func (s *Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64) ([]ssh.PublicKey, error) {
 	var aks []string
 	query := h.Rebind(`SELECT public_key FROM public_keys
 			WHERE user_id = ?
@@ -149,7 +149,7 @@ func (*Store) ListPublicKeysByUserID(ctx context.Context, h db.Handler, id int64
 		return nil, err
 	}
 
-	return parseStoredKeys(ctx, aks, "user_id", id), nil
+	return parseStoredKeys(s.log(), aks, "user_id", id), nil
 }
 
 // RemovePublicKeyByUserID implements store.Store.
@@ -219,12 +219,12 @@ func affected(res sql.Result, err error) error {
 // skipped and logged, so it cannot fail every lookup of that user's keys and
 // lock them out with their other, valid keys. keyvals name the user in the
 // log entry.
-func parseStoredKeys(ctx context.Context, aks []string, keyvals ...any) []ssh.PublicKey {
+func parseStoredKeys(logger *log.Logger, aks []string, keyvals ...any) []ssh.PublicKey {
 	pks := make([]ssh.PublicKey, 0, len(aks))
 	for _, ak := range aks {
 		pk, _, err := sshutils.ParseAuthorizedKey(ak)
 		if err != nil {
-			log.FromContext(ctx).WithPrefix("store").Warn("skipping unparsable stored public key", append(keyvals, "err", err)...)
+			logger.Warn("skipping unparsable stored public key", append(keyvals, "err", err)...)
 			continue
 		}
 		pks = append(pks, pk)

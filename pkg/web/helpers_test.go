@@ -69,7 +69,7 @@ func newTestEnvLogging(t testing.TB, logger *log.Logger) *testEnv {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	datastore := database.New()
+	datastore := database.New(nil)
 	be := backend.New(cfg, dbx, datastore, logger)
 	return &testEnv{ctx: ctx, cfg: cfg, dbx: dbx, datastore: datastore, be: be, logger: logger}
 }

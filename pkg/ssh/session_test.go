@@ -102,7 +102,7 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		tb.Fatal(err)
 	}
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())

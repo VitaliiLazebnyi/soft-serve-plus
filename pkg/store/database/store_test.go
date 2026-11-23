@@ -21,7 +21,7 @@ import (
 func newStoreTestDB(t *testing.T) (context.Context, *db.DB, store.Store) {
 	t.Helper()
 	ctx, dbx := newWebhookTestDB(t)
-	return ctx, dbx, New()
+	return ctx, dbx, New(nil)
 }
 
 func newPublicKey(t *testing.T) ssh.PublicKey {

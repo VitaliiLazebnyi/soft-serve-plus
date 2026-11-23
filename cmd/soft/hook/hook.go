@@ -30,47 +30,64 @@ var ErrNoDataPath = errors.New("SOFT_SERVE_DATA_PATH is not set; hooks must be r
 // and every hook runs the custom hook. The server does the rest once
 // receive-pack has exited, so none opens the database.
 
+// Env is what the hook commands run with: the server's config and the hook
+// log. soft's main fills it in before it runs a hook command, from the file
+// the server writes for hooks.
+type Env struct {
+	Config *config.Config
+	// Logger is the hook log; nil is log.Default().
+	Logger *log.Logger
+}
+
 // preReceiveRunE runs the custom pre-receive hook with the ref lines.
-func preReceiveRunE(c *cobra.Command, args []string) error {
-	refs, err := readRefLines(c, hooks.PreReceiveHook)
+func (e *Env) preReceiveRunE(c *cobra.Command, args []string) error {
+	refs, err := e.readRefLines(c, hooks.PreReceiveHook)
 	if err != nil {
 		return err
 	}
-	return runHookCommand(c, hooks.PreReceiveHook, refs, args)
+	return e.runHookCommand(c, hooks.PreReceiveHook, refs, args)
 }
 
 // updateRunE runs the custom update hook with its three arguments.
-func updateRunE(c *cobra.Command, args []string) error {
-	return runHookCommand(c, hooks.UpdateHook, nil, args)
+func (e *Env) updateRunE(c *cobra.Command, args []string) error {
+	return e.runHookCommand(c, hooks.UpdateHook, nil, args)
 }
 
 // postReceiveRunE records the ref lines for the server and runs the custom
 // post-receive hook with them.
-func postReceiveRunE(c *cobra.Command, args []string) error {
-	refs, err := readRefLines(c, hooks.PostReceiveHook)
+func (e *Env) postReceiveRunE(c *cobra.Command, args []string) error {
+	refs, err := e.readRefLines(c, hooks.PostReceiveHook)
 	if err != nil {
 		return err
 	}
-	recordPushRefs(hookLogger(c), refs)
-	return runHookCommand(c, hooks.PostReceiveHook, refs, args)
+	recordPushRefs(e.hookLogger(), refs)
+	return e.runHookCommand(c, hooks.PostReceiveHook, refs, args)
 }
 
 // postUpdateRunE runs the custom post-update hook with the ref names.
-func postUpdateRunE(c *cobra.Command, args []string) error {
-	return runHookCommand(c, hooks.PostUpdateHook, nil, args)
+func (e *Env) postUpdateRunE(c *cobra.Command, args []string) error {
+	return e.runHookCommand(c, hooks.PostUpdateHook, nil, args)
 }
 
-// hookLogger returns the command's logger, with the repository the server
-// runs the hook for.
-func hookLogger(c *cobra.Command) *log.Logger {
+// logger returns the hook log.
+func (e *Env) logger() *log.Logger {
+	if e.Logger == nil {
+		return log.Default()
+	}
+	return e.Logger
+}
+
+// hookLogger returns the hook log, with the repository the server runs the
+// hook for.
+func (e *Env) hookLogger() *log.Logger {
 	// This is set in the server before invoking git-receive-pack.
-	return log.FromContext(c.Context()).With("repo", os.Getenv("SOFT_SERVE_REPO_NAME"))
+	return e.logger().With("repo", os.Getenv("SOFT_SERVE_REPO_NAME"))
 }
 
 // readRefLines reads the "<old> <new> <ref>" lines git gives hook on stdin.
 // A line longer than the scanner takes, or a failed read, fails the hook
 // rather than letting it act, and run the custom hook, on part of the refs.
-func readRefLines(c *cobra.Command, hook string) ([]byte, error) {
+func (e *Env) readRefLines(c *cobra.Command, hook string) ([]byte, error) {
 	var buf bytes.Buffer
 	scanner := bufio.NewScanner(c.InOrStdin())
 	for scanner.Scan() {
@@ -78,7 +95,7 @@ func readRefLines(c *cobra.Command, hook string) ([]byte, error) {
 		buf.WriteByte('\n')
 	}
 	if err := scanner.Err(); err != nil {
-		hookLogger(c).Error(fmt.Sprintf("failed to read %s hook input", hook), "err", err)
+		e.hookLogger().Error(fmt.Sprintf("failed to read %s hook input", hook), "err", err)
 		return nil, fmt.Errorf("read %s hook input: %w", hook, err)
 	}
 	return buf.Bytes(), nil
@@ -86,11 +103,15 @@ func readRefLines(c *cobra.Command, hook string) ([]byte, error) {
 
 // runHookCommand runs the custom hook in the data path's hooks directory
 // with input on stdin and args, if there is one.
-func runHookCommand(c *cobra.Command, hook string, input []byte, args []string) error {
+func (e *Env) runHookCommand(c *cobra.Command, hook string, input []byte, args []string) error {
+	if e.Config == nil {
+		e.hookLogger().Error("refusing to run a hook without the server config")
+		return config.ErrNilConfig
+	}
 	ctx := c.Context()
-	path := filepath.Join(config.FromContext(ctx).DataPath, "hooks", hook)
+	path := filepath.Join(e.Config.DataPath, "hooks", hook)
 	if err := runCustomHook(ctx, path, bytes.NewReader(input), c.OutOrStdout(), c.ErrOrStderr(), args...); err != nil {
-		hookLogger(c).Error("failed to run custom hook", "err", err)
+		e.hookLogger().Error("failed to run custom hook", "err", err)
 		return err
 	}
 	return nil
@@ -116,24 +137,24 @@ func recordPushRefs(logger *log.Logger, refs []byte) {
 	}
 }
 
-// NewCommand returns a new hook command with its subcommands.
+// NewCommand returns a new hook command with its subcommands, which run
+// with env as it is when they run.
 //
-// Each call builds a new command tree. Cobra keeps a subcommand's context
-// from its first run, so a tree run twice would run the second time with
-// the first run's config.
-func NewCommand() *cobra.Command {
+// Each call builds a new command tree, so its flags start from their
+// defaults: cobra does not reset a flag a previous run set.
+func NewCommand(env *Env) *cobra.Command {
 	command := &cobra.Command{
 		Use:    "hook",
 		Short:  "Run git server hooks",
 		Long:   "Handles Soft Serve Plus git server hooks.",
 		Hidden: true,
-		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(*cobra.Command, []string) error {
 			// Without SOFT_SERVE_DATA_PATH the data path defaults to "data"
 			// in the working directory, which for a hook is the repository,
 			// and a custom hook would be looked for there. The server always
 			// sets it.
 			if os.Getenv("SOFT_SERVE_DATA_PATH") == "" {
-				log.FromContext(c.Context()).Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
+				env.logger().Error("refusing to run a hook without SOFT_SERVE_DATA_PATH")
 				return ErrNoDataPath
 			}
 			return nil
@@ -151,23 +172,23 @@ func NewCommand() *cobra.Command {
 		&cobra.Command{
 			Use:   hooks.PreReceiveHook,
 			Short: "Run git pre-receive hook",
-			RunE:  preReceiveRunE,
+			RunE:  env.preReceiveRunE,
 		},
 		&cobra.Command{
 			Use:   hooks.UpdateHook,
 			Short: "Run git update hook",
 			Args:  cobra.ExactArgs(3),
-			RunE:  updateRunE,
+			RunE:  env.updateRunE,
 		},
 		&cobra.Command{
 			Use:   hooks.PostReceiveHook,
 			Short: "Run git post-receive hook",
-			RunE:  postReceiveRunE,
+			RunE:  env.postReceiveRunE,
 		},
 		&cobra.Command{
 			Use:   hooks.PostUpdateHook,
 			Short: "Run git post-update hook",
-			RunE:  postUpdateRunE,
+			RunE:  env.postUpdateRunE,
 		},
 	)
 

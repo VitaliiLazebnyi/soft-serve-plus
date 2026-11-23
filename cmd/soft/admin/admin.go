@@ -6,11 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/cmd"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/spf13/cobra"
 )
@@ -19,13 +15,12 @@ import (
 // confirmed.
 var errRollbackNotConfirmed = errors.New("rollback not confirmed")
 
-// NewCommand returns a new admin command with its subcommands.
+// NewCommand returns a new admin command with its subcommands, which load
+// the server's config and logger with load (see cmd.OpenEnv).
 //
-// Each call builds a new command tree. Cobra keeps a subcommand's context
-// from its first run, and InitBackendContext stores the database and
-// backend in it, so a tree run twice would run the second time with the
-// first run's config and closed database.
-func NewCommand() *cobra.Command {
+// Each call builds a new command tree, so its flags start from their
+// defaults: cobra does not reset a flag a previous run set.
+func NewCommand(load cmd.Loader) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "admin",
 		Short: "Administrate the server",
@@ -38,15 +33,11 @@ func NewCommand() *cobra.Command {
 	}
 
 	migrateCmd := &cobra.Command{
-		Use:                "migrate",
-		Short:              "Migrate the database to the latest version",
-		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.OpenBackendContext,
-		PersistentPostRunE: cmd.CloseDBContext,
-		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
-			ctx := c.Context()
-			db := db.FromContext(ctx)
-			if err := migrate.Migrate(ctx, db, config.FromContext(ctx), log.FromContext(ctx)); err != nil {
+		Use:   "migrate",
+		Short: "Migrate the database to the latest version",
+		Args:  cobra.NoArgs,
+		RunE: cmd.WithEnv(load, false, func(c *cobra.Command, _ []string, env *cmd.Env) error {
+			if err := migrate.Migrate(c.Context(), env.DB, env.Config, env.Logger); err != nil {
 				return fmt.Errorf("migration: %w", err)
 			}
 
@@ -62,17 +53,13 @@ func NewCommand() *cobra.Command {
 		Long: "Rollback the database to the previous version.\n\n" +
 			"This undoes the last database migration and may drop the data it added. " +
 			"It asks for confirmation unless --yes is given.",
-		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.OpenBackendContext,
-		PersistentPostRunE: cmd.CloseDBContext,
-		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
+		Args: cobra.NoArgs,
+		RunE: cmd.WithEnv(load, false, func(c *cobra.Command, _ []string, env *cmd.Env) error {
 			if !rollbackYes && !confirm(c, "Roll back the last database migration? This may drop data. [y/N] ") {
 				return errRollbackNotConfirmed
 			}
 
-			ctx := c.Context()
-			db := db.FromContext(ctx)
-			if err := migrate.Rollback(ctx, db, config.FromContext(ctx), log.FromContext(ctx)); err != nil {
+			if err := migrate.Rollback(c.Context(), env.DB, env.Config, env.Logger); err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
 
@@ -82,16 +69,11 @@ func NewCommand() *cobra.Command {
 	rollbackCmd.Flags().BoolVarP(&rollbackYes, "yes", "y", false, "roll back without asking for confirmation")
 
 	syncHooksCmd := &cobra.Command{
-		Use:                "sync-hooks",
-		Short:              "Update repository hooks",
-		Args:               cobra.NoArgs,
-		PersistentPreRunE:  cmd.OpenBackendContext,
-		PersistentPostRunE: cmd.CloseDBContext,
-		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
-			ctx := c.Context()
-			cfg := config.FromContext(ctx)
-			be := backend.FromContext(ctx)
-			if err := cmd.InitializeHooks(ctx, cfg, be); err != nil {
+		Use:   "sync-hooks",
+		Short: "Update repository hooks",
+		Args:  cobra.NoArgs,
+		RunE: cmd.WithEnv(load, false, func(c *cobra.Command, _ []string, env *cmd.Env) error {
+			if err := cmd.InitializeHooks(c.Context(), env.Config, env.Backend, env.Logger); err != nil {
 				return fmt.Errorf("initialize hooks: %w", err)
 			}
 

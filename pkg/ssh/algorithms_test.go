@@ -197,7 +197,7 @@ func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	dbstore := database.New()
+	dbstore := database.New(nil)
 	be := backend.New(cfg, dbx, dbstore, logger)
 	hostKey := testHostKey(t, cfg.SSH.KeyPath)
 	tokens, err := jwk.NewSigner(hostKey, cfg.HTTP.PublicURL)

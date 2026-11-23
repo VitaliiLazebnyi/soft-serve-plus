@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
@@ -93,10 +92,10 @@ func TestServeReloadsCertificateOnSIGHUP(t *testing.T) {
 	cfg.HTTP.ListenAddr = loopbackAddr()
 	cfg.Stats.ListenAddr = loopbackAddr()
 
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	ctx := context.Background()
+	load, _ := testLoad(cfg)
 
-	command := NewCommand()
+	command := NewCommand(load)
 	command.SetArgs([]string{})
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)

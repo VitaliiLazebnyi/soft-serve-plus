@@ -40,7 +40,7 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	st := database.New()
+	st := database.New(nil)
 	be := backend.New(cfg, dbx, st, logger)
 	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)

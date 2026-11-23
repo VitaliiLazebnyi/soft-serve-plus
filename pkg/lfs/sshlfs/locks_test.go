@@ -196,7 +196,7 @@ func TestLFSLockOwnership(t *testing.T) {
 	tr, deps := newLFSUploadTransfer(t)
 	ctx := t.Context()
 	// The store is stateless: this one sees what the transfer's does.
-	datastore := database.New()
+	datastore := database.New(nil)
 	dbx := deps.DB
 
 	users := map[string]lfsLockTestUser{}

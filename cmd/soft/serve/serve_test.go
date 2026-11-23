@@ -9,7 +9,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/charmbracelet/soft-serve/cmd"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -36,10 +39,10 @@ func TestServeStartErrorShutsDown(t *testing.T) {
 	cfg.HTTP.ListenAddr = taken.Addr().String()
 	cfg.Stats.ListenAddr = loopbackAddr()
 
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	ctx := context.Background()
+	load, closed := testLoad(cfg)
 
-	command := NewCommand()
+	command := NewCommand(load)
 	command.SetArgs([]string{})
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
@@ -48,10 +51,8 @@ func TestServeStartErrorShutsDown(t *testing.T) {
 		t.Fatalf("serve returned %v, want the HTTP server's listen error", err)
 	}
 
-	dbx := db.FromContext(command.Context())
-	is.True(dbx != nil)
-	if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("database ping returned %v, want it closed", err)
+	if !closed() {
+		t.Fatal("serve left its database and log open")
 	}
 }
 
@@ -121,10 +122,10 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 			cfg.Stats.ListenAddr = loopbackAddr()
 			tc.setup(t, cfg)
 
-			ctx := config.WithContext(context.Background(), cfg)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
+			ctx := context.Background()
+			load, closed := testLoad(cfg)
 
-			command := NewCommand()
+			command := NewCommand(load)
 			command.SetArgs(append([]string{}, tc.args...))
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
@@ -133,12 +134,8 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 				t.Fatalf("serve returned %v, want a %q error", err, tc.want)
 			}
 
-			dbx := db.FromContext(command.Context())
-			if dbx == nil {
-				t.Fatal("no database in the command context")
-			}
-			if err := dbx.PingContext(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-				t.Fatalf("database ping returned %v, want it closed", err)
+			if !closed() {
+				t.Fatal("serve left its database and log open")
 			}
 		})
 	}
@@ -165,8 +162,8 @@ func TestServeUsesContextConfig(t *testing.T) {
 	cfg.HTTP.ListenAddr = taken.Addr().String()
 	cfg.Stats.ListenAddr = loopbackAddr()
 
-	ctx := config.WithContext(context.Background(), cfg)
-	ctx = log.WithContext(ctx, log.New(io.Discard))
+	ctx := context.Background()
+	load, _ := testLoad(cfg)
 
 	// A repository to generate hooks for.
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
@@ -182,7 +179,7 @@ func TestServeUsesContextConfig(t *testing.T) {
 
 	// Starting the HTTP server fails, after the directories and hooks are
 	// set up.
-	command := NewCommand()
+	command := NewCommand(load)
 	command.SetArgs([]string{"--sync-hooks"})
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
@@ -240,8 +237,8 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 			cfg.HTTP.ListenAddr = taken.Addr().String()
 			cfg.Stats.ListenAddr = loopbackAddr()
 
-			ctx := config.WithContext(context.Background(), cfg)
-			ctx = log.WithContext(ctx, log.New(io.Discard))
+			ctx := context.Background()
+			load, _ := testLoad(cfg)
 
 			// A repository to generate hooks for.
 			dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
@@ -256,7 +253,7 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 			is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700))
 
 			// Starting the HTTP server fails, after the hooks are synced.
-			command := NewCommand()
+			command := NewCommand(load)
 			command.SetArgs(tc.args)
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
@@ -303,4 +300,15 @@ func TestWarnIgnoredSettings(t *testing.T) {
 			t.Errorf("log lacks %q:\n%s", want, out)
 		}
 	}
+}
+
+// testLoad returns a Loader that gives cfg and a logger that discards, and
+// a function that reports whether the Env opened with it was closed. An Env
+// closes its log after its database.
+func testLoad(cfg *config.Config) (cmd.Loader, func() bool) {
+	var closed atomic.Bool
+	load := func() (*config.Config, *log.Logger, func() error, error) {
+		return cfg, log.New(io.Discard), func() error { closed.Store(true); return nil }, nil
+	}
+	return load, closed.Load
 }
