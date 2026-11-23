@@ -123,9 +123,9 @@ type ItemDelegate struct {
 }
 
 // NewItemDelegate creates a new ItemDelegate.
-func NewItemDelegate(common *common.Common, activePane *pane) *ItemDelegate {
+func NewItemDelegate(c *common.Common, activePane *pane) *ItemDelegate {
 	return &ItemDelegate{
-		common:     common,
+		common:     c,
 		activePane: activePane,
 	}
 }

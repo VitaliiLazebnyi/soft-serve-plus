@@ -120,16 +120,16 @@ type Log struct {
 }
 
 // NewLog creates a new Log model.
-func NewLog(common *common.Common) *Log {
+func NewLog(c *common.Common) *Log {
 	l := &Log{
-		common:     common,
-		vp:         viewport.New(common),
+		common:     c,
+		vp:         viewport.New(c),
 		activeView: logViewCommits,
 
 		waitBeforeLoading: waitBeforeLoading,
 	}
-	selector := selector.NewPane(common, LogItemDelegate{common})
-	l.selector = selector
+	sel := selector.NewPane(c, LogItemDelegate{c})
+	l.selector = sel
 	return l
 }
 

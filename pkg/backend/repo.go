@@ -918,12 +918,12 @@ func (d *Backend) deleteEvent(ctx context.Context, name string) (*repoDeleteEven
 		d.logger.Error("deleting repository without webhook event", "repo", name, "err", err)
 		return nil, r, nil
 	}
-	hooks, err := d.webhooks.Subscribers(ctx, ev)
+	subs, err := d.webhooks.Subscribers(ctx, ev)
 	if err != nil {
 		d.logEventNotDelivered(ev, err)
 		return nil, r, nil
 	}
-	return &repoDeleteEvent{event: ev, hooks: hooks}, r, nil
+	return &repoDeleteEvent{event: ev, hooks: subs}, r, nil
 }
 
 // deleteRepoRow deletes the row of the repository name, if its ID is id

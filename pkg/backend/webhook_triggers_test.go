@@ -657,7 +657,7 @@ func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
-	hooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
+	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
 	is.NoErr(err)
 	unblock := blockDeliveries(t, e, 10)
 
@@ -665,7 +665,7 @@ func TestDeliveryWithBusySendersIsQueuedNotRunInCaller(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 		is.NoErr(err)
-		e.be.deliverAfterChange(e.ctx, hooks, ev, true)
+		e.be.deliverAfterChange(e.ctx, whs, ev, true)
 	}
 	is.Equal(len(e.deliveredEvents(t, id)), 0) // queued, not run in the caller
 
@@ -681,13 +681,13 @@ func TestDeliveryWithFullQueueIsDroppedAndRecorded(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
-	hooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
+	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
 	is.NoErr(err)
 	blockDeliveries(t, e, 0)
 
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
-	e.be.deliverAfterChange(e.ctx, hooks, ev, true)
+	e.be.deliverAfterChange(e.ctx, whs, ev, true)
 
 	is.True(strings.Contains(e.logs.String(), "webhook event dropped: delivery queue is full"))
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
@@ -885,7 +885,7 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
-	hooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
+	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
 	is.NoErr(err)
 	other, err := e.be.CreateRepository(e.ctx, "other", e.admin, proto.RepositoryOptions{})
 	is.NoErr(err)
@@ -907,7 +907,7 @@ func TestDeliveryForBusyRepoIsDroppedAndRecorded(t *testing.T) {
 
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
-	e.be.deliverAfterChange(e.ctx, hooks, ev, true)
+	e.be.deliverAfterChange(e.ctx, whs, ev, true)
 
 	is.True(strings.Contains(e.logs.String(), "webhook event dropped: repository has too many pending deliveries"))
 	list, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
@@ -1036,13 +1036,13 @@ func TestDeliveryRecordedAfterWebhookDeletedWritesNoRow(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
-	hooks, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
+	whs, err := e.be.store.GetWebhooksByRepoID(e.ctx, e.be.db, e.repo.ID())
 	is.NoErr(err)
 	ev, err := e.be.webhooks.NewRepositoryEvent(e.ctx, e.admin, e.repo, webhook.RepositoryEventActionRename)
 	is.NoErr(err)
 
 	is.NoErr(e.be.DeleteWebhook(e.ctx, e.repo, id))
-	is.NoErr(e.be.webhooks.Deliver(e.ctx, hooks, ev))
+	is.NoErr(e.be.webhooks.Deliver(e.ctx, whs, ev))
 
 	var n int
 	is.NoErr(e.be.db.GetContext(e.ctx, &n, "SELECT COUNT(*) FROM webhook_deliveries WHERE webhook_id = ?", id))

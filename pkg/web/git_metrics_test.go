@@ -94,7 +94,7 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 
 	srv := httptest.NewServer(f.handler)
 	t.Cleanup(srv.Close)
-	url := srv.URL + "/" + name + ".git"
+	repoURL := srv.URL + "/" + name + ".git"
 
 	// counted runs git and returns how much it added to the fetch counter.
 	counted := func(args ...string) float64 {
@@ -107,7 +107,7 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 	for _, version := range []string{"2", "0"} {
 		dst := filepath.Join(t.TempDir(), "clone")
 		// A clone sends ls-refs and fetch in protocol v2.
-		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", url, dst), 1.0)
+		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", repoURL, dst), 1.0)
 		// A fetch with nothing new sends no RPC in v0, and ls-refs in v2.
 		is.Equal(counted("-C", dst, "-c", "protocol.version="+version, "fetch", "-q", "origin"), 1.0)
 	}

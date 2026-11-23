@@ -425,7 +425,7 @@ func (r *Repo) View() string {
 	mainStyle := r.common.Styles.Repo.Body.
 		Height(r.height - hm)
 	var main string
-	var statusbar string
+	var bar string
 	switch r.state {
 	case loadingState:
 		main = fmt.Sprintf("%s loading…", r.spinner.View())
@@ -442,7 +442,7 @@ func (r *Repo) View() string {
 		} else {
 			main = p.View()
 		}
-		statusbar = r.statusbar.View()
+		bar = r.statusbar.View()
 	}
 	main = r.common.Zone.Mark(
 		r.zonePrefix+"main",
@@ -456,7 +456,7 @@ func (r *Repo) View() string {
 		r.headerView(),
 		tabsView,
 		main,
-		statusbar,
+		bar,
 	)
 	return s.Render(view)
 }
@@ -513,7 +513,7 @@ func (r *Repo) setStatusBarInfo() {
 	}
 
 	active := r.panes[r.activeTab]
-	key := r.selectedRepo.Name()
+	name := r.selectedRepo.Name()
 	value := active.StatusBarValue()
 	info := active.StatusBarInfo()
 	extra := "*"
@@ -521,7 +521,7 @@ func (r *Repo) setStatusBarInfo() {
 		extra += " " + r.ref.Name().Short()
 	}
 
-	r.statusbar.SetStatus(key, value, info, extra)
+	r.statusbar.SetStatus(name, value, info, extra)
 }
 
 // updatePane delivers msg to the tab id.

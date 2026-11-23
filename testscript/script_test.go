@@ -365,9 +365,9 @@ func cmdSoft(user string, keys ...ssh.Signer) func(ts *testscript.TestScript, ne
 	}
 }
 
-// runSoft runs the soft command args over SSH as config says.
-func runSoft(ts *testscript.TestScript, neg bool, args []string, config *ssh.ClientConfig) {
-	cli, bound, err := dialSSH(ts, config)
+// runSoft runs the soft command args over SSH as clientCfg says.
+func runSoft(ts *testscript.TestScript, neg bool, args []string, clientCfg *ssh.ClientConfig) {
+	cli, bound, err := dialSSH(ts, clientCfg)
 	ts.Check(err)
 	defer cli.Close() //nolint:errcheck
 	defer bound.stop()

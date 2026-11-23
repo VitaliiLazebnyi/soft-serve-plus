@@ -66,13 +66,13 @@ type Stash struct {
 }
 
 // NewStash creates a new stash model.
-func NewStash(common *common.Common) *Stash {
-	vp := viewport.New(common)
-	selector := selector.NewPane(common, StashItemDelegate{common})
+func NewStash(c *common.Common) *Stash {
+	vp := viewport.New(c)
+	sel := selector.NewPane(c, StashItemDelegate{c})
 	return &Stash{
 		vp:     vp,
-		common: common,
-		list:   selector,
+		common: c,
+		list:   sel,
 	}
 }
 

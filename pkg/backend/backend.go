@@ -96,19 +96,19 @@ const noReplaceObjectsEnv = "GIT_NO_REPLACE_OBJECTS"
 // upload-pack ignores it and clones get the original objects.
 //
 // It logs to logger, the default logger when nil.
-func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Backend {
+func New(cfg *config.Config, dbx *db.DB, st store.Store, logger *log.Logger) *Backend {
 	_ = os.Setenv(noReplaceObjectsEnv, "1") // only fails for an invalid name
 	if logger == nil {
 		logger = log.Default()
 	}
-	webhooks := webhook.NewSender(cfg, db, st, logger)
+	webhooks := webhook.NewSender(cfg, dbx, st, logger)
 	logger = logger.WithPrefix("backend")
 	searchPointerBlobs := func(ctx context.Context, r *git.Repository, include, exclude []string, pointerChan chan<- lfs.PointerBlob, errChan chan<- error) {
 		lfs.SearchPointerBlobsBetween(ctx, logger, r, include, exclude, pointerChan, errChan)
 	}
 	b := &Backend{
 		cfg:    cfg,
-		db:     db,
+		db:     dbx,
 		store:  st,
 		logger: logger,
 

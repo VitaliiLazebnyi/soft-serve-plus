@@ -145,16 +145,16 @@ type Files struct {
 }
 
 // NewFiles creates a new files model.
-func NewFiles(common *common.Common) *Files {
+func NewFiles(c *common.Common) *Files {
 	f := &Files{
-		common:       common,
-		code:         code.New(common, "", ""),
+		common:       c,
+		code:         code.New(c, "", ""),
 		activeView:   filesViewLoading,
 		lastSelected: make([]int, 0),
 		lineNumber:   true,
 	}
-	selector := selector.NewPane(common, FileItemDelegate{common})
-	f.selector = selector
+	sel := selector.NewPane(c, FileItemDelegate{c})
+	f.selector = sel
 	f.code.ShowLineNumber = f.lineNumber
 	// "b" toggles blame and "l" toggles line numbers in the content view, so
 	// they must not also page up or scroll right in the viewport.
@@ -171,11 +171,11 @@ func NewFiles(common *common.Common) *Files {
 
 // Path implements Pane.
 func (f *Files) Path() string {
-	path := f.path
-	if path == "." {
+	p := f.path
+	if p == "." {
 		return ""
 	}
-	return path
+	return p
 }
 
 // TabName returns the tab name.
@@ -503,7 +503,7 @@ func (f *Files) StatusBarInfo() string {
 // state it needs here instead of reading the model later.
 func (f *Files) updateFilesCmd() tea.Cmd {
 	f.listing++
-	repo, ref, path, listing, gen := f.repo, f.ref, f.path, f.listing, f.gen
+	repo, ref, p, listing, gen := f.repo, f.ref, f.path, f.listing, f.gen
 	// The pane is about to list a directory: a file it was opening is no
 	// longer wanted.
 	f.fileLoad.Stop()
@@ -520,7 +520,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 		if err != nil {
 			return loadError(ctx, paneFiles, gen, err)
 		}
-		t, err := r.TreePath(ref, path)
+		t, err := r.TreePath(ref, p)
 		if err != nil {
 			return loadError(ctx, paneFiles, gen, err)
 		}
@@ -541,7 +541,7 @@ func (f *Files) updateFilesCmd() tea.Cmd {
 				files = append(files, FileItem{entry: e})
 			}
 		}
-		return FileItemsMsg{items: append(dirs, files...), listing: listing, dir: path, gen: gen, truncated: truncated}
+		return FileItemsMsg{items: append(dirs, files...), listing: listing, dir: p, gen: gen, truncated: truncated}
 	}
 }
 

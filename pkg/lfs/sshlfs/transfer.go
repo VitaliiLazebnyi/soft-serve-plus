@@ -395,21 +395,21 @@ var (
 )
 
 // Create implements transfer.LockBackend.
-func (l *lfsLockBackend) Create(path string, refname string) (transfer.Lock, error) {
+func (l *lfsLockBackend) Create(lockPath string, refname string) (transfer.Lock, error) {
 	if l.op == lfs.OperationDownload {
 		return nil, errReadOnlySession
 	}
 
 	// Same rule as the HTTP locks API: a lock names one file in the working
 	// tree, so "a.bin", "./a.bin" and "dir/../a.bin" cannot hold three locks.
-	if err := lfs.ValidateLockPath(path); err != nil {
+	if err := lfs.ValidateLockPath(lockPath); err != nil {
 		return nil, fmt.Errorf("%w: %w", transfer.ErrParseError, err)
 	}
 
 	var lock LFSLock
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
-		lock.lock, err = l.store.CreateLFSLockForUser(l.ctx, tx, l.repo.ID(), l.user.ID(), path, refname)
+		lock.lock, err = l.store.CreateLFSLockForUser(l.ctx, tx, l.repo.ID(), l.user.ID(), lockPath, refname)
 		return err
 	}); err != nil {
 		// A repository deleted meanwhile fails the insert on its foreign
@@ -461,10 +461,10 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 //
 // Like FromID, it finds the lock whoever owns it: the processor uses it to
 // name the owner of a conflicting lock and to answer list-lock path=.
-func (l *lfsLockBackend) FromPath(path string) (transfer.Lock, error) {
+func (l *lfsLockBackend) FromPath(lockPath string) (transfer.Lock, error) {
 	var lock LFSLock
 	var err error
-	if lock.lock, err = l.store.GetLFSLockForPath(l.ctx, l.dbx, l.repo.ID(), path); err != nil {
+	if lock.lock, err = l.store.GetLFSLockForPath(l.ctx, l.dbx, l.repo.ID(), lockPath); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
 			return nil, transfer.ErrNotFound
 		}

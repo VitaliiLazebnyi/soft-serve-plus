@@ -41,13 +41,13 @@ type Readme struct {
 }
 
 // NewReadme creates a new readme model.
-func NewReadme(common *common.Common) *Readme {
-	readme := code.New(common, "", "")
+func NewReadme(c *common.Common) *Readme {
+	readme := code.New(c, "", "")
 	readme.NoContentStyle = readme.NoContentStyle.SetString("No readme found.")
 	readme.UseGlamour = true
 	return &Readme{
 		code:      readme,
-		common:    common,
+		common:    c,
 		isLoading: true,
 	}
 }

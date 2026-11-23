@@ -31,8 +31,8 @@ func StyleRenderer() gansi.RenderContext {
 }
 
 // StyleRendererWithStyles returns a new Glamour renderer.
-func StyleRendererWithStyles(styles gansi.StyleConfig) gansi.RenderContext {
+func StyleRendererWithStyles(cfg gansi.StyleConfig) gansi.RenderContext {
 	return gansi.NewRenderContext(gansi.Options{
-		Styles: styles,
+		Styles: cfg,
 	})
 }

@@ -51,13 +51,13 @@ type Refs struct {
 }
 
 // NewRefs creates a new Refs component.
-func NewRefs(common *common.Common, refPrefix string) *Refs {
+func NewRefs(c *common.Common, refPrefix string) *Refs {
 	r := &Refs{
-		common:    common,
+		common:    c,
 		refPrefix: refPrefix,
 		isLoading: true,
 	}
-	s := selector.NewPane(common, RefItemDelegate{common})
+	s := selector.NewPane(c, RefItemDelegate{c})
 	r.selector = s
 	return r
 }

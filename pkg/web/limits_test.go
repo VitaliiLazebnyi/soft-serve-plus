@@ -421,13 +421,13 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	t.Parallel()
 	l := &requestDeadlines{idle: 200 * time.Millisecond}
-	// proto is the request's protocol as the handler saw it, set before
+	// protocol is the request's protocol as the handler saw it, set before
 	// started is closed.
-	var proto string
+	var protocol string
 	started := make(chan struct{})
 	errc := make(chan error, 1)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proto = r.Proto
+		protocol = r.Proto
 		close(started)
 		l.serve(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			buf := make([]byte, 32*1024)
@@ -468,8 +468,8 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	case <-time.After(closeWait):
 		t.Fatalf("the request did not reach the handler: %v", err)
 	}
-	if proto != "HTTP/2.0" {
-		t.Fatalf("protocol = %s, want HTTP/2.0", proto)
+	if protocol != "HTTP/2.0" {
+		t.Fatalf("protocol = %s, want HTTP/2.0", protocol)
 	}
 	select {
 	case <-errc: //nolint:errcheck // only the write ending matters, not its error

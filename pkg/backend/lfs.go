@@ -182,12 +182,12 @@ func refTips(ctx context.Context, r *git.Repository) ([]string, error) {
 	return slices.Compact(tips), nil
 }
 
-// readScannedRefs returns the tips saved in the file at path, sorted and
+// readScannedRefs returns the tips saved in file, sorted and
 // distinct, and when the whole history was last scanned, or nil tips if
 // there is no usable file. A file without the time of the full scan is
 // usable, with a zero time.
-func readScannedRefs(path string) ([]string, time.Time) {
-	data, err := os.ReadFile(path)
+func readScannedRefs(file string) ([]string, time.Time) {
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, time.Time{}
 	}
@@ -214,14 +214,14 @@ func readScannedRefs(path string) ([]string, time.Time) {
 }
 
 // writeScannedRefs saves tips and the time of the last full scan to the
-// file at path, replacing it at once so a sync never reads half of it.
+// file, replacing it at once so a sync never reads half of it.
 // The directory is the LFS root of the repository, which pkg/storage keeps
 // 0700 like the object directories under it.
-func writeScannedRefs(path string, tips []string, fullScan time.Time) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+func writeScannedRefs(file string, tips []string, fullScan time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), lfsScannedRefsFile+"-*")
+	f, err := os.CreateTemp(filepath.Dir(file), lfsScannedRefsFile+"-*")
 	if err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func writeScannedRefs(path string, tips []string, fullScan time.Time) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return os.Rename(f.Name(), file)
 }
 
 // isObjectID reports whether s is a sha1 or sha256 object id.
