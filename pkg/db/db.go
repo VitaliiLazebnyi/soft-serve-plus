@@ -141,6 +141,17 @@ var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source
 //   - a busy timeout of five seconds, unless the data source sets one, so a
 //     statement that meets another process's write, such as a git hook's,
 //     waits for it instead of failing with "database is locked";
+//   - write-ahead logging, unless it sets a journal mode or is a "file:"
+//     URI that opens the database read-only (mode=ro or immutable), which
+//     cannot switch it. The driver drops mode and immutable from a plain
+//     path, which opens read-write, so there they change nothing.
+//     In SQLite's default rollback journal a commit locks the database
+//     file exclusively while it writes and syncs, and every read waits for it,
+//     for busy_timeout at most and then with "database is locked"; on a
+//     slow disk a few commits in a row are enough. With WAL, reads go on
+//     from the last commit while a write commits. The mode is stored in
+//     the database file, so a database that has been opened in WAL stays
+//     in it until a data source names another mode;
 //   - write transactions that begin IMMEDIATE, unless it sets _txlock. A
 //     deferred transaction that reads before it writes cannot upgrade to a
 //     write lock while another connection holds one: SQLite returns
@@ -165,7 +176,7 @@ func sqliteDSN(dsn string) (string, error) {
 		}
 	}
 	var add []string
-	fk, busy := sqlitePragmas(q)
+	fk, busy, journal := sqlitePragmas(q)
 	switch fk {
 	case pragmaOff:
 		return "", errSqliteForeignKeysOff
@@ -174,6 +185,9 @@ func sqliteDSN(dsn string) (string, error) {
 	}
 	if !busy {
 		add = append(add, "_pragma=busy_timeout("+strconv.Itoa(defaultSqliteBusyTimeout)+")")
+	}
+	if !journal && !sqliteReadOnly(dsn, q) {
+		add = append(add, "_pragma=journal_mode(WAL)")
 	}
 	if !q.Has("_txlock") {
 		add = append(add, "_txlock=immediate")
@@ -199,9 +213,13 @@ const (
 
 // sqlitePragmas returns what the query of a SQLite data source sets foreign
 // keys to, through the _fk and _foreign_keys keys or a _pragma, and whether
-// it sets a busy timeout. A foreign_keys setting that is not one of the
-// driver's true values counts as off.
-func sqlitePragmas(q url.Values) (fk pragmaState, busy bool) {
+// it sets a busy timeout and a journal mode, each through a _pragma or the
+// driver's own keys (_busy_timeout or _timeout, _journal_mode or _journal).
+// The driver applies its own keys after the _pragma list, so a pragma added
+// next to one of them would run first and then be undone on every new
+// connection. A foreign_keys setting that is not one of the driver's true
+// values counts as off.
+func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 	set := func(v string) {
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(v), `'"`)) {
 		case "1", "true", "on", "yes":
@@ -226,24 +244,61 @@ func sqlitePragmas(q url.Values) (fk pragmaState, busy bool) {
 			}
 		case "busy_timeout":
 			busy = true
+		case "journal_mode":
+			journal = true
 		}
 	}
 	busy = busy || q.Has("_busy_timeout") || q.Has("_timeout")
-	return fk, busy
+	journal = journal || q.Has("_journal_mode") || q.Has("_journal")
+	return fk, busy, journal
 }
 
-// splitPragma splits a _pragma value, such as "busy_timeout(5000)" or
-// "foreign_keys = on", into its name, in lower case, and its value.
+// sqliteReadOnly reports whether a SQLite data source, dsn with its query q,
+// opens the database read-only: a "file:" URI with the parameter mode=ro or
+// immutable set to a true value. Such a connection cannot change the journal
+// mode: SQLite refuses with "attempt to write a readonly database". The
+// driver passes the parameters to SQLite only in a "file:" URI; it drops
+// them from a plain path.
+func sqliteReadOnly(dsn string, q url.Values) bool {
+	if !strings.HasPrefix(dsn, "file:") {
+		return false
+	}
+	if q.Get("mode") == "ro" {
+		return true
+	}
+	switch strings.ToLower(q.Get("immutable")) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
+}
+
+// splitPragma splits a _pragma value, such as "busy_timeout(5000)",
+// "foreign_keys = on" or "main.journal_mode(WAL)", into its name, in lower
+// case and without a schema, and its value. The schema is dropped so that a
+// pragma naming one counts as the plain pragma: the driver runs the _pragma
+// list sorted, so an added plain pragma would run before one that names
+// main, and lose to it.
 func splitPragma(p string) (name, value string, hasValue bool) {
 	i := strings.IndexAny(p, "(=")
 	if i < 0 {
-		return strings.ToLower(strings.TrimSpace(p)), "", false
+		return pragmaName(p), "", false
 	}
 	value = strings.TrimSpace(p[i+1:])
 	if p[i] == '(' {
 		value = strings.TrimSpace(strings.TrimSuffix(value, ")"))
 	}
-	return strings.ToLower(strings.TrimSpace(p[:i])), value, true
+	return pragmaName(p[:i]), value, true
+}
+
+// pragmaName is the name of a pragma written as name or schema.name, in
+// lower case and without the schema.
+func pragmaName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if j := strings.LastIndexByte(s, '.'); j >= 0 {
+		s = strings.TrimSpace(s[j+1:])
+	}
+	return s
 }
 
 // postgresUTCConfig parses dsn into a lib/pq configuration whose sessions

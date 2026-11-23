@@ -436,8 +436,12 @@ db:
   # The database data source name.
   # This is driver specific and can be a file path or connection string.
   # With SQLite, foreign keys are always enforced (a data source that turns
-  # them off is refused), and a busy database is waited on for 5 seconds
-  # unless the data source sets its own busy_timeout.
+  # them off is refused), a busy database is waited on for 5 seconds unless
+  # the data source sets its own busy_timeout, and the database is in WAL
+  # mode unless the data source sets its own journal_mode. On a network file
+  # system (NFS, SMB), add "&_pragma=journal_mode(DELETE)" before the first
+  # start of a version with WAL as the default: that start switches an
+  # existing database to WAL.
   # A relative SQLite path, including the path in a relative "file:" URI, is
   # relative to the data directory. ":memory:" and in-memory "file:" URIs
   # are used as written.
@@ -757,24 +761,30 @@ The error names the database file in place of `soft-serve.db`, quoted for
 the shell when it needs to be. Postgres has always enforced foreign keys, so a
 Postgres database holds no such rows.
 
-SQLite keeps its default rollback journal, in which a read waits (up to the
-busy timeout) while a write commits. Write-ahead logging lets reads go on
-during a write. It is not the default because it puts conditions on where the
-database lives and how it is backed up. To switch to it, add
-`&_pragma=journal_mode(WAL)` to `db.data_source`, provided that:
+SQLite runs in write-ahead logging (WAL) mode, unless `db.data_source` sets
+another `journal_mode`. In SQLite's own default, the rollback journal, a
+commit locks the database while it writes and syncs. Every read waits for it,
+and gives up after the busy timeout with "database is locked"; on a slow disk
+a few commits in a row are enough. With WAL, reads go on during a write. WAL
+puts two conditions on the data directory:
 
-- the data directory is on a local disk. The server and its git hooks share
-  the log through a memory-mapped `-shm` file, which network file systems such
-  as NFS or SMB do not support. Local disks on Linux, macOS and Windows are
-  fine;
+- it is on a local disk. WAL shares its index through a memory-mapped `-shm`
+  file, which network file systems such as NFS or SMB do not support. Local
+  disks on Linux, macOS and Windows are fine. On a network file system, add
+  `&_pragma=journal_mode(DELETE)` to `db.data_source` before upgrading, that
+  is, before the first start of this version: that start switches an
+  existing database to WAL;
 - backups include the `-wal` file. Copy `soft-serve.db`, `soft-serve.db-wal`
   and `soft-serve.db-shm` together while the server is stopped, or use
   `sqlite3 soft-serve.db ".backup backup.db"` while it runs. A copy of
   `soft-serve.db` alone can miss the latest writes.
 
-The mode is stored in the database file, so an existing database switches on
-the next start and stays in WAL mode after the pragma is removed. To switch
-back, stop the server and run `sqlite3 soft-serve.db "PRAGMA journal_mode=DELETE"`.
+The mode is stored in the database file: an existing database switches to
+WAL on the first start of this version, and the `-wal` and `-shm` files
+appear next to it. To switch back, add `&_pragma=journal_mode(DELETE)` to
+`db.data_source` and restart the server. The database file and its directory
+must be writable by the server, even for a server that only reads: a
+read-only database file no longer opens with the default data source.
 
 #### LFS Configuration
 
