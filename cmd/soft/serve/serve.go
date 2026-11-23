@@ -80,9 +80,9 @@ func runServe(ctx context.Context, env *cmd.Env, syncHooks bool) error {
 	s.HTTPServer.Server.Handler = withTestStop(s.HTTPServer.Server.Handler, testStop)
 
 	started := make(chan error, 1)
-	go func() {
+	go func(ctx context.Context) {
 		started <- s.Start(ctx)
-	}()
+	}(ctx)
 	// The error the server stopped with is returned only after the
 	// shutdown, which runs either way.
 	serverErr := waitForStop(s, started, sigs, testStop)
@@ -91,9 +91,10 @@ func runServe(ctx context.Context, env *cmd.Env, syncHooks bool) error {
 	// second interrupt or terminate signal stops that wait.
 	abort, stopWaiting := abortOnSignal(sigs.term, s.logger)
 	defer stopWaiting()
-	ctx, cancel := context.WithTimeout(ctx, drainTimeout)
+	// A context of its own: the goroutine above still holds ctx.
+	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
-	return errors.Join(serverErr, s.Shutdown(ctx, abort))
+	return errors.Join(serverErr, s.Shutdown(drainCtx, abort))
 }
 
 // prepareDataPath warns about the settings the server ignores, and writes

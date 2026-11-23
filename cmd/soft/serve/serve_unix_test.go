@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -246,5 +247,65 @@ func TestSignalsKeepStopBehindSIGHUP(t *testing.T) {
 		if sig := <-sigs.term; sig != syscall.SIGTERM {
 			t.Fatalf("the stop channel got %v, want SIGTERM", sig)
 		}
+	}
+}
+
+// "soft serve" stops cleanly on SIGTERM while its servers serve, with
+// nothing else between the start and the signal. Under -race this covers
+// the shutdown racing with the goroutine that runs Start: the drain context
+// must not be written to a variable that goroutine reads.
+func TestServeStopsOnSIGTERM(t *testing.T) {
+	probe := newSignalProbe(t)
+	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
+	cfg := config.DefaultConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.SSH.ListenAddr = loopbackAddr()
+	cfg.Git.ListenAddr = loopbackAddr()
+	cfg.HTTP.ListenAddr = loopbackAddr()
+	cfg.Stats.ListenAddr = loopbackAddr()
+	load, closed := testLoad(cfg)
+
+	command := NewCommand(load)
+	command.SetArgs([]string{})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- command.ExecuteContext(context.Background()) }()
+
+	// "soft serve" registers its signal handler before it starts the
+	// servers, so once the HTTP server answers, a SIGTERM reaches it.
+	client := &http.Client{Timeout: time.Minute}
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+cfg.HTTP.ListenAddr+"/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := client.Do(req); err == nil {
+			_ = res.Body.Close()
+			break
+		}
+		select {
+		case err := <-serveErr:
+			t.Fatalf("soft serve returned %v before it served", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the HTTP server did not answer within a minute")
+		}
+	}
+
+	probe.send(syscall.SIGTERM)
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("soft serve returned %v after SIGTERM, want nil", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("soft serve did not stop within a minute of SIGTERM")
+	}
+	if !closed() {
+		t.Error("soft serve left its database and log open")
 	}
 }
