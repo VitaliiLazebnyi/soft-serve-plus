@@ -30,6 +30,13 @@ func TestSqliteDSN(t *testing.T) {
 		// A journal mode the data source sets is kept.
 		"soft-serve.db?_pragma=journal_mode(DELETE)": "soft-serve.db?_pragma=journal_mode(DELETE)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"soft-serve.db?_pragma=Journal_Mode = wal":   "soft-serve.db?_pragma=Journal_Mode = wal&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"soft-serve.db?_journal_mode=DELETE":         "soft-serve.db?_journal_mode=DELETE&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"soft-serve.db?_journal=TRUNCATE":            "soft-serve.db?_journal=TRUNCATE&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		// A read-only database cannot switch its journal mode.
+		"file:soft-serve.db?mode=ro":     "file:soft-serve.db?mode=ro&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"file:soft-serve.db?immutable=1": "file:soft-serve.db?immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"file:soft-serve.db?immutable=0": "file:soft-serve.db?immutable=0&" + added,
+		"file:soft-serve.db?mode=rw":     "file:soft-serve.db?mode=rw&" + added,
 		// Starting with "?", the whole string is a file name to the driver.
 		"?odd": "?odd",
 	} {
@@ -238,5 +245,97 @@ func TestSqliteReadDoesNotWaitForCommit(t *testing.T) {
 				t.Errorf("read after the commit: %d rows, %v; want 2", n, err)
 			}
 		})
+	}
+}
+
+// A journal mode set with the driver's own _journal_mode or _journal key is
+// the data source's mode, as one set with a _pragma is. The driver applies
+// those keys after the _pragma list, so a journal_mode(WAL) added next to
+// them made every new connection switch the database to WAL and back. A
+// switch needs the database to itself: a connection opened while another
+// held a read transaction failed with "database is locked".
+func TestOpenSqliteJournalModeKeys(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"_journal_mode", "_journal"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "soft.db")
+			// A short busy timeout: the failure this checks for waits it out.
+			d, err := Open(ctx, "sqlite", path+"?_pragma=busy_timeout(100)&"+key+"=DELETE", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close() //nolint:errcheck
+			if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER)"); err != nil {
+				t.Fatal(err)
+			}
+
+			// A read transaction holds its read lock on one connection
+			// while the pool opens new ones.
+			r, err := d.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close() //nolint:errcheck
+			if _, err := r.ExecContext(ctx, "BEGIN"); err != nil {
+				t.Fatal(err)
+			}
+			var n int
+			if err := r.QueryRowContext(ctx, "SELECT COUNT(*) FROM t").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			defer r.ExecContext(ctx, "ROLLBACK") //nolint:errcheck
+
+			for range 2 {
+				c, err := d.Conn(ctx)
+				if err != nil {
+					t.Fatalf("new connection during a read transaction: %v", err)
+				}
+				var m string
+				err = c.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&m)
+				c.Close() //nolint:errcheck
+				if err != nil || m != "delete" {
+					t.Errorf("journal mode of a new connection = %q, %v; want delete", m, err)
+				}
+			}
+		})
+	}
+}
+
+// A read-only data source cannot switch the journal mode, so it gets no
+// journal_mode(WAL) and opens a database in rollback-journal mode as it is.
+func TestOpenSqliteReadOnlyKeepsJournalMode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "soft.db")
+	d, err := Open(ctx, "sqlite", path+"?_pragma=journal_mode(DELETE)", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"CREATE TABLE t (n INTEGER)", "INSERT INTO t (n) VALUES (1)"} {
+		if _, err := d.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	d.Close() //nolint:errcheck
+
+	uri := "file:" + filepath.ToSlash(path)
+	for _, q := range []string{"mode=ro", "immutable=1", "mode=ro&cache=private", "immutable=true"} {
+		ro, err := Open(ctx, "sqlite", uri+"?"+q, Options{})
+		if err != nil {
+			t.Errorf("Open(%s): %v", q, err)
+			continue
+		}
+		var n int
+		var m string
+		if err := ro.GetContext(ctx, &n, "SELECT COUNT(*) FROM t"); err != nil || n != 1 {
+			t.Errorf("%s: read %d rows, %v; want 1", q, n, err)
+		}
+		if err := ro.GetContext(ctx, &m, "PRAGMA journal_mode"); err != nil || m != "delete" {
+			t.Errorf("%s: journal mode %q, %v; want delete", q, m, err)
+		}
+		ro.Close() //nolint:errcheck
 	}
 }
