@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -60,5 +61,39 @@ func TestTransactionContextCancelledBeforeCommit(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("rows = %d, want 0", n)
+	}
+}
+
+// Every transaction runs in READ COMMITTED on Postgres, whatever the
+// server, database, role or data source make the default. The row locks the
+// store takes (LockAndCountWebhooks, LockUserRepos, the ForUpdate reads) are
+// followed by reads that must see what the previous holder of the lock
+// committed, which only READ COMMITTED gives: a snapshot taken per
+// statement.
+func TestTransactionsAreReadCommittedPostgres(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
+		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")
+	}
+	ctx := context.Background()
+	dbx, err := dbtest.Open(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbtest.SetDefaultIsolation(ctx, t, dbx, "repeatable read")
+
+	for name, run := range map[string]func(context.Context, func(*db.Tx) error) error{
+		"TransactionContext":     dbx.TransactionContext,
+		"ReadTransactionContext": dbx.ReadTransactionContext,
+	} {
+		var got string
+		if err := run(ctx, func(tx *db.Tx) error {
+			return tx.GetContext(ctx, &got, `SHOW transaction_isolation`)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got != "read committed" {
+			t.Errorf("%s: isolation = %q, want read committed", name, got)
+		}
 	}
 }
