@@ -18,22 +18,23 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/matryer/is"
 )
 
 // When the server fails to start, "soft serve" still shuts it down and
 // closes the database before returning the error: cobra skips the command's
 // PersistentPostRunE, which closes it otherwise.
 func TestServeStartErrorShutsDown(t *testing.T) {
-	is := is.New(t)
-
 	taken, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer taken.Close() //nolint: errcheck
 
 	t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 	cfg := config.DefaultConfig()
-	is.NoErr(cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	cfg.SSH.ListenAddr = loopbackAddr()
 	cfg.Git.ListenAddr = loopbackAddr()
 	cfg.HTTP.ListenAddr = taken.Addr().String()
@@ -145,17 +146,19 @@ func TestServeEarlyErrorClosesDB(t *testing.T) {
 // directories, the default config file and the repository hooks. It must
 // not build a second config from the environment.
 func TestServeUsesContextConfig(t *testing.T) {
-	is := is.New(t)
-
 	taken, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer taken.Close() //nolint: errcheck
 
 	envPath := t.TempDir()
 	t.Setenv("SOFT_SERVE_DATA_PATH", envPath)
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	is.NoErr(cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	cfg.SSH.ListenAddr = loopbackAddr()
 	cfg.Git.ListenAddr = loopbackAddr()
 	cfg.HTTP.ListenAddr = taken.Addr().String()
@@ -166,15 +169,25 @@ func TestServeUsesContextConfig(t *testing.T) {
 
 	// A repository to generate hooks for.
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
+		t.Fatal(err)
+	}
 	_, err = dbx.ExecContext(ctx, `INSERT INTO repos
 		(name, project_name, description, private, mirror, hidden, user_id, updated_at)
 		VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
-	is.NoErr(err)
-	is.NoErr(dbx.Close())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dbx.Close(); err != nil {
+		t.Fatal(err)
+	}
 	// sync-hooks skips a repository without a directory.
-	is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700))
+	if err := os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	// Starting the HTTP server fails, after the directories and hooks are
 	// set up.
@@ -203,7 +216,9 @@ func TestServeUsesContextConfig(t *testing.T) {
 		t.Errorf("update.sample mode = %v, want it not executable", info.Mode())
 	}
 	entries, err := os.ReadDir(envPath)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, e := range entries {
 		t.Errorf("%s created under the environment data path", e.Name())
 	}
@@ -221,15 +236,17 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 		{"no flags", []string{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			is := is.New(t)
-
 			taken, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			defer taken.Close() //nolint: errcheck
 
 			t.Setenv("SOFT_SERVE_DATA_PATH", t.TempDir())
 			cfg := config.DefaultConfig()
-			is.NoErr(cfg.Validate())
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
 			cfg.SSH.ListenAddr = loopbackAddr()
 			cfg.Git.ListenAddr = loopbackAddr()
 			cfg.HTTP.ListenAddr = taken.Addr().String()
@@ -240,15 +257,25 @@ func TestServeFlagsDoNotCarryOver(t *testing.T) {
 
 			// A repository to generate hooks for.
 			dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-			is.NoErr(err)
-			is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
+				t.Fatal(err)
+			}
 			_, err = dbx.ExecContext(ctx, `INSERT INTO repos
 				(name, project_name, description, private, mirror, hidden, user_id, updated_at)
 				VALUES ('repo1', '', '', false, false, false, 1, CURRENT_TIMESTAMP)`)
-			is.NoErr(err)
-			is.NoErr(dbx.Close())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := dbx.Close(); err != nil {
+				t.Fatal(err)
+			}
 			// sync-hooks skips a repository without a directory.
-			is.NoErr(os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700))
+			if err := os.MkdirAll(filepath.Join(cfg.DataPath, "repos", "repo1.git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
 
 			// Starting the HTTP server fails, after the hooks are synced.
 			command := NewCommand(load)

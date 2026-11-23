@@ -3,12 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/matryer/is"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/crypto/ssh"
 )
@@ -56,37 +56,56 @@ func TestSSHPublicKeyAuthDefaultsExcludeSHA1(t *testing.T) {
 }
 
 func TestParseSSHAlgorithms(t *testing.T) {
-	is := is.New(t)
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
-	is.NoErr(os.Unsetenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS"))
+	if err := os.Unsetenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS"); err != nil {
+		t.Fatal(err)
+	}
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	is.NoErr(os.WriteFile(path, []byte(`ssh:
+	if err := os.WriteFile(path, []byte(`ssh:
   public_key_auth_algorithms: ["ssh-ed25519", "ssh-rsa"]
-`), 0o600))
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(parseFile(cfg, path))
-	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), []string{"ssh-ed25519", "ssh-rsa"})
+	if err := parseFile(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), ([]string{"ssh-ed25519", "ssh-rsa"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cfg.SSH.AcceptedPublicKeyAuthAlgorithms() = %v, want %v", got, want)
+	}
 
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "rsa-sha2-512, ssh-dss")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(parseEnv(cfg))
-	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), []string{"rsa-sha2-512", "ssh-dss"})
+	if err := parseEnv(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), ([]string{"rsa-sha2-512", "ssh-dss"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cfg.SSH.AcceptedPublicKeyAuthAlgorithms() = %v, want %v", got, want)
+	}
 
 	// Hooks re-read the config from the environment.
-	is.True(slices.Contains(cfg.Environ(), "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss"))
+	if !slices.Contains(cfg.Environ(), "SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss") {
+		t.Fatal("not true: slices.Contains(cfg.Environ(), \"SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS=rsa-sha2-512,ssh-dss\")")
+	}
 
 	// An empty variable, as Environ writes for an unset list, keeps the
 	// default rather than reading as one empty name.
 	t.Setenv("SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS", "")
 	cfg = DefaultConfig()
 	cfg.DataPath = dir
-	is.NoErr(parseEnv(cfg))
-	is.Equal(len(cfg.SSH.PublicKeyAuthAlgorithms), 0)
-	is.Equal(cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms())
+	if err := parseEnv(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(cfg.SSH.PublicKeyAuthAlgorithms); got != 0 {
+		t.Fatalf("len(cfg.SSH.PublicKeyAuthAlgorithms) = %v, want %v", got, 0)
+	}
+	if got, want := cfg.SSH.AcceptedPublicKeyAuthAlgorithms(), DefaultSSHPublicKeyAuthAlgorithms(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cfg.SSH.AcceptedPublicKeyAuthAlgorithms() = %v, want %v", got, want)
+	}
 }
 
 func TestValidateRejectsUnknownSSHAlgorithms(t *testing.T) {
