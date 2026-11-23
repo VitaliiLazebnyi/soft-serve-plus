@@ -22,7 +22,8 @@ import (
 // them the same way. The test runs on Postgres when SOFT_SERVE_DB_DRIVER is
 // "postgres".
 func TestWebhookDeliverySeqBackfill(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -31,12 +32,11 @@ func TestWebhookDeliverySeqBackfill(t *testing.T) {
 	// Migrate up to, but not including, the sequence migration. Later
 	// migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:webhookDeliverySeqVersion-1]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:webhookDeliverySeqVersion-1]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() before seq => %v", err)
 	}
-	migrations = all[:webhookDeliverySeqVersion]
+	list = all[:webhookDeliverySeqVersion]
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -108,7 +108,7 @@ func TestWebhookDeliverySeqBackfill(t *testing.T) {
 	}
 
 	for _, round := range []string{"first", "after rollback"} {
-		if err := Migrate(ctx, dbx); err != nil {
+		if err := migrate(ctx, dbx, env, list); err != nil {
 			t.Fatalf("%s: Migrate() seq => %v", round, err)
 		}
 		check(numbered(backfilled...))
@@ -125,7 +125,7 @@ func TestWebhookDeliverySeqBackfill(t *testing.T) {
 		insert(after, "")
 		check(append(numbered(backfilled...), delivery{after, 5}))
 
-		if err := Rollback(ctx, dbx); err != nil {
+		if err := rollback(ctx, dbx, env, list); err != nil {
 			t.Fatalf("%s: Rollback() => %v", round, err)
 		}
 		if hasColumn(ctx, t, dbx, "webhook_deliveries", "seq") {
@@ -159,19 +159,20 @@ func hasColumn(ctx context.Context, t *testing.T, dbx *db.DB, table, column stri
 // On SQLite, the migration logs a VACUUM hint when it copied existing
 // deliveries, and stays quiet on an empty table, such as a fresh install.
 func TestWebhookDeliverySeqVacuumHint(t *testing.T) {
+	t.Parallel()
 	all := migrations
-	t.Cleanup(func() { migrations = all })
+	var list []Migration
 	for _, withRows := range []bool{false, true} {
 		var buf bytes.Buffer
-		ctx := config.WithContext(context.TODO(), config.DefaultConfig())
-		ctx = log.WithContext(ctx, log.New(&buf))
+		ctx, env := context.TODO(), testEnv(config.DefaultConfig())
+		env.Logger = log.New(&buf).WithPrefix("migrate")
 		dbx, err := test.OpenSqlite(ctx, t)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		migrations = all[:webhookDeliverySeqVersion-1]
-		if err := Migrate(ctx, dbx); err != nil {
+		list = all[:webhookDeliverySeqVersion-1]
+		if err := migrate(ctx, dbx, env, list); err != nil {
 			t.Fatalf("Migrate() before seq => %v", err)
 		}
 		if withRows {
@@ -189,8 +190,8 @@ func TestWebhookDeliverySeqVacuumHint(t *testing.T) {
 				}
 			}
 		}
-		migrations = all[:webhookDeliverySeqVersion]
-		if err := Migrate(ctx, dbx); err != nil {
+		list = all[:webhookDeliverySeqVersion]
+		if err := migrate(ctx, dbx, env, list); err != nil {
 			t.Fatalf("Migrate() => %v", err)
 		}
 		if got := strings.Contains(buf.String(), "VACUUM"); got != withRows {

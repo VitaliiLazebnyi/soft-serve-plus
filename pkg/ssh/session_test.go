@@ -88,12 +88,12 @@ func setupServer(tb testing.TB) *ssh.Server {
 		tb.Fatal(err)
 	}
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		tb.Fatal(err)
 	}
 	closeTestDB(tb, dbx)
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		tb.Fatal(err)
 	}
 	dbstore := database.New()

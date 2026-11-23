@@ -14,7 +14,8 @@ import (
 // and migrating again adds them back. The test runs on Postgres when
 // SOFT_SERVE_DB_DRIVER is "postgres".
 func TestMirrorSyncStatus(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +23,6 @@ func TestMirrorSyncStatus(t *testing.T) {
 
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -32,16 +32,16 @@ func TestMirrorSyncStatus(t *testing.T) {
 	}
 
 	// A repository from before the migration.
-	migrations = all[:mirrorSyncStatus.Version-1]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:mirrorSyncStatus.Version-1]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() to %d => %v", mirrorSyncStatus.Version-1, err)
 	}
 	mustExec(`INSERT INTO users (id, username, admin, updated_at) VALUES (100, 'u', false, CURRENT_TIMESTAMP)`)
 	mustExec(`INSERT INTO repos (id, name, project_name, description, private, mirror, hidden, user_id, updated_at)
 		VALUES (1, 'r', 'r', '', false, true, false, 100, CURRENT_TIMESTAMP)`)
 
-	migrations = all[:mirrorSyncStatus.Version]
-	if err := Migrate(ctx, dbx); err != nil {
+	list = all[:mirrorSyncStatus.Version]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 	var row struct {
@@ -64,7 +64,7 @@ func TestMirrorSyncStatus(t *testing.T) {
 		t.Errorf("updated row = %+v, want a sync time and the error", row)
 	}
 
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() => %v", err)
 	}
 	if err := dbx.GetContext(ctx, &row, `SELECT mirror_synced_at, mirror_error FROM repos WHERE id = 1`); err == nil {
@@ -75,7 +75,7 @@ func TestMirrorSyncStatus(t *testing.T) {
 		t.Errorf("repository after rollback = %q, %v; want r", name, err)
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	read()

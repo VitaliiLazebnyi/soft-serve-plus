@@ -39,7 +39,7 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	logger := log.New(logs)
 	logger.SetLevel(log.DebugLevel)
 	ctx = log.WithContext(config.WithContext(ctx, cfg), logger)
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	st := database.New()

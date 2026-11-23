@@ -19,7 +19,7 @@ import (
 // It removes the database file when the test is done using tb.Cleanup.
 func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
 	dbpath := filepath.Join(tb.TempDir(), "test.db")
-	dbx, err := db.Open(ctx, "sqlite", dbpath)
+	dbx, err := db.Open(ctx, "sqlite", dbpath, db.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 	if dsn == "" {
 		dsn = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
 	}
-	admin, err := db.Open(ctx, "postgres", dsn)
+	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func openPostgres(ctx context.Context, tb testing.TB, dsn string) (*db.DB, error
 		admin.Close()                                                 //nolint:errcheck
 		return nil, err
 	}
-	dbx, err := db.Open(ctx, "postgres", testDSN)
+	dbx, err := db.Open(ctx, "postgres", testDSN, db.Options{})
 	if err != nil {
 		admin.ExecContext(ctx, "DROP DATABASE "+name+" WITH (FORCE)") //nolint:errcheck
 		admin.Close()                                                 //nolint:errcheck

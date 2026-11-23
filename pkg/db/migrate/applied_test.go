@@ -17,6 +17,7 @@ import (
 // Migration versions must strictly increase in the order they run, and each
 // name must be unique, since both are recorded and checked on every start.
 func TestMigrationsOrdered(t *testing.T) {
+	t.Parallel()
 	names := map[string]int64{}
 	for i, m := range migrations {
 		if m.Version <= 0 {
@@ -43,6 +44,7 @@ var sqlFileName = regexp.MustCompile(`^(\d{4})_([a-z0-9_]+)_(sqlite|postgres)\.(
 // Every migration that is written in SQL has an up and a down file for both
 // SQLite and Postgres, and every SQL file belongs to a known migration.
 func TestMigrationSQLFilesComplete(t *testing.T) {
+	t.Parallel()
 	files, err := fs.Glob(sqls, "*.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -84,24 +86,25 @@ func TestMigrationSQLFilesComplete(t *testing.T) {
 	}
 }
 
-func migratedDB(t *testing.T) (context.Context, *db.DB) {
+func migratedDB(t *testing.T) (context.Context, Env, *db.DB) {
 	t.Helper()
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() => %v, want nil error", err)
 	}
-	return ctx, dbx
+	return ctx, env, dbx
 }
 
 // A database whose recorded migration has another name under the same
 // version, such as one migrated by a build whose numbering collides with this
 // one's, is refused by Migrate and Rollback, and left alone.
 func TestMigrateRefusesRenamedMigration(t *testing.T) {
-	ctx, dbx := migratedDB(t)
+	t.Parallel()
+	ctx, env, dbx := migratedDB(t)
 	if len(migrations) < 2 {
 		t.Skip("needs two migrations")
 	}
@@ -110,8 +113,8 @@ func TestMigrateRefusesRenamedMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for name, run := range map[string]func(context.Context, *db.DB) error{"Migrate": Migrate, "Rollback": Rollback} {
-		err := run(ctx, dbx)
+	for name, run := range map[string]func(context.Context, *db.DB, Env, []Migration) error{"Migrate": migrate, "Rollback": rollback} {
+		err := run(ctx, dbx, env, migrations)
 		if err == nil || !strings.Contains(err.Error(), `"someone_elses_migration"`) || !strings.Contains(err.Error(), fmt.Sprintf("%q", m.Name)) {
 			t.Errorf("%s() => %v, want an error naming both migrations", name, err)
 		}
@@ -122,19 +125,19 @@ func TestMigrateRefusesRenamedMigration(t *testing.T) {
 // A recorded migration this binary does not know, below its latest version,
 // is refused.
 func TestMigrateRefusesUnknownMigration(t *testing.T) {
-	ctx, dbx := migratedDB(t)
+	t.Parallel()
+	ctx, env, dbx := migratedDB(t)
 	if len(migrations) < 3 {
 		t.Skip("needs three migrations")
 	}
 
 	// Simulate a binary that lacks one of the applied migrations.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
 	gone := all[len(all)-2]
-	migrations = append(append([]Migration{}, all[:len(all)-2]...), all[len(all)-1])
+	list := append(append([]Migration{}, all[:len(all)-2]...), all[len(all)-1])
 
-	for name, run := range map[string]func(context.Context, *db.DB) error{"Migrate": Migrate, "Rollback": Rollback} {
-		err := run(ctx, dbx)
+	for name, run := range map[string]func(context.Context, *db.DB, Env, []Migration) error{"Migrate": migrate, "Rollback": rollback} {
+		err := run(ctx, dbx, env, list)
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("migration %d %q, which is unknown", gone.Version, gone.Name)) {
 			t.Errorf("%s() => %v, want an unknown migration error", name, err)
 		}
@@ -145,7 +148,8 @@ func TestMigrateRefusesUnknownMigration(t *testing.T) {
 // A database that lacks a migration older than its latest one is refused:
 // Migrate would otherwise never run it.
 func TestMigrateRefusesMissingMigration(t *testing.T) {
-	ctx, dbx := migratedDB(t)
+	t.Parallel()
+	ctx, env, dbx := migratedDB(t)
 	if len(migrations) < 2 {
 		t.Skip("needs two migrations")
 	}
@@ -154,7 +158,7 @@ func TestMigrateRefusesMissingMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Migrate(ctx, dbx)
+	err := migrate(ctx, dbx, env, migrations)
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("missing migration %d %q", m.Version, m.Name)) {
 		t.Errorf("Migrate() => %v, want a missing migration error", err)
 	}
@@ -164,15 +168,16 @@ func TestMigrateRefusesMissingMigration(t *testing.T) {
 // A database migrated in full by this binary is accepted again, and a rollback
 // followed by a migrate brings it back.
 func TestMigrateAcceptsOwnHistory(t *testing.T) {
-	ctx, dbx := migratedDB(t)
-	if err := Migrate(ctx, dbx); err != nil {
+	t.Parallel()
+	ctx, env, dbx := migratedDB(t)
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("second Migrate() => %v, want nil error", err)
 	}
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Rollback() => %v, want nil error", err)
 	}
 	assertAppliedCount(t, ctx, dbx, len(migrations)-1)
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, migrations); err != nil {
 		t.Fatalf("Migrate() after Rollback() => %v, want nil error", err)
 	}
 	assertAppliedCount(t, ctx, dbx, len(migrations))

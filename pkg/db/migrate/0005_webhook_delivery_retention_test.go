@@ -14,7 +14,8 @@ import (
 // keeps the remaining rows. The test runs on Postgres when
 // SOFT_SERVE_DB_DRIVER is "postgres".
 func TestWebhookDeliveryRetentionTrims(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -23,12 +24,11 @@ func TestWebhookDeliveryRetentionTrims(t *testing.T) {
 	// Migrate up to, but not including, the retention migration. Later
 	// migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:webhookDeliveryRetention.Version-1]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:webhookDeliveryRetention.Version-1]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() before retention => %v", err)
 	}
-	migrations = all[:webhookDeliveryRetention.Version]
+	list = all[:webhookDeliveryRetention.Version]
 
 	mustExec := func(q string, args ...any) {
 		t.Helper()
@@ -58,7 +58,7 @@ func TestWebhookDeliveryRetentionTrims(t *testing.T) {
 		}
 	}
 
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() retention => %v", err)
 	}
 
@@ -87,11 +87,11 @@ func TestWebhookDeliveryRetentionTrims(t *testing.T) {
 	}
 	check("migrate")
 
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() retention => %v", err)
 	}
 	check("rollback")
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() retention again => %v", err)
 	}
 	check("migrate again")

@@ -243,7 +243,7 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	// or, in rollback-journal mode, an open read transaction (then at
 	// COMMIT), and succeeds otherwise. Unlike a write bounded by a
 	// deadline, it doesn't depend on how fast the machine is.
-	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)")
+	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)", db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { probe.Close() }) //nolint:errcheck
 

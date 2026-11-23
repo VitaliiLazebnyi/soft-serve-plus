@@ -9,6 +9,7 @@ import (
 )
 
 func TestTraceRedactsArgs(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	l := log.New(&buf)
 	l.SetLevel(log.DebugLevel)
@@ -29,5 +30,6 @@ func TestTraceRedactsArgs(t *testing.T) {
 }
 
 func TestTraceNilLogger(t *testing.T) {
+	t.Parallel()
 	trace(nil, "SELECT 1", "x")
 }

@@ -13,6 +13,7 @@ import (
 )
 
 func TestWrapErrorBadNoRows(t *testing.T) {
+	t.Parallel()
 	for _, e := range []error{
 		fmt.Errorf("foo"),
 		errors.New("bar"),
@@ -24,6 +25,7 @@ func TestWrapErrorBadNoRows(t *testing.T) {
 }
 
 func TestWrapErrorGoodNoRows(t *testing.T) {
+	t.Parallel()
 	if err := WrapError(sql.ErrNoRows); err != ErrRecordNotFound {
 		t.Errorf("WrapError(sql.ErrNoRows) => %v, want %v", err, ErrRecordNotFound)
 	}
@@ -32,6 +34,7 @@ func TestWrapErrorGoodNoRows(t *testing.T) {
 // A mapped constraint violation keeps the driver error in its chain, so code
 // that needs the driver's own code can still find it.
 func TestWrapErrorKeepsDriverError(t *testing.T) {
+	t.Parallel()
 	drv := &pq.Error{Code: "23505"}
 	err := WrapError(drv)
 	if !errors.Is(err, ErrDuplicateKey) {
@@ -54,7 +57,7 @@ func TestWrapErrorKeepsDriverError(t *testing.T) {
 func TestWrapErrorSqliteConstraints(t *testing.T) {
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=foreign_keys(1)"
-	dbx, err := Open(ctx, "sqlite", dsn)
+	dbx, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +121,7 @@ func TestWrapErrorSqliteConstraints(t *testing.T) {
 // TestWrapErrorPostgresConstraints checks the mapping of Postgres constraint
 // violation codes, also when the driver error is wrapped.
 func TestWrapErrorPostgresConstraints(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		err  *pq.Error
 		want error

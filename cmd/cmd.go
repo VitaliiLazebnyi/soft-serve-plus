@@ -143,12 +143,15 @@ func initBackend(cmd *cobra.Command, create bool) error {
 		closeLogFile(ctx)
 		return err
 	}
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{
+		Logger:       log.FromContext(ctx),
+		Trace:        config.IsVerbose(),
+		MaxOpenConns: cfg.DB.MaxOpenConns,
+	})
 	if err != nil {
 		closeLogFile(ctx)
 		return fmt.Errorf("open database: %w", err)
 	}
-	dbx.SetPoolLimits(cfg.DB)
 
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()

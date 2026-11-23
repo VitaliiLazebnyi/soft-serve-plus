@@ -74,7 +74,7 @@ func (pagedLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) (mo
 // of the last lock of a full page as the next cursor, and starts the next
 // page after it, so paging lists every lock exactly once.
 func TestLFSLockRangeCursor(t *testing.T) {
-	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -133,7 +133,7 @@ func (passwordLockStore) GetUserByID(_ context.Context, _ db.Handler, id int64) 
 // log of a lock, as in its "lock success" line, does not print the owner's
 // password hash. A lock used to hold the owner's whole user record.
 func TestLFSLockDebugLogOmitsPassword(t *testing.T) {
-	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	dbx, err := db.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

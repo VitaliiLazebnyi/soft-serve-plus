@@ -29,7 +29,7 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 	e.be.renameTxDone = func(err error) error {
 		// The rename's transaction has failed and rolled back. Hold the
 		// row's lock with the rename that, from here, is in flight.
-		tx, berr := e.be.db.BeginTx(e.ctx, nil)
+		tx, berr := beginRawTx(t, e.ctx, e.be.db)
 		if berr != nil {
 			committed <- berr
 			return err

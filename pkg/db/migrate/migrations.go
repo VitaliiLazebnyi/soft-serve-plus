@@ -101,10 +101,10 @@ func sqlMigration(version int64, name string) Migration {
 	return Migration{
 		Version: version,
 		Name:    name,
-		Migrate: func(ctx context.Context, tx *db.Tx) error {
+		Migrate: func(ctx context.Context, tx *db.Tx, _ Env) error {
 			return execMigration(ctx, tx, version, name, false)
 		},
-		Rollback: func(ctx context.Context, tx *db.Tx) error {
+		Rollback: func(ctx context.Context, tx *db.Tx, _ Env) error {
 			return execMigration(ctx, tx, version, name, true)
 		},
 	}

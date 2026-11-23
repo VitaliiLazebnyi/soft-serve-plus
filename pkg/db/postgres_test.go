@@ -67,13 +67,13 @@ func TestPostgresTimestampsAreUTC(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	d, err := Open(ctx, "postgres", dsn)
+	d, err := Open(ctx, "postgres", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	conn, err := d.Connx(ctx)
+	conn, err := d.x.Connx(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

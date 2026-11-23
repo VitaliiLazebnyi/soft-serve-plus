@@ -15,7 +15,7 @@ import (
 // WrapError, so callers need not wrap them again.
 func TestHandlerMapsErrors(t *testing.T) {
 	ctx := context.Background()
-	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +62,12 @@ func TestHandlerMapsErrors(t *testing.T) {
 // whose message is ErrDuplicateKey's generic one, still has the driver error,
 // naming the failed constraint, written to the debug log.
 func TestHandlerLogsConstraintDetail(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	l := log.New(&buf)
 	l.SetLevel(log.DebugLevel)
-	ctx := log.WithContext(context.Background(), l)
-	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{Logger: l})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +85,59 @@ func TestHandlerLogsConstraintDetail(t *testing.T) {
 	}
 	if out := buf.String(); !strings.Contains(out, "constraint violation") || !strings.Contains(out, "t.n") {
 		t.Errorf("debug log = %q, want the driver error naming t.n", out)
+	}
+	if strings.Contains(buf.String(), "trace") {
+		t.Errorf("debug log = %q, want no query trace without Options.Trace", buf.String())
+	}
+}
+
+// Without Options.Logger, constraint violation detail goes to the default
+// logger, as it did when the handle took the context's logger. It changes
+// the default logger, so it does not run in parallel.
+func TestOpenNilLoggerUsesDefault(t *testing.T) {
+	var buf bytes.Buffer
+	l := log.New(&buf)
+	l.SetLevel(log.DebugLevel)
+	prev := log.Default()
+	log.SetDefault(l)
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE t (n INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, err = d.ExecContext(ctx, "INSERT INTO t (n) VALUES (1)")
+	}
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("duplicate insert: err = %v, want ErrDuplicateKey", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "constraint violation") {
+		t.Errorf("default logger = %q, want the constraint violation detail", out)
+	}
+}
+
+// With Options.Trace, every query is logged to Options.Logger.
+func TestOpenTrace(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	l := log.New(&buf)
+	l.SetLevel(log.DebugLevel)
+	ctx := context.Background()
+	d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), Options{Logger: l, Trace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	if _, err := d.ExecContext(ctx, "CREATE TABLE traced (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); !strings.Contains(out, "trace") || !strings.Contains(out, "CREATE TABLE traced") {
+		t.Errorf("debug log = %q, want the query traced", out)
 	}
 }

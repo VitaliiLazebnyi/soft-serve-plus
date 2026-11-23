@@ -13,7 +13,8 @@ import (
 // migration back works once no such object is recorded. The test runs on
 // Postgres when SOFT_SERVE_DB_DRIVER is "postgres".
 func TestLFSObjectSizeBigint(t *testing.T) {
-	ctx := config.WithContext(context.TODO(), config.DefaultConfig())
+	t.Parallel()
+	ctx, env := context.TODO(), testEnv(config.DefaultConfig())
 	dbx, err := test.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
@@ -21,9 +22,8 @@ func TestLFSObjectSizeBigint(t *testing.T) {
 
 	// Later migrations stay out of the test so that Rollback undoes this one.
 	all := migrations
-	t.Cleanup(func() { migrations = all })
-	migrations = all[:lfsObjectSizeBigint.Version]
-	if err := Migrate(ctx, dbx); err != nil {
+	list := all[:lfsObjectSizeBigint.Version]
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() => %v", err)
 	}
 
@@ -49,10 +49,10 @@ func TestLFSObjectSizeBigint(t *testing.T) {
 
 	mustExec(`DELETE FROM lfs_objects WHERE oid = 'big'`)
 	mustExec(`INSERT INTO lfs_objects (repo_id, oid, size, updated_at) VALUES (1, 'small', 42, CURRENT_TIMESTAMP)`)
-	if err := Rollback(ctx, dbx); err != nil {
+	if err := rollback(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Rollback() => %v", err)
 	}
-	if err := Migrate(ctx, dbx); err != nil {
+	if err := migrate(ctx, dbx, env, list); err != nil {
 		t.Fatalf("Migrate() again => %v", err)
 	}
 	if err := dbx.GetContext(ctx, &got, `SELECT size FROM lfs_objects WHERE oid = 'small'`); err != nil {

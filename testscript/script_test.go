@@ -1279,7 +1279,7 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 
 	// Create the database. Scripts run in parallel, so its name comes from
 	// test.CreateDB, which never hands two of them the same one.
-	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo)
+	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo, db.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -1299,7 +1299,7 @@ func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
 	)
 
 	return func() {
-		dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo)
+		dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo, db.Options{})
 		if err != nil {
 			t.Fatal("failed to open database", dbName, err)
 		}

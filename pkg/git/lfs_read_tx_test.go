@@ -44,12 +44,12 @@ func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db")+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db")+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx); err != nil {
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	s := database.New()

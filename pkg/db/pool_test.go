@@ -5,13 +5,11 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
-
-	"github.com/charmbracelet/soft-serve/pkg/config"
 )
 
-func openPoolTestDB(t *testing.T) *DB {
+func openPoolTestDB(t *testing.T, opts Options) *DB {
 	t.Helper()
-	d, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"))
+	d, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "test.db"), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,9 +34,9 @@ func holdConns(t *testing.T, d *DB, n int) {
 	}
 }
 
-func TestSetPoolLimitsZeroKeepsDefaults(t *testing.T) {
-	d := openPoolTestDB(t)
-	d.SetPoolLimits(config.DBConfig{})
+func TestPoolLimitZeroKeepsDefaults(t *testing.T) {
+	t.Parallel()
+	d := openPoolTestDB(t, Options{})
 	if got := d.Stats().MaxOpenConnections; got != 0 {
 		t.Errorf("MaxOpenConnections = %d, want 0 (no limit)", got)
 	}
@@ -50,9 +48,9 @@ func TestSetPoolLimitsZeroKeepsDefaults(t *testing.T) {
 	}
 }
 
-func TestSetPoolLimits(t *testing.T) {
-	d := openPoolTestDB(t)
-	d.SetPoolLimits(config.DBConfig{MaxOpenConns: 5})
+func TestPoolLimit(t *testing.T) {
+	t.Parallel()
+	d := openPoolTestDB(t, Options{MaxOpenConns: 5})
 	if got := d.Stats().MaxOpenConnections; got != 5 {
 		t.Errorf("MaxOpenConnections = %d, want 5", got)
 	}

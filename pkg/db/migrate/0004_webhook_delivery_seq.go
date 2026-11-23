@@ -20,14 +20,14 @@ const (
 var webhookDeliverySeq = Migration{
 	Name:    webhookDeliverySeqName,
 	Version: webhookDeliverySeqVersion,
-	Migrate: func(ctx context.Context, tx *db.Tx) error {
+	Migrate: func(ctx context.Context, tx *db.Tx, env Env) error {
 		if err := execMigration(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName, false); err != nil {
 			return err
 		}
-		suggestSqliteVacuum(ctx, tx)
+		suggestSqliteVacuum(ctx, tx, env.Logger)
 		return nil
 	},
-	Rollback: func(ctx context.Context, tx *db.Tx) error {
+	Rollback: func(ctx context.Context, tx *db.Tx, _ Env) error {
 		return execMigration(ctx, tx, webhookDeliverySeqVersion, webhookDeliverySeqName, true)
 	},
 }
@@ -42,7 +42,7 @@ var webhookDeliverySeq = Migration{
 // The hint names the database file SQLite has open, because the configured
 // data source is relative to the data path, and sqlite3 run from another
 // directory would create a new, empty file instead.
-func suggestSqliteVacuum(ctx context.Context, tx *db.Tx) {
+func suggestSqliteVacuum(ctx context.Context, tx *db.Tx, logger *log.Logger) {
 	if tx.DriverName() != "sqlite" {
 		return
 	}
@@ -55,7 +55,7 @@ func suggestSqliteVacuum(ctx context.Context, tx *db.Tx) {
 	if err := tx.GetContext(ctx, &open, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err == nil && open != "" {
 		file = open
 	}
-	log.FromContext(ctx).WithPrefix("migrate").Info(
+	logger.Info(
 		"webhook deliveries were copied into a rebuilt table; the space of the old table stays in the database file until it is vacuumed. "+
 			"To reclaim it, stop the server and run: sqlite3 <file> VACUUM. "+
 			"VACUUM writes a full copy of the database, so it needs free disk space up to about the size of the file.",

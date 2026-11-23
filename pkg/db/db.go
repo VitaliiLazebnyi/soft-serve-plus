@@ -12,24 +12,42 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
-// DB is a Soft Serve database connection pool.
+// DB is a Soft Serve database connection pool. It wraps the sqlx handle
+// rather than embedding it, so every query goes through the methods of DB,
+// which trace it and map its error.
 type DB struct {
-	*sqlx.DB
-	logger *log.Logger // query trace, set only in verbose mode
+	x      *sqlx.DB
+	logger *log.Logger // query trace, set only with Options.Trace
 	errLog *log.Logger // constraint violation detail, see mapError
 	// writeSlot, on SQLite, is held by the one write transaction of this
 	// handle that may be open at a time. See transaction.
 	writeSlot chan struct{}
 }
 
+// Options are the settings of a database handle besides its driver and data
+// source.
+type Options struct {
+	// Logger receives constraint violation detail at debug level (see
+	// mapError) and, with Trace, every query. A nil Logger is the default
+	// logger.
+	Logger *log.Logger
+	// Trace logs every query, and the number of its arguments, at debug
+	// level. The server sets it in verbose mode.
+	Trace bool
+	// MaxOpenConns limits the open connections (db.max_open_conns). Zero
+	// leaves database/sql's default of no limit. The pool keeps
+	// database/sql's default of two idle connections, or fewer when the
+	// limit is lower.
+	MaxOpenConns int
+}
+
 // Open opens a database connection.
-func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
+func Open(ctx context.Context, driverName string, dsn string, opts Options) (*DB, error) {
 	var (
 		db  *sqlx.DB
 		err error
@@ -41,7 +59,7 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 		}
 		db, err = sqlx.ConnectContext(ctx, driverName, dsn)
 	case "postgres":
-		db, err = connectPostgres(ctx, dsn)
+		db, err = connectPostgres(ctx, dsn, defaultPostgresConnectTimeout)
 	default:
 		return nil, fmt.Errorf("unknown driver %q: the database driver is sqlite or postgres", driverName)
 	}
@@ -49,34 +67,20 @@ func Open(ctx context.Context, driverName string, dsn string) (*DB, error) {
 		return nil, err
 	}
 
-	d := &DB{
-		DB:     db,
-		errLog: log.FromContext(ctx).WithPrefix("db"),
-	}
-	if driverName == "sqlite" {
-		d.writeSlot = make(chan struct{}, 1)
-	}
-
-	if config.IsVerbose() {
-		logger := log.FromContext(ctx).WithPrefix("db")
-		d.logger = logger
-	}
-
-	return d, nil
+	return Wrap(db, opts), nil
 }
 
 // defaultPostgresConnectTimeout bounds connecting to Postgres when the data
 // source and PGCONNECT_TIMEOUT set no connect_timeout. Without it, lib/pq
 // waits for as long as the operating system does, so an unreachable database
 // can hang startup for minutes.
-// It is a variable so tests can shorten it.
-var defaultPostgresConnectTimeout = 10 * time.Second
+const defaultPostgresConnectTimeout = 10 * time.Second
 
 // connectPostgres connects to Postgres and checks the connection, applying
-// defaultPostgresConnectTimeout unless the data source or the environment
-// already sets a connect_timeout (0 among them, which waits forever).
-func connectPostgres(ctx context.Context, dsn string) (*sqlx.DB, error) {
-	cfg, err := postgresConfig(dsn)
+// timeout unless the data source or the environment already sets a
+// connect_timeout (0 among them, which waits forever).
+func connectPostgres(ctx context.Context, dsn string, timeout time.Duration) (*sqlx.DB, error) {
+	cfg, err := postgresConfig(dsn, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +97,15 @@ func connectPostgres(ctx context.Context, dsn string) (*sqlx.DB, error) {
 }
 
 // postgresConfig parses dsn the way lib/pq does, environment included, with
-// sessions in UTC (see postgresUTCConfig), and applies
-// defaultPostgresConnectTimeout when no connect_timeout is set.
-func postgresConfig(dsn string) (pq.Config, error) {
+// sessions in UTC (see postgresUTCConfig), and applies timeout when no
+// connect_timeout is set.
+func postgresConfig(dsn string, timeout time.Duration) (pq.Config, error) {
 	cfg, err := postgresUTCConfig(dsn)
 	if err != nil {
 		return cfg, err
 	}
 	if !postgresConnectTimeoutSet(dsn) {
-		cfg.ConnectTimeout = defaultPostgresConnectTimeout
+		cfg.ConnectTimeout = timeout
 	}
 	return cfg, nil
 }
@@ -266,25 +270,89 @@ func postgresUTCConfig(dsn string) (pq.Config, error) {
 	return cfg, nil
 }
 
-// SetPoolLimits applies db.max_open_conns from c. Zero leaves
-// database/sql's default of no limit. The pool keeps database/sql's default
-// of two idle connections, or fewer when the limit is lower.
-func (d *DB) SetPoolLimits(c config.DBConfig) {
-	if c.MaxOpenConns > 0 {
-		d.SetMaxOpenConns(c.MaxOpenConns)
-	}
-}
-
 // Close closes the database.
 func (d *DB) Close() error {
-	return d.DB.Close()
+	return d.x.Close()
 }
 
-// Tx is a database transaction.
+// DriverName returns the name of the database driver, "sqlite" or
+// "postgres".
+func (d *DB) DriverName() string {
+	return d.x.DriverName()
+}
+
+// Rebind rewrites the ? placeholders of query for the driver.
+func (d *DB) Rebind(query string) string {
+	return d.x.Rebind(query)
+}
+
+// Wrap returns a DB over an open sqlx handle, for a driver or connector
+// Open does not build, such as a test's. The handle must be a SQLite
+// ("sqlite") or Postgres ("postgres") one.
+func Wrap(x *sqlx.DB, opts Options) *DB {
+	logger := opts.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	d := &DB{x: x, errLog: logger.WithPrefix("db")}
+	if opts.Trace {
+		d.logger = d.errLog
+	}
+	if x.DriverName() == "sqlite" {
+		d.writeSlot = make(chan struct{}, 1)
+	}
+	if opts.MaxOpenConns > 0 {
+		x.SetMaxOpenConns(opts.MaxOpenConns)
+	}
+	return d
+}
+
+// Conn returns one connection of the pool, for statements that must share a
+// connection, such as a SQLite pragma, or run outside the transaction
+// helpers, such as a test that holds a lock. Statements on it are neither
+// traced nor mapped with WrapError. The caller closes it.
+func (d *DB) Conn(ctx context.Context) (*sql.Conn, error) {
+	return d.x.Conn(ctx)
+}
+
+// Stats returns the statistics of the connection pool.
+func (d *DB) Stats() sql.DBStats {
+	return d.x.Stats()
+}
+
+// SetMaxOpenConns limits the open connections; see Options.MaxOpenConns.
+func (d *DB) SetMaxOpenConns(n int) {
+	d.x.SetMaxOpenConns(n)
+}
+
+// SetMaxIdleConns sets the most idle connections the pool keeps. Zero
+// closes the idle ones.
+func (d *DB) SetMaxIdleConns(n int) {
+	d.x.SetMaxIdleConns(n)
+}
+
+// PingContext checks that the database can be reached.
+func (d *DB) PingContext(ctx context.Context) error {
+	return d.x.PingContext(ctx)
+}
+
+// Tx is a database transaction. Like DB, it wraps the sqlx transaction
+// rather than embedding it.
 type Tx struct {
-	*sqlx.Tx
+	x      *sqlx.Tx
 	logger *log.Logger
 	errLog *log.Logger
+}
+
+// DriverName returns the name of the database driver, "sqlite" or
+// "postgres".
+func (t *Tx) DriverName() string {
+	return t.x.DriverName()
+}
+
+// Rebind rewrites the ? placeholders of query for the driver.
+func (t *Tx) Rebind(query string) string {
+	return t.x.Rebind(query)
 }
 
 // TransactionContext runs fn in a transaction. The transaction is committed
@@ -347,7 +415,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		opts = &o
 	}
 
-	txx, err := d.DB.BeginTxx(ctx, opts)
+	txx, err := d.x.BeginTxx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -358,7 +426,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		if !returned {
 			// Release the connection, and SQLite's write lock, while the
 			// goroutine unwinds.
-			_ = tx.Rollback()
+			_ = tx.x.Rollback()
 		}
 	}()
 	err = fn(tx)
@@ -367,7 +435,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 		return rollback(tx, err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.x.Commit(); err != nil {
 		// sql.ErrTxDone here means the transaction was already rolled back,
 		// most often because ctx was cancelled after fn returned: nothing fn
 		// wrote is kept, so it is a failure like any other. Report the
@@ -384,7 +452,7 @@ func (d *DB) transaction(ctx context.Context, opts *sql.TxOptions, fn func(tx *T
 }
 
 func rollback(tx *Tx, err error) error {
-	if rerr := tx.Rollback(); rerr != nil {
+	if rerr := tx.x.Rollback(); rerr != nil {
 		if errors.Is(rerr, sql.ErrTxDone) {
 			return err
 		}

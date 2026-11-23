@@ -57,10 +57,10 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	is.NoErr(cfg.Validate())
 
 	ctx := config.WithContext(context.Background(), cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { _ = dbx.Close() })
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = db.WithContext(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)

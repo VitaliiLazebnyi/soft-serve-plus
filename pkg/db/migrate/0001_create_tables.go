@@ -8,7 +8,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 )
@@ -21,11 +20,8 @@ const (
 var createTables = Migration{
 	Version: createTablesVersion,
 	Name:    createTablesName,
-	Migrate: func(ctx context.Context, tx *db.Tx) error {
-		cfg := config.FromContext(ctx)
-		if cfg == nil {
-			return errNoConfig
-		}
+	Migrate: func(ctx context.Context, tx *db.Tx, env Env) error {
+		cfg := env.Config
 
 		// Seed rows are inserted only when missing, so the migration also
 		// runs over tables left behind by an earlier rollback. SQLite says so
@@ -118,7 +114,7 @@ var createTables = Migration{
 		}
 
 		if sqlite {
-			if err := importLegacyTables(ctx, tx); err != nil {
+			if err := importLegacyTables(ctx, tx, env.Logger); err != nil {
 				return err
 			}
 		}
@@ -132,7 +128,7 @@ var createTables = Migration{
 		if len(adminKeys) > 0 {
 			var ok bool
 			var err error
-			adminID, ok, err = adminUserID(ctx, tx, log.FromContext(ctx).WithPrefix("migrate"))
+			adminID, ok, err = adminUserID(ctx, tx, env.Logger)
 			if err != nil {
 				return err
 			}
@@ -196,7 +192,7 @@ var createTables = Migration{
 
 		return nil
 	},
-	Rollback: func(ctx context.Context, tx *db.Tx) error {
+	Rollback: func(ctx context.Context, tx *db.Tx, _ Env) error {
 		return execMigration(ctx, tx, createTablesVersion, createTablesName, true)
 	},
 }
@@ -207,9 +203,7 @@ var createTables = Migration{
 // Foreign keys stay enforced: "PRAGMA foreign_keys" is a no-op inside a
 // transaction. Rows that point at a user or repository that no longer
 // exists are left out with a warning instead of failing the migration.
-func importLegacyTables(ctx context.Context, tx *db.Tx) error {
-	logger := log.FromContext(ctx).WithPrefix("migrate")
-
+func importLegacyTables(ctx context.Context, tx *db.Tx, logger *log.Logger) error {
 	if ok, err := tableExists(ctx, tx, "public_key_old"); err != nil {
 		return err
 	} else if ok {

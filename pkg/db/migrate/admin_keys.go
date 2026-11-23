@@ -56,19 +56,20 @@ const defaultAdminUsername = "admin"
 // deadlock. All instances sharing a database must use the same
 // initial_admin_keys: a run with a different list attaches and removes keys to
 // match its own list.
-func SyncAdminKeys(ctx context.Context, dbx *db.DB) error {
+//
+// It logs to logger, the default logger when nil.
+func SyncAdminKeys(ctx context.Context, dbx *db.DB, cfg *config.Config, logger *log.Logger) error {
+	env, err := newEnv(cfg, logger)
+	if err != nil {
+		return err
+	}
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
-		return syncAdminKeys(ctx, tx)
+		return syncAdminKeys(ctx, tx, env)
 	})
 }
 
-func syncAdminKeys(ctx context.Context, tx *db.Tx) error {
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return nil
-	}
-
-	logger := log.FromContext(ctx).WithPrefix("migrate")
+func syncAdminKeys(ctx context.Context, tx *db.Tx, env Env) error {
+	cfg, logger := env.Config, env.Logger
 
 	keys := cfg.AdminKeys()
 	slices.SortFunc(keys, func(a, b gossh.PublicKey) int {

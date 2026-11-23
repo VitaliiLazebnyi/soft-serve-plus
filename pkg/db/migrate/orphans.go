@@ -12,7 +12,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/jmoiron/sqlx"
 )
 
 // orphansCheckedKey names the settings row that says a SQLite database was
@@ -214,9 +213,9 @@ func sqliteFile(ctx context.Context, tx *db.Tx) (string, error) {
 
 // sqliteFilePath returns the path of the main database file as SQLite has
 // it, or "" for an in-memory database.
-func sqliteFilePath(ctx context.Context, tx sqlx.QueryerContext) (string, error) {
+func sqliteFilePath(ctx context.Context, h db.Handler) (string, error) {
 	var file string
-	if err := sqlx.GetContext(ctx, tx, &file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
+	if err := h.GetContext(ctx, &file, `SELECT file FROM pragma_database_list WHERE name = 'main'`); err != nil {
 		return "", fmt.Errorf("look up the database file: %w", err)
 	}
 	return file, nil

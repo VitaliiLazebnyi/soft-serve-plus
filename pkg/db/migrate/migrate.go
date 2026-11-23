@@ -6,11 +6,20 @@ import (
 	"fmt"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 )
 
+// Env is what a migration needs besides its transaction.
+type Env struct {
+	// Config is the server configuration. It is never nil.
+	Config *config.Config
+	// Logger logs with the "migrate" prefix. It is never nil.
+	Logger *log.Logger
+}
+
 // MigrateFunc is a function that executes a migration.
-type MigrateFunc func(ctx context.Context, tx *db.Tx) error //nolint:revive
+type MigrateFunc func(ctx context.Context, tx *db.Tx, env Env) error //nolint:revive
 
 // Migration is a struct that contains the name of the migration and the
 // function to execute it.
@@ -47,14 +56,31 @@ func (Migrations) schema(driverName string) string {
 	`
 }
 
-// errNoConfig is returned by migrations that need the server configuration
-// when ctx carries none.
-var errNoConfig = errors.New("migrate: no config in context")
+// newEnv returns the Env of cfg and logger. A nil logger is the default
+// logger.
+func newEnv(cfg *config.Config, logger *log.Logger) (Env, error) {
+	if cfg == nil {
+		return Env{}, config.ErrNilConfig
+	}
+	if logger == nil {
+		logger = log.Default()
+	}
+	return Env{Config: cfg, Logger: logger.WithPrefix("migrate")}, nil
+}
 
-// Migrate runs the migrations. ctx must carry the server configuration
-// (config.WithContext).
-func Migrate(ctx context.Context, dbx *db.DB) error {
-	logger := log.FromContext(ctx).WithPrefix("migrate")
+// Migrate runs the migrations with the server configuration cfg, logging to
+// logger (the default logger when nil).
+func Migrate(ctx context.Context, dbx *db.DB, cfg *config.Config, logger *log.Logger) error {
+	env, err := newEnv(cfg, logger)
+	if err != nil {
+		return err
+	}
+	return migrate(ctx, dbx, env, migrations)
+}
+
+// migrate runs the migrations of list, which is in order of execution.
+func migrate(ctx context.Context, dbx *db.DB, env Env, list []Migration) error {
+	logger := env.Logger
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		if err := lockMigrations(ctx, tx); err != nil {
 			return err
@@ -70,23 +96,23 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 			}
 		}
 
-		current, err := checkApplied(ctx, tx)
+		current, err := checkApplied(ctx, tx, list)
 		if err != nil {
 			return err
 		}
 
-		pending := len(migrations) > 0 && migrations[len(migrations)-1].Version > current
+		pending := len(list) > 0 && list[len(list)-1].Version > current
 		if err := removeSqliteOrphans(ctx, tx, logger, pending); err != nil {
 			return err
 		}
 
-		for _, m := range migrations {
+		for _, m := range list {
 			if m.Version <= current {
 				continue
 			}
 
 			logger.Infof("running migration %d. %s", m.Version, m.Name)
-			if err := m.Migrate(ctx, tx); err != nil {
+			if err := m.Migrate(ctx, tx, env); err != nil {
 				return fmt.Errorf("migration %d %s: %w", m.Version, m.Name, err)
 			}
 
@@ -99,9 +125,19 @@ func Migrate(ctx context.Context, dbx *db.DB) error {
 	})
 }
 
-// Rollback rolls back a migration.
-func Rollback(ctx context.Context, dbx *db.DB) error {
-	logger := log.FromContext(ctx).WithPrefix("migrate")
+// Rollback rolls back the latest migration, with the server configuration
+// cfg, logging to logger (the default logger when nil).
+func Rollback(ctx context.Context, dbx *db.DB, cfg *config.Config, logger *log.Logger) error {
+	env, err := newEnv(cfg, logger)
+	if err != nil {
+		return err
+	}
+	return rollback(ctx, dbx, env, migrations)
+}
+
+// rollback rolls back the latest migration of list.
+func rollback(ctx context.Context, dbx *db.DB, env Env, list []Migration) error {
+	logger := env.Logger
 	return dbx.TransactionContext(ctx, func(tx *db.Tx) error {
 		if err := lockMigrations(ctx, tx); err != nil {
 			return err
@@ -115,7 +151,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 			return fmt.Errorf("there are no migrations to rollback")
 		}
 
-		current, err := checkApplied(ctx, tx)
+		current, err := checkApplied(ctx, tx, list)
 		if err != nil {
 			return err
 		}
@@ -127,9 +163,9 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 		// checkApplied has made sure this binary knows every applied
 		// migration, so the latest one is found.
 		var m *Migration
-		for i := range migrations {
-			if migrations[i].Version == current {
-				m = &migrations[i]
+		for i := range list {
+			if list[i].Version == current {
+				m = &list[i]
 				break
 			}
 		}
@@ -138,7 +174,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 		}
 
 		logger.Infof("rolling back migration %d. %s", m.Version, m.Name)
-		if err := m.Rollback(ctx, tx); err != nil {
+		if err := m.Rollback(ctx, tx, env); err != nil {
 			return err
 		}
 
@@ -151,7 +187,8 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 }
 
 // checkApplied checks every migration recorded in the database against the
-// migrations this binary knows and returns the latest applied version, 0 when
+// migrations of list, the ones this binary knows, and returns the latest
+// applied version, 0 when
 // none is. It refuses a database that:
 //
 //   - a newer binary migrated past the latest migration known here, since its
@@ -163,7 +200,7 @@ func Rollback(ctx context.Context, dbx *db.DB) error {
 //     would otherwise never run.
 //
 // Comparing only the latest version would miss all but the first case.
-func checkApplied(ctx context.Context, tx *db.Tx) (int64, error) {
+func checkApplied(ctx context.Context, tx *db.Tx, list []Migration) (int64, error) {
 	var applied []Migrations
 	if err := tx.SelectContext(ctx, &applied, tx.Rebind("SELECT * FROM migrations ORDER BY version ASC")); err != nil {
 		return 0, fmt.Errorf("list applied migrations: %w", err)
@@ -173,16 +210,16 @@ func checkApplied(ctx context.Context, tx *db.Tx) (int64, error) {
 	}
 
 	current := applied[len(applied)-1].Version
-	if n := len(migrations); n == 0 || current > migrations[n-1].Version {
+	if n := len(list); n == 0 || current > list[n-1].Version {
 		var latest int64
 		if n > 0 {
-			latest = migrations[n-1].Version
+			latest = list[n-1].Version
 		}
 		return 0, fmt.Errorf("database is at migration version %d, newer than the latest version %d known to this binary; upgrade soft-serve", current, latest)
 	}
 
-	known := make(map[int64]string, len(migrations))
-	for _, m := range migrations {
+	known := make(map[int64]string, len(list))
+	for _, m := range list {
 		known[m.Version] = m.Name
 	}
 	done := make(map[int64]bool, len(applied))
@@ -196,7 +233,7 @@ func checkApplied(ctx context.Context, tx *db.Tx) (int64, error) {
 		}
 		done[a.Version] = true
 	}
-	for _, m := range migrations {
+	for _, m := range list {
 		if m.Version > current {
 			break
 		}

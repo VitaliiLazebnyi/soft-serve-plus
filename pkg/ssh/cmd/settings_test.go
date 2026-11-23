@@ -35,7 +35,7 @@ func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 	cfg.DB.Driver = dbx.DriverName()
 
 	ctx = config.WithContext(ctx, cfg)
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(ctx, cfg, dbx, dbstore)

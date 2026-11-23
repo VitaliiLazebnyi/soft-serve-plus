@@ -14,6 +14,7 @@ import (
 // a relative "file:" URI in the data directory, and an in-memory database
 // nowhere on disk.
 func TestOpenResolvedSQLiteDataSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
 		dsn  string
@@ -25,6 +26,7 @@ func TestOpenResolvedSQLiteDataSource(t *testing.T) {
 		{"file::memory:?_pragma=foreign_keys(1)", ""},
 	} {
 		t.Run(c.dsn, func(t *testing.T) {
+			t.Parallel()
 			// A space and a '#' in the data path must survive a URI.
 			dp := filepath.Join(t.TempDir(), "data dir#1")
 			if err := os.MkdirAll(dp, 0o700); err != nil {
@@ -37,7 +39,7 @@ func TestOpenResolvedSQLiteDataSource(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			d, err := Open(ctx, "sqlite", cfg.DB.DataSource)
+			d, err := Open(ctx, "sqlite", cfg.DB.DataSource, Options{})
 			if err != nil {
 				t.Fatalf("open %q: %v", cfg.DB.DataSource, err)
 			}

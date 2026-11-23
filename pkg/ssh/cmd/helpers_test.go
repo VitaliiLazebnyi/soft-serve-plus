@@ -50,7 +50,7 @@ func newAuthTestContextWith(t *testing.T, tweak func(*config.Config)) (context.C
 	is.NoErr(cfg.Validate())
 
 	ctx = config.WithContext(ctx, cfg)
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	ctx = db.WithContext(ctx, dbx)
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)

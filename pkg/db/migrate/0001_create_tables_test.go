@@ -33,6 +33,7 @@ func openLegacySqlite(t *testing.T, ctx context.Context, users ...ownerRow) *db.
 }
 
 func TestFirstMigrationSeedsAdminKeysToAdminNotUserOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	// alice gets id 1 and is not an admin.
 	dbx := openLegacySqlite(t, ctx,
@@ -44,7 +45,7 @@ func TestFirstMigrationSeedsAdminKeysToAdminNotUserOne(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
 	validate(t, cfg)
-	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,6 +55,7 @@ func TestFirstMigrationSeedsAdminKeysToAdminNotUserOne(t *testing.T) {
 }
 
 func TestFirstMigrationCreatesAdminForKeysWhenLegacyUsersHaveNone(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openLegacySqlite(t, ctx, ownerRow{Username: "alice", Admin: false})
 
@@ -61,7 +63,7 @@ func TestFirstMigrationCreatesAdminForKeysWhenLegacyUsersHaveNone(t *testing.T) 
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
 	validate(t, cfg)
-	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,6 +73,7 @@ func TestFirstMigrationCreatesAdminForKeysWhenLegacyUsersHaveNone(t *testing.T) 
 }
 
 func TestFirstMigrationDoesNotSeedAdminKeysToNonAdminNamedAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	// "admin" is a regular account and another admin exists.
 	dbx := openLegacySqlite(t, ctx,
@@ -82,7 +85,7 @@ func TestFirstMigrationDoesNotSeedAdminKeysToNonAdminNamedAdmin(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.InitialAdminKeys = []string{ak}
 	validate(t, cfg)
-	if err := Migrate(config.WithContext(ctx, cfg), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,7 +104,7 @@ func TestFirstMigrationDoesNotSeedAdminKeysToNonAdminNamedAdmin(t *testing.T) {
 // repositories.
 func openLegacySqliteWithRepos(t *testing.T, ctx context.Context, users ...ownerRow) *db.DB {
 	t.Helper()
-	dbx, err := db.Open(ctx, "sqlite", filepath.Join(t.TempDir(), "legacy.db")+"?_pragma=foreign_keys(1)")
+	dbx, err := db.Open(ctx, "sqlite", filepath.Join(t.TempDir(), "legacy.db")+"?_pragma=foreign_keys(1)", db.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,16 +155,17 @@ func addLegacyRepo(t *testing.T, dbx *db.DB, name string) {
 }
 
 func TestFirstMigrationGivesLegacyReposToAdminWhenLegacyUsersHaveNone(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openLegacySqliteWithRepos(t, ctx, ownerRow{Username: "alice", Admin: false})
 	addLegacyRepo(t, dbx, "repo1")
 
-	if err := Migrate(config.WithContext(ctx, config.DefaultConfig()), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(config.DefaultConfig()), migrations); err != nil {
 		t.Fatal(err)
 	}
 
 	var owner ownerRow
-	if err := dbx.Get(&owner, `SELECT users.username, users.admin
+	if err := dbx.GetContext(context.Background(), &owner, `SELECT users.username, users.admin
 		FROM users INNER JOIN repos ON users.id = repos.user_id WHERE repos.name = 'repo1'`); err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +175,7 @@ func TestFirstMigrationGivesLegacyReposToAdminWhenLegacyUsersHaveNone(t *testing
 }
 
 func TestFirstMigrationLeavesOutOrphanedLegacyRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openLegacySqliteWithRepos(t, ctx,
 		ownerRow{Username: "admin", Admin: true},
@@ -184,7 +189,7 @@ func TestFirstMigrationLeavesOutOrphanedLegacyRows(t *testing.T) {
 	mustExec(t, dbx, `INSERT INTO collab (user_id, repo_id, updated_at) VALUES
 		(2, 1, CURRENT_TIMESTAMP), (99, 1, CURRENT_TIMESTAMP), (2, 99, CURRENT_TIMESTAMP)`)
 
-	if err := Migrate(config.WithContext(ctx, config.DefaultConfig()), dbx); err != nil {
+	if err := migrate(ctx, dbx, testEnv(config.DefaultConfig()), migrations); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,7 +211,7 @@ func TestFirstMigrationLeavesOutOrphanedLegacyRows(t *testing.T) {
 		Parent string `db:"parent"`
 		FKID   int64  `db:"fkid"`
 	}
-	if err := dbx.Select(&violations, "PRAGMA foreign_key_check"); err != nil {
+	if err := dbx.SelectContext(context.Background(), &violations, "PRAGMA foreign_key_check"); err != nil {
 		t.Fatal(err)
 	}
 	if len(violations) > 0 {
@@ -215,12 +220,13 @@ func TestFirstMigrationLeavesOutOrphanedLegacyRows(t *testing.T) {
 }
 
 func TestFirstMigrationFailsClearlyWithoutAnAdminForLegacyRepos(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	// "admin" is taken by a regular account and nobody is an admin.
 	dbx := openLegacySqliteWithRepos(t, ctx, ownerRow{Username: "admin", Admin: false})
 	addLegacyRepo(t, dbx, "repo1")
 
-	err := Migrate(config.WithContext(ctx, config.DefaultConfig()), dbx)
+	err := migrate(ctx, dbx, testEnv(config.DefaultConfig()), migrations)
 	if err == nil || !strings.Contains(err.Error(), "no admin user to own the imported repositories") {
 		t.Fatalf("Migrate() => %v; want an error about the missing admin", err)
 	}
@@ -231,11 +237,12 @@ func TestFirstMigrationFailsClearlyWithoutAnAdminForLegacyRepos(t *testing.T) {
 // seeded keys as recorded there, and the boot warning about unrecorded admin
 // keys still covers it. A database created from nothing is marked.
 func TestFirstMigrationMarksRecordedKeysOnlyWithoutLegacyTables(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	marked := func(dbx *db.DB) bool {
 		t.Helper()
 		var n int
-		if err := dbx.Get(&n, dbx.Rebind(`SELECT COUNT(*) FROM settings WHERE "key" = ?`), adminKeysRecordedKey); err != nil {
+		if err := dbx.GetContext(context.Background(), &n, dbx.Rebind(`SELECT COUNT(*) FROM settings WHERE "key" = ?`), adminKeysRecordedKey); err != nil {
 			t.Fatal(err)
 		}
 		return n > 0
@@ -252,7 +259,7 @@ func TestFirstMigrationMarksRecordedKeysOnlyWithoutLegacyTables(t *testing.T) {
 	old := newAuthorizedKey(t)
 	mustExec(t, legacy, `INSERT INTO public_key (user_id, public_key, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)`, old)
 	cfg := config.DefaultConfig()
-	if err := Migrate(config.WithContext(ctx, cfg), legacy); err != nil {
+	if err := migrate(ctx, legacy, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 	if marked(legacy) {
@@ -269,7 +276,7 @@ func TestFirstMigrationMarksRecordedKeysOnlyWithoutLegacyTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(config.WithContext(ctx, cfg), fresh); err != nil {
+	if err := migrate(ctx, fresh, testEnv(cfg), migrations); err != nil {
 		t.Fatal(err)
 	}
 	if !marked(fresh) {

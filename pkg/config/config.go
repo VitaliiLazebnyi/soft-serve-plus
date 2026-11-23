@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -27,7 +28,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-var binPath = "soft"
+// binPath returns the path of the running soft binary, with forward
+// slashes, or "soft" when it cannot be found. It is read once, when first
+// needed, rather than in an init function.
+var binPath = sync.OnceValue(func() string {
+	if ex, err := os.Executable(); err == nil {
+		return filepath.ToSlash(ex)
+	}
+	return "soft"
+})
 
 const (
 	// StrictHostKeyCheckingAcceptNew records an unknown host key on first
@@ -388,7 +397,7 @@ type UnknownKey struct {
 // Environ returns the config as a list of environment variables.
 func (c *Config) Environ() []string {
 	envs := []string{
-		fmt.Sprintf("SOFT_SERVE_BIN_PATH=%s", binPath),
+		fmt.Sprintf("SOFT_SERVE_BIN_PATH=%s", binPath()),
 	}
 	if c == nil {
 		return envs
@@ -1421,10 +1430,4 @@ func (c *Config) UnreadableAdminKeyFiles() []string {
 // mistyped key. The entries are not returned, as they may hold key material.
 func (c *Config) IgnoredAdminKeys() int {
 	return len(c.ignoredAdminKeys)
-}
-
-func init() {
-	if ex, err := os.Executable(); err == nil {
-		binPath = filepath.ToSlash(ex)
-	}
 }

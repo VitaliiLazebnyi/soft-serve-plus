@@ -39,7 +39,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	if dsn == "" {
 		dsn = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
 	}
-	admin, err := db.Open(ctx, "postgres", dsn)
+	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { admin.Close() }) //nolint:errcheck
 	name, err := sstest.CreateDB(ctx, admin, "softserve_test")
@@ -65,11 +65,11 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	cfg.DB.Driver = "postgres"
 	cfg.DB.DataSource = testDSN
 	ctx = config.WithContext(ctx, cfg)
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource)
+	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 
-	is.NoErr(migrate.Migrate(ctx, dbx))
+	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
 	be := New(ctx, cfg, dbx, dbstore)

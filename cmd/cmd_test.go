@@ -35,7 +35,7 @@ func TestCloseDBOnError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			dbx, err := db.Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"))
+			dbx, err := db.Open(ctx, "sqlite", filepath.Join(t.TempDir(), "test.db"), db.Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -258,7 +258,7 @@ func TestInitializeHooksSkipsMissingAndContinues(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = CloseDBContext(c, nil) })
 	ctx = c.Context()
-	if err := migrate.Migrate(ctx, db.FromContext(ctx)); err != nil {
+	if err := migrate.Migrate(ctx, db.FromContext(ctx), cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	be := backend.FromContext(ctx)

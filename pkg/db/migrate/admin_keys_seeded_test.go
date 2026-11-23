@@ -15,6 +15,7 @@ import (
 // as a key the sync attached does. It used to stay on the admin account for
 // good, with full admin rights and no log line.
 func TestSeededAdminKeyRemovedWhenRotated(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -42,6 +43,7 @@ func TestSeededAdminKeyRemovedWhenRotated(t *testing.T) {
 // the key, so the operator can remove it, or list it in initial_admin_keys
 // to keep it and silence the warning.
 func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 
@@ -98,6 +100,7 @@ func TestUnrecordedAdminKeyWarnsAtBoot(t *testing.T) {
 // the admin user without a record was added by hand, and starting does not
 // warn about it.
 func TestHandAddedAdminKeyNoWarningOnNewInstall(t *testing.T) {
+	t.Parallel()
 	ctx := context.TODO()
 	dbx := openDB(t, ctx)
 

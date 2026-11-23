@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -45,7 +46,7 @@ func NewCommand() *cobra.Command {
 		RunE: cmd.CloseDBOnError(func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()
 			db := db.FromContext(ctx)
-			if err := migrate.Migrate(ctx, db); err != nil {
+			if err := migrate.Migrate(ctx, db, config.FromContext(ctx), log.FromContext(ctx)); err != nil {
 				return fmt.Errorf("migration: %w", err)
 			}
 
@@ -71,7 +72,7 @@ func NewCommand() *cobra.Command {
 
 			ctx := c.Context()
 			db := db.FromContext(ctx)
-			if err := migrate.Rollback(ctx, db); err != nil {
+			if err := migrate.Rollback(ctx, db, config.FromContext(ctx), log.FromContext(ctx)); err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
 

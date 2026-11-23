@@ -18,12 +18,13 @@ import (
 )
 
 func TestOpenUnknownDriver(t *testing.T) {
-	_, err := Open(context.TODO(), "invalid", "")
+	t.Parallel()
+	_, err := Open(context.TODO(), "invalid", "", Options{})
 	if err == nil {
-		t.Error("Open(invalid) => nil, want error")
+		t.Error("Open(invalid, Options{}) => nil, want error")
 	}
 	if !strings.Contains(err.Error(), "unknown driver") {
-		t.Errorf("Open(invalid) => %v, want error containing 'unknown driver'", err)
+		t.Errorf("Open(invalid, Options{}) => %v, want error containing 'unknown driver'", err)
 	}
 }
 
@@ -56,11 +57,12 @@ func waitingForWriter() bool {
 // before it writes waits (busy_timeout) for another connection's write
 // transaction to commit instead of failing at once with "database is locked".
 func TestSqliteReadThenWriteWaitsForWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// A busy timeout of a minute, so that a loaded machine does not make
 	// the wait for the writer run out.
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(60000)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestPostgresConfigConnectTimeout(t *testing.T) {
 		"host=localhost port=5432 user=soft dbname=soft_serve sslmode=disable":         defaultPostgresConnectTimeout,
 		"host=localhost user=soft dbname=soft_serve connect_timeout=7 sslmode=disable": 7 * time.Second,
 	} {
-		cfg, err := postgresConfig(dsn)
+		cfg, err := postgresConfig(dsn, defaultPostgresConnectTimeout)
 		if err != nil {
 			t.Fatalf("postgresConfig(%q): %v", dsn, err)
 		}
@@ -157,7 +159,7 @@ func TestPostgresConfigConnectTimeout(t *testing.T) {
 
 	// PGCONNECT_TIMEOUT is honoured as lib/pq honours it.
 	t.Setenv("PGCONNECT_TIMEOUT", "4")
-	cfg, err := postgresConfig("postgres://user@localhost/soft_serve")
+	cfg, err := postgresConfig("postgres://user@localhost/soft_serve", defaultPostgresConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,13 +169,12 @@ func TestPostgresConfigConnectTimeout(t *testing.T) {
 }
 
 // Open gives up on a Postgres server that accepts the connection but never
-// answers, instead of hanging startup, when the data source sets no timeout.
+// answers, instead of hanging startup, when the data source sets no
+// timeout: it applies defaultPostgresConnectTimeout. The test goes through
+// Open itself, so it waits out the real default (10 s).
 func TestOpenPostgresSilentServer(t *testing.T) {
 	t.Setenv("PGCONNECT_TIMEOUT", "")
 	os.Unsetenv("PGCONNECT_TIMEOUT") //nolint:errcheck
-	old := defaultPostgresConnectTimeout
-	defaultPostgresConnectTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { defaultPostgresConnectTimeout = old })
 
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -204,29 +205,31 @@ func TestOpenPostgresSilentServer(t *testing.T) {
 	}()
 
 	// Without a connect timeout Open never returns, so the test waits for
-	// it without timing it: a loaded machine can take seconds past the
-	// timeout. The timeout's value is TestPostgresConfigConnectTimeout's check.
+	// it on a condition, for up to a minute, without timing it: a loaded
+	// machine can take seconds past the timeout. The timeout's value is
+	// TestPostgresConfigConnectTimeout's check.
 	done := make(chan error, 1)
 	go func() {
-		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable")
+		_, err := Open(context.Background(), "postgres", "postgres://user@"+ln.Addr().String()+"/soft_serve?sslmode=disable", Options{})
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Fatal("Open() on a silent server => nil error, want an error")
+			t.Fatal("Open on a silent server => nil error, want an error")
 		}
 	case <-time.After(time.Minute):
-		t.Fatal("Open() on a silent server did not return")
+		t.Fatal("Open on a silent server did not return")
 	}
 }
 
 // A panic in the transaction function rolls the transaction back, so its
 // connection and SQLite's write lock are released, and the panic goes on.
 func TestTransactionPanicRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,9 +274,10 @@ func TestTransactionPanicRollsBack(t *testing.T) {
 // A transaction whose fn calls runtime.Goexit, as t.FailNow does, is rolled
 // back too: recover sees nothing in that case.
 func TestTransactionGoexitRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(100)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +314,8 @@ func TestTransactionGoexitRollsBack(t *testing.T) {
 // When the rollback fails too, both the error from fn and the rollback error
 // stay reachable with errors.Is.
 func TestRollbackErrorKeepsOriginal(t *testing.T) {
-	d := &DB{DB: sqlx.NewDb(sql.OpenDB(failingRollbackConnector{}), "sqlite")}
+	t.Parallel()
+	d := &DB{x: sqlx.NewDb(sql.OpenDB(failingRollbackConnector{}), "sqlite")}
 	defer d.Close() //nolint:errcheck
 
 	fnErr := errors.New("fn failed")
@@ -351,9 +356,10 @@ func (failingRollbackTx) Rollback() error { return errRollback }
 // transaction does not take the write lock: it reads while another
 // connection holds a write transaction open.
 func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,9 +419,10 @@ func TestSqliteReadTransactionDoesNotWaitForWriter(t *testing.T) {
 // they wait for their turn instead of failing at BEGIN with "database is
 // locked".
 func TestSqliteWritersTakeTurns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(50)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,9 +471,10 @@ func TestSqliteWritersTakeTurns(t *testing.T) {
 // waiting for its turn gives up when its context ends, and that reads do
 // not wait for the turn at all.
 func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=busy_timeout(5000)"
-	d, err := Open(ctx, "sqlite", dsn)
+	d, err := Open(ctx, "sqlite", dsn, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
