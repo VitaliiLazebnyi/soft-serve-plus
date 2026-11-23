@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"charm.land/log/v2"
 )
 
 // testTimeout bounds every wait in these tests, so a handler that never
@@ -142,14 +144,6 @@ func TestUploadPackChildHoldsOutputOpen(t *testing.T) {
 	}
 }
 
-// setOutputIdleTimeout sets outputIdleTimeout to d for the test.
-func setOutputIdleTimeout(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := outputIdleTimeout
-	outputIdleTimeout = d
-	t.Cleanup(func() { outputIdleTimeout = prev })
-}
-
 // TestServiceBackgroundProcessHoldsOutputOpen covers a process started by
 // git, such as one a hook leaves running in the background, that keeps
 // git's output open after git exited normally. The handler must return
@@ -163,7 +157,6 @@ func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
 	if err != nil {
 		t.Skip("sh not found")
 	}
-	setOutputIdleTimeout(t, 100*time.Millisecond)
 	levels := captureLog(t)
 
 	var stdout, stderr syncBuffer
@@ -179,6 +172,7 @@ func TestServiceBackgroundProcessHoldsOutputOpen(t *testing.T) {
 				c.Path = sh
 				c.Args = []string{"sh", "-c", "sleep 60 & echo $!; echo done >&2"}
 			},
+			outputIdleTimeout: 100 * time.Millisecond,
 		})
 	}()
 
@@ -238,6 +232,7 @@ func (w *slowWriter) Write(p []byte) (int, error) {
 // cmd.Stdout set to the client and WaitDelay as the limit, os/exec cuts
 // the copy there (exec.ErrWaitDelay) and the client loses the end.
 func TestServiceSlowClientGetsAllOutput(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("uses sh")
 	}
@@ -245,8 +240,6 @@ func TestServiceSlowClientGetsAllOutput(t *testing.T) {
 	if err != nil {
 		t.Skip("sh not found")
 	}
-	setOutputIdleTimeout(t, 20*time.Millisecond)
-
 	const size = 256 << 10
 	w := &slowWriter{delay: 50 * time.Millisecond}
 	errc := make(chan error, 1)
@@ -258,6 +251,7 @@ func TestServiceSlowClientGetsAllOutput(t *testing.T) {
 				c.Path = sh
 				c.Args = []string{"sh", "-c", "head -c " + strconv.Itoa(size) + " /dev/zero"}
 			},
+			outputIdleTimeout: 20 * time.Millisecond,
 		})
 	}()
 
@@ -397,5 +391,25 @@ func TestTailBuffer(t *testing.T) {
 	}
 	if got, want := b.String(), "...ne; fatal: two; end"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// A panic in a copy of git's output is logged on the command's Logger, the
+// one its transport passes, and not on the default logger.
+func TestServiceLogsPanicOnCommandLogger(t *testing.T) {
+	t.Parallel()
+	var logs syncBuffer
+	logger := log.NewWithOptions(&logs, log.Options{Level: log.DebugLevel})
+	err := UploadPackService.Handler(t.Context(), ServiceCommand{
+		Stdout: panicWriter{},
+		Dir:    bareWithRefs(t, 1),
+		Args:   []string{"--advertise-refs"},
+		Logger: logger,
+	})
+	if err != nil {
+		t.Logf("handler: %v", err)
+	}
+	if !strings.Contains(string(logs.Bytes()), "client write panicked") {
+		t.Fatalf("the panic was not logged on the command's logger; it logged %q", logs.Bytes())
 	}
 }
