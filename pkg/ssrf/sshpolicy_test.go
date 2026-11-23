@@ -248,7 +248,7 @@ func TestValidateGitRemotePolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v, err := ValidateGitRemote(tt.remote, tt.policy)
+			v, err := ValidateGitRemote(t.Context(), tt.remote, tt.policy)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("error = %v, want %v", err, tt.wantErr)
@@ -307,15 +307,15 @@ func TestLookupsAreBounded(t *testing.T) {
 			return validateURL(context.Background(), "https://hooks.example/x", nil, l)
 		}},
 		{"ValidateGitRemote https", func(l lookupFunc) error {
-			_, err := ValidateGitRemote("https://git.example/x.git", GitRemotePolicy{lookup: l})
+			_, err := ValidateGitRemote(t.Context(), "https://git.example/x.git", GitRemotePolicy{lookup: l})
 			return err
 		}},
 		{"ValidateGitRemote git", func(l lookupFunc) error {
-			_, err := ValidateGitRemote("git://git.example/x.git", GitRemotePolicy{lookup: l})
+			_, err := ValidateGitRemote(t.Context(), "git://git.example/x.git", GitRemotePolicy{lookup: l})
 			return err
 		}},
 		{"ValidateGitRemote ssh allowlist", func(l lookupFunc) error {
-			_, err := ValidateGitRemote("ssh://git@git.example/x.git", GitRemotePolicy{
+			_, err := ValidateGitRemote(t.Context(), "ssh://git@git.example/x.git", GitRemotePolicy{
 				AllowedSSHHosts: mustAllowedHosts(t, "10.0.0.0/8"), lookup: l,
 			})
 			return err

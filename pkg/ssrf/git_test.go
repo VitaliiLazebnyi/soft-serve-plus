@@ -121,7 +121,7 @@ func TestValidateGitRemote(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ValidateGitRemote(tt.remote, anySSH)
+			got, err := ValidateGitRemote(t.Context(), tt.remote, anySSH)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -182,7 +182,7 @@ func TestValidateGitRemoteResolvesHostnames(t *testing.T) {
 				return fake(ctx, host)
 			}}
 
-			v, err := ValidateGitRemote(tt.remote, policy)
+			v, err := ValidateGitRemote(t.Context(), tt.remote, policy)
 			// The injected resolver, not the system one, answered.
 			if lookups.Load() != 1 {
 				t.Fatalf("fake resolver called %d times, want 1", lookups.Load())
@@ -498,7 +498,7 @@ func TestValidateGitRemoteErrorsHideResolver(t *testing.T) {
 		"git://does-not-exist.invalid/x.git",
 	} {
 		before := lookups.Load()
-		_, err := ValidateGitRemote(remote, failing)
+		_, err := ValidateGitRemote(t.Context(), remote, failing)
 		// Without this, a check rejecting the name before lookup would let
 		// the test pass without exercising the resolver-error path.
 		if got := lookups.Load() - before; got != 1 {
@@ -516,7 +516,7 @@ func TestValidateGitRemoteErrorsHideResolver(t *testing.T) {
 
 	// A URL Go cannot parse must produce exactly the typed error and its
 	// fixed reason, never the parser's own message.
-	_, err := ValidateGitRemote("http://a{b@127.0.0.1:8080/", anySSH)
+	_, err := ValidateGitRemote(t.Context(), "http://a{b@127.0.0.1:8080/", anySSH)
 	if !errors.Is(err, ErrInvalidURL) {
 		t.Fatalf("unparseable remote error = %v, want ErrInvalidURL", err)
 	}
@@ -534,7 +534,7 @@ func TestValidateGitRemoteRefusesMixedAnswers(t *testing.T) {
 		"mixed.example": {"140.82.112.3", "10.0.0.1"},
 	})}
 	for _, remote := range []string{"https://mixed.example/x.git", "git://mixed.example/x.git"} {
-		if _, err := ValidateGitRemote(remote, policy); !errors.Is(err, ErrPrivateIP) {
+		if _, err := ValidateGitRemote(t.Context(), remote, policy); !errors.Is(err, ErrPrivateIP) {
 			t.Errorf("ValidateGitRemote(%q) error = %v, want ErrPrivateIP", remote, err)
 		}
 	}
@@ -560,7 +560,7 @@ func TestValidateGitRemoteRefusesTrailingDot(t *testing.T) {
 		"git://git.example./x.git",
 		"git://git.example.:9418/x.git",
 	} {
-		if _, err := ValidateGitRemote(remote, policy); !errors.Is(err, ErrAmbiguousHost) {
+		if _, err := ValidateGitRemote(t.Context(), remote, policy); !errors.Is(err, ErrAmbiguousHost) {
 			t.Errorf("ValidateGitRemote(%q) error = %v, want ErrAmbiguousHost", remote, err)
 		}
 	}
@@ -570,7 +570,7 @@ func TestValidateGitRemoteRefusesTrailingDot(t *testing.T) {
 		"ssh://git@git.example./x.git",
 		"git@git.example.:x.git",
 	} {
-		if _, err := ValidateGitRemote(remote, policy); err != nil {
+		if _, err := ValidateGitRemote(t.Context(), remote, policy); err != nil {
 			t.Errorf("ValidateGitRemote(%q): %v", remote, err)
 		}
 	}
@@ -628,7 +628,7 @@ func TestValidateGitRemoteSSHUserAndZone(t *testing.T) {
 		{"git://[2606:4700::1%25x]/x.git", ErrAmbiguousHost},
 	}
 	for _, tt := range tests {
-		_, err := ValidateGitRemote(tt.remote, anySSH)
+		_, err := ValidateGitRemote(t.Context(), tt.remote, anySSH)
 		if tt.err == nil {
 			if err != nil {
 				t.Errorf("ValidateGitRemote(%q): %v", tt.remote, err)

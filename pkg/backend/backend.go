@@ -118,7 +118,7 @@ func New(cfg *config.Config, db *db.DB, st store.Store, logger *log.Logger) *Bac
 		pushCreatedRetry: pushCreatedDirRetry,
 
 		binVersion:         git.BinVersion,
-		validateGitRemote:  ssrf.ValidateGitRemoteContext,
+		validateGitRemote:  ssrf.ValidateGitRemote,
 		searchPointerBlobs: searchPointerBlobs,
 		importTimeout:      time.Hour,
 	}

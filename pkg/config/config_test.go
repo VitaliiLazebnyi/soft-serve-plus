@@ -568,7 +568,7 @@ func TestValidateParsesAllowedHosts(t *testing.T) {
 		t.Errorf("parsed %d entries, want 2", len(got))
 	}
 	policy := ssrf.GitRemotePolicy{AllowedSSHHosts: cfg.SSH.ParsedClientAllowedHosts()}
-	if _, err := ssrf.ValidateGitRemote("ssh://git@git.internal.example/x.git", policy); err != nil {
+	if _, err := ssrf.ValidateGitRemote(t.Context(), "ssh://git@git.internal.example/x.git", policy); err != nil {
 		t.Errorf("parsed allowlist does not match its own entry: %v", err)
 	}
 

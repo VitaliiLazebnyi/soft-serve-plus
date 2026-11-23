@@ -110,7 +110,7 @@ func TestValidateImportRemote(t *testing.T) {
 		{"unparseable http to loopback", "http://a{b@127.0.0.1:8080/", nobody, proto.ErrInvalidRemote},
 	}
 
-	d := &Backend{validateGitRemote: ssrf.ValidateGitRemoteContext}
+	d := &Backend{validateGitRemote: ssrf.ValidateGitRemote}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

@@ -131,14 +131,10 @@ func GitEnv(remotes ...ValidatedGitRemote) []string {
 // SSH remotes are not IP-validated: they authenticate with the operator's own
 // client key, so which hosts they may reach is a policy question, answered by
 // the GitRemotePolicy, not an address-range one.
-func ValidateGitRemote(remote string, policy GitRemotePolicy) (ValidatedGitRemote, error) {
-	return ValidateGitRemoteContext(context.Background(), remote, policy)
-}
-
-// ValidateGitRemoteContext is ValidateGitRemote with the hostname lookups it
-// makes bounded by ctx, so a caller that must not stall on a slow resolver
-// can set a deadline.
-func ValidateGitRemoteContext(ctx context.Context, remote string, policy GitRemotePolicy) (ValidatedGitRemote, error) {
+//
+// The hostname lookups it makes are bounded by ctx, so a caller that must not
+// stall on a slow resolver can set a deadline.
+func ValidateGitRemote(ctx context.Context, remote string, policy GitRemotePolicy) (ValidatedGitRemote, error) {
 	if remote == "" {
 		return ValidatedGitRemote{}, ErrInvalidURL
 	}

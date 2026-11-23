@@ -283,7 +283,7 @@ func TestValidateURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateURL(tt.url)
+			err := ValidateURL(t.Context(), tt.url)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
 				return
@@ -354,7 +354,7 @@ func TestValidateURLErrorsHideResolver(t *testing.T) {
 func TestValidateURLErrorsHideSystemResolver(t *testing.T) {
 	fakeResolver(t, nil)
 
-	err := ValidateURL("https://does-not-exist.invalid/hook")
+	err := ValidateURL(t.Context(), "https://does-not-exist.invalid/hook")
 	if !errors.Is(err, ErrInvalidURL) {
 		t.Fatalf("ValidateURL() error = %v, want ErrInvalidURL", err)
 	}
@@ -419,7 +419,7 @@ func TestValidateURLResolvesHostnames(t *testing.T) {
 // A cancelled context stops the hostname lookup: validation returns at once
 // with the context's error instead of waiting for the resolver, and does not
 // blame DNS.
-func TestValidateURLContextCancelled(t *testing.T) {
+func TestValidateURLCancelled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -447,23 +447,23 @@ func TestValidateURLContextCancelled(t *testing.T) {
 	}
 }
 
-// ValidateURLContext and ValidateURLAllowingContext check a context that is
-// already done before resolving anything.
-func TestValidateURLContextAlreadyCancelled(t *testing.T) {
+// ValidateURL and ValidateURLAllowing check a context that is already done
+// before resolving anything.
+func TestValidateURLAlreadyCancelled(t *testing.T) {
 	// The name is unknown to the stub, which would answer "not found"
 	// (ErrInvalidURL) if the cancellation were missed.
 	fakeResolver(t, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := ValidateURLContext(ctx, "https://does-not-exist.invalid/"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ValidateURLContext() = %v, want context.Canceled", err)
+	if err := ValidateURL(ctx, "https://does-not-exist.invalid/"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateURL() = %v, want context.Canceled", err)
 	}
-	if err := ValidateURLAllowingContext(ctx, "https://does-not-exist.invalid/", nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ValidateURLAllowingContext() = %v, want context.Canceled", err)
+	if err := ValidateURLAllowing(ctx, "https://does-not-exist.invalid/", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateURLAllowing() = %v, want context.Canceled", err)
 	}
 	// An IP literal needs no lookup, so it is still checked as before.
-	if err := ValidateURLContext(ctx, "https://93.184.216.34/"); err != nil {
-		t.Fatalf("ValidateURLContext(IP literal) = %v, want nil", err)
+	if err := ValidateURL(ctx, "https://93.184.216.34/"); err != nil {
+		t.Fatalf("ValidateURL(IP literal) = %v, want nil", err)
 	}
 }

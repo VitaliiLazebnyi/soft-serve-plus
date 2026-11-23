@@ -81,7 +81,7 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 		}
 
 		for _, url := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
-			v, err := ssrf.ValidateGitRemoteContext(ctx, url, policy)
+			v, err := ssrf.ValidateGitRemote(ctx, url, policy)
 			if err != nil {
 				return mirrorRemotes{}, fmt.Errorf("remote %q: %w", name, err)
 			}
@@ -368,7 +368,7 @@ func (m *MirrorPull) syncMirrorRepo(jobCtx context.Context, name string) (err er
 
 	// The endpoint is stored in the repo config and may predate
 	// validation, so check it before dialing.
-	v, err := ssrf.ValidateGitRemoteContext(ctx, lfsEndpoint, policy)
+	v, err := ssrf.ValidateGitRemote(ctx, lfsEndpoint, policy)
 	if err != nil {
 		logger.Warn("skipping lfs sync, endpoint failed validation", "repo", name, "err", err)
 		return fmt.Errorf("lfs endpoint: %w", err)
