@@ -304,11 +304,11 @@ func (d *GitDaemon) refuseAsync(c *serverConn, err error) {
 // The wait ends refuseLinger after the answer, at until unless it is zero,
 // and at the connection's maximum deadline, whichever comes first, and reads
 // at most refuseDrain bytes. It also ends when the daemon shuts down, so a
-// graceful Shutdown does not wait on refused clients. A connection counted against max_connections stays counted
-// meanwhile, as it is still open. A refusal of the request passes the request deadline
-// as until, so a client holds its connection unanswered no longer than it
-// could already by sending the request line late, however long the access
-// checks took.
+// graceful Shutdown does not wait on refused clients. A connection counted
+// against max_connections stays counted meanwhile, as it is still open. A
+// refusal of the request passes the request deadline as until, so a client
+// holds its connection unanswered no longer than it could already by
+// sending the request line late, however long the access checks took.
 func (d *GitDaemon) refuse(c *serverConn, err error, until time.Time) {
 	git.WritePktlineErr(c, err) //nolint: errcheck
 	now := d.now()
