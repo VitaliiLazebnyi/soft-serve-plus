@@ -20,9 +20,6 @@ func TestEnvironBinPath(t *testing.T) {
 	if got, want := DefaultConfig().Environ()[0], "SOFT_SERVE_BIN_PATH="+filepath.ToSlash(ex); got != want {
 		t.Errorf("Environ()[0] = %q, want %q", got, want)
 	}
-	if got, want := (*Config)(nil).Environ(), []string{"SOFT_SERVE_BIN_PATH=" + filepath.ToSlash(ex)}; !reflect.DeepEqual(got, want) {
-		t.Errorf("nil Environ() = %q, want %q", got, want)
-	}
 }
 
 // environExcluded lists the config fields that Environ leaves out on

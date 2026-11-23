@@ -393,9 +393,6 @@ func (c *Config) Environ() []string {
 	envs := []string{
 		fmt.Sprintf("SOFT_SERVE_BIN_PATH=%s", binPath()),
 	}
-	if c == nil {
-		return envs
-	}
 
 	// TestEnvironRoundTrip checks that the environment Load reads gives every field back, so
 	// a new field must be added here. Log.Path is left out on purpose: the
