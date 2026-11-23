@@ -14,7 +14,7 @@ type CollaboratorEvent struct {
 	// Action is the collaborator event action.
 	Action CollaboratorEventAction `json:"action" url:"action"`
 	// AccessLevel is the collaborator access level.
-	AccessLevel access.AccessLevel `json:"access_level" url:"access_level"`
+	AccessLevel access.Level `json:"access_level" url:"access_level"`
 	// Collaborator is the collaborator.
 	Collaborator User `json:"collaborator" url:"collaborator"`
 }

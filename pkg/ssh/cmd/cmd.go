@@ -122,14 +122,14 @@ func (cmds *Commands) denyRead(ctx context.Context) error {
 // repoRunE is the body of a repo-scoped command. repo is the repository
 // named by the command's first argument, as withRepo resolved it, and level
 // the caller's access level on it.
-type repoRunE func(cmd *cobra.Command, args []string, repo proto.Repository, level access.AccessLevel) error
+type repoRunE func(cmd *cobra.Command, args []string, repo proto.Repository, level access.Level) error
 
 // withRepo returns the RunE of a repo-scoped command: the caller must be
 // able to read the repository named by the first argument and hold at
 // least need on it, and fn then runs with that repository. Readability is
 // decided before existence, so a caller who cannot read gets denyRead's
 // answer whether or not the repository exists.
-func (cmds *Commands) withRepo(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
+func (cmds *Commands) withRepo(need access.Level, fn repoRunE) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		repo, level, err := cmds.gateRepo(cmd.Context(), args, need)
 		if err != nil {
@@ -146,7 +146,7 @@ func (cmds *Commands) withRepo(need access.AccessLevel, fn repoRunE) func(*cobra
 // on a name with a row but no repository directory (delete, rename and
 // collab), so they can act on such a row: fn then gets a nil repository
 // and acts on the name.
-func (cmds *Commands) withRepoOrName(need access.AccessLevel, fn repoRunE) func(*cobra.Command, []string) error {
+func (cmds *Commands) withRepoOrName(need access.Level, fn repoRunE) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		repo, level, err := cmds.gateRepo(cmd.Context(), args, need)
 		if err != nil {
@@ -159,7 +159,7 @@ func (cmds *Commands) withRepoOrName(need access.AccessLevel, fn repoRunE) func(
 // gateRepo looks up the repository named by args and checks that the
 // caller may read it and holds at least need on it. The repository is nil
 // only for a server admin and a name with no repository behind it.
-func (cmds *Commands) gateRepo(ctx context.Context, args []string, need access.AccessLevel) (proto.Repository, access.AccessLevel, error) {
+func (cmds *Commands) gateRepo(ctx context.Context, args []string, need access.Level) (proto.Repository, access.Level, error) {
 	repo, level, err := cmds.be.ReadableForUser(ctx, repoArg(args), proto.UserFromContext(ctx))
 	if err != nil {
 		return nil, level, lookupFailed(ctx, cmds.logger, "look up repository", err)
@@ -227,7 +227,7 @@ func repoArg(args []string) string {
 
 // repoAccessLevel returns the caller's access level for the sanitized name.
 // The error is lookupFailed's when the lookup failed.
-func (cmds *Commands) repoAccessLevel(ctx context.Context, repo string) (access.AccessLevel, error) {
+func (cmds *Commands) repoAccessLevel(ctx context.Context, repo string) (access.Level, error) {
 	_, level, err := cmds.be.ReadableForUser(ctx, repo, proto.UserFromContext(ctx))
 	if err != nil {
 		return access.NoAccess, lookupFailed(ctx, cmds.logger, "look up repository", err)

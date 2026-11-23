@@ -100,9 +100,9 @@ type SSHConfig struct {
 	allowedHosts ssrf.AllowedHosts
 }
 
-// AllowedHosts returns the parsed ssh allowlist. It is empty until Validate
-// has run. The slice is a copy, so a caller may change it.
-func (c *SSHConfig) AllowedHosts() ssrf.AllowedHosts {
+// ParsedClientAllowedHosts returns the parsed ssh allowlist. It is empty
+// until Validate has run. The slice is a copy, so a caller may change it.
+func (c *SSHConfig) ParsedClientAllowedHosts() ssrf.AllowedHosts {
 	return slices.Clone(c.allowedHosts)
 }
 
@@ -306,10 +306,10 @@ type Config struct {
 	// stored in the database (see the `settings` command) on every read, for
 	// as long as it remains set. It is not a one-time default: it behaves
 	// like InitialAdminKeys, not like a seed value. Invalid values are
-	// rejected at parse time by AccessLevel's TextUnmarshaler.
+	// rejected at parse time by access.Level's TextUnmarshaler.
 	//
 	// This is intended for scripted, non-production bootstrapping only.
-	AnonAccess *access.AccessLevel `env:"ANON_ACCESS" yaml:"anon_access"`
+	AnonAccess *access.Level `env:"ANON_ACCESS" yaml:"anon_access"`
 
 	// AllowKeyless overrides whether keyless (no public key) connections
 	// are allowed.
@@ -370,8 +370,8 @@ type Config struct {
 	unreadableAdminKeyFiles map[string]struct{}
 	ignoredAdminKeys        map[string]struct{}
 
-	// configPath is the absolute path of the config file Load resolved.
-	configPath string
+	// filePath is the absolute path of the config file Load resolved.
+	filePath string
 
 	// unknownKeys records the config file keys no setting is read from,
 	// and removed the removed settings the file or the environment sets.
@@ -401,7 +401,7 @@ func (c *Config) Environ() []string {
 	// a new field must be added here. Log.Path is left out on purpose: the
 	// server gives hooks their own log file.
 	envs = append(envs, []string{
-		fmt.Sprintf("SOFT_SERVE_CONFIG_LOCATION=%s", c.ConfigPath()),
+		fmt.Sprintf("SOFT_SERVE_CONFIG_LOCATION=%s", c.FilePath()),
 		fmt.Sprintf("SOFT_SERVE_DATA_PATH=%s", c.DataPath),
 		fmt.Sprintf("SOFT_SERVE_NAME=%s", c.Name),
 		fmt.Sprintf("SOFT_SERVE_INITIAL_ADMIN_KEYS=%s", strings.Join(c.InitialAdminKeys, "\n")),
@@ -765,7 +765,7 @@ func (c *Config) load() error {
 	if err != nil {
 		return err
 	}
-	c.configPath = path
+	c.filePath = path
 	if exist(path) {
 		if err := c.readFile(path); err != nil {
 			return err
@@ -784,11 +784,11 @@ func (c *Config) load() error {
 //go:embed config.yaml
 var defaultConfigFile []byte
 
-// WriteDefaultFile writes the default config file to ConfigPath, creating
+// WriteDefaultFile writes the default config file to FilePath, creating
 // its directory if needed. It writes the defaults, not c, so environment
 // overrides are not saved to the file.
 func (c *Config) WriteDefaultFile() error {
-	path := c.ConfigPath()
+	path := c.FilePath()
 	// The config can hold secrets such as a database password, so only
 	// the server's user may read it.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -809,12 +809,12 @@ func DefaultDataPath() string {
 	return dp
 }
 
-// ConfigPath returns the config file: for a config from Load, the absolute
+// FilePath returns the config file: for a config from Load, the absolute
 // path Load resolved, whether or not the file exists; for any other,
 // config.yaml in the data path.
-func (c *Config) ConfigPath() string {
-	if c.configPath != "" {
-		return c.configPath
+func (c *Config) FilePath() string {
+	if c.filePath != "" {
+		return c.filePath
 	}
 	return filepath.Join(c.DataPath, "config.yaml")
 }
@@ -857,7 +857,7 @@ func exist(path string) bool {
 
 // Exist returns true if the config file exists.
 func (c *Config) Exist() bool {
-	return exist(c.ConfigPath())
+	return exist(c.FilePath())
 }
 
 // DefaultMaxTimeout is the default max_timeout of the SSH server, the git

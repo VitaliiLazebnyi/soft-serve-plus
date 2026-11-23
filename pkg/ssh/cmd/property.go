@@ -21,7 +21,7 @@ type repoProperty struct {
 	short   string
 	// need is the access level that changing the property takes. Reading
 	// it takes read access.
-	need access.AccessLevel
+	need access.Level
 	get  func(proto.Repository) string
 	// setText stores a free-text value: the arguments after the
 	// repository, joined by spaces.
@@ -103,7 +103,7 @@ func (cmds *Commands) propertyCommand(p repoProperty) *cobra.Command {
 		Aliases: p.aliases,
 		Short:   p.short,
 		Args:    args,
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, level access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, level access.Level) error {
 			if len(args) == 1 {
 				cmd.Println(p.get(repo))
 				return nil

@@ -11,7 +11,7 @@ import (
 )
 
 // AddCollabByUsernameAndRepo implements store.Store.
-func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.AccessLevel) error {
+func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.Level) error {
 	username = strings.ToLower(username)
 	if err := proto.ValidateUsername(username); err != nil {
 		return err

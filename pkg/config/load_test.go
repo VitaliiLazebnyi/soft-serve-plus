@@ -50,7 +50,7 @@ func writeConfig(cfg *Config, path string) error {
 // writeTestConfig writes cfg to its config path as a config file.
 func writeTestConfig(t *testing.T, cfg *Config) error {
 	t.Helper()
-	return writeConfig(cfg, cfg.ConfigPath())
+	return writeConfig(cfg, cfg.FilePath())
 }
 
 // The file the server writes on its first start holds the defaults, and
@@ -132,7 +132,7 @@ func TestWriteDefaultFile(t *testing.T) {
 	if err := cfg.WriteDefaultFile(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(cfg.ConfigPath())
+	got, err := os.ReadFile(cfg.FilePath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ max_blob_size: -1
 }
 
 // A relative SOFT_SERVE_CONFIG_LOCATION is resolved once, at load, against
-// the working directory the server starts in. ConfigPath and the
+// the working directory the server starts in. FilePath and the
 // environment hooks get name that file wherever they are used from: a hook
 // starts in a repository's directory, where the relative path named another
 // file and every push failed (R29, CFG-1).
@@ -351,14 +351,14 @@ func TestRelativeConfigLocation(t *testing.T) {
 		t.Fatalf("Load() name %q, want the relative file's", cfg.Name)
 	}
 	want := filepath.Join(dir, "conf.yaml")
-	if got := cfg.ConfigPath(); got != want {
-		t.Errorf("ConfigPath() = %q, want %q", got, want)
+	if got := cfg.FilePath(); got != want {
+		t.Errorf("FilePath() = %q, want %q", got, want)
 	}
 
 	// From another directory, as a hook runs.
 	t.Chdir(t.TempDir())
-	if got := cfg.ConfigPath(); got != want {
-		t.Errorf("ConfigPath() from another directory = %q, want %q", got, want)
+	if got := cfg.FilePath(); got != want {
+		t.Errorf("FilePath() from another directory = %q, want %q", got, want)
 	}
 	if !slices.Contains(cfg.Environ(), "SOFT_SERVE_CONFIG_LOCATION="+want) {
 		t.Errorf("Environ() does not name %s", want)

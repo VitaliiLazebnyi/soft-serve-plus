@@ -287,7 +287,7 @@ func (f *Files) Init() tea.Cmd {
 func (f *Files) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		f.repo = msg
 	case RefMsg:
 		f.ref = msg.Ref

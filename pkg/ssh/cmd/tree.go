@@ -17,7 +17,7 @@ func (cmds *Commands) treeCommand() *cobra.Command {
 		Use:   "tree REPOSITORY [REFERENCE] [PATH]",
 		Short: "Print repository tree at path",
 		Args:  cobra.RangeArgs(1, 3),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			path := ""
 			ref := ""

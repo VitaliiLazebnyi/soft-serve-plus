@@ -25,7 +25,7 @@ func (s txCheckStore) check(name string, h db.Handler) {
 	}
 }
 
-func (s txCheckStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.AccessLevel, error) {
+func (s txCheckStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.Level, error) {
 	s.check("GetAnonAccess", h)
 	return s.Store.GetAnonAccess(ctx, h)
 }

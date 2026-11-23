@@ -156,7 +156,7 @@ func TestDiffRenderLostResult(t *testing.T) {
 			}
 			p.m.Update(GoBackMsg{})
 			// The repository is opened again, and a diff with it.
-			p.m.Update(RepoMsg(fakeRepo{}))
+			p.m.Update(OpenedMsg(fakeRepo{}))
 			r := renders(p.open(&git.Diff{Patch: "+two\n"}))
 			if len(r) != 1 {
 				t.Fatalf("opening a diff after a lost render started %d renders; want 1", len(r))

@@ -28,7 +28,7 @@ func TestLogReloadsPageLoadedForAnotherSize(t *testing.T) {
 	c := uitest.NewCommon(t, ctx, nil, nil)
 	l := NewLog(c)
 	l.SetSize(80, 40)
-	l.Update(RepoMsg(repo))
+	l.Update(OpenedMsg(repo))
 	ref := updateRefCmd(t.Context(), repo, 1)()
 	refMsg, ok := ref.(RefMsg)
 	if !ok {
@@ -100,7 +100,7 @@ func newTestLog(t *testing.T, dir string) *Log {
 	ctx := context.Background()
 	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(80, 40)
-	l.Update(RepoMsg(openRepo{path: dir}))
+	l.Update(OpenedMsg(openRepo{path: dir}))
 	l.Update(RefMsg{Ref: ref})
 	l.Update(l.countCommitsCmd()())
 	l.Update(l.updateCommitsCmd()())
@@ -175,7 +175,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 
 	l.Update(selector.SelectMsg{IdentifiableItem: l.selector.SelectedItem()})
 	// The repository can no longer be opened when the diff loads.
-	l.Update(RepoMsg(openRepo{path: filepath.Join(dir, "missing")}))
+	l.Update(OpenedMsg(openRepo{path: filepath.Join(dir, "missing")}))
 	msg := l.loadDiffCmd()()
 	if _, ok := msg.(LogDiffErrorMsg); !ok {
 		t.Fatalf("loadDiffCmd() = %T; want LogDiffErrorMsg", msg)
@@ -198,7 +198,7 @@ func TestLogDiffErrorReturnsToCommits(t *testing.T) {
 	}
 
 	// A resize after the error is dismissed shows the commit list again.
-	l.Update(RepoMsg(openRepo{path: dir}))
+	l.Update(OpenedMsg(openRepo{path: dir}))
 	resizeLog(l, 100, 30)
 	l.Update(l.updateCommitsCmd()())
 	if l.activeView != logViewCommits {

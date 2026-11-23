@@ -99,7 +99,7 @@ func TestHeaderClickWithoutCloneCmd(t *testing.T) {
 		c.HideCloneCmd = hide
 		r := New(c, NewReadme(c))
 		r.SetSize(80, 24)
-		r.Update(RepoMsg(fakeRepo{}))
+		r.Update(OpenedMsg(fakeRepo{}))
 		r.state = readyState
 
 		// Zones are stored in the order they are marked, so once the

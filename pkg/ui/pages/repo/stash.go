@@ -169,7 +169,7 @@ func (s *Stash) Init() tea.Cmd {
 func (s *Stash) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		s.repo = msg
 		s.clearPatch()
 	case RefMsg:

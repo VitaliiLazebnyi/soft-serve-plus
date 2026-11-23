@@ -469,7 +469,7 @@ func TestSettingsStore(t *testing.T) {
 			t.Errorf("GetAllowKeylessAccess() after setting %v = %v, %v", allow, v, err)
 		}
 	}
-	for _, level := range []access.AccessLevel{access.NoAccess, access.ReadWriteAccess, access.AdminAccess, access.ReadOnlyAccess} {
+	for _, level := range []access.Level{access.NoAccess, access.ReadWriteAccess, access.AdminAccess, access.ReadOnlyAccess} {
 		if err := s.SetAnonAccess(ctx, dbx, level); err != nil {
 			t.Fatal(err)
 		}

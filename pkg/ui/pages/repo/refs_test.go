@@ -93,7 +93,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	r := NewRefs(uitest.NewCommon(t, t.Context(), nil, nil), git.RefsTags)
 	r.SetSize(80, 24)
 	repo := openRepo{path: dir}
-	r.Update(RepoMsg(repo))
+	r.Update(OpenedMsg(repo))
 
 	ref, ok := updateRefCmd(t.Context(), repo, 0)().(RefMsg)
 	if !ok {
@@ -135,7 +135,7 @@ func TestRefsLoadsOncePerRepo(t *testing.T) {
 	}
 
 	// Opening the repository again lists them again.
-	r.Update(RepoMsg(repo))
+	r.Update(OpenedMsg(repo))
 	r.Update(ref)
 	if !r.isLoading {
 		t.Fatal("reopening the repository did not list the tags again")
@@ -155,7 +155,7 @@ func TestRefsReloadWhenSwitchedWhileLoading(t *testing.T) {
 	r := NewRefs(uitest.NewCommon(t, t.Context(), nil, nil), git.RefsTags)
 	r.SetSize(80, 24)
 	repo := openRepo{path: dir}
-	r.Update(RepoMsg(repo))
+	r.Update(OpenedMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not return a RefMsg")
@@ -276,7 +276,7 @@ func TestRefsSelectKeyOpensHighlightedItem(t *testing.T) {
 			ctx := context.Background()
 			r := NewRefs(uitest.NewCommon(t, ctx, nil, nil), git.RefsHeads)
 			r.SetSize(80, 10)
-			r.Update(RepoMsg(openRepo{path: dir}))
+			r.Update(OpenedMsg(openRepo{path: dir}))
 			r.Update(r.updateItemsCmd()())
 			if r.selector.TotalPages() < 2 {
 				t.Fatalf("want several pages, got %d", r.selector.TotalPages())

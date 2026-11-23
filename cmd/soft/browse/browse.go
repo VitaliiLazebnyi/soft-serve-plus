@@ -159,7 +159,7 @@ func (m *model) Init() tea.Cmd {
 		m.footer.Init(),
 		// The repository page loads the ref to show itself.
 		func() tea.Msg {
-			return repo.RepoMsg(m.repo)
+			return repo.OpenedMsg(m.repo)
 		},
 	)
 }

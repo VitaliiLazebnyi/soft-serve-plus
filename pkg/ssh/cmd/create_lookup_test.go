@@ -24,7 +24,7 @@ type anonFailsAfterStore struct {
 	reads *atomic.Int32
 }
 
-func (s anonFailsAfterStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.AccessLevel, error) {
+func (s anonFailsAfterStore) GetAnonAccess(ctx context.Context, h db.Handler) (access.Level, error) {
 	if s.reads.Add(1) > s.ok {
 		return access.NoAccess, errors.New("SQL logic error: no such table: settings")
 	}

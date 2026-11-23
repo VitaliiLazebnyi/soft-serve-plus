@@ -49,7 +49,7 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 		Use:   "list REPOSITORY",
 		Short: "List repository webhooks",
 		Args:  cobra.ExactArgs(1),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -91,7 +91,7 @@ func (cmds *Commands) webhookCreateCommand() *cobra.Command {
 		Use:   "create REPOSITORY URL",
 		Short: "Create a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -151,7 +151,7 @@ func (cmds *Commands) webhookDeleteCommand() *cobra.Command {
 		Use:   "delete REPOSITORY WEBHOOK_ID",
 		Short: "Delete a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -177,7 +177,7 @@ func (cmds *Commands) webhookUpdateCommand() *cobra.Command {
 		Use:   "update REPOSITORY WEBHOOK_ID",
 		Short: "Update a repository webhook",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -267,7 +267,7 @@ func (cmds *Commands) webhookDeliveriesListCommand() *cobra.Command {
 		Use:   "list REPOSITORY WEBHOOK_ID",
 		Short: "List webhook deliveries",
 		Args:  cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -307,7 +307,7 @@ func (cmds *Commands) webhookDeliveriesRedeliverCommand() *cobra.Command {
 		Use:   "redeliver REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Redeliver a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 
@@ -333,7 +333,7 @@ func (cmds *Commands) webhookDeliveriesGetCommand() *cobra.Command {
 		Use:   "get REPOSITORY WEBHOOK_ID DELIVERY_ID",
 		Short: "Get a webhook delivery",
 		Args:  cobra.ExactArgs(3),
-		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.AdminAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 

@@ -28,7 +28,7 @@ func (cmds *Commands) tagListCommand() *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List repository tags",
 		Args:    cobra.ExactArgs(1),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, _ []string, rr proto.Repository, _ access.Level) error {
 			r, err := cmds.openRepository(cmd.Context(), rr)
 			if err != nil {
 				return err
@@ -57,7 +57,7 @@ func (cmds *Commands) tagDeleteCommand() *cobra.Command {
 		Aliases: []string{"remove", "rm", "del"},
 		Short:   "Delete a tag",
 		Args:    cobra.ExactArgs(2),
-		RunE: cmds.withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx, err := cmds.eventSenderContext(cmd.Context())
 			if err != nil {
 				return err

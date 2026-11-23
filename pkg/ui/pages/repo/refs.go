@@ -125,7 +125,7 @@ func (r *Refs) Init() tea.Cmd {
 func (r *Refs) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		r.selector.Select(0)
 		r.repo = msg
 		r.loaded = false

@@ -114,7 +114,7 @@ func newTestCommands(t *testing.T, tweak func(*config.Config), wrap func(store.S
 }
 
 // levelOf is the access level Backend.Readable gives user's account on repo.
-func levelOf(t *testing.T, be *backend.Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+func levelOf(t *testing.T, be *backend.Backend, ctx context.Context, repo string, user proto.User) access.Level {
 	t.Helper()
 	_, level, err := be.Readable(ctx, repo, user)
 	if err != nil {
@@ -125,7 +125,7 @@ func levelOf(t *testing.T, be *backend.Backend, ctx context.Context, repo string
 
 // collabOf is Backend.IsCollaborator for the repository and user with these
 // names.
-func collabOf(t *testing.T, be *backend.Backend, ctx context.Context, repo, username string) (access.AccessLevel, bool, error) {
+func collabOf(t *testing.T, be *backend.Backend, ctx context.Context, repo, username string) (access.Level, bool, error) {
 	t.Helper()
 	u, err := be.User(ctx, username)
 	if err != nil {

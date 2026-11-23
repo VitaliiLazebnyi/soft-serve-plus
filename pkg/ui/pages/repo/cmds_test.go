@@ -83,7 +83,7 @@ func TestFilesCommandsDoNotReadModel(t *testing.T) {
 	repo, ref := cmdTestRepo(t)
 	f := NewFiles(cmdTestCommon(t))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(repo))
+	f.Update(OpenedMsg(repo))
 	cmd := f.Update(RefMsg{Ref: ref})
 	items := findMsg[FileItemsMsg](t, runCmd(cmd))
 	f.Update(items)
@@ -140,7 +140,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 	repo, ref := cmdTestRepo(t)
 	l := NewLog(cmdTestCommon(t))
 	l.SetSize(80, 40)
-	l.Update(RepoMsg(repo))
+	l.Update(OpenedMsg(repo))
 
 	// A new ref, then the model changes before the count command runs. An
 	// empty repository would cancel the load, so clear the model by hand.
@@ -151,7 +151,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 		t.Fatalf("count = %d, want 1", count.count)
 	}
 
-	l.Update(RepoMsg(repo))
+	l.Update(OpenedMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(count)
 	l.repo, l.ref = nil, nil
@@ -162,7 +162,7 @@ func TestLogCommandsDoNotReadModel(t *testing.T) {
 
 	// Open a commit, then switch the ref before the diff command runs.
 	commit := commits.items[0].(LogItem).Commit
-	l.Update(RepoMsg(repo))
+	l.Update(OpenedMsg(repo))
 	l.Update(RefMsg{Ref: ref})
 	cmd = l.Update(selector.SelectMsg{IdentifiableItem: LogItem{Commit: commit}})
 	l.selectedCommit = nil
@@ -236,7 +236,7 @@ func TestFilesBackAfterOpeningFileThroughRepo(t *testing.T) {
 	}
 	// Give the pane its repository and ref directly: Repo itself only needs
 	// them for the status bar.
-	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(OpenedMsg(openRepo{path: dir}))
 	cmd := f.Update(RefMsg{Ref: ref})
 	update(findMsg[FileItemsMsg](t, runCmd(cmd)))
 

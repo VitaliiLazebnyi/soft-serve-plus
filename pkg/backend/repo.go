@@ -40,7 +40,7 @@ import (
 // importRemotePolicy.
 func RemotePolicy(cfg *config.Config, user proto.User) ssrf.GitRemotePolicy {
 	return ssrf.GitRemotePolicy{
-		AllowedSSHHosts: cfg.SSH.AllowedHosts(),
+		AllowedSSHHosts: cfg.SSH.ParsedClientAllowedHosts(),
 		AllowAnySSHHost: user != nil && user.IsAdmin(),
 	}
 }

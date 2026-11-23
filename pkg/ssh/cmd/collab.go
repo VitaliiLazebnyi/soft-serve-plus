@@ -52,7 +52,7 @@ func (cmds *Commands) collabAddCommand() *cobra.Command {
 		Short: "Add a collaborator to a repo",
 		Long:  "Add a collaborator to a repo. LEVEL can be one of: no-access, read-only, read-write, or admin-access. Defaults to read-write. Requires admin access to the repo.",
 		Args:  cobra.RangeArgs(2, 3),
-		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 			username := args[1]
@@ -87,7 +87,7 @@ func (cmds *Commands) collabRemoveCommand() *cobra.Command {
 		Use:   "remove REPOSITORY USERNAME",
 		Args:  cobra.ExactArgs(2),
 		Short: "Remove a collaborator from a repo",
-		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 			username := args[1]
@@ -115,7 +115,7 @@ func (cmds *Commands) collabListCommand() *cobra.Command {
 		Use:   "list REPOSITORY",
 		Short: "List collaborators and their access levels for a repo",
 		Args:  cobra.ExactArgs(1),
-		RunE: cmds.withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 			repo := repoArg(args)

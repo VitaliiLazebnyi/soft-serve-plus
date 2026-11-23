@@ -12,7 +12,7 @@ import (
 type CollaboratorStore interface {
 	GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) (models.Collab, error)
 	GetCollabByUserIDAndRepoID(ctx context.Context, h db.Handler, userID int64, repoID int64) (models.Collab, error)
-	AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.AccessLevel) error
+	AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.Level) error
 	RemoveCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) error
 	ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) ([]models.Collab, error)
 	ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo string) ([]models.User, error)

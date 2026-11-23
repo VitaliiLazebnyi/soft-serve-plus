@@ -5,12 +5,12 @@ import (
 	"errors"
 )
 
-// AccessLevel is the level of access allowed to a repo.
-type AccessLevel int //nolint: revive
+// Level is the level of access allowed to a repo.
+type Level int
 
 const (
 	// NoAccess does not allow access to the repo.
-	NoAccess AccessLevel = iota
+	NoAccess Level = iota
 
 	// ReadOnlyAccess allows read-only access to the repo.
 	ReadOnlyAccess
@@ -23,7 +23,7 @@ const (
 )
 
 // String returns the string representation of the access level.
-func (a AccessLevel) String() string {
+func (a Level) String() string {
 	switch a {
 	case NoAccess:
 		return "no-access"
@@ -40,7 +40,7 @@ func (a AccessLevel) String() string {
 
 // ParseAccessLevel parses an access level string: no-access, read-only,
 // read-write or admin-access. Anything else is ErrInvalidAccessLevel.
-func ParseAccessLevel(s string) (AccessLevel, error) {
+func ParseAccessLevel(s string) (Level, error) {
 	switch s {
 	case "no-access":
 		return NoAccess, nil
@@ -56,15 +56,15 @@ func ParseAccessLevel(s string) (AccessLevel, error) {
 }
 
 var (
-	_ encoding.TextMarshaler   = AccessLevel(0)
-	_ encoding.TextUnmarshaler = (*AccessLevel)(nil)
+	_ encoding.TextMarshaler   = Level(0)
+	_ encoding.TextUnmarshaler = (*Level)(nil)
 )
 
 // ErrInvalidAccessLevel is returned when an invalid access level is provided.
 var ErrInvalidAccessLevel = errors.New("invalid access level")
 
 // UnmarshalText implements encoding.TextUnmarshaler.
-func (a *AccessLevel) UnmarshalText(text []byte) error {
+func (a *Level) UnmarshalText(text []byte) error {
 	l, err := ParseAccessLevel(string(text))
 	if err != nil {
 		return err
@@ -80,7 +80,7 @@ func (a *AccessLevel) UnmarshalText(text []byte) error {
 // It returns ErrInvalidAccessLevel for a level outside the known set, rather
 // than writing "unknown", which UnmarshalText would then reject; this keeps
 // every marshalled level round-trippable.
-func (a AccessLevel) MarshalText() (text []byte, err error) {
+func (a Level) MarshalText() (text []byte, err error) {
 	switch a {
 	case NoAccess, ReadOnlyAccess, ReadWriteAccess, AdminAccess:
 		return []byte(a.String()), nil

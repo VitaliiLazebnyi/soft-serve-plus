@@ -179,7 +179,7 @@ func (e *testEnv) storePasswordHash(t *testing.T, username, password string) {
 type routeCaller struct {
 	user  proto.User
 	repo  proto.Repository
-	level access.AccessLevel
+	level access.Level
 }
 
 // serveRoute calls the git route handler h of s as withAccess does once it

@@ -38,7 +38,7 @@ func TestFilesFileLoadKeepsListing(t *testing.T) {
 	ctx := context.Background()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(openRepo{path: dir}))
+	f.Update(OpenedMsg(openRepo{path: dir}))
 	f.Update(findMsg[FileItemsMsg](t, runCmd(f.Update(RefMsg{Ref: ref}))))
 	item := func(name string) selector.SelectMsg {
 		for _, it := range f.selector.Items() {

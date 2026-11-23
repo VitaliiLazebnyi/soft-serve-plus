@@ -160,7 +160,7 @@ func gitDenyRead(anonymous bool) error {
 // gitAccess authorizes a git service that needs level need on repo, which
 // is nil when the caller may not read it (see backend.Readable). anonymous
 // is as for denyRead: no account and not a server admin.
-func gitAccess(anonymous bool, repo proto.Repository, have, need access.AccessLevel) error {
+func gitAccess(anonymous bool, repo proto.Repository, have, need access.Level) error {
 	if repo == nil || have < access.ReadOnlyAccess {
 		return gitDenyRead(anonymous)
 	}
@@ -237,7 +237,7 @@ type gitRequest struct {
 	// repo is nil when the repository is missing or the caller may not
 	// read it; level is the caller's access level either way.
 	repo  proto.Repository
-	level access.AccessLevel
+	level access.Level
 	// anonymous is as for denyRead: no account and not a server admin.
 	anonymous bool
 	cfg       *config.Config
@@ -354,7 +354,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 
 // setRepo makes repo the request's repository, as after looking the name up
 // again.
-func (r *gitRequest) setRepo(repo proto.Repository, level access.AccessLevel) {
+func (r *gitRequest) setRepo(repo proto.Repository, level access.Level) {
 	r.repo, r.level = repo, level
 }
 
@@ -538,7 +538,7 @@ func (cmds *Commands) runLFS(cmd *cobra.Command, args []string, service gitserve
 	}
 
 	operation := args[1]
-	var need access.AccessLevel
+	var need access.Level
 	switch operation {
 	case lfs.OperationDownload:
 		need = access.ReadOnlyAccess

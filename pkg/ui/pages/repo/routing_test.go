@@ -60,7 +60,7 @@ func TestRepoDeliversMessagesOnce(t *testing.T) {
 		want map[*countingPane]int
 	}{
 		{func(uint64) tea.Msg { return tea.WindowSizeMsg{Width: 100, Height: 50} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
-		{func(uint64) tea.Msg { return RepoMsg(fakeRepo{}) }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
+		{func(uint64) tea.Msg { return OpenedMsg(fakeRepo{}) }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{func(g uint64) tea.Msg { return RefMsg{gen: g} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{func(g uint64) tea.Msg { return EmptyRepoMsg{gen: g} }, map[*countingPane]int{readme: 1, files: 1, log: 1}},
 		{func(g uint64) tea.Msg { return ReadmeMsg{gen: g} }, map[*countingPane]int{readme: 1}},

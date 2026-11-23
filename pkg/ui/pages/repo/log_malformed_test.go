@@ -37,7 +37,7 @@ func TestLogSkipsMalformedCommit(t *testing.T) {
 			ctx := context.Background()
 			l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 			l.SetSize(80, 40)
-			l.Update(RepoMsg(openRepo{path: dir}))
+			l.Update(OpenedMsg(openRepo{path: dir}))
 			l.Update(RefMsg{Ref: ref})
 			l.Update(l.countCommitsCmd()())
 			msg := l.updateCommitsCmd()()

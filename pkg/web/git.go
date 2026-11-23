@@ -69,7 +69,7 @@ type gitRequest struct {
 	user    proto.User
 	// repo is nil until withAccess finds the caller may read it.
 	repo  proto.Repository
-	level access.AccessLevel
+	level access.Level
 	// pushFailed is set by a receive-pack request that failed; see
 	// pushCreates.
 	pushFailed bool
@@ -459,7 +459,7 @@ const (
 // repository the caller cannot read and a missing one both arrive as
 // !readable, so they get the same verdict. Bad credentials are rejected
 // before a push can create anything.
-func authorize(need routeAccess, readable bool, level access.AccessLevel, anonymous, badCreds bool) verdict {
+func authorize(need routeAccess, readable bool, level access.Level, anonymous, badCreds bool) verdict {
 	canWrite := level >= access.ReadWriteAccess
 	switch {
 	case need.lfs:

@@ -69,7 +69,7 @@ func TestReadableRepositories(t *testing.T) {
 		return m
 	}
 
-	for _, anon := range []access.AccessLevel{access.NoAccess, access.ReadOnlyAccess} {
+	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
 		is.NoErr(be.SetAnonAccess(ctx, anon))
 		for _, user := range []proto.User{nil, owner, collab, stranger, admin} {
 			repos, err := be.ReadableRepositories(ctx, user)
@@ -103,7 +103,7 @@ func TestReadableRepositories(t *testing.T) {
 	is.Equal(len(repos), 5)
 
 	// No non-admin is listed a row whose directory is gone.
-	for _, anon := range []access.AccessLevel{access.NoAccess, access.ReadOnlyAccess} {
+	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
 		is.NoErr(be.SetAnonAccess(ctx, anon))
 		for _, user := range []proto.User{nil, owner, collab, stranger} {
 			repos, err := be.ReadableRepositories(ctx, user)

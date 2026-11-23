@@ -63,7 +63,7 @@ func TestFilesSubmoduleIsUserError(t *testing.T) {
 	ctx := context.Background()
 	f := NewFiles(uitest.NewCommon(t, ctx, nil, nil))
 	f.SetSize(80, 40)
-	f.Update(RepoMsg(repo))
+	f.Update(OpenedMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not load the reference")

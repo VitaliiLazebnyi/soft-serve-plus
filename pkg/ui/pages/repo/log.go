@@ -246,7 +246,7 @@ func (l *Log) Init() tea.Cmd {
 func (l *Log) Update(msg tea.Msg) tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		l.repo = msg
 		l.clearDiff()
 	case RefMsg:

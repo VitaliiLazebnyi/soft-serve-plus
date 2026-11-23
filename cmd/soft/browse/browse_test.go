@@ -64,8 +64,8 @@ func hasRefMsg(ms []tea.Msg) bool {
 	return false
 }
 
-// The reference is loaded only after RepoMsg is handled: batched commands run
-// concurrently, so a RefMsg sent alongside RepoMsg could reach the tabs before
+// The reference is loaded only after OpenedMsg is handled: batched commands run
+// concurrently, so a RefMsg sent alongside OpenedMsg could reach the tabs before
 // they have a repository to read from.
 func TestRefAfterRepo(t *testing.T) {
 	t.Parallel()
@@ -94,21 +94,21 @@ func TestRefAfterRepo(t *testing.T) {
 	}
 	started := msgs(t, m.Init())
 	if hasRefMsg(started) {
-		t.Fatal("Init sends a RefMsg alongside RepoMsg")
+		t.Fatal("Init sends a RefMsg alongside OpenedMsg")
 	}
 	var repoMsg tea.Msg
 	for _, msg := range started {
-		if _, ok := msg.(repo.RepoMsg); ok {
+		if _, ok := msg.(repo.OpenedMsg); ok {
 			repoMsg = msg
 		}
 	}
 	if repoMsg == nil {
-		t.Fatalf("Init sends no RepoMsg: %v", started)
+		t.Fatalf("Init sends no OpenedMsg: %v", started)
 	}
 
 	_, cmd := m.Update(repoMsg)
 	if got := msgs(t, cmd); !hasRefMsg(got) {
-		t.Fatalf("handling RepoMsg does not load the reference: %v", got)
+		t.Fatalf("handling OpenedMsg does not load the reference: %v", got)
 	}
 }
 

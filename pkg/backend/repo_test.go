@@ -203,7 +203,7 @@ func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
-	is.Equal(len(cfg.SSH.AllowedHosts()), 0)
+	is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
 
 	user, err := be.CreateUser(ctx, "tenant", proto.UserOptions{})
 	is.NoErr(err)
@@ -265,7 +265,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
-			is.Equal(len(cfg.SSH.AllowedHosts()), 0)
+			is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
 
 			pub := newTestPublicKey(t)
 			setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
@@ -351,7 +351,7 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
-	is.Equal(len(cfg.SSH.AllowedHosts()), 0)
+	is.Equal(len(cfg.SSH.ParsedClientAllowedHosts()), 0)
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.NoErr(err)

@@ -27,7 +27,7 @@ func (cmds *Commands) blobCommand() *cobra.Command {
 		Aliases: []string{"cat", "show"},
 		Short:   "Print out the contents of file at path",
 		Args:    cobra.RangeArgs(1, 3),
-		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepo(access.ReadOnlyAccess, func(cmd *cobra.Command, args []string, repo proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			ref := ""
 			fp := ""

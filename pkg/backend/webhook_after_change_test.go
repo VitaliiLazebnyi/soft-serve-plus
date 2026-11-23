@@ -51,7 +51,7 @@ func (s *cancelAfterCommitStore) SetRepoIsPrivateByName(ctx context.Context, h d
 	return s.arm(s.Store.SetRepoIsPrivateByName(ctx, h, name, private))
 }
 
-func (s *cancelAfterCommitStore) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username, repo string, level access.AccessLevel) error {
+func (s *cancelAfterCommitStore) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username, repo string, level access.Level) error {
 	return s.arm(s.Store.AddCollabByUsernameAndRepo(ctx, h, username, repo, level))
 }
 

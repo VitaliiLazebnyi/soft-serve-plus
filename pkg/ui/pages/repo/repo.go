@@ -59,8 +59,8 @@ type Repository interface {
 	Open(ctx context.Context) (*git.Repository, error)
 }
 
-// RepoMsg is a message that contains a repository.
-type RepoMsg Repository //nolint:revive
+// OpenedMsg is a message that contains a repository.
+type OpenedMsg Repository
 
 // GoBackMsg is a message to go back to the previous view.
 type GoBackMsg struct{}
@@ -263,7 +263,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 	// it is meant for, so that the active pane does not get it a second time.
 	routed := false
 	switch msg := msg.(type) {
-	case RepoMsg:
+	case OpenedMsg:
 		// Set the state to loading when we get a new repository.
 		r.gen++
 		r.selectedRepo = msg
@@ -397,7 +397,7 @@ func (r *Repo) Update(msg tea.Msg) tea.Cmd {
 		if v, ok := r.panes[r.activeTab].(codeView); ok && r.state != failedState && v.ownsRender(msg) {
 			r.setStatusBarInfo()
 		}
-	case RepoMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
+	case OpenedMsg, RefMsg, EmptyRepoMsg, tabs.ActiveTabMsg, GoBackMsg,
 		selector.ActiveMsg, tea.KeyPressMsg, tea.MouseClickMsg,
 		tea.MouseWheelMsg:
 		r.setStatusBarInfo()

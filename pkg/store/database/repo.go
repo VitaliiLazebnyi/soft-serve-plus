@@ -85,7 +85,7 @@ func (*Store) GetRepoByName(ctx context.Context, h db.Handler, name string) (mod
 }
 
 // GetRepoWithCollabByName implements store.Store.
-func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.AccessLevel, bool, error) {
+func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name string, userID int64) (models.Repo, access.Level, bool, error) {
 	var row struct {
 		models.Repo
 		CollabLevel sql.NullInt64 `db:"collab_access_level"`
@@ -97,7 +97,7 @@ func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name st
 	if err := h.GetContext(ctx, &row, query, userID, name); err != nil {
 		return models.Repo{}, 0, false, err
 	}
-	return row.Repo, access.AccessLevel(row.CollabLevel.Int64), row.CollabLevel.Valid, nil
+	return row.Repo, access.Level(row.CollabLevel.Int64), row.CollabLevel.Valid, nil
 }
 
 // GetRepoByID implements store.Store.

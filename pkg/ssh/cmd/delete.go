@@ -12,7 +12,7 @@ func (cmds *Commands) deleteCommand() *cobra.Command {
 		Aliases: []string{"del", "remove", "rm"},
 		Short:   "Delete a repository",
 		Args:    cobra.ExactArgs(1),
-		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx, err := cmds.eventSenderContext(cmd.Context())
 			if err != nil {
 				return err

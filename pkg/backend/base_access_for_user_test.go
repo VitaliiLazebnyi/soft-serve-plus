@@ -32,7 +32,7 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{adminKey}})
 	is.NoErr(err)
 
-	for _, anon := range []access.AccessLevel{access.NoAccess, access.ReadOnlyAccess} {
+	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
 		is.NoErr(be.SetAnonAccess(ctx, anon))
 		for _, adminOnly := range []bool{false, true} {
 			cfg.AdminOnlyCreate = adminOnly
@@ -44,7 +44,7 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 				name string
 				pk   ssh.PublicKey
 				user proto.User
-				want access.AccessLevel
+				want access.Level
 			}{
 				{"anonymous", nil, nil, anon},
 				{"unknown key", newTestPublicKey(t), nil, anon},

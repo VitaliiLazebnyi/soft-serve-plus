@@ -60,7 +60,7 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		adminOnly bool
-		missing   access.AccessLevel
+		missing   access.Level
 	}{
 		{adminOnly: false, missing: access.AdminAccess},
 		{adminOnly: true, missing: access.ReadOnlyAccess},

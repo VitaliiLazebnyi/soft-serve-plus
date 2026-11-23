@@ -98,8 +98,8 @@ func TestAdminKeysReturnsCopy(t *testing.T) {
 }
 
 // TestAllowedHostsReturnCopies checks that changing the allowlists
-// AllowedHosts and ParsedAllowedHosts return leaves the config's own alone,
-// as AdminKeys does.
+// ParsedClientAllowedHosts and ParsedAllowedHosts return leaves the
+// config's own alone, as AdminKeys does.
 func TestAllowedHostsReturnCopies(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()
@@ -113,7 +113,7 @@ func TestAllowedHostsReturnCopies(t *testing.T) {
 		name string
 		get  func() ssrf.AllowedHosts
 	}{
-		{"ssh", cfg.SSH.AllowedHosts},
+		{"ssh", cfg.SSH.ParsedClientAllowedHosts},
 		{"webhook", cfg.Webhook.ParsedAllowedHosts},
 	} {
 		want := slices.Clone(tc.get())
@@ -453,7 +453,7 @@ func TestParseAnonAccessEnv(t *testing.T) {
 	is.Equal(*cfg.AnonAccess, access.AdminAccess)
 }
 
-// An invalid anon-access level is rejected at parse time by AccessLevel's
+// An invalid anon-access level is rejected at parse time by access.Level's
 // TextUnmarshaler, so it never reaches Validate as a bad value.
 func TestParseRejectsInvalidAnonAccess(t *testing.T) {
 	is := is.New(t)
@@ -553,7 +553,7 @@ func TestValidateRejectsUnquotableDataPath(t *testing.T) {
 func TestValidateParsesAllowedHosts(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataPath = t.TempDir()
-	if len(cfg.SSH.AllowedHosts()) != 0 {
+	if len(cfg.SSH.ParsedClientAllowedHosts()) != 0 {
 		t.Fatal("allowlist populated before Validate")
 	}
 
@@ -564,10 +564,10 @@ func TestValidateParsesAllowedHosts(t *testing.T) {
 	if got := cfg.SSH.ClientAllowedHosts; len(got) != 2 {
 		t.Errorf("blank entries kept: %q", got)
 	}
-	if got := cfg.SSH.AllowedHosts(); len(got) != 2 {
+	if got := cfg.SSH.ParsedClientAllowedHosts(); len(got) != 2 {
 		t.Errorf("parsed %d entries, want 2", len(got))
 	}
-	policy := ssrf.GitRemotePolicy{AllowedSSHHosts: cfg.SSH.AllowedHosts()}
+	policy := ssrf.GitRemotePolicy{AllowedSSHHosts: cfg.SSH.ParsedClientAllowedHosts()}
 	if _, err := ssrf.ValidateGitRemote("ssh://git@git.internal.example/x.git", policy); err != nil {
 		t.Errorf("parsed allowlist does not match its own entry: %v", err)
 	}
@@ -866,7 +866,7 @@ func TestWebhookAllowedHostsFromEnvAndFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Unsetenv("SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS") //nolint:errcheck // restored by t.Setenv above
-	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", cfg.ConfigPath())
+	t.Setenv("SOFT_SERVE_CONFIG_LOCATION", cfg.FilePath())
 	fromFile := &Config{DataPath: cfg.DataPath}
 	if err := fromFile.load(); err != nil {
 		t.Fatal(err)
@@ -973,8 +973,8 @@ func TestWriteDefaultFileIsPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]os.FileMode{
-		cfg.DataPath:     0o700,
-		cfg.ConfigPath(): 0o600,
+		cfg.DataPath:   0o700,
+		cfg.FilePath(): 0o600,
 	} {
 		fi, err := os.Stat(path)
 		if err != nil {

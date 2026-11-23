@@ -12,7 +12,7 @@ func (cmds *Commands) renameCommand() *cobra.Command {
 		Aliases: []string{"mv", "move"},
 		Short:   "Rename an existing repository",
 		Args:    cobra.ExactArgs(2),
-		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.AccessLevel) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 			oldName := repoArg(args)

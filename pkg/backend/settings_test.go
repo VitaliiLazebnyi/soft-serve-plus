@@ -65,7 +65,7 @@ func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backe
 }
 
 // levelOf is the access level Readable gives user's account on repo.
-func levelOf(t *testing.T, be *Backend, ctx context.Context, repo string, user proto.User) access.AccessLevel {
+func levelOf(t *testing.T, be *Backend, ctx context.Context, repo string, user proto.User) access.Level {
 	t.Helper()
 	_, level, err := be.Readable(ctx, repo, user)
 	if err != nil {
@@ -75,7 +75,7 @@ func levelOf(t *testing.T, be *Backend, ctx context.Context, repo string, user p
 }
 
 // baseLevel is BaseAccessLevelForUser, failing the test if the lookup failed.
-func baseLevel(t *testing.T, be *Backend, ctx context.Context, user proto.User) access.AccessLevel {
+func baseLevel(t *testing.T, be *Backend, ctx context.Context, user proto.User) access.Level {
 	t.Helper()
 	level, err := be.BaseAccessLevelForUser(ctx, user)
 	if err != nil {
@@ -87,8 +87,8 @@ func baseLevel(t *testing.T, be *Backend, ctx context.Context, user proto.User) 
 // noLookupError takes the results of a Readable or ReadableForUser call and
 // returns the repository and level, failing the test if the lookup failed:
 // noLookupError(t)(be.Readable(ctx, name, user)).
-func noLookupError(t *testing.T) func(proto.Repository, access.AccessLevel, error) (proto.Repository, access.AccessLevel) {
-	return func(r proto.Repository, level access.AccessLevel, err error) (proto.Repository, access.AccessLevel) {
+func noLookupError(t *testing.T) func(proto.Repository, access.Level, error) (proto.Repository, access.Level) {
+	return func(r proto.Repository, level access.Level, err error) (proto.Repository, access.Level) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func noLookupError(t *testing.T) func(proto.Repository, access.AccessLevel, erro
 
 // collabOf is IsCollaborator for the repository and user with these names.
 // A missing repository has no collaborators.
-func collabOf(t *testing.T, be *Backend, ctx context.Context, repo, username string) (access.AccessLevel, bool, error) {
+func collabOf(t *testing.T, be *Backend, ctx context.Context, repo, username string) (access.Level, bool, error) {
 	t.Helper()
 	u, err := be.User(ctx, username)
 	if err != nil {

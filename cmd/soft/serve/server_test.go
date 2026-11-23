@@ -82,7 +82,7 @@ func TestWarnIfAnonAdminAccess(t *testing.T) {
 	cases := []struct {
 		name         string
 		allowKeyless bool
-		anonAccess   access.AccessLevel
+		anonAccess   access.Level
 		wantWarning  bool
 	}{
 		{"defaults: keyless disabled, read-only anon", false, access.ReadOnlyAccess, false},

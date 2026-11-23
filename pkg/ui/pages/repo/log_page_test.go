@@ -50,7 +50,7 @@ func newLogOf(t *testing.T, n int) *Log {
 	ctx := context.Background()
 	l := NewLog(uitest.NewCommon(t, ctx, nil, nil))
 	l.SetSize(80, 15)
-	l.Update(RepoMsg(repo))
+	l.Update(OpenedMsg(repo))
 	ref, ok := updateRefCmd(t.Context(), repo, 1)().(RefMsg)
 	if !ok {
 		t.Fatal("updateRefCmd did not load the reference")
