@@ -232,7 +232,7 @@ func (t *Tree) lsTree(path string, limit int) (Entries, bool, error) {
 		args = append(args, "--", path)
 	}
 	// Literal pathspecs: a name such as ":(glob)x" or "*" is a name.
-	cmd := NewCommandWithContext(t.repo.ctx, args...).AddEnvs(
+	cmd := NewCommand(t.repo.ctx, args...).AddEnvs(
 		"GIT_LITERAL_PATHSPECS=1",
 		"GIT_GLOB_PATHSPECS=0",
 		"GIT_NOGLOB_PATHSPECS=0",

@@ -337,7 +337,7 @@ func (d *Backend) pushCreatedRepositoryUsed(ctx context.Context, tx *db.Tx, m mo
 // that cannot be read counts as having refs, so it is never removed by
 // mistake.
 func hasRefs(dir string) bool {
-	out, err := git.NewCommand("for-each-ref", "--count=1", "--format=%(refname)").RunInDir(dir)
+	out, err := git.NewCommand(context.Background(), "for-each-ref", "--count=1", "--format=%(refname)").RunInDir(dir)
 	if err != nil {
 		return true
 	}

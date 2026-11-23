@@ -43,7 +43,7 @@ func (r *Repository) StashList() ([]*git.Stash, error) {
 // `git version` without a context, to choose a sort git has had since 2.5,
 // and keeps a failure of it for the life of the process.
 func (r *Repository) Tags() ([]string, error) {
-	out, err := NewCommandWithContext(r.ctx, "tag", "--list", "--sort=-creatordate").RunInDir(r.Path)
+	out, err := NewCommand(r.ctx, "tag", "--list", "--sort=-creatordate").RunInDir(r.Path)
 	if err != nil {
 		return nil, err
 	}

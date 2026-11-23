@@ -149,7 +149,7 @@ func (r *Repository) CommitByRevision(rev string) (*Commit, error) {
 // such as a repository it cannot read, which is not a missing revision; nor
 // is an existing ref whose object is gone (see refUnreadable).
 func (r *Repository) revisionMissing(rev string) bool {
-	cmd := NewCommandWithContext(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
+	cmd := NewCommand(r.ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
 	err := cmd.RunInDirPipeline(io.Discard, io.Discard, r.Path)
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
@@ -178,7 +178,7 @@ func isParseError(err error) bool {
 // logIDs runs git log for rev with opt, as git-module's Log does, and
 // returns the IDs it lists. Its error keeps git's *exec.ExitError.
 func (r *Repository) logIDs(rev string, opt LogOptions) ([]string, error) {
-	cmd := NewCommandWithContext(r.ctx, "log").
+	cmd := NewCommand(r.ctx, "log").
 		AddArgs(opt.Args...).
 		AddArgs("--pretty=" + git.LogFormatHashOnly)
 	if opt.MaxCount > 0 {

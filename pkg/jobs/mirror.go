@@ -50,7 +50,7 @@ type mirrorRemotes struct {
 // it is fetched by name, so a repository with any remote group is refused,
 // and so is one with more than one remote (see errMultipleRemotes).
 func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.GitRemotePolicy) (mirrorRemotes, error) {
-	keys, err := git.NewCommand("config", "--list", "--name-only").WithContext(ctx).RunInDir(r.Path)
+	keys, err := git.NewCommand(ctx, "config", "--list", "--name-only").RunInDir(r.Path)
 	if err != nil {
 		return mirrorRemotes{}, fmt.Errorf("reading config: %w", err)
 	}
@@ -60,7 +60,7 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 		}
 	}
 
-	out, err := git.NewCommand("remote").WithContext(ctx).RunInDir(r.Path)
+	out, err := git.NewCommand(ctx, "remote").RunInDir(r.Path)
 	if err != nil {
 		return mirrorRemotes{}, fmt.Errorf("listing remotes: %w", err)
 	}
@@ -75,7 +75,7 @@ func validateMirrorRemotes(ctx context.Context, r *git.Repository, policy ssrf.G
 		// A remote without a url is printed as its own name, which git
 		// would fetch from as a local path. That fails validation, as it
 		// should.
-		out, err := git.NewCommand("remote", "get-url", "--all", "--", name).WithContext(ctx).RunInDir(r.Path)
+		out, err := git.NewCommand(ctx, "remote", "get-url", "--all", "--", name).RunInDir(r.Path)
 		if err != nil {
 			return mirrorRemotes{}, fmt.Errorf("remote %q: reading url: %w", name, err)
 		}
