@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -105,12 +104,8 @@ func TestHeaderClickWithoutCloneCmd(t *testing.T) {
 		// Zones are stored in the order they are marked, so once the
 		// sentinel after the page is stored, so is every zone of the page.
 		c.Zone.Scan(r.View() + c.Zone.Mark("sentinel", "x"))
-		deadline := time.Now().Add(time.Minute)
-		for c.Zone.Get("sentinel").IsZero() {
-			if time.Now().After(deadline) {
-				t.Fatal("the zones were never stored")
-			}
-			time.Sleep(time.Millisecond)
+		if !uitest.WaitFor(func() bool { return !c.Zone.Get("sentinel").IsZero() }) {
+			t.Fatal("the zones were never stored")
 		}
 
 		var copied []CopyMsg

@@ -417,19 +417,28 @@ func waitingForWriteTurn() bool {
 }
 
 // TestSendWebhookRecordWaitsForWriteTurn holds this process's SQLite write
-// turn while a delivery is recorded, for longer than the record used to
-// allow. The record waits for its turn, so the delivery is still in the
-// history. It used to give up after 5 seconds, which lost a delivery on a
-// loaded Windows runner.
+// turn while a delivery is recorded, for writeTurnHold. The record waits for
+// its turn, so the delivery is still in the history: a record that gives up
+// sooner loses the delivery on a loaded machine.
+//
+// The record's own timeout is raised for the test, so that no pause of the
+// process can make the hold outlast it; the default is checked to be longer
+// than the hold.
 //
 // It stays serial: waitingForWriteTurn looks at every goroutine of the
 // process, and would see another test's record.
 func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
+	// writeTurnHold is longer than SQLite's busy timeout, 5 seconds.
+	const writeTurnHold = 6 * time.Second
 	is := is.New(t)
 	e := newTestEnv(t)
 	if e.dbx.DriverName() != "sqlite" {
 		t.Skip("only SQLite databases have a write turn")
 	}
+	if e.s.recordTimeout <= writeTurnHold {
+		t.Fatalf("the default record timeout is %v, want more than %v", e.s.recordTimeout, writeTurnHold)
+	}
+	e.s.recordTimeout = time.Hour
 	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
@@ -439,9 +448,8 @@ func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 	go func() {
 		done <- e.dbx.TransactionContext(context.Background(), func(*db.Tx) error {
 			close(held)
-			// Hold the turn from when the record waits for it for
-			// longer than the 5 seconds the record used to wait. Load
-			// can only make the hold longer.
+			// Hold the turn from when the record waits for it. Load can
+			// only make the hold longer.
 			deadline := time.Now().Add(time.Minute)
 			for !waitingForWriteTurn() {
 				if time.Now().After(deadline) {
@@ -449,7 +457,7 @@ func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			time.Sleep(6 * time.Second)
+			time.Sleep(writeTurnHold)
 			return nil
 		})
 	}()

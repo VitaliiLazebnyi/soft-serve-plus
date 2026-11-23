@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -163,13 +162,11 @@ func (d *driver) run(cmd tea.Cmd) tea.Msg {
 	}
 	ch := make(chan tea.Msg, 1)
 	go func() { ch <- cmd() }()
-	select {
-	case msg := <-ch:
-		return msg
-	case <-time.After(uitest.HangGuard):
-		d.t.Fatalf("command did not finish within %v", uitest.HangGuard)
-		return nil
+	msg, ok := uitest.Receive(ch)
+	if !ok {
+		d.t.Fatal("command did not finish")
 	}
+	return msg
 }
 
 // Every pane of the repository page, and the header and status bar around

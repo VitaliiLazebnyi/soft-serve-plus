@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -108,10 +107,8 @@ func runLoad(t *testing.T, s *Selection, cmd tea.Cmd) bool {
 	}
 	ch := make(chan tea.Msg, 1)
 	go func() { ch <- cmd() }()
-	var msg tea.Msg
-	select {
-	case msg = <-ch:
-	case <-time.After(uitest.HangGuard):
+	msg, ok := uitest.Receive(ch)
+	if !ok {
 		t.Fatal("command did not return")
 	}
 	switch msg := msg.(type) {
