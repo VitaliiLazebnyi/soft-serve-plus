@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
@@ -72,7 +73,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := New(ctx, cfg, dbx, dbstore)
+	be := New(cfg, dbx, dbstore, log.FromContext(ctx))
 	ctx = db.WithContext(ctx, dbx)
 
 	user, err := be.User(ctx, "admin")
@@ -91,6 +92,7 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 // with pg_blocking_pids, so the test fails if the lock is removed), and once
 // it commits its 20th webhook, must fail.
 func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	for i := range webhook.MaxWebhooksPerRepo - 1 {
@@ -165,6 +167,7 @@ func waitBlockedBy(e whEnv, holder int, result <-chan error, op string) error {
 // Many creates at once on Postgres: exactly the cap succeed, the rest get
 // ErrTooManyWebhooks, and none fail with a deadlock or other error.
 func TestCreateWebhookConcurrentPostgres(t *testing.T) {
+	t.Parallel()
 	testConcurrentCreates(t, newPostgresWebhookEnv(t))
 }
 
@@ -172,6 +175,7 @@ func TestCreateWebhookConcurrentPostgres(t *testing.T) {
 // Latin-1 header, a NUL and a multi-byte body cut off at the size limit must
 // still be recorded, and redelivering it must not report an error.
 func TestWebhookDeliveryNonUTF8ResponsePostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 

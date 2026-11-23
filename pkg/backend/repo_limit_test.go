@@ -23,6 +23,7 @@ import (
 // that many repositories, by create and by import, and keeps the ones they
 // have. Deleting one frees a slot.
 func TestMaxReposPerUser(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -74,6 +75,7 @@ func TestMaxReposPerUser(t *testing.T) {
 // leaves no parent directory behind, and a name that is already taken gets
 // the limit as its answer, as import does.
 func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -103,6 +105,7 @@ func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
 // initial_admin_keys whatever account the key is on. So is the server's own
 // bootstrap create.
 func TestMaxReposPerUserAdminsExempt(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -140,6 +143,7 @@ func TestMaxReposPerUserAdminsExempt(t *testing.T) {
 // They are owned by the default admin but are counted apart from the
 // admin's own repositories.
 func TestMaxReposPerUserAnonymous(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -173,11 +177,14 @@ func TestMaxReposPerUserAnonymous(t *testing.T) {
 // in READ COMMITTED each create would otherwise count without seeing the
 // others' uncommitted rows.
 func TestMaxReposPerUserConcurrent(t *testing.T) {
+	t.Parallel()
 	t.Run("sqlite", func(t *testing.T) {
+		t.Parallel()
 		be, cfg := newTestBackend(t)
 		testMaxReposPerUserConcurrent(t, be, cfg, backendTestContext(be, cfg))
 	})
 	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
 		e := newPostgresWebhookEnv(t)
 		testMaxReposPerUserConcurrent(t, e.be, e.cfg, e.ctx)
 	})

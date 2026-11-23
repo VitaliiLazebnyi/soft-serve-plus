@@ -17,6 +17,7 @@ import (
 // setter reports a missing repository as proto.ErrRepoNotFound rather than
 // leaking a database or filesystem error, or silently succeeding.
 func TestMissingRepositoryAccessors(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
@@ -40,6 +41,7 @@ func TestMissingRepositoryAccessors(t *testing.T) {
 
 	for name, fn := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			err := fn()
 			if !errors.Is(err, proto.ErrRepoNotFound) {
 				t.Fatalf("expected ErrRepoNotFound, got %v", err)

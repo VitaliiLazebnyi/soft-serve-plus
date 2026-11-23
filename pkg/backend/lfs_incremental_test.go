@@ -28,13 +28,12 @@ type lfsScan struct {
 }
 
 // recordLFSScans makes the pointer scan record each of its runs.
-func recordLFSScans(t *testing.T) func() []lfsScan {
+func recordLFSScans(t *testing.T, be *Backend) func() []lfsScan {
 	t.Helper()
 	var mu sync.Mutex
 	var scans []lfsScan
-	orig := searchPointerBlobs
-	t.Cleanup(func() { searchPointerBlobs = orig })
-	searchPointerBlobs = func(ctx context.Context, r *git.Repository, include, exclude []string, pointerChan chan<- lfs.PointerBlob, errChan chan<- error) {
+	orig := be.searchPointerBlobs
+	be.searchPointerBlobs = func(ctx context.Context, r *git.Repository, include, exclude []string, pointerChan chan<- lfs.PointerBlob, errChan chan<- error) {
 		mu.Lock()
 		scans = append(scans, lfsScan{include: include, exclude: exclude})
 		i := len(scans) - 1
@@ -158,9 +157,10 @@ func oids(pointers ...lfs.Pointer) []string {
 // TestSyncRepoLFSObjectsIncremental verifies that a mirror sync only scans
 // the history added since the last one, and stores the objects in it.
 func TestSyncRepoLFSObjectsIncremental(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 2)
-	scans := recordLFSScans(t)
+	scans := recordLFSScans(t, lt.be)
 
 	// The first sync scans everything.
 	is.NoErr(lt.sync())
@@ -196,10 +196,12 @@ func TestSyncRepoLFSObjectsIncremental(t *testing.T) {
 // TestSyncRepoLFSObjectsFullScan verifies the cases in which a mirror sync
 // scans the whole history again.
 func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
+	t.Parallel()
 	t.Run("import", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.store())
 		is.NoErr(lt.store())
 		got := scans()
@@ -213,9 +215,10 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("old tip gone", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.sync())
 		scans()
 
@@ -238,9 +241,10 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("unreadable tips", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.sync())
 		scans()
 
@@ -252,9 +256,10 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	})
 
 	t.Run("lfs directory removed", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 2)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.sync())
 		scans()
 
@@ -276,10 +281,12 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 // TestSyncRepoLFSObjectsRetry verifies that objects a sync couldn't store
 // are tried again by later syncs, even when nothing new was fetched.
 func TestSyncRepoLFSObjectsRetry(t *testing.T) {
+	t.Parallel()
 	t.Run("first sync", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 2)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		p := lt.pointers[1]
 		lt.client.errs = map[string]error{p.Oid: errors.New("not there")}
 		is.True(errors.Is(lt.sync(), ErrLFSObjectsUnavailable))
@@ -296,9 +303,10 @@ func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 	})
 
 	t.Run("later sync", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.sync())
 		tip1 := lt.git(t, "rev-parse", "HEAD")
 		scans()
@@ -329,7 +337,9 @@ func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 // detached HEAD reaches is scanned, like git rev-list --all does, in a full
 // scan and in a scan of the new history.
 func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
+	t.Parallel()
 	t.Run("full scan", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		p := lt.detachHead(t)
@@ -340,9 +350,10 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 	})
 
 	t.Run("new history", func(t *testing.T) {
+		t.Parallel()
 		is := is.New(t)
 		lt := newLFSTest(t, 1)
-		scans := recordLFSScans(t)
+		scans := recordLFSScans(t, lt.be)
 		is.NoErr(lt.sync())
 		scans()
 
@@ -362,9 +373,10 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 // old, which fetches objects whose files went missing, and that scans of the
 // new history in between don't count as full scans.
 func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
-	scans := recordLFSScans(t)
+	scans := recordLFSScans(t, lt.be)
 	is.NoErr(lt.sync())
 	scans()
 	_, fullScan := readScannedRefs(lt.markerPath())
@@ -415,9 +427,10 @@ func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
 // history after upstream replaced it with unrelated history only finds and
 // fetches the objects of the new history.
 func TestSyncRepoLFSObjectsRewrittenHistory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 2)
-	scans := recordLFSScans(t)
+	scans := recordLFSScans(t, lt.be)
 	is.NoErr(lt.sync())
 	tip1 := lt.git(t, "rev-parse", "HEAD")
 	scans()
@@ -446,9 +459,10 @@ func TestSyncRepoLFSObjectsRewrittenHistory(t *testing.T) {
 // TestSyncRepoLFSObjectsTagOnly verifies that the objects of history only
 // a tag reaches are scanned and fetched.
 func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
-	scans := recordLFSScans(t)
+	scans := recordLFSScans(t, lt.be)
 	is.NoErr(lt.sync())
 	scans()
 
@@ -471,6 +485,7 @@ func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
 // that writeScannedRefs creates is 0700, like the object directories
 // pkg/storage creates under it.
 func TestWriteScannedRefsDirMode(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("windows has no unix permissions")
 	}

@@ -197,8 +197,10 @@ func (lt *lfsTest) incompleteFiles(t *testing.T) int {
 // and recorded, including the final partial batch, and that a later sync only
 // fetches objects that are missing on disk.
 func TestStoreRepoMissingLFSObjects(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{1, 21} {
 		t.Run(fmt.Sprintf("%d objects", n), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, n)
 
@@ -234,6 +236,7 @@ func TestStoreRepoMissingLFSObjects(t *testing.T) {
 // object's content doesn't hold a database write transaction, so other
 // writers aren't blocked for as long as the download takes.
 func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 
@@ -277,8 +280,10 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 // Recording an object then violates the foreign key, which must not be taken
 // for an object recorded already.
 func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
+	t.Parallel()
 	for _, onDisk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("on disk %v", onDisk), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 
@@ -299,6 +304,7 @@ func TestStoreRepoMissingLFSObjectsRepoDeleted(t *testing.T) {
 // remote reports an error for is skipped, the other objects are still
 // stored, and the sync reports ErrLFSObjectsUnavailable.
 func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 2)
 	missing, ok := lt.pointers[0], lt.pointers[1]
@@ -322,6 +328,7 @@ func TestStoreRepoMissingLFSObjectsObjectError(t *testing.T) {
 // instead of being counted as an unavailable object, and leaves neither the
 // object nor a temporary file behind.
 func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	broken := lt.pointers[0]
@@ -339,6 +346,7 @@ func TestStoreRepoMissingLFSObjectsReadError(t *testing.T) {
 // TestFetchImportLFSObjects verifies that an import succeeds when the remote
 // lacks some LFS objects, and fails when fetching them fails otherwise.
 func TestFetchImportLFSObjects(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 2)
 
@@ -360,12 +368,14 @@ func TestFetchImportLFSObjects(t *testing.T) {
 // TestStoreRepoMissingLFSObjectsBadContent verifies that content which
 // doesn't match the requested pointer is neither stored nor recorded.
 func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
+	t.Parallel()
 	for name, content := range map[string]func([]byte) []byte{
 		"wrong hash": func(b []byte) []byte { return bytes.ToUpper(b) },
 		"too short":  func(b []byte) []byte { return b[:len(b)-1] },
 		"too long":   func(b []byte) []byte { return append(b, '!') },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
@@ -384,6 +394,7 @@ func TestStoreRepoMissingLFSObjectsBadContent(t *testing.T) {
 // TestStoreRepoMissingLFSObjectsOmitted verifies that a requested object the
 // remote leaves out of its response is reported.
 func TestStoreRepoMissingLFSObjectsOmitted(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	lt.client.omit = map[string]bool{lt.pointers[0].Oid: true}
@@ -393,6 +404,7 @@ func TestStoreRepoMissingLFSObjectsOmitted(t *testing.T) {
 // TestStoreRepoMissingLFSObjectsUnrequested verifies that objects the remote
 // sends without being asked for, valid or not, are not stored.
 func TestStoreRepoMissingLFSObjectsUnrequested(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 
@@ -423,8 +435,10 @@ func TestStoreRepoMissingLFSObjectsUnrequested(t *testing.T) {
 // size doesn't match its pointer, such as one an interrupted download left
 // behind, is downloaded again rather than recorded as it is.
 func TestStoreRepoMissingLFSObjectsTruncated(t *testing.T) {
+	t.Parallel()
 	for _, recorded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recorded %v", recorded), func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTest(t, 1)
 			p := lt.pointers[0]
@@ -450,6 +464,7 @@ func TestStoreRepoMissingLFSObjectsTruncated(t *testing.T) {
 // TestStoreRepoMissingLFSObjectsDuplicateOid verifies that an oid two
 // different pointer blobs share is requested only once.
 func TestStoreRepoMissingLFSObjectsDuplicateOid(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 		// A trailing line makes another blob that parses to the same pointer.
@@ -465,6 +480,7 @@ func TestStoreRepoMissingLFSObjectsDuplicateOid(t *testing.T) {
 // right pointer from being fetched, whichever of the two is scanned first,
 // and that later syncs neither fetch nor report anything.
 func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// file is where the bad pointer goes. Blobs are scanned in tree
@@ -477,6 +493,7 @@ func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
 		{"bad pointer last", "z-bad.bin", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {
 				bad := lfs.Pointer{Oid: pointers[0].Oid, Size: pointers[0].Size + 1}
@@ -509,6 +526,7 @@ func TestStoreRepoMissingLFSObjectsSameOidOtherSize(t *testing.T) {
 // versions could leave behind, is checked and fetched again when its content
 // isn't the object.
 func TestStoreRepoMissingLFSObjectsWrongStoredObject(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	p := lt.pointers[0]
@@ -538,6 +556,7 @@ func TestStoreRepoMissingLFSObjectsWrongStoredObject(t *testing.T) {
 // pointer, as older versions could leave behind, gets its record corrected,
 // so later syncs neither fetch nor report anything.
 func TestStoreRepoMissingLFSObjectsWrongRecordedSize(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		file        string
@@ -547,6 +566,7 @@ func TestStoreRepoMissingLFSObjectsWrongRecordedSize(t *testing.T) {
 		{"bad pointer last", "z-bad.bin", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			var bad lfs.Pointer
 			lt := newLFSTestWith(t, 1, func(work string, pointers []lfs.Pointer) {

@@ -50,6 +50,7 @@ func (e whEnv) seedInactiveHook(t *testing.T, events ...webhook.Event) int64 {
 // An inactive webhook is sent nothing, on the push path that sends in the
 // caller and on the background path, while an active one next to it is.
 func TestInactiveWebhookGetsNoEvents(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	active := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventRepository)
@@ -72,6 +73,7 @@ func TestInactiveWebhookGetsNoEvents(t *testing.T) {
 
 // Reactivating a webhook resumes its deliveries.
 func TestReactivatedWebhookResumesDeliveries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepositoryVisibilityChange)
@@ -93,6 +95,7 @@ func TestReactivatedWebhookResumesDeliveries(t *testing.T) {
 // A webhook deactivated while its event waits in the queue is skipped when
 // the event is sent.
 func TestWebhookDeactivatedWhileQueuedIsSkipped(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventRepository)
@@ -115,6 +118,7 @@ func TestWebhookDeactivatedWhileQueuedIsSkipped(t *testing.T) {
 // Redelivering to an inactive webhook is refused and sends nothing. Once the
 // webhook is active again it can be redelivered.
 func TestRedeliverInactiveWebhookRefused(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)

@@ -12,6 +12,7 @@ import (
 // built with filepath.Join, so on Windows it held a backslash and never
 // matched a tree path.
 func TestReadmeInSubdirectory(t *testing.T) {
+	t.Parallel()
 	lt := newLFSTestWith(t, 0, func(work string, _ []lfs.Pointer) {
 		if err := os.MkdirAll(filepath.Join(work, "docs"), 0o755); err != nil {
 			t.Fatal(err)

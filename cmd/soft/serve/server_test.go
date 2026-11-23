@@ -67,7 +67,7 @@ func setupTestBackendWithDB(tb testing.TB) (context.Context, *config.Config, *ba
 
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 
 	return ctx, cfg, be, dbx
 }

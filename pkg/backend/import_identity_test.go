@@ -17,6 +17,7 @@ import (
 // A failed fetch then removes the import's own repository only: the one now
 // under the name is left alone. The cleanup used to delete by name.
 func TestFailedImportDeletesByIdentity(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx, cancel := context.WithCancel(asAdmin(t, be, backendTestContext(be, cfg)))

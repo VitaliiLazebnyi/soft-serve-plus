@@ -43,7 +43,7 @@ func newTestUIContext(t *testing.T) context.Context {
 	}
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	return backend.WithContext(ctx, backend.New(ctx, cfg, dbx, dbstore))
+	return backend.WithContext(ctx, backend.New(cfg, dbx, dbstore, log.FromContext(ctx)))
 }
 
 // The subtests run one at a time: building the UI pages writes the shared

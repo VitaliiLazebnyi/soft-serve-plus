@@ -40,6 +40,7 @@ func TestRunRemoteGitRedactsCommand(t *testing.T) {
 // The buffer keeps all of a short output, and of a long one its start and
 // its end, cut to whole words, with a mark for what it left out between.
 func TestHeadTailBuffer(t *testing.T) {
+	t.Parallel()
 	short := headTailBuffer{limit: 8}
 	writeAll(&short, "ab", "cdef ", "gh")
 	if got := short.String(); got != "abcdef gh" {
@@ -77,6 +78,7 @@ func writeAll(b *headTailBuffer, chunks ...string) {
 // buffer the URL falls on and wherever in it the cut lands, the limit
 // itself included.
 func TestRemoteGitOutputCutURL(t *testing.T) {
+	t.Parallel()
 	const token = "ghp_SECRETTOKEN"
 	url := "https://" + token + "@github.com/o/r.git"
 	filler := strings.Repeat("remote: noise\n", remoteGitOutputLimit/7)
@@ -110,6 +112,7 @@ func assertNoToken(t *testing.T, where string, cut int, out, token string) {
 // os/exec copies git's stderr pipe into the buffer with io.Copy, which
 // prefers the writer's ReadFrom, so the cap must hold on that path too.
 func TestHeadTailBufferCopyFromPipe(t *testing.T) {
+	t.Parallel()
 	if _, ok := any(&headTailBuffer{}).(io.ReaderFrom); ok {
 		t.Fatal("headTailBuffer implements io.ReaderFrom, which bypasses its limit")
 	}

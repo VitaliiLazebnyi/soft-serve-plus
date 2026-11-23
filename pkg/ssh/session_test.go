@@ -98,7 +98,7 @@ func setupServer(tb testing.TB) *ssh.Server {
 	}
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	return &ssh.Server{
 		Handler: ContextMiddleware(cfg, dbx, dbstore, be, log.Default())(BubbleTeaMiddleware(func(s ssh.Session) {
 			_, _, active := s.Pty()

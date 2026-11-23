@@ -65,6 +65,7 @@ func (s txCheckStore) GetRepoByName(ctx context.Context, h db.Handler, name stri
 // AnonAccess, AllowKeyless, Repository and IsCollaborator are on the access
 // check of every request.
 func TestSingleReadsRunWithoutTransaction(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	admin, err := be.User(ctx, "admin")

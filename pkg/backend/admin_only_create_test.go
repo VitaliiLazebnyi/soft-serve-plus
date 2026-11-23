@@ -25,6 +25,7 @@ import (
 // With AdminOnlyCreate on, a missing name is read-only for non-admins and
 // anonymous users, so nothing can be created there.
 func TestAdminOnlyCreateFlagOnCapsBaseAccess(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -48,6 +49,7 @@ func TestAdminOnlyCreateFlagOnCapsBaseAccess(t *testing.T) {
 // behaviour: a registered user gets read-write on a missing name, so can
 // create it.
 func TestAdminOnlyCreateFlagOffKeepsUpstreamBaseAccess(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -64,6 +66,7 @@ func TestAdminOnlyCreateFlagOffKeepsUpstreamBaseAccess(t *testing.T) {
 
 // A database admin keeps admin access on a missing name whatever the flag.
 func TestDatabaseAdminBaseAccessIgnoresFlag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -82,6 +85,7 @@ func TestDatabaseAdminBaseAccessIgnoresFlag(t *testing.T) {
 // level when that is higher than read-write (upstream behaviour), and the
 // flag on caps it at read-only.
 func TestAnonAdminLevelIsCappedOnlyWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -149,6 +153,7 @@ const offlineRemote = "https://127.0.0.1/x.git"
 // or above, as the SSH and HTTP handlers already require. An entry point that
 // skips the handlers' checks cannot let anonymous users create.
 func TestBackendRefusesAnonymousCreatesUnderReadOnlyAnonAccess(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -178,6 +183,7 @@ func TestBackendRefusesAnonymousCreatesUnderReadOnlyAnonAccess(t *testing.T) {
 // anonymous caller, creating, importing or renaming to a new name, whichever
 // caller reaches it. Nothing is created.
 func TestBackendRefusesNonAdminCreatesWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -205,6 +211,7 @@ func TestBackendRefusesNonAdminCreatesWhenFlagOn(t *testing.T) {
 // With AdminOnlyCreate on, a non-admin's rename of an owned repository to a
 // new name is refused and the repository stays where it was.
 func TestBackendRefusesNonAdminRenameToNewNameWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -227,6 +234,7 @@ func TestBackendRefusesNonAdminRenameToNewNameWhenFlagOn(t *testing.T) {
 // a new name. The import may still fail for an unrelated reason (for example,
 // a git version gate), so it only has to pass the policy.
 func TestBackendAllowsAdminCreatesWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -248,6 +256,7 @@ func TestBackendAllowsAdminCreatesWhenFlagOn(t *testing.T) {
 // With AdminOnlyCreate off, the same non-admin calls are not refused by the
 // policy: create and rename to a new name succeed.
 func TestBackendAllowsNonAdminCreatesWhenFlagOff(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -282,12 +291,14 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 // still let it create, import and rename to a new name: IsServerAdmin honours
 // the key.
 func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
+	t.Parallel()
 	for _, registered := range []bool{false, true} {
 		name := "anonymous"
 		if registered {
 			name = "non-admin user"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
@@ -338,6 +349,7 @@ func TestBackendAllowsAdminKeyCreatesWhenFlagOn(t *testing.T) {
 // without proof of holding its private half, so a user could claim a key
 // before an operator lists it and become an admin over HTTP.
 func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -385,6 +397,7 @@ func TestHTTPAdminOnlyByAdminFlag(t *testing.T) {
 // as before, and so does the owner once promoted or once the key is
 // unlisted.
 func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	be, cfg := newTestBackendWithLog(t, &logs)
@@ -449,6 +462,7 @@ func TestListedAdminKeyOwnedByNonAdminHasNoAccount(t *testing.T) {
 // current owner, and not once the conflict is resolved: the owner promoted,
 // the key gone from the account, or the key no longer listed.
 func TestOwnedAdminKeyWarningFollowsTheConflict(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs bytes.Buffer
 	be, cfg := newTestBackendWithLog(t, &logs)

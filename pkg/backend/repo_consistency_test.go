@@ -13,6 +13,7 @@ import (
 // RemoveCollaborator takes the name in any case, like AddCollaborator, and
 // its event carries the stored, lowercase name.
 func TestRemoveCollaboratorEventNamesStoredUsername(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "bob", proto.UserOptions{})
@@ -40,6 +41,7 @@ func refuseRepoUpdate(t *testing.T, e whEnv, column string) {
 
 // A description the database refuses leaves the stored one as it was.
 func TestSetDescriptionDBFailureKeepsDescription(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	is.NoErr(e.be.SetDescription(e.ctx, "repo", "before"))
@@ -53,6 +55,7 @@ func TestSetDescriptionDBFailureKeepsDescription(t *testing.T) {
 
 // A visibility change the database refuses leaves the repository as it was.
 func TestSetPrivateDBFailureKeepsVisibility(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	refuseRepoUpdate(t, e, "private")

@@ -127,6 +127,7 @@ func pushWaitsForGate() bool {
 // starts while it is being removed waits for that and then finds it gone,
 // rather than writing refs into a directory about to be deleted.
 func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -145,7 +146,7 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 
 	// A push starts during the removal, after the last check for refs.
 	pushErr := make(chan error, 1)
-	testHookBeforePushCreatedDelete = func() {
+	be.beforePushCreatedDelete = func() {
 		go func() {
 			done, err := be.BeginPush(ctx, r)
 			if err == nil {
@@ -170,7 +171,6 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	t.Cleanup(func() { testHookBeforePushCreatedDelete = nil })
 
 	removed, err = be.RemovePushCreatedRepository(ctx, r)
 	is.NoErr(err)
@@ -189,13 +189,12 @@ func TestRemovePushCreatedRepositoryChecksWhenDeleting(t *testing.T) {
 	is.New(t).NoErr(err)
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
 	is.New(t).NoErr(err)
-	t.Cleanup(func() { testHookBeforePushCreatedDelete = nil })
 
 	t.Run("collaborator", func(t *testing.T) {
 		is := is.New(t)
 		r, err := be.CreateRepository(ctx, "collab", owner, proto.RepositoryOptions{})
 		is.NoErr(err)
-		testHookBeforePushCreatedDelete = func() {
+		be.beforePushCreatedDelete = func() {
 			is.NoErr(be.AddCollaborator(ctx, "collab", "alice", access.ReadWriteAccess))
 		}
 
@@ -211,7 +210,7 @@ func TestRemovePushCreatedRepositoryChecksWhenDeleting(t *testing.T) {
 		r, err := be.CreateRepository(ctx, "name", owner, proto.RepositoryOptions{})
 		is.NoErr(err)
 		var other proto.Repository
-		testHookBeforePushCreatedDelete = func() {
+		be.beforePushCreatedDelete = func() {
 			is.NoErr(be.RenameRepository(ctx, "name", "moved"))
 			other, err = be.CreateRepository(ctx, "name", owner, proto.RepositoryOptions{})
 			is.NoErr(err)

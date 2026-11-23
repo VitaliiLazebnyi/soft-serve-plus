@@ -109,6 +109,7 @@ func (e whEnv) createHook(t *testing.T, url string, events ...webhook.Event) int
 }
 
 func TestCreateWebhookStoresFields(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -133,6 +134,7 @@ func TestCreateWebhookStoresFields(t *testing.T) {
 }
 
 func TestListWebhooksEmpty(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -142,6 +144,7 @@ func TestListWebhooksEmpty(t *testing.T) {
 }
 
 func TestCreateWebhookRejectsUnsafeURLs(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -163,6 +166,7 @@ func TestCreateWebhookRejectsUnsafeURLs(t *testing.T) {
 }
 
 func TestCreateWebhookSanitizesURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -177,6 +181,7 @@ func TestCreateWebhookSanitizesURL(t *testing.T) {
 // Suspected bug: an unknown content type is accepted and stored, so every
 // later delivery to the webhook fails.
 func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -186,6 +191,7 @@ func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
 
 // Suspected bug: an event value outside the known set is stored as-is.
 func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -197,6 +203,7 @@ func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
 // constraint, so the whole create fails with a raw database error instead of
 // storing the event once.
 func TestCreateWebhookAcceptsDuplicateEvents(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -213,6 +220,7 @@ func TestCreateWebhookAcceptsDuplicateEvents(t *testing.T) {
 // URLs differ. Deleting one makes room again, and other repositories are not
 // affected.
 func TestCreateWebhookCapsWebhooksPerRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	var ids []int64
@@ -239,6 +247,7 @@ func TestCreateWebhookCapsWebhooksPerRepo(t *testing.T) {
 // longer than busy_timeout on a slow disk (Windows), so they also rely on
 // the write transactions of one process taking turns (see db.transaction).
 func TestCreateWebhookConcurrentSQLite(t *testing.T) {
+	t.Parallel()
 	testConcurrentCreates(t, newWebhookEnv(t))
 }
 
@@ -282,6 +291,7 @@ func testConcurrentCreates(t *testing.T, e whEnv) {
 }
 
 func TestUpdateWebhookChangesEverything(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventCollaborator)
@@ -302,6 +312,7 @@ func TestUpdateWebhookChangesEverything(t *testing.T) {
 // empty list to DeleteWebhookEventsByID, and sqlx rejects an empty IN clause,
 // so a plain update that keeps the same events fails.
 func TestUpdateWebhookWithSameEvents(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -312,6 +323,7 @@ func TestUpdateWebhookWithSameEvents(t *testing.T) {
 
 // Suspected bug: a plain add (nothing removed) hits the same empty IN clause.
 func TestUpdateWebhookAddsEventOnly(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -327,6 +339,7 @@ func TestUpdateWebhookAddsEventOnly(t *testing.T) {
 // Suspected bug: CreateWebhook sanitizes the URL but UpdateWebhook does not,
 // so the stored URL depends on which call wrote it.
 func TestUpdateWebhookSanitizesURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -340,6 +353,7 @@ func TestUpdateWebhookSanitizesURL(t *testing.T) {
 }
 
 func TestUpdateWebhookRejectsUnsafeURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -357,6 +371,7 @@ func TestUpdateWebhookRejectsUnsafeURL(t *testing.T) {
 // succeeds silently, because the store's UPDATE matches zero rows and nothing
 // checks that.
 func TestUpdateWebhookUnknownIDFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -369,6 +384,7 @@ func TestUpdateWebhookUnknownIDFails(t *testing.T) {
 // zero-row update, so updating another repo's webhook through this repo
 // rewrites that webhook's events.
 func TestUpdateWebhookCannotTouchOtherRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
@@ -386,6 +402,7 @@ func TestUpdateWebhookCannotTouchOtherRepo(t *testing.T) {
 }
 
 func TestWebhookGetScopedToRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
@@ -399,6 +416,7 @@ func TestWebhookGetScopedToRepo(t *testing.T) {
 }
 
 func TestDeleteWebhookScopedToRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
@@ -413,6 +431,7 @@ func TestDeleteWebhookScopedToRepo(t *testing.T) {
 
 // Deleting a webhook removes its events and deliveries.
 func TestDeleteWebhookRemovesEvents(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventRepository)
@@ -455,6 +474,7 @@ func (e whEnv) seedDelivery(t *testing.T, webhookID int64, url string, body stri
 }
 
 func TestListAndReadDeliveries(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -474,6 +494,7 @@ func TestListAndReadDeliveries(t *testing.T) {
 }
 
 func TestDeliveriesScopedToRepo(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
@@ -492,6 +513,7 @@ func TestDeliveriesScopedToRepo(t *testing.T) {
 }
 
 func TestDeliveriesUnknown(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -506,6 +528,7 @@ func TestDeliveriesUnknown(t *testing.T) {
 // Redelivery to a private address fails at dial time. The failure is recorded
 // as a new delivery, and the call itself returns nil.
 func TestRedeliverRecordsNewDelivery(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -557,6 +580,7 @@ func TestRedeliverDoesNotLogPayload(t *testing.T) {
 // A stored body that fails to parse is reported to the caller, but the parse
 // error is not logged, since it quotes part of the body.
 func TestRedeliverParseErrorNotLogged(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		ct   webhook.ContentType
@@ -569,6 +593,7 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 		{"form", webhook.ContentTypeForm, `a=%zz`, "error parsing webhook form body", "%zz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			e := newWebhookEnv(t)
 			id := e.createHook(t, whURL, webhook.EventPush)
@@ -592,6 +617,7 @@ func TestRedeliverParseErrorNotLogged(t *testing.T) {
 // Suspected bug: a form-encoded webhook cannot be redelivered, because the
 // stored JSON body is passed as a raw message and form encoding of it fails.
 func TestRedeliverFormWebhook(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -620,6 +646,7 @@ func TestRedeliverFormWebhook(t *testing.T) {
 // A delivery kept by retention pruning can still be redelivered; a pruned one
 // is reported as not found.
 func TestRedeliverAfterPrune(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -642,6 +669,7 @@ func TestRedeliverAfterPrune(t *testing.T) {
 }
 
 func TestRedeliverFailures(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -663,6 +691,7 @@ func TestRedeliverFailures(t *testing.T) {
 // Error paths inside transactions are reached by removing the table the
 // operation reads or writes. The database is per test, so this is safe.
 func TestErrorPathsWhenStoreFails(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -703,6 +732,7 @@ func TestErrorPathsWhenStoreFails(t *testing.T) {
 // A URL already used by another webhook of the same repository violates the
 // unique (repo_id, url) constraint, so the update fails and changes nothing.
 func TestUpdateWebhookFailsOnDuplicateURL(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	a := e.createHook(t, whURL, webhook.EventPush)
@@ -740,6 +770,7 @@ func (e whEnv) dropTrigger(t *testing.T, name string) {
 // A failure while removing an event must roll back the whole update, so the
 // URL and the remaining events stay as they were.
 func TestUpdateWebhookRollsBackOnEventDeleteFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventCollaborator)
@@ -758,6 +789,7 @@ func TestUpdateWebhookRollsBackOnEventDeleteFailure(t *testing.T) {
 
 // A failure while adding an event must roll back the whole update.
 func TestUpdateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -776,8 +808,10 @@ func TestUpdateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 // Each dependent-row delete in DeleteWebhook can fail. A failure must leave
 // the webhook, its events and its deliveries in place.
 func TestDeleteWebhookRollsBackOnStoreFailure(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"webhook_deliveries", "webhook_events", "webhooks"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			e := newWebhookEnv(t)
 			id := e.createHook(t, whURL, webhook.EventPush)
@@ -800,6 +834,7 @@ func TestDeleteWebhookRollsBackOnStoreFailure(t *testing.T) {
 
 // A failure while creating events fails the whole create.
 func TestCreateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
@@ -814,6 +849,7 @@ func TestCreateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 
 // A stored form body that is not a valid query string cannot be redelivered.
 func TestRedeliverMalformedFormBody(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -828,6 +864,7 @@ func TestRedeliverMalformedFormBody(t *testing.T) {
 // A redelivery sends the stored body in the content type the delivery was
 // recorded with, even if the webhook's content type changed afterwards.
 func TestRedeliverUsesStoredContentTypeAfterWebhookChanged(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -872,6 +909,7 @@ func TestRedeliverUsesStoredContentTypeAfterWebhookChanged(t *testing.T) {
 // redelivery: the webhook's current content type is used and the fallback is
 // logged.
 func TestRedeliverFallsBackOnUnknownStoredContentType(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -914,6 +952,7 @@ func TestRedeliverFallsBackOnUnknownStoredContentType(t *testing.T) {
 // key. That must be reported as the repository being gone, not as a
 // duplicate key.
 func TestCreateWebhookOnDeletedRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
@@ -957,6 +996,7 @@ func (e whEnv) redeliveredHeaders(t *testing.T, id int64, delID uuid.UUID) strin
 // A redelivery sends the delivery GUID of the delivery it repeats, and a
 // redelivery of that redelivery keeps the same GUID.
 func TestRedeliverKeepsDeliveryGUID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -995,6 +1035,7 @@ func TestRedeliverKeepsDeliveryGUID(t *testing.T) {
 // A stored delivery without a usable GUID header is redelivered with its own
 // id, the GUID it was first sent with.
 func TestRedeliverWithoutStoredGUIDUsesDeliveryID(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
@@ -1022,6 +1063,7 @@ func TestRedeliverWithoutStoredGUIDUsesDeliveryID(t *testing.T) {
 }
 
 func TestStoredHeader(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	headers := "Content-Type: application/json\nx-softserve-delivery:  abc \nX-SoftServe-Delivery: second\n"
 

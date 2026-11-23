@@ -56,10 +56,14 @@ func stallingRemote(t *testing.T) (remote, hostPort string, accepted <-chan stru
 }
 
 // waitAccepted waits for the stalling remote to be dialed.
-func waitAccepted(t *testing.T, accepted <-chan struct{}) {
+// An import that ends before it reaches the remote fails the test with its
+// error, rather than after the wait.
+func waitAccepted(t *testing.T, accepted <-chan struct{}, errc <-chan error) {
 	t.Helper()
 	select {
 	case <-accepted:
+	case err := <-errc:
+		t.Fatalf("the import ended before it reached the remote: %v", err)
 	case <-time.After(time.Minute):
 		t.Fatal("the import never reached the remote")
 	}
@@ -100,6 +104,7 @@ func assertNothingLeft(t *testing.T, be *Backend, name string) {
 // An import stops, and cleans up, when the caller goes away: a dropped SSH
 // session must not leave a clone running on the server.
 func TestImportRepositoryStopsWithCaller(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, accepted := stallingRemote(t)
@@ -109,7 +114,7 @@ func TestImportRepositoryStopsWithCaller(t *testing.T) {
 	is.NoErr(err)
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted)
+	waitAccepted(t, accepted, errc)
 	cancel()
 	is.True(errors.Is(waitImport(t, errc), proto.ErrImportFailed))
 	assertNothingLeft(t, be, "stalled")
@@ -117,6 +122,7 @@ func TestImportRepositoryStopsWithCaller(t *testing.T) {
 
 // An import that runs past importTimeout is stopped and cleaned up.
 func TestImportRepositoryTimeout(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, _ := stallingRemote(t)
@@ -124,9 +130,7 @@ func TestImportRepositoryTimeout(t *testing.T) {
 	admin, err := be.User(ctx, "admin")
 	is.NoErr(err)
 
-	prev := importTimeout
-	importTimeout = time.Second
-	t.Cleanup(func() { importTimeout = prev })
+	be.importTimeout = time.Second
 
 	is.True(errors.Is(waitImport(t, importAsync(ctx, be, "stalled", admin, remote)), proto.ErrImportFailed))
 	assertNothingLeft(t, be, "stalled")
@@ -135,6 +139,7 @@ func TestImportRepositoryTimeout(t *testing.T) {
 // StopImports, which shutdown calls, stops the imports in flight and
 // refuses new ones; WaitForImports returns once they have cleaned up.
 func TestStopImports(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	remote, _, accepted := stallingRemote(t)
@@ -143,7 +148,7 @@ func TestStopImports(t *testing.T) {
 	is.NoErr(err)
 
 	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted)
+	waitAccepted(t, accepted, errc)
 	be.StopImports()
 	wctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -162,6 +167,7 @@ func TestStopImports(t *testing.T) {
 // passed that check can still find the limit reached when it records its
 // repository, after the clone: it then fails and leaves nothing behind.
 func TestImportRepoLimit(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -203,6 +209,7 @@ func TestImportRepoLimit(t *testing.T) {
 // reserveImport caps the imports in flight per user, except for server
 // admins, and on the whole server, and frees a slot once.
 func TestReserveImportCaps(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -257,6 +264,7 @@ func TestReserveImportCaps(t *testing.T) {
 // failure while leaving that repository behind: registering runs to the
 // end, and the import either succeeds or removes what it created.
 func TestImportStoppedDuringRegister(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))

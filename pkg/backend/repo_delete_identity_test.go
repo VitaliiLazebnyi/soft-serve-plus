@@ -61,6 +61,7 @@ func swapFixture(t *testing.T) (be *Backend, ctx context.Context, orig proto.Rep
 // as not found and leaves both alone. It used to build the event for one
 // repository and delete the other.
 func TestDeleteRepositoryActsOnTheRepositoryItLookedUp(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, ctx, orig, replacement := swapFixture(t)
 
@@ -77,6 +78,7 @@ func TestDeleteRepositoryActsOnTheRepositoryItLookedUp(t *testing.T) {
 // DeleteResolvedRepository deletes the repository a caller resolved, and
 // checked access to, before; never another one that took its name since.
 func TestDeleteResolvedRepository(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))

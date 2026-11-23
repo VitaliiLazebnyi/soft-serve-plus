@@ -23,6 +23,7 @@ import (
 // included, and a stock git daemon pointed at the data directory exports
 // none of them.
 func TestRemoveDaemonExportFiles(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -74,6 +75,7 @@ func (s *repoCountingStore) GetAllRepos(ctx context.Context, h db.Handler) ([]mo
 // both the orphan report and the export-file sweep. They used to do both
 // twice.
 func TestCheckRepositoryDirsScansOnce(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)

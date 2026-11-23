@@ -14,6 +14,7 @@ import (
 // registered user and an anonymous caller can neither create nor import it,
 // nor rename a repository to it.
 func TestAboutRepoReservedForAdmins(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -55,6 +56,7 @@ func TestAboutRepoReservedForAdmins(t *testing.T) {
 
 // A server admin may create AboutRepo, and rename a repository to it.
 func TestAboutRepoAllowedForAdmins(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -79,6 +81,7 @@ func TestAboutRepoAllowedForAdmins(t *testing.T) {
 // default admin as owner, is refused: such a repository can predate the
 // reservation of the name for admins.
 func TestAboutRepoOwnedByAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)

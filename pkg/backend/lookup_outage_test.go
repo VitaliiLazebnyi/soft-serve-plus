@@ -35,12 +35,12 @@ func newLookupBackend(t *testing.T, logs io.Writer) *Backend {
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
+	var logger *charmlog.Logger
 	if logs != nil {
-		logger := charmlog.New(logs)
+		logger = charmlog.New(logs)
 		logger.SetLevel(charmlog.DebugLevel)
-		ctx = charmlog.WithContext(ctx, logger)
 	}
-	return New(ctx, cfg, dbx, database.New())
+	return New(cfg, dbx, database.New(), logger)
 }
 
 // During an outage a missing name gets the same answer as an existing
@@ -48,8 +48,10 @@ func newLookupBackend(t *testing.T, logs io.Writer) *Backend {
 // answer of "no access" for the missing name only would tell anyone which
 // private names exist.
 func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be := newLookupBackend(t, nil)
 			ctx := context.Background()
@@ -86,6 +88,7 @@ func TestOutageAnswersMissingAndExistingAlike(t *testing.T) {
 // gives read-write, and list nothing for an anonymous caller, all with no
 // error. The wrappers other callers use still fail closed.
 func TestSettingsLookupErrorsReturned(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
@@ -116,6 +119,7 @@ func TestSettingsLookupErrorsReturned(t *testing.T) {
 // The fail-closed settings wrappers log a lookup the client canceled at
 // Debug, not as a server error.
 func TestSettingsLookupCanceledLoggedAtDebug(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
@@ -132,6 +136,7 @@ func TestSettingsLookupCanceledLoggedAtDebug(t *testing.T) {
 // A failed owner lookup keeps the about repository's readme hidden, as
 // before, and is now logged.
 func TestAboutRepoOwnerLookupFailureLogged(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var logs syncBuffer
 	be := newLookupBackend(t, &logs)
@@ -150,6 +155,7 @@ func TestAboutRepoOwnerLookupFailureLogged(t *testing.T) {
 // with the lookup error, marked as proto.ErrLookupFailed, not with a
 // refusal, and nothing is created.
 func TestCheckCanCreateReturnsLookupError(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be := newLookupBackend(t, nil)
 	ctx := context.Background()

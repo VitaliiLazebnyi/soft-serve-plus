@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -805,7 +806,7 @@ func TestWebhookListReportsStoreFailure(t *testing.T) {
 	// The backend lists webhooks through its own store, not the context's,
 	// so the failing store goes into a backend over the same database.
 	failStore := failingWebhookStore{Store: store.FromContext(ownerCtx)}
-	failBe := backend.New(ownerCtx, config.FromContext(ownerCtx), db.FromContext(ownerCtx), failStore)
+	failBe := backend.New(config.FromContext(ownerCtx), db.FromContext(ownerCtx), failStore, log.FromContext(ownerCtx))
 	failCtx := backend.WithContext(store.WithContext(ownerCtx, failStore), failBe)
 
 	stdout, _, err := runRepoOutput(t, failCtx, "webhook", "list", "hooks")

@@ -70,6 +70,7 @@ func (e whEnv) deliveredPushes(t *testing.T, hookID int64) []pushPayload {
 // process looked the pusher up by the name in SOFT_SERVE_USERNAME, and
 // named the other account.
 func TestAfterPushSenderIsThePushingAccount(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	alice, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
@@ -92,6 +93,7 @@ func TestAfterPushSenderIsThePushingAccount(t *testing.T) {
 // A push with no account, such as an anonymous one or a key with no user
 // row, sends its events with an empty sender.
 func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
@@ -110,6 +112,7 @@ func TestAfterPushWithoutAccountHasEmptySender(t *testing.T) {
 // repository's one sender busy, AfterPush returns before any of them is
 // sent, and they are sent once the sender is free.
 func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -135,6 +138,7 @@ func TestAfterPushQueuesEventsBehindTheRepositorysOthers(t *testing.T) {
 // Regression (review round 1): the job stopped as soon as the queue was
 // closed, so the push lost every event, recorded nowhere.
 func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -167,6 +171,7 @@ func TestAfterPushQueuedBeforeShutdownIsSent(t *testing.T) {
 // records each of its events as undelivered, with the reason, so they can
 // be redelivered.
 func TestAfterPushQueueFullRecordsUndelivered(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
@@ -199,6 +204,7 @@ func TestAfterPushQueueFullRecordsUndelivered(t *testing.T) {
 // forEachPushEvent stops at the first ref once its context is done and says
 // how far it got, so the queue-full path can log what it left unrecorded.
 func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	commit := makeCommit(t, e.be.repoPath("repo"))
@@ -231,6 +237,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 // and queues nothing (R55): the owner row is broken here, so building one
 // would log an error.
 func TestAfterPushWithoutSubscribersBuildsNothing(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventRepository)
@@ -250,6 +257,7 @@ func TestAfterPushWithoutSubscribersBuildsNothing(t *testing.T) {
 // A payload that cannot be built is logged and skipped; the push's other
 // events are still sent.
 func TestAfterPushSkipsAnEventItCannotBuild(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.seedHook(t, webhook.EventPush)
@@ -270,6 +278,7 @@ func TestAfterPushSkipsAnEventItCannotBuild(t *testing.T) {
 // When the subscribers cannot be read, the failure is logged and nothing is
 // sent; the push itself has already happened.
 func TestAfterPushSurvivesSubscriberLookupFailure(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventPush)
@@ -284,6 +293,7 @@ func TestAfterPushSurvivesSubscriberLookupFailure(t *testing.T) {
 
 // A repository deleted before its push's events are sent sends none.
 func TestAfterPushRepositoryGoneSendsNothing(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventPush)
@@ -303,6 +313,7 @@ func TestAfterPushRepositoryGoneSendsNothing(t *testing.T) {
 // The post-update work: a push that updated refs writes info/last-modified;
 // one that updated none leaves it alone.
 func TestAfterPushWritesLastModified(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newWebhookEnv(t)
 	commit := makeCommit(t, e.be.repoPath("repo"))

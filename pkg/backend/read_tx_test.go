@@ -22,6 +22,7 @@ import (
 // another connection holds a write transaction open, instead of waiting for
 // it (busy_timeout) and then failing with "database is locked".
 func TestLookupsDoNotWaitForWriter(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	// The webhook methods take the database and store from the context.

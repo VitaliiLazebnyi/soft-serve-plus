@@ -49,6 +49,7 @@ func assertDir(t *testing.T, p string) {
 // leaves empty, but not the repos directory or a group that still has
 // repositories.
 func TestDeleteRepositoryRemovesEmptyParents(t *testing.T) {
+	t.Parallel()
 	be, create, root := nestedReposFixture(t)
 	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b/c")
@@ -76,6 +77,7 @@ func TestDeleteRepositoryRemovesEmptyParents(t *testing.T) {
 
 // A group directory holding something other than repositories is kept.
 func TestDeleteRepositoryKeepsNonEmptyParent(t *testing.T) {
+	t.Parallel()
 	be, create, root := nestedReposFixture(t)
 	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b")
@@ -95,6 +97,7 @@ func TestDeleteRepositoryKeepsNonEmptyParent(t *testing.T) {
 // A group directory that is a symlink is left alone, even when what it
 // points to is empty.
 func TestDeleteRepositoryKeepsSymlinkedParent(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need extra privileges on Windows")
 	}
@@ -121,6 +124,7 @@ func TestDeleteRepositoryKeepsSymlinkedParent(t *testing.T) {
 // Renaming a repository out of a group removes the group directories the old
 // name leaves empty, and renaming within a group keeps the group.
 func TestRenameRepositoryRemovesEmptyParents(t *testing.T) {
+	t.Parallel()
 	be, create, root := nestedReposFixture(t)
 	ctx := asAdmin(t, be, backendTestContext(be, be.cfg))
 	create("a/b/c")
@@ -149,6 +153,7 @@ func TestRenameRepositoryRemovesEmptyParents(t *testing.T) {
 // A create that fails after claiming its directory removes the group
 // directories it made.
 func TestFailedCreateRemovesEmptyParents(t *testing.T) {
+	t.Parallel()
 	be, create, root := nestedReposFixture(t)
 	create("g/h/r")
 	// Leave the row but take the directory away, so a second create
@@ -166,6 +171,7 @@ func TestFailedCreateRemovesEmptyParents(t *testing.T) {
 // withRepoParent recreates a parent removed between its creation and the
 // placement, as a concurrent delete of the group's last repository does.
 func TestWithRepoParentRecreatesRemovedParent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	p := filepath.Join(root, "a", "b", "r.git")
 	removed := false
@@ -188,6 +194,7 @@ func TestWithRepoParentRecreatesRemovedParent(t *testing.T) {
 // name. The move is made to fail by taking write permission away from the old
 // name's group directory, which os.Rename needs to unlink the old entry.
 func TestFailedRenameRemovesEmptyParents(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not block a rename on Windows")
 	}

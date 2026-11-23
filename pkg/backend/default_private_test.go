@@ -16,6 +16,7 @@ import (
 // server admins, and refused for anonymous callers, who could not reach a
 // private repository.
 func TestDefaultPrivate(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -42,7 +43,7 @@ func newRepoTestUI(t *testing.T) *UI {
 	}
 	dbstore := database.New()
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 	for _, name := range []string{"a", "b"} {
 		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {

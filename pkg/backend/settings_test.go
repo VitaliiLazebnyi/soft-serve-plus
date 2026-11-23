@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
@@ -50,11 +49,11 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 
 	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
 	dbstore := database.New()
-	ctx = store.WithContext(ctx, dbstore)
+	var logger *charmlog.Logger
 	if logs != nil {
-		ctx = charmlog.WithContext(ctx, charmlog.New(logs))
+		logger = charmlog.New(logs)
 	}
-	be := New(ctx, cfg, dbx, dbstore)
+	be := New(cfg, dbx, dbstore, logger)
 
 	return be, cfg
 }
@@ -130,6 +129,7 @@ func setAdminKeys(t *testing.T, cfg *config.Config, keys []string) {
 }
 
 func TestAnonAccessConfigOverride(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -153,6 +153,7 @@ func TestAnonAccessConfigOverride(t *testing.T) {
 }
 
 func TestAllowKeylessConfigOverride(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()

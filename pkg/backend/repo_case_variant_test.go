@@ -47,6 +47,7 @@ func assertSecretIntact(t *testing.T, be *Backend) {
 // directory as an orphan and remove it, leaving the real repository's row
 // without a repository.
 func TestDeleteRepositoryCaseVariantKeepsRepository(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: SECRET is a different repository")
@@ -62,6 +63,7 @@ func TestDeleteRepositoryCaseVariantKeepsRepository(t *testing.T) {
 // On a case-insensitive filesystem renaming the case variant used to move the
 // directory of "secret" while no row was renamed, stranding the repository.
 func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: SECRET is a different repository")
@@ -84,6 +86,7 @@ func TestRenameRepositoryCaseVariantKeepsRepository(t *testing.T) {
 // which reported success for a repository that does not exist. The rename now
 // needs the row and leaves the directory where it is.
 func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -101,6 +104,7 @@ func TestRenameRepositoryWithoutRowLeavesDirectory(t *testing.T) {
 // name reported as not found. It is reported when the server starts (see
 // OrphanRepositoryDirs). The delete used to remove it.
 func TestDeleteRepositoryLeavesOrphanDirectory(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
@@ -118,6 +122,7 @@ func TestDeleteRepositoryLeavesOrphanDirectory(t *testing.T) {
 // like these are not case variants of each other, so the delete must compare
 // the directory against every repository, not only names that fold alike.
 func TestDeleteRepositoryNormalizationVariantKeepsRepository(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	const (
@@ -151,6 +156,7 @@ func TestDeleteRepositoryNormalizationVariantKeepsRepository(t *testing.T) {
 // row and whose directory is spelled exactly so on disk, must not treat that
 // directory as an orphan: it is the directory of "Secret".
 func TestDeleteRepositoryExactSpellingOfAnotherRepositoryKeepsIt(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	if !createCaseVariantFixture(t, be) {
 		t.Skip("filesystem is case-sensitive: Secret has its own directory")

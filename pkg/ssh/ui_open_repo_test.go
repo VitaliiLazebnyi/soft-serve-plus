@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -64,7 +65,7 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 	dbstore := database.New()
 	ctx = db.WithContext(ctx, dbx)
 	ctx = store.WithContext(ctx, dbstore)
-	be := backend.New(ctx, cfg, dbx, dbstore)
+	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	ctx = backend.WithContext(ctx, be)
 
 	pk := uiTestKey(t)

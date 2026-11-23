@@ -20,6 +20,7 @@ import (
 // deleting transaction (checked with pg_blocking_pids) and then fail with
 // proto.ErrRepoNotFound, since the repository it names is gone.
 func TestDeleteRepositoryKeepCheckLocksRowPostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})

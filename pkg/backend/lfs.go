@@ -66,11 +66,7 @@ const lfsFullScanPrefix = "full-scan "
 // before, so this is how long an object file that went missing or was cut
 // short stays that way. Once a day keeps the cost of the full scan on a
 // large repository to one sync in 144 at the default mirror interval.
-var lfsFullScanInterval = 24 * time.Hour
-
-// searchPointerBlobs scans for pointers. Tests replace it to see what is
-// scanned.
-var searchPointerBlobs = lfs.SearchPointerBlobsBetween
+const lfsFullScanInterval = 24 * time.Hour
 
 // lfsScanError is an error of the pointer scan itself, as opposed to one
 // that came up storing the objects it found.
@@ -268,7 +264,7 @@ func (d *Backend) storeMissingLFSObjects(ctx context.Context, repo proto.Reposit
 
 	pointerChan := make(chan lfs.PointerBlob)
 	errChan := make(chan error, 1)
-	go searchPointerBlobs(ctx, r, include, exclude, pointerChan, errChan)
+	go d.searchPointerBlobs(ctx, r, include, exclude, pointerChan, errChan)
 
 	s := &lfsSync{
 		ctx:       ctx,

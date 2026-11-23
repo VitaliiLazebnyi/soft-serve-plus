@@ -44,6 +44,7 @@ func (s *raceDeleteWebhookStore) DeleteRepoByName(ctx context.Context, h db.Hand
 // reported the repository not found, rolling everything back. The two now
 // take turns on the repository's row.
 func TestDeleteWebhookRacingRepositoryDeletePostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)

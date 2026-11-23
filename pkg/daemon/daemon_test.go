@@ -80,7 +80,7 @@ func runTests(m *testing.M) int {
 	}
 	datastore := database.New()
 	ctx = store.WithContext(ctx, datastore)
-	be := backend.New(ctx, cfg, dbx, datastore)
+	be := backend.New(cfg, dbx, datastore, nil)
 	testBackend = be
 	ctx = backend.WithContext(ctx, be)
 	d, err := NewGitDaemon(ctx)

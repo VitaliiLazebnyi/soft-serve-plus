@@ -15,6 +15,7 @@ import (
 // config: mirror = true on the remote with a URL, removed again when
 // mirroring is switched off, and nothing else touched.
 func TestSetMirrorConfig(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -71,6 +72,7 @@ func TestSetMirrorConfig(t *testing.T) {
 // fetches every ref of a remote with --prune, so each would delete and
 // overwrite the other's refs. Nothing is written.
 func TestSetMirrorRefusesTwoRemotes(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)

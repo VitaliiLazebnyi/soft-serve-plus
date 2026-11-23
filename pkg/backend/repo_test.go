@@ -27,6 +27,7 @@ import (
 // a nil user (an anon-access/allow-keyless override) is owned by the
 // lowest-ID admin rather than failing the NOT NULL repos.user_id constraint.
 func TestCreateRepositoryAnonymousOwner(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -48,6 +49,7 @@ func TestCreateRepositoryAnonymousOwner(t *testing.T) {
 // error rather than silently returning a zero user ID (which would violate
 // the NOT NULL repos.user_id constraint) when the database has no admin.
 func TestDefaultAdminUserIDNoAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
@@ -68,6 +70,7 @@ func TestDefaultAdminUserIDNoAdmin(t *testing.T) {
 // maps to the right user-facing error, and that accepted remotes carry the
 // git environment that keeps the validation honest.
 func TestValidateImportRemote(t *testing.T) {
+	t.Parallel()
 	allowed, err := ssrf.ParseAllowedHosts([]string{"git.internal.example", "10.0.0.0/8"})
 	if err != nil {
 		t.Fatal(err)
@@ -108,10 +111,12 @@ func TestValidateImportRemote(t *testing.T) {
 		{"unparseable http to loopback", "http://a{b@127.0.0.1:8080/", nobody, proto.ErrInvalidRemote},
 	}
 
+	d := &Backend{validateGitRemote: ssrf.ValidateGitRemoteContext}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
-			v, err := validateImportRemote(context.Background(), tt.remote, tt.policy)
+			v, err := d.validateImportRemote(context.Background(), tt.remote, tt.policy)
 
 			if tt.wantErr != nil {
 				is.True(errors.Is(err, tt.wantErr))
@@ -133,6 +138,7 @@ func TestValidateImportRemote(t *testing.T) {
 // the caller blocked forever on a channel that was only written after a
 // successful clone, leaking a goroutine per failed import.
 func TestImportRepositoryCloneFailure(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("ssh"); err != nil {
 		t.Skip("ssh client not available")
 	}
@@ -174,6 +180,7 @@ func TestImportRepositoryCloneFailure(t *testing.T) {
 }
 
 func TestRedactRemote(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"https://user:secret@example.com/x.git": "https://example.com/x.git",
 		"https://TOKEN@example.com/x.git":       "https://example.com/x.git",
@@ -193,6 +200,7 @@ func TestRedactRemote(t *testing.T) {
 // configured, only a server admin may import over ssh. The clone would
 // present the server's client key to whatever host the remote names.
 func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
@@ -243,6 +251,7 @@ func TestImportRepositorySSHRequiresAdmin(t *testing.T) {
 // it has no account or a non-admin one, as IsServerAdmin treats it. The same caller without the key on the context, or with any
 // other key, is still refused.
 func TestImportRepositorySSHAdminKey(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("ssh"); err != nil {
 		t.Skip("ssh client not available")
 	}
@@ -253,6 +262,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 			name = "non-admin user"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
 			be, cfg := newTestBackend(t)
 			ctx := backendTestContext(be, cfg)
@@ -338,6 +348,7 @@ func TestImportRepositorySSHAdminKey(t *testing.T) {
 // that an LFS endpoint the job would skip is not a refusal. Such a repository arises when a non-admin account holding an
 // admin key imports from ssh without --mirror.
 func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -433,6 +444,7 @@ func TestSetMirrorChecksOwnerPolicy(t *testing.T) {
 // remotes with a deadline and before it opens a transaction, so a slow
 // resolver cannot hold the database lock and stall other writers.
 func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
@@ -447,9 +459,8 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 
 	entered := make(chan bool, 1)
 	release := make(chan struct{})
-	prev := validateGitRemote
-	t.Cleanup(func() { validateGitRemote = prev })
-	validateGitRemote = func(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
+	prev := be.validateGitRemote
+	be.validateGitRemote = func(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
 		_, hasDeadline := ctx.Deadline()
 		entered <- hasDeadline
 		<-release
@@ -476,6 +487,7 @@ func TestSetMirrorValidatesOutsideTransaction(t *testing.T) {
 // refused before any remote is touched, and that a new enough git leaves the
 // gate open.
 func TestImportRepositoryDisabled(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		version  git.Version
@@ -494,12 +506,10 @@ func TestImportRepositoryDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			is := is.New(t)
-			orig := binVersion
-			binVersion = func() (git.Version, error) { return tt.version, tt.err }
-			t.Cleanup(func() { binVersion = orig })
-
 			be, _ := newTestBackend(t)
+			be.binVersion = func() (git.Version, error) { return tt.version, tt.err }
 			ctx := context.Background()
 			admin, err := be.User(ctx, "admin")
 			is.NoErr(err)
@@ -524,17 +534,15 @@ func TestImportRepositoryDisabled(t *testing.T) {
 // backend, whatever the outcome: a version that could not be read keeps
 // imports off until restart.
 func TestImportGateChecksOnce(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	var calls int
 	err := errors.New("fork/exec git: resource temporarily unavailable")
-	orig := binVersion
-	binVersion = func() (git.Version, error) {
+	be, _ := newTestBackend(t)
+	be.binVersion = func() (git.Version, error) {
 		calls++
 		return git.Version{Major: 2, Minor: 45}, err
 	}
-	t.Cleanup(func() { binVersion = orig })
-
-	be, _ := newTestBackend(t)
 	is.True(be.ImportsDisabledReason() != "")
 	err = nil
 	is.True(be.ImportsDisabledReason() != "")

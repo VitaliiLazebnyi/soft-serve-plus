@@ -30,6 +30,7 @@ func createDeleteFixture(t *testing.T, be *Backend) string {
 // stay too. The directory used to be removed inside the transaction, so a
 // failed commit left a row with no repository behind it.
 func TestDeleteRepositoryCommitFailureKeepsDirectory(t *testing.T) {
+	t.Parallel()
 	be, cfg := newTestBackend(t)
 	rp := createDeleteFixture(t, be)
 	ctx := backendTestContext(be, cfg)
@@ -60,6 +61,7 @@ func TestDeleteRepositoryCommitFailureKeepsDirectory(t *testing.T) {
 // removed is logged rather than reported as a failed delete, and nothing can
 // take the leftover directory over. It is an orphan, reported at start-up.
 func TestDeleteRepositoryDirectoryRemovalFailure(t *testing.T) {
+	t.Parallel()
 	// As in os/removeall_test.go: on Windows a mode only sets the read-only
 	// attribute, which does not stop removal, and root ignores the mode.
 	if runtime.GOOS == "windows" {

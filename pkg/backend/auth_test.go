@@ -5,6 +5,7 @@ import (
 )
 
 func TestGenerateToken(t *testing.T) {
+	t.Parallel()
 	token := GenerateToken()
 	if token == "" {
 		t.Fatal("token is empty")
@@ -12,6 +13,7 @@ func TestGenerateToken(t *testing.T) {
 }
 
 func TestHashToken(t *testing.T) {
+	t.Parallel()
 	token := GenerateToken()
 	hash := HashToken(token)
 	if hash == "" {

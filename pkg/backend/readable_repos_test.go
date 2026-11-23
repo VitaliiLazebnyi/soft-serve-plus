@@ -17,6 +17,7 @@ import (
 // caller's collaborations once, picks exactly the repositories Readable
 // lets the caller read one by one.
 func TestReadableRepositories(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()

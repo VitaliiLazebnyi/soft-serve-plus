@@ -27,14 +27,13 @@ func (s *pausingMirrorStore) SetRepoIsMirrorByName(ctx context.Context, h db.Han
 // rename of the repository waits for it rather than slip in between the
 // check and the write. The check used to read the row without a lock.
 func TestSetMirrorLocksCheckedRowPostgres(t *testing.T) {
+	t.Parallel()
 	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	r, err := git.Open(e.be.repoPath("repo"))
 	is.NoErr(err)
 	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
-	prev := validateGitRemote
-	t.Cleanup(func() { validateGitRemote = prev })
-	validateGitRemote = func(context.Context, string, ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
+	e.be.validateGitRemote = func(context.Context, string, ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
 		return ssrf.ValidatedGitRemote{}, nil
 	}
 
