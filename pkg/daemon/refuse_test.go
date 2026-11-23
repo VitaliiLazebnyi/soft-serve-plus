@@ -15,35 +15,35 @@ import (
 // request deadline. The wait used to be what was left of the request timeout
 // when the request line arrived, counted again from the refusal, so slow
 // checks pushed it past the deadline by as long as they took.
+//
+// Nothing here is decided by how long a step takes. The request timeout is
+// an hour, so no stall makes the request line late, and the refusal reads
+// its time from a clock two request timeouts ahead, so it comes after the
+// request deadline however soon it runs. Past that deadline the daemon
+// lets go of the connection at once; the old wait would hold it for about
+// the request timeout more, an hour, far past the test's wait.
 func TestRefusalEndsAtRequestDeadline(t *testing.T) {
 	t.Parallel()
-	const requestTimeout = 4 * time.Second
-	release := make(chan time.Time, 1)
+	const requestTimeout = time.Hour
 	d, addr := startLimitedDaemon(t, 1, func(d *GitDaemon) {
 		d.requestTimeout = requestTimeout
 		d.refuseLinger = time.Hour
-		// Keep the access checks busy until past the request deadline.
-		d.testHooks.beforeAuthorize = func() { time.Sleep(time.Until(<-release)) }
+		d.testHooks.now = func() time.Time { return time.Now().Add(2 * requestTimeout) }
 	})
 	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
-	// The daemon has accepted the connection once it counts it, so its
-	// request deadline is before now plus the request timeout.
-	waitConns(t, d, 1, idleWait)
-	release <- time.Now().Add(requestTimeout)
+	_ = c.SetReadDeadline(time.Now().Add(idleWait))
 	if _, err := io.WriteString(c, pkt("git-upload-pack /deadline-missing.git\x00host=localhost\x00")); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
 	_, err = readPktline(c)
 	wantErrLine(t, "missing repo", err, git.ErrNotAuthed)
-	// The request deadline has passed, so the daemon lets go of the
-	// connection at once. The old wait would hold it for about the
-	// request timeout more.
-	waitConns(t, d, 0, requestTimeout/2)
+	// The client neither sends nor hangs up, so only the end of the
+	// refusal's wait closes the connection.
+	waitConns(t, d, 0, idleWait)
 }
 
 // dialHeld connects to addr, sends request, and reads the daemon's answer,

@@ -53,6 +53,7 @@ func newLookupTestDaemon(t *testing.T) (context.Context, *GitDaemon, *db.DB, *sy
 	if err != nil {
 		t.Fatal(err)
 	}
+	patient(d)
 	t.Cleanup(func() { _ = d.Close() })
 	return ctx, d, dbx, logs
 }
