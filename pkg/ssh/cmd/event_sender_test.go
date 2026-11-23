@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -81,8 +82,7 @@ func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
 				got <- senderEvent{req.Header.Get("X-SoftServe-Event"), payload.Sender.ID, payload.Sender.Username}
 				w.WriteHeader(http.StatusOK)
 			}))
-			is.NoErr(be.CreateWebhook(ownerCtx, r, srv.URL+"/hook", webhook.ContentTypeJSON, "",
-				[]webhook.Event{webhook.EventBranchTagDelete, webhook.EventRepository}, true))
+			is.NoErr(be.CreateWebhook(ownerCtx, r, backend.WebhookInput{URL: srv.URL + "/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventBranchTagDelete, webhook.EventRepository}, Active: true}))
 
 			is.NoErr(be.SetUsername(ctx, "owner", "renamed"))
 			is.NoErr(runRepo(t, ownerCtx, tc.args...))

@@ -41,7 +41,7 @@ func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
 	url := srv.URL + "/hook"
 
 	// Default: refused at create.
-	err := e.be.CreateWebhook(e.ctx, e.repo, url, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventRepositoryVisibilityChange}, true)
+	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: url, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepositoryVisibilityChange}, Active: true})
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 
 	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
@@ -67,15 +67,15 @@ func TestWebhookAllowedHostsUpdate(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 	events := []webhook.Event{webhook.EventPush}
 
-	err := e.be.UpdateWebhook(e.ctx, e.repo, id, "http://10.1.2.3/hook", webhook.ContentTypeJSON, "", events, true)
+	err := e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://10.1.2.3/hook", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 
 	e.setWebhookAllowedHosts(t, "10.0.0.0/8", "0.0.0.0/0:8080")
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, "http://10.1.2.3/hook", webhook.ContentTypeJSON, "", events, true))
+	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://10.1.2.3/hook", ContentType: webhook.ContentTypeJSON, Events: events, Active: true}))
 
-	err = e.be.UpdateWebhook(e.ctx, e.repo, id, "http://169.254.169.254:8080/latest/meta-data", webhook.ContentTypeJSON, "", events, true)
+	err = e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://169.254.169.254:8080/latest/meta-data", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
-	err = e.be.CreateWebhook(e.ctx, e.repo, "http://169.254.169.254:8080/", webhook.ContentTypeJSON, "", events, true)
+	err = e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: "http://169.254.169.254:8080/", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
 	is.True(errors.Is(err, ssrf.ErrPrivateIP))
 
 	h, err := e.be.Webhook(e.ctx, e.repo, id)
@@ -95,9 +95,9 @@ func TestWebhookCreateAndUpdateStopWhenCancelled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
-	err := e.be.CreateWebhook(ctx, e.repo, "https://hooks.example/new", webhook.ContentTypeJSON, "", events, true)
+	err := e.be.CreateWebhook(ctx, e.repo, WebhookInput{URL: "https://hooks.example/new", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
 	is.True(errors.Is(err, context.Canceled))
-	err = e.be.UpdateWebhook(ctx, e.repo, id, "https://hooks.example/changed", webhook.ContentTypeJSON, "", events, true)
+	err = e.be.UpdateWebhook(ctx, e.repo, id, WebhookInput{URL: "https://hooks.example/changed", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
 	is.True(errors.Is(err, context.Canceled))
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)

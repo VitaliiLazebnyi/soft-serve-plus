@@ -109,8 +109,7 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 		is.Equal(n, webhook.MaxWebhooksPerRepo-1)
 
 		go func() {
-			result <- e.be.CreateWebhook(e.ctx, e.repo, whURL+"/racer",
-				webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
+			result <- e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL + "/racer", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 		}()
 		if err := waitBlockedBy(e, holder, result, "CreateWebhook"); err != nil {
 			return err
