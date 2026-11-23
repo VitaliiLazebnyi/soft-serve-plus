@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -110,4 +112,26 @@ func TestEmptyImportRecordsNoLastModified(t *testing.T) {
 	is.True(!strings.Contains(logs.String(), "failed to record the last change"))
 	_, err = os.Stat(imp.path + "/info/last-modified")
 	is.True(os.IsNotExist(err))
+}
+
+// info/last-modified is a data file: it is written readable and writable as
+// the umask allows, like the files git writes, and never executable.
+func TestLastModifiedIsNotExecutable(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bits")
+	}
+	is := is.New(t)
+	be, cfg := newTestBackend(t)
+	ctx := backendTestContext(be, cfg)
+	_, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
+	is.NoErr(err)
+	commitLongAgo(t, be.repoPath("repo"))
+
+	is.NoErr(be.populateLastModified(ctx, "repo"))
+	fi, err := os.Stat(filepath.Join(be.repoPath("repo"), "info", "last-modified"))
+	is.NoErr(err)
+	if mode := fi.Mode().Perm(); mode&^0o666 != 0 {
+		t.Fatalf("info/last-modified has mode %v, want no bits beyond 0666", mode)
+	}
 }

@@ -1841,7 +1841,9 @@ func (d *Backend) populateLastModified(ctx context.Context, name string) error {
 	if err := os.MkdirAll(filepath.Dir(fp), os.ModePerm); err != nil {
 		return err
 	}
-	return os.WriteFile(fp, []byte(t.Format(time.RFC3339)), os.ModePerm) //nolint:gosec
+	// 0o666 less the umask, as git writes the files beside it. The time of
+	// the latest commit is no secret to anyone who can read the objects.
+	return os.WriteFile(fp, []byte(t.Format(time.RFC3339)), 0o666) //nolint:gosec // see above
 }
 
 func readOneline(path string) (string, error) {
