@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParseAccessLevel(t *testing.T) {
+func TestParseLevel(t *testing.T) {
 	cases := []struct {
 		in  string
 		out Level
@@ -22,9 +22,9 @@ func TestParseAccessLevel(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		out, err := ParseAccessLevel(c.in)
+		out, err := ParseLevel(c.in)
 		if out != c.out || !errors.Is(err, c.err) || (err == nil) != (c.err == nil) {
-			t.Errorf("ParseAccessLevel(%q) => (%d, %v), want (%d, %v)", c.in, out, err, c.out, c.err)
+			t.Errorf("ParseLevel(%q) => (%d, %v), want (%d, %v)", c.in, out, err, c.out, c.err)
 		}
 	}
 }

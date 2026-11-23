@@ -26,7 +26,7 @@ func (*Store) GetAnonAccess(ctx context.Context, h db.Handler) (access.Level, er
 	if err := h.GetContext(ctx, &level, query); err != nil {
 		return access.NoAccess, err
 	}
-	l, err := access.ParseAccessLevel(level)
+	l, err := access.ParseLevel(level)
 	if err != nil {
 		return access.NoAccess, fmt.Errorf("anon_access setting %q: %w", level, err)
 	}

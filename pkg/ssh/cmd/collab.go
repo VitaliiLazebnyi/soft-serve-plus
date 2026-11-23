@@ -59,7 +59,7 @@ func (cmds *Commands) collabAddCommand() *cobra.Command {
 			level := access.ReadWriteAccess
 			if len(args) > 2 {
 				var err error
-				if level, err = access.ParseAccessLevel(args[2]); err != nil {
+				if level, err = access.ParseLevel(args[2]); err != nil {
 					return err
 				}
 			}
