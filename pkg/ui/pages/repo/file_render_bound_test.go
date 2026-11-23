@@ -22,7 +22,10 @@ func codeRenders(cmd tea.Cmd) []tea.Msg {
 // A file of many short lines is not highlighted, however small: chroma's
 // cost grows with its tokens.
 //
-// Not parallel: it measures the bytes the process allocates.
+// Not parallel: it measures the bytes the process allocates, and it needs
+// a free tokenising slot. The server highlights at most a few files at
+// once, and a parallel test holding the slots would leave this file
+// unhighlighted, so it would pass for the wrong reason.
 func TestFileOfManyLinesNotHighlighted(t *testing.T) {
 	f := newUnboundedFiles(t)
 	deliverAll(f, openFile(t, f, strings.Repeat("x := 1\n", 20000), "many.go"))
