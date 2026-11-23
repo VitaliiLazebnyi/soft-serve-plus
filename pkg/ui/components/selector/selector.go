@@ -1,3 +1,4 @@
+// Package selector is the TUI component for a list of items to select from.
 package selector
 
 import (

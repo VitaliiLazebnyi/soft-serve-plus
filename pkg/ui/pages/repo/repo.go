@@ -1,3 +1,5 @@
+// Package repo is the TUI's repository page, with its readme, files,
+// commits, stash, branches and tags tabs.
 package repo
 
 import (

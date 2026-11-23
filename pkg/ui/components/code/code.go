@@ -1,3 +1,5 @@
+// Package code is the TUI component that shows a file or a README:
+// highlighted source or rendered markdown, within size and time limits.
 package code
 
 import (
@@ -375,9 +377,8 @@ func (j renderJob) run() RenderedMsg {
 	// File contents come from the repository and must not reach the
 	// terminal as escape sequences; chroma and glamour pass them through.
 	content := termtext.Sanitize(j.content)
-	// FIXME chroma & glamour might break wrapping when using tabs since tab
-	// width depends on the terminal. This is a workaround to replace tabs
-	// with spaces.
+	// Tabs become spaces: their width depends on the terminal, which chroma
+	// and glamour do not know, so they would break the wrapping.
 	content = strings.ReplaceAll(content, "\t", strings.Repeat(" ", j.tabWidth))
 	small := len(content) <= HighlightMax
 	longest := longestLine(content)

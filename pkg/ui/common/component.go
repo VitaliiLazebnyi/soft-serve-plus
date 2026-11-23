@@ -14,7 +14,7 @@ type Model interface {
 	View() string
 }
 
-// Component represents a Bubble Tea model that implements a SetSize function.
+// Component is a Model with key help and a size its parent sets.
 type Component interface {
 	Model
 	help.KeyMap

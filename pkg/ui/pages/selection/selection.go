@@ -1,3 +1,5 @@
+// Package selection is the TUI's first page: the server's readme and the
+// list of repositories the session may read.
 package selection
 
 import (

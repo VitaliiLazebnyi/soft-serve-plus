@@ -1,3 +1,5 @@
+// Package statusbar is the TUI component for the bar at the bottom of the
+// repository page.
 package statusbar
 
 import (

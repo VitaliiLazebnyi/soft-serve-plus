@@ -1,3 +1,5 @@
+// Package ui is the TUI of an SSH session and of soft browse: a list of
+// repositories and a page per repository.
 package ui
 
 import (
