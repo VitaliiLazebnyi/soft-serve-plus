@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -24,6 +25,9 @@ func TestServiceEnv(t *testing.T) {
 		"SOFT_SERVE_TESTRUN=1",
 		"SOFT_SERVE_TEST_WEBHOOK_ADDR=127.0.0.1:1",
 		"SOFT_SERVEX=kept",
+		"GIT_PROTOCOL=version=2",
+		"git_protocol=version=2",
+		"GIT_PROTOCOLX=kept",
 		"NOEQUALS",
 	}
 	extra := []string{
@@ -41,6 +45,7 @@ func TestServiceEnv(t *testing.T) {
 		"SOFT_SERVE_TESTRUN=1",
 		"SOFT_SERVE_TEST_WEBHOOK_ADDR=127.0.0.1:1",
 		"SOFT_SERVEX=kept",
+		"GIT_PROTOCOLX=kept",
 		"NOEQUALS",
 		"GIT_NO_REPLACE_OBJECTS=1",
 		"SOFT_SERVE_REPO_NAME=repo",
@@ -48,6 +53,44 @@ func TestServiceEnv(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("serviceEnv:\n got %q\nwant %q", got, want)
+	}
+}
+
+// A GIT_PROTOCOL in the server's own environment does not reach git: a
+// request that asks for no version is served v0, as the transport answers
+// it, and a request's own version is still the one git serves. The server's
+// environment is the environ argument, so the variable is set for the git
+// child alone.
+func TestServiceEnvDropsInheritedProtocol(t *testing.T) {
+	t.Parallel()
+	dir := initBare(t)
+	environ := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_PROTOCOL=version=2",
+	}
+	for _, tc := range []struct {
+		name  string
+		extra []string
+		v2    bool
+	}{
+		{"no version asked", nil, false},
+		{"version=1 asked", []string{"GIT_PROTOCOL=version=1"}, false},
+		{"version=2 asked", []string{"GIT_PROTOCOL=version=2"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := exec.CommandContext(t.Context(), "git", "upload-pack", "--stateless-rpc", "--advertise-refs", dir)
+			cmd.Env = serviceEnv(environ, tc.extra)
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("upload-pack: %v", err)
+			}
+			if got := bytes.HasPrefix(out, []byte("000eversion 2\n")); got != tc.v2 {
+				t.Errorf("git served v2: %t, want %t; advertisement %q", got, tc.v2, out)
+			}
+		})
 	}
 }
 
