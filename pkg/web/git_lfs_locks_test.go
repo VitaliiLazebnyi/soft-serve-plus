@@ -520,3 +520,54 @@ func TestLFSLocksAnonymousWriterAsksForCredentials(t *testing.T) {
 		})
 	}
 }
+
+// A lock is refused for a path that does not name one file in the working
+// tree, and nothing is stored for it.
+//
+// Its subtests run in order on one fixture, so only the test runs in
+// parallel with others.
+func TestLFSLockCreateRejectsInvalidPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
+	t.Parallel()
+	f := newLocksFixture(t)
+	ctx, rc := f.ctx, f.owner
+	rc.level = access.ReadWriteAccess
+	dbx := f.env.dbx
+	countLocks := func() int {
+		t.Helper()
+		var n int
+		if err := dbx.GetContext(ctx, &n, "SELECT COUNT(*) FROM lfs_locks"); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := countLocks()
+
+	for _, p := range []string{"", "/a.bin", "../a.bin", "./a.bin", "dir//a.bin", "dir/../a.bin", "a\x00b"} {
+		t.Run(p, func(t *testing.T) {
+			b, _ := json.Marshal(lfs.LockCreateRequest{Path: p, Ref: lfs.Reference{Name: "refs/heads/main"}})
+			req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks", strings.NewReader(string(b)))
+			req.Header.Set("Accept", lfs.MediaType)
+			req.Header.Set("Content-Type", lfs.MediaType)
+			w := httptest.NewRecorder()
+			f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusUnprocessableEntity, w.Body)
+			}
+		})
+	}
+
+	if after := countLocks(); after != before {
+		t.Fatalf("locks = %d, want %d", after, before)
+	}
+
+	// A valid path still locks.
+	b, _ := json.Marshal(lfs.LockCreateRequest{Path: "dir/c.bin", Ref: lfs.Reference{Name: "refs/heads/main"}})
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/repo.git/info/lfs/locks", strings.NewReader(string(b)))
+	req.Header.Set("Accept", lfs.MediaType)
+	req.Header.Set("Content-Type", lfs.MediaType)
+	w := httptest.NewRecorder()
+	f.s.serveRoute((*server).serviceLfsLocks, w, req, rc)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusCreated, w.Body)
+	}
+}

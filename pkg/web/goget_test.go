@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"runtime"
 	"strings"
 	"testing"
@@ -196,4 +198,63 @@ func TestPathAncestorsBounded(t *testing.T) {
 	is.Equal(got[len(got)-1], "a")
 	is.Equal(got[len(got)-2], "a/a")
 	is.Equal(pathAncestors("a/.git/b"), []string{"a/.git/b", "a"})
+}
+
+// goGet requests the go-get page for path.
+func goGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path+"?go-get=1", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// The go-get import root keeps the path of the public URL, and the page
+// escapes what it interpolates.
+func TestGoGetImportRoot(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	f := newOracleFixture(t)
+	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
+	is.NoErr(err)
+	cfg := f.env.cfg
+
+	cfg.HTTP.PublicURL = "https://example.com/git"
+	w := goGet(t, f.handler, "/pub/sub")
+	is.Equal(w.Code, http.StatusOK)
+	is.Equal(w.Header().Get("Content-Type"), "text/html; charset=utf-8")
+	body := w.Body.String()
+	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/git/pub git https://example.com/git/pub.git">`))
+	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/git/pub"`))
+	is.True(strings.Contains(body, `content="0; url=https://pkg.go.dev/example.com/git/pub"`))
+
+	cfg.HTTP.PublicURL = "https://example.com"
+	body = goGet(t, f.handler, "/pub").Body.String()
+	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/pub git https://example.com/pub.git">`))
+
+	// A public URL is configuration, but it is still not markup.
+	cfg.HTTP.PublicURL = `https://example.com/a"><script>x</script>`
+	w = goGet(t, f.handler, "/pub")
+	body = w.Body.String()
+	// The page still renders, with the value escaped rather than dropped.
+	is.Equal(w.Code, http.StatusOK)
+	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git">`))
+	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`))
+	is.True(!strings.Contains(body, "<script>"))
+	is.True(!strings.Contains(body, `a">`))
+	is.True(!strings.Contains(body, "ZgotmplZ"))
+}
+
+func TestGoImportRoot(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	for raw, want := range map[string]string{
+		"https://example.com":           "example.com",
+		"https://example.com/":          "example.com",
+		"https://example.com:8443/a/b/": "example.com:8443/a/b",
+	} {
+		u, err := url.Parse(raw)
+		is.NoErr(err)
+		is.Equal(goImportRoot(u), want)
+	}
 }
