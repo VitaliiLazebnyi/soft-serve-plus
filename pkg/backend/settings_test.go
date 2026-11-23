@@ -31,6 +31,13 @@ func newTestBackend(t *testing.T) (*Backend, *config.Config) {
 // default logger.
 func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Config) {
 	t.Helper()
+	return newTestBackendWithQuery(t, logs, "")
+}
+
+// newTestBackendWithQuery is newTestBackendWithLog with query, which starts
+// with "&", added to the SQLite data source, such as to set its journal mode.
+func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backend, *config.Config) {
+	t.Helper()
 	is := is.New(t)
 	ctx := context.Background()
 
@@ -38,7 +45,7 @@ func newTestBackendWithLog(t *testing.T, logs io.Writer) (*Backend, *config.Conf
 	cfg := config.DefaultConfig()
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" + query
 	// AdminOnlyCreate is left at its default (off); tests of the restricted
 	// policy turn it on themselves.
 

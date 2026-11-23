@@ -121,11 +121,18 @@ func newLFSTest(t *testing.T, objects int) *lfsTest {
 // to the work tree before it is committed.
 func newLFSTestWith(t *testing.T, objects int, extra func(work string, pointers []lfs.Pointer)) *lfsTest {
 	t.Helper()
+	return newLFSTestWithQuery(t, objects, extra, "")
+}
+
+// newLFSTestWithQuery is newLFSTestWith on a backend whose data source has
+// query added (see newTestBackendWithQuery).
+func newLFSTestWithQuery(t *testing.T, objects int, extra func(work string, pointers []lfs.Pointer), query string) *lfsTest {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
 
-	be, cfg := newTestBackend(t)
+	be, cfg := newTestBackendWithQuery(t, nil, query)
 	ctx := config.WithContext(context.Background(), cfg)
 	repo, err := be.CreateRepository(ctx, "lfs-repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	if err != nil {
@@ -238,15 +245,19 @@ func TestStoreRepoMissingLFSObjects(t *testing.T) {
 func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
-	lt := newLFSTest(t, 1)
+	// The database is in rollback-journal mode, where an open read
+	// transaction keeps a write from committing too, so the probe below
+	// catches either kind. In WAL mode it would catch only a write one.
+	const journal = "&_pragma=journal_mode(DELETE)"
+	lt := newLFSTestWithQuery(t, 1, nil, journal)
 
 	// probe is a second handle on the database that never waits for a
 	// lock: with busy_timeout 0, its write transaction fails at once with
 	// "database is locked" while any connection holds a write transaction,
-	// or, in rollback-journal mode, an open read transaction (then at
-	// COMMIT), and succeeds otherwise. Unlike a write bounded by a
-	// deadline, it doesn't depend on how fast the machine is.
-	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)", db.Options{})
+	// or an open read transaction (then at COMMIT), and succeeds otherwise.
+	// Unlike a write bounded by a deadline, it doesn't depend on how fast
+	// the machine is.
+	probe, err := db.Open(lt.ctx, "sqlite", filepath.Join(lt.be.cfg.DataPath, "test.db")+"?_pragma=busy_timeout(0)"+journal, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { probe.Close() }) //nolint:errcheck
 
@@ -269,7 +280,7 @@ func TestStoreRepoMissingLFSObjectsNoTxDuringDownload(t *testing.T) {
 
 	is.NoErr(lt.store())
 	is.True(called)    // the content was read
-	is.NoErr(probeErr) // no write transaction, nor in rollback-journal mode a read one, is open while the object downloads
+	is.NoErr(probeErr) // no write transaction, nor a read one, is open while the object downloads
 	is.NoErr(writeErr) // so another writer isn't blocked
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), lt.pointers[0].Oid)
 	is.NoErr(err)
