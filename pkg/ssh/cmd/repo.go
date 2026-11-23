@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -81,9 +81,9 @@ func (cmds *Commands) RepoCommand() *cobra.Command {
 
 				// project name and description are optional, handle trailing
 				// whitespace to avoid breaking tests.
-				cmd.Println(strings.TrimSpace(fmt.Sprint("Project Name: ", utils.Sanitize(rr.ProjectName()))))
+				cmd.Println(strings.TrimSpace(fmt.Sprint("Project Name: ", termtext.Sanitize(rr.ProjectName()))))
 				cmd.Println("Repository:", rr.Name())
-				cmd.Println(strings.TrimSpace(fmt.Sprint("Description: ", utils.Sanitize(rr.Description()))))
+				cmd.Println(strings.TrimSpace(fmt.Sprint("Description: ", termtext.Sanitize(rr.Description()))))
 				cmd.Println("Private:", rr.IsPrivate())
 				cmd.Println("Hidden:", rr.IsHidden())
 				cmd.Println("Mirror:", rr.IsMirror())
@@ -102,25 +102,25 @@ func (cmds *Commands) RepoCommand() *cobra.Command {
 						cmd.Println("Last Sync:", st.SyncedAt.UTC().Format(time.RFC3339))
 					}
 					if st.Error != "" && level >= access.ReadWriteAccess {
-						cmd.Println("Last Sync Error:", strings.ReplaceAll(utils.Sanitize(st.Error), "\n", " "))
+						cmd.Println("Last Sync Error:", strings.ReplaceAll(termtext.Sanitize(st.Error), "\n", " "))
 					}
 				}
 				if owner != nil {
 					cmd.Println(strings.TrimSpace(fmt.Sprint("Owner: ", owner.Username())))
 				}
 				if head != nil {
-					cmd.Println("Default Branch:", utils.Sanitize(head.Name().Short()))
+					cmd.Println("Default Branch:", termtext.Sanitize(head.Name().Short()))
 				}
 				if len(branches) > 0 {
 					cmd.Println("Branches:")
 					for _, b := range branches {
-						cmd.Println("  -", utils.Sanitize(b))
+						cmd.Println("  -", termtext.Sanitize(b))
 					}
 				}
 				if len(tags) > 0 {
 					cmd.Println("Tags:")
 					for _, t := range tags {
-						cmd.Println("  -", utils.Sanitize(t))
+						cmd.Println("  -", termtext.Sanitize(t))
 					}
 				}
 

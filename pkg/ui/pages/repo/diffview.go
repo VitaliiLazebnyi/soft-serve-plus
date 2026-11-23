@@ -6,9 +6,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // diffHighlightMax is the largest patch, in bytes, that is highlighted. A
@@ -98,7 +98,7 @@ func renderSummary(diff *git.Diff, styles *styles.Styles, width int) string {
 // renderDiff sanitises, highlights and wraps diff's patch. A patch over
 // diffHighlightMax bytes or diffHighlightMaxLines lines is not highlighted.
 func renderDiff(diff *git.Diff, width int) string {
-	patch := utils.Sanitize(diff.Patch)
+	patch := termtext.Sanitize(diff.Patch)
 	if len(patch) > diffHighlightMax || strings.Count(patch, "\n") > diffHighlightMaxLines {
 		return wrapText("\n"+patch, width)
 	}

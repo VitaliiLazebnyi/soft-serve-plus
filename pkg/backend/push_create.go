@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // pushGates orders pushes to a repository against the removal of a
@@ -72,7 +71,7 @@ func (p *pushGates) release(name string, g *pushGate) {
 // proto.ErrRepoNotFound if the repository is gone or its name now belongs
 // to another repository.
 func (d *Backend) BeginPush(ctx context.Context, repo proto.Repository) (func(), error) {
-	name := utils.SanitizeRepo(repo.Name())
+	name := proto.SanitizeRepo(repo.Name())
 	g := d.pushGates.acquire(name)
 	g.rw.RLock()
 	done := func() {
@@ -115,7 +114,7 @@ func (d *Backend) BeginPush(ctx context.Context, repo proto.Repository) (func(),
 // Once the row is gone, a directory the delete could not remove is tried
 // again for a few seconds (see removePushCreatedDir).
 func (d *Backend) RemovePushCreatedRepository(ctx context.Context, created proto.Repository) (bool, error) {
-	name := utils.SanitizeRepo(created.Name())
+	name := proto.SanitizeRepo(created.Name())
 	g := d.pushGates.acquire(name)
 	defer d.pushGates.release(name, g)
 	if !g.rw.TryLock() {

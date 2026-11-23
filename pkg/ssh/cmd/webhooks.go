@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2/table"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/dustin/go-humanize"
 	"github.com/google/uuid"
@@ -67,7 +67,7 @@ func (cmds *Commands) webhookListCommand() *cobra.Command {
 
 				table = table.Row(
 					strconv.FormatInt(h.ID, 10),
-					utils.Sanitize(h.URL),
+					termtext.Sanitize(h.URL),
 					strings.Join(events, ","),
 					strconv.FormatBool(h.Active),
 					humanize.Time(h.CreatedAt),
@@ -105,7 +105,7 @@ func (cmds *Commands) webhookCreateCommand() *cobra.Command {
 				return err
 			}
 
-			url := utils.Sanitize(args[1])
+			url := termtext.Sanitize(args[1])
 			return be.CreateWebhook(ctx, repo, strings.TrimSpace(url), ct, secret, evs, active)
 		}),
 	}
@@ -199,7 +199,7 @@ func (cmds *Commands) webhookUpdateCommand() *cobra.Command {
 			newURL := wh.URL
 			if flags.Changed("url") {
 				// Normalise the same way create does.
-				newURL = strings.TrimSpace(utils.Sanitize(url))
+				newURL = strings.TrimSpace(termtext.Sanitize(url))
 			}
 
 			newSecret := wh.Secret
@@ -356,32 +356,32 @@ func (cmds *Commands) webhookDeliveriesGetCommand() *cobra.Command {
 			// request carries repository data, so none of it may reach the
 			// admin's terminal as escape sequences.
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "ID: %s\n", del.ID)                                             //nolint:errcheck
-			fmt.Fprintf(out, "Event: %s\n", del.Event)                                       //nolint:errcheck
-			fmt.Fprintf(out, "Request URL: %s\n", utils.Sanitize(del.RequestURL))            //nolint:errcheck
-			fmt.Fprintf(out, "Request Method: %s\n", utils.Sanitize(del.RequestMethod))      //nolint:errcheck
-			fmt.Fprintf(out, "Request Error: %s\n", utils.Sanitize(del.RequestError.String)) //nolint:errcheck
-			fmt.Fprintf(out, "Request Headers:\n")                                           //nolint:errcheck
-			reqHeaders := strings.Split(utils.Sanitize(del.RequestHeaders), "\n")
+			fmt.Fprintf(out, "ID: %s\n", del.ID)                                                //nolint:errcheck
+			fmt.Fprintf(out, "Event: %s\n", del.Event)                                          //nolint:errcheck
+			fmt.Fprintf(out, "Request URL: %s\n", termtext.Sanitize(del.RequestURL))            //nolint:errcheck
+			fmt.Fprintf(out, "Request Method: %s\n", termtext.Sanitize(del.RequestMethod))      //nolint:errcheck
+			fmt.Fprintf(out, "Request Error: %s\n", termtext.Sanitize(del.RequestError.String)) //nolint:errcheck
+			fmt.Fprintf(out, "Request Headers:\n")                                              //nolint:errcheck
+			reqHeaders := strings.Split(termtext.Sanitize(del.RequestHeaders), "\n")
 			for _, h := range reqHeaders {
 				fmt.Fprintf(out, "  %s\n", h) //nolint:errcheck
 			}
 
 			fmt.Fprintf(out, "Request Body:\n") //nolint:errcheck
-			reqBody := strings.Split(utils.Sanitize(del.RequestBody), "\n")
+			reqBody := strings.Split(termtext.Sanitize(del.RequestBody), "\n")
 			for _, b := range reqBody {
 				fmt.Fprintf(out, "  %s\n", b) //nolint:errcheck
 			}
 
 			fmt.Fprintf(out, "Response Status: %d\n", del.ResponseStatus) //nolint:errcheck
 			fmt.Fprintf(out, "Response Headers:\n")                       //nolint:errcheck
-			resHeaders := strings.Split(utils.Sanitize(del.ResponseHeaders), "\n")
+			resHeaders := strings.Split(termtext.Sanitize(del.ResponseHeaders), "\n")
 			for _, h := range resHeaders {
 				fmt.Fprintf(out, "  %s\n", h) //nolint:errcheck
 			}
 
 			fmt.Fprintf(out, "Response Body:\n") //nolint:errcheck
-			resBody := strings.Split(utils.Sanitize(del.ResponseBody), "\n")
+			resBody := strings.Split(termtext.Sanitize(del.ResponseBody), "\n")
 			for _, b := range resBody {
 				fmt.Fprintf(out, "  %s\n", b) //nolint:errcheck
 			}

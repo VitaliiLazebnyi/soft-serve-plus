@@ -7,8 +7,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // FormatLineNumber adds line numbers to a string.
@@ -58,13 +58,13 @@ func DisplayFilename(s string) string {
 }
 
 // SanitizeText returns repository text, such as a commit subject, an author
-// or a description, ready to show: utils.Sanitize removes escape sequences
+// or a description, ready to show: termtext.Sanitize removes escape sequences
 // and control characters, and SanitizeText also removes the Unicode
 // bidirectional controls, which would let the text reorder what is shown
 // around it in a terminal that implements bidi. DisplayFilename escapes them
 // in file names.
 func SanitizeText(s string) string {
-	s = utils.Sanitize(s)
+	s = termtext.Sanitize(s)
 	if !strings.ContainsFunc(s, isBidiControl) {
 		return s
 	}

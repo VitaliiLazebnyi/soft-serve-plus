@@ -8,8 +8,8 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -24,7 +24,7 @@ func (*Store) AddPublicKeyByUserID(ctx context.Context, h db.Handler, id int64, 
 // CreateUser implements store.Store.
 func (*Store) CreateUser(ctx context.Context, h db.Handler, username string, isAdmin bool, pks []ssh.PublicKey) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateNewUsername(username); err != nil {
+	if err := proto.ValidateNewUsername(username); err != nil {
 		return err
 	}
 
@@ -50,7 +50,7 @@ func (*Store) CreateUser(ctx context.Context, h db.Handler, username string, isA
 // DeleteUserByUsername implements store.Store.
 func (*Store) DeleteUserByUsername(ctx context.Context, h db.Handler, username string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -80,7 +80,7 @@ func (*Store) FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.Publ
 // FindUserByUsername implements store.Store.
 func (*Store) FindUserByUsername(ctx context.Context, h db.Handler, username string) (models.User, error) {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return models.User{}, err
 	}
 
@@ -94,7 +94,7 @@ func (*Store) FindUserByUsername(ctx context.Context, h db.Handler, username str
 // GetRepoByNameForUpdate.
 func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, username string) (models.User, error) {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return models.User{}, err
 	}
 
@@ -162,7 +162,7 @@ func (*Store) RemovePublicKeyByUserID(ctx context.Context, h db.Handler, id int6
 // SetAdminByUsername implements store.Store.
 func (*Store) SetAdminByUsername(ctx context.Context, h db.Handler, username string, isAdmin bool) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
@@ -173,12 +173,12 @@ func (*Store) SetAdminByUsername(ctx context.Context, h db.Handler, username str
 // SetUsernameByUsername implements store.Store.
 func (*Store) SetUsernameByUsername(ctx context.Context, h db.Handler, username string, newUsername string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
 	newUsername = strings.ToLower(newUsername)
-	if err := utils.ValidateNewUsername(newUsername); err != nil {
+	if err := proto.ValidateNewUsername(newUsername); err != nil {
 		return err
 	}
 
@@ -189,7 +189,7 @@ func (*Store) SetUsernameByUsername(ctx context.Context, h db.Handler, username 
 // SetUsernameByUserID implements store.Store.
 func (*Store) SetUsernameByUserID(ctx context.Context, h db.Handler, id int64, newUsername string) error {
 	newUsername = strings.ToLower(newUsername)
-	if err := utils.ValidateNewUsername(newUsername); err != nil {
+	if err := proto.ValidateNewUsername(newUsername); err != nil {
 		return err
 	}
 

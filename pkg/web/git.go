@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -87,7 +86,7 @@ func (g gitRoute) newRequest(r *http.Request) *gitRequest {
 		// caller-supplied ?service= only means something on the ref
 		// advertisement.
 		service: gitserve.Service(vars["service"]),
-		name:    utils.SanitizeRepo(repo),
+		name:    proto.SanitizeRepo(repo),
 	}
 	if gr.service == "" && gr.file == "info/refs" {
 		gr.service = getServiceType(r)
@@ -172,7 +171,7 @@ func withParams(next http.Handler) http.Handler {
 			renderNotFound(w, r)
 			return
 		}
-		vars["repo"] = utils.SanitizeRepo(vars["repo"])
+		vars["repo"] = proto.SanitizeRepo(vars["repo"])
 		next.ServeHTTP(w, mux.SetURLVars(r, vars))
 	})
 }
@@ -343,7 +342,7 @@ func (s *server) identify(r *http.Request, logger *log.Logger, repos ...string) 
 // user, or nil (anonymous) when the user authenticated with a bearer token
 // that does not name repo.
 func (c caller) userFor(repo string) proto.User {
-	if c.audience != nil && !slices.Contains(c.audience, utils.SanitizeRepo(repo)) {
+	if c.audience != nil && !slices.Contains(c.audience, proto.SanitizeRepo(repo)) {
 		return nil
 	}
 	return c.user
@@ -568,7 +567,7 @@ func isBearer(hdr string) bool {
 // nearest the root, where repositories are: a go get path is a repository
 // followed by a package path, which may be deep. A new repository name has
 // at most this many segments, so it is always among them.
-const maxPathAncestors = utils.MaxRepoSegments
+const maxPathAncestors = proto.MaxRepoSegments
 
 // pathAncestors returns p followed by its parent directories, each spelled
 // as a sanitized repository name, which is what `soft jwt` mints. Only the
@@ -583,7 +582,7 @@ func pathAncestors(p string) []string {
 		}
 	}
 	for _, end := range slices.Backward(ends) {
-		if parent := utils.SanitizeRepo(p[:end]); parent != "" && parent != ancestors[len(ancestors)-1] {
+		if parent := proto.SanitizeRepo(p[:end]); parent != "" && parent != ancestors[len(ancestors)-1] {
 			ancestors = append(ancestors, parent)
 		}
 	}
@@ -626,7 +625,7 @@ func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Reque
 
 	v := authorize(need, repo != nil, accessLevel, user == nil, badCredentials(err))
 	if v == createThenServe {
-		if verr := utils.ValidateRepo(utils.SanitizeRepo(repoName)); verr != nil {
+		if verr := proto.ValidateRepo(proto.SanitizeRepo(repoName)); verr != nil {
 			logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
 			// git shows a text/plain error body to the user.
 			http.Error(w, verr.Error(), http.StatusBadRequest)

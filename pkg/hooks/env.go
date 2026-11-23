@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -18,7 +17,7 @@ import (
 // https://git-scm.com/docs/gitrepository-layout. The name is sanitized
 // first, so "a/b.git", "/a/b" and "a/b" share one directory.
 func RepoPath(cfg *config.Config, name string) string {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	return filepath.Join(ReposPath(cfg), strings.ReplaceAll(name, "/", string(os.PathSeparator))+".git")
 }
 

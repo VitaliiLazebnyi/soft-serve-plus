@@ -11,19 +11,19 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
 )
 
 // CreateWebhook creates a webhook for a repository.
 func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
-	url = utils.Sanitize(url)
+	url = termtext.Sanitize(url)
 	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, events); err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 
 // UpdateWebhook updates a webhook.
 func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
-	url = utils.Sanitize(url)
+	url = termtext.Sanitize(url)
 	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
 		return err
 	}

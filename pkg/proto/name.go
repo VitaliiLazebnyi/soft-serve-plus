@@ -1,20 +1,21 @@
-package utils
+package proto
 
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"path"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 )
 
 // SanitizeRepo returns the canonical repository name; the result is a fixed point.
 func SanitizeRepo(repo string) string {
 	// We're using path instead of filepath here because this is not OS dependent
 	// looking at you Windows
-	segs := strings.Split(path.Clean("/" + Sanitize(repo))[1:], "/")
+	segs := strings.Split(path.Clean("/" + termtext.Sanitize(repo))[1:], "/")
 	for len(segs) > 0 {
 		last := segs[len(segs)-1]
 		for strings.HasSuffix(last, ".git") {
@@ -31,99 +32,6 @@ func SanitizeRepo(repo string) string {
 		}
 	}
 	return ""
-}
-
-// Sanitize returns s without ANSI escape sequences (CSI, OSC, DCS, APC, SOS
-// and PM strings included) and without any other C0 or C1 control character
-// except newline and tab, so that the result can be written to a terminal
-// without the terminal acting on it.
-//
-// Invalid UTF-8 is replaced with U+FFFD first, so a stray 8-bit byte from a
-// legacy-encoded file cannot act as a C1 introducer. Escape sequences are
-// matched within a single line, and a string sequence (DCS, OSC, SOS, PM,
-// APC) is removed only when it is terminated on that line; otherwise only its
-// ESC is dropped and the rest stays visible as plain text. An unterminated
-// sequence therefore never hides the content that follows it.
-func Sanitize(s string) string {
-	s = strings.ToValidUTF8(s, "\uFFFD")
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = stripLineEscapes(line)
-	}
-	return strings.Map(func(r rune) rune {
-		if r != '\n' && r != '\t' && unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.Join(lines, "\n"))
-}
-
-// stripLineEscapes removes the complete 7-bit escape sequences in line. An
-// incomplete sequence loses only its ESC; the control characters left behind
-// are removed by Sanitize.
-func stripLineEscapes(line string) string {
-	if !strings.ContainsRune(line, '\x1b') {
-		return line
-	}
-	var b strings.Builder
-	b.Grow(len(line))
-	for i := 0; i < len(line); {
-		if line[i] != '\x1b' {
-			b.WriteByte(line[i])
-			i++
-			continue
-		}
-		if n := escapeLen(line[i:]); n > 0 {
-			i += n
-		} else {
-			i++ // drop the lone ESC, keep what follows
-		}
-	}
-	return b.String()
-}
-
-// escapeLen returns the length of the complete escape sequence at the start of
-// s (which begins with ESC), or 0 when the sequence is incomplete.
-func escapeLen(s string) int {
-	if len(s) < 2 {
-		return 0
-	}
-	switch s[1] {
-	case '[': // CSI: parameters and intermediates, then a final byte.
-		for j := 2; j < len(s); j++ {
-			switch c := s[j]; {
-			case c >= 0x20 && c <= 0x3f:
-			case c >= 0x40 && c <= 0x7e:
-				return j + 1
-			default:
-				return 0
-			}
-		}
-		return 0
-	case 'P', ']', 'X', '^', '_': // DCS, OSC, SOS, PM, APC: up to ST or BEL.
-		for j := 2; j < len(s); j++ {
-			switch s[j] {
-			case '\a':
-				return j + 1
-			case '\x1b':
-				if j+1 < len(s) && s[j+1] == '\\' {
-					return j + 2
-				}
-			}
-		}
-		return 0
-	default: // ESC, intermediates, then a final byte (e.g. ESC ( B, ESC 7).
-		for j := 1; j < len(s); j++ {
-			switch c := s[j]; {
-			case c >= 0x20 && c <= 0x2f:
-			case c >= 0x30 && c <= 0x7e:
-				return j + 1
-			default:
-				return 0
-			}
-		}
-		return 0
-	}
 }
 
 // ValidateUsername returns an error if any of the given usernames are invalid.
@@ -301,67 +209,4 @@ func ValidateExistingRepo(repo string) error {
 	}
 
 	return nil
-}
-
-// RedactURL returns rawURL without its user info, query and fragment, so it
-// can be logged or returned in an error. Remotes and LFS endpoints can carry
-// a token as the user name or password, and LFS hrefs are often presigned
-// URLs with a signature in the query. A URL that cannot be parsed is
-// replaced entirely; a string without "://" (such as an scp-style remote, a
-// Windows path or plain text) is returned unchanged.
-func RedactURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		if strings.Contains(rawURL, "://") {
-			return "[redacted]"
-		}
-		return rawURL
-	}
-	// A string without "://" has no authority, so no user info to strip:
-	// an scp-style remote, a Windows path, plain text with a colon, which
-	// url.Parse reads as a scheme. With "://", the user info and query go
-	// even when the host is empty: "https://TOKEN@/x" parses with the token
-	// as user info.
-	if u.Scheme == "" || !strings.Contains(rawURL, "://") {
-		return rawURL
-	}
-	u.User = nil
-	u.RawQuery = ""
-	u.ForceQuery = false
-	u.Fragment = ""
-	u.RawFragment = ""
-	return u.String()
-}
-
-// ErrInvalidURL replaces the parser's message in the errors RedactURLError
-// returns for a URL that cannot be parsed. ssrf.ErrInvalidURL, and so
-// webhook.ErrInvalidURL, are the same error.
-var ErrInvalidURL = errors.New("invalid URL")
-
-// RedactURLError redacts the URL of a *url.Error, which the HTTP client
-// returns for every failed request and which prints the whole URL except for
-// a password, with redact: RedactURL, or a stricter rule where the path can
-// hold a secret too, as in many webhook URLs. The returned error keeps the
-// operation and the underlying error (except for a parse error, whose
-// message can quote part of the URL and is replaced with ErrInvalidURL), so
-// errors.Is and errors.As (context.DeadlineExceeded, net.Error timeouts and
-// so on) still work. Any other error is returned unchanged.
-func RedactURLError(err error, redact func(string) string) error {
-	uerr, ok := err.(*url.Error) //nolint:errorlint // only the top-level error is replaced
-	if !ok {
-		return err
-	}
-	inner := uerr.Err
-	if uerr.Op == "parse" {
-		inner = ErrInvalidURL
-	}
-	return &url.Error{Op: uerr.Op, URL: redact(uerr.URL), Err: inner}
-}
-
-// StorableText returns s as text every database accepts: Postgres refuses
-// invalid UTF-8 and NUL bytes in TEXT columns, so invalid bytes are replaced
-// with U+FFFD and NULs are dropped. Use it for text a remote or a receiver
-// wrote, and for errors that may quote it.
-func StorableText(s string) string {
-	return strings.ReplaceAll(strings.ToValidUTF8(s, string(utf8.RuneError)), "\x00", "")
 }

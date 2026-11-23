@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -41,7 +41,7 @@ func (cmds *Commands) tagListCommand() *cobra.Command {
 			for _, t := range tags {
 				// A ref name cannot hold C0 controls, but it can hold
 				// C1 ones encoded as UTF-8.
-				cmd.Println(utils.Sanitize(t))
+				cmd.Println(termtext.Sanitize(t))
 			}
 
 			return nil

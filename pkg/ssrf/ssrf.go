@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/internal/testdial"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 var (
@@ -23,10 +22,11 @@ var (
 	ErrPrivateIP = errors.New("connection to private or internal IP address is not allowed")
 	// ErrInvalidScheme is returned when a URL scheme is not http or https.
 	ErrInvalidScheme = errors.New("URL must use http or https scheme")
-	// ErrInvalidURL is returned when a URL is invalid. It is
-	// utils.ErrInvalidURL, which redacted errors carry for a URL that does
-	// not parse, so one check covers both.
-	ErrInvalidURL = utils.ErrInvalidURL
+	// ErrInvalidURL is returned when a URL is invalid. It also replaces the
+	// parser's message in the errors RedactURLError returns for a URL that
+	// does not parse, so one check covers both. webhook.ErrInvalidURL is the
+	// same error.
+	ErrInvalidURL = errors.New("invalid URL")
 )
 
 // ClientTimeout caps each request made by the client from NewSecureClient,

@@ -28,7 +28,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/google/go-querystring/query"
 	"github.com/google/uuid"
 )
@@ -177,13 +176,13 @@ func NewSender(cfg *config.Config, dbx *db.DB, st store.Store, logger *log.Logge
 func (s *Sender) do(ctx context.Context, url string, headers http.Header, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return nil, utils.RedactURLError(err, redactURL)
+		return nil, ssrf.RedactURLError(err, redactURL)
 	}
 
 	req.Header = headers
 	res, err := s.client.Do(req)
 	if err != nil {
-		return nil, utils.RedactURLError(err, redactURL)
+		return nil, ssrf.RedactURLError(err, redactURL)
 	}
 
 	return res, nil
@@ -446,11 +445,11 @@ func formatHeaders(h http.Header) string {
 	return b.String()
 }
 
-// storableText is utils.StorableText: Postgres refusing a receiver's text
+// storableText is db.StorableText: Postgres refusing a receiver's text
 // would lose the whole delivery row. Use it for text that comes from the
 // receiver: its headers and body, and errors that may quote them.
 func storableText(s string) string {
-	return utils.StorableText(s)
+	return db.StorableText(s)
 }
 
 // recordDelivery writes one delivery row, then prunes the webhook's older
@@ -663,7 +662,7 @@ func (s *Sender) lookupHook(ctx context.Context, w models.Webhook, event Event) 
 }
 
 func repoURL(publicURL string, repo string) string {
-	return fmt.Sprintf("%s/%s.git", publicURL, utils.SanitizeRepo(repo))
+	return fmt.Sprintf("%s/%s.git", publicURL, proto.SanitizeRepo(repo))
 }
 
 // defaultBranch returns repo's default branch for an event payload. An error

@@ -17,7 +17,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs/sshlfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/spf13/cobra"
@@ -300,7 +299,7 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 	start := time.Now()
 
 	// repo should be in the form of "repo.git"
-	name := utils.SanitizeRepo(args[0])
+	name := proto.SanitizeRepo(args[0])
 	user := proto.UserFromContext(ctx)
 	if err := gitserve.EnsureWithin(hooks.ReposPath(cfg), name+".git"); err != nil {
 		return nil, err

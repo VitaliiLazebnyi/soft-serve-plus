@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 )
 
 // RemoteGitWaitDelay is how long a git command against a remote has to exit
@@ -75,7 +75,7 @@ var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]+`)
 // out the user info of the remote URLs it prints but keeps their query, which
 // can hold a token, and the remote's own lines can hold any URL.
 func redactURLs(msg string) string {
-	return urlPattern.ReplaceAllStringFunc(msg, utils.RedactURL)
+	return urlPattern.ReplaceAllStringFunc(msg, ssrf.RedactURL)
 }
 
 // remoteGitOutput returns what out kept, redacted. out cuts its text at

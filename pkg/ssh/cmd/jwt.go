@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +25,7 @@ func (cmds *Commands) JWTCommand() *cobra.Command {
 			// Mint the spelling the HTTP router checks against.
 			audience := make([]string, len(args))
 			for i, arg := range args {
-				audience[i] = utils.SanitizeRepo(arg)
+				audience[i] = proto.SanitizeRepo(arg)
 			}
 
 			// Signing fails only for the server's host key, whose error

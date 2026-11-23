@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
 // CreateRepo implements store.Store.
@@ -21,13 +21,13 @@ func (*Store) CreateRepo(ctx context.Context, h db.Handler, r models.Repo) (mode
 	query := h.Rebind(`INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at, user_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
 			RETURNING *;`)
-	err := h.GetContext(ctx, &m, query, utils.SanitizeRepo(r.Name), r.ProjectName, r.Description, r.Private, r.Mirror, r.Hidden, r.Anonymous, r.UserID)
+	err := h.GetContext(ctx, &m, query, proto.SanitizeRepo(r.Name), r.ProjectName, r.Description, r.Private, r.Mirror, r.Hidden, r.Anonymous, r.UserID)
 	return m, err
 }
 
 // DeleteRepoByName implements store.Store.
 func (*Store) DeleteRepoByName(ctx context.Context, h db.Handler, name string) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("DELETE FROM repos WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, name))
 }
@@ -78,7 +78,7 @@ func (*Store) LockUserRepos(ctx context.Context, h db.Handler, userID int64) err
 // GetRepoByName implements store.Store.
 func (*Store) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
 	var repo models.Repo
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("SELECT * FROM repos WHERE name = ?;")
 	err := h.GetContext(ctx, &repo, query, name)
 	return repo, err
@@ -90,7 +90,7 @@ func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name st
 		models.Repo
 		CollabLevel sql.NullInt64 `db:"collab_access_level"`
 	}
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind(`SELECT repos.*, collabs.access_level AS collab_access_level
 		FROM repos LEFT JOIN collabs ON collabs.repo_id = repos.id AND collabs.user_id = ?
 		WHERE repos.name = ?;`)
@@ -128,13 +128,13 @@ func (*Store) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name str
 		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
 	}
 	var repo models.Repo
-	err := h.GetContext(ctx, &repo, query, utils.SanitizeRepo(name))
+	err := h.GetContext(ctx, &repo, query, proto.SanitizeRepo(name))
 	return repo, err
 }
 
 // SetRepoIsMirrorByName implements store.Store.
 func (*Store) SetRepoIsMirrorByName(ctx context.Context, h db.Handler, name string, isMirror bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("UPDATE repos SET mirror = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, isMirror, name))
 }
@@ -149,7 +149,7 @@ func (*Store) SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64,
 	query := "UPDATE repos SET mirror_error = ?, mirror_synced_at = CURRENT_TIMESTAMP WHERE id = ?;"
 	if syncErr != "" {
 		query = "UPDATE repos SET mirror_error = ? WHERE id = ?;"
-		syncErr = utils.StorableText(syncErr)
+		syncErr = db.StorableText(syncErr)
 		if syncErr == "" {
 			// Still a failure, though nothing of its text was kept.
 			syncErr = "\uFFFD"
@@ -160,36 +160,36 @@ func (*Store) SetRepoMirrorSyncByID(ctx context.Context, h db.Handler, id int64,
 
 // SetRepoDescriptionByName implements store.Store.
 func (*Store) SetRepoDescriptionByName(ctx context.Context, h db.Handler, name string, description string) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("UPDATE repos SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, description, name))
 }
 
 // SetRepoIsHiddenByName implements store.Store.
 func (*Store) SetRepoIsHiddenByName(ctx context.Context, h db.Handler, name string, isHidden bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("UPDATE repos SET hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, isHidden, name))
 }
 
 // SetRepoIsPrivateByName implements store.Store.
 func (*Store) SetRepoIsPrivateByName(ctx context.Context, h db.Handler, name string, isPrivate bool) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("UPDATE repos SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, isPrivate, name))
 }
 
 // SetRepoNameByName implements store.Store.
 func (*Store) SetRepoNameByName(ctx context.Context, h db.Handler, name string, newName string) error {
-	name = utils.SanitizeRepo(name)
-	newName = utils.SanitizeRepo(newName)
+	name = proto.SanitizeRepo(name)
+	newName = proto.SanitizeRepo(newName)
 	query := h.Rebind("UPDATE repos SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, newName, name))
 }
 
 // SetRepoProjectNameByName implements store.Store.
 func (*Store) SetRepoProjectNameByName(ctx context.Context, h db.Handler, name string, projectName string) error {
-	name = utils.SanitizeRepo(name)
+	name = proto.SanitizeRepo(name)
 	query := h.Rebind("UPDATE repos SET project_name = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;")
 	return affected(h.ExecContext(ctx, query, projectName, name))
 }

@@ -8,11 +8,11 @@ import (
 
 	gansi "charm.land/glamour/v2/ansi"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -72,13 +72,13 @@ func (cmds *Commands) commitCommand() *cobra.Command {
 
 			s := strings.Builder{}
 			commitLine := "commit " + commit.ID.String()
-			authorLine := "Author: " + utils.Sanitize(commit.Author.Name)
+			authorLine := "Author: " + termtext.Sanitize(commit.Author.Name)
 			dateLine := "Date:   " + commit.Committer.When.UTC().Format(time.UnixDate)
-			msgLine := strings.ReplaceAll(utils.Sanitize(commit.Message), "\r\n", "\n")
+			msgLine := strings.ReplaceAll(termtext.Sanitize(commit.Message), "\r\n", "\n")
 			// Anything formatted for reading in a terminal is stripped of
 			// the escape sequences and control characters a commit can
 			// carry.
-			patch = utils.Sanitize(patch)
+			patch = termtext.Sanitize(patch)
 			statsLine := renderStats(diff, commonStyle, color)
 			diffLine := renderDiff(patch, color)
 
@@ -153,7 +153,7 @@ func renderDiff(patch string, color bool) string {
 func renderStats(diff *git.Diff, commonStyle *styles.Styles, color bool) string {
 	style := commonStyle.Log
 	// The stats name the changed files, which may hold control characters.
-	c := utils.Sanitize(diff.Stat)
+	c := termtext.Sanitize(diff.Stat)
 
 	if color {
 		s := strings.Split(c, "\n")

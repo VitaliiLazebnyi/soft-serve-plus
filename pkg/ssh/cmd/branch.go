@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +44,7 @@ func (cmds *Commands) branchListCommand() *cobra.Command {
 			for _, b := range branches {
 				// A ref name cannot hold C0 controls, but it can hold
 				// C1 ones encoded as UTF-8.
-				cmd.Println(utils.Sanitize(b))
+				cmd.Println(termtext.Sanitize(b))
 			}
 
 			return nil
@@ -74,7 +74,7 @@ func (cmds *Commands) branchDefaultCommand() *cobra.Command {
 					return err
 				}
 
-				cmd.Println(utils.Sanitize(head.Name().Short()))
+				cmd.Println(termtext.Sanitize(head.Name().Short()))
 			case 2:
 				if level < access.ReadWriteAccess {
 					return proto.ErrUnauthorized

@@ -8,12 +8,12 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -105,7 +105,7 @@ func (cmds *Commands) blobCommand() *cobra.Command {
 			// the command tree, whichever command it runs.
 			noColor, _ := strconv.ParseBool(os.Getenv("SOFT_SERVE_NO_COLOR"))
 			if (color && !noColor) || linenumber {
-				c = utils.Sanitize(c)
+				c = termtext.Sanitize(c)
 			}
 			if color && !noColor {
 				c, err = common.FormatHighlight(fp, c, cmds.blobBudget)

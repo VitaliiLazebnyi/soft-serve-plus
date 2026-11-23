@@ -1,9 +1,6 @@
-package utils
+package proto
 
 import (
-	"context"
-	"errors"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -118,38 +115,6 @@ func TestValidateUsernameRejectsCredentials(t *testing.T) {
 	}
 }
 
-func TestRedactURL(t *testing.T) {
-	tests := map[string]string{
-		"https://user:secret@example.com/x.git":               "https://example.com/x.git",
-		"https://TOKEN@example.com/x.git":                     "https://example.com/x.git",
-		"https://example.com/x.git":                           "https://example.com/x.git",
-		"https://s3.example.com/obj?X-Amz-Signature=SIG#frag": "https://s3.example.com/obj",
-		"https://example.com/obj?":                            "https://example.com/obj",
-		"ssh://git@10.0.0.1/x.git":                            "ssh://10.0.0.1/x.git",
-		"git@github.com:x/y.git":                              "git@github.com:x/y.git",
-		"https://TOKEN@example.com/%zz":                       "[redacted]",
-		// No host: the user info and query still go.
-		"https://u:TOKEN@/path":         "https:///path",
-		"https://TOKEN@/path?sig=TOKEN": "https:///path",
-		"file:///srv/x.git?token=TOKEN": "file:///srv/x.git",
-		// Not URLs: no "://", so no authority and no user info to strip.
-		// url.Parse reads whatever comes before the first colon as a
-		// scheme, so these must still be left alone.
-		"host:path":            "host:path",
-		"just some words":      "just some words",
-		`C:\x`:                 `C:\x`,
-		`C:\x\y?z`:             `C:\x\y?z`,
-		"fatal: what? yes #3":  "fatal: what? yes #3",
-		"host:path?q#f":        "host:path?q#f",
-		"mailto:a@b?subject=x": "mailto:a@b?subject=x",
-	}
-	for in, want := range tests {
-		if got := RedactURL(in); got != want {
-			t.Errorf("RedactURL(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // A repository whose name breaks the rules for new names can still be
 // named, to rename it, but not one that is unsafe as a path.
 func TestValidateExistingRepo(t *testing.T) {
@@ -241,45 +206,6 @@ func TestValidateNewUsernameFirstCharacter(t *testing.T) {
 	}
 }
 
-func TestSanitize(t *testing.T) {
-	cases := []struct {
-		name, in, out string
-	}{
-		{"plain", "hello, 世界", "hello, 世界"},
-		{"newline and tab", "a\n\tb", "a\n\tb"},
-		{"crlf", "a\r\nb", "a\nb"},
-		{"sgr", "a\x1b[31mred\x1b[0m", "ared"},
-		{"osc 52", "a\x1b]52;c;Zm9v\x07b", "ab"},
-		{"osc 8", "\x1b]8;;http://evil\x1b\\link\x1b]8;;\x1b\\", "link"},
-		{"dcs", "a\x1bP1;2|x\x1b\\b", "ab"},
-		{"apc", "a\x1b_Gf=100;AAAA\x1b\\b", "ab"},
-		{"unterminated dcs", "a\x1bPq#0;2;0;0;0", "aPq#0;2;0;0;0"},
-		{"unterminated dcs keeps later lines", "hidden \x1bP start\nline3 MALICIOUS_CODE", "hidden P start\nline3 MALICIOUS_CODE"},
-		{"unterminated osc keeps later lines", "a\x1b]0;title\nb\nc", "a]0;title\nb\nc"},
-		{"string sequence does not span lines", "a\x1b]0;x\ny\x07z", "a]0;x\nyz"},
-		{"unterminated csi", "a\x1b[31\nb", "a[31\nb"},
-		{"esc charset", "a\x1b(Bb\x1b7c", "abc"},
-		{"c0", "a\x07b\x00c\x08d\x7fe", "abcde"},
-		{"lone esc", "a\x1b", "a"},
-		{"c1 csi", "a\u009b31mb", "a31mb"},
-		{"c1 dcs", "a\u0090q\u009cb", "aqb"},
-		{"cp1252 byte", "na\x9eve\nline2", "na\ufffdve\nline2"},
-		{"lone 8-bit c1 bytes", "a\x90b\x98c\x9dd\x9ee\x9ff\x9bg\nh", "a\ufffdb\ufffdc\ufffdd\ufffde\ufffdf\ufffdg\nh"},
-		{"latin-1 text", "caf\xe9 cr\xe8me\n\xa9 2001", "caf\ufffd cr\ufffdme\n\ufffd 2001"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := Sanitize(c.in)
-			if got != c.out {
-				t.Errorf("Sanitize(%q) = %q, want %q", c.in, got, c.out)
-			}
-			if again := Sanitize(got); again != got {
-				t.Errorf("Sanitize is not idempotent: %q -> %q", got, again)
-			}
-		})
-	}
-}
-
 // A new repository name has at most MaxRepoSegments segments; an existing
 // one may have more.
 func TestValidateRepoSegmentCount(t *testing.T) {
@@ -293,56 +219,5 @@ func TestValidateRepoSegmentCount(t *testing.T) {
 	}
 	if err := ValidateExistingRepo(tooDeep); err != nil {
 		t.Fatalf("ValidateExistingRepo(%d segments) = %v, want nil", MaxRepoSegments+1, err)
-	}
-}
-
-// RedactURLError applies the rule it is given to the URL of a *url.Error,
-// keeps the error chain, replaces a parse error's message, and leaves other
-// errors alone.
-func TestRedactURLError(t *testing.T) {
-	in := &url.Error{Op: "Get", URL: "https://USER:PASS@host/a/b?sig=SECRET", Err: context.DeadlineExceeded}
-	err := RedactURLError(in, RedactURL)
-	if got, want := err.Error(), "Get \"https://host/a/b\": context deadline exceeded"; got != want {
-		t.Errorf("error = %q, want %q", got, want)
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("error %v lost its chain", err)
-	}
-	if in.URL != "https://USER:PASS@host/a/b?sig=SECRET" {
-		t.Errorf("the original error was changed: %q", in.URL)
-	}
-	strict := func(string) string { return "[redacted]" }
-	if got := RedactURLError(in, strict).Error(); strings.Contains(got, "host") {
-		t.Errorf("the rule given was not applied: %q", got)
-	}
-
-	_, perr := url.Parse("https://host:SECRETPORT/x") //nolint:staticcheck // invalid on purpose
-	rerr := RedactURLError(perr, RedactURL)
-	if !errors.Is(rerr, ErrInvalidURL) || strings.Contains(rerr.Error(), "SECRETPORT") {
-		t.Errorf("parse error = %q, want ErrInvalidURL without the port", rerr)
-	}
-
-	other := errors.New("other")
-	if got := RedactURLError(other, RedactURL); got != other { //nolint:errorlint
-		t.Errorf("other error = %v, want it unchanged", got)
-	}
-	if got := RedactURLError(nil, RedactURL); got != nil {
-		t.Errorf("nil error = %v", got)
-	}
-}
-
-// StorableText replaces bytes that are not UTF-8 and drops NULs, in that
-// order, as webhook deliveries and mirror sync errors both store it.
-func TestStorableText(t *testing.T) {
-	for in, want := range map[string]string{
-		"plain \u00e9 \u2713": "plain \u00e9 \u2713",
-		"bad \xff\xfe":        "bad \uFFFD",
-		"nul\x00 here":        "nul here",
-		"\xff\x00\xfe":        "\uFFFD\uFFFD",
-		"\x00":                "",
-	} {
-		if got := StorableText(in); got != want {
-			t.Errorf("StorableText(%q) = %q, want %q", in, got, want)
-		}
 	}
 }

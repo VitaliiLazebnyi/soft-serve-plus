@@ -6,9 +6,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/charmbracelet/soft-serve/pkg/proto"
+
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -26,7 +27,7 @@ func TruncateWidth(s string, width int) string {
 
 // RepoURL returns the URL of the repository.
 func RepoURL(publicURL, name string) string {
-	name = utils.SanitizeRepo(name) + ".git"
+	name = proto.SanitizeRepo(name) + ".git"
 	u, err := url.Parse(publicURL)
 	if err == nil && u.Scheme == "ssh" {
 		host := u.Hostname()

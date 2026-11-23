@@ -11,10 +11,10 @@ import (
 	"charm.land/glamour/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	vp "github.com/charmbracelet/soft-serve/pkg/ui/components/viewport"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -373,7 +373,7 @@ func (j renderJob) run() RenderedMsg {
 	var msg RenderedMsg
 	// File contents come from the repository and must not reach the
 	// terminal as escape sequences; chroma and glamour pass them through.
-	content := utils.Sanitize(j.content)
+	content := termtext.Sanitize(j.content)
 	// FIXME chroma & glamour might break wrapping when using tabs since tab
 	// width depends on the terminal. This is a workaround to replace tabs
 	// with spaces.

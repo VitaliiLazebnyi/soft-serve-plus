@@ -3,7 +3,6 @@ package cmd
 import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +16,7 @@ func (cmds *Commands) renameCommand() *cobra.Command {
 			ctx := cmd.Context()
 			be := cmds.be
 			oldName := repoArg(args)
-			newName := utils.SanitizeRepo(args[1])
+			newName := proto.SanitizeRepo(args[1])
 
 			// The destination is gated like create: it may already be
 			// somebody else's repository.

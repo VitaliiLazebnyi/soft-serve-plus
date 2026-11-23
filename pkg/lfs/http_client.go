@@ -13,7 +13,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 )
 
 // HTTPClient downloads objects from a Git LFS server over HTTP, with the
@@ -120,11 +119,11 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 		return nil, err
 	}
 
-	logger.Debugf("Calling: %s", utils.RedactURL(url))
+	logger.Debugf("Calling: %s", ssrf.RedactURL(url))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, payload)
 	if err != nil {
-		err = utils.RedactURLError(err, utils.RedactURL)
+		err = ssrf.RedactURLError(err, ssrf.RedactURL)
 		logger.Errorf("Error creating request: %v", err)
 		return nil, err
 	}
@@ -138,7 +137,7 @@ func (c *HTTPClient) batch(ctx context.Context, operation string, objects []Poin
 			return nil, ctx.Err()
 		default:
 		}
-		err = utils.RedactURLError(err, utils.RedactURL)
+		err = ssrf.RedactURLError(err, ssrf.RedactURL)
 		logger.Errorf("Error while processing request: %v", err)
 		return nil, err
 	}
@@ -288,7 +287,7 @@ var errMissingDownload = errors.New("missing action 'download'")
 // stops the download: a plain import that is told an object is unavailable
 // never fetches it again.
 func isObjectError(err error) bool {
-	if errors.Is(err, errMissingDownload) || errors.Is(err, utils.ErrInvalidURL) {
+	if errors.Is(err, errMissingDownload) || errors.Is(err, ssrf.ErrInvalidURL) {
 		return true
 	}
 	var serr *statusError
@@ -308,11 +307,11 @@ func isObjectError(err error) bool {
 // adapter does, and returns its content.
 func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, error) {
 	logger := c.logger
-	logger.Debugf("Calling: %s %s", http.MethodGet, utils.RedactURL(l.Href))
+	logger.Debugf("Calling: %s %s", http.MethodGet, ssrf.RedactURL(l.Href))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.Href, nil)
 	if err != nil {
-		err = utils.RedactURLError(err, utils.RedactURL)
+		err = ssrf.RedactURLError(err, ssrf.RedactURL)
 		logger.Errorf("Error creating request: %v", err)
 		return nil, err
 	}
@@ -328,7 +327,7 @@ func (c *HTTPClient) download(ctx context.Context, l *Link) (io.ReadCloser, erro
 			return nil, ctx.Err()
 		default:
 		}
-		err = utils.RedactURLError(err, utils.RedactURL)
+		err = ssrf.RedactURLError(err, ssrf.RedactURL)
 		logger.Errorf("Error while processing request: %v", err)
 		return nil, err
 	}

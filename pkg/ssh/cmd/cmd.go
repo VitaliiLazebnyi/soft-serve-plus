@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -224,7 +223,7 @@ func repoArg(args []string) string {
 	if len(args) == 0 {
 		return ""
 	}
-	return utils.SanitizeRepo(args[0])
+	return proto.SanitizeRepo(args[0])
 }
 
 // repoAccessLevel returns the caller's access level for the sanitized name.

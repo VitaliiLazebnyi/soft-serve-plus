@@ -7,17 +7,17 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/charmbracelet/soft-serve/pkg/utils"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
 
 // AddCollabByUsernameAndRepo implements store.Store.
 func (*Store) AddCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string, level access.AccessLevel) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 
 	query := h.Rebind(`INSERT INTO collabs (access_level, user_id, repo_id, updated_at)
 			VALUES (
@@ -39,11 +39,11 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, user
 	var m models.Collab
 
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return models.Collab{}, err
 	}
 
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 
 	err := h.GetContext(ctx, &m, h.Rebind(`
 		SELECT
@@ -63,7 +63,7 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, user
 func (*Store) ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) ([]models.Collab, error) {
 	var m []models.Collab
 
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 	query := h.Rebind(`
 		SELECT
 			collabs.*
@@ -84,7 +84,7 @@ func (*Store) ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) 
 func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo string) ([]models.User, error) {
 	var m []models.User
 
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 	query := h.Rebind(`
 		SELECT
 			users.*
@@ -119,11 +119,11 @@ func (*Store) ListCollabsByUserID(ctx context.Context, h db.Handler, userID int6
 // RemoveCollabByUsernameAndRepo implements store.Store.
 func (*Store) RemoveCollabByUsernameAndRepo(ctx context.Context, h db.Handler, username string, repo string) error {
 	username = strings.ToLower(username)
-	if err := utils.ValidateUsername(username); err != nil {
+	if err := proto.ValidateUsername(username); err != nil {
 		return err
 	}
 
-	repo = utils.SanitizeRepo(repo)
+	repo = proto.SanitizeRepo(repo)
 	query := h.Rebind(`
 		DELETE FROM
 			collabs
