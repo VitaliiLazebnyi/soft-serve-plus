@@ -170,10 +170,8 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 		// Every attempt was stopped, so err is set, but it is the first
 		// attempt's error, which can be a refusal of another address of a
 		// name that also has a permitted one.
-		if t := redirect.Load(); t != nil {
-			if fn := testdial.Load(); fn != nil {
-				return fn(ctx, t.network, t.address)
-			}
+		if c, handed, err := toTestDialer(ctx, redirect.Load(), conn); handed {
+			return c, err
 		}
 		if err != nil {
 			return nil, dialError(ctx, host, err)
@@ -187,6 +185,22 @@ func secureDialer(allowed AllowedHosts) func(ctx context.Context, network, addr 
 // the checks let through is then made by that Func instead, as the first
 // permitted address is the one a real dial would connect to.
 var errRedirected = errors.New("connection handed to the test dialer")
+
+// toTestDialer makes the attempt t, the first one the checks let through
+// while internal/testdial had a Func set, with that Func, and reports
+// whether it did: it does not when no attempt was redirected, or when the
+// Func was removed meanwhile.
+func toTestDialer(ctx context.Context, t *dialTarget, _ net.Conn) (net.Conn, bool, error) {
+	if t == nil {
+		return nil, false, nil
+	}
+	fn := testdial.Load()
+	if fn == nil {
+		return nil, false, nil
+	}
+	c, err := fn(ctx, t.network, t.address)
+	return c, true, err
+}
 
 // dialTarget is one connection attempt: its network and address.
 type dialTarget struct {
