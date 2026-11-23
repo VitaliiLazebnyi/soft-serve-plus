@@ -71,14 +71,14 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	hs := handlerServer(t, cfg, dbx, dbstore, be, log.New(logs))
 	srv := &ssh.Server{
 		PublicKeyHandler: (&Server{}).PublicKeyHandler,
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()
 			}
 			_, _ = s.Write([]byte(name))
 			_ = s.Exit(0)
-		})),
+		}),
 	}
 	addr := testsession.Listen(t, srv)
 

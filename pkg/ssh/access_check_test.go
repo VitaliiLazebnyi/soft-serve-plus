@@ -48,9 +48,9 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		KeyboardInteractiveHandler: func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool {
 			return true
 		},
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(hs.bubbleTeaMiddleware(func(s ssh.Session) {
 			_ = s.Exit(0)
-		}))),
+		})),
 	}
 	addr := testsession.Listen(t, srv)
 

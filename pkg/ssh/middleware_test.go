@@ -275,14 +275,14 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 		},
 		// The handler prints the session's user, or "anon" without one,
 		// and the fingerprint of the session's key.
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			name := "anon"
 			if u := proto.UserFromContext(s.Context()); u != nil {
 				name = u.Username()
 			}
 			_, _ = fmt.Fprintf(s, "%s %s", name, gossh.FingerprintSHA256(s.PublicKey()))
 			_ = s.Exit(0)
-		})),
+		}),
 	}
 	addr := testsession.Listen(t, srv)
 

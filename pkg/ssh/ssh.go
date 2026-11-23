@@ -125,9 +125,6 @@ func newServer(cfg *config.Config, dbx *db.DB, st store.Store, be *backend.Backe
 			// Command length middleware.
 			// Refuses overlong exec commands before anything parses them.
 			commandLengthMiddleware,
-			// Logger middleware.
-			// This must come first to set up the context.
-			s.loggerMiddleware,
 		),
 	}
 

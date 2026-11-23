@@ -314,7 +314,6 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 	if err != nil {
 		return nil, gitLookupFailed(ctx, logger, name, err)
 	}
-	ctx = proto.WithRepositoryContext(ctx, repo)
 
 	// The session's GIT_PROTOCOL, if it sent one, goes to git.
 	var protocol string
@@ -359,7 +358,6 @@ func (cmds *Commands) newGitRequest(cmd *cobra.Command, args []string) (*gitRequ
 // again.
 func (r *gitRequest) setRepo(repo proto.Repository, level access.AccessLevel) {
 	r.repo, r.level = repo, level
-	r.ctx = proto.WithRepositoryContext(r.ctx, repo)
 }
 
 // runUploadPack runs git-upload-pack or git-upload-archive, which read the

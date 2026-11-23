@@ -75,9 +75,9 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	s := &Server{be: be}
 	hs := handlerServer(t, cfg, dbx, dbstore, be, log.Default())
 	srv := &ssh.Server{
-		Handler: hs.loggerMiddleware(hs.authenticationMiddleware(func(s ssh.Session) {
+		Handler: hs.authenticationMiddleware(func(s ssh.Session) {
 			s.Exit(0) //nolint:errcheck
-		})),
+		}),
 	}
 	is.NoErr(srv.SetOption(ssh.KeyboardInteractiveAuth(s.KeyboardInteractiveHandler)))
 
