@@ -406,7 +406,7 @@ func (l *lfsLockBackend) Create(lockPath string, refname string) (transfer.Lock,
 		return nil, fmt.Errorf("%w: %w", transfer.ErrParseError, err)
 	}
 
-	var lock LFSLock
+	var lock lfsLock
 	if err := l.dbx.TransactionContext(l.ctx, func(tx *db.Tx) error {
 		var err error
 		lock.lock, err = l.store.CreateLFSLockForUser(l.ctx, tx, l.repo.ID(), l.user.ID(), lockPath, refname)
@@ -438,7 +438,7 @@ func (l *lfsLockBackend) Create(lockPath string, refname string) (transfer.Lock,
 // An ID that is not a number is refused with transfer.ErrParseError, which
 // the processor sends back to the client as a 400 status.
 func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
-	var lock LFSLock
+	var lock lfsLock
 	iid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid lock id %q", transfer.ErrParseError, id)
@@ -462,7 +462,7 @@ func (l *lfsLockBackend) FromID(id string) (transfer.Lock, error) {
 // Like FromID, it finds the lock whoever owns it: the processor uses it to
 // name the owner of a conflicting lock and to answer list-lock path=.
 func (l *lfsLockBackend) FromPath(lockPath string) (transfer.Lock, error) {
-	var lock LFSLock
+	var lock lfsLock
 	var err error
 	if lock.lock, err = l.store.GetLFSLockForPath(l.ctx, l.dbx, l.repo.ID(), lockPath); err != nil {
 		if errors.Is(err, db.ErrRecordNotFound) {
@@ -485,7 +485,7 @@ func (l *lfsLockBackend) FromPath(lockPath string) (transfer.Lock, error) {
 // 400 status.
 func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) error) (string, error) {
 	var nextCursor string
-	var locks []*LFSLock
+	var locks []*lfsLock
 
 	afterID, err := lfs.ParseLocksCursor(cursor)
 	if err != nil {
@@ -500,7 +500,7 @@ func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) 
 	}
 	nextCursor = lfs.NextLocksCursor(limit, mlocks)
 	for _, mlock := range mlocks {
-		locks = append(locks, &LFSLock{lock: mlock, backend: l})
+		locks = append(locks, &lfsLock{lock: mlock, backend: l})
 	}
 
 	for _, lock := range locks {
@@ -554,23 +554,23 @@ func (l *lfsLockBackend) Unlock(lock transfer.Lock) error {
 	return nil
 }
 
-// LFSLock is a Git LFS lock object.
+// lfsLock is a Git LFS lock object.
 // It implements transfer.Lock.
-type LFSLock struct {
+type lfsLock struct {
 	lock    models.LFSLock
 	backend *lfsLockBackend
 }
 
-var _ transfer.Lock = (*LFSLock)(nil)
+var _ transfer.Lock = (*lfsLock)(nil)
 
 // String implements fmt.Stringer, which is how the transfer library's debug
 // log prints a lock.
-func (l *LFSLock) String() string {
+func (l *lfsLock) String() string {
 	return fmt.Sprintf("id=%s path=%q ownername=%q", l.ID(), l.Path(), l.OwnerName())
 }
 
 // AsArguments implements transfer.Lock.
-func (l *LFSLock) AsArguments() []string {
+func (l *lfsLock) AsArguments() []string {
 	return []string{
 		fmt.Sprintf("id=%s", l.ID()),
 		fmt.Sprintf("path=%s", l.Path()),
@@ -580,7 +580,7 @@ func (l *LFSLock) AsArguments() []string {
 }
 
 // AsLockSpec implements transfer.Lock.
-func (l *LFSLock) AsLockSpec(ownerID bool) ([]string, error) {
+func (l *lfsLock) AsLockSpec(ownerID bool) ([]string, error) {
 	id := l.ID()
 	spec := []string{
 		fmt.Sprintf("lock %s", id),
@@ -602,26 +602,26 @@ func (l *LFSLock) AsLockSpec(ownerID bool) ([]string, error) {
 }
 
 // FormattedTimestamp implements transfer.Lock.
-func (l *LFSLock) FormattedTimestamp() string {
+func (l *lfsLock) FormattedTimestamp() string {
 	return l.lock.CreatedAt.Format(time.RFC3339)
 }
 
 // ID implements transfer.Lock.
-func (l *LFSLock) ID() string {
+func (l *lfsLock) ID() string {
 	return strconv.FormatInt(l.lock.ID, 10)
 }
 
 // OwnerName implements transfer.Lock.
-func (l *LFSLock) OwnerName() string {
+func (l *lfsLock) OwnerName() string {
 	return l.lock.OwnerName
 }
 
 // Path implements transfer.Lock.
-func (l *LFSLock) Path() string {
+func (l *lfsLock) Path() string {
 	return l.lock.Path
 }
 
 // Unlock implements transfer.Lock.
-func (l *LFSLock) Unlock() error {
+func (l *lfsLock) Unlock() error {
 	return l.backend.Unlock(l)
 }

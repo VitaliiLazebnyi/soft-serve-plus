@@ -85,7 +85,7 @@ func TestLFSLockBackendDownloadSessionRefusesWrites(t *testing.T) {
 	if _, err := l.Create("foo.png", "refs/heads/main"); !errors.Is(err, transfer.ErrForbidden) {
 		t.Errorf("Create: got %v, want ErrForbidden", err)
 	}
-	if err := l.Unlock(&LFSLock{}); !errors.Is(err, transfer.ErrForbidden) {
+	if err := l.Unlock(&lfsLock{}); !errors.Is(err, transfer.ErrForbidden) {
 		t.Errorf("Unlock: got %v, want ErrForbidden", err)
 	}
 }
