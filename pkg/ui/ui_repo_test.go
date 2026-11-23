@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 // newRepoTestUI returns a UI backed by a real backend that holds the
 // repositories "a" and "b". The pages are built without Init, which would load
 // the repository list.
-func newRepoTestUI(t *testing.T) *UI {
+func newRepoTestUI(t *testing.T) *Model {
 	t.Helper()
 	ctx := t.Context()
 	cfg := newTestUIConfig(t)
@@ -33,7 +33,7 @@ func newRepoTestUI(t *testing.T) *UI {
 		}
 	}
 
-	ui := NewUI(uitest.NewCommon(t, ctx, cfg, be), 80, 40, "")
+	ui := New(uitest.NewCommon(t, ctx, cfg, be), 80, 40, "")
 	ui.pages[selectionPage] = selection.New(ui.common)
 	ui.pages[repoPage] = repo.New(ui.common,
 		repo.NewReadme(ui.common),
@@ -48,7 +48,7 @@ func newRepoTestUI(t *testing.T) *UI {
 
 // shownRepo returns the name of the repository the UI shows, or "" on the
 // selection page.
-func shownRepo(t *testing.T, ui *UI) string {
+func shownRepo(t *testing.T, ui *Model) string {
 	t.Helper()
 	if ui.activePage != repoPage {
 		return ""

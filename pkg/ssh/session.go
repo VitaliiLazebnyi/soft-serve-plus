@@ -11,6 +11,7 @@ import (
 	bm "charm.land/wish/v2/bubbletea"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/ui"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -55,10 +56,10 @@ func (srv *Server) bubbleTeaMiddleware(next ssh.Handler) ssh.Handler {
 
 // tuiMiddleware is bubbleTeaMiddleware with newProgram building each
 // session's program, so that a test can see the UI it builds.
-func tuiMiddleware(newProgram func(ssh.Session) (*tea.Program, *UI, context.CancelFunc)) func(ssh.Handler) ssh.Handler {
+func tuiMiddleware(newProgram func(ssh.Session) (*tea.Program, *ui.Model, context.CancelFunc)) func(ssh.Handler) ssh.Handler {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
-			var ui *UI
+			var model *ui.Model
 			cancel := func() {}
 			var start time.Time
 			stop := func() {
@@ -73,13 +74,13 @@ func tuiMiddleware(newProgram func(ssh.Session) (*tea.Program, *UI, context.Canc
 				// A panic skips the handler below; count that session's
 				// time too.
 				stop()
-				if ui != nil {
-					ui.common.Zone.Close()
+				if model != nil {
+					model.Common().Zone.Close()
 				}
 			}()
 			bm.MiddlewareWithProgramHandler(func(s ssh.Session) *tea.Program {
 				p, pui, pcancel := newProgram(s)
-				ui, cancel = pui, pcancel
+				model, cancel = pui, pcancel
 				if p != nil {
 					start = time.Now()
 				}
@@ -98,7 +99,7 @@ func tuiMiddleware(newProgram func(ssh.Session) (*tea.Program, *UI, context.Canc
 // function that cancels the UI's context, or nil for the program and UI and a
 // no-op when the session gets no TUI. The caller must call cancel once the
 // program has exited, and then close the UI's zone manager.
-func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
+func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *ui.Model, context.CancelFunc) {
 	none := func() {}
 	pty, _, active := s.Pty()
 	if !active {
@@ -155,7 +156,7 @@ func (srv *Server) newSessionProgram(s ssh.Session) (*tea.Program, *UI, context.
 		tea.WithFilter(sessionFilter),
 	)
 
-	m := NewUI(c, width, height, initialRepo)
+	m := ui.New(c, width, height, initialRepo)
 	p := tea.NewProgram(m, opts...)
 
 	tuiSessionCounter.Inc()

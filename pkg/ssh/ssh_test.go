@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"net"
@@ -10,7 +11,9 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/pkg/proto"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -84,4 +87,16 @@ func serve(t *testing.T, s *Server) string {
 	go s.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = s.Close() })
 	return l.Addr().String()
+}
+
+// fixtureAdmin returns the admin account the first migration creates, the
+// owner of fixture repositories: the backend refuses a create by a caller
+// who may not create, as an anonymous caller may not by default.
+func fixtureAdmin(t testing.TB, be *backend.Backend) proto.User {
+	t.Helper()
+	u, err := be.User(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

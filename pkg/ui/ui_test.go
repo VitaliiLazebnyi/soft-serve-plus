@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"bytes"
@@ -81,7 +81,7 @@ func TestUIErrorScreenHidesInternalErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ui := NewUI(uc, 120, 40, "")
+			ui := New(uc, 120, 40, "")
 			t.Cleanup(ui.common.Zone.Close)
 			ui.Init()
 
@@ -116,11 +116,11 @@ func (p *filteringPage) ShortHelp() []key.Binding  { return nil }
 func (p *filteringPage) FullHelp() [][]key.Binding { return nil }
 func (p *filteringPage) IsFiltering() bool         { return true }
 
-func newFilteringUI(t *testing.T) (*UI, *filteringPage) {
+func newFilteringUI(t *testing.T) (*Model, *filteringPage) {
 	t.Helper()
 	c := uitest.NewCommon(t, t.Context(), nil, nil)
 	page := &filteringPage{}
-	ui := &UI{
+	ui := &Model{
 		common:     c,
 		width:      80,
 		height:     24,
@@ -213,11 +213,11 @@ func (p *recordingPage) inputs() (n int) {
 	return n
 }
 
-func newTestUI(t *testing.T, active page) (*UI, *recordingPage) {
+func newTestUI(t *testing.T, active page) (*Model, *recordingPage) {
 	t.Helper()
 	c := uitest.NewCommon(t, t.Context(), nil, nil)
 	p := &recordingPage{}
-	ui := &UI{
+	ui := &Model{
 		common:     c,
 		width:      80,
 		height:     24,
@@ -319,7 +319,7 @@ func (p *resizeCountingPage) SetSize(int, int)          {}
 func TestUIDeliversResizeOnce(t *testing.T) {
 	t.Parallel()
 	c := uitest.NewCommon(t, t.Context(), nil, nil)
-	ui := NewUI(c, 80, 40, "")
+	ui := New(c, 80, 40, "")
 	sel, rp := &resizeCountingPage{}, &resizeCountingPage{}
 	ui.pages = []common.Component{sel, rp}
 	ui.state = readyState
@@ -335,6 +335,9 @@ func TestUIDeliversResizeOnce(t *testing.T) {
 	}
 }
 
+// renderWait bounds how long a test waits for a render to finish.
+const renderWait = time.Minute
+
 // TestUIQuitKeepsZoneManagerRunning checks that quitting leaves the zone
 // manager running for the program's last render. A render after the manager
 // is closed blocks forever once the view has more zones than its worker
@@ -342,7 +345,7 @@ func TestUIDeliversResizeOnce(t *testing.T) {
 func TestUIQuitKeepsZoneManagerRunning(t *testing.T) {
 	t.Parallel()
 	c := uitest.NewCommon(t, t.Context(), nil, nil)
-	ui := NewUI(c, 80, 24, "")
+	ui := New(c, 80, 24, "")
 
 	_, cmd := ui.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
@@ -364,7 +367,7 @@ func TestUIQuitKeepsZoneManagerRunning(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(sessionLoopsWait):
+	case <-time.After(renderWait):
 		t.Fatal("render after quit blocked: the zone manager was closed on quit")
 	}
 }

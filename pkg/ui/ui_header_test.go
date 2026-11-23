@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"strings"
@@ -14,7 +14,7 @@ func TestUISelectionShowsServerName(t *testing.T) {
 	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.Name = "  Test Server  "
-	ui := NewUI(uitest.NewCommon(t, t.Context(), cfg, nil), 80, 24, "")
+	ui := New(uitest.NewCommon(t, t.Context(), cfg, nil), 80, 24, "")
 	ui.Init()
 
 	var first string

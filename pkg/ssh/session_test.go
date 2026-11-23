@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
+	"github.com/charmbracelet/soft-serve/pkg/ui"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/matryer/is"
 	dto "github.com/prometheus/client_model/go"
@@ -427,15 +428,15 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
 	srv := &ssh.Server{
 		Handler: func(s ssh.Session) {
-			p, ui, cancel := hs.newSessionProgram(s)
+			p, model, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
 				return
 			}
-			defer ui.common.Zone.Close()
-			before := ui.common.Context().Err()
+			defer model.Common().Zone.Close()
+			before := model.Common().Context().Err()
 			cancel()
-			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, ui.common.Context().Err(), s.Context().Err())
+			_, _ = fmt.Fprintf(s.Stderr(), "before=%v after=%v conn=%v", before, model.Common().Context().Err(), s.Context().Err())
 			_ = s.Exit(0)
 		},
 	}
@@ -464,14 +465,15 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 	hs := handlerServer(t, cfg, depsOf(ctx).dbx, depsOf(ctx).st, depsOf(ctx).be, log.Default())
 	srv := &ssh.Server{
 		Handler: func(s ssh.Session) {
-			p, ui, cancel := hs.newSessionProgram(s)
+			p, model, cancel := hs.newSessionProgram(s)
 			if p == nil {
 				_ = s.Exit(1)
 				return
 			}
 			cancel()
-			ui.common.Zone.Close()
-			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", ui.width, ui.height)
+			model.Common().Zone.Close()
+			width, height := model.Size()
+			_, _ = fmt.Fprintf(s.Stderr(), "%dx%d", width, height)
 			_ = s.Exit(0)
 		},
 	}
@@ -532,18 +534,18 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 	hs := handlerServer(t, cfg, d.dbx, d.st, d.be, log.Default())
 	// built gets the UI newSessionProgram returns, nil when it built none;
 	// uiCtx gets the built UI's context, for the next handler.
-	built := make(chan *UI, 1)
+	built := make(chan *ui.Model, 1)
 	uiCtx := make(chan context.Context, 1)
 	type errs struct{ ui, conn error }
 	after := make(chan errs, 1)
 	srv := &ssh.Server{
-		Handler: tuiMiddleware(func(s ssh.Session) (*tea.Program, *UI, context.CancelFunc) {
-			p, ui, cancel := hs.newSessionProgram(s)
-			if ui != nil {
-				uiCtx <- ui.common.Context()
+		Handler: tuiMiddleware(func(s ssh.Session) (*tea.Program, *ui.Model, context.CancelFunc) {
+			p, model, cancel := hs.newSessionProgram(s)
+			if model != nil {
+				uiCtx <- model.Common().Context()
 			}
-			built <- ui
-			return p, ui, cancel
+			built <- model
+			return p, model, cancel
 		})(func(s ssh.Session) {
 			// The program has exited; the middleware's deferred cleanup
 			// has not run yet.
@@ -588,16 +590,16 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ui *UI
+	var model *ui.Model
 	select {
-	case ui = <-built:
+	case model = <-built:
 	case <-time.After(sessionLoopsWait):
 		t.Fatal("newSessionProgram was not called")
 	}
-	if ui == nil {
+	if model == nil {
 		t.Fatal("the TUI did not start: newSessionProgram built no UI")
 	}
-	ctx := ui.common.Context()
+	ctx := model.Common().Context()
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("the TUI's context is done while it runs: %v", err)
 	}

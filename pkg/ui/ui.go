@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"context"
@@ -37,8 +37,9 @@ const (
 	readyState
 )
 
-// UI is the main UI model.
-type UI struct {
+// Model is the TUI's root model: the repository list and the repository
+// pages of one SSH session.
+type Model struct {
 	serverName  string
 	initialRepo string
 	common      *common.Common
@@ -63,11 +64,11 @@ type repoOpenedMsg struct {
 	err  error
 }
 
-// NewUI returns a new UI model of width x height cells, limited by
+// New returns a new Model of width x height cells, limited by
 // common.ClampSize.
-func NewUI(c *common.Common, width, height int, initialRepo string) *UI {
+func New(c *common.Common, width, height int, initialRepo string) *Model {
 	width, height = common.ClampSize(width, height)
-	ui := &UI{
+	ui := &Model{
 		serverName:  c.Config.Name,
 		width:       width,
 		height:      height,
@@ -82,7 +83,18 @@ func NewUI(c *common.Common, width, height int, initialRepo string) *UI {
 	return ui
 }
 
-func (ui *UI) getMargins() (wm, hm int) {
+// Common returns the Common the model's components share. Its Zone
+// manager must be closed once the program has exited.
+func (ui *Model) Common() *common.Common {
+	return ui.common
+}
+
+// Size returns the model's width and height in cells.
+func (ui *Model) Size() (width, height int) {
+	return ui.width, ui.height
+}
+
+func (ui *Model) getMargins() (wm, hm int) {
 	style := ui.common.Styles.App
 	switch ui.activePage {
 	case selectionPage:
@@ -102,7 +114,7 @@ func (ui *UI) getMargins() (wm, hm int) {
 }
 
 // ShortHelp implements help.KeyMap.
-func (ui *UI) ShortHelp() []key.Binding {
+func (ui *Model) ShortHelp() []key.Binding {
 	b := make([]key.Binding, 0)
 	switch ui.state {
 	case errorState:
@@ -117,7 +129,7 @@ func (ui *UI) ShortHelp() []key.Binding {
 }
 
 // FullHelp implements help.KeyMap.
-func (ui *UI) FullHelp() [][]key.Binding {
+func (ui *Model) FullHelp() [][]key.Binding {
 	b := make([][]key.Binding, 0)
 	switch ui.state {
 	case errorState:
@@ -135,7 +147,7 @@ func (ui *UI) FullHelp() [][]key.Binding {
 }
 
 // SetSize implements common.Component.
-func (ui *UI) SetSize(width, height int) {
+func (ui *Model) SetSize(width, height int) {
 	ui.width, ui.height = common.ClampSize(width, height)
 	wm, hm := ui.getMargins()
 	ui.footer.SetSize(width-wm, height-hm)
@@ -147,7 +159,7 @@ func (ui *UI) SetSize(width, height int) {
 }
 
 // Init implements tea.Model.
-func (ui *UI) Init() tea.Cmd {
+func (ui *Model) Init() tea.Cmd {
 	ui.pages[selectionPage] = selection.New(ui.common)
 	ui.pages[repoPage] = repo.New(ui.common,
 		repo.NewReadme(ui.common),
@@ -173,7 +185,7 @@ func (ui *UI) Init() tea.Cmd {
 }
 
 // IsFiltering returns true if the selection page is filtering.
-func (ui *UI) IsFiltering() bool {
+func (ui *Model) IsFiltering() bool {
 	if ui.activePage == selectionPage {
 		if s, ok := ui.pages[selectionPage].(interface{ IsFiltering() bool }); ok {
 			return s.IsFiltering()
@@ -183,7 +195,7 @@ func (ui *UI) IsFiltering() bool {
 }
 
 // Update implements tea.Model.
-func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (ui *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	ui.common.Logger.Debugf("msg received: %T", msg)
 	if m, ok := msg.(repoOpenedMsg); ok {
 		// Only the newest open counts. An older one finished late, for
@@ -307,7 +319,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View implements tea.Model.
-func (ui *UI) View() tea.View {
+func (ui *Model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -350,7 +362,7 @@ func (ui *UI) View() tea.View {
 // openRepoCmd starts opening repository rn. It must be called from Init or
 // Update: it takes the next repoGen there, and the command reads only what
 // does not change, never the UI.
-func (ui *UI) openRepoCmd(rn string) tea.Cmd {
+func (ui *Model) openRepoCmd(rn string) tea.Cmd {
 	ui.repoGen++
 	gen := ui.repoGen
 	ctx := ui.common.Context()

@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func uiTestKey(t *testing.T) gossh.PublicKey {
 // opened, and an admin key on the context still opens every repository.
 func TestOpenRepoUsesSessionUser(t *testing.T) {
 	t.Parallel()
-	open := func(ui *UI, rn string) (proto.Repository, error) {
+	open := func(ui *Model, rn string) (proto.Repository, error) {
 		msg, ok := ui.openRepoCmd(rn)().(repoOpenedMsg)
 		if !ok {
 			t.Fatal("openRepoCmd did not return a repoOpenedMsg")
@@ -64,21 +64,21 @@ func TestOpenRepoUsesSessionUser(t *testing.T) {
 		t.Fatalf("the key still resolves (%v); the test proves nothing", err)
 	}
 
-	ui := NewUI(uitest.NewCommon(t, sessCtx, cfg, be), 80, 40, "")
+	ui := New(uitest.NewCommon(t, sessCtx, cfg, be), 80, 40, "")
 	r, err := open(ui, "private")
 	is.NoErr(err)
 	is.Equal(r.Name(), "private")
 
 	// An admin key no account owns opens the private repository too.
 	adminCtx := context.WithValue(ctx, ssh.ContextKeyPublicKey, adminKey)
-	ui = NewUI(uitest.NewCommon(t, adminCtx, cfg, be), 80, 40, "")
+	ui = New(uitest.NewCommon(t, adminCtx, cfg, be), 80, 40, "")
 	r, err = open(ui, "private")
 	is.NoErr(err)
 	is.Equal(r.Name(), "private")
 
 	// Anyone else gets the missing-repository error.
 	otherCtx := context.WithValue(ctx, ssh.ContextKeyPublicKey, uiTestKey(t))
-	ui = NewUI(uitest.NewCommon(t, otherCtx, cfg, be), 80, 40, "")
+	ui = New(uitest.NewCommon(t, otherCtx, cfg, be), 80, 40, "")
 	_, err = open(ui, "private")
 	is.Equal(err, common.ErrMissingRepo)
 }

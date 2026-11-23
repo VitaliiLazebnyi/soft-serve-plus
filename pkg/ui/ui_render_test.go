@@ -1,4 +1,4 @@
-package ssh
+package ui
 
 import (
 	"os"
@@ -16,7 +16,7 @@ import (
 )
 
 // commitTo pushes a commit that adds a file to the server repository name.
-func commitTo(t *testing.T, ui *UI, name string) {
+func commitTo(t *testing.T, ui *Model, name string) {
 	t.Helper()
 	r, err := ui.common.Backend.Repository(ui.common.Context(), name)
 	if err != nil {
@@ -47,7 +47,7 @@ func commitTo(t *testing.T, ui *UI, name string) {
 
 // settleUI delivers msgs to ui and every message their commands produce,
 // until none is left, dropping spinner ticks.
-func settleUI(t *testing.T, ui *UI, msgs ...tea.Msg) {
+func settleUI(t *testing.T, ui *Model, msgs ...tea.Msg) {
 	t.Helper()
 	for steps := 0; len(msgs) > 0; steps++ {
 		if steps > 10000 {
@@ -64,7 +64,7 @@ func settleUI(t *testing.T, ui *UI, msgs ...tea.Msg) {
 }
 
 // openCommit opens repository "a" on its Commits tab and opens its commit.
-func openCommit(t *testing.T, ui *UI) {
+func openCommit(t *testing.T, ui *Model) {
 	t.Helper()
 	settleUI(t, ui, ui.openRepoCmd("a")())
 	settleUI(t, ui, tabs.SelectTabMsg(2))
