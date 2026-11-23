@@ -818,6 +818,30 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 	}
 }
 
+// A _pragma whose name is quoted, bracketed or carries a comment is refused:
+// SQLite reads each as the pragma it names, so it would get past the
+// foreign-keys refusal or keep the added WAL from seeing a journal mode.
+func TestSqliteDSNRefusesUnreadablePragmaNames(t *testing.T) {
+	t.Parallel()
+	for _, p := range []string{
+		`"journal_mode"(DELETE)`,
+		`main."journal_mode"(DELETE)`,
+		`journal_mode/**/(DELETE)`,
+		`foreign_keys/**/(0)`,
+		`main."foreign_keys"(0)`,
+		`main.[foreign_keys]=0`,
+		"`foreign_keys`=0",
+	} {
+		dsn := "soft-serve.db?_pragma=" + p
+		if _, err := sqliteDSN(dsn); !errors.Is(err, errSqlitePragmaName) {
+			t.Errorf("sqliteDSN(%q) error = %v, want %v", dsn, err, errSqlitePragmaName)
+		}
+		if _, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), dsn), Options{}); !errors.Is(err, errSqlitePragmaName) {
+			t.Errorf("Open(%q, Options{}) error = %v, want %v", dsn, err, errSqlitePragmaName)
+		}
+	}
+}
+
 // A data source that is a bare path, as SOFT_SERVE_DB_DATA_SOURCE often is,
 // still gets foreign keys and a busy timeout on every connection. Without
 // them, deleting a user would leave their keys behind, and any statement

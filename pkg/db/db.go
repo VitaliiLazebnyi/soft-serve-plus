@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,19 @@ const defaultSqliteBusyTimeout = 5000
 var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source, or SOFT_SERVE_DB_DATA_SOURCE) turns foreign keys off; " +
 	"Soft Serve Plus needs them on: remove the foreign_keys pragma or the _fk or _foreign_keys setting from it")
 
+// errSqlitePragmaName is returned by Open for a SQLite data source with a
+// _pragma whose name is not a plain name or schema.name: quoted, bracketed
+// or with a comment. The server reads the names to tell which pragmas the
+// data source sets, and SQLite accepts those spellings for the same pragma,
+// so one would slip past: foreign keys turned off, or a journal mode that the
+// added WAL would fight on every new connection.
+var errSqlitePragmaName = errors.New("the SQLite data source (db.data_source, or SOFT_SERVE_DB_DATA_SOURCE) has a _pragma whose name is quoted or has a comment; " +
+	"write it as name(value) or schema.name(value)")
+
+// sqlitePragmaName matches the name part of a _pragma, before its value: a
+// name or schema.name, with spaces around the parts.
+var sqlitePragmaName = regexp.MustCompile(`^\s*([A-Za-z_]\w*\s*\.\s*)?[A-Za-z_]\w*\s*$`)
+
 // sqliteDSN returns dsn with what the server relies on, on every
 // connection the pool opens:
 //
@@ -162,8 +176,10 @@ var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source
 //     TxOptions.ReadOnly, as ReadTransactionContext does, are still started
 //     as deferred by the driver, so reads do not queue behind writers.
 //
-// A data source that starts with "?" is a file name to the driver and is
-// left as it is.
+// A _pragma whose name is not a plain name or schema.name is refused with
+// errSqlitePragmaName, since the checks above could not tell which pragma it
+// sets. A data source that starts with "?" is a file name to the driver and
+// is left as it is.
 func sqliteDSN(dsn string) (string, error) {
 	i := strings.IndexByte(dsn, '?')
 	if i == 0 {
@@ -175,6 +191,15 @@ func sqliteDSN(dsn string) (string, error) {
 		if q, err = url.ParseQuery(dsn[i+1:]); err != nil {
 			// The driver rejects it too, with its own error.
 			return dsn, nil
+		}
+	}
+	for _, p := range q["_pragma"] {
+		name := p
+		if j := strings.IndexAny(p, "(="); j >= 0 {
+			name = p[:j]
+		}
+		if !sqlitePragmaName.MatchString(name) {
+			return "", fmt.Errorf("%w: _pragma=%s", errSqlitePragmaName, p)
 		}
 	}
 	var add []string
