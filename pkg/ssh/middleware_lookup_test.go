@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite"
@@ -35,7 +34,6 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	cfg.DataPath = dp
 	cfg.DB.Driver = "sqlite"
 	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	ctx = config.WithContext(ctx, cfg)
 
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
@@ -46,7 +44,6 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbstore := database.New(nil)
-	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 
 	newKey := func(name string) gossh.Signer {

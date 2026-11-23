@@ -907,7 +907,7 @@ func TestCloseStopsDeliveries(t *testing.T) {
 	if err := s.Config.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := config.WithContext(context.Background(), s.Config)
+	ctx := context.Background()
 	owner, err := s.Backend.DefaultAdmin(ctx)
 	if err != nil {
 		t.Fatal(err)

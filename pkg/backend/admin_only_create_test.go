@@ -14,10 +14,8 @@ import (
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/sshutils"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
@@ -106,9 +104,7 @@ func TestAnonAdminLevelIsCappedOnlyWhenFlagOn(t *testing.T) {
 // reads from its context (webhook delivery and rename need them).
 func backendTestContext(be *Backend, cfg *config.Config) context.Context {
 	ctx := context.Background()
-	ctx = config.WithContext(ctx, cfg)
-	ctx = db.WithContext(ctx, be.db)
-	return store.WithContext(ctx, be.store)
+	return ctx
 }
 
 // defaultAdmin returns the admin account the first migration creates. Tests

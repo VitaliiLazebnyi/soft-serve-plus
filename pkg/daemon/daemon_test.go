@@ -68,7 +68,6 @@ func runTests(m *testing.M) int {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		log.Fatal(err)

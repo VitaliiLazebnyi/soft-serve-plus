@@ -31,7 +31,6 @@ func newLookupBackend(t *testing.T, logs io.Writer) *Backend {
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.DB.Driver = dbx.DriverName()
-	ctx = config.WithContext(ctx, cfg)
 	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 		t.Fatal(err)
 	}

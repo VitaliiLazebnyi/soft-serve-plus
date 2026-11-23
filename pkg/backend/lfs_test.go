@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -132,8 +131,8 @@ func newLFSTestWithQuery(t *testing.T, objects int, extra func(work string, poin
 		t.Skip("git not found")
 	}
 
-	be, cfg := newTestBackendWithQuery(t, nil, query)
-	ctx := config.WithContext(context.Background(), cfg)
+	be, _ := newTestBackendWithQuery(t, nil, query)
+	ctx := context.Background()
 	repo, err := be.CreateRepository(ctx, "lfs-repo", defaultAdmin(t, be), proto.RepositoryOptions{})
 	if err != nil {
 		t.Fatal(err)

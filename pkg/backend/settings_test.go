@@ -49,7 +49,6 @@ func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backe
 	// AdminOnlyCreate is left at its default (off); tests of the restricted
 	// policy turn it on themselves.
 
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	is.NoErr(err)
 	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck

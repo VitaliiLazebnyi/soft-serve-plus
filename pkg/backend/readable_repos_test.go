@@ -6,10 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/matryer/is"
 )
 
@@ -19,11 +16,8 @@ import (
 func TestReadableRepositories(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
-	be, cfg := newTestBackend(t)
+	be, _ := newTestBackend(t)
 	ctx := context.Background()
-	ctx = config.WithContext(ctx, cfg)
-	ctx = db.WithContext(ctx, be.db)
-	ctx = store.WithContext(ctx, be.store)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 	is.NoErr(err)

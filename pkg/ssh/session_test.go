@@ -22,7 +22,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/matryer/is"
@@ -93,7 +92,6 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 	if err := cfg.Validate(); err != nil {
 		tb.Fatal(err)
 	}
-	ctx = config.WithContext(ctx, cfg)
 	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
 	if err != nil {
 		tb.Fatal(err)
@@ -103,7 +101,6 @@ func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Hand
 		tb.Fatal(err)
 	}
 	dbstore := database.New(nil)
-	ctx = store.WithContext(ctx, dbstore)
 	be := backend.New(cfg, dbx, dbstore, log.FromContext(ctx))
 	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
 	return &ssh.Server{

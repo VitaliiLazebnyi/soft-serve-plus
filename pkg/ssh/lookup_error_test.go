@@ -10,11 +10,9 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
@@ -36,12 +34,10 @@ func TestOpenRepoOutageSameAnswer(t *testing.T) {
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			ctx = config.WithContext(ctx, cfg)
 			if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
 				t.Fatal(err)
 			}
 			st := database.New(nil)
-			ctx = store.WithContext(db.WithContext(ctx, dbx), st)
 			be := backend.New(cfg, dbx, st, log.FromContext(ctx))
 			owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 			if err != nil {
