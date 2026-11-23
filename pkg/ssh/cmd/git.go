@@ -129,8 +129,8 @@ func (cmds *Commands) GitLFSAuthenticateCommand() *cobra.Command {
 	})
 }
 
-// GitLFSTransfer returns a cobra command for git-lfs-transfer.
-func (cmds *Commands) GitLFSTransfer() *cobra.Command {
+// GitLFSTransferCommand returns a cobra command for git-lfs-transfer.
+func (cmds *Commands) GitLFSTransferCommand() *cobra.Command {
 	return gitCommand("git-lfs-transfer REPO OPERATION", "Git LFS transfer", cobra.ExactArgs(2), func(cmd *cobra.Command, args []string) error {
 		return cmds.runLFS(cmd, args, gitserve.LFSTransferService)
 	})

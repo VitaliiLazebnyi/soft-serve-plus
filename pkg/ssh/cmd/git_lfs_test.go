@@ -89,7 +89,7 @@ func TestSSHLFSTransferClientGone(t *testing.T) {
 	_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
 	is.NoErr(err)
 
-	logs, err := runLFSCommand(adminCtx, (*Commands).GitLFSTransfer, strings.NewReader(""), errWriter{}, "shared", "download")
+	logs, err := runLFSCommand(adminCtx, (*Commands).GitLFSTransferCommand, strings.NewReader(""), errWriter{}, "shared", "download")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
