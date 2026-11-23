@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
@@ -32,7 +33,7 @@ func (i LogItem) Hash() string {
 // Title returns the item title. Implements list.DefaultItem.
 func (i LogItem) Title() string {
 	if i.Commit != nil {
-		return common.SanitizeText(strings.Split(i.Commit.Message, "\n")[0])
+		return termtext.Text(strings.Split(i.Commit.Message, "\n")[0])
 	}
 	return ""
 }
@@ -113,8 +114,8 @@ func (d LogItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 				m.Width()-horizontalFrameSize),
 		)
 	}
-	author := common.SanitizeText(i.Author.Name)
-	committer := common.SanitizeText(i.Committer.Name)
+	author := termtext.Text(i.Author.Name)
+	committer := termtext.Text(i.Committer.Name)
 	who := ""
 	if author != "" && committer != "" {
 		who = styles.Keyword.Render(committer) + styles.Desc.Render(" committed")

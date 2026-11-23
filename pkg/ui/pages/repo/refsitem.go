@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/dustin/go-humanize"
 )
@@ -27,7 +28,7 @@ func (i RefItem) ID() string {
 
 // Title implements list.DefaultItem.
 func (i RefItem) Title() string {
-	return common.SanitizeText(i.Reference.Name().Short())
+	return termtext.Text(i.Reference.Name().Short())
 }
 
 // Description implements list.DefaultItem.
@@ -119,7 +120,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 
 	// A ref name cannot hold C0 controls, but it can hold C1 ones encoded
 	// as UTF-8.
-	ref := common.SanitizeText(i.Short())
+	ref := termtext.Text(i.Short())
 
 	var desc string
 	if isTag {
@@ -131,7 +132,7 @@ func (d RefItemDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 			desc += " " + st.ItemDesc.Render(date)
 		}
 
-		if msg := strings.TrimSpace(common.SanitizeText(i.TagSubject)); msg != "" {
+		if msg := strings.TrimSpace(termtext.Text(i.TagSubject)); msg != "" {
 			msgSt := st.ItemDesc.Faint(false)
 			msgMargin := m.Width() -
 				horizontalFrameSize -

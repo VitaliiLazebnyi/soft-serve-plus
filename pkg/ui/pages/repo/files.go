@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
@@ -476,7 +477,7 @@ func (f *Files) StatusBarValue() string {
 		return " "
 	}
 	// File names may contain control characters; escape them for display.
-	return common.DisplayFilename(p)
+	return termtext.Filename(p)
 }
 
 // StatusBarInfo returns the status bar info.
@@ -657,10 +658,10 @@ func renderBlame(c *common.Common, f *FileItem, b *git.Blame) string {
 		if commit == nil {
 			break
 		}
-		who := common.SanitizeText(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
+		who := termtext.Text(fmt.Sprintf("%s <%s>", commit.Author.Name, commit.Author.Email))
 		line := fmt.Sprintf("%s %s %s",
 			c.Styles.Tree.Blame.Hash.Render(commit.ID.String()[:7]),
-			c.Styles.Tree.Blame.Message.Render(common.SanitizeText(commit.Summary())),
+			c.Styles.Tree.Blame.Message.Render(termtext.Text(commit.Summary())),
 			c.Styles.Tree.Blame.Who.Render(who),
 		)
 		if line != prev {

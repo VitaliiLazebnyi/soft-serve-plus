@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
@@ -454,8 +455,8 @@ func (l *Log) StatusBarValue() string {
 	if c == nil {
 		return ""
 	}
-	who := common.SanitizeText(c.Author.Name)
-	if email := common.SanitizeText(c.Author.Email); email != "" {
+	who := termtext.Text(c.Author.Name)
+	if email := termtext.Text(c.Author.Email); email != "" {
 		who += " <" + email + ">"
 	}
 	value := c.ID.String()[:7]
@@ -704,10 +705,10 @@ func renderCommit(c *git.Commit, st *styles.Styles, width int) string {
 	s := strings.Builder{}
 	// Strip escape sequences and control characters, CR included since
 	// lipgloss prints empty lines when CRLF is used.
-	msg := common.SanitizeText(c.Message)
+	msg := termtext.Text(c.Message)
 	fmt.Fprintf(&s, "%s\n%s\n%s\n%s\n",
 		st.Log.CommitHash.Render("commit "+c.ID.String()),
-		st.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", common.SanitizeText(c.Author.Name), common.SanitizeText(c.Author.Email))),
+		st.Log.CommitAuthor.Render(fmt.Sprintf("Author: %s <%s>", termtext.Text(c.Author.Name), termtext.Text(c.Author.Email))),
 		st.Log.CommitDate.Render("Date:   "+c.Author.When.Format(time.UnixDate)),
 		st.Log.CommitBody.Render(msg),
 	)

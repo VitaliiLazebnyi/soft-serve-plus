@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/code"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/footer"
@@ -466,13 +467,13 @@ func (r *Repo) headerView() string {
 		return ""
 	}
 	truncate := lipgloss.NewStyle().MaxWidth(r.width)
-	header := common.SanitizeText(r.selectedRepo.ProjectName())
+	header := termtext.Text(r.selectedRepo.ProjectName())
 	if header == "" {
 		header = r.selectedRepo.Name()
 	}
 	header = r.common.Styles.Repo.HeaderName.Render(header) +
 		" " + common.VisibilityMarker(r.selectedRepo.IsPrivate())
-	desc := strings.TrimSpace(common.SanitizeText(r.selectedRepo.Description()))
+	desc := strings.TrimSpace(termtext.Text(r.selectedRepo.Description()))
 	if desc != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left,
 			header,

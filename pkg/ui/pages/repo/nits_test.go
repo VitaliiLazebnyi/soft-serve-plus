@@ -251,19 +251,6 @@ func TestStatusBarRefreshedOnEveryResult(t *testing.T) {
 	}
 }
 
-// SanitizeText removes bidirectional controls along with what
-// termtext.Sanitize removes, and keeps joiners that emoji need.
-func TestSanitizeTextBidi(t *testing.T) {
-	t.Parallel()
-	in := "a\u202eb\x1b[31mc\u200dd\u061ce\u200ff"
-	if got, want := common.SanitizeText(in), "abc\u200ddef"; got != want {
-		t.Fatalf("SanitizeText(%q) = %q; want %q", in, got, want)
-	}
-	if got := common.SanitizeText("plain\ttext\n"); got != "plain\ttext\n" {
-		t.Fatalf("plain text changed to %q", got)
-	}
-}
-
 // A code view render of a hidden tab leaves the status bar alone, so a copy
 // notice stays; a render of the tab shown refreshes it.
 func TestStatusBarKeepsNoticeOnHiddenTabRender(t *testing.T) {
