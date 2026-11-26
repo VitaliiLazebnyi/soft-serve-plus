@@ -476,6 +476,9 @@ func (cmds *Commands) runReceivePack(cmd *cobra.Command, args []string) error {
 		return gitServiceError(r.ctx, r.logger, gitserve.ReceivePackService, r.name, err)
 	}
 
+	if cmds.afterReceivePack != nil {
+		cmds.afterReceivePack()
+	}
 	// The push succeeded, so HEAD is fixed even if the client has gone
 	// meanwhile, as the failure path does.
 	if err := gitserve.EnsureDefaultBranch(context.WithoutCancel(r.ctx), r.scmd.Dir); err != nil {

@@ -56,6 +56,9 @@ type Commands struct {
 	// push is marked as running: for a push to a missing name, right after
 	// the push created the repository.
 	beforeBeginPush func()
+	// afterReceivePack, when a test sets it, runs once receive-pack has
+	// succeeded, before the push fixes HEAD.
+	afterReceivePack func()
 	// blobBudget is blob --color's syntax.Budget, nil outside tests.
 	blobBudget syntax.Budget
 }
