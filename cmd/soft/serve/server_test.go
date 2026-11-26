@@ -945,6 +945,24 @@ func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Cleanup(func() { _ = client.Close() })
+	// The client's handshake ends before the server's: the server marks the
+	// connection established, which is what keeps a Shutdown from closing
+	// it as one still in its handshake, only after it has sent the
+	// authentication success. It answers global requests only after that,
+	// so a reply, even a refusal, fences the connection as established.
+	replied := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("soft-serve-test@example.invalid", true, nil)
+		replied <- err
+	}()
+	select {
+	case err := <-replied:
+		if err != nil {
+			t.Fatalf("the SSH server did not answer a global request: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH server did not answer a global request within a minute")
+	}
 	closed := make(chan struct{})
 	go func() {
 		_ = client.Wait()
