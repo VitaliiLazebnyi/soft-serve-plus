@@ -109,6 +109,8 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 		"limit=1000":                 {locks: 2},
 		"cursor=1&limit=0":           {locks: 1},
 		"cursor=9223372036854775807": {locks: 0},
+		"cursor=2147483648":          {locks: 0},
+		"id=2147483648":              {locks: 0},
 		"path=a.bin":                 {locks: 1},
 		"path=a.bin&id=":             {locks: 1},
 		"cursor=&limit=":             {locks: 2},
@@ -116,11 +118,6 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 	} {
 		t.Run(query, func(t *testing.T) {
 			t.Parallel()
-			if query == "cursor=9223372036854775807" && f.env.dbx.DriverName() == "postgres" {
-				// Lock IDs are SERIAL (int4) on Postgres, which refuses to
-				// compare one with a cursor past 2^31-1: the list answers 500.
-				t.Skip("a cursor past 2^31-1 fails on Postgres's int4 lock IDs")
-			}
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/repo.git/info/lfs/locks?"+query, nil)
 			req.Header.Set("Accept", lfs.MediaType)
 			w := httptest.NewRecorder()

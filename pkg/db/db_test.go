@@ -768,6 +768,17 @@ func TestSqliteDSN(t *testing.T) {
 		"soft-serve.db?_timeout=100":                  "soft-serve.db?_timeout=100&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
 		"soft-serve.db?_fk=1&_pragma=busy_timeout(1)": "soft-serve.db?_fk=1&_pragma=busy_timeout(1)&_pragma=journal_mode(WAL)&_txlock=immediate",
 		"soft-serve.db?_pragma=foreign_keys(on)":      "soft-serve.db?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate",
+		// A setting without a value sets nothing: the driver applies no
+		// empty key, and a _pragma without a value only reads the pragma.
+		// Of a key and its alias, the driver takes the alias.
+		"soft-serve.db?_busy_timeout=":              "soft-serve.db?_busy_timeout=&" + added,
+		"soft-serve.db?_timeout=":                   "soft-serve.db?_timeout=&" + added,
+		"soft-serve.db?_busy_timeout=100&_timeout=": "soft-serve.db?_busy_timeout=100&_timeout=&" + added,
+		"soft-serve.db?_pragma=busy_timeout":        "soft-serve.db?_pragma=busy_timeout&" + added,
+		"soft-serve.db?_pragma=busy_timeout()":      "soft-serve.db?_pragma=busy_timeout()&" + added,
+		"soft-serve.db?_journal_mode=":              "soft-serve.db?_journal_mode=&" + added,
+		"soft-serve.db?_journal=":                   "soft-serve.db?_journal=&" + added,
+		"soft-serve.db?_pragma=journal_mode":        "soft-serve.db?_pragma=journal_mode&" + added,
 		// A journal mode the data source sets is kept.
 		"soft-serve.db?_pragma=journal_mode(DELETE)": "soft-serve.db?_pragma=journal_mode(DELETE)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"soft-serve.db?_pragma=Journal_Mode = wal":   "soft-serve.db?_pragma=Journal_Mode = wal&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
@@ -786,6 +797,9 @@ func TestSqliteDSN(t *testing.T) {
 		"file:soft-serve.db?immutable=1": "file:soft-serve.db?immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		"file:soft-serve.db?immutable=0": "file:soft-serve.db?immutable=0&" + added,
 		"file:soft-serve.db?mode=rw":     "file:soft-serve.db?mode=rw&" + added,
+		// Any of a repeated mode or immutable counts.
+		"file:soft-serve.db?mode=rw&mode=ro":         "file:soft-serve.db?mode=rw&mode=ro&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
+		"file:soft-serve.db?immutable=0&immutable=1": "file:soft-serve.db?immutable=0&immutable=1&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		// Starting with "?", the whole string is a file name to the driver.
 		"?odd": "?odd",
 	} {
@@ -814,6 +828,30 @@ func TestSqliteDSNRefusesForeignKeysOff(t *testing.T) {
 		}
 		if _, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), dsn), Options{}); !errors.Is(err, errSqliteForeignKeysOff) {
 			t.Errorf("Open(%q, Options{}) error = %v, want %v", dsn, err, errSqliteForeignKeysOff)
+		}
+	}
+}
+
+// A _pragma whose name is quoted, bracketed or carries a comment is refused:
+// SQLite reads each as the pragma it names, so it would get past the
+// foreign-keys refusal or keep the added WAL from seeing a journal mode.
+func TestSqliteDSNRefusesUnreadablePragmaNames(t *testing.T) {
+	t.Parallel()
+	for _, p := range []string{
+		`"journal_mode"(DELETE)`,
+		`main."journal_mode"(DELETE)`,
+		`journal_mode/**/(DELETE)`,
+		`foreign_keys/**/(0)`,
+		`main."foreign_keys"(0)`,
+		`main.[foreign_keys]=0`,
+		"`foreign_keys`=0",
+	} {
+		dsn := "soft-serve.db?_pragma=" + p
+		if _, err := sqliteDSN(dsn); !errors.Is(err, errSqlitePragmaName) {
+			t.Errorf("sqliteDSN(%q) error = %v, want %v", dsn, err, errSqlitePragmaName)
+		}
+		if _, err := Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), dsn), Options{}); !errors.Is(err, errSqlitePragmaName) {
+			t.Errorf("Open(%q, Options{}) error = %v, want %v", dsn, err, errSqlitePragmaName)
 		}
 	}
 }
@@ -1061,6 +1099,25 @@ func TestOpenSqliteJournalModeKeys(t *testing.T) {
 	}
 }
 
+// A busy timeout setting without a value sets nothing, so the connection
+// still gets the default one rather than SQLite's 0.
+func TestOpenSqliteEmptyBusyTimeoutGetsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, q := range []string{"_busy_timeout=", "_timeout=", "_pragma=busy_timeout"} {
+		d, err := Open(ctx, "sqlite", filepath.Join(t.TempDir(), "soft.db")+"?"+q, Options{})
+		if err != nil {
+			t.Errorf("Open(%s): %v", q, err)
+			continue
+		}
+		var busy int
+		if err := d.GetContext(ctx, &busy, "PRAGMA busy_timeout"); err != nil || busy != defaultSqliteBusyTimeout {
+			t.Errorf("%s: busy_timeout = %d, %v; want %d", q, busy, err, defaultSqliteBusyTimeout)
+		}
+		d.Close() //nolint:errcheck
+	}
+}
+
 // A read-only data source cannot switch the journal mode, so it gets no
 // journal_mode(WAL) and opens a database in rollback-journal mode as it is.
 func TestOpenSqliteReadOnlyKeepsJournalMode(t *testing.T) {
@@ -1080,7 +1137,7 @@ func TestOpenSqliteReadOnlyKeepsJournalMode(t *testing.T) {
 	d.Close() //nolint:errcheck
 
 	uri := "file:" + filepath.ToSlash(path)
-	for _, q := range []string{"mode=ro", "immutable=1", "mode=ro&cache=private", "immutable=true"} {
+	for _, q := range []string{"mode=ro", "immutable=1", "mode=ro&cache=private", "immutable=true", "mode=rw&mode=ro"} {
 		ro, err := Open(ctx, "sqlite", uri+"?"+q, Options{})
 		if err != nil {
 			t.Errorf("Open(%s): %v", q, err)

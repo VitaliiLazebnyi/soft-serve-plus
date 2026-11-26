@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +135,19 @@ const defaultSqliteBusyTimeout = 5000
 var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source, or SOFT_SERVE_DB_DATA_SOURCE) turns foreign keys off; " +
 	"Soft Serve Plus needs them on: remove the foreign_keys pragma or the _fk or _foreign_keys setting from it")
 
+// errSqlitePragmaName is returned by Open for a SQLite data source with a
+// _pragma whose name is not a plain name or schema.name: quoted, bracketed
+// or with a comment. The server reads the names to tell which pragmas the
+// data source sets, and SQLite accepts those spellings for the same pragma,
+// so one would slip past: foreign keys turned off, or a journal mode that the
+// added WAL would fight on every new connection.
+var errSqlitePragmaName = errors.New("the SQLite data source (db.data_source, or SOFT_SERVE_DB_DATA_SOURCE) has a _pragma whose name is quoted or has a comment; " +
+	"write it as name(value) or schema.name(value)")
+
+// sqlitePragmaName matches the name part of a _pragma, before its value: a
+// name or schema.name, with spaces around the parts.
+var sqlitePragmaName = regexp.MustCompile(`^\s*([A-Za-z_]\w*\s*\.\s*)?[A-Za-z_]\w*\s*$`)
+
 // sqliteDSN returns dsn with what the server relies on, on every
 // connection the pool opens:
 //
@@ -162,8 +177,10 @@ var errSqliteForeignKeysOff = errors.New("the SQLite data source (db.data_source
 //     TxOptions.ReadOnly, as ReadTransactionContext does, are still started
 //     as deferred by the driver, so reads do not queue behind writers.
 //
-// A data source that starts with "?" is a file name to the driver and is
-// left as it is.
+// A _pragma whose name is not a plain name or schema.name is refused with
+// errSqlitePragmaName, since the checks above could not tell which pragma it
+// sets. A data source that starts with "?" is a file name to the driver and
+// is left as it is.
 func sqliteDSN(dsn string) (string, error) {
 	i := strings.IndexByte(dsn, '?')
 	if i == 0 {
@@ -175,6 +192,15 @@ func sqliteDSN(dsn string) (string, error) {
 		if q, err = url.ParseQuery(dsn[i+1:]); err != nil {
 			// The driver rejects it too, with its own error.
 			return dsn, nil
+		}
+	}
+	for _, p := range q["_pragma"] {
+		name := p
+		if j := strings.IndexAny(p, "(="); j >= 0 {
+			name = p[:j]
+		}
+		if !sqlitePragmaName.MatchString(name) {
+			return "", fmt.Errorf("%w: _pragma=%s", errSqlitePragmaName, p)
 		}
 	}
 	var add []string
@@ -221,6 +247,10 @@ const (
 // next to one of them would run first and then be undone on every new
 // connection. A foreign_keys setting that is not one of the driver's true
 // values counts as off.
+//
+// A setting counts only if it sets something: a _pragma without a value
+// reads the pragma, and the driver applies nothing for an empty key, so the
+// connection would keep SQLite's default (a busy timeout of 0).
 func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 	set := func(v string) {
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(v), `'"`)) {
@@ -245,32 +275,45 @@ func sqlitePragmas(q url.Values) (fk pragmaState, busy, journal bool) {
 				set(value)
 			}
 		case "busy_timeout":
-			busy = true
+			busy = busy || value != ""
 		case "journal_mode":
-			journal = true
+			journal = journal || value != ""
 		}
 	}
-	busy = busy || q.Has("_busy_timeout") || q.Has("_timeout")
-	journal = journal || q.Has("_journal_mode") || q.Has("_journal")
+	busy = busy || driverKey(q, "_busy_timeout", "_timeout") != ""
+	journal = journal || driverKey(q, "_journal_mode", "_journal") != ""
 	return fk, busy, journal
 }
 
+// driverKey returns the value the SQLite driver takes for a setting it reads
+// from key or its alias: the first value of the alias if the query has it,
+// else the first of key.
+func driverKey(q url.Values, key, alias string) string {
+	if q.Has(alias) {
+		return q.Get(alias)
+	}
+	return q.Get(key)
+}
+
 // sqliteReadOnly reports whether a SQLite data source, dsn with its query q,
-// opens the database read-only: a "file:" URI with the parameter mode=ro or
+// may open the database read-only: a "file:" URI with a parameter mode=ro or
 // immutable set to a true value. Such a connection cannot change the journal
-// mode: SQLite refuses with "attempt to write a readonly database". The
+// mode: SQLite refuses with "attempt to write a readonly database". Every
+// value of a repeated parameter counts, whichever one SQLite takes. The
 // driver passes the parameters to SQLite only in a "file:" URI; it drops
 // them from a plain path.
 func sqliteReadOnly(dsn string, q url.Values) bool {
 	if !strings.HasPrefix(dsn, "file:") {
 		return false
 	}
-	if q.Get("mode") == "ro" {
+	if slices.Contains(q["mode"], "ro") {
 		return true
 	}
-	switch strings.ToLower(q.Get("immutable")) {
-	case "1", "true", "on", "yes":
-		return true
+	for _, v := range q["immutable"] {
+		switch strings.ToLower(v) {
+		case "1", "true", "on", "yes":
+			return true
+		}
 	}
 	return false
 }
