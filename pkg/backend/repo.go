@@ -148,8 +148,7 @@ const AboutRepo = ".soft-serve"
 // creating repositories, would otherwise still be shown. So is one whose
 // owner is no longer an admin.
 func (d *Backend) AboutRepoOwnedByAdmin(ctx context.Context, r proto.Repository) bool {
-	rr, ok := r.(*repo)
-	if !ok || rr.repo.Anonymous || r.UserID() == 0 {
+	if r.CreatedAnonymously() || r.UserID() == 0 {
 		return false
 	}
 	owner, err := d.UserByID(ctx, r.UserID())
@@ -1717,6 +1716,14 @@ type repo struct {
 // It implements proto.Repository.
 func (r *repo) ID() int64 {
 	return r.repo.ID
+}
+
+// CreatedAnonymously reports whether a caller with no user created the
+// repository.
+//
+// It implements proto.Repository.
+func (r *repo) CreatedAnonymously() bool {
+	return r.repo.Anonymous
 }
 
 // UserID returns the repository's owner's user ID.

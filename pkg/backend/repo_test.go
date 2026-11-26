@@ -923,6 +923,9 @@ func TestAboutRepoAllowedForAdmins(t *testing.T) {
 	}
 }
 
+// wrappedRepo is a proto.Repository of a type other than the backend's.
+type wrappedRepo struct{ proto.Repository }
+
 // AboutRepoOwnedByAdmin holds only for an AboutRepo an admin created and
 // still owns. One an anonymous caller created, which is recorded with the
 // default admin as owner, is refused: such a repository can predate the
@@ -960,6 +963,10 @@ func TestAboutRepoOwnedByAdmin(t *testing.T) {
 	}
 	if !be.AboutRepoOwnedByAdmin(ctx, aboutRepo()) {
 		t.Fatal("not true: be.AboutRepoOwnedByAdmin(ctx, aboutRepo())")
+	}
+	// Judged by the interface's methods, not by the type that implements it.
+	if !be.AboutRepoOwnedByAdmin(ctx, wrappedRepo{aboutRepo()}) {
+		t.Fatal("an admin's AboutRepo behind another proto.Repository is refused")
 	}
 	if err := be.SetAdmin(ctx, "root", false); err != nil {
 		t.Fatal(err)

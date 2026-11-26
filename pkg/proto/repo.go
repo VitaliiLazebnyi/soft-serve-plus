@@ -30,6 +30,9 @@ type Repository interface {
 	// repository has an owner: one created without a user belongs to the
 	// default admin.
 	UserID() int64
+	// CreatedAnonymously reports whether a caller with no user created
+	// the repository; UserID then names the default admin.
+	CreatedAnonymously() bool
 	// CreatedAt returns the time the repository was created.
 	CreatedAt() time.Time
 	// UpdatedAt returns the time the repository was last updated.
