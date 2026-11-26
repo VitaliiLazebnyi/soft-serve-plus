@@ -925,7 +925,7 @@ func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
 	var client *gossh.Client
 	deadline := time.Now().Add(time.Minute)
 	for {
-		client, err = gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		client, err = testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 			User:            "test",
 			Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 			HostKeyCallback: gossh.InsecureIgnoreHostKey(), // test server
@@ -1100,7 +1100,7 @@ func TestNewServerLoadsKeys(t *testing.T) {
 	var presented gossh.PublicKey
 	var client *gossh.Client
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
-		client, err = gossh.Dial("tcp", sshAddr, &gossh.ClientConfig{
+		client, err = testnet.DialSSH("tcp", sshAddr, &gossh.ClientConfig{
 			User: "test",
 			HostKeyCallback: func(_ string, _ net.Addr, key gossh.PublicKey) error {
 				presented = key

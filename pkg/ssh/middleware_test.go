@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
@@ -72,7 +74,7 @@ func noAnswers(string, string, []string, []bool) ([]string, error) { return nil,
 // It returns the handshake error, or the command's stderr and exit error.
 func runCommand(t *testing.T, addr string, command string, auth ...gossh.AuthMethod) (stderr string, runErr, dialErr error) {
 	t.Helper()
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            auth,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
@@ -712,7 +714,7 @@ func TestSSHServerRefusesOverlongCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
@@ -1039,7 +1041,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	go srv.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = srv.Close() })
 
-	c, err := gossh.Dial("tcp", l.Addr().String(), &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", l.Addr().String(), &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,

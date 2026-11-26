@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/config"
@@ -117,7 +119,7 @@ func dialClient(t *testing.T, addr string) (*gossh.Client, error) {
 	t.Helper()
 	cfg := clientConfig(t)
 	cfg.Timeout = sessionLoopsWait
-	return gossh.Dial("tcp", addr, cfg)
+	return testnet.DialSSH("tcp", addr, cfg)
 }
 
 // clientConfig returns the configuration of a test client, which signs in

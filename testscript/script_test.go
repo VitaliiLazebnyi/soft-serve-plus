@@ -76,6 +76,9 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	// HTTP clients without a transport of their own retry a loopback
+	// connect that timed out (see testnet.Dial).
+	testnet.UseDialForDefaultTransport()
 	code := m.Run()
 	if binDir != "" {
 		_ = os.RemoveAll(binDir)
@@ -654,7 +657,7 @@ var loopbackClient = &http.Client{
 			if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
 				addr = net.JoinHostPort(loopback, port)
 			}
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
+			return testnet.Dial(ctx, network, addr)
 		},
 	},
 }

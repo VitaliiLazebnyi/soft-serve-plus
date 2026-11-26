@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
 	"charm.land/ssh"
@@ -209,7 +211,7 @@ func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
 	srv := setupServer(t)
 	addr := testsession.Listen(t, srv)
 
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
@@ -553,7 +555,7 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 	}
 	addr := testsession.Listen(t, srv)
 
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,

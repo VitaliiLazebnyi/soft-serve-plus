@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"github.com/charmbracelet/keygen"
@@ -60,7 +62,7 @@ func TestServerPresentsGivenHostKey(t *testing.T) {
 	addr := serve(t, s)
 
 	var got gossh.PublicKey
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User: "test",
 		Auth: []gossh.AuthMethod{gossh.KeyboardInteractive(noAnswers)},
 		HostKeyCallback: func(_ string, _ net.Addr, key gossh.PublicKey) error {
@@ -374,7 +376,7 @@ func dialWith(t *testing.T, addr string, kex, ciphers, macs []string) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		Config: gossh.Config{
 			KeyExchanges: kex,
 			Ciphers:      ciphers,
@@ -430,7 +432,7 @@ func TestSSHServerRefusesSHA1ByDefault(t *testing.T) {
 // dialWithSigner connects to addr authenticating with signer and returns
 // the handshake error.
 func dialWithSigner(addr string, signer gossh.Signer) error {
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
@@ -560,7 +562,7 @@ func TestStopCutsOffHandshakeInProgress(t *testing.T) {
 			}
 			go s.Serve(l) //nolint: errcheck
 
-			raw, err := (&net.Dialer{Timeout: time.Minute}).DialContext(ctx, "tcp", l.Addr().String())
+			raw, err := testnet.Dial(ctx, "tcp", l.Addr().String())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -658,7 +660,7 @@ func TestStopRefusesConnectionCalledBackAfter(t *testing.T) {
 				t.Fatal(err)
 			}
 			go s.Serve(l) //nolint: errcheck
-			raw, err := (&net.Dialer{Timeout: time.Minute}).DialContext(ctx, "tcp", l.Addr().String())
+			raw, err := testnet.Dial(ctx, "tcp", l.Addr().String())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1045,7 +1047,7 @@ func TestPubkeyAddProofOverSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "alice",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),

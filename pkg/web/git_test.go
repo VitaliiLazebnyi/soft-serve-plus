@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -1263,7 +1265,7 @@ func post(ctx context.Context, srv *httptest.Server, body io.Reader, gzipped boo
 	if gzipped {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
-	resp, err := srv.Client().Do(req)
+	resp, err := testnet.Client(srv.Client()).Do(req)
 	if err != nil {
 		return false, err
 	}
