@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,17 +55,42 @@ func stallingRemote(t *testing.T) (remote, hostPort string, accepted <-chan stru
 	return "ssh://git@" + hostPort + "/x.git", hostPort, ch
 }
 
-// waitAccepted waits for the stalling remote to be dialed.
-// An import that ends before it reaches the remote fails the test with its
-// error, rather than after the wait.
-func waitAccepted(t *testing.T, accepted <-chan struct{}, errc <-chan error) {
+// maxStallAttempts bounds how many times startStalledImport starts an
+// import whose ssh connect to the stalling remote timed out.
+const maxStallAttempts = 4
+
+// startStalledImport starts importing remote, a stallingRemote, as user, and
+// waits for the import to reach the remote. It returns the import's error
+// channel (see importAsync).
+//
+// An import that ends before it reaches the remote fails the test with what
+// the backend logged, since ImportRepository itself returns only the fixed
+// proto.ErrImportFailed. One whose ssh connect to the remote timed out is
+// started again, up to maxStallAttempts in all: on a loaded macOS machine
+// the kernel can stall a loopback connect until it times out (KNOWN_ISSUES
+// item 309), and such a connect never reached the remote, so the test has
+// not started. Every other early end fails the test.
+func startStalledImport(t *testing.T, ctx context.Context, be *Backend, logs *syncBuffer, name string, user proto.User, remote string, accepted <-chan struct{}) <-chan error {
 	t.Helper()
-	select {
-	case <-accepted:
-	case err := <-errc:
-		t.Fatalf("the import ended before it reached the remote: %v", err)
-	case <-time.After(time.Minute):
-		t.Fatal("the import never reached the remote")
+	for attempt := 1; ; attempt++ {
+		before := len(logs.String())
+		errc := importAsync(ctx, be, name, user, remote)
+		select {
+		case <-accepted:
+			return errc
+		case err := <-errc:
+			logged := logs.String()[before:]
+			if attempt < maxStallAttempts && strings.Contains(logged, "ssh: connect to host") &&
+				strings.Contains(logged, "Operation timed out") {
+				t.Logf("the ssh connect to the stalling remote timed out (attempt %d of %d), starting the import again:\n%s",
+					attempt, maxStallAttempts, logged)
+				continue
+			}
+			t.Fatalf("the import ended before it reached the remote: %v; the backend logged:\n%s", err, logged)
+		case <-time.After(time.Minute):
+			t.Fatal("the import never reached the remote")
+		}
+		return nil
 	}
 }
 
@@ -107,7 +133,8 @@ func assertNothingLeft(t *testing.T, be *Backend, name string) {
 // session must not leave a clone running on the server.
 func TestImportRepositoryStopsWithCaller(t *testing.T) {
 	t.Parallel()
-	be, cfg := newTestBackend(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
 	remote, _, accepted := stallingRemote(t)
 	ctx, cancel := context.WithCancel(backendTestContext(be, cfg))
 	defer cancel()
@@ -116,8 +143,7 @@ func TestImportRepositoryStopsWithCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted, errc)
+	errc := startStalledImport(t, ctx, be, &logs, "stalled", admin, remote, accepted)
 	cancel()
 	if !errors.Is(waitImport(t, errc), proto.ErrImportFailed) {
 		t.Fatal("not true: errors.Is(waitImport(t, errc), proto.ErrImportFailed)")
@@ -148,7 +174,8 @@ func TestImportRepositoryTimeout(t *testing.T) {
 // refuses new ones; WaitForImports returns once they have cleaned up.
 func TestStopImports(t *testing.T) {
 	t.Parallel()
-	be, cfg := newTestBackend(t)
+	var logs syncBuffer
+	be, cfg := newTestBackendWithLog(t, &logs)
 	remote, _, accepted := stallingRemote(t)
 	ctx := backendTestContext(be, cfg)
 	admin, err := be.User(ctx, "admin")
@@ -156,8 +183,7 @@ func TestStopImports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	errc := importAsync(ctx, be, "stalled", admin, remote)
-	waitAccepted(t, accepted, errc)
+	errc := startStalledImport(t, ctx, be, &logs, "stalled", admin, remote, accepted)
 	be.StopImports()
 	wctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
