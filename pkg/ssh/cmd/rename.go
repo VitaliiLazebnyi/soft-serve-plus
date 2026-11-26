@@ -12,7 +12,7 @@ func (cmds *Commands) renameCommand() *cobra.Command {
 		Aliases: []string{"mv", "move"},
 		Short:   "Rename an existing repository",
 		Args:    cobra.ExactArgs(2),
-		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.Level) error {
+		RunE: cmds.withRepoOrName(access.AdminAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
 			oldName := repoArg(args)
@@ -28,7 +28,12 @@ func (cmds *Commands) renameCommand() *cobra.Command {
 				return proto.ErrUnauthorized
 			}
 
-			return cmds.createFailed(ctx, "rename repository", be.RenameRepository(ctx, oldName, newName))
+			// A server admin may rename a row with no repository
+			// directory, which only the name can reach.
+			if rr == nil {
+				return cmds.createFailed(ctx, "rename repository", be.RenameRepository(ctx, oldName, newName))
+			}
+			return cmds.createFailed(ctx, "rename repository", be.RenameResolvedRepository(ctx, rr, newName))
 		}),
 	}
 

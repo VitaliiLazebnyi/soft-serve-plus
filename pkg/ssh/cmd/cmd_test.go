@@ -1655,6 +1655,7 @@ func afterGate(ctx context.Context, fn func()) {
 
 // TestRepoCommandsActOnCheckedRepository runs each repository command that
 // changes a repository's row, its collaborators or the repository itself,
+// and the collaborator list,
 // with the repository it checked renamed away, and another one created
 // under its name by someone else, between the check and the action. The
 // command must not act on the other repository: the caller was authorized
@@ -1688,6 +1689,18 @@ func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
 		}},
 		{"collab remove", []string{"collab", "remove", "r", "dave"}, func(t *testing.T, ctx context.Context, be *backend.Backend, o proto.Repository) bool {
 			return isCollab(t, ctx, be, o, "dave")
+		}},
+		// Turning mirroring off needs no remote, so acting on bob's
+		// repository would succeed.
+		{"mirror", []string{"mirror", "r", "false"}, func(_ *testing.T, _ context.Context, _ *backend.Backend, o proto.Repository) bool {
+			return !o.IsMirror()
+		}},
+		{"rename", []string{"rename", "r", "r-new"}, func(_ *testing.T, _ context.Context, _ *backend.Backend, _ proto.Repository) bool {
+			return true // it still has its name
+		}},
+		// Reads bob's collaborators, which alice may not see.
+		{"collab list", []string{"collab", "list", "r"}, func(_ *testing.T, _ context.Context, _ *backend.Backend, _ proto.Repository) bool {
+			return true
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

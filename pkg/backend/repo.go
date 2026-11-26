@@ -997,11 +997,20 @@ func (d *Backend) removeRepoFiles(name string, repoID int64) {
 // RenameRepository renames a repository. An error that is not a refusal
 // (see clientError) is logged and returned as proto.ErrServerFault.
 func (d *Backend) RenameRepository(ctx context.Context, oldName string, newName string) error {
-	return d.clientError(ctx, "rename", oldName, d.renameRepository(ctx, oldName, newName))
+	return d.clientError(ctx, "rename", oldName, d.renameRepository(ctx, oldName, 0, newName))
 }
 
-// renameRepository is RenameRepository without the mapping of errors.
-func (d *Backend) renameRepository(ctx context.Context, oldName string, newName string) error {
+// RenameResolvedRepository is RenameRepository for r, a repository the
+// caller looked up and authorized before: another repository under r's name
+// by the time the row is locked is proto.ErrRepoNotFound (see lockResolved).
+func (d *Backend) RenameResolvedRepository(ctx context.Context, r proto.Repository, newName string) error {
+	return d.clientError(ctx, "rename", r.Name(), d.renameRepository(ctx, r.Name(), r.ID(), newName))
+}
+
+// renameRepository is RenameRepository without the mapping of errors. With
+// id other than 0 it renames oldName only while that is the repository with
+// ID id.
+func (d *Backend) renameRepository(ctx context.Context, oldName string, id int64, newName string) error {
 	oldName = proto.SanitizeRepo(oldName)
 	// The repository may predate the rules for new names.
 	if err := proto.ValidateExistingRepo(oldName); err != nil {
@@ -1063,6 +1072,9 @@ func (d *Backend) renameRepository(ctx context.Context, oldName string, newName 
 		renamed, err = d.store.GetRepoByNameForUpdate(ctx, tx, oldName)
 		if err != nil {
 			return err
+		}
+		if id != 0 && renamed.ID != id {
+			return proto.ErrRepoNotFound
 		}
 		if err := d.store.SetRepoNameByName(ctx, tx, oldName, newName); err != nil {
 			return err
@@ -1372,6 +1384,19 @@ var errRepoChangedDuringMirror = errors.New("repository changed while switching 
 // Note: enabling mirror mode requires the repository to have been imported
 // with a remote URL. Use ImportRepository to create a new mirror.
 func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error {
+	return d.setMirror(ctx, name, 0, mirror)
+}
+
+// SetResolvedMirror is SetMirror for r, a repository the caller looked up
+// and authorized before: see lockResolved.
+func (d *Backend) SetResolvedMirror(ctx context.Context, r proto.Repository, mirror bool) error {
+	return d.setMirror(ctx, r.Name(), r.ID(), mirror)
+}
+
+// setMirror is SetMirror, which with id other than 0 acts on name only
+// while that is the repository with ID id. The ID read first is checked
+// again with the row locked.
+func (d *Backend) setMirror(ctx context.Context, name string, id int64, mirror bool) error {
 	name = proto.SanitizeRepo(name)
 	rp := d.repoPath(name)
 
@@ -1382,6 +1407,9 @@ func (d *Backend) SetMirror(ctx context.Context, name string, mirror bool) error
 	m, err := d.store.GetRepoByName(ctx, d.db, name)
 	if err != nil {
 		return wrapRepoError(err)
+	}
+	if id != 0 && m.ID != id {
+		return proto.ErrRepoNotFound
 	}
 	_, rcfg, err := d.openRepoConfig(ctx, rp)
 	if err != nil {
