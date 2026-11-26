@@ -76,7 +76,9 @@ func databaseTestDirs(t *testing.T) map[string]bool {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && p != repoRoot && strings.HasPrefix(d.Name(), ".") {
+		// The go tool ignores directories named testdata or starting with
+		// "." or "_", so no package there runs in CI.
+		if d.IsDir() && p != repoRoot && (d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".") || strings.HasPrefix(d.Name(), "_")) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(p, "_test.go") {

@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/safego"
 )
 
 // scanBlockedOnSend reports whether a scan waits to send a pointer nobody
@@ -309,5 +311,248 @@ func TestSearchPointerBlobsBetween(t *testing.T) {
 	// An object that isn't in the repository fails the scan.
 	if _, err := scan(tips[1:], []string{strings.Repeat("1", 40)}); err == nil {
 		t.Error("scan with a missing object succeeded")
+	}
+}
+
+// newPointerRepo returns a repository with one commit holding an LFS
+// pointer file.
+func newPointerRepo(t *testing.T) *git.Repository {
+	t.Helper()
+	dir := t.TempDir()
+	pointer := "version https://git-lfs.github.com/spec/v1\n" +
+		"oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n" +
+		"size 12345\n"
+	if err := os.WriteFile(filepath.Join(dir, "file.bin"), []byte(pointer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "file.bin"},
+		{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	repo, err := git.Open(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// failGit puts a git first on PATH that fails, writing "injected failure"
+// to stderr, when its arguments include arg, and runs the real git
+// otherwise.
+func failGit(t *testing.T, arg string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found")
+	}
+	bin := t.TempDir()
+	script := fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do
+	if [ "$a" = %q ]; then
+		echo "injected failure" >&2
+		exit 1
+	fi
+done
+exec %q "$@"
+`, arg, realGit)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func searchPointers(repo *git.Repository) ([]PointerBlob, error) {
+	pointerChan := make(chan PointerBlob)
+	errChan := make(chan error, 1)
+	go SearchPointerBlobs(context.Background(), nil, repo, pointerChan, errChan)
+	var pointers []PointerBlob
+	for p := range pointerChan {
+		pointers = append(pointers, p)
+	}
+	return pointers, <-errChan
+}
+
+func TestSearchPointerBlobs(t *testing.T) {
+	t.Parallel()
+	pointers, err := searchPointers(newPointerRepo(t))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pointers) != 1 || pointers[0].Size != 12345 {
+		t.Errorf("pointers = %+v, want the one in file.bin", pointers)
+	}
+}
+
+// Every git command of the scan must report its failure: a failing cat-file
+// that ended the scan early with no error would pass for a complete scan
+// that found fewer pointers.
+func TestSearchPointerBlobsReportsGitFailures(t *testing.T) {
+	// Not parallel: failGit sets PATH.
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as git")
+	}
+	for _, tc := range []struct{ arg, label string }{
+		{"rev-list", "git rev-list"},
+		{"--batch", "git cat-file --batch "},
+	} {
+		t.Run(tc.arg, func(t *testing.T) {
+			repo := newPointerRepo(t)
+			failGit(t, tc.arg)
+			_, err := searchPointers(repo)
+			if err == nil {
+				t.Fatal("scan reported no error")
+			}
+			if !strings.Contains(err.Error(), tc.label) {
+				t.Errorf("error %q does not name %q", err, tc.label)
+			}
+			if !strings.Contains(err.Error(), "injected failure") {
+				t.Errorf("error %q does not include git's stderr", err)
+			}
+		})
+	}
+}
+
+// catFileObject renders one object of git cat-file --batch output.
+func catFileObject(id, typ string, size int, content string) string {
+	return fmt.Sprintf("%s %s %d\n%s\n", id, typ, size, content)
+}
+
+// A blob whose size git cat-file reports past the cutoff is skipped, not read
+// into the cutoff-sized buffer, and the scan goes on to the next object. A
+// pointer that comes after it is still found.
+func TestParseCatFileBatchSkipsLargeBlob(t *testing.T) {
+	t.Parallel()
+	p, err := GeneratePointer(strings.NewReader("after"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := p.String() + strings.Repeat("x", 4*blobSizeCutoff)
+	out := catFileObject(strings.Repeat("1", 40), "blob", len(large), large) +
+		catFileObject(strings.Repeat("2", 40), "blob", len(p.String()), p.String())
+
+	var found []PointerBlob
+	err = parseCatFileBatch(strings.NewReader(out), ReadPointerFromBuffer, func(pb PointerBlob) bool {
+		found = append(found, pb)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(found) != 1 || found[0].Hash != strings.Repeat("2", 40) || found[0].Oid != p.Oid {
+		t.Errorf("found %+v, want only the pointer after the large blob", found)
+	}
+}
+
+// A negative size, or one past any object git stores, is malformed output,
+// an error rather than a panic or a skip that overflows.
+func TestParseCatFileBatchBadSize(t *testing.T) {
+	t.Parallel()
+	for _, size := range []string{"-1", "9223372036854775807", "1125899906842625"} {
+		for _, typ := range []string{"blob", "commit"} {
+			out := strings.Repeat("1", 40) + " " + typ + " " + size + "\n\n"
+			err := parseCatFileBatch(strings.NewReader(out), ReadPointerFromBuffer, func(PointerBlob) bool { return true })
+			if err == nil {
+				t.Errorf("parse accepted a %s of size %s", typ, size)
+			}
+		}
+	}
+}
+
+// A refs/replace/ ref does not change what the scan reads: git would
+// otherwise report the replacement's size and content for the pointer's id.
+// Here the replacement is larger than the cutoff, so a scan that honours it
+// either drops the pointer or reads a blob it can't hold.
+func TestSearchPointerBlobsIgnoresReplaceRefs(t *testing.T) {
+	t.Parallel()
+	work := t.TempDir()
+	run := func(stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = work
+		cmd.Stdin = strings.NewReader(stdin)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// The scan's own git commands must not read the host's configuration
+	// either.
+
+	p, err := GeneratePointer(strings.NewReader("replaced"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run("", "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(work, "file"), []byte(p.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("", "add", ".")
+	run("", "commit", "-q", "-m", "pointer")
+	pointerBlob := run("", "rev-parse", "HEAD:file")
+	large := run(p.String()+strings.Repeat("x", 4*blobSizeCutoff), "hash-object", "-w", "--stdin")
+	run("", "replace", pointerBlob, large)
+
+	repo, err := git.Open(t.Context(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointers, err := searchPointers(repo)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(pointers) != 1 || pointers[0].Hash != pointerBlob || pointers[0].Oid != p.Oid {
+		t.Errorf("found %+v, want the pointer in %s", pointers, pointerBlob)
+	}
+}
+
+// panickingReader is a pointerReader that panics.
+func panickingReader([]byte) (Pointer, error) { panic("scanner boom") }
+
+// A panic in the scan is logged and reported as the scan's error, and both
+// channels are closed, rather than taking the process down.
+func TestSearchPointerBlobsRecoversPanic(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	repo := newPointerRepo(t)
+	pointerChan := make(chan PointerBlob)
+	errChan := make(chan error, 1)
+	go searchPointerBlobs(t.Context(), log.New(&logs), panickingReader, repo, []string{"--all"}, "", pointerChan, errChan)
+
+	deadline := time.After(time.Minute)
+	for open := true; open; {
+		select {
+		case _, open = <-pointerChan:
+		case <-deadline:
+			t.Fatal("the pointer channel was not closed")
+		}
+	}
+	var err error
+	select {
+	case err = <-errChan:
+	case <-deadline:
+		t.Fatal("no error reported")
+	}
+	var perr *safego.PanicError
+	if !errors.As(err, &perr) {
+		t.Fatalf("error = %v, want a *safego.PanicError", err)
+	}
+	if !strings.Contains(logs.String(), "scanner boom") {
+		t.Errorf("panic not logged: %q", logs.String())
+	}
+	if _, open := <-errChan; open {
+		t.Error("the error channel was not closed")
 	}
 }

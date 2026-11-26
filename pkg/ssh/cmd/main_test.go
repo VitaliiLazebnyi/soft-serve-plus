@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/internal/testdial"
+	"github.com/charmbracelet/soft-serve/internal/testregexp"
 )
 
 // testNet is the in-memory network every connection an SSRF-protected
@@ -34,3 +35,7 @@ func TestMain(m *testing.M) {
 	restoreDial()
 	os.Exit(code)
 }
+
+// The tests of blob --color and commit --color check what chroma's lexers
+// make of their input, which must not depend on chroma's regex timeout.
+func init() { testregexp.DisableTimeouts() }

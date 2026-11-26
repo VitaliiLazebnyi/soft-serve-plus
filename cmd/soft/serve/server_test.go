@@ -14,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +41,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/daemon"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/hooks"
+	"github.com/charmbracelet/soft-serve/pkg/jobs"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
@@ -1121,5 +1125,209 @@ func TestNewServerRefusesNilDependencies(t *testing.T) {
 			}
 			t.Errorf("NewServer(nil %s) = %v, want an error naming it", name, err)
 		}
+	}
+}
+
+// recordingScheduler records the jobs scheduleJobs adds, by name, with
+// their specs and functions. It refuses the names in fail.
+type recordingScheduler struct {
+	specs map[string]string
+	fns   map[string]func()
+	fail  map[string]bool
+}
+
+func (r *recordingScheduler) AddFunc(name, spec string, fn func()) error {
+	if r.fail[name] {
+		return errors.New("refused")
+	}
+	if r.specs == nil {
+		r.specs, r.fns = map[string]string{}, map[string]func(){}
+	}
+	r.specs[name], r.fns[name] = spec, fn
+	return nil
+}
+
+// An empty jobs.mirror_pull leaves the mirror job unscheduled, and a spec
+// schedules it. lfs-sweep is scheduled hourly either way.
+func TestScheduleJobs(t *testing.T) {
+	for _, c := range []struct {
+		mirror string
+		want   map[string]string
+	}{
+		{"", map[string]string{"lfs-sweep": "@every 1h"}},
+		{"@every 1h", map[string]string{"mirror-pull": "@every 1h", "lfs-sweep": "@every 1h"}},
+		{"*/5 * * * *", map[string]string{"mirror-pull": "*/5 * * * *", "lfs-sweep": "@every 1h"}},
+	} {
+		cfg := config.DefaultConfig()
+		cfg.Jobs.MirrorPull = c.mirror
+		var buf bytes.Buffer
+		var sched recordingScheduler
+		if err := scheduleJobs(t.Context(), cfg, new(backend.Backend), &sched, log.New(&buf)); err != nil {
+			t.Fatal(err)
+		}
+
+		if !maps.Equal(sched.specs, c.want) {
+			t.Errorf("mirror_pull %q: scheduled %v, want %v", c.mirror, sched.specs, c.want)
+		}
+		if disabled := strings.Contains(buf.String(), "cron job disabled"); disabled != (c.mirror == "") {
+			t.Errorf("mirror_pull %q: disabled message logged %v: %q", c.mirror, disabled, buf.String())
+		}
+	}
+}
+
+// A job the scheduler refuses is logged, and the other is still scheduled.
+func TestScheduleJobsLogsRefusedJob(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var buf bytes.Buffer
+	sched := recordingScheduler{fail: map[string]bool{"mirror-pull": true}}
+	if err := scheduleJobs(t.Context(), cfg, new(backend.Backend), &sched, log.New(&buf)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := slices.Collect(maps.Keys(sched.specs)); !slices.Equal(got, []string{"lfs-sweep"}) {
+		t.Errorf("scheduled %v, want only lfs-sweep", got)
+	}
+	if out := buf.String(); !strings.Contains(out, "error adding cron job") || !strings.Contains(out, "mirror-pull") {
+		t.Errorf("refused job not logged: %q", out)
+	}
+}
+
+// *cron.Scheduler is what the server passes.
+var _ jobScheduler = (*cron.Scheduler)(nil)
+
+// The jobs run with the jobCtx scheduleJobs is given, not with whatever
+// context the scheduler has, and with the config and logger given alongside:
+// the lfs-sweep it schedules sweeps that config's data path and logs to that
+// logger. Once jobCtx is done, a tick starts nothing.
+func TestScheduleJobsRunWithJobContext(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataPath = t.TempDir()
+	stale := filepath.Join(cfg.DataPath, "lfs", "1", "incomplete", "stale")
+	writeStale := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-2 * backend.IncompleteLFSMaxAge)
+		if err := os.Chtimes(stale, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The jobs log through the logger given, so it shows whether one ran.
+	var jobLogs bytes.Buffer
+	jobLogger := log.New(&jobLogs)
+	jobLogger.SetLevel(log.DebugLevel)
+
+	var sched recordingScheduler
+	if err := scheduleJobs(jobCtx, cfg, new(backend.Backend), &sched, jobLogger); err != nil {
+		t.Fatal(err)
+	}
+
+	writeStale()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stale temp file not swept with the config given: %v", err)
+	}
+
+	if !strings.Contains(jobLogs.String(), "removed stale lfs temp files") {
+		t.Errorf("the sweep did not log through the logger given: %q", jobLogs.String())
+	}
+
+	// A tick once jobCtx is done starts nothing: the sweep would stop on
+	// the done context by itself, but only after it started and logged
+	// the cancellation as a failed sweep.
+	writeStale()
+	jobLogs.Reset()
+	cancel()
+	sched.fns["lfs-sweep"]()
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("a tick after jobCtx was cancelled ran the sweep: %v", err)
+	}
+	if jobLogs.Len() != 0 {
+		t.Errorf("a tick after jobCtx was cancelled started the sweep: %q", jobLogs.String())
+	}
+}
+
+// The README's Removed settings table says the LFS sweep runs hourly, which
+// is what jobs.LFSSweepSpec schedules.
+func TestReadmeLFSSweepHourly(t *testing.T) {
+	if jobs.LFSSweepSpec != "@every 1h" {
+		t.Fatalf("jobs.LFSSweepSpec = %q; update the README's Removed settings table", jobs.LFSSweepSpec)
+	}
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(readme), "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(line, "| `jobs.lfs_sweep` |") {
+			if !strings.Contains(line, "hourly") {
+				t.Errorf("README row %q does not say hourly", line)
+			}
+			return
+		}
+	}
+	t.Error("README has no Removed settings row for jobs.lfs_sweep")
+}
+
+func getStats(t *testing.T, ctx context.Context, url string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close() //nolint:errcheck
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res.StatusCode, string(body)
+}
+
+// The stats server serves the Prometheus metrics on /metrics, and nothing
+// else, and stops on Shutdown.
+func TestStatsServer(t *testing.T) {
+	ctx := context.Background()
+	s := newStatsServer()
+
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- s.Serve(l) }()
+
+	base := "http://" + l.Addr().String()
+
+	code, body := getStats(t, ctx, base+"/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d, want %d", code, http.StatusOK)
+	}
+	for _, want := range []string{"go_goroutines", "process_start_time_seconds"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /metrics body has no %q", want)
+		}
+	}
+
+	if code, _ := getStats(t, ctx, base+"/"); code != http.StatusNotFound {
+		t.Errorf("GET / = %d, want %d", code, http.StatusNotFound)
+	}
+
+	sctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if err := s.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown() = %v", err)
+	}
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		t.Errorf("Serve() after Shutdown = %v, want %v", err, http.ErrServerClosed)
 	}
 }

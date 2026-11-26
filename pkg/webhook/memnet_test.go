@@ -25,8 +25,8 @@ import (
 // the kernel gives up on, and a test that expects a delivery then sees none.
 // A pipe has no connect to stall, and these tests do not add to the churn.
 //
-// Tests of the SSRF-protected client itself (allowed_hosts_test.go,
-// ssrf_test.go) still use TCP, since its checks run on the socket.
+// Tests of the SSRF-protected client itself (TestSendWebhookAllowedHosts and
+// TestSSRFProtection) still use TCP, since its checks run on the socket.
 
 // memNet maps each in-memory receiver's address to its listener.
 var memNet = struct {

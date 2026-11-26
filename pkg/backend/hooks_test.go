@@ -264,7 +264,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 		calls++
 		return true
 	}); got != 2 {
-		t.Fatalf("e.be.forEachPushEvent(ctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\treturn true\n\t}) = %v, want %v", got, 2)
+		t.Fatalf("forEachPushEvent with a callback that always continues = %v, want %v", got, 2)
 	}
 	if got := calls; got != 2 {
 		t.Fatalf("calls = %v, want %v", got, 2)
@@ -277,7 +277,7 @@ func TestForEachPushEventStopsWhenContextDone(t *testing.T) {
 		cancel()
 		return true
 	}); got != 1 {
-		t.Fatalf("e.be.forEachPushEvent(cctx, e.repo, e.admin, refs, subs, func([]models.Webhook, webhook.EventPayload) bool {\n\t\tcalls++\n\t\tcancel()\n\t\treturn true\n\t}) = %v, want %v", got, 1)
+		t.Fatalf("forEachPushEvent with a callback that cancels the context = %v, want %v", got, 1)
 	}
 	if got := calls; got != 1 {
 		t.Fatalf("calls = %v, want %v", got, 1)
@@ -401,5 +401,158 @@ func TestAfterPushWritesLastModified(t *testing.T) {
 	_, err = time.Parse(time.RFC3339, string(b))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A branch or tag creation sends branch_tag_create.
+func TestAfterPushSendsBranchTagCreate(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate)
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: zeroSha, NewSha: someSha, RefName: "refs/heads/feature",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// A branch or tag deletion sends branch_tag_delete.
+func TestAfterPushSendsBranchTagDelete(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagDelete)
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: someSha, NewSha: zeroSha, RefName: "refs/heads/feature",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagDelete}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// A plain ref update sends no branch_tag event.
+func TestAfterPushPlainUpdateSendsNoBranchTag(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: someSha, NewSha: someSha, RefName: "refs/heads/feature",
+	}})
+
+	if got := len(e.deliveredEvents(t, id)); got != 0 {
+		t.Fatalf("len(e.deliveredEvents(t, id)) = %v, want %v", got, 0)
+	}
+}
+
+// A push that moves a branch sends a push event describing its commits.
+func TestAfterPushSendsPushEvent(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// A new branch on a repository with commits sends both branch_tag_create and
+// push, in that order.
+func TestAfterPushSendsBranchTagThenPush(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// A push that updates several refs sends the events of each ref, in the
+// order git lists them.
+func TestAfterPushSendsEventsForEachRef(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.afterPush(t, e.admin, []hooks.HookArg{
+		{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"},
+		{OldSha: zeroSha, NewSha: commit, RefName: "refs/tags/v1"},
+	})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{
+		webhook.EventBranchTagCreate, webhook.EventPush,
+		webhook.EventBranchTagCreate, webhook.EventPush,
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// A push that deletes a branch sends branch_tag_delete and then a push event
+// with no commits, without logging an error.
+func TestAfterPushDeleteSendsBranchTagThenPush(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagDelete, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: commit, NewSha: zeroSha, RefName: "refs/heads/main",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagDelete, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+	if strings.Contains(e.logs.String(), "error creating push webhook") {
+		t.Fatal("not true: !strings.Contains(e.logs.String(), \"error creating push webhook\")")
+	}
+}
+
+// A push with neither a public key nor a username, such as an anonymous HTTP
+// or keyless SSH push with anon-access read-write, still sends its events:
+// the server authorized the push.
+func TestAfterPushAnonymousPush(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventPush)
+	commit := makeCommit(t, e.be.repoPath("repo"))
+
+	e.afterPush(t, nil, []hooks.HookArg{{
+		OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate, webhook.EventPush}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+	}
+}
+
+// With both SHAs zero the event is classified as a creation, because the old
+// SHA is checked first. This documents that classification.
+func TestAfterPushBothShasZeroIsCreate(t *testing.T) {
+	t.Parallel()
+	e := newWebhookEnv(t)
+	id := e.seedHook(t, webhook.EventBranchTagCreate, webhook.EventBranchTagDelete)
+
+	e.afterPush(t, e.admin, []hooks.HookArg{{
+		OldSha: zeroSha, NewSha: zeroSha, RefName: "refs/heads/feature",
+	}})
+
+	if got, want := e.deliveredEvents(t, id), ([]webhook.Event{webhook.EventBranchTagCreate}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
 	}
 }
