@@ -668,6 +668,29 @@ func TestLFSLockOwnership(t *testing.T) {
 		t.Fatalf("other lock: %v", err)
 	}
 	expect("other unlock own", session("other", unlock(strconv.FormatInt(otherLock.ID, 10))), pkt("status 200\n"))
+
+	// list-lock id= lists only that lock, as ?id= does over HTTP: none
+	// for an ID no lock has, and 400 for one that is not a positive int64.
+	session("owner", lock("c.bin"))
+	session("owner", lock("d.bin"))
+	cLock, err := datastore.GetLFSLockForPath(ctx, dbx, 1, "c.bin")
+	if err != nil {
+		t.Fatalf("c.bin lock: %v", err)
+	}
+	cID := strconv.FormatInt(cLock.ID, 10)
+	got := session("owner", listLocks("id="+cID))
+	expect("list id", got, pkt("status 200\n"), pkt("path "+cID+" c.bin\n"))
+	if strings.Contains(got, "d.bin") {
+		t.Errorf("list id=%s: response lists another lock: %q", cID, got)
+	}
+	got = session("owner", listLocks("id=2147483648"))
+	expect("list unknown id", got, pkt("status 200\n"))
+	if strings.Contains(got, ".bin") {
+		t.Errorf("list id=2147483648: response lists a lock: %q", got)
+	}
+	for _, bad := range []string{"9223372036854775808", "0", "-1", "x"} {
+		expect("list id="+bad, session("owner", listLocks("id="+bad)), pkt("status 400\n"))
+	}
 }
 
 // A lock ID or cursor past what the lock ID column holds (a 32-bit SERIAL on

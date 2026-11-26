@@ -389,6 +389,10 @@ var errNoUserLocks = fmt.Errorf("%w: locks need a user account", transfer.ErrFor
 // lock, like force in the HTTP API's unlock request.
 const lockForceKey = "force"
 
+// lockIDKey is the list-lock argument that names one lock, like ?id= in the
+// HTTP API's lock list.
+const lockIDKey = "id"
+
 var (
 	errLockNotOwned        = fmt.Errorf("%w: lock belongs to another user", transfer.ErrForbidden)
 	errForceUnlockNotAdmin = fmt.Errorf("%w: admin access required for force unlock", transfer.ErrForbidden)
@@ -483,7 +487,26 @@ func (l *lfsLockBackend) FromPath(lockPath string) (transfer.Lock, error) {
 // next-cursor; empty means the first page. Any other cursor is refused with
 // transfer.ErrParseError, which the processor sends back to the client as a
 // 400 status.
+//
+// With an id argument it lists only that lock, or none if the repository
+// has no lock with that ID, and ignores the cursor, as the HTTP lock list
+// does. An id that is not a positive int64 is refused the same way.
 func (l *lfsLockBackend) Range(cursor string, limit int, fn func(transfer.Lock) error) (string, error) {
+	if idStr, ok := l.args[lockIDKey]; ok && idStr != "" {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || id <= 0 {
+			return "", fmt.Errorf("%w: invalid lock id %q", transfer.ErrParseError, idStr)
+		}
+		mlock, err := l.store.GetLFSLockByID(l.ctx, l.dbx, l.repo.ID(), id)
+		if errors.Is(err, db.ErrRecordNotFound) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return "", fn(&lfsLock{lock: mlock, backend: l})
+	}
+
 	var nextCursor string
 	var locks []*lfsLock
 
