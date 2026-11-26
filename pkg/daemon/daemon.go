@@ -69,7 +69,6 @@ const requestTimeout = 10 * time.Second
 
 // Server represents a Git daemon.
 type Server struct {
-	addr           string
 	requestTimeout time.Duration
 	finished       chan struct{}
 	conns          connections
@@ -133,7 +132,6 @@ func NewServer(cfg *config.Config, be *backend.Backend, logger *log.Logger) (*Se
 		logger = log.Default()
 	}
 	d := &Server{
-		addr:           cfg.Git.ListenAddr,
 		requestTimeout: requestTimeout,
 		finished:       make(chan struct{}, 1),
 		cfg:            cfg,
@@ -150,19 +148,6 @@ func NewServer(cfg *config.Config, be *backend.Backend, logger *log.Logger) (*Se
 
 // errNilBackend is returned by NewServer for a nil backend.
 var errNilBackend = errors.New("daemon: nil backend")
-
-// ListenAndServe starts the Git TCP daemon.
-func (d *Server) ListenAndServe() error {
-	if d.done.Load() {
-		return ErrServerClosed
-	}
-	var cfg net.ListenConfig
-	listener, err := cfg.Listen(context.Background(), "tcp", d.addr)
-	if err != nil {
-		return err
-	}
-	return d.Serve(listener)
-}
 
 // Serve accepts connections on the listener and serves Git requests.
 func (d *Server) Serve(listener net.Listener) error {

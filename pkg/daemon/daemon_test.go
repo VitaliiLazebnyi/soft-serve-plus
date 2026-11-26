@@ -38,7 +38,7 @@ import (
 // answers fails the test instead of hanging it.
 func dialDaemon(t *testing.T) net.Conn {
 	t.Helper()
-	return dialDaemonAt(t, testDaemon.addr)
+	return dialDaemonAt(t, testDaemon.cfg.Git.ListenAddr)
 }
 
 // dialDaemonAt is dialDaemon to the daemon at addr.
@@ -404,7 +404,7 @@ func requestUploadPack(t *testing.T, repo string) (string, error) {
 // it answers with, or the error it answers with.
 func rawRequest(t *testing.T, raw []byte) (string, error) {
 	t.Helper()
-	return rawRequestTo(t, testDaemon.addr, raw)
+	return rawRequestTo(t, testDaemon.cfg.Git.ListenAddr, raw)
 }
 
 // rawRequestTo sends raw bytes to the daemon at addr and returns the first
@@ -483,7 +483,7 @@ func TestInvalidRepo(t *testing.T) {
 func readAll(t *testing.T, request ...string) []byte {
 	t.Helper()
 	var dialer net.Dialer
-	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.addr)
+	c, err := dialer.DialContext(t.Context(), "tcp", testDaemon.cfg.Git.ListenAddr)
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
@@ -611,12 +611,12 @@ func TestServeRacingShutdown(t *testing.T) {
 // RandomPort checks that a port is free on loopback alone, so a daemon bound
 // to every interface could collide with a listener on another one.
 func TestListensOnLoopback(t *testing.T) {
-	host, _, err := net.SplitHostPort(testDaemon.addr)
+	host, _, err := net.SplitHostPort(testDaemon.cfg.Git.ListenAddr)
 	if err != nil {
-		t.Fatalf("invalid daemon address %q: %v", testDaemon.addr, err)
+		t.Fatalf("invalid daemon address %q: %v", testDaemon.cfg.Git.ListenAddr, err)
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		t.Fatalf("daemon listens on %q, want a loopback address", testDaemon.addr)
+		t.Fatalf("daemon listens on %q, want a loopback address", testDaemon.cfg.Git.ListenAddr)
 	}
 }
 
@@ -1807,8 +1807,8 @@ func (b *syncBuffer) String() string {
 }
 
 // newRequestTestDaemon serves a daemon that logs at Info level to the
-// returned buffer, on its own loopback listener.
-func newRequestTestDaemon(t *testing.T, hooks testHooks) (*Server, *syncBuffer) {
+// returned buffer, on its own loopback listener, whose address it returns.
+func newRequestTestDaemon(t *testing.T, hooks testHooks) (*Server, string, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
 	logger := log.New(logs)
@@ -1823,17 +1823,16 @@ func newRequestTestDaemon(t *testing.T, hooks testHooks) (*Server, *syncBuffer) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.addr = l.Addr().String()
 	go d.Serve(l) //nolint:errcheck
 	t.Cleanup(func() { _ = d.Close() })
-	return d, logs
+	return d, l.Addr().String(), logs
 }
 
-// request asks d for repo with service and returns the first line it
+// request asks the daemon at addr for repo with service and returns the first line it
 // answers with, after the connection is closed.
-func request(t *testing.T, d *Server, service gitserve.Service, repo string) string {
+func request(t *testing.T, addr string, service gitserve.Service, repo string) string {
 	t.Helper()
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", d.addr)
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatalf("failed to connect to daemon: %v", err)
 	}
@@ -1905,7 +1904,7 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
 	var timed atomic.Int32
-	d, logs := newRequestTestDaemon(t, testHooks{requestTimed: func(service gitserve.Service) {
+	d, addr, logs := newRequestTestDaemon(t, testHooks{requestTimed: func(service gitserve.Service) {
 		if service == gitserve.UploadPackService {
 			timed.Add(1)
 		} else {
@@ -1914,10 +1913,10 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	}})
 
 	before := sampleCount(t, gitserve.UploadPackService)
-	if got := request(t, d, gitserve.UploadPackService, "accepted-missing"); got != gitserve.ErrNotAuthed.Error() {
+	if got := request(t, addr, gitserve.UploadPackService, "accepted-missing"); got != gitserve.ErrNotAuthed.Error() {
 		t.Fatalf("missing repo: got %q, want %q", got, gitserve.ErrNotAuthed)
 	}
-	if got := request(t, d, gitserve.UploadPackService, "accepted-public"); got == gitserve.ErrNotAuthed.Error() {
+	if got := request(t, addr, gitserve.UploadPackService, "accepted-public"); got == gitserve.ErrNotAuthed.Error() {
 		t.Fatalf("public repo was refused: %q", got)
 	}
 
