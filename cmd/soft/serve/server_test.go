@@ -554,7 +554,7 @@ func TestStartServesAllListenersUntilShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := s.Shutdown(ctx, ctx); err != nil {
+	if err := s.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 	if err := waitStart(t, errc, "after Shutdown"); err != nil {
@@ -638,7 +638,7 @@ func TestShutdownRightAfterStart(t *testing.T) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		err := s.Shutdown(ctx, ctx)
+		err := s.Shutdown(ctx)
 		cancel()
 		if err != nil {
 			t.Fatalf("run %d: Shutdown: %v", i, err)
@@ -817,7 +817,7 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := s.Shutdown(ctx, ctx); err != nil {
+	if err := s.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 	if !cancelled.Load() {
@@ -845,7 +845,7 @@ func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 	// The drain is over before it starts.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.Shutdown(ctx, ctx); err != nil {
+	if err := s.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown = %v, want nil when only the drain ran out", err)
 	}
 	if err := waitStart(t, errc, "after Shutdown"); err != nil {
@@ -855,6 +855,56 @@ func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Minute):
 		t.Fatal("the SSH connection is still open a minute after Shutdown")
+	}
+}
+
+// Shutdown's context ends the drain as well as the wait for deliveries, so
+// the second signal runServe aborts with cuts off a long transfer at once.
+func TestShutdownContextEndsTheDrain(t *testing.T) {
+	sshAddr := loopbackAddr()
+	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
+	// Longer than the test's waits, so only ctx can end it.
+	s.drain = time.Hour
+	errc := startAsync(s)
+	closed := dialIdleSSH(t, sshAddr, errc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Shutdown(ctx) }()
+	// The idle connection holds the SSH server's drain; Shutdown is in it
+	// once the listeners are closed.
+	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+		s.mu.Lock()
+		inDrain := s.closed && s.listeners == nil
+		s.mu.Unlock()
+		if inDrain {
+			break
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("Shutdown did not close the listeners within a minute")
+		}
+	}
+	select {
+	case <-closed:
+		t.Fatal("the SSH connection was closed before ctx was cancelled")
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Shutdown = %v, want nil when only the drain was cut off", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("Shutdown still drains a minute after its context was cancelled")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Minute):
+		t.Fatal("the SSH connection is still open a minute after Shutdown")
+	}
+	if err := waitStart(t, errc, "after Shutdown"); err != nil {
+		t.Fatalf("Start returned %v after Shutdown, want nil", err)
 	}
 }
 

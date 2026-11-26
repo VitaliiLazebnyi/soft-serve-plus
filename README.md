@@ -840,7 +840,7 @@ the clones, pushes and SSH sessions in flight 5 seconds to finish. It then
 cuts off whatever is still running and exits with status 0: a transfer cut
 off this way is not an error of the server. Webhook deliveries already
 queued get up to a minute more; a second SIGINT or SIGTERM stops that
-wait. SIGHUP does not stop the server: it reloads the TLS certificate, if
+wait, and cuts off the 5 seconds if they still run. SIGHUP does not stop the server: it reloads the TLS certificate, if
 one is set.
 
 ## Server Access
