@@ -414,7 +414,7 @@ const drainTimeout = 5 * time.Second
 
 // jobsTimeout is how long Shutdown waits at least for the cancelled cron
 // jobs to end, so none uses the database once the caller closes it: until
-// the caller's deadline, or this long from then on if that is later.
+// the drain ends, or this long from the start of the wait if that is later.
 const jobsTimeout = 10 * time.Second
 
 // waitAtLeast returns a context that ends at ctx's deadline or d from now,
@@ -427,11 +427,13 @@ func waitAtLeast(ctx context.Context, d time.Duration) (context.Context, context
 	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
 }
 
-// Shutdown stops the server; ctx being done ends each of its waits at once.
-// Imports in flight are cancelled, and the servers drain for drainTimeout;
-// what still runs then is closed, which is logged but not an error. The
-// cancelled cron jobs are waited for until ctx's deadline, and for at least
-// jobsTimeout. The cancelled imports' cleanup and the background webhook
+// Shutdown stops the server; ctx being done ends the drain and the delivery
+// wait at once, while the cron wait still lasts at least jobsTimeout.
+// Imports in flight are cancelled, and the servers drain until ctx's
+// deadline or for drainTimeout, whichever ends first; what still runs then
+// is closed, which is logged but not an error. The cancelled cron jobs are
+// waited for until the drain's end, and for at least jobsTimeout. The
+// cancelled imports' cleanup and the background webhook
 // deliveries are then waited for within their own budget,
 // backend.ShutdownDeliveryTimeout; with ctx already done, as for Close,
 // they are not waited for. Each server's error is logged; they are returned
