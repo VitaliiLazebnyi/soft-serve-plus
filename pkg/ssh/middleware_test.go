@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
@@ -72,7 +74,7 @@ func noAnswers(string, string, []string, []bool) ([]string, error) { return nil,
 // It returns the handshake error, or the command's stderr and exit error.
 func runCommand(t *testing.T, addr string, command string, auth ...gossh.AuthMethod) (stderr string, runErr, dialErr error) {
 	t.Helper()
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            auth,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
@@ -310,7 +312,7 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 			mu.Lock()
 			approved = nil
 			mu.Unlock()
-			sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+			sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 				User: "test",
 				Auth: []gossh.AuthMethod{gossh.PublicKeys(offeredKey{pub: tc.offered.PublicKey()}, tc.signer)},
 			})
@@ -381,7 +383,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		{"unregistered key, TUI", gossh.PublicKeys(signer), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+			sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 				User: "test",
 				Auth: []gossh.AuthMethod{tc.auth},
 			})
@@ -455,7 +457,7 @@ func TestLoggingMiddlewarePtyKeepsFields(t *testing.T) {
 	var buf syncBuffer
 	logger := log.NewWithOptions(&buf, log.Options{Level: log.DebugLevel})
 
-	sess := testsession.New(t, &ssh.Server{
+	sess := newTestSession(t, &ssh.Server{
 		Handler: func(s ssh.Session) {
 			s.Context().SetValue(proto.ContextKeyUser, proto.User(logTestUser{}))
 			(&Server{logger: logger}).loggingMiddleware(func(s ssh.Session) {
@@ -572,7 +574,7 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	}
 
 	allowed, refused := publicKeyCounts()
-	sess := testsession.New(t, srv, &gossh.ClientConfig{
+	sess := newTestSession(t, srv, &gossh.ClientConfig{
 		User: "anon",
 		Auth: []gossh.AuthMethod{gossh.KeyboardInteractive(func(string, string, []string, []bool) ([]string, error) {
 			return nil, nil
@@ -712,7 +714,7 @@ func TestSSHServerRefusesOverlongCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
@@ -791,7 +793,7 @@ func TestCommandLengthMiddleware(t *testing.T) {
 			t.Parallel()
 
 			var reached atomic.Bool
-			sess := testsession.New(t, &ssh.Server{
+			sess := newTestSession(t, &ssh.Server{
 				Handler: commandLengthMiddleware(func(s ssh.Session) {
 					reached.Store(true)
 					s.Exit(0) //nolint: errcheck
@@ -875,7 +877,7 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 
 	run := func(signer gossh.Signer) (string, string, error) {
 		t.Helper()
-		sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+		sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 			User: "test",
 			Auth: []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		})
@@ -1039,7 +1041,7 @@ func TestSessionContextPerSession(t *testing.T) {
 	go srv.Serve(l) //nolint: errcheck
 	t.Cleanup(func() { _ = srv.Close() })
 
-	c, err := gossh.Dial("tcp", l.Addr().String(), &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", l.Addr().String(), &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,

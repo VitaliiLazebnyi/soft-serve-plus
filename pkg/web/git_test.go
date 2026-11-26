@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/access"
@@ -1244,6 +1246,7 @@ func newServiceRPCServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 		h.endErr = r.Context().Err()
 		rc <- h
 	}))
+	testnet.UseDial(srv.Client())
 	t.Cleanup(srv.Close)
 	return srv, fc, rc
 }

@@ -33,6 +33,28 @@ func TestWithDatabase(t *testing.T) {
 	}
 }
 
+// A data source on a unix socket, as a local run uses to keep the database
+// off TCP loopback (see Open), keeps its socket directory and port.
+func TestWithDatabaseUnixSocket(t *testing.T) {
+	t.Parallel()
+	for _, dsn := range []string{
+		"host=/tmp/pg port=5433 user=postgres sslmode=disable",
+		"postgres:///postgres?host=/tmp/pg&port=5433&sslmode=disable",
+	} {
+		got, err := withDatabase(dsn, "softserve_test_1")
+		if err != nil {
+			t.Fatalf("withDatabase(%q) => %v", dsn, err)
+		}
+		cfg, err := pq.NewConfig(got)
+		if err != nil {
+			t.Fatalf("withDatabase(%q) = %q: %v", dsn, got, err)
+		}
+		if cfg.Database != "softserve_test_1" || cfg.Host != "/tmp/pg" || cfg.Port != 5433 {
+			t.Errorf("withDatabase(%q) = %q: database %q, host %q, port %d", dsn, got, cfg.Database, cfg.Host, cfg.Port)
+		}
+	}
+}
+
 // The test database enforces foreign keys and waits on a busy database, as
 // the server's does, so migrations and queries are tested as they run.
 func TestOpenSqlitePragmas(t *testing.T) {

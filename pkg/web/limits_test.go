@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"github.com/charmbracelet/soft-serve/internal/testdial"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -54,7 +56,7 @@ const closeWait = time.Minute
 // after timeout.
 func dial(t *testing.T, addr string, timeout time.Duration) net.Conn {
 	t.Helper()
-	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", addr)
+	conn, err := testnet.Dial(context.Background(), "tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +131,7 @@ func TestHTTPMaxConnections(t *testing.T) {
 
 	// Probe over a kept-alive connection: opening a connection per probe
 	// makes macOS drop loopback connects now and then, which takes seconds.
-	client := &http.Client{Transport: &http.Transport{}, Timeout: closeWait}
+	client := &http.Client{Transport: &http.Transport{DialContext: testnet.Dial}, Timeout: closeWait}
 	t.Cleanup(client.CloseIdleConnections)
 	status := func() int {
 		t.Helper()
@@ -396,7 +398,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			}
 			t.Cleanup(srv.Close)
 
-			resp, err := srv.Client().Do(newSentRequest(t, srv.URL, reqBody))
+			resp, err := testnet.UseDial(srv.Client()).Do(newSentRequest(t, srv.URL, reqBody))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -452,7 +454,7 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	srv.EnableHTTP2 = true
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	client := srv.Client()
+	client := testnet.UseDial(srv.Client())
 	client.Transport.(*http.Transport).DialContext = n.Dial
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
@@ -540,7 +542,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	srv.Config.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: 1}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	client := srv.Client()
+	client := testnet.UseDial(srv.Client())
 	// The second request waits for the first stream to close instead of
 	// opening a connection of its own.
 	client.Transport.(*http.Transport).HTTP2 = &http.HTTP2Config{StrictMaxConcurrentRequests: true}

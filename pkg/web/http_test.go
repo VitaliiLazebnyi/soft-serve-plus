@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 )
 
 // Serve speaks TLS on the given listener when a TLS configuration is set,
@@ -50,7 +52,7 @@ func TestHTTPServerServe(t *testing.T) {
 			pool.AddCert(cert.Leaf)
 			client := &http.Client{
 				Timeout:   closeWait,
-				Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
+				Transport: &http.Transport{DialContext: testnet.Dial, TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
 			}
 			scheme := "http"
 			if useTLS {

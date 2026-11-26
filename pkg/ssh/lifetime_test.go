@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
@@ -79,7 +81,7 @@ func dialAuth(t *testing.T, addr string, auth gossh.AuthMethod) *gossh.Client {
 // closed by a short lifetime before it is done.
 func tryDialAuth(t *testing.T, addr string, auth gossh.AuthMethod) (*gossh.Client, error) {
 	t.Helper()
-	c, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	c, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		Auth:            []gossh.AuthMethod{auth},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),

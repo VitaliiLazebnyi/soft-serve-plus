@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/soft-serve/internal/testnet"
 )
 
 // post sends one webhook request with event to the receiver over network.
@@ -18,8 +20,7 @@ func post(t *testing.T, rcv *webhookReceiver, network, event, path string) {
 	}
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, addr)
+			return testnet.Dial(ctx, network, addr)
 		},
 	}}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://receiver"+path, strings.NewReader("{}"))

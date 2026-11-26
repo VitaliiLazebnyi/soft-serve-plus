@@ -76,6 +76,9 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	// HTTP clients without a transport of their own retry a loopback
+	// connect that timed out (see testnet.Dial).
+	testnet.UseDialForDefaultTransport()
 	code := m.Run()
 	if binDir != "" {
 		_ = os.RemoveAll(binDir)
@@ -654,7 +657,7 @@ var loopbackClient = &http.Client{
 			if host, port, err := net.SplitHostPort(addr); err == nil && host == "localhost" {
 				addr = net.JoinHostPort(loopback, port)
 			}
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
+			return testnet.Dial(ctx, network, addr)
 		},
 	},
 }
@@ -1090,13 +1093,12 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 	port := ts.Getenv(args[0])
 
 	// verify that the server is not up. Only a refused connection says that
-	// nothing listens: a dial that times out on a loaded machine does not.
+	// nothing listens: a dial that times out on a loaded machine does not,
+	// and testnet.Dial tries such a dial again.
 	addr := net.JoinHostPort(loopback, port)
-	conn, err := net.DialTimeout( //nolint:noctx
-		"tcp",
-		addr,
-		time.Minute,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := testnet.Dial(ctx, "tcp", addr)
 	if err == nil {
 		_ = conn.Close()
 		ts.Fatalf("server is running on port %s while it should not be running", port)

@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	"github.com/rogpeppe/go-internal/testscript"
 	"golang.org/x/crypto/ssh"
 )
@@ -203,7 +205,7 @@ func dialSSH(ts *testscript.TestScript, config *ssh.ClientConfig) (*ssh.Client, 
 	addr := net.JoinHostPort(loopback, ts.Getenv("SSH_PORT"))
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	conn, err := testnet.Dial(ctx, "tcp", addr)
 	if errors.Is(err, context.DeadlineExceeded) {
 		failStuck(ts, "connect to "+addr)
 	}

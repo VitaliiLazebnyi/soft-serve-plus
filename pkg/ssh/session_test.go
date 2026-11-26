@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/testnet"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
 	"charm.land/ssh"
@@ -75,7 +77,7 @@ func (w *firstWrite) Write(p []byte) (int, error) {
 
 func setup(tb testing.TB) *gossh.Session {
 	tb.Helper()
-	return testsession.New(tb, setupServer(tb), nil)
+	return newTestSession(tb, setupServer(tb), nil)
 }
 
 // setupServer returns an SSH server running the TUI middleware. Its database
@@ -209,7 +211,7 @@ func TestTUISessionDurationCountedAtSessionEnd(t *testing.T) {
 	srv := setupServer(t)
 	addr := testsession.Listen(t, srv)
 
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
@@ -430,7 +432,7 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
 	}
-	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	sess := newTestSession(t, srv, &gossh.ClientConfig{User: "test"})
 	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +469,7 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
 	}
-	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	sess := newTestSession(t, srv, &gossh.ClientConfig{User: "test"})
 	if err := sess.RequestPty("xterm", 30000, 30000, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +555,7 @@ func TestTUIContextEndsWithSession(t *testing.T) {
 	}
 	addr := testsession.Listen(t, srv)
 
-	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+	client, err := testnet.DialSSH("tcp", addr, &gossh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         sessionLoopsWait,
