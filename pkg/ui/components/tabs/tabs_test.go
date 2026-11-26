@@ -3,7 +3,8 @@ package tabs
 import (
 	"context"
 	"testing"
-	"time"
+
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -49,15 +50,14 @@ func TestTabsUseSectionKeys(t *testing.T) {
 // since Scan hands zones to a background worker.
 func waitZone(t *testing.T, c *common.Common, id string) (x, y int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for time.Now().Before(deadline) {
-		if z := c.Zone.Get(id); z != nil && !z.IsZero() {
-			return z.StartX, z.StartY
-		}
-		time.Sleep(time.Millisecond)
+	var z *zone.ZoneInfo
+	if !uitest.WaitFor(func() bool {
+		z = c.Zone.Get(id)
+		return z != nil && !z.IsZero()
+	}) {
+		t.Fatalf("zone %q was never stored", id)
 	}
-	t.Fatalf("zone %q was never stored", id)
-	return 0, 0
+	return z.StartX, z.StartY
 }
 
 // A zone another component marks with a tab's name, such as a repository or

@@ -527,9 +527,8 @@ func TestStartFailsWithNoServerEnabled(t *testing.T) {
 
 // A Shutdown that comes right after Start bound its listeners, while the
 // servers are only starting to serve on them, still stops them all within
-// its deadline. The SSH server used to wait for a listener it started serving
-// on after its Shutdown ran, and that listener was closed only after every
-// server's Shutdown returned, so Shutdown ran into its deadline.
+// its deadline, although the SSH server may start serving a listener after
+// its Shutdown ran.
 func TestShutdownRightAfterStart(t *testing.T) {
 	for i := range 50 {
 		addrs := []string{loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr()}
@@ -570,9 +569,9 @@ func TestShutdownRightAfterStart(t *testing.T) {
 	}
 }
 
-// A server that fails while serving makes Start return its error at once.
-// Start used to hold the error until every other server had stopped too, so
-// the process kept running with only some of its servers up.
+// A server that fails while serving makes Start return its error at once,
+// rather than when every other server has stopped too, so the process does
+// not keep running with only some of its servers up.
 func TestStartReturnsWhenAServerFails(t *testing.T) {
 	addrs := []string{loopbackAddr(), loopbackAddr(), loopbackAddr(), loopbackAddr()}
 	s := newStartTestServer(t, addrs[0], addrs[1], addrs[2], addrs[3])
@@ -750,8 +749,8 @@ func TestShutdownCancelsAndWaitsForCronJobs(t *testing.T) {
 }
 
 // When the drain runs out, Shutdown cuts off what still runs, and the stop
-// is not an error: an ordinary stop during a long transfer used to make
-// soft serve exit with status 1 (R59, CFG-17).
+// is not an error: an ordinary stop during a long transfer does not make
+// soft serve exit with status 1.
 func TestShutdownCutsOffWhatOutlivesTheDrain(t *testing.T) {
 	sshAddr := loopbackAddr()
 	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
@@ -824,7 +823,7 @@ func dialIdleSSH(t *testing.T, addr string, errc <-chan error) <-chan struct{} {
 // Close is Shutdown with contexts that are already done: with a connection
 // that would hold a drain until its idle timeout, it returns at once and
 // cuts the connection off. It does not warn that a drain ran out, since
-// there was none (S14 round-1 review notes 10 and 11).
+// there was none.
 func TestCloseCutsOffWithoutDraining(t *testing.T) {
 	sshAddr := loopbackAddr()
 	s := newStartTestServer(t, sshAddr, loopbackAddr(), loopbackAddr(), loopbackAddr())
@@ -876,7 +875,7 @@ func (b *syncBuffer) String() string {
 
 // Close, which waits for no delivery, still closes the delivery queue, so
 // no new delivery starts: a push afterwards to a repository with a push
-// webhook is skipped, not sent (S14 round-2 review note 2).
+// webhook is skipped, not sent.
 func TestCloseStopsDeliveries(t *testing.T) {
 	// The backend logs to the default logger it finds when it is built.
 	old := log.Default()
@@ -917,7 +916,7 @@ func TestCloseStopsDeliveries(t *testing.T) {
 
 // waitAtLeast waits until the caller's deadline, or for at least d when
 // that comes sooner or the caller has none, and a cancelled caller does not
-// end it (S14 round-1 review note 9).
+// end it.
 func TestWaitAtLeast(t *testing.T) {
 	far, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
@@ -997,7 +996,7 @@ func TestNewServerLoadsKeys(t *testing.T) {
 }
 
 // The README's "Stopping the server" says how long the drain is and that
-// the stop succeeds (S14 round-1 review note 12).
+// the stop succeeds.
 func TestReadmeStopMatchesDrain(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
 	if err != nil {
@@ -1025,7 +1024,7 @@ func TestReadmeStopMatchesDrain(t *testing.T) {
 
 // A host key the server cannot use stops it at start: the SSH server
 // presents the key the tokens are signed with, so there is no serving SSH
-// without one that signs tokens too (tracker 343(a)). There are two gates:
+// without one that signs tokens too. There are two gates:
 //   - a DSA key, which the SSH library would still serve, is refused by the
 //     config loader before any signer is built;
 //   - an ECDSA key on P-224, which the config loader accepts, is refused by

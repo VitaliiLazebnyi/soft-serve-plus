@@ -51,7 +51,7 @@ const connectAttempts = 3
 // git's own "unable to connect to 127.0.0.1:" on a line of its own. Only
 // git's own fatal line counts, not a message from the server ("remote:
 // fatal: ...") or a later error that quotes curl. Under load a loopback
-// connect can time out (KNOWN_ISSUES item 309), at about 7.8 s on macOS.
+// connect can time out, at about 7.8 s on macOS.
 // Such a request never reached the server, so running the command again
 // repeats nothing the server saw. git's ssh retries its own connect
 // (ConnectionAttempts in sshConfig).

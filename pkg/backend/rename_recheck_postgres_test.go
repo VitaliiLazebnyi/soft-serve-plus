@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/matryer/is"
 )
 
 // On Postgres the re-check after a failed rename waits for a transaction
@@ -16,14 +14,15 @@ import (
 // connection does, and sees the row as it leaves it. Here the rename's own
 // transaction fails, and another transaction, standing in for the COMMIT
 // in flight, renames the row to the new name and commits only once the
-// re-check waits for it. A plain read saw the old name, moved the directory
-// back, and left it away from its row.
+// re-check waits for it. A plain read would see the old name, move the
+// directory back, and leave it away from its row.
 func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	_, err := e.be.db.ExecContext(e.ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.be.store = unpinnableRenameStore{Store: e.be.store}
 
 	committed := make(chan error, 1)
@@ -66,14 +65,24 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 		return err
 	}
 
-	is.NoErr(e.be.RenameRepository(e.ctx, "repo", "new"))
-	is.NoErr(<-committed)
+	if err := e.be.RenameRepository(e.ctx, "repo", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-committed; err != nil {
+		t.Fatal(err)
+	}
 	r, err := e.be.Repository(e.ctx, "new")
-	is.NoErr(err) // the row and the directory are under the new name
+	if err != nil {
+		t.Fatal(err)
+	} // the row and the directory are under the new name
 	_, err = os.Stat(filepath.Join(e.be.repoPath("new"), "HEAD"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // On Postgres too, when the outcome of a rename cannot be read either, the
@@ -82,7 +91,6 @@ func TestRenameRepositoryRecheckWaitsForRowLockPostgres(t *testing.T) {
 // and never reaches it.
 func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectoryPostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	e.be.store = failingByIDStore{Store: e.be.store}
 	e.be.renameTxDone = func(err error) error {
@@ -92,9 +100,15 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectoryPostgres(t *testing.
 		return err
 	}
 
-	is.True(e.be.RenameRepository(e.ctx, "repo", "new") != nil)
+	if e.be.RenameRepository(e.ctx, "repo", "new") == nil {
+		t.Fatal("not true: e.be.RenameRepository(e.ctx, \"repo\", \"new\") != nil")
+	}
 	_, err := os.Stat(filepath.Join(e.be.repoPath("new"), "HEAD"))
-	is.NoErr(err) // where the committed row puts it
+	if err != nil {
+		t.Fatal(err)
+	} // where the committed row puts it
 	_, err = os.Lstat(e.be.repoPath("repo"))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }

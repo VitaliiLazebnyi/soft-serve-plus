@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // raceDeleteWebhookStore runs race once, inside the repository delete's
@@ -38,14 +37,11 @@ func (s *raceDeleteWebhookStore) DeleteRepoByName(ctx context.Context, h db.Hand
 }
 
 // On Postgres, deleting a webhook while its repository is being deleted
-// must not make the repository's delete fail. The webhook delete used to
-// take no lock on the repository: it removed a webhook the repository's
-// delete had already listed, which then found nothing to delete and
-// reported the repository not found, rolling everything back. The two now
-// take turns on the repository's row.
+// must not make the repository's delete fail, as it would if the webhook
+// delete removed a webhook the repository's delete had already listed. The
+// two take turns on the repository's row.
 func TestDeleteWebhookRacingRepositoryDeletePostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 
@@ -77,9 +73,15 @@ func TestDeleteWebhookRacingRepositoryDeletePostgres(t *testing.T) {
 	}
 	e.be.store = rs
 
-	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
+	if err := e.be.DeleteRepository(e.ctx, "repo"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := e.be.Repository(e.ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 	// The webhook went with its repository; deleting it found nothing.
-	is.True(errors.Is(<-hookDeleted, proto.ErrWebhookNotFound))
+	if !errors.Is(<-hookDeleted, proto.ErrWebhookNotFound) {
+		t.Fatal("not true: errors.Is(<-hookDeleted, proto.ErrWebhookNotFound)")
+	}
 }

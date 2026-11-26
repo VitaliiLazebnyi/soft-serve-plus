@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // pausingRenameStore runs renamed inside a rename's transaction, right after
@@ -84,17 +83,18 @@ func waitForLockWaiter(t *testing.T, e whEnv, op <-chan error, name string) {
 
 // On Postgres a delete that waited for a rename of the same repository to
 // commit finds no repository under the old name. It must say so, and leave
-// the renamed repository's webhooks and LFS objects alone. It used to read
-// the row without a lock, delete its webhooks, delete nothing and report
-// success, then remove the LFS directory of the repository's id.
+// the renamed repository's webhooks and LFS objects alone.
 func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	e.createHook(t, whURL, webhook.EventPush)
 	object := filepath.Join(e.cfg.DataPath, "lfs", strconv.FormatInt(e.repo.ID(), 10), "objects", "o")
-	is.NoErr(os.MkdirAll(filepath.Dir(object), 0o755))
-	is.NoErr(os.WriteFile(object, []byte("x"), 0o600))
+	if err := os.MkdirAll(filepath.Dir(object), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(object, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	commit := raceRename(t, e)
 	deleted := make(chan error, 1)
@@ -104,19 +104,29 @@ func TestDeleteRepositoryRacingRenamePostgres(t *testing.T) {
 
 	deleteErr := <-deleted
 	r, err := e.be.Repository(e.ctx, "moved")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hooks, err := e.be.ListWebhooks(e.ctx, r)
-	is.NoErr(err)
-	is.Equal(len(hooks), 1) // the renamed repository's webhook is kept
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hooks); got != 1 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 1)
+	} // the renamed repository's webhook is kept
 	_, err = os.Stat(object)
-	is.NoErr(err)                                        // and its LFS object
-	is.True(errors.Is(deleteErr, proto.ErrRepoNotFound)) // the delete reported a miss
+	if err != nil {
+		t.Fatal(err)
+	} // and its LFS object
+	if !errors.Is(deleteErr, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(deleteErr, proto.ErrRepoNotFound)")
+	} // the delete reported a miss
 }
 
 // On Postgres a setter that waited for a rename of the same repository to
-// commit finds no repository under the old name and must say so. They used
-// to look the repository up without a lock, update no row and report
-// success: "repo private" then left the renamed repository public.
+// commit finds no repository under the old name and must say so, rather
+// than update no row and report success: "repo private" would then leave
+// the renamed repository public.
 func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 	t.Parallel()
 	for name, set := range map[string]func(e whEnv) error{
@@ -127,7 +137,6 @@ func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			e := newPostgresWebhookEnv(t)
 
 			commit := raceRename(t, e)
@@ -137,12 +146,22 @@ func TestRepoSettersRacingRenamePostgres(t *testing.T) {
 			commit()
 
 			err := <-done
-			is.True(errors.Is(err, proto.ErrRepoNotFound))
+			if !errors.Is(err, proto.ErrRepoNotFound) {
+				t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+			}
 			r, err := e.be.Repository(e.ctx, "moved")
-			is.NoErr(err)
-			is.True(!r.IsPrivate() && !r.IsHidden())
-			is.Equal(r.Description(), "")
-			is.Equal(r.ProjectName(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.IsPrivate() || r.IsHidden() {
+				t.Fatal("not true: !r.IsPrivate() && !r.IsHidden()")
+			}
+			if got := r.Description(); got != "" {
+				t.Fatalf("r.Description() = %v, want %v", got, "")
+			}
+			if got := r.ProjectName(); got != "" {
+				t.Fatalf("r.ProjectName() = %v, want %v", got, "")
+			}
 		})
 	}
 }

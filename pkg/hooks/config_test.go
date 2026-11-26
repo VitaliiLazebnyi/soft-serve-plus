@@ -13,8 +13,8 @@ import (
 
 // The hook config holds what a hook uses, the log settings with the hook log
 // as the log file, and reads back as the server's; it holds no secret, and
-// is private to the server's user. Regression (review round 1): the file
-// held the whole config, the database data source and password included.
+// is private to the server's user: not the whole config, whose database
+// data source can hold a password.
 func TestHookConfigRoundTrip(t *testing.T) {
 	dataPath := t.TempDir()
 	cfg := config.DefaultConfig()

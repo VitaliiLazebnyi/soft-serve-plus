@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite"
 )
@@ -57,7 +56,6 @@ func newTestBackendWithQuery(t *testing.T, logs io.Writer, query string) (*Backe
 // logger; nil is the default logger.
 func openTestBackend(t *testing.T, logger *charmlog.Logger, query string) (*Backend, *config.Config) {
 	t.Helper()
-	is := is.New(t)
 	ctx := context.Background()
 
 	cfg := config.DefaultConfig()
@@ -66,16 +64,22 @@ func openTestBackend(t *testing.T, logger *charmlog.Logger, query string) (*Back
 	var err error
 	if query == "" {
 		dbx, cfg.DB.DataSource, err = dbtest.OpenSource(ctx, t)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	} else {
 		cfg.DB.DataSource = cfg.DataPath + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" + query
 		dbx, err = db.Open(ctx, "sqlite", cfg.DB.DataSource, db.Options{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 	}
 	cfg.DB.Driver = dbx.DriverName()
 
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
+		t.Fatal(err)
+	}
 	return New(cfg, dbx, database.New(nil), logger), cfg
 }
 
@@ -151,55 +155,77 @@ func setAdminKeys(t *testing.T, cfg *config.Config, keys []string) {
 
 func TestAnonAccessConfigOverride(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	// Seeded default from migration, no override set.
-	is.Equal(be.AnonAccess(ctx), access.ReadOnlyAccess)
+	if got := be.AnonAccess(ctx); got != access.ReadOnlyAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 
 	// With no override, DB writes via SetAnonAccess are reflected.
-	is.NoErr(be.SetAnonAccess(ctx, access.ReadWriteAccess))
-	is.Equal(be.AnonAccess(ctx), access.ReadWriteAccess)
+	if err := be.SetAnonAccess(ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if got := be.AnonAccess(ctx); got != access.ReadWriteAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.ReadWriteAccess)
+	}
 
 	// A config override takes precedence over whatever is in the DB.
 	admin := access.AdminAccess
 	cfg.AnonAccess = &admin
-	is.Equal(be.AnonAccess(ctx), access.AdminAccess)
+	if got := be.AnonAccess(ctx); got != access.AdminAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.AdminAccess)
+	}
 
 	// The DB value is unchanged underneath the override: once the override
 	// is cleared, the last DB write is what's returned again.
 	cfg.AnonAccess = nil
-	is.Equal(be.AnonAccess(ctx), access.ReadWriteAccess)
+	if got := be.AnonAccess(ctx); got != access.ReadWriteAccess {
+		t.Fatalf("be.AnonAccess(ctx) = %v, want %v", got, access.ReadWriteAccess)
+	}
 }
 
 func TestAllowKeylessConfigOverride(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
 	// Seeded default from migration, no override set.
-	is.Equal(be.AllowKeyless(ctx), true)
+	if got := be.AllowKeyless(ctx); got != true {
+		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, true)
+	}
 
 	// With no override, DB writes via SetAllowKeyless are reflected.
-	is.NoErr(be.SetAllowKeyless(ctx, false))
-	is.Equal(be.AllowKeyless(ctx), false)
+	if err := be.SetAllowKeyless(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := be.AllowKeyless(ctx); got != false {
+		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, false)
+	}
 
 	// A config override of true takes precedence over a DB value of false.
 	allow := true
 	cfg.AllowKeyless = &allow
-	is.Equal(be.AllowKeyless(ctx), true)
+	if got := be.AllowKeyless(ctx); got != true {
+		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, true)
+	}
 
 	// A config override of false takes precedence over a DB value of true
 	// too — this is a real tri-state override, not just a way to force
 	// things open.
-	is.NoErr(be.SetAllowKeyless(ctx, true))
+	if err := be.SetAllowKeyless(ctx, true); err != nil {
+		t.Fatal(err)
+	}
 	disallow := false
 	cfg.AllowKeyless = &disallow
-	is.Equal(be.AllowKeyless(ctx), false)
+	if got := be.AllowKeyless(ctx); got != false {
+		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, false)
+	}
 
 	// Clearing the override falls back to the DB value again.
 	cfg.AllowKeyless = nil
-	is.Equal(be.AllowKeyless(ctx), true)
+	if got := be.AllowKeyless(ctx); got != true {
+		t.Fatalf("be.AllowKeyless(ctx) = %v, want %v", got, true)
+	}
 }

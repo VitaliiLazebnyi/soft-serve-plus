@@ -15,10 +15,10 @@ func TestParseLevel(t *testing.T) {
 		{"", NoAccess, ErrInvalidAccessLevel},
 		{"foo", NoAccess, ErrInvalidAccessLevel},
 		{"unknown", NoAccess, ErrInvalidAccessLevel},
-		{AdminAccess.String(), AdminAccess, nil},
-		{ReadOnlyAccess.String(), ReadOnlyAccess, nil},
-		{ReadWriteAccess.String(), ReadWriteAccess, nil},
-		{NoAccess.String(), NoAccess, nil},
+		{"admin-access", AdminAccess, nil},
+		{"read-only", ReadOnlyAccess, nil},
+		{"read-write", ReadWriteAccess, nil},
+		{"no-access", NoAccess, nil},
 	}
 
 	for _, c := range cases {
@@ -29,14 +29,20 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
+// The names are the ones the CLI and the config accept.
 func TestMarshalTextRoundTrip(t *testing.T) {
-	for _, l := range []Level{NoAccess, ReadOnlyAccess, ReadWriteAccess, AdminAccess} {
+	for l, want := range map[Level]string{
+		NoAccess:        "no-access",
+		ReadOnlyAccess:  "read-only",
+		ReadWriteAccess: "read-write",
+		AdminAccess:     "admin-access",
+	} {
 		text, err := l.MarshalText()
 		if err != nil {
 			t.Fatalf("MarshalText(%d) => error %v", l, err)
 		}
-		if string(text) != l.String() {
-			t.Errorf("MarshalText(%d) => %q, want %q", l, text, l.String())
+		if string(text) != want {
+			t.Errorf("MarshalText(%d) => %q, want %q", l, text, want)
 		}
 		var got Level
 		if err := got.UnmarshalText(text); err != nil {

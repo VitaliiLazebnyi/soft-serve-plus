@@ -51,7 +51,7 @@ const recorder = "#!/bin/sh\n" +
 
 // The generated hooks are POSIX sh scripts that work from a repository whose
 // path contains spaces and pass stdin, arguments and exit codes through. They
-// run the server-wide custom hook themselves and start no soft process (R55),
+// run the server-wide custom hook themselves and start no soft process,
 // and post-receive writes its refs to $SOFT_SERVE_PUSH_REFS for the server.
 func TestGeneratedHooksRunFromPathWithSpaces(t *testing.T) {
 	if runtime.GOOS == "windows" {

@@ -5,9 +5,9 @@ import (
 )
 
 // A lock is stored for the path it was asked for. Validation
-// (lfs.ValidateLockPath) accepts a path that ends in a space; the store used
-// to trim it, so "a.bin " locked "a.bin" and a lock on "a.bin" then failed
-// as a duplicate.
+// (lfs.ValidateLockPath) accepts a path that ends in a space, and the store
+// does not trim it: "a.bin " does not lock "a.bin", and a lock on "a.bin"
+// does not then fail as a duplicate.
 func TestLFSLockPathStoredAsGiven(t *testing.T) {
 	ctx, dbx, s := newStoreTestDB(t)
 	const repo, owner = 7, 100 // see newWebhookTestDB

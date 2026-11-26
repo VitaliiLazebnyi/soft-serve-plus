@@ -183,7 +183,7 @@ func TestVerifyIgnoresKeyID(t *testing.T) {
 		Issuer:    testIssuer,
 		Audience:  []string{"repo"},
 	}
-	// The RFC 7638 thumbprint of the Ed25519 key, as the old code minted it,
+	// The RFC 7638 thumbprint of the Ed25519 key, as such tokens carry it,
 	// and some other value.
 	pub := kp.CryptoPublicKey().(ed25519.PublicKey)
 	thumb := sha256.Sum256([]byte(`{"crv":"Ed25519","kty":"OKP","x":"` + base64.RawURLEncoding.EncodeToString(pub) + `"}`))

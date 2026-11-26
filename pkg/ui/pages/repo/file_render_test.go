@@ -13,7 +13,7 @@ import (
 )
 
 // renderAllocMax is the most bytes the render of a file of 1 MiB may
-// allocate, whatever the width. Rendering it inside Update used to allocate
+// allocate, whatever the width. Rendering it inside Update would allocate
 // gigabytes, more the wider the terminal.
 const renderAllocMax = 160 << 20
 

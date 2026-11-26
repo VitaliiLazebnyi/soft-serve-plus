@@ -101,8 +101,8 @@ func (f *oracleFixture) assertSameAnswer(t *testing.T, method, path, auth string
 }
 
 // TestReceivePackDoesNotRevealPrivateRepositories covers the push paths,
-// which used to answer 401 for a private repository and 404 for a missing
-// one to the same signed-in user.
+// which must answer a private repository and a missing one alike to the
+// same signed-in user.
 func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -167,9 +167,9 @@ func TestReceivePackReaderIsForbidden(t *testing.T) {
 	is.Equal(answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever?service=git-receive-pack", auth)), want)
 
 	// A GET whose path ends in the push service name is routed to the RPC
-	// handler with a nested repository name. It used to be authorized as a
-	// push first, which could create that nested repository; now the
-	// method is refused before anything else, for any caller.
+	// handler with a nested repository name. The method is refused
+	// before anything else, for any caller: authorized as a push, it
+	// could create that nested repository.
 	for _, name := range []string{"secret", "ghost"} {
 		for _, a := range []string{auth, ""} {
 			got := answerOf(f.do(http.MethodGet, "/"+name+"/objects/info/git-receive-pack", a))
@@ -189,10 +189,9 @@ func (f *oracleFixture) mintJWT(t *testing.T, user proto.User, audience ...strin
 	return f.env.mintJWT(t, user, audience...)
 }
 
-// TestBearerTokenDoesNotRevealPrivateRepositories covers JWT auth, which
-// used to reject any token for a missing repository as bad credentials
-// (403) before checking it, while a valid token for a private repository
-// identified the user and answered 404.
+// TestBearerTokenDoesNotRevealPrivateRepositories covers JWT auth: a token
+// for a missing repository is checked as one for a private repository is,
+// so the answers do not tell the two apart.
 func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

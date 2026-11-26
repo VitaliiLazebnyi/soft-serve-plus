@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/soft-serve/git"
@@ -101,17 +100,18 @@ func (l *loop) deliver(msg tea.Msg) {
 // settle delivers messages until every running command is waiting at the
 // gate.
 func (l *loop) settle(waiting *atomic.Int32) {
-	deadline := time.Now().Add(uitest.HangGuard)
-	for l.running.Load() > waiting.Load() {
-		if time.Now().After(deadline) {
-			l.t.Fatal("commands never settle")
+	if !uitest.WaitFor(func() bool {
+		for {
+			select {
+			case msg := <-l.results:
+				l.running.Add(-1)
+				l.deliver(msg)
+			default:
+				return l.running.Load() <= waiting.Load()
+			}
 		}
-		select {
-		case msg := <-l.results:
-			l.running.Add(-1)
-			l.deliver(msg)
-		case <-time.After(5 * time.Millisecond): // a poll; the loop waits for HangGuard
-		}
+	}) {
+		l.t.Fatal("commands never settle")
 	}
 }
 
@@ -164,12 +164,10 @@ func TestFilesOneLoadInFlight(t *testing.T) {
 	started := repo.waiting.Load()
 	close(repo.gate)
 	for l.running.Load() > 0 {
-		select {
-		case <-l.results:
-			l.running.Add(-1)
-		case <-time.After(uitest.HangGuard):
+		if _, ok := uitest.Receive(l.results); !ok {
 			t.Fatal("loads never finish")
 		}
+		l.running.Add(-1)
 	}
 	listings, opened := count("ls-tree")-before, count("check-attr")-files
 	t.Logf("%d loads reached the repository; %d listings and %d file loads ran git", started, listings, opened)

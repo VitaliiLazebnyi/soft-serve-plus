@@ -17,8 +17,8 @@ import (
 )
 
 // TestInfoRefsGitFailure covers a ref advertisement that git fails to make
-// for a repository that exists. It used to answer 404, as if the repository
-// were missing, and log nothing; it must answer 500 and log git's reason.
+// for a repository that exists. It must answer 500 and log git's reason, not
+// 404 as if the repository were missing.
 func TestInfoRefsGitFailure(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

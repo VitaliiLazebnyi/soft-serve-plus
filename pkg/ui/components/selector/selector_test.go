@@ -6,7 +6,8 @@ import (
 	"io"
 	"sync"
 	"testing"
-	"time"
+
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -97,15 +98,14 @@ func (testDelegate) Render(w io.Writer, _ list.Model, _ int, item list.Item) {
 // since Scan hands zones to a background worker.
 func waitZone(t *testing.T, c *common.Common, id string) (x, y int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for time.Now().Before(deadline) {
-		if z := c.Zone.Get(id); z != nil && !z.IsZero() {
-			return z.StartX, z.StartY
-		}
-		time.Sleep(time.Millisecond)
+	var z *zone.ZoneInfo
+	if !uitest.WaitFor(func() bool {
+		z = c.Zone.Get(id)
+		return z != nil && !z.IsZero()
+	}) {
+		t.Fatalf("zone %q was never stored", id)
 	}
-	t.Fatalf("zone %q was never stored", id)
-	return 0, 0
+	return z.StartX, z.StartY
 }
 
 // Items are marked with zone IDs of their own, so an item named like another
@@ -158,15 +158,11 @@ func newTestSelector(t *testing.T, names ...string) *Selector {
 func render(t *testing.T, s *Selector, want string, y int) {
 	t.Helper()
 	s.common.Zone.Scan(s.View())
-	deadline := time.Now().Add(time.Minute)
-	for {
-		if z := s.common.Zone.Get(s.zonePrefix + want); !z.IsZero() && z.StartY == y {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("zone %q was not drawn at row %d", want, y)
-		}
-		time.Sleep(time.Millisecond)
+	if !uitest.WaitFor(func() bool {
+		z := s.common.Zone.Get(s.zonePrefix + want)
+		return !z.IsZero() && z.StartY == y
+	}) {
+		t.Fatalf("zone %q was not drawn at row %d", want, y)
 	}
 }
 

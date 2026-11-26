@@ -73,8 +73,8 @@ func TestSSHKeyPairMissingFile(t *testing.T) {
 }
 
 // The path is used as is. keygen.New expands environment variables, so a
-// path holding a literal "$" used to miss the file and silently generate a
-// throwaway key.
+// path holding a literal "$" given to it would miss the file and silently
+// generate a throwaway key.
 func TestSSHKeyPairPathWithDollar(t *testing.T) {
 	base := t.TempDir()
 	// keygen would expand the "$" too, so write the key elsewhere and copy

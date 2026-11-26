@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -22,7 +21,6 @@ import (
 // new name. The repository is returned when it exists and the level reads.
 func TestReadableForUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
@@ -34,26 +32,42 @@ func TestReadableForUser(t *testing.T) {
 	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(listedKey)))
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []ssh.PublicKey{ownerKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	collab, err := be.CreateUser(ctx, "collab", proto.UserOptions{PublicKeys: []ssh.PublicKey{collabKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	other, err := be.CreateUser(ctx, "other", proto.UserOptions{PublicKeys: []ssh.PublicKey{otherKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{adminKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "public", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "private", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Straight to the store: AddCollaborator also sends a webhook event,
 	// which needs a database on ctx.
-	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		return be.store.AddCollabByUsernameAndRepo(ctx, tx, "collab", "private", access.ReadWriteAccess)
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
-		is.NoErr(be.SetAnonAccess(ctx, anon))
+		if err := be.SetAnonAccess(ctx, anon); err != nil {
+			t.Fatal(err)
+		}
 		for _, name := range []string{"public", "private", "missing"} {
 			for _, tc := range []struct {
 				name string
@@ -86,8 +100,12 @@ func TestReadableForUser(t *testing.T) {
 	// The unowned admin key opens a private repository from the context alone.
 	keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, listedKey)
 	r, level := noLookupError(t)(be.ReadableForUser(keyCtx, "private", nil))
-	is.True(r != nil)
-	is.Equal(level, access.AdminAccess)
+	if r == nil {
+		t.Fatal("not true: r != nil")
+	}
+	if got := level; got != access.AdminAccess {
+		t.Fatalf("level = %v, want %v", got, access.AdminAccess)
+	}
 }
 
 // expectReadable is the level TestReadableForUser expects caller to hold on
@@ -118,23 +136,34 @@ func expectReadable(repo, caller string, anon access.Level) access.Level {
 // lookup loses the private repository, but the session user keeps it.
 func TestReadableForUserDoesNotLookUpKey(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 	ctx := context.Background()
 
 	pk := newTestPublicKey(t)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []ssh.PublicKey{pk}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "private", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sessCtx := proto.WithUserContext(context.WithValue(ctx, charmssh.ContextKeyPublicKey, pk), owner)
-	is.NoErr(be.RemovePublicKey(ctx, "owner", pk))
+	if err := be.RemovePublicKey(ctx, "owner", pk); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.UserByPublicKey(ctx, pk)
-	is.True(errors.Is(err, proto.ErrUserNotFound)) // the key no longer resolves to the owner
+	if !errors.Is(err, proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUserNotFound)")
+	} // the key no longer resolves to the owner
 
 	r, level := noLookupError(t)(be.ReadableForUser(sessCtx, "private", proto.UserFromContext(sessCtx)))
-	is.True(r != nil)
-	is.Equal(level, access.AdminAccess)
+	if r == nil {
+		t.Fatal("not true: r != nil")
+	}
+	if got := level; got != access.AdminAccess {
+		t.Fatalf("level = %v, want %v", got, access.AdminAccess)
+	}
 }

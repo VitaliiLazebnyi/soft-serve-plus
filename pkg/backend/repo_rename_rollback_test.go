@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // unpinnableRenameStore renames the row and then records a row that breaks
@@ -31,44 +30,58 @@ func (s unpinnableRenameStore) SetRepoNameByName(ctx context.Context, h db.Handl
 }
 
 // A rename whose transaction fails after the directory moved moves it back,
-// so the row and the directory agree again. The directory used to stay at
-// the new name, without a row, while the row still named the old one.
+// so the row and the directory agree again.
 func TestRenameRepositoryCommitFailureMovesDirectoryBack(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	_, err := be.CreateRepository(ctx, "team/old", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.db.ExecContext(ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	be.store = unpinnableRenameStore{Store: be.store}
 
-	is.True(be.RenameRepository(ctx, "team/old", "other/new") != nil)
+	if be.RenameRepository(ctx, "team/old", "other/new") == nil {
+		t.Fatal("not true: be.RenameRepository(ctx, \"team/old\", \"other/new\") != nil")
+	}
 
 	r, err := be.Repository(ctx, "team/old")
-	is.NoErr(err) // the row and the directory are under the old name
+	if err != nil {
+		t.Fatal(err)
+	} // the row and the directory are under the old name
 	_, err = os.Stat(filepath.Join(be.repoPath("team/old"), "HEAD"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Lstat(be.repoPath("other/new"))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 	_, err = os.Lstat(filepath.Join(cfg.DataPath, "repos", "other"))
-	is.True(os.IsNotExist(err)) // no empty group left behind
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	} // no empty group left behind
 	_, err = r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A COMMIT whose answer is lost, as when the connection drops during it,
 // reports an error although the rename committed. The row then names the
-// new name, so the directory stays there and the rename succeeds. The
-// directory used to be moved back under the old name, away from its row.
+// new name, so the directory stays there and the rename succeeds.
 func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	be.renameTxDone = func(err error) error {
 		if err == nil {
 			return errors.New("driver: bad connection")
@@ -76,13 +89,21 @@ func TestRenameRepositoryCommitOutcomeLostKeepsDirectoryWithRow(t *testing.T) {
 		return err
 	}
 
-	is.NoErr(be.RenameRepository(ctx, "old", "new"))
+	if err := be.RenameRepository(ctx, "old", "new"); err != nil {
+		t.Fatal(err)
+	}
 	r, err := be.Repository(ctx, "new")
-	is.NoErr(err) // the row and the directory are under the new name
+	if err != nil {
+		t.Fatal(err)
+	} // the row and the directory are under the new name
 	_, err = r.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = os.Lstat(be.repoPath("old"))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }
 
 // failingByIDStore fails every lookup by ID, as a database that went away
@@ -103,11 +124,12 @@ func (failingByIDStore) GetRepoByID(context.Context, db.Handler, int64) (models.
 // rather than risk moving it away from its row.
 func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	be.store = failingByIDStore{Store: be.store}
 	be.renameTxDone = func(err error) error {
 		if err == nil {
@@ -116,56 +138,73 @@ func TestRenameRepositoryCommitOutcomeUnknownLeavesDirectory(t *testing.T) {
 		return err
 	}
 
-	is.True(be.RenameRepository(ctx, "old", "new") != nil)
+	if be.RenameRepository(ctx, "old", "new") == nil {
+		t.Fatal("not true: be.RenameRepository(ctx, \"old\", \"new\") != nil")
+	}
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
-	is.NoErr(err) // where the committed row puts it
+	if err != nil {
+		t.Fatal(err)
+	} // where the committed row puts it
 }
 
 // After a failed rename, the directory is moved back only if the row still
 // has the old name. A row renamed by another session since has a name this
-// rename does not know of, so the directory stays where it is. It used to
-// be moved back whenever the row did not have the new name.
+// rename does not know of, so the directory stays where it is.
 func TestRenameRepositoryFailureRenamedAgainLeavesDirectory(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	r, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.db.ExecContext(ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	be.store = unpinnableRenameStore{Store: be.store}
 	be.renameTxDone = func(err error) error {
 		// Another session renames the row once this one's transaction
 		// has failed.
 		_, xerr := be.db.ExecContext(ctx, be.db.Rebind(`UPDATE repos SET name = 'third' WHERE id = ?`), r.ID())
-		is.NoErr(xerr)
+		if xerr != nil {
+			t.Fatal(xerr)
+		}
 		return err
 	}
 
-	is.True(be.RenameRepository(ctx, "old", "new") != nil)
+	if be.RenameRepository(ctx, "old", "new") == nil {
+		t.Fatal("not true: be.RenameRepository(ctx, \"old\", \"new\") != nil")
+	}
 	_, err = os.Stat(filepath.Join(be.repoPath("new"), "HEAD"))
-	is.NoErr(err) // left where it is
+	if err != nil {
+		t.Fatal(err)
+	} // left where it is
 	_, err = os.Lstat(be.repoPath("old"))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }
 
 // On SQLite the re-check after a failed rename does not wait for the
 // database's write lock: another writer holding it does not keep the
-// directory from going back to its row. The re-check used to take the
-// write lock and, past busy_timeout, leave the directory at the new name.
+// directory from going back to its row, as it would once busy_timeout
+// passed.
 func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	if be.db.DriverName() != "sqlite" {
 		t.Skip("SQLite only")
 	}
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	_, err := be.CreateRepository(ctx, "old", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.db.ExecContext(ctx, `CREATE TABLE pin (repo_id INTEGER NOT NULL REFERENCES repos(id) DEFERRABLE INITIALLY DEFERRED)`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	be.store = unpinnableRenameStore{Store: be.store}
 
 	// Another writer takes the write lock once the rename's transaction
@@ -174,16 +213,28 @@ func TestRenameRepositoryRecheckSQLiteIgnoresWriteLock(t *testing.T) {
 	be.renameTxDone = func(err error) error {
 		var berr error
 		holder, berr = beginRawTx(t, ctx, be.db)
-		is.NoErr(berr)
+		if berr != nil {
+			t.Fatal(berr)
+		}
 		_, berr = holder.ExecContext(ctx, `CREATE TABLE held (n INTEGER)`)
-		is.NoErr(berr)
+		if berr != nil {
+			t.Fatal(berr)
+		}
 		return err
 	}
 	renameErr := be.RenameRepository(ctx, "old", "new")
-	is.NoErr(holder.Rollback())
-	is.True(renameErr != nil)
+	if err := holder.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if renameErr == nil {
+		t.Fatal("not true: renameErr != nil")
+	}
 	_, err = os.Stat(filepath.Join(be.repoPath("old"), "HEAD"))
-	is.NoErr(err) // moved back to its row
+	if err != nil {
+		t.Fatal(err)
+	} // moved back to its row
 	_, err = os.Lstat(be.repoPath("new"))
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }

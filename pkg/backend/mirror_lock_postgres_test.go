@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // pausingMirrorStore runs paused inside SetMirror's transaction, after its
@@ -25,14 +24,17 @@ func (s *pausingMirrorStore) SetRepoIsMirrorByName(ctx context.Context, h db.Han
 
 // On Postgres SetMirror holds the row it checked until it commits, so a
 // rename of the repository waits for it rather than slip in between the
-// check and the write. The check used to read the row without a lock.
+// check and the write.
 func TestSetMirrorLocksCheckedRowPostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	r, err := git.Open(t.Context(), e.be.repoPath("repo"))
-	is.NoErr(err)
-	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"); err != nil {
+		t.Fatal(err)
+	}
 	e.be.validateGitRemote = func(context.Context, string, ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error) {
 		return ssrf.ValidatedGitRemote{}, nil
 	}
@@ -52,9 +54,17 @@ func TestSetMirrorLocksCheckedRowPostgres(t *testing.T) {
 	waitForLockWaiter(t, e, renamed, "RenameRepository")
 	close(release)
 
-	is.NoErr(<-mirrored)
-	is.NoErr(<-renamed)
+	if err := <-mirrored; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-renamed; err != nil {
+		t.Fatal(err)
+	}
 	moved, err := e.be.Repository(e.ctx, "moved")
-	is.NoErr(err)
-	is.True(moved.IsMirror())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !moved.IsMirror() {
+		t.Fatal("not true: moved.IsMirror()")
+	}
 }

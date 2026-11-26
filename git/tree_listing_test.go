@@ -177,7 +177,7 @@ func bigTreeRepo(t *testing.T, n int, extra ...string) (*Repository, string) {
 	return repo, id
 }
 
-// R10: listing a directory of 200,000 entries read and kept all of them,
+// Listing a directory of 200,000 entries read and kept all of them,
 // several times over (hundreds of MiB). The listing must stop after
 // MaxTreeEntries, say it did, and stay within a few MiB; looking up one
 // path must not list the directory at all.

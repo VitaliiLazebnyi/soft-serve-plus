@@ -90,7 +90,7 @@ func breakTable(t *testing.T, ctx context.Context, table string) {
 }
 
 // `repo list` lists the repositories of the session's user, as the session
-// resolved it. A lookup of the session's key that fails no longer turns the
+// resolved it. A lookup of the session's key that fails does not turn the
 // list into what an anonymous caller sees.
 func TestRepoListUsesSessionUser(t *testing.T) {
 	t.Parallel()

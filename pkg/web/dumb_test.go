@@ -14,8 +14,8 @@ import (
 )
 
 // TestDumbHTTPIsRefused checks every request of the dumb HTTP protocol gets
-// one uncacheable 403, whatever the repository and the caller. A missing
-// loose object used to be answered 404 with a one-year Cache-Control.
+// one uncacheable 403, whatever the repository and the caller, even for a
+// missing loose object.
 func TestDumbHTTPIsRefused(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
@@ -60,7 +60,7 @@ func TestDumbHTTPIsRefused(t *testing.T) {
 		}
 	}
 
-	// Other methods are refused as before, and nothing was created.
+	// Other methods are refused too, and nothing was created.
 	w := f.do(http.MethodPost, "/pub.git/HEAD", "")
 	is.Equal(w.Code, http.StatusMethodNotAllowed)
 	is.Equal(w.Header().Get("Allow"), "GET, HEAD")

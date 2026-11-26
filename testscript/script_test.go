@@ -663,7 +663,7 @@ var loopbackClient = &http.Client{
 // loopback only, and macOS's ssh, given the name localhost with
 // AddressFamily inet and no ConnectTimeout, waits for ever when its connect
 // fails, instead of reporting the error: under load a connect to loopback
-// can fail (KNOWN_ISSUES item 309), and a script then hung until the test
+// can fail, and a script then hung until the test
 // binary timed out. So localhost is dialed at loopback by address, and
 // ConnectTimeout bounds the connect and the wait for the server's banner.
 // ConnectionAttempts makes ssh try a failed connect twice more, about a
@@ -818,7 +818,7 @@ type webhookReceiverKey struct{}
 //
 // The soft binary built with the webhooktest tag dials every webhook request
 // to its Unix socket. A loopback TCP connect can stall for seconds on a busy
-// macOS machine and fail with ETIMEDOUT (KNOWN_ISSUES item 309); nothing sends
+// macOS machine and fail with ETIMEDOUT; nothing sends
 // a failed delivery again, so the event would never arrive. It also listens
 // on loopback TCP for repo-webhook-allowed-hosts, which tests the client that
 // sends to internal addresses and so needs one.

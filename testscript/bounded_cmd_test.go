@@ -214,7 +214,7 @@ var refusedAtBanner = regexp.MustCompile(`(?s)debug1: Connection established\..*
 // git's ssh dials localhost at 127.0.0.1, bounds the connect and the
 // banner exchange, and tries a refused connect three times (see
 // sshConfig). The hang this prevents is in macOS's ssh; the retry covers
-// a loopback connect that fails under load (KNOWN_ISSUES item 309).
+// a loopback connect that fails under load.
 //
 // "ssh -G" checks the settings themselves, with any OpenSSH. A refused
 // connect checks that ssh retries it, where it does: OpenSSH for Windows

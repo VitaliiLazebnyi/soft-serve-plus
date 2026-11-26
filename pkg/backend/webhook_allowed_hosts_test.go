@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/ssrf"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // setWebhookAllowedHosts sets webhook.allowed_hosts and parses it the way the
@@ -28,7 +27,6 @@ func (e whEnv) setWebhookAllowedHosts(t *testing.T, entries ...string) {
 // be created and is delivered to through the SSRF-protected client.
 func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 
 	var hits atomic.Int32
@@ -42,45 +40,70 @@ func TestWebhookAllowedHostsCreateAndDeliver(t *testing.T) {
 
 	// Default: refused at create.
 	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: url, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepositoryVisibilityChange}, Active: true})
-	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+	if !errors.Is(err, ssrf.ErrPrivateIP) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrPrivateIP)")
+	}
 
 	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
 	id := e.createHook(t, url, webhook.EventRepositoryVisibilityChange)
 
-	is.NoErr(e.be.SetPrivate(e.ctx, "repo", true))
+	if err := e.be.SetPrivate(e.ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	e.be.WaitForDeliveries(e.ctx)
-	is.Equal(hits.Load(), int32(1))
+	if got, want := hits.Load(), int32(1); got != want {
+		t.Fatalf("hits.Load() = %v, want %v", got, want)
+	}
 
 	ds, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 1)
-	is.Equal(ds[0].ResponseStatus, http.StatusOK)
-	is.True(!ds[0].RequestError.Valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 1 {
+		t.Fatalf("len(ds) = %v, want %v", got, 1)
+	}
+	if got := ds[0].ResponseStatus; got != http.StatusOK {
+		t.Fatalf("ds[0].ResponseStatus = %v, want %v", got, http.StatusOK)
+	}
+	if ds[0].RequestError.Valid {
+		t.Fatal("not true: !ds[0].RequestError.Valid")
+	}
 }
 
 // Update validates the new URL against the list too, and the list does not
 // open metadata addresses.
 func TestWebhookAllowedHostsUpdate(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 	events := []webhook.Event{webhook.EventPush}
 
 	err := e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://10.1.2.3/hook", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
-	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+	if !errors.Is(err, ssrf.ErrPrivateIP) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrPrivateIP)")
+	}
 
 	e.setWebhookAllowedHosts(t, "10.0.0.0/8", "0.0.0.0/0:8080")
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://10.1.2.3/hook", ContentType: webhook.ContentTypeJSON, Events: events, Active: true}))
+	if err := e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://10.1.2.3/hook", ContentType: webhook.ContentTypeJSON, Events: events, Active: true}); err != nil {
+		t.Fatal(err)
+	}
 
 	err = e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://169.254.169.254:8080/latest/meta-data", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
-	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+	if !errors.Is(err, ssrf.ErrPrivateIP) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrPrivateIP)")
+	}
 	err = e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: "http://169.254.169.254:8080/", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
-	is.True(errors.Is(err, ssrf.ErrPrivateIP))
+	if !errors.Is(err, ssrf.ErrPrivateIP) {
+		t.Fatal("not true: errors.Is(err, ssrf.ErrPrivateIP)")
+	}
 
 	h, err := e.be.Webhook(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(h.URL, "http://10.1.2.3/hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.URL; got != "http://10.1.2.3/hook" {
+		t.Fatalf("h.URL = %v, want %v", got, "http://10.1.2.3/hook")
+	}
 }
 
 // Create and update resolve the webhook's hostname with the caller's context,
@@ -88,7 +111,6 @@ func TestWebhookAllowedHostsUpdate(t *testing.T) {
 // stored or changed.
 func TestWebhookCreateAndUpdateStopWhenCancelled(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 	events := []webhook.Event{webhook.EventPush}
@@ -96,12 +118,22 @@ func TestWebhookCreateAndUpdateStopWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(e.ctx)
 	cancel()
 	err := e.be.CreateWebhook(ctx, e.repo, WebhookInput{URL: "https://hooks.example/new", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
-	is.True(errors.Is(err, context.Canceled))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("not true: errors.Is(err, context.Canceled)")
+	}
 	err = e.be.UpdateWebhook(ctx, e.repo, id, WebhookInput{URL: "https://hooks.example/changed", ContentType: webhook.ContentTypeJSON, Events: events, Active: true})
-	is.True(errors.Is(err, context.Canceled))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("not true: errors.Is(err, context.Canceled)")
+	}
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
-	is.NoErr(err)
-	is.Equal(len(hooks), 1)
-	is.Equal(hooks[0].URL, whURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hooks); got != 1 {
+		t.Fatalf("len(hooks) = %v, want %v", got, 1)
+	}
+	if got := hooks[0].URL; got != whURL {
+		t.Fatalf("hooks[0].URL = %v, want %v", got, whURL)
+	}
 }

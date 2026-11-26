@@ -112,9 +112,8 @@ func sha256Hex(s string) string {
 }
 
 // TestLFSUploadRejectsMismatchedContent checks that the basic upload handler
-// verifies the body against the oid and the declared size. It used to write
-// the body straight to the object path and record it, so a client could
-// store arbitrary content under any oid.
+// verifies the body against the oid and the declared size, so a client
+// cannot store arbitrary content under any oid.
 func TestLFSUploadRejectsMismatchedContent(t *testing.T) {
 	t.Parallel()
 	const content = "hello lfs"
@@ -289,7 +288,7 @@ func (e *lfsUploadEnv) uploadConcurrently(content string, tokens ...string) []co
 
 // TestLFSUploadConcurrentDuplicate checks that two uploads of the same object
 // that both get past the existence check both succeed. The second insert hits
-// the unique constraint, which used to be answered with a 500.
+// the unique constraint, which is not answered with a 500.
 func TestLFSUploadConcurrentDuplicate(t *testing.T) {
 	t.Parallel()
 	e := newLFSUploadEnv(t)
@@ -444,9 +443,8 @@ func TestLFSBatchUploadOmitsActionsForPresentObjects(t *testing.T) {
 }
 
 // TestLFSUploadRestoresMissingObject checks that an upload of an object that
-// is recorded but whose file is gone or damaged stores it again. The handler
-// used to skip any upload of a recorded object, so the file could never be
-// restored.
+// is recorded but whose file is gone or damaged stores it again, rather than
+// skip it because the object is recorded.
 func TestLFSUploadRestoresMissingObject(t *testing.T) {
 	t.Parallel()
 	const content = "restore me"

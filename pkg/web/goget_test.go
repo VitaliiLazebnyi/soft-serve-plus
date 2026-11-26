@@ -82,12 +82,12 @@ func allocated(f func()) uint64 {
 
 // The go get route serves anonymous requests for any path, so the work it
 // does before the length cap is checked must not grow faster than the path.
-// The list of a path's parent directories, which a bearer token may name,
-// used to be built for every request, one copy of the path per segment: a
-// 32 KB path cost seconds and gigabytes. It is now built only for a bearer
-// token, and only for the parents nearest the root. The go get walk tries
-// only those parents too: it used to look up every parent, which at the
-// length cap cost hundreds of megabytes per request.
+// The list of a path's parent directories, which a bearer token may name, is
+// built only for a bearer token, and only for the parents nearest the root:
+// one copy of the path per segment for every request would cost seconds and
+// gigabytes for a 32 KB path. The go get walk tries only those parents too:
+// a lookup of every parent at the length cap would cost hundreds of
+// megabytes per request.
 func TestGoGetPathWorkIsBounded(t *testing.T) {
 	is := is.New(t)
 	f := newOracleFixture(t)

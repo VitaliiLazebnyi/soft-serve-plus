@@ -36,9 +36,9 @@ func listLFSLocks(t *testing.T, ctx context.Context, dbx *db.DB, limit int, betw
 }
 
 // TestLFSLocksPagingSameSecond checks that locks created in the same second
-// are each listed exactly once. Pages used to be ordered by updated_at alone,
-// which has one-second resolution, so ties came back in no fixed order and
-// Postgres listed some locks twice and others never.
+// are each listed exactly once. updated_at has one-second resolution, so
+// pages ordered by it alone would bring ties back in no fixed order, and
+// Postgres would list some locks twice and others never.
 func TestLFSLocksPagingSameSecond(t *testing.T) {
 	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)

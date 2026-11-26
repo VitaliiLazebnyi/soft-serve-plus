@@ -17,7 +17,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // newPostgresWebhookEnv is newWebhookEnv, logging to the default logger,
@@ -28,15 +27,18 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
 		t.Skip("set SOFT_SERVE_DB_DRIVER=postgres to run")
 	}
-	is := is.New(t)
 	ctx := context.Background()
 	be, cfg := openTestBackend(t, log.Default(), "")
 
 	user, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx = proto.WithUserContext(ctx, user)
 	repo, err := be.CreateRepository(ctx, "repo", user, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return whEnv{ctx: ctx, be: be, cfg: cfg, admin: user, repo: repo, logs: &syncBuffer{}}
 }
 
@@ -49,14 +51,13 @@ func newPostgresWebhookEnv(t *testing.T) whEnv {
 // it commits its 20th webhook, must fail.
 func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	for i := range webhook.MaxWebhooksPerRepo - 1 {
 		e.createHook(t, fmt.Sprintf("%s/%d", whURL, i), webhook.EventPush)
 	}
 
 	result := make(chan error, 1)
-	is.NoErr(e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
+	if err := e.be.db.TransactionContext(e.ctx, func(tx *db.Tx) error {
 		var holder int
 		if err := tx.GetContext(e.ctx, &holder, `SELECT pg_backend_pid();`); err != nil {
 			return err
@@ -65,7 +66,9 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		is.Equal(n, webhook.MaxWebhooksPerRepo-1)
+		if got, want := n, webhook.MaxWebhooksPerRepo-1; got != want {
+			t.Fatalf("n = %v, want %v", got, want)
+		}
 
 		go func() {
 			result <- e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL + "/racer", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
@@ -76,17 +79,25 @@ func TestCreateWebhookCapHoldsUnderConcurrencyPostgres(t *testing.T) {
 
 		_, err = e.be.store.CreateWebhook(e.ctx, tx, models.Webhook{RepoID: e.repo.ID(), URL: whURL + "/last", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		return err
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case err := <-result:
-		is.True(errors.Is(err, webhook.ErrTooManyWebhooks))
+		if !errors.Is(err, webhook.ErrTooManyWebhooks) {
+			t.Fatal("not true: errors.Is(err, webhook.ErrTooManyWebhooks)")
+		}
 	case <-time.After(time.Minute):
 		t.Fatal("CreateWebhook still waiting after the lock was released")
 	}
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
-	is.NoErr(err)
-	is.Equal(len(hooks), webhook.MaxWebhooksPerRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(hooks); got != webhook.MaxWebhooksPerRepo {
+		t.Fatalf("len(hooks) = %v, want %v", got, webhook.MaxWebhooksPerRepo)
+	}
 }
 
 // waitBlockedBy waits until some backend is waiting for a lock held by the
@@ -131,7 +142,6 @@ func TestCreateWebhookConcurrentPostgres(t *testing.T) {
 // still be recorded, and redelivering it must not report an error.
 func TestWebhookDeliveryNonUTF8ResponsePostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 
 	body := "\x00" + strings.Repeat("€", 64<<10)
@@ -144,24 +154,48 @@ func TestWebhookDeliveryNonUTF8ResponsePostgres(t *testing.T) {
 	e.setWebhookAllowedHosts(t, "127.0.0.0/8")
 	id := e.createHook(t, srv.URL+"/hook", webhook.EventRepositoryVisibilityChange)
 
-	is.NoErr(e.be.SetPrivate(e.ctx, "repo", true))
+	if err := e.be.SetPrivate(e.ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	e.be.WaitForDeliveries(e.ctx)
 
 	ds, err := e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 1)
-	is.Equal(ds[0].ResponseStatus, http.StatusOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 1 {
+		t.Fatalf("len(ds) = %v, want %v", got, 1)
+	}
+	if got := ds[0].ResponseStatus; got != http.StatusOK {
+		t.Fatalf("ds[0].ResponseStatus = %v, want %v", got, http.StatusOK)
+	}
 
-	is.NoErr(e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, ds[0].ID))
+	if err := e.be.RedeliverWebhookDelivery(e.ctx, e.repo, id, ds[0].ID); err != nil {
+		t.Fatal(err)
+	}
 	ds, err = e.be.ListWebhookDeliveries(e.ctx, e.repo, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 2 {
+		t.Fatalf("len(ds) = %v, want %v", got, 2)
+	}
 	for _, d := range ds {
 		full, err := e.be.WebhookDelivery(e.ctx, e.repo, id, d.ID)
-		is.NoErr(err)
-		is.True(strings.Contains(full.ResponseHeaders, "X-Name: caf�\n"))
-		is.True(strings.HasPrefix(full.ResponseBody, "€€"))
-		is.True(utf8.ValidString(full.ResponseBody))
-		is.True(!strings.Contains(full.ResponseBody, "\x00"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(full.ResponseHeaders, "X-Name: caf�\n") {
+			t.Fatal("not true: strings.Contains(full.ResponseHeaders, \"X-Name: caf�\\n\")")
+		}
+		if !strings.HasPrefix(full.ResponseBody, "€€") {
+			t.Fatal("not true: strings.HasPrefix(full.ResponseBody, \"€€\")")
+		}
+		if !utf8.ValidString(full.ResponseBody) {
+			t.Fatal("not true: utf8.ValidString(full.ResponseBody)")
+		}
+		if strings.Contains(full.ResponseBody, "\x00") {
+			t.Fatal("not true: !strings.Contains(full.ResponseBody, \"\\x00\")")
+		}
 	}
 }

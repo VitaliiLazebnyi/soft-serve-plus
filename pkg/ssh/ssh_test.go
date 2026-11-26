@@ -18,7 +18,7 @@ import (
 )
 
 // The server presents the host key it is given, and does not read or
-// create the file at ssh.key_path for it (tracker 343(a)).
+// create the file at ssh.key_path for it.
 func TestServerPresentsGivenHostKey(t *testing.T) {
 	t.Parallel()
 	cfg := config.DefaultConfig()

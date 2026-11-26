@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/list"
@@ -36,10 +35,8 @@ func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 	}
 	ch := make(chan tea.Msg, 1)
 	go func() { ch <- cmd() }()
-	var msg tea.Msg
-	select {
-	case msg = <-ch:
-	case <-time.After(uitest.HangGuard):
+	msg, ok := uitest.Receive(ch)
+	if !ok {
 		d.t.Fatal("command did not return")
 	}
 	if msg != nil && reflect.TypeOf(msg).PkgPath() == cursorPkg {

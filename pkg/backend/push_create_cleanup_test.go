@@ -13,22 +13,28 @@ import (
 	"time"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // A repository whose refs cannot be listed counts as having refs, so the
 // cleanup never removes one it could not check.
 func TestRepositoryHasRefsFailsSafe(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "empty", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.True(!be.RepositoryHasRefs(ctx, r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if be.RepositoryHasRefs(ctx, r) {
+		t.Fatal("not true: !be.RepositoryHasRefs(ctx, r)")
+	}
 
-	is.NoErr(os.RemoveAll(be.repoPath("empty")))
-	is.True(be.RepositoryHasRefs(ctx, r))
+	if err := os.RemoveAll(be.repoPath("empty")); err != nil {
+		t.Fatal(err)
+	}
+	if !be.RepositoryHasRefs(ctx, r) {
+		t.Fatal("not true: be.RepositoryHasRefs(ctx, r)")
+	}
 }
 
 // The check for refs runs under the removal's context: once that is done,
@@ -38,24 +44,35 @@ func TestRepositoryHasRefsFailsSafe(t *testing.T) {
 // with ctx's error.
 func TestRemovePushCreatedRepositoryCancelledKeeps(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "cancelled", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	deleteTried := false
 	be.beforePushCreatedDelete = func() { deleteTried = true }
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	removed, err := be.RemovePushCreatedRepository(cancelled, r)
-	is.NoErr(err)
-	is.True(!removed)
-	is.True(!deleteTried)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	}
+	if deleteTried {
+		t.Fatal("not true: !deleteTried")
+	}
 	_, err = be.Repository(ctx, "cancelled")
-	is.NoErr(err) // the row is kept
+	if err != nil {
+		t.Fatal(err)
+	} // the row is kept
 	_, err = os.Stat(be.repoPath("cancelled"))
-	is.NoErr(err) // and so is the directory
+	if err != nil {
+		t.Fatal(err)
+	} // and so is the directory
 }
 
 // commitTo points ref of the repository at dir at a new empty commit.
@@ -82,20 +99,29 @@ func commitTo(t *testing.T, dir, ref string) {
 // exist.
 func TestRemovePushCreatedRepositoryKeptWithRefsGetsHead(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "pushed", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("pushed")
 	commitTo(t, dir, "refs/heads/feature")
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(!removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	}
 	head, err := exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD").Output()
-	is.NoErr(err)
-	is.Equal(strings.TrimSpace(string(head)), "refs/heads/feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(head)); got != "refs/heads/feature" {
+		t.Fatalf("strings.TrimSpace(string(head)) = %v, want %v", got, "refs/heads/feature")
+	}
 }
 
 // A ref a lingering git process writes after the snapshot of the refs and
@@ -104,11 +130,12 @@ func TestRemovePushCreatedRepositoryKeptWithRefsGetsHead(t *testing.T) {
 // seen by the check, and the repository was removed with it.
 func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "late", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("late")
 	wrote := false
 	be.afterRefSnapshot = func(rp string) {
@@ -117,13 +144,23 @@ func TestRemovePushCreatedRepositoryRefBetweenSnapshotAndCheck(t *testing.T) {
 	}
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(wrote)
-	is.True(!removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wrote {
+		t.Fatal("not true: wrote")
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	}
 	_, err = be.Repository(ctx, "late")
-	is.NoErr(err) // the row is kept
+	if err != nil {
+		t.Fatal(err)
+	} // the row is kept
 	_, err = os.Stat(filepath.Join(dir, "refs", "heads", "main"))
-	is.NoErr(err) // and so is the ref
+	if err != nil {
+		t.Fatal(err)
+	} // and so is the ref
 }
 
 // On Windows the failed push's git process can hold the directory open for
@@ -138,7 +175,6 @@ func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove the directory regardless of its mode")
 	}
-	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	// Retry for as long as the test needs, so the test decides when the
@@ -146,10 +182,14 @@ func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
 	be.pushCreatedRetry = retryPolicy{first: 10 * time.Millisecond, total: time.Hour}
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "failed", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("failed")
 	objects := filepath.Join(dir, "objects")
-	is.NoErr(os.Chmod(objects, 0o555))
+	if err := os.Chmod(objects, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
 
 	// Make the directory removable once the first removal failed. The
@@ -169,11 +209,19 @@ func TestRemovePushCreatedRepositoryRetriesDirectory(t *testing.T) {
 	}()
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(<-released)
-	is.NoErr(err)
-	is.True(removed)
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	}
 	_, err = os.Stat(dir)
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }
 
 // A directory that stays is given up on once the waits run out, and logged.
@@ -185,48 +233,73 @@ func TestRemovePushCreatedRepositoryGivesUpOnDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove the directory regardless of its mode")
 	}
-	is := is.New(t)
 	var logs syncBuffer
 	be, cfg := newTestBackendWithLog(t, &logs)
 	be.pushCreatedRetry = retryPolicy{first: time.Millisecond, total: 3 * time.Millisecond}
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "stuck", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	objects := filepath.Join(be.repoPath("stuck"), "objects")
-	is.NoErr(os.Chmod(objects, 0o555))
+	if err := os.Chmod(objects, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(removed) // the row is gone
-	is.True(strings.Contains(logs.String(), "failed to remove the directory of a repository created by a failed push"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	} // the row is gone
+	if !strings.Contains(logs.String(), "failed to remove the directory of a repository created by a failed push") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"failed to remove the directory of a repository created by a failed push\")")
+	}
 	_, err = os.Stat(be.repoPath("stuck"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // HEAD is fixed only on the repository the push created. One renamed or
-// created under the name since is left as it is. HEAD used to be pointed
-// at a branch of whatever had the name.
+// created under the name since is left as it is.
 func TestRemovePushCreatedRepositoryLeavesHeadOfAnother(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	created, err := be.CreateRepository(ctx, "name", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(be.RenameRepository(ctx, "name", "moved"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RenameRepository(ctx, "name", "moved"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "name", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("name")
-	is.NoErr(exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing").Run())
+	if err := exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing").Run(); err != nil {
+		t.Fatal(err)
+	}
 	commitTo(t, dir, "refs/heads/feature")
 
 	removed, err := be.RemovePushCreatedRepository(ctx, created)
-	is.NoErr(err)
-	is.True(!removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	}
 	head, err := exec.CommandContext(t.Context(), "git", "-C", dir, "symbolic-ref", "HEAD").Output()
-	is.NoErr(err)
-	is.Equal(strings.TrimSpace(string(head)), "refs/heads/missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(head)); got != "refs/heads/missing" {
+		t.Fatalf("strings.TrimSpace(string(head)) = %v, want %v", got, "refs/heads/missing")
+	}
 }
 
 // refOnFailureLog is a log sink that, when the delete logs that it could
@@ -263,7 +336,6 @@ func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove the directory regardless of its mode")
 	}
-	is := is.New(t)
 	logs := &refOnFailureLog{}
 	be, cfg := newTestBackendWithLog(t, logs)
 	// A few short waits: without the check the retry gives up at once and
@@ -271,20 +343,34 @@ func TestRemovePushCreatedRepositoryRetryKeepsLateRefs(t *testing.T) {
 	be.pushCreatedRetry = retryPolicy{first: time.Millisecond, total: 3 * time.Millisecond}
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "late", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("late")
 	logs.ref = filepath.Join(dir, "refs", "heads", "pushed")
 	objects := filepath.Join(dir, "objects")
-	is.NoErr(os.Chmod(objects, 0o555))
+	if err := os.Chmod(objects, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.Chmod(objects, 0o755) }) //nolint:errcheck
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.NoErr(logs.err)
-	is.True(removed) // the row is gone
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.err; err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	} // the row is gone
 	_, err = os.Stat(logs.ref)
-	is.NoErr(err) // the pushed ref is kept
-	is.True(strings.Contains(logs.String(), "wrote refs to the repository after its row was deleted"))
+	if err != nil {
+		t.Fatal(err)
+	} // the pushed ref is kept
+	if !strings.Contains(logs.String(), "wrote refs to the repository after its row was deleted") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"wrote refs to the repository after its row was deleted\")")
+	}
 }
 
 // chmodOnFailureLog is a log sink that makes dir writable again when the
@@ -306,7 +392,7 @@ func (w *chmodOnFailureLog) Write(p []byte) (int, error) {
 // A reftable repository always has a file at refs/heads and a table, since
 // HEAD lives in the reftable, whether or not anything was pushed. That is
 // not a ref written after the delete: the retry goes on and removes the
-// directory. It used to stop at once and log that a push wrote refs.
+// directory.
 func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not prevent removal on Windows")
@@ -322,28 +408,41 @@ func TestRemovePushCreatedRepositoryRetryReftable(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "init.defaultRefFormat")
 	t.Setenv("GIT_CONFIG_VALUE_0", "reftable")
 
-	is := is.New(t)
 	logs := &chmodOnFailureLog{}
 	be, cfg := newTestBackendWithLog(t, logs)
 	be.pushCreatedRetry = retryPolicy{first: time.Millisecond, total: time.Hour}
 	ctx := backendTestContext(be, cfg)
 	r, err := be.CreateRepository(ctx, "tables", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := be.repoPath("tables")
 	_, err = os.Stat(filepath.Join(dir, "reftable", "tables.list"))
-	is.NoErr(err) // the repository is a reftable one
+	if err != nil {
+		t.Fatal(err)
+	} // the repository is a reftable one
 	// The reftable files survive the first removal, as files held open
 	// do on Windows.
 	logs.dir = filepath.Join(dir, "reftable")
-	is.NoErr(os.Chmod(logs.dir, 0o555))
+	if err := os.Chmod(logs.dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.Chmod(logs.dir, 0o755) }) //nolint:errcheck
 
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	}
 	_, err = os.Stat(dir)
-	is.True(os.IsNotExist(err)) // removed by the retry
-	is.True(!strings.Contains(logs.String(), "wrote refs"))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	} // removed by the retry
+	if strings.Contains(logs.String(), "wrote refs") {
+		t.Fatal("not true: !strings.Contains(logs.String(), \"wrote refs\")")
+	}
 }
 
 // refsWritten counts what was added or changed since the snapshot, never

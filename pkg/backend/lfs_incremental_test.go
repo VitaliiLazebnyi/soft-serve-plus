@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
-	"github.com/matryer/is"
 )
 
 // lfsScan is one run of the pointer scan.
@@ -158,39 +158,72 @@ func oids(pointers ...lfs.Pointer) []string {
 // the history added since the last one, and stores the objects in it.
 func TestSyncRepoLFSObjectsIncremental(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 2)
 	scans := recordLFSScans(t, lt.be)
 
 	// The first sync scans everything.
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got := scans()
-	is.Equal(len(got), 1)
-	is.Equal(got[0].exclude, nil)
-	is.Equal(len(got[0].oids), 2)
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got := got[0].exclude; got != nil {
+		t.Fatalf("got[0].exclude = %v, want nil", got)
+	}
+	if got := len(got[0].oids); got != 2 {
+		t.Fatalf("len(got[0].oids) = %v, want %v", got, 2)
+	}
 	tip1 := lt.git(t, "rev-parse", "HEAD")
-	is.Equal(got[0].include, []string{tip1})
+	if got, want := got[0].include, ([]string{tip1}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].include = %v, want %v", got, want)
+	}
 
 	// A sync that fetched nothing scans nothing.
-	is.NoErr(lt.sync())
-	is.Equal(len(scans()), 0)
-	is.Equal(len(lt.client.requested), 0)
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(scans()); got != 0 {
+		t.Fatalf("len(scans()) = %v, want %v", got, 0)
+	}
+	if got := len(lt.client.requested); got != 0 {
+		t.Fatalf("len(lt.client.requested) = %v, want %v", got, 0)
+	}
 
 	// A sync after a new commit scans only that commit's objects.
 	p := lt.addObject(t)
 	tip2 := lt.git(t, "rev-parse", "HEAD")
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got = scans()
-	is.Equal(len(got), 1)
-	is.Equal(got[0].include, []string{tip2})
-	is.Equal(got[0].exclude, []string{tip1})
-	is.Equal(got[0].oids, oids(p))         // only the new object is scanned
-	is.Equal(lt.client.requested, oids(p)) // and fetched
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got, want := got[0].include, ([]string{tip2}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].include = %v, want %v", got, want)
+	}
+	if got, want := got[0].exclude, ([]string{tip1}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].exclude = %v, want %v", got, want)
+	}
+	if got, want := got[0].oids, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].oids = %v, want %v", got, want)
+	} // only the new object is scanned
+	if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	} // and fetched
 	content, err := os.ReadFile(lt.path(p))
-	is.NoErr(err)
-	is.Equal(content, lt.client.objects[p.Oid]) // and stored
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := content, lt.client.objects[p.Oid]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("content = %v, want %v", got, want)
+	} // and stored
 	_, err = lt.be.store.GetLFSObjectByOid(lt.ctx, lt.be.db, lt.repo.ID(), p.Oid)
-	is.NoErr(err) // and recorded
+	if err != nil {
+		t.Fatal(err)
+	} // and recorded
 }
 
 // TestSyncRepoLFSObjectsFullScan verifies the cases in which a mirror sync
@@ -199,81 +232,137 @@ func TestSyncRepoLFSObjectsFullScan(t *testing.T) {
 	t.Parallel()
 	t.Run("import", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.store())
-		is.NoErr(lt.store())
+		if err := lt.store(); err != nil {
+			t.Fatal(err)
+		}
+		if err := lt.store(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 2) // an import always scans
-		is.Equal(got[1].exclude, nil)
-		is.Equal(len(got[1].oids), 1) // everything
+		if got := len(got); got != 2 {
+			t.Fatalf("len(got) = %v, want %v", got, 2)
+		} // an import always scans
+		if got := got[1].exclude; got != nil {
+			t.Fatalf("got[1].exclude = %v, want nil", got)
+		}
+		if got := len(got[1].oids); got != 1 {
+			t.Fatalf("len(got[1].oids) = %v, want %v", got, 1)
+		} // everything
 
 		// It leaves the tips it scanned for the first mirror sync.
-		is.NoErr(lt.sync())
-		is.Equal(len(scans()), 0)
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(scans()); got != 0 {
+			t.Fatalf("len(scans()) = %v, want %v", got, 0)
+		}
 	})
 
 	t.Run("old tip gone", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		scans()
 
 		// A tip of the last sync that's no longer in the repository makes
 		// the shorter scan fail.
 		missing := strings.Repeat("1", 40)
-		is.NoErr(writeScannedRefs(lt.markerPath(), []string{missing}, time.Now()))
-		is.NoErr(os.Remove(lt.path(lt.pointers[0])))
-		is.NoErr(lt.sync())
+		if err := writeScannedRefs(lt.markerPath(), []string{missing}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(lt.path(lt.pointers[0])); err != nil {
+			t.Fatal(err)
+		}
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 2)
-		is.Equal(got[0].exclude, []string{missing})
-		is.Equal(got[1].exclude, nil) // so it scans everything
-		is.Equal(len(got[1].oids), 1)
-		is.Equal(lt.client.requested, oids(lt.pointers[0])) // and fetches what's missing
+		if got := len(got); got != 2 {
+			t.Fatalf("len(got) = %v, want %v", got, 2)
+		}
+		if got, want := got[0].exclude, ([]string{missing}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got[0].exclude = %v, want %v", got, want)
+		}
+		if got := got[1].exclude; got != nil {
+			t.Fatalf("got[1].exclude = %v, want nil", got)
+		} // so it scans everything
+		if got := len(got[1].oids); got != 1 {
+			t.Fatalf("len(got[1].oids) = %v, want %v", got, 1)
+		}
+		if got, want := lt.client.requested, oids(lt.pointers[0]); !reflect.DeepEqual(got, want) {
+			t.Fatalf("lt.client.requested = %v, want %v", got, want)
+		} // and fetches what's missing
 
 		// And the next sync starts from the tips it scanned.
-		is.NoErr(lt.sync())
-		is.Equal(len(scans()), 0)
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(scans()); got != 0 {
+			t.Fatalf("len(scans()) = %v, want %v", got, 0)
+		}
 	})
 
 	t.Run("unreadable tips", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		scans()
 
-		is.NoErr(os.WriteFile(lt.markerPath(), []byte("not an object id\n"), 0o600))
-		is.NoErr(lt.sync())
+		if err := os.WriteFile(lt.markerPath(), []byte("not an object id\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 1)
-		is.Equal(got[0].exclude, nil)
+		if got := len(got); got != 1 {
+			t.Fatalf("len(got) = %v, want %v", got, 1)
+		}
+		if got := got[0].exclude; got != nil {
+			t.Fatalf("got[0].exclude = %v, want nil", got)
+		}
 	})
 
 	t.Run("lfs directory removed", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 2)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		scans()
 
 		// The objects are gone, and the record of what was scanned with
 		// them, so everything is scanned and fetched again.
-		is.NoErr(os.RemoveAll(lt.lfsDir()))
-		is.NoErr(lt.sync())
+		if err := os.RemoveAll(lt.lfsDir()); err != nil {
+			t.Fatal(err)
+		}
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 1)
-		is.Equal(got[0].exclude, nil)
-		is.Equal(len(lt.client.requested), 2)
+		if got := len(got); got != 1 {
+			t.Fatalf("len(got) = %v, want %v", got, 1)
+		}
+		if got := got[0].exclude; got != nil {
+			t.Fatalf("got[0].exclude = %v, want nil", got)
+		}
+		if got := len(lt.client.requested); got != 2 {
+			t.Fatalf("len(lt.client.requested) = %v, want %v", got, 2)
+		}
 		for _, p := range lt.pointers {
 			_, err := os.Stat(lt.path(p))
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 }
@@ -284,52 +373,82 @@ func TestSyncRepoLFSObjectsRetry(t *testing.T) {
 	t.Parallel()
 	t.Run("first sync", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 2)
 		scans := recordLFSScans(t, lt.be)
 		p := lt.pointers[1]
 		lt.client.errs = map[string]error{p.Oid: errors.New("not there")}
-		is.True(errors.Is(lt.sync(), ErrLFSObjectsUnavailable))
+		if !errors.Is(lt.sync(), ErrLFSObjectsUnavailable) {
+			t.Fatal("not true: errors.Is(lt.sync(), ErrLFSObjectsUnavailable)")
+		}
 		scans()
 
 		lt.client.errs = nil
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 1)
-		is.Equal(got[0].exclude, nil)          // still everything
-		is.Equal(lt.client.requested, oids(p)) // and the object is fetched
+		if got := len(got); got != 1 {
+			t.Fatalf("len(got) = %v, want %v", got, 1)
+		}
+		if got := got[0].exclude; got != nil {
+			t.Fatalf("got[0].exclude = %v, want nil", got)
+		} // still everything
+		if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+			t.Fatalf("lt.client.requested = %v, want %v", got, want)
+		} // and the object is fetched
 		_, err := os.Stat(lt.path(p))
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	t.Run("later sync", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		tip1 := lt.git(t, "rev-parse", "HEAD")
 		scans()
 
 		p := lt.addObject(t)
 		lt.client.errs = map[string]error{p.Oid: errors.New("not there")}
-		is.True(errors.Is(lt.sync(), ErrLFSObjectsUnavailable))
+		if !errors.Is(lt.sync(), ErrLFSObjectsUnavailable) {
+			t.Fatal("not true: errors.Is(lt.sync(), ErrLFSObjectsUnavailable)")
+		}
 		scans()
 
 		// Nothing new was fetched, but the commit with the object that
 		// was unavailable is scanned again.
 		lt.client.errs = nil
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 1)
-		is.Equal(got[0].exclude, []string{tip1})
-		is.Equal(got[0].oids, oids(p))
-		is.Equal(lt.client.requested, oids(p))
+		if got := len(got); got != 1 {
+			t.Fatalf("len(got) = %v, want %v", got, 1)
+		}
+		if got, want := got[0].exclude, ([]string{tip1}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got[0].exclude = %v, want %v", got, want)
+		}
+		if got, want := got[0].oids, oids(p); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got[0].oids = %v, want %v", got, want)
+		}
+		if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+			t.Fatalf("lt.client.requested = %v, want %v", got, want)
+		}
 		_, err := os.Stat(lt.path(p))
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		is.NoErr(lt.sync())
-		is.Equal(len(scans()), 0)
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(scans()); got != 0 {
+			t.Fatalf("len(scans()) = %v, want %v", got, 0)
+		}
 	})
 }
 
@@ -340,31 +459,47 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 	t.Parallel()
 	t.Run("full scan", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		p := lt.detachHead(t)
-		is.NoErr(lt.sync())
-		is.Equal(lt.client.requested, oids(lt.pointers...))
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := lt.client.requested, oids(lt.pointers...); !reflect.DeepEqual(got, want) {
+			t.Fatalf("lt.client.requested = %v, want %v", got, want)
+		}
 		_, err := os.Stat(lt.path(p))
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	t.Run("new history", func(t *testing.T) {
 		t.Parallel()
-		is := is.New(t)
 		lt := newLFSTest(t, 1)
 		scans := recordLFSScans(t, lt.be)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		scans()
 
 		p := lt.detachHead(t)
-		is.NoErr(lt.sync())
+		if err := lt.sync(); err != nil {
+			t.Fatal(err)
+		}
 		got := scans()
-		is.Equal(len(got), 1)
-		is.True(got[0].exclude != nil) // only the new history
-		is.Equal(lt.client.requested, oids(p))
+		if got := len(got); got != 1 {
+			t.Fatalf("len(got) = %v, want %v", got, 1)
+		}
+		if got[0].exclude == nil {
+			t.Fatal("not true: got[0].exclude != nil")
+		} // only the new history
+		if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+			t.Fatalf("lt.client.requested = %v, want %v", got, want)
+		}
 		_, err := os.Stat(lt.path(p))
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 }
 
@@ -374,53 +509,98 @@ func TestSyncRepoLFSObjectsDetachedHead(t *testing.T) {
 // new history in between don't count as full scans.
 func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	scans := recordLFSScans(t, lt.be)
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	scans()
 	_, fullScan := readScannedRefs(lt.markerPath())
-	is.True(!fullScan.IsZero())
+	if fullScan.IsZero() {
+		t.Fatal("not true: !fullScan.IsZero()")
+	}
 
 	// A scan of the new history keeps the time of the last full scan. It
 	// is set an hour back, so a scan that saved the current time shows.
 	tips, _ := readScannedRefs(lt.markerPath())
 	fullScan = time.Now().Add(-time.Hour)
-	is.NoErr(writeScannedRefs(lt.markerPath(), tips, fullScan))
+	if err := writeScannedRefs(lt.markerPath(), tips, fullScan); err != nil {
+		t.Fatal(err)
+	}
 	p := lt.addObject(t)
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got := scans()
-	is.Equal(len(got), 1)
-	is.True(got[0].exclude != nil)
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got[0].exclude == nil {
+		t.Fatal("not true: got[0].exclude != nil")
+	}
 	tips, kept := readScannedRefs(lt.markerPath())
-	is.Equal(kept.Unix(), fullScan.Unix())
+	if got, want := kept.Unix(), fullScan.Unix(); got != want {
+		t.Fatalf("kept.Unix() = %v, want %v", got, want)
+	}
 
 	// A file that went missing isn't noticed while nothing is fetched.
-	is.NoErr(os.Remove(lt.path(p)))
-	is.NoErr(lt.sync())
-	is.Equal(len(scans()), 0)
+	if err := os.Remove(lt.path(p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(scans()); got != 0 {
+		t.Fatalf("len(scans()) = %v, want %v", got, 0)
+	}
 
 	// Until the last full scan is too old.
-	is.NoErr(writeScannedRefs(lt.markerPath(), tips, time.Now().Add(-lfsFullScanInterval-time.Minute)))
-	is.NoErr(lt.sync())
+	if err := writeScannedRefs(lt.markerPath(), tips, time.Now().Add(-lfsFullScanInterval-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got = scans()
-	is.Equal(len(got), 1)
-	is.Equal(got[0].exclude, nil)          // the whole history is scanned
-	is.Equal(lt.client.requested, oids(p)) // and the missing file fetched
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got := got[0].exclude; got != nil {
+		t.Fatalf("got[0].exclude = %v, want nil", got)
+	} // the whole history is scanned
+	if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	} // and the missing file fetched
 	_, err := os.Stat(lt.path(p))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, fullScan = readScannedRefs(lt.markerPath())
-	is.True(time.Since(fullScan) < time.Hour) // and the time of the full scan saved
+	if time.Since(fullScan) >= time.Hour {
+		t.Fatal("not true: time.Since(fullScan) < time.Hour")
+	} // and the time of the full scan saved
 
-	is.NoErr(lt.sync())
-	is.Equal(len(scans()), 0)
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(scans()); got != 0 {
+		t.Fatalf("len(scans()) = %v, want %v", got, 0)
+	}
 
 	// A full scan in the future means the clock went back.
-	is.NoErr(writeScannedRefs(lt.markerPath(), tips, time.Now().Add(time.Hour)))
-	is.NoErr(lt.sync())
+	if err := writeScannedRefs(lt.markerPath(), tips, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got = scans()
-	is.Equal(len(got), 1)
-	is.Equal(got[0].exclude, nil)
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got := got[0].exclude; got != nil {
+		t.Fatalf("got[0].exclude = %v, want nil", got)
+	}
 }
 
 // TestSyncRepoLFSObjectsRewrittenHistory verifies that a scan of the new
@@ -428,10 +608,11 @@ func TestSyncRepoLFSObjectsPeriodicFullScan(t *testing.T) {
 // fetches the objects of the new history.
 func TestSyncRepoLFSObjectsRewrittenHistory(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 2)
 	scans := recordLFSScans(t, lt.be)
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	tip1 := lt.git(t, "rev-parse", "HEAD")
 	scans()
 
@@ -442,28 +623,47 @@ func TestSyncRepoLFSObjectsRewrittenHistory(t *testing.T) {
 	lt.git(t, "push", "-q", "--force", lt.be.repoPath("lfs-repo"), "HEAD:main")
 	tip2 := lt.git(t, "rev-parse", "HEAD")
 
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got := scans()
-	is.Equal(len(got), 1)
-	is.Equal(got[0].include, []string{tip2})
-	is.Equal(got[0].exclude, []string{tip1})
-	is.Equal(got[0].oids, oids(p))
-	is.Equal(lt.client.requested, oids(p))
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got, want := got[0].include, ([]string{tip2}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].include = %v, want %v", got, want)
+	}
+	if got, want := got[0].exclude, ([]string{tip1}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].exclude = %v, want %v", got, want)
+	}
+	if got, want := got[0].oids, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].oids = %v, want %v", got, want)
+	}
+	if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	}
 	_, err := os.Stat(lt.path(p))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(lt.sync())
-	is.Equal(len(scans()), 0)
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(scans()); got != 0 {
+		t.Fatalf("len(scans()) = %v, want %v", got, 0)
+	}
 }
 
 // TestSyncRepoLFSObjectsTagOnly verifies that the objects of history only
 // a tag reaches are scanned and fetched.
 func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	lt := newLFSTest(t, 1)
 	scans := recordLFSScans(t, lt.be)
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	scans()
 
 	lt.git(t, "checkout", "-q", "-b", "side")
@@ -471,14 +671,26 @@ func TestSyncRepoLFSObjectsTagOnly(t *testing.T) {
 	lt.git(t, "tag", "-a", "-m", "release", "v1")
 	lt.git(t, "push", "-q", lt.be.repoPath("lfs-repo"), "refs/tags/v1")
 
-	is.NoErr(lt.sync())
+	if err := lt.sync(); err != nil {
+		t.Fatal(err)
+	}
 	got := scans()
-	is.Equal(len(got), 1)
-	is.True(got[0].exclude != nil)
-	is.Equal(got[0].oids, oids(p))
-	is.Equal(lt.client.requested, oids(p))
+	if got := len(got); got != 1 {
+		t.Fatalf("len(got) = %v, want %v", got, 1)
+	}
+	if got[0].exclude == nil {
+		t.Fatal("not true: got[0].exclude != nil")
+	}
+	if got, want := got[0].oids, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got[0].oids = %v, want %v", got, want)
+	}
+	if got, want := lt.client.requested, oids(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lt.client.requested = %v, want %v", got, want)
+	}
 	_, err := os.Stat(lt.path(p))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestWriteScannedRefsDirMode verifies that the LFS root of a repository
@@ -489,10 +701,15 @@ func TestWriteScannedRefsDirMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows has no unix permissions")
 	}
-	is := is.New(t)
 	dir := filepath.Join(t.TempDir(), "lfs", "1")
-	is.NoErr(writeScannedRefs(filepath.Join(dir, lfsScannedRefsFile), nil, time.Now()))
+	if err := writeScannedRefs(filepath.Join(dir, lfsScannedRefsFile), nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	fi, err := os.Stat(dir)
-	is.NoErr(err)
-	is.Equal(fi.Mode().Perm(), os.FileMode(0o700))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fi.Mode().Perm(), os.FileMode(0o700); got != want {
+		t.Fatalf("fi.Mode().Perm() = %v, want %v", got, want)
+	}
 }

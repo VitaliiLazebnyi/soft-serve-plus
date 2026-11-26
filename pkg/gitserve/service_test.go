@@ -333,8 +333,7 @@ func TestStoppedByContext(t *testing.T) {
 }
 
 // TestServiceErrorCarriesStderr checks a git failure reports why git failed,
-// from its stderr, whether or not the caller takes stderr too. It used to
-// report only the exit status unless the caller kept stderr itself.
+// from its stderr, whether or not the caller takes stderr too.
 func TestServiceErrorCarriesStderr(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

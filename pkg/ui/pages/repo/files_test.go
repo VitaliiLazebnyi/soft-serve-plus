@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 )
 
-// R10: a directory with more than git.MaxTreeEntries entries is listed in
+// A directory with more than git.MaxTreeEntries entries is listed in
 // part, and the status bar says the listing is truncated.
 func TestFilesListingTruncated(t *testing.T) {
 	t.Parallel()

@@ -50,7 +50,7 @@ func renameRepo(t *testing.T, dir, from, to string) {
 	run("", "commit", "-q", "-m", "rename")
 }
 
-// R1: opening a commit that renames a file to or from a name git quotes
+// Opening a commit that renames a file to or from a name git quotes
 // crashed the server from the diff parser's goroutine. The Log page must
 // show the diff with the rename.
 func TestLogDiffRenameQuotedName(t *testing.T) {

@@ -18,12 +18,11 @@ import (
 )
 
 // When an admin command fails, it still closes the database and the log:
-// cobra skips a command's PersistentPostRunE, which used to close them.
+// cobra skips a command's PersistentPostRunE when the command fails.
 func TestAdminErrorClosesDB(t *testing.T) {
-	// Run twice, each with its own data path. Regression: the admin command
-	// tree was package-level, and cobra keeps a subcommand's context from
-	// its first run, so a second run used the first run's config and data
-	// path.
+	// Run twice, each with its own data path: cobra keeps a subcommand's
+	// context from its first run, so a command tree shared by both runs
+	// would give the second the first run's config and data path.
 	for _, name := range []string{"first", "second"} {
 		t.Run(name, testAdminErrorClosesDB)
 	}
@@ -137,8 +136,8 @@ func TestAdminRejectsUnknownSubcommand(t *testing.T) {
 
 // The maintenance commands refuse to run without the server's data
 // directory, or its database, and create neither: run from a shell without
-// SOFT_SERVE_DATA_PATH, migrate used to create ./data and migrate an empty
-// database while the real one was untouched (R46).
+// SOFT_SERVE_DATA_PATH, migrate must not create ./data and migrate an empty
+// database while the real one is elsewhere.
 func TestAdminRefusesMissingDataPathOrDatabase(t *testing.T) {
 	for _, sub := range []string{"migrate", "sync-hooks"} {
 		t.Run(sub+" missing data path", func(t *testing.T) {

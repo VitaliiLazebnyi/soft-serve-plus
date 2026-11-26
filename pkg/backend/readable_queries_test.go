@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 )
 
 // lookupCountingStore counts the lookups an access check makes, each of
@@ -43,44 +42,57 @@ func (s *lookupCountingStore) GetAnonAccess(ctx context.Context, h db.Handler) (
 
 // A registered stranger asking for a private repository costs as many
 // lookups as asking for a missing name, so an outage cannot tell the two
-// apart by which lookup failed. The private repository used to cost one
-// more: the collaborator row was read on its own.
+// apart by which lookup failed.
 func TestReadableLookupsMatchForPrivateAndMissing(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	st := &lookupCountingStore{Store: be.store}
 	be.store = st
 
 	lookups := func(name string) int32 {
 		st.n.Store(0)
 		r, level, err := be.Readable(ctx, name, stranger)
-		is.NoErr(err)
-		is.True(r == nil)
-		is.True(level < access.ReadOnlyAccess || name == "missing")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r != nil {
+			t.Fatal("not true: r == nil")
+		}
+		if level >= access.ReadOnlyAccess && name != "missing" {
+			t.Fatal("not true: level < access.ReadOnlyAccess || name == \"missing\"")
+		}
 		return st.n.Load()
 	}
-	is.Equal(lookups("private"), lookups("missing"))
+	if got, want := lookups("private"), lookups("missing"); got != want {
+		t.Fatalf("lookups(\"private\") = %v, want %v", got, want)
+	}
 }
 
 // With only the collaborators table failing, an existing private repository
 // and a missing name answer alike, for an anonymous caller and for a
-// stranger: both lookups go through the same failing query. A missing name
-// used to skip it and answer as free, while the private repository failed.
+// stranger: both lookups go through the same failing query, so a missing
+// name does not skip it and answer as free.
 func TestReadableCollabOutageAnswersAlike(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be := newLookupBackend(t, nil)
 	ctx := context.Background()
 	_, err := be.CreateRepository(ctx, "private", defaultAdmin(t, be), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	breakTable(t, be, "collabs")
 
 	for _, user := range []proto.User{nil, stranger} {
@@ -88,6 +100,8 @@ func TestReadableCollabOutageAnswersAlike(t *testing.T) {
 			r, level, err := be.Readable(ctx, name, user)
 			return fmt.Sprintf("%v %v %v", r != nil, level, err != nil)
 		}
-		is.Equal(answer("private"), answer("missing"))
+		if got, want := answer("private"), answer("missing"); got != want {
+			t.Fatalf("answer(\"private\") = %v, want %v", got, want)
+		}
 	}
 }

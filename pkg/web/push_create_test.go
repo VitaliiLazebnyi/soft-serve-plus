@@ -452,8 +452,8 @@ func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests s
 
 // A failed push can have written refs before it failed: receive-pack
 // updates them before the hooks run. The repository is then handed to the
-// backend's removal, which keeps it and points HEAD at the pushed branch.
-// It used to leave the list with HEAD naming a branch that does not exist.
+// backend's removal, which keeps it and points HEAD at the pushed branch,
+// not at a branch that does not exist.
 func TestHTTPPushCreateFailedPushWithRefsGetsHead(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

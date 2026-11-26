@@ -68,7 +68,7 @@ func TestServerConfigExcludesSHA1ByDefault(t *testing.T) {
 	}
 }
 
-// The key exchanges, ciphers and MACs are fixed (R68); the public key
+// The key exchanges, ciphers and MACs are fixed; the public key
 // authentication algorithms follow the config.
 func TestServerConfigHonoursConfiguredAlgorithms(t *testing.T) {
 	t.Parallel()

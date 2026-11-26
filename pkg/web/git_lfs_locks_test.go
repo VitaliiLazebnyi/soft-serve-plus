@@ -52,9 +52,8 @@ func newLocksFixture(t *testing.T) *locksFixture {
 }
 
 // TestLFSLocksGetRejectsInvalidParams checks that the lock list rejects an
-// id, cursor or limit it cannot use. These used to be parsed with their
-// errors ignored, so ?id=abc read as no id and listed every lock instead
-// of looking one up.
+// id, cursor or limit it cannot use: ?id=abc does not read as no id and
+// list every lock instead of looking one up.
 func TestLFSLocksGetRejectsInvalidParams(t *testing.T) {
 	t.Parallel()
 	f := newLocksFixture(t)
@@ -142,7 +141,7 @@ func TestLFSLocksGetValidParams(t *testing.T) {
 }
 
 // TestLFSLocksVerifyRejectsInvalidParams covers the same cursor and limit
-// checks on the verify endpoint, where an invalid cursor used to be read as
+// checks on the verify endpoint, where an invalid cursor must not be read as
 // the first page.
 //
 // Its subtests run in order on one fixture, so only the test runs in
@@ -196,10 +195,10 @@ func TestLFSLocksVerifyRejectsInvalidParams(t *testing.T) { //nolint:tparallel /
 // TestLFSLocksPagingIsStable pages through the lock list and the verify
 // endpoint by next_cursor while locks are created and deleted between pages,
 // all of them in the same second. Every lock that exists throughout must be
-// listed exactly once. Pages used to be taken by row offset over the
-// one-second updated_at, so ties came back in no fixed order and a lock
-// created or deleted between pages shifted the others: some were listed
-// twice and others never, and verify could leave out another user's lock.
+// listed exactly once. Pages taken by row offset over the one-second
+// updated_at would bring ties back in no fixed order, and a lock created or
+// deleted between pages would shift the others: some would be listed twice
+// and others never, and verify could leave out another user's lock.
 //
 // Its subtests run in order on one fixture, so only the test runs in
 // parallel with others.
@@ -336,9 +335,8 @@ func TestLFSLocksPagingIsStable(t *testing.T) { //nolint:tparallel // the subtes
 }
 
 // TestLFSLocksListNeedsOnlyReadAccess checks that a reader may list locks,
-// as the locking API asks for, while creating one still needs write access.
-// The list used to be treated as a write, so `git lfs locks` failed for
-// readers over HTTP although it worked over SSH.
+// as the locking API asks for, while creating one still needs write access,
+// so `git lfs locks` works for readers over HTTP as it does over SSH.
 func TestLFSLocksListNeedsOnlyReadAccess(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
@@ -413,9 +411,9 @@ func TestLFSLocksListFilterNoMatch(t *testing.T) {
 }
 
 // TestLFSLockCreateConflictReturnsLock checks that creating a lock on a path
-// someone else holds answers 409 with that lock, as the spec asks. The
-// lookup used to be scoped to the caller, so the response carried an empty
-// lock.
+// someone else holds answers 409 with that lock, as the spec asks: the
+// lookup is not scoped to the caller, so the response does not carry an
+// empty lock.
 func TestLFSLockCreateConflictReturnsLock(t *testing.T) {
 	t.Parallel()
 	f := newLocksFixture(t)
@@ -486,9 +484,8 @@ func TestLFSLockForceUnlockWrapsLock(t *testing.T) {
 
 // TestLFSLocksAnonymousWriterAsksForCredentials checks that an anonymous
 // caller with write access (anon-access: read-write) is asked to sign in
-// before creating or deleting a lock, since a lock needs an owner. Create
-// used to answer 404 "user not found" and unlock a 401 without a challenge,
-// so git-lfs never offered credentials.
+// before creating or deleting a lock, since a lock needs an owner: the
+// answer is a 401 with a challenge, so git-lfs offers credentials.
 func TestLFSLocksAnonymousWriterAsksForCredentials(t *testing.T) {
 	t.Parallel()
 	f := newLocksFixture(t)

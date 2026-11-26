@@ -166,10 +166,10 @@ func noAccessConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
-// A window-change before any command used to block the session's request
-// loop for ever, keeping the loop, the session and what the client wrote to
-// it after the connection closed. It is refused now, and nothing is left
-// once the client goes.
+// A window-change before any command is refused, rather than block the
+// session's request loop for ever, which would keep the loop, the session
+// and what the client wrote to it after the connection closed. Nothing is
+// left once the client goes.
 func TestWindowChangeBeforeCommandLeavesNothing(t *testing.T) {
 	addr, _ := startTestServer(t, noAccessConfig(t))
 	before := sessionLoops()
@@ -414,9 +414,8 @@ func TestWindowChangeAfterSessionLimitLeavesNothing(t *testing.T) {
 	waitSessionLoops(t, before)
 }
 
-// env requests used to be stored, each up to 256 KiB, until the connection
-// closed. Only one short GIT_PROTOCOL is accepted now, and the rest is
-// refused and not kept.
+// Only one short GIT_PROTOCOL env request is accepted; the rest are refused
+// and not kept until the connection closes.
 func TestEnvRequestsNotStored(t *testing.T) {
 	addr, _ := startTestServer(t, noAccessConfig(t))
 	c, err := dialClient(t, addr)
@@ -538,7 +537,7 @@ func TestFilterEnvRequests(t *testing.T) {
 }
 
 // Window changes before a command are refused; after a shell starts, the
-// handler gets them, and a second pty-req is refused as before.
+// handler gets them, and a second pty-req is refused.
 //
 // The handler reads window changes until the session ends, rather than
 // exiting once it has the size it waits for: charm.land/ssh sends a size to
@@ -626,17 +625,18 @@ func startForwardServer(t *testing.T, handler ssh.Handler) string {
 // A handler that blocks without draining its window changes -- stuck on a
 // write to a client that is not reading (the length or auth check, the
 // session-limit refusal, the "no access" message) or inside a TUI whose
-// renderer the client has stalled -- used to deadlock the session's request
-// loop. The loop fills the one-element window channel and then blocks on the
-// next window-change, so it stops answering requests; x/crypto's request
-// buffer fills and the connection read loop blocks behind it, and the server
-// never sees another request, the disconnect or a timeout.
+// renderer the client has stalled -- must not deadlock the session's
+// request loop. Without a drain, the loop fills the one-element window
+// channel and then blocks on the next window-change, so it stops answering
+// requests; x/crypto's request buffer fills and the connection read loop
+// blocks behind it, and the server never sees another request, the
+// disconnect or a timeout.
 //
 // forwardWindowChanges drains the window changes whatever the handler does,
 // so the loop keeps answering. This sends window-changes that want a reply
 // while the handler is blocked and checks every one is answered; without the
-// fix the second never is (the loop is stuck sending the first to a channel
-// nobody reads). A blocked handler stands in for the reviewer's zero-window
+// drain the second never is (the loop is stuck sending the first to a
+// channel nobody reads). A blocked handler stands in for a zero-window
 // client, whose first byte written blocks the same way.
 func TestForwardWindowChangesKeepsLoopAnswering(t *testing.T) {
 	ready := make(chan struct{})

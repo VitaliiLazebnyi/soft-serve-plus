@@ -12,8 +12,8 @@ import (
 
 // The key the first migration seeds is the one most likely to be rotated:
 // install with K1, later replace it with K2 in the config. K1 must then go,
-// as a key the sync attached does. It used to stay on the admin account for
-// good, with full admin rights and no log line.
+// as a key the sync attached does, rather than stay on the admin account
+// for good, with full admin rights and no log line.
 func TestSeededAdminKeyRemovedWhenRotated(t *testing.T) {
 	t.Parallel()
 	ctx := context.TODO()

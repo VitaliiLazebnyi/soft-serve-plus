@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // TestSetPrivateWebhookOnlyOnChange verifies that the visibility change
@@ -16,30 +15,37 @@ import (
 // value it already has.
 func TestSetPrivateWebhookOnlyOnChange(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, _ := newTestBackend(t)
 
 	ctx := context.Background()
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx = proto.WithUserContext(ctx, admin)
 
 	repo, err := be.CreateRepository(ctx, "repo", defaultAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Deliveries to this address fail fast, but are still recorded.
 	var hookID int64
-	is.NoErr(be.db.TransactionContext(ctx, func(tx *db.Tx) error {
+	if err := be.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		hookID, err = be.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: "http://127.0.0.1:1/", ContentType: int(webhook.ContentTypeJSON), Active: true})
 		if err != nil {
 			return err
 		}
 		return be.store.CreateWebhookEvents(ctx, tx, hookID, []int{int(webhook.EventRepositoryVisibilityChange)})
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	deliveries := func() int {
 		ds, err := be.store.ListWebhookDeliveriesByWebhookID(ctx, be.db, hookID)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return len(ds)
 	}
 
@@ -50,17 +56,29 @@ func TestSetPrivateWebhookOnlyOnChange(t *testing.T) {
 		<-finished
 	}
 
-	is.NoErr(be.SetPrivate(ctx, "repo", false))
+	if err := be.SetPrivate(ctx, "repo", false); err != nil {
+		t.Fatal(err)
+	}
 	idle()
-	is.Equal(deliveries(), 0)
+	if got := deliveries(); got != 0 {
+		t.Fatalf("deliveries() = %v, want %v", got, 0)
+	}
 
-	is.NoErr(be.SetPrivate(ctx, "repo", true))
+	if err := be.SetPrivate(ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, "first visibility delivery", func() bool { return deliveries() == 1 })
 
-	is.NoErr(be.SetPrivate(ctx, "repo", true))
+	if err := be.SetPrivate(ctx, "repo", true); err != nil {
+		t.Fatal(err)
+	}
 	idle()
-	is.Equal(deliveries(), 1)
+	if got := deliveries(); got != 1 {
+		t.Fatalf("deliveries() = %v, want %v", got, 1)
+	}
 
-	is.NoErr(be.SetPrivate(ctx, "repo", false))
+	if err := be.SetPrivate(ctx, "repo", false); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, "second visibility delivery", func() bool { return deliveries() == 2 })
 }

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 )
 
 // cancelAfterCommitStore cancels the caller's context on the first read made
@@ -105,7 +105,9 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 			setup: func(t *testing.T, e whEnv) {
 				t.Helper()
 				_, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-				is.New(t).NoErr(err)
+				if err != nil {
+					t.Fatal(err)
+				}
 			},
 			change: func(ctx context.Context, e whEnv) error {
 				return e.be.AddCollaborator(ctx, "repo", "alice", access.ReadOnlyAccess)
@@ -116,10 +118,13 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 			event: webhook.EventCollaborator,
 			setup: func(t *testing.T, e whEnv) {
 				t.Helper()
-				is := is.New(t)
 				_, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-				is.NoErr(err)
-				is.NoErr(e.be.AddCollaborator(e.ctx, "repo", "alice", access.ReadOnlyAccess))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := e.be.AddCollaborator(e.ctx, "repo", "alice", access.ReadOnlyAccess); err != nil {
+					t.Fatal(err)
+				}
 			},
 			change: func(ctx context.Context, e whEnv) error {
 				return e.be.RemoveCollaborator(ctx, "repo", "alice")
@@ -129,7 +134,6 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			e := newWebhookEnv(t)
 			if tc.setup != nil {
 				tc.setup(t, e)
@@ -142,11 +146,17 @@ func TestWebhookEventSentWhenContextEndsAfterCommit(t *testing.T) {
 			e.be.store = st
 			e.be.webhooks = webhook.NewSender(e.cfg, e.be.db, st, e.be.logger)
 
-			is.NoErr(tc.change(ctx, e))
-			is.True(ctx.Err() != nil) // the context ended after the commit
+			if err := tc.change(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("not true: ctx.Err() != nil")
+			} // the context ended after the commit
 			e.be.WaitForDeliveries(e.ctx)
 
-			is.Equal(e.deliveredEvents(t, id), []webhook.Event{tc.event})
+			if got, want := e.deliveredEvents(t, id), ([]webhook.Event{tc.event}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("e.deliveredEvents(t, id) = %v, want %v", got, want)
+			}
 		})
 	}
 }

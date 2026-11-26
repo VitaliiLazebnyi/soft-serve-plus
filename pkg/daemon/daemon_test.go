@@ -151,7 +151,7 @@ func startIdleDaemon(t *testing.T) string {
 }
 
 // readPktline reads one pkt-line. An ERR packet is returned as a
-// *git.PktlineError carrying the daemon's message.
+// *gitserve.PktlineError carrying the daemon's message.
 func readPktline(c net.Conn) (string, error) {
 	line, err := gitserve.ReadPkt(c)
 	if err != nil {
@@ -212,9 +212,9 @@ func TestBadRequests(t *testing.T) {
 
 // TestRefusalSurvivesLateInput verifies a client that sends more after its
 // request line, as git archive sends its arguments, still reads the refusal
-// when that input arrives after the daemon has answered. The daemon used to
-// close the connection at once, so the late input drew a reset: the client's
-// next write failed, or its read lost the ERR packet to the reset.
+// when that input arrives after the daemon has answered. A daemon that
+// closed the connection at once would draw a reset with the late input: the
+// client's next write would fail, or its read would lose the ERR packet.
 func TestRefusalSurvivesLateInput(t *testing.T) {
 	conns := make(chan *recordedConn, 1)
 	_, addr := startDaemonOn(t, 1, func(inner net.Listener) net.Listener {
@@ -407,9 +407,7 @@ func clientGoroutines(t *testing.T) int {
 
 // TestFailedRequestDoesNotLeak checks that a connection that fails before
 // sending its request, by timing out or by being reset, leaves no goroutine
-// behind. Reading the request used to run on a goroutine that sent its result
-// twice into a channel with room for one, and blocked forever once the
-// handler had stopped listening.
+// behind.
 func TestFailedRequestDoesNotLeak(t *testing.T) {
 	addr := startIdleDaemon(t)
 	var dialer net.Dialer
@@ -631,8 +629,8 @@ func TestGitFailureFixedMessage(t *testing.T) {
 }
 
 // Serve and Shutdown can run at the same time: Serve either sees the daemon
-// closed or is waited for. Serve used to start counting on the WaitGroup
-// that Shutdown might already be waiting on, which the race detector reports.
+// closed or is waited for: it does not add to a WaitGroup that Shutdown may
+// already be waiting on, which the race detector reports.
 func TestServeRacingShutdown(t *testing.T) {
 	for i := range 100 {
 		d, err := NewServer(testDaemon.cfg, testBackend, nil)
@@ -772,7 +770,7 @@ func startDaemonOn(t *testing.T, limit int, wrap func(net.Listener) net.Listener
 
 // probeRequest asks for a repository that does not exist. A kept connection
 // sends it to show that the daemon serves it: the answer is
-// git.ErrNotAuthed, never the refusal.
+// gitserve.ErrNotAuthed, never the refusal.
 var probeRequest = pkt("git-upload-pack /missing\x00host=127.0.0.1\x00")
 
 // wantServed fails the test unless the daemon answers a request on c, which
@@ -800,7 +798,7 @@ func isRefusal(err error) bool {
 }
 
 // TestMaxConnections checks that max_connections N lets N connections in and
-// refuses the next. It used to let only N-1 in, and a limit of 1 none.
+// refuses the next, and a limit of 1 lets one in.
 //
 // Nothing is decided by a read that did not end in time. A connection is
 // kept once the daemon counts it, and still served: its request gets an
@@ -827,8 +825,7 @@ func TestMaxConnections(t *testing.T) {
 }
 
 // TestMaxConnectionsBurst dials many connections at once: exactly limit of
-// them are kept. Connections used to be counted in their own goroutines, so
-// a burst passed the check before any was counted.
+// them are kept: each connection is counted before the next is checked.
 //
 // The test waits, up to idleWait, until all but limit of the connections are
 // refused, then checks that each of the others is still served. A
@@ -928,8 +925,8 @@ func TestConnectionsAddAfterCloseAll(t *testing.T) {
 
 // TestRequestTimeout checks that a client which sends part of its request
 // line, well within the idle timeout, is still dropped once the request
-// timeout passes, and is told why. Every read used to push the deadline
-// forward, so a client trickling its request a byte at a time could hold a
+// timeout passes, and is told why: a read does not push the deadline
+// forward, so a client trickling its request a byte at a time cannot hold a
 // connection slot indefinitely.
 //
 // The idle timeout is ten minutes, far past the test's wait, so an answer
@@ -952,8 +949,8 @@ func TestRequestTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = d.Close() })
 
 	// Start a request line whose declared length is more than is ever
-	// sent. The daemon reads it, which used to push the deadline past the
-	// idle timeout. A client slowed past the request timeout before it
+	// sent. The daemon reads it, which must not push the deadline past
+	// the idle timeout. A client slowed past the request timeout before it
 	// writes can have its write reset the connection the daemon has just
 	// closed, losing the answer; it tries again on a new connection.
 	waitForDaemon(t, "the daemon to answer a partial request line", func() bool {

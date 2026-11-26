@@ -13,9 +13,8 @@ import (
 )
 
 // TestDeleteRefAtMalformedCommit deletes a branch and a tag that point at a
-// commit git-module cannot parse. Reading that commit used to panic before
-// the delete; the delete needs only the ref's ID, so it succeeds and still
-// sends its event.
+// commit git-module cannot parse. The delete needs only the ref's ID, so it
+// succeeds, without a panic, and still sends its event.
 func TestDeleteRefAtMalformedCommit(t *testing.T) {
 	t.Parallel()
 	for _, kind := range gittest.Malformed {

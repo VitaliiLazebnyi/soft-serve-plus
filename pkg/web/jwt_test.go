@@ -13,9 +13,9 @@ import (
 )
 
 // TestParseJWTHostKeyTypes checks that tokens minted with the server's host
-// key verify whatever the key type is. Only Ed25519 used to work, so an RSA
-// or ECDSA host key (as suggested for older SSH clients) broke `soft jwt` and
-// git-lfs over SSH.
+// key verify whatever the key type is, so an RSA or ECDSA host key (as
+// suggested for older SSH clients) works with `soft jwt` and git-lfs over
+// SSH.
 func TestParseJWTHostKeyTypes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -126,7 +126,7 @@ func TestBearerTokenWithKeyID(t *testing.T) {
 	claims := jwtTestClaims(f.env, "secret")
 	claims.Subject = fmt.Sprintf("%s#%d", f.owner.Username(), f.owner.ID())
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	// An RFC 7638 thumbprint, as the old code put there.
+	// An RFC 7638 thumbprint, as tokens minted with a key ID carry.
 	token.Header["kid"] = "pXIvChkPX0Nik0T-8ADSGgxzCbqOXKyjqTUu4M4TYy0"
 	signed, err := token.SignedString(kp.PrivateKey())
 	if err != nil {

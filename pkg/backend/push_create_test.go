@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // A repository created by an HTTP push is removed only if nothing was done
@@ -22,13 +21,19 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.New(t).NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.New(t).NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	inTx := func(fn func(tx *db.Tx) error) func(t *testing.T, r proto.Repository) {
 		return func(t *testing.T, _ proto.Repository) {
-			is.New(t).NoErr(be.db.TransactionContext(ctx, fn))
+			if err := be.db.TransactionContext(ctx, fn); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	tests := map[string]func(t *testing.T, r proto.Repository){
@@ -36,12 +41,18 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 		"ref": func(t *testing.T, r proto.Repository) {
 			dir := be.repoPath(r.Name())
 			tree, err := exec.CommandContext(t.Context(), "git", "-C", dir, "mktree").Output()
-			is.New(t).NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			cmd := exec.CommandContext(t.Context(), "git", "-C", dir, "commit-tree", string(tree[:len(tree)-1]), "-m", "x")
 			cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@b", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@b")
 			commit, err := cmd.Output()
-			is.New(t).NoErr(err)
-			is.New(t).NoErr(exec.CommandContext(t.Context(), "git", "-C", dir, "update-ref", "refs/heads/main", string(commit[:len(commit)-1])).Run())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := exec.CommandContext(t.Context(), "git", "-C", dir, "update-ref", "refs/heads/main", string(commit[:len(commit)-1])).Run(); err != nil {
+				t.Fatal(err)
+			}
 		},
 		// The settings are changed in the store, as the backend's setters
 		// do, without the webhook event those also deliver.
@@ -58,7 +69,9 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 			return be.store.SetRepoIsHiddenByName(ctx, tx, "repo-hidden", true)
 		}),
 		"collaborator": func(t *testing.T, r proto.Repository) {
-			is.New(t).NoErr(be.AddCollaborator(ctx, r.Name(), "alice", access.ReadWriteAccess))
+			if err := be.AddCollaborator(ctx, r.Name(), "alice", access.ReadWriteAccess); err != nil {
+				t.Fatal(err)
+			}
 		},
 		"webhook": func(t *testing.T, r proto.Repository) {
 			inTx(func(tx *db.Tx) error {
@@ -81,23 +94,34 @@ func TestRemovePushCreatedRepositoryKeepsUsed(t *testing.T) {
 
 	for name, use := range tests {
 		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
 			repoName := "repo-" + name
 			r, err := be.CreateRepository(ctx, repoName, owner, proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if use != nil {
 				use(t, r)
 			}
 
 			removed, err := be.RemovePushCreatedRepository(ctx, r)
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			_, err = be.Repository(ctx, repoName)
 			if use == nil {
-				is.True(removed)
-				is.True(errors.Is(err, proto.ErrRepoNotFound))
+				if !removed {
+					t.Fatal("not true: removed")
+				}
+				if !errors.Is(err, proto.ErrRepoNotFound) {
+					t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+				}
 			} else {
-				is.True(!removed)
-				is.NoErr(err) // the used repository is kept
+				if removed {
+					t.Fatal("not true: !removed")
+				}
+				if err != nil {
+					t.Fatal(err)
+				} // the used repository is kept
 			}
 		})
 	}
@@ -129,20 +153,29 @@ func pushWaitsForGate() bool {
 // rather than writing refs into a directory about to be deleted.
 func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A push is running: the repository stays.
 	done, err := be.BeginPush(ctx, r)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	removed, err := be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(!removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	}
 	done()
 
 	// A push starts during the removal, after the last check for refs.
@@ -174,9 +207,15 @@ func TestRemovePushCreatedRepositoryOrdersPushes(t *testing.T) {
 	}
 
 	removed, err = be.RemovePushCreatedRepository(ctx, r)
-	is.NoErr(err)
-	is.True(removed)
-	is.True(errors.Is(<-pushErr, proto.ErrRepoNotFound)) // the push finds it gone
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	}
+	if !errors.Is(<-pushErr, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(<-pushErr, proto.ErrRepoNotFound)")
+	} // the push finds it gone
 }
 
 // A change that lands after the removal's checks for refs, and before the
@@ -187,43 +226,71 @@ func TestRemovePushCreatedRepositoryChecksWhenDeleting(t *testing.T) {
 	be, cfg := newTestBackend(t)
 	ctx := asAdmin(t, be, backendTestContext(be, cfg))
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.New(t).NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.New(t).NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("collaborator", func(t *testing.T) {
-		is := is.New(t)
 		r, err := be.CreateRepository(ctx, "collab", owner, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		be.beforePushCreatedDelete = func() {
-			is.NoErr(be.AddCollaborator(ctx, "collab", "alice", access.ReadWriteAccess))
+			if err := be.AddCollaborator(ctx, "collab", "alice", access.ReadWriteAccess); err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		removed, err := be.RemovePushCreatedRepository(ctx, r)
-		is.NoErr(err)
-		is.True(!removed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed {
+			t.Fatal("not true: !removed")
+		}
 		_, err = be.Repository(ctx, "collab")
-		is.NoErr(err) // kept with its collaborator
+		if err != nil {
+			t.Fatal(err)
+		} // kept with its collaborator
 	})
 
 	t.Run("recreated", func(t *testing.T) {
-		is := is.New(t)
 		r, err := be.CreateRepository(ctx, "name", owner, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var other proto.Repository
 		be.beforePushCreatedDelete = func() {
-			is.NoErr(be.RenameRepository(ctx, "name", "moved"))
+			if err := be.RenameRepository(ctx, "name", "moved"); err != nil {
+				t.Fatal(err)
+			}
 			other, err = be.CreateRepository(ctx, "name", owner, proto.RepositoryOptions{})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		removed, err := be.RemovePushCreatedRepository(ctx, r)
-		is.NoErr(err)
-		is.True(!removed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed {
+			t.Fatal("not true: !removed")
+		}
 		cur, err := be.Repository(ctx, "name")
-		is.NoErr(err) // the repository now under the name is kept
-		is.Equal(cur.ID(), other.ID())
+		if err != nil {
+			t.Fatal(err)
+		} // the repository now under the name is kept
+		if got, want := cur.ID(), other.ID(); got != want {
+			t.Fatalf("cur.ID() = %v, want %v", got, want)
+		}
 		_, err = be.Repository(ctx, "moved")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 }

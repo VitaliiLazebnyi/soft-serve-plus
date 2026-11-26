@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 )
 
-// A README found only under docs/ is still found. Regression: the glob was
-// built with filepath.Join, so on Windows it held a backslash and never
-// matched a tree path.
+// A README found only under docs/ is still found: tree paths use "/" on
+// every system, so the glob is not built with filepath.Join, which would
+// give it a backslash on Windows.
 func TestReadmeInSubdirectory(t *testing.T) {
 	t.Parallel()
 	lt := newLFSTestWith(t, 0, func(work string, _ []lfs.Pointer) {

@@ -77,8 +77,8 @@ func TestPushRefs(t *testing.T) {
 
 // Refs files a stopped server left behind are removed at the next start;
 // other files in the directory are not. A data path with glob characters in
-// its name is a plain path. Regression (review round 2): the sweep globbed
-// the whole path, so a data path containing "[x]" matched nothing.
+// its name is a plain path: a sweep that globbed the whole path would match
+// nothing in a data path containing "[x]".
 func TestRemoveStalePushRefs(t *testing.T) {
 	glob := "data [x] *?"
 	if runtime.GOOS == "windows" {

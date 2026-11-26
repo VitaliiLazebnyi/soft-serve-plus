@@ -7,7 +7,6 @@ import (
 	charmssh "charm.land/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -18,7 +17,6 @@ import (
 // otherwise.
 func TestBaseAccessLevelForUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := context.Background()
 
@@ -28,12 +26,18 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(listedKey)))
 
 	user, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{userKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	admin, err := be.CreateUser(ctx, "root", proto.UserOptions{Admin: true, PublicKeys: []ssh.PublicKey{adminKey}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, anon := range []access.Level{access.NoAccess, access.ReadOnlyAccess} {
-		is.NoErr(be.SetAnonAccess(ctx, anon))
+		if err := be.SetAnonAccess(ctx, anon); err != nil {
+			t.Fatal(err)
+		}
 		for _, adminOnly := range []bool{false, true} {
 			cfg.AdminOnlyCreate = adminOnly
 			registered := access.ReadWriteAccess
@@ -67,5 +71,7 @@ func TestBaseAccessLevelForUser(t *testing.T) {
 
 	// The unowned admin key is recognised from the context alone.
 	keyCtx := context.WithValue(ctx, charmssh.ContextKeyPublicKey, listedKey)
-	is.Equal(baseLevel(t, be, keyCtx, nil), access.AdminAccess)
+	if got := baseLevel(t, be, keyCtx, nil); got != access.AdminAccess {
+		t.Fatalf("baseLevel(t, be, keyCtx, nil) = %v, want %v", got, access.AdminAccess)
+	}
 }

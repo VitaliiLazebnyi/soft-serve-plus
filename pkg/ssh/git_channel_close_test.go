@@ -132,7 +132,7 @@ func copyBlockedOnWindow() bool {
 	)
 }
 
-// R32 / SSH-4: a fetch whose channel the client closes while the connection
+// A fetch whose channel the client closes while the connection
 // stays open, as interrupting a clone over an OpenSSH ControlMaster
 // connection does, must not keep git running and the session's place under
 // max_sessions. Two things stop git: the session's own context, which ends

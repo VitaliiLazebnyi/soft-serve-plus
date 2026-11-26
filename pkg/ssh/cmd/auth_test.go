@@ -12,11 +12,10 @@ import (
 	"github.com/matryer/is"
 )
 
-// TestGlobalCommandsIgnoreRepositoryAccess is the regression test for the
-// privilege escalation where a non-admin could run global admin commands by
-// creating a repository named after the command's first argument. `user
-// set-admin victim true` used to be authorized by the caller's admin access
-// to a repository they happened to own called "victim".
+// TestGlobalCommandsIgnoreRepositoryAccess checks that a non-admin cannot run
+// global admin commands by creating a repository named after the command's
+// first argument: `user set-admin victim true` is not authorized by the
+// caller's admin access to a repository they own called "victim".
 func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)

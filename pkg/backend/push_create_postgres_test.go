@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // Postgres runs transactions in READ COMMITTED, so a collaborator added
@@ -21,10 +20,11 @@ import (
 // proto.ErrRepoNotFound, since the repository it names is gone.
 func TestDeleteRepositoryKeepCheckLocksRowPostgres(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newPostgresWebhookEnv(t)
 	_, err := e.be.CreateUser(e.ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result := make(chan error, 1)
 	err = e.be.deleteRepository(e.ctx, "repo", 0, func(tx *db.Tx, m models.Repo) (bool, error) {
@@ -42,17 +42,23 @@ func TestDeleteRepositoryKeepCheckLocksRowPostgres(t *testing.T) {
 		}
 		return false, nil
 	})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case err := <-result:
 		// The collaborator was not added to the deleted repository, and
 		// the error says the repository is gone, not that the
 		// collaborator exists.
-		is.True(errors.Is(err, proto.ErrRepoNotFound))
+		if !errors.Is(err, proto.ErrRepoNotFound) {
+			t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+		}
 	case <-time.After(time.Minute):
 		t.Fatal("AddCollaborator still waiting after the delete committed")
 	}
 	_, err = e.be.Repository(e.ctx, "repo")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 }

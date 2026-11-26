@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -23,51 +22,76 @@ import (
 // have. Deleting one frees a slot.
 func TestMaxReposPerUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 2
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bob, err := be.CreateUser(ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "a2", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "a3", alice, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	// Refused before the remote is touched, with the reason rather than
 	// the fixed import failure.
 	_, err = be.ImportRepository(ctx, "a4", alice, offlineRemote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	for _, name := range []string{"a3", "a4"} {
 		_, err = be.Repository(ctx, name)
-		is.True(errors.Is(err, proto.ErrRepoNotFound))
-		is.True(!be.repoPathExists(name))
+		if !errors.Is(err, proto.ErrRepoNotFound) {
+			t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+		}
+		if be.repoPathExists(name) {
+			t.Fatal("not true: !be.repoPathExists(name)")
+		}
 	}
 
 	// The existing repositories are kept.
 	for _, name := range []string{"a1", "a2"} {
 		_, err = be.Repository(ctx, name)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// The limit is per user.
 	_, err = be.CreateRepository(ctx, "b1", bob, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.DeleteRepository(ctx, "a1"))
+	if err := be.DeleteRepository(ctx, "a1"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "a3", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// 0 means no limit.
 	cfg.MaxReposPerUser = 0
 	_, err = be.CreateRepository(ctx, "a5", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // At the limit, create refuses before touching the disk: a nested name
@@ -75,29 +99,42 @@ func TestMaxReposPerUser(t *testing.T) {
 // the limit as its answer, as import does.
 func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 1
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = be.CreateRepository(ctx, "group/a2", alice, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	_, err = os.Stat(filepath.Join(cfg.DataPath, "repos", "group"))
-	is.True(errors.Is(err, fs.ErrNotExist))
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("not true: errors.Is(err, fs.ErrNotExist)")
+	}
 
 	_, err = be.CreateRepository(ctx, "a1", alice, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 
 	// An invalid name is reported as such even at the limit, as for import.
 	_, err = be.CreateRepository(ctx, "bad name!", alice, proto.RepositoryOptions{})
-	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
+	if err == nil || errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	_, err = be.ImportRepository(ctx, "bad name!", alice, "https://example.com/x.git", proto.RepositoryOptions{})
-	is.True(err != nil && !errors.Is(err, proto.ErrRepoLimitReached))
+	if err == nil || errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: err != nil && !errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 }
 
 // Server admins are exempt: admin accounts, and the holder of a key in
@@ -105,36 +142,49 @@ func TestMaxReposPerUserRefusesBeforeCreating(t *testing.T) {
 // bootstrap create.
 func TestMaxReposPerUserAdminsExempt(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 1
 
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"x1", "x2", "x3"} {
 		_, err = be.CreateRepository(ctx, name, admin, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	pub := newTestPublicKey(t)
 	setAdminKeys(t, cfg, append(cfg.InitialAdminKeys, proto.MarshalAuthorizedKey(pub)))
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []ssh.PublicKey{pub}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	keyCtx := context.WithValue(proto.WithUserContext(ctx, alice), charmssh.ContextKeyPublicKey, pub)
 	for _, name := range []string{"k1", "k2"} {
 		_, err = be.CreateRepository(keyCtx, name, alice, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Without the key on the context, alice is an ordinary user at the limit.
 	_, err = be.CreateRepository(ctx, "k3", alice, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 
 	bob, err := be.CreateUser(ctx, "bob", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"s1", "s2"} {
 		_, err = be.CreateSystemRepository(ctx, name, bob, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -143,7 +193,6 @@ func TestMaxReposPerUserAdminsExempt(t *testing.T) {
 // admin's own repositories.
 func TestMaxReposPerUserAnonymous(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	be, cfg := newTestBackend(t)
 	ctx := backendTestContext(be, cfg)
 	cfg.MaxReposPerUser = 2
@@ -151,24 +200,40 @@ func TestMaxReposPerUserAnonymous(t *testing.T) {
 	cfg.AnonAccess = &rw
 
 	admin, err := be.User(ctx, "admin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"x1", "x2", "x3"} {
 		_, err = be.CreateRepository(ctx, name, admin, proto.RepositoryOptions{})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	_, err = be.CreateRepository(ctx, "anon1", nil, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "anon2", nil, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "anon3", nil, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 	_, err = be.ImportRepository(ctx, "anon4", nil, offlineRemote, proto.RepositoryOptions{})
-	is.True(errors.Is(err, proto.ErrRepoLimitReached))
+	if !errors.Is(err, proto.ErrRepoLimitReached) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoLimitReached)")
+	}
 
 	r, err := be.Repository(ctx, "anon1")
-	is.NoErr(err)
-	is.Equal(r.UserID(), admin.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.UserID(), admin.ID(); got != want {
+		t.Fatalf("r.UserID() = %v, want %v", got, want)
+	}
 }
 
 // Concurrent creates by one user cannot together go past the limit. On
@@ -190,13 +255,14 @@ func TestMaxReposPerUserConcurrent(t *testing.T) {
 }
 
 func testMaxReposPerUserConcurrent(t *testing.T, be *Backend, cfg *config.Config, ctx context.Context) {
-	is := is.New(t)
 	cfg.MaxReposPerUser = 3
 	rw := access.ReadWriteAccess
 	cfg.AnonAccess = &rw
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, user := range []proto.User{alice, nil} {
 		const n = 10
@@ -224,9 +290,15 @@ func testMaxReposPerUserConcurrent(t *testing.T, be *Backend, cfg *config.Config
 				t.Fatalf("unexpected error: %v", err)
 			}
 		}
-		is.Equal(ok, 3)
+		if got := ok; got != 3 {
+			t.Fatalf("ok = %v, want %v", got, 3)
+		}
 		got, err := be.countRepos(ctx, be.db, user)
-		is.NoErr(err)
-		is.Equal(got, int64(3))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := got, int64(3); got != want {
+			t.Fatalf("got = %v, want %v", got, want)
+		}
 	}
 }
