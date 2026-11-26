@@ -27,9 +27,12 @@ func (*Store) CreateAccessToken(ctx context.Context, h db.Handler, name string, 
 	return t, err
 }
 
-// DeleteAccessTokenForUser implements store.Store.
+// DeleteAccessTokenForUser implements store.Store. The ID comes from the
+// user, and access_tokens.id is 32-bit on Postgres, which types a bare
+// parameter compared with it as int4 and refuses an ID past 2^31-1; with
+// CAST(? AS BIGINT) such an ID matches no token instead.
 func (*Store) DeleteAccessTokenForUser(ctx context.Context, h db.Handler, userID int64, id int64) error {
-	query := h.Rebind(`DELETE FROM access_tokens WHERE user_id = ? AND id = ?`)
+	query := h.Rebind(`DELETE FROM access_tokens WHERE user_id = ? AND id = CAST(? AS BIGINT)`)
 	return affected(h.ExecContext(ctx, query, userID, id))
 }
 
