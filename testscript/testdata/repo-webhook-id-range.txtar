@@ -1,0 +1,32 @@
+# vi: set ft=conf
+
+# A webhook ID past 2^31-1 names no webhook on either database: webhooks.id
+# is a 32-bit SERIAL on Postgres, where such an ID used to fail with "out of
+# range" instead.
+
+# start soft serve
+exec soft serve &
+# wait for SSH server to start
+ensureserverrunning SSH_PORT
+
+soft repo create repo-range
+
+! soft repo webhook update repo-range 2147483648 --active=false
+stderr 'webhook not found'
+! stderr 'out of range'
+! soft repo webhook delete repo-range 2147483648
+stderr 'webhook not found'
+! stderr 'out of range'
+! soft repo webhook deliveries list repo-range 2147483648
+stderr 'webhook not found'
+! stderr 'out of range'
+! soft repo webhook deliveries get repo-range 9223372036854775807 00000000-0000-0000-0000-000000000000
+stderr 'not found'
+! stderr 'out of range'
+! soft repo webhook deliveries redeliver repo-range 9223372036854775807 00000000-0000-0000-0000-000000000000
+stderr 'not found'
+! stderr 'out of range'
+
+# stop the server
+[windows] stopserver
+[windows] ! stderr .

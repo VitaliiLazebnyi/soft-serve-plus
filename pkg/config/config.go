@@ -720,6 +720,7 @@ func (c *Config) readEnv() error {
 	}); err != nil {
 		return fmt.Errorf("parse environment variables: %w", err)
 	}
+	c.clearEmptyEnvLists()
 	// The env parser leaves the list alone when the variable is set but
 	// blank, as in the Docker image, so it then still holds the file's keys,
 	// whose quotes are not the environment's to strip.
@@ -733,6 +734,28 @@ func (c *Config) readEnv() error {
 	c.InitialAdminKeys = mergeAdminKeys(c.InitialAdminKeys, fileAdminKeys)
 	c.readRemovedEnv()
 	return nil
+}
+
+// clearEmptyEnvLists empties each list setting whose variable is set to the
+// empty string. The env parser leaves a field alone when its variable is
+// empty, which suits a scalar but means a list from the config file could
+// not be cleared from the environment, and an empty list is a policy of its
+// own for some (ssh.client_allowed_hosts lets only admins import over ssh).
+// Initial admin keys are left out: the environment's keys are merged with
+// the file's, so a blank variable keeps the file's keys.
+func (c *Config) clearEmptyEnvLists() {
+	for name, list := range map[string]*[]string{
+		"SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS":       &c.SSH.ClientAllowedHosts,
+		"SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS": &c.SSH.PublicKeyAuthAlgorithms,
+		"SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS":      &c.HTTP.CORS.AllowedHeaders,
+		"SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS":      &c.HTTP.CORS.AllowedOrigins,
+		"SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS":      &c.HTTP.CORS.AllowedMethods,
+		"SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS":          &c.Webhook.AllowedHosts,
+	} {
+		if v, ok := os.LookupEnv(name); ok && v == "" {
+			*list = nil
+		}
+	}
 }
 
 // mergeAdminKeys returns the entries of a followed by those of b, each

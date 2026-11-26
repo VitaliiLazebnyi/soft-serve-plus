@@ -630,6 +630,79 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	} // with the pushed commit
 }
 
+// A push that succeeded points HEAD at a pushed branch even when the
+// session ends between the push and that fix, as when the client hangs up
+// once git has reported success.
+func TestSSHPushFixesHeadAfterSessionEnds(t *testing.T) {
+	ctx, be := newAuthTestContext(t)
+	adminCtx := withUser(t, ctx, be, "boss", true)
+	if _, err := be.CreateRepository(ctx, "headless", proto.UserFromContext(adminCtx), proto.RepositoryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	sessCtx, endSession := context.WithCancel(adminCtx)
+	defer endSession()
+	cmdsOf(ctx).afterReceivePack = endSession
+
+	// The repository's hooks run the server binary, which is the test
+	// binary here; point git at no hooks instead.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", t.TempDir())
+
+	// Only a branch HEAD does not name, so HEAD needs the fix.
+	work := t.TempDir()
+	gitCmd := func(stdin string, args ...string) []byte {
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", work}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	gitCmd("", "init", "-q", "--bare")
+	tree := strings.TrimSpace(string(gitCmd("", "mktree")))
+	commit := strings.TrimSpace(string(gitCmd("", "commit-tree", tree, "-m", "pushed")))
+	pack := gitCmd(commit+"\n", "pack-objects", "--stdout", "--revs")
+	line := fmt.Sprintf("%s %s refs/heads/feature\x00report-status\n", strings.Repeat("0", 40), commit)
+	req := fmt.Sprintf("%04x%s0000", len(line)+4, line) + string(pack)
+
+	c := cmdsOf(adminCtx).GitReceivePackCommand()
+	c.SilenceUsage = true
+	c.SilenceErrors = true
+	c.SetIn(strings.NewReader(req))
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	c.SetArgs([]string{"headless"})
+	if err := c.ExecuteContext(sessCtx); err != nil {
+		t.Fatalf("push = %v, want nil", err)
+	}
+	if sessCtx.Err() == nil {
+		t.Fatal("the session did not end between the push and the HEAD fix")
+	}
+
+	r, err := be.Repository(ctx, "headless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gr, err := r.Open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := gr.HEAD()
+	if err != nil {
+		t.Fatalf("HEAD after the push: %v", err)
+	}
+	if got, want := head.Name().String(), "refs/heads/feature"; got != want {
+		t.Fatalf("HEAD = %v, want %v", got, want)
+	}
+}
+
 // A push to a missing name creates the repository and then pushes to its
 // directory, found by name. If an admin deletes the new repository before
 // git starts and someone else creates another under the same name, the push

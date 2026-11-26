@@ -204,7 +204,7 @@ func rollback(ctx context.Context, dbx *db.DB, env Env, list []Migration) error 
 // Comparing only the latest version would miss all but the first case.
 func checkApplied(ctx context.Context, tx *db.Tx, list []Migration) (int64, error) {
 	var applied []Migrations
-	if err := tx.SelectContext(ctx, &applied, tx.Rebind("SELECT * FROM migrations ORDER BY version ASC")); err != nil {
+	if err := tx.SelectContext(ctx, &applied, tx.Rebind("SELECT id, name, version FROM migrations ORDER BY version ASC")); err != nil {
 		return 0, fmt.Errorf("list applied migrations: %w", err)
 	}
 	if len(applied) == 0 {

@@ -91,13 +91,12 @@ func runServe(ctx context.Context, env *cmd.Env, syncHooks bool) error {
 	serverErr := waitForStop(s, started, sigs, testStop)
 
 	// Waiting for webhook deliveries can take up to a minute; a
-	// second interrupt or terminate signal stops that wait.
+	// second interrupt or terminate signal stops that wait, and the drain
+	// if it still runs. A context of its own: the goroutine above still
+	// holds ctx.
 	abort, stopWaiting := abortOnSignal(sigs.term, s.logger)
 	defer stopWaiting()
-	// A context of its own: the goroutine above still holds ctx.
-	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
-	defer cancel()
-	return errors.Join(serverErr, s.Shutdown(drainCtx, abort))
+	return errors.Join(serverErr, s.Shutdown(abort))
 }
 
 // prepareDataPath warns about the settings the server ignores, and writes

@@ -13,7 +13,7 @@ func (*Store) CreateLFSLockForUser(ctx context.Context, h db.Handler, repoID int
 	var lock models.LFSLock
 	query := h.Rebind(`INSERT INTO lfs_locks (repo_id, user_id, path, refname, updated_at)
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		RETURNING *;`)
+		RETURNING ` + lfsLockColumns + `;`)
 	err := h.GetContext(ctx, &lock, query, repoID, userID, path, refname)
 	return lock, err
 }
@@ -25,7 +25,7 @@ func (*Store) CreateLFSLockForUser(ctx context.Context, h db.Handler, repoID int
 // SERIAL on Postgres, which types a bare parameter after the column and
 // refuses a value past 2^31-1 as out of range. As BIGINT it compares like
 // any other number, so such an ID names no lock, as it does on SQLite.
-const lfsLocks = `SELECT lfs_locks.*, users.username AS owner_name
+const lfsLocks = `SELECT ` + lfsLockColumnsQualified + `, users.username AS owner_name
 	FROM lfs_locks INNER JOIN users ON users.id = lfs_locks.user_id`
 
 // GetLFSLocks implements store.Store.
@@ -98,7 +98,7 @@ func (*Store) UpdateLFSObjectSize(ctx context.Context, h db.Handler, repoID int6
 // GetLFSObjectByOid implements store.Store.
 func (*Store) GetLFSObjectByOid(ctx context.Context, h db.Handler, repoID int64, oid string) (models.LFSObject, error) {
 	var obj models.LFSObject
-	query := h.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? AND oid = ?;`)
+	query := h.Rebind(`SELECT ` + lfsObjectColumns + ` FROM lfs_objects WHERE repo_id = ? AND oid = ?;`)
 	err := h.GetContext(ctx, &obj, query, repoID, oid)
 	return obj, err
 }
@@ -117,7 +117,7 @@ func (*Store) GetLFSObjectsByOids(ctx context.Context, h db.Handler, repoID int6
 			args = append(args, oid)
 		}
 		var page []models.LFSObject
-		query := h.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? AND oid IN (` + placeholders(len(chunk)) + `) ORDER BY id;`)
+		query := h.Rebind(`SELECT ` + lfsObjectColumns + ` FROM lfs_objects WHERE repo_id = ? AND oid IN (` + placeholders(len(chunk)) + `) ORDER BY id;`)
 		if err := h.SelectContext(ctx, &page, query, args...); err != nil {
 			return nil, err
 		}
@@ -129,7 +129,7 @@ func (*Store) GetLFSObjectsByOids(ctx context.Context, h db.Handler, repoID int6
 // GetLFSObjects implements store.Store.
 func (*Store) GetLFSObjects(ctx context.Context, h db.Handler, repoID int64) ([]models.LFSObject, error) {
 	var objs []models.LFSObject
-	query := h.Rebind(`SELECT * FROM lfs_objects WHERE repo_id = ? ORDER BY id;`)
+	query := h.Rebind(`SELECT ` + lfsObjectColumns + ` FROM lfs_objects WHERE repo_id = ? ORDER BY id;`)
 	err := h.SelectContext(ctx, &objs, query, repoID)
 	return objs, err
 }

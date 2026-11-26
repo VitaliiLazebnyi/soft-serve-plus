@@ -12,7 +12,6 @@ require (
 	charm.land/wish/v2 v2.0.5
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/aymanbagabas/git-module v1.8.4-0.20250826192401-1f81c5471e53
-	github.com/caarlos0/duration v0.0.0-20241219124531-2bb7dc683aa4
 	github.com/caarlos0/env/v11 v11.4.2
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/git-lfs-transfer v0.1.1-0.20260812203852-971c0284dc33

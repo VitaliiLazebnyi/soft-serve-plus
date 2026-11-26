@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -1030,5 +1031,51 @@ func TestCreateWebhookDeliveryColumns(t *testing.T) {
 		!d.RequestError.Valid || d.RequestError.String != "e" || d.RequestHeaders != "rqh" || d.RequestBody != "rqb" ||
 		d.ResponseStatus != 418 || d.ResponseHeaders != "rsh" || d.ResponseBody != "rsb" {
 		t.Errorf("delivery = %+v", d)
+	}
+}
+
+// A webhook ID past what the ID column holds (a 32-bit SERIAL on Postgres)
+// names no webhook, on both drivers: lookups find nothing and an update or
+// delete changes nothing, rather than failing with "out of range". The
+// SSH webhook commands take the ID from the user.
+func TestWebhookIDsBeyondColumnRange(t *testing.T) {
+	t.Parallel()
+	ctx, dbx := newWebhookTestDB(t)
+	s := &Store{}
+	wid, err := s.CreateWebhook(ctx, dbx, models.Webhook{RepoID: 7, URL: "https://example.com", ContentType: 1, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{math.MaxInt32 + 1, math.MaxInt64} {
+		if _, err := s.GetWebhookByID(ctx, dbx, 7, id); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("GetWebhookByID(%d) error = %v, want %v", id, err, db.ErrRecordNotFound)
+		}
+		if _, err := s.GetActiveWebhookByIDWhereEvent(ctx, dbx, 7, id, 1); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("GetActiveWebhookByIDWhereEvent(%d) error = %v, want %v", id, err, db.ErrRecordNotFound)
+		}
+		if _, err := s.GetWebhookDeliveryByID(ctx, dbx, id, uuid.New()); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("GetWebhookDeliveryByID(%d) error = %v, want %v", id, err, db.ErrRecordNotFound)
+		}
+		if ds, err := s.ListWebhookDeliveriesByWebhookID(ctx, dbx, id); err != nil || len(ds) != 0 {
+			t.Errorf("ListWebhookDeliveriesByWebhookID(%d) = %d, %v; want 0, nil", id, len(ds), err)
+		}
+		if es, err := s.GetWebhookEventsByWebhookID(ctx, dbx, id); err != nil || len(es) != 0 {
+			t.Errorf("GetWebhookEventsByWebhookID(%d) = %d, %v; want 0, nil", id, len(es), err)
+		}
+		if err := s.DeleteWebhookEventsByID(ctx, dbx, id, []int64{id}); err != nil {
+			t.Errorf("DeleteWebhookEventsByID(%d) = %v, want nil", id, err)
+		}
+		if err := s.PruneWebhookDeliveries(ctx, dbx, id, 1); err != nil {
+			t.Errorf("PruneWebhookDeliveries(%d) = %v, want nil", id, err)
+		}
+		if err := s.UpdateWebhookByID(ctx, dbx, models.Webhook{ID: id, RepoID: 7, URL: "https://example.com"}); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("UpdateWebhookByID(%d) = %v, want %v", id, err, db.ErrRecordNotFound)
+		}
+		if err := s.DeleteWebhookForRepoByID(ctx, dbx, 7, id); err != nil && !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("DeleteWebhookForRepoByID(%d) = %v", id, err)
+		}
+	}
+	if _, err := s.GetWebhookByID(ctx, dbx, 7, wid); err != nil {
+		t.Errorf("GetWebhookByID(%d) = %v, want the webhook", wid, err)
 	}
 }

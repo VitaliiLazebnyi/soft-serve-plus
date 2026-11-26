@@ -69,7 +69,7 @@ func TestSelectItemCmdDoesNotReadModel(t *testing.T) {
 	}()
 	for range 100 {
 		s.SetItems(nil)
-		s.Select(0)
+		s.list.Select(0)
 		s.SetItems([]IdentifiableItem{testItem("c")})
 	}
 	wg.Wait()
@@ -124,13 +124,13 @@ func TestItemZoneIgnoresSameNamedZone(t *testing.T) {
 
 	x, y := waitZone(t, c, "footer")
 	s.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	if got := s.Index(); got != 0 {
+	if got := s.list.Index(); got != 0 {
 		t.Fatalf("clicking a zone named %q selected item %d", "footer", got)
 	}
 
 	x, y = waitZone(t, c, s.zonePrefix+"footer")
 	s.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	if got := s.Index(); got != 1 {
+	if got := s.list.Index(); got != 1 {
 		t.Fatalf("clicking the footer item left item %d selected", got)
 	}
 }
@@ -145,11 +145,11 @@ func newTestSelector(t *testing.T, names ...string) *Selector {
 	}
 	s := New(c, items, testDelegate{})
 	s.SetSize(40, 10)
-	s.SetShowTitle(false)
-	s.SetShowHelp(false)
-	s.SetShowStatusBar(false)
-	s.SetShowFilter(false)
-	s.SetShowPagination(false)
+	s.list.SetShowTitle(false)
+	s.list.SetShowHelp(false)
+	s.list.SetShowStatusBar(false)
+	s.list.SetShowFilter(false)
+	s.list.SetShowPagination(false)
 	return s
 }
 
@@ -203,12 +203,12 @@ func selected(msgs []tea.Msg) IdentifiableItem {
 func TestClickFilteredItemSelectsIt(t *testing.T) {
 	t.Parallel()
 	s := newTestSelector(t, "alpha", "beta", "alpine", "gamma", "alps")
-	s.SetFilterText("alp")
+	s.list.SetFilterText("alp")
 	if got := s.SelectedItem(); got == nil || got.ID() == "alpha" {
 		t.Fatalf("filtered list starts at %v, want an item other than alpha", got)
 	}
 	row := -1
-	for i, item := range s.VisibleItems() {
+	for i, item := range s.list.VisibleItems() {
 		if item.(testItem) == "alpha" {
 			row = i
 		}
@@ -235,7 +235,7 @@ func TestClickFilteredItemSelectsIt(t *testing.T) {
 func TestClickSelectedFilteredItemOpensIt(t *testing.T) {
 	t.Parallel()
 	s := newTestSelector(t, "alpha", "beta", "gamma")
-	s.SetFilterText("gam")
+	s.list.SetFilterText("gam")
 	render(t, s, "gamma", 0)
 
 	if got := selected(click(s, 0)); got == nil || got.ID() != "gamma" {
@@ -257,10 +257,10 @@ func TestSelectorTypesHelpKeyWhileFiltering(t *testing.T) {
 	} {
 		s.Update(k)
 	}
-	if s.FilterState() != list.Filtering {
-		t.Fatalf("filter state = %v, want filtering", s.FilterState())
+	if s.list.FilterState() != list.Filtering {
+		t.Fatalf("filter state = %v, want filtering", s.list.FilterState())
 	}
-	if got := s.FilterValue(); got != "a?" {
+	if got := s.list.FilterValue(); got != "a?" {
 		t.Errorf("filter = %q, want %q", got, "a?")
 	}
 }
@@ -282,7 +282,7 @@ func TestMouseWheelMovesCursor(t *testing.T) {
 		{tea.MouseWheelUp, 1},
 	} {
 		s.Update(tea.MouseWheelMsg{Button: step.button})
-		if got := s.Index(); got != step.want {
+		if got := s.list.Index(); got != step.want {
 			t.Fatalf("after %v: index = %d; want %d", step.button, got, step.want)
 		}
 	}
@@ -302,7 +302,7 @@ func TestNewPane(t *testing.T) {
 	c := uitest.NewCommon(t, context.Background(), nil, nil)
 	s := NewPane(c, nopDelegate{})
 	s.SetSize(80, 24)
-	m := s.Model
+	m := s.list
 	if m.ShowTitle() || m.ShowFilter() || m.ShowHelp() || m.ShowPagination() || m.ShowStatusBar() {
 		t.Error("pane list shows list chrome")
 	}

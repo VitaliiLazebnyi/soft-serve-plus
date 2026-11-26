@@ -68,7 +68,7 @@ var repoProperties = []repoProperty{
 		need:  access.AdminAccess,
 		get:   func(r proto.Repository) string { return strconv.FormatBool(r.IsMirror()) },
 		setBool: func(ctx context.Context, be *backend.Backend, r proto.Repository, v bool) error {
-			return be.SetMirror(ctx, r.Name(), v)
+			return be.SetResolvedMirror(ctx, r, v)
 		},
 	},
 	{

@@ -86,7 +86,7 @@ func (r *Refs) SetSize(width, height int) {
 // ShortHelp implements help.KeyMap.
 func (r *Refs) ShortHelp() []key.Binding {
 	copyKey := r.common.CopyKey("copy ref")
-	k := r.selector.KeyMap
+	k := r.selector.KeyMap()
 	return []key.Binding{
 		r.common.KeyMap.SelectItem,
 		k.CursorUp,
@@ -98,7 +98,7 @@ func (r *Refs) ShortHelp() []key.Binding {
 // FullHelp implements help.KeyMap.
 func (r *Refs) FullHelp() [][]key.Binding {
 	copyKey := r.common.CopyKey("copy ref")
-	k := r.selector.KeyMap
+	k := r.selector.KeyMap()
 	return [][]key.Binding{
 		{r.common.KeyMap.SelectItem},
 		{

@@ -314,7 +314,7 @@ func (d *Backend) pushCreatedRepositoryUsed(ctx context.Context, tx *db.Tx, m mo
 		return true, nil
 	}
 
-	collabs, err := d.store.ListCollabsByRepo(ctx, tx, m.Name)
+	collabs, err := d.store.ListCollabsByRepoID(ctx, tx, m.ID)
 	if err != nil || len(collabs) > 0 {
 		return true, err
 	}

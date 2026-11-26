@@ -192,7 +192,7 @@ func (f *Files) SetSize(width, height int) {
 
 // ShortHelp implements help.KeyMap.
 func (f *Files) ShortHelp() []key.Binding {
-	k := f.selector.KeyMap
+	k := f.selector.KeyMap()
 	switch f.activeView {
 	case filesViewFiles:
 		return []key.Binding{
@@ -220,7 +220,7 @@ func (f *Files) FullHelp() [][]key.Binding {
 	switch f.activeView {
 	case filesViewFiles:
 		copyKey = f.common.CopyKey("copy name")
-		k := f.selector.KeyMap
+		k := f.selector.KeyMap()
 		b = append(b, [][]key.Binding{
 			{
 				f.common.KeyMap.SelectItem,

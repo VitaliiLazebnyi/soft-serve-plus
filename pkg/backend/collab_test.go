@@ -1,12 +1,17 @@
 package backend
 
 import (
+	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
+	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 )
 
@@ -217,5 +222,65 @@ func TestRemoveCollaboratorRowVanishes(t *testing.T) {
 
 	if !errors.Is(e.be.RemoveCollaborator(e.ctx, "repo", "bob"), proto.ErrCollaboratorNotFound) {
 		t.Fatal("not true: errors.Is(e.be.RemoveCollaborator(e.ctx, \"repo\", \"bob\"), proto.ErrCollaboratorNotFound)")
+	}
+}
+
+// afterLookupStore calls after once, inside the first GetRepoByName after it
+// is set, once the lookup has returned its row.
+type afterLookupStore struct {
+	store.Store
+	after func()
+}
+
+func (s *afterLookupStore) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
+	m, err := s.Store.GetRepoByName(ctx, h, name)
+	if s.after != nil {
+		after := s.after
+		s.after = nil
+		after()
+	}
+	return m, err
+}
+
+// On Postgres a read transaction sees what other transactions commit
+// between its statements. A rename of the checked repository and a create
+// under its old name, committed right after the ID check, must not make
+// ResolvedCollaborators list the new repository's collaborators: they are
+// read by the checked ID. SQLite reads from one snapshot, so only Postgres
+// can show it.
+func TestResolvedCollaboratorsReadByCheckedID(t *testing.T) {
+	t.Parallel()
+	e := newPostgresWebhookEnv(t)
+	for _, name := range []string{"alice", "bob"} {
+		if _, err := e.be.CreateUser(e.ctx, name, proto.UserOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.be.AddCollaborator(e.ctx, "repo", "alice", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+
+	st := &afterLookupStore{Store: e.be.store}
+	e.be.store = st
+	st.after = func() {
+		if err := st.Store.SetRepoNameByName(e.ctx, e.be.db, "repo", "moved"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := st.Store.CreateRepo(e.ctx, e.be.db, models.Repo{Name: "repo", UserID: e.admin.ID()}); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := st.Store.AddCollabByUsernameAndRepo(e.ctx, e.be.db, "bob", "repo", access.ReadOnlyAccess); err != nil {
+			t.Error(err)
+		}
+	}
+
+	got, err := e.be.ResolvedCollaborators(e.ctx, e.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Collaborator{{Username: "alice", AccessLevel: access.ReadWriteAccess}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ResolvedCollaborators() = %+v, want %+v", got, want)
 	}
 }

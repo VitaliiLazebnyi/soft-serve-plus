@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -67,5 +68,25 @@ func TestAccessTokenStore(t *testing.T) {
 	}
 	if ts, err := s.GetAccessTokensByUserID(ctx, dbx, owner); err != nil || len(ts) != 0 {
 		t.Errorf("GetAccessTokensByUserID() after deleting both = %d, %v, want 0", len(ts), err)
+	}
+}
+
+// A token ID past the access_tokens.id column's range, which is 32-bit on
+// Postgres, names no token instead of failing as out of range.
+func TestAccessTokenIDBeyondColumnRange(t *testing.T) {
+	t.Parallel()
+	ctx, dbx, s := newStoreTestDB(t)
+	const owner = 100 // see newWebhookTestDB
+	tok, err := s.CreateAccessToken(ctx, dbx, "kept", owner, "hash-kept", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{math.MaxInt32 + 1, math.MaxInt64} {
+		if err := s.DeleteAccessTokenForUser(ctx, dbx, owner, id); !errors.Is(err, db.ErrRecordNotFound) {
+			t.Errorf("DeleteAccessTokenForUser(%d) error = %v, want ErrRecordNotFound", id, err)
+		}
+	}
+	if got, err := s.GetAccessTokenByToken(ctx, dbx, "hash-kept"); err != nil || got.ID != tok.ID {
+		t.Errorf("GetAccessTokenByToken() = %+v, %v, want token %d", got, err, tok.ID)
 	}
 }

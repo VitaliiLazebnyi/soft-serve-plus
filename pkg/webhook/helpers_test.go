@@ -198,16 +198,17 @@ type fakeRepo struct {
 	openErr error
 }
 
-func (r fakeRepo) ID() int64            { return r.id }
-func (r fakeRepo) Name() string         { return r.name }
-func (r fakeRepo) ProjectName() string  { return "Project" }
-func (r fakeRepo) Description() string  { return "a description" }
-func (r fakeRepo) IsPrivate() bool      { return false }
-func (r fakeRepo) IsMirror() bool       { return false }
-func (r fakeRepo) IsHidden() bool       { return false }
-func (r fakeRepo) UserID() int64        { return r.userID }
-func (r fakeRepo) CreatedAt() time.Time { return time.Unix(1700000000, 0) }
-func (r fakeRepo) UpdatedAt() time.Time { return time.Unix(1700000100, 0) }
+func (r fakeRepo) ID() int64              { return r.id }
+func (r fakeRepo) Name() string           { return r.name }
+func (r fakeRepo) ProjectName() string    { return "Project" }
+func (r fakeRepo) Description() string    { return "a description" }
+func (r fakeRepo) IsPrivate() bool        { return false }
+func (r fakeRepo) IsMirror() bool         { return false }
+func (r fakeRepo) IsHidden() bool         { return false }
+func (r fakeRepo) UserID() int64          { return r.userID }
+func (fakeRepo) CreatedAnonymously() bool { return false }
+func (r fakeRepo) CreatedAt() time.Time   { return time.Unix(1700000000, 0) }
+func (r fakeRepo) UpdatedAt() time.Time   { return time.Unix(1700000100, 0) }
 
 func (r fakeRepo) Open(ctx context.Context) (*git.Repository, error) {
 	if r.openErr != nil {

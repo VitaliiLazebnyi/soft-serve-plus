@@ -546,7 +546,10 @@ log after editing `config.yaml`.
 
 You can also use environment variables, to override these settings. All server
 settings environment variables start with `SOFT_SERVE_` followed by the setting
-name all in uppercase. Here are some examples:
+name all in uppercase. A variable set to the empty string leaves a single
+setting as the file set it, but clears a list setting (such as
+`SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=`); `SOFT_SERVE_INITIAL_ADMIN_KEYS` is
+merged with the file's keys instead. Here are some examples:
 
 - `SOFT_SERVE_NAME`: The name of the server that will appear in the TUI
 - `SOFT_SERVE_SSH_LISTEN_ADDR`: SSH listen address
@@ -837,7 +840,7 @@ the clones, pushes and SSH sessions in flight 5 seconds to finish. It then
 cuts off whatever is still running and exits with status 0: a transfer cut
 off this way is not an error of the server. Webhook deliveries already
 queued get up to a minute more; a second SIGINT or SIGTERM stops that
-wait. SIGHUP does not stop the server: it reloads the TLS certificate, if
+wait, and cuts off the 5 seconds if they still run. SIGHUP does not stop the server: it reloads the TLS certificate, if
 one is set.
 
 ## Server Access

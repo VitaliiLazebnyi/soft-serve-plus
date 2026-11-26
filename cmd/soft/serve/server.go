@@ -54,6 +54,10 @@ type Server struct {
 	mu        sync.Mutex
 	listeners []*serveListener
 	closed    bool
+
+	// drain is how long Shutdown lets the servers drain; zero is
+	// drainTimeout.
+	drain time.Duration
 }
 
 // NewServer returns a new *Server configured to serve Soft Serve with cfg,
@@ -410,7 +414,7 @@ const drainTimeout = 5 * time.Second
 
 // jobsTimeout is how long Shutdown waits at least for the cancelled cron
 // jobs to end, so none uses the database once the caller closes it: until
-// the caller's deadline, or this long from then on if that is later.
+// the drain ends, or this long from the start of the wait if that is later.
 const jobsTimeout = 10 * time.Second
 
 // waitAtLeast returns a context that ends at ctx's deadline or d from now,
@@ -423,22 +427,31 @@ func waitAtLeast(ctx context.Context, d time.Duration) (context.Context, context
 	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
 }
 
-// Shutdown stops the server. Imports in flight are cancelled, and the
-// servers drain within ctx; what still runs when ctx is done is closed, which
-// is logged but not an error. The cancelled cron jobs are waited for until
-// ctx's deadline, and for at least jobsTimeout. The cancelled imports'
-// cleanup and the background webhook deliveries are then waited for within
-// their own budget, backend.ShutdownDeliveryTimeout, or until abort is done,
-// whichever comes first; with abort already done, as for Close, they are
-// not waited for. Each server's error is logged; they are returned joined. The
-// servers that were never built are skipped, so it also stops a server
-// NewServer failed to finish.
-func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
+// Shutdown stops the server; ctx being done ends the drain and the delivery
+// wait at once, while the cron wait still lasts at least jobsTimeout.
+// Imports in flight are cancelled, and the servers drain until ctx's
+// deadline or for drainTimeout, whichever ends first; what still runs then
+// is closed, which is logged but not an error. The cancelled cron jobs are
+// waited for until the drain's end, and for at least jobsTimeout. The
+// cancelled imports' cleanup and the background webhook
+// deliveries are then waited for within their own budget,
+// backend.ShutdownDeliveryTimeout; with ctx already done, as for Close,
+// they are not waited for. Each server's error is logged; they are returned
+// joined. The servers that were never built are skipped, so it also stops a
+// server NewServer failed to finish.
+func (s *Server) Shutdown(ctx context.Context) error {
 	s.markClosed()
 	logger := s.logger
 	if logger == nil {
 		logger = log.Default() // a Server NewServer did not build
 	}
+	abort := ctx
+	drain := s.drain
+	if drain == 0 {
+		drain = drainTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, drain)
+	defer cancel()
 	// Stop the imports first: an SSH session running one would otherwise
 	// hold the SSH server's drain until the import finished.
 	if s.Backend != nil {
@@ -478,7 +491,7 @@ func (s *Server) Shutdown(ctx context.Context, abort context.Context) error {
 				if errors.Is(err, context.DeadlineExceeded) {
 					// Not for Close, whose context is cancelled
 					// before any drain.
-					logger.Warn("stopping with connections still open", "server", name, "drain", drainTimeout)
+					logger.Warn("stopping with connections still open", "server", name, "drain", drain)
 				}
 				err = closeNow()
 				if errors.Is(err, daemon.ErrServerClosed) || errors.Is(err, http.ErrServerClosed) || errors.Is(err, ssh.ErrServerClosed) {
@@ -550,7 +563,7 @@ func closeServer(s *Server) { _ = s.Close() }
 func (s *Server) Close() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	return s.Shutdown(ctx, ctx)
+	return s.Shutdown(ctx)
 }
 
 // markClosed makes a Start that has not yet stored its listeners close them

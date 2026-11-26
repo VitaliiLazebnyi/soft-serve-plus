@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTokenCreateExpiresIn(t *testing.T) {
@@ -73,5 +74,39 @@ func TestTokenCreateExpiresIn(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// parseExpiresIn reads the units of time.ParseDuration plus d, w, mo and y,
+// and refuses what does not fit a time.Duration.
+func TestParseExpiresIn(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	for in, want := range map[string]time.Duration{
+		"1y":           365 * day,
+		"3mo":          90 * day,
+		"2w":           14 * day,
+		"5d4h":         5*day + 4*time.Hour,
+		"1h30m":        90 * time.Minute,
+		"1.5d":         36 * time.Hour,
+		".5y":          365 * 12 * time.Hour,
+		"10mo5d3h2m1s": 305*day + 3*time.Hour + 2*time.Minute + time.Second,
+		"1y1y":         730 * day,
+		"300ms":        300 * time.Millisecond,
+		"1ns":          time.Nanosecond,
+		"-1d":          -day,
+		"+2h":          2 * time.Hour,
+		"0":            0,
+		"292y":         292 * 365 * day,
+	} {
+		got, err := parseExpiresIn(in)
+		if err != nil || got != want {
+			t.Errorf("parseExpiresIn(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "-", "d", "1", "1x", "1.d1", "1d1", "1..5h", "293y", "106752d"} {
+		if got, err := parseExpiresIn(in); err == nil {
+			t.Errorf("parseExpiresIn(%q) = %v, want an error", in, got)
+		}
 	}
 }

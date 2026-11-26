@@ -47,7 +47,7 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, user
 
 	err := h.GetContext(ctx, &m, h.Rebind(`
 		SELECT
-			collabs.*
+			`+collabColumnsQualified+`
 		FROM
 			collabs
 		INNER JOIN users ON users.id = collabs.user_id
@@ -59,60 +59,43 @@ func (*Store) GetCollabByUsernameAndRepo(ctx context.Context, h db.Handler, user
 	return m, err
 }
 
-// ListCollabsByRepo implements store.Store.
-func (*Store) ListCollabsByRepo(ctx context.Context, h db.Handler, repo string) ([]models.Collab, error) {
+// ListCollabsByRepoID implements store.Store.
+func (*Store) ListCollabsByRepoID(ctx context.Context, h db.Handler, repoID int64) ([]models.Collab, error) {
 	var m []models.Collab
-
-	repo = proto.SanitizeRepo(repo)
-	query := h.Rebind(`
-		SELECT
-			collabs.*
-		FROM
-			collabs
-		INNER JOIN repos ON repos.id = collabs.repo_id
-		WHERE
-			repos.name = ?
-		ORDER BY
-			collabs.id
-	`)
-
-	err := h.SelectContext(ctx, &m, query, repo)
+	query := h.Rebind(`SELECT ` + collabColumns + ` FROM collabs WHERE repo_id = ? ORDER BY id`)
+	err := h.SelectContext(ctx, &m, query, repoID)
 	return m, err
 }
 
-// ListCollabsByRepoAsUsers implements store.Store.
-func (*Store) ListCollabsByRepoAsUsers(ctx context.Context, h db.Handler, repo string) ([]models.User, error) {
+// ListCollabsByRepoIDAsUsers implements store.Store.
+func (*Store) ListCollabsByRepoIDAsUsers(ctx context.Context, h db.Handler, repoID int64) ([]models.User, error) {
 	var m []models.User
-
-	repo = proto.SanitizeRepo(repo)
 	query := h.Rebind(`
 		SELECT
-			users.*
+			` + userColumnsQualified + `
 		FROM
 			users
 		INNER JOIN collabs ON collabs.user_id = users.id
-		INNER JOIN repos ON repos.id = collabs.repo_id
 		WHERE
-			repos.name = ?
+			collabs.repo_id = ?
 		ORDER BY
 			users.username
 	`)
-
-	err := h.SelectContext(ctx, &m, query, repo)
+	err := h.SelectContext(ctx, &m, query, repoID)
 	return m, err
 }
 
 // GetCollabByUserIDAndRepoID implements store.Store.
 func (*Store) GetCollabByUserIDAndRepoID(ctx context.Context, h db.Handler, userID int64, repoID int64) (models.Collab, error) {
 	var m models.Collab
-	err := h.GetContext(ctx, &m, h.Rebind(`SELECT * FROM collabs WHERE user_id = ? AND repo_id = ?`), userID, repoID)
+	err := h.GetContext(ctx, &m, h.Rebind(`SELECT `+collabColumns+` FROM collabs WHERE user_id = ? AND repo_id = ?`), userID, repoID)
 	return m, err
 }
 
 // ListCollabsByUserID implements store.Store.
 func (*Store) ListCollabsByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.Collab, error) {
 	var m []models.Collab
-	err := h.SelectContext(ctx, &m, h.Rebind(`SELECT * FROM collabs WHERE user_id = ?`), userID)
+	err := h.SelectContext(ctx, &m, h.Rebind(`SELECT `+collabColumns+` FROM collabs WHERE user_id = ?`), userID)
 	return m, err
 }
 

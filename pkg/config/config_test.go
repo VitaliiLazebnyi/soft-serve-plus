@@ -2690,3 +2690,94 @@ func TestValidateRejectsUnusableValues(t *testing.T) {
 		})
 	}
 }
+
+// A list variable set to the empty string clears the list the config file
+// set; an unset variable leaves it alone.
+func TestEmptyEnvClearsFileList(t *testing.T) {
+	file := "ssh:\n  client_allowed_hosts: [git.internal]\n  public_key_auth_algorithms: [ssh-ed25519]\n" +
+		"http:\n  cors:\n    allowed_headers: [X-A]\n    allowed_origins: [https://a.example]\n    allowed_methods: [GET]\n" +
+		"webhook:\n  allowed_hosts: [hooks.internal]\n"
+	lists := func(c *Config) map[string][]string {
+		return map[string][]string{
+			"SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS":       c.SSH.ClientAllowedHosts,
+			"SOFT_SERVE_SSH_PUBLIC_KEY_AUTH_ALGORITHMS": c.SSH.PublicKeyAuthAlgorithms,
+			"SOFT_SERVE_HTTP_CORS_ALLOWED_HEADERS":      c.HTTP.CORS.AllowedHeaders,
+			"SOFT_SERVE_HTTP_CORS_ALLOWED_ORIGINS":      c.HTTP.CORS.AllowedOrigins,
+			"SOFT_SERVE_HTTP_CORS_ALLOWED_METHODS":      c.HTTP.CORS.AllowedMethods,
+			"SOFT_SERVE_WEBHOOK_ALLOWED_HOSTS":          c.Webhook.AllowedHosts,
+		}
+	}
+	for name := range lists(DefaultConfig()) {
+		t.Run(name, func(t *testing.T) {
+			loadEnv(t, file)
+			t.Setenv(name, "")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() = %v", err)
+			}
+			for other, got := range lists(cfg) {
+				if other == name && len(got) != 0 {
+					t.Errorf("%s=\"\" left %q", name, got)
+				}
+				if other != name && len(got) != 1 {
+					t.Errorf("%s=\"\" changed %s to %q", name, other, got)
+				}
+			}
+		})
+	}
+	t.Run("ssh allowlist parsed empty", func(t *testing.T) {
+		loadEnv(t, file)
+		t.Setenv("SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() = %v", err)
+		}
+		if n := len(cfg.SSH.ParsedClientAllowedHosts()); n != 0 {
+			t.Errorf("ParsedClientAllowedHosts has %d entries, want 0", n)
+		}
+	})
+}
+
+// Every list setting read from the environment is either cleared by an
+// empty variable or is the merged admin key list.
+func TestEmptyEnvListsCoverEveryList(t *testing.T) {
+	var names []string
+	var walk func(reflect.Type, string)
+	walk = func(rt reflect.Type, prefix string) {
+		for i := range rt.NumField() {
+			f := rt.Field(i)
+			tag, ok := f.Tag.Lookup("env")
+			ft := f.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			switch {
+			case ft.Kind() == reflect.Struct && f.Tag.Get("envPrefix") != "":
+				walk(ft, prefix+f.Tag.Get("envPrefix"))
+			case ok && ft.Kind() == reflect.Slice:
+				names = append(names, prefix+tag)
+			}
+		}
+	}
+	walk(reflect.TypeFor[Config](), "SOFT_SERVE_")
+	for _, name := range names {
+		if name == "SOFT_SERVE_INITIAL_ADMIN_KEYS" {
+			continue
+		}
+		cfg := DefaultConfig()
+		cfg.SSH.ClientAllowedHosts = []string{"x"}
+		cfg.SSH.PublicKeyAuthAlgorithms = []string{"x"}
+		cfg.HTTP.CORS = CORSConfig{AllowedHeaders: []string{"x"}, AllowedOrigins: []string{"x"}, AllowedMethods: []string{"x"}}
+		cfg.Webhook.AllowedHosts = []string{"x"}
+		before := fmt.Sprint(cfg.SSH, cfg.HTTP.CORS, cfg.Webhook)
+		t.Setenv(name, "")
+		cfg.clearEmptyEnvLists()
+		os.Unsetenv(name) //nolint:errcheck // restored by t.Setenv above
+		if fmt.Sprint(cfg.SSH, cfg.HTTP.CORS, cfg.Webhook) == before {
+			t.Errorf("%s is a list setting that an empty variable does not clear", name)
+		}
+	}
+	if len(names) < 7 {
+		t.Fatalf("found only %d list settings: %q", len(names), names)
+	}
+}

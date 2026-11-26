@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/spf13/cobra"
 )
@@ -115,11 +116,18 @@ func (cmds *Commands) collabListCommand() *cobra.Command {
 		Use:   "list REPOSITORY",
 		Short: "List collaborators and their access levels for a repo",
 		Args:  cobra.ExactArgs(1),
-		RunE: cmds.withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, _ proto.Repository, _ access.Level) error {
+		RunE: cmds.withRepoOrName(access.ReadWriteAccess, func(cmd *cobra.Command, args []string, rr proto.Repository, _ access.Level) error {
 			ctx := cmd.Context()
 			be := cmds.be
-			repo := repoArg(args)
-			collabs, err := be.Collaborators(ctx, repo)
+			// A server admin may list the collaborators of a row with
+			// no repository directory, which only the name can reach.
+			var collabs []backend.Collaborator
+			var err error
+			if rr == nil {
+				collabs, err = be.Collaborators(ctx, repoArg(args))
+			} else {
+				collabs, err = be.ResolvedCollaborators(ctx, rr)
+			}
 			if err != nil {
 				return err
 			}

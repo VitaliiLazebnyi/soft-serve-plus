@@ -86,23 +86,41 @@ type Collaborator struct {
 // Collaborators returns the collaborators of a repository with their access
 // levels.
 func (d *Backend) Collaborators(ctx context.Context, repo string) ([]Collaborator, error) {
+	return d.collaborators(ctx, repo, 0)
+}
+
+// ResolvedCollaborators is Collaborators for r, a repository the caller
+// looked up and authorized before: another repository under r's name by
+// the time they are read is proto.ErrRepoNotFound.
+func (d *Backend) ResolvedCollaborators(ctx context.Context, r proto.Repository) ([]Collaborator, error) {
+	return d.collaborators(ctx, r.Name(), r.ID())
+}
+
+// collaborators is Collaborators, which with id other than 0 lists them
+// only while repo is the repository with ID id. The collaborators are read
+// by the ID the lookup found, so a rename and a create committed after the
+// lookup cannot put another repository's collaborators in the list.
+func (d *Backend) collaborators(ctx context.Context, repo string, id int64) ([]Collaborator, error) {
 	repo = proto.SanitizeRepo(repo)
 	var users []models.User
 	var collabs []models.Collab
 	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		// The join returns an empty list for a missing repository, so
+		// An ID read returns an empty list for a missing repository, so
 		// look it up first.
-		if _, err := d.store.GetRepoByName(ctx, tx, repo); err != nil {
+		m, err := d.store.GetRepoByName(ctx, tx, repo)
+		if err != nil {
 			return err
 		}
+		if id != 0 && m.ID != id {
+			return proto.ErrRepoNotFound
+		}
 
-		var err error
-		users, err = d.store.ListCollabsByRepoAsUsers(ctx, tx, repo)
+		users, err = d.store.ListCollabsByRepoIDAsUsers(ctx, tx, m.ID)
 		if err != nil {
 			return err
 		}
 
-		collabs, err = d.store.ListCollabsByRepo(ctx, tx, repo)
+		collabs, err = d.store.ListCollabsByRepoID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
 		return nil, wrapRepoError(err)

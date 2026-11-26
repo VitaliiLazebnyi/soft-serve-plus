@@ -20,7 +20,7 @@ func (*Store) CreateRepo(ctx context.Context, h db.Handler, r models.Repo) (mode
 	var m models.Repo
 	query := h.Rebind(`INSERT INTO repos (name, project_name, description, private, mirror, hidden, anonymous, updated_at, user_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-			RETURNING *;`)
+			RETURNING ` + repoColumns + `;`)
 	err := h.GetContext(ctx, &m, query, proto.SanitizeRepo(r.Name), r.ProjectName, r.Description, r.Private, r.Mirror, r.Hidden, r.Anonymous, r.UserID)
 	return m, err
 }
@@ -35,7 +35,7 @@ func (*Store) DeleteRepoByName(ctx context.Context, h db.Handler, name string) e
 // GetAllRepos implements store.Store.
 func (*Store) GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := h.Rebind("SELECT * FROM repos ORDER BY name;")
+	query := h.Rebind("SELECT " + repoColumns + " FROM repos ORDER BY name;")
 	err := h.SelectContext(ctx, &repos, query)
 	return repos, err
 }
@@ -43,7 +43,7 @@ func (*Store) GetAllRepos(ctx context.Context, h db.Handler) ([]models.Repo, err
 // GetUserRepos implements store.Store.
 func (*Store) GetUserRepos(ctx context.Context, h db.Handler, userID int64) ([]models.Repo, error) {
 	var repos []models.Repo
-	query := h.Rebind("SELECT * FROM repos WHERE user_id = ? ORDER BY name;")
+	query := h.Rebind("SELECT " + repoColumns + " FROM repos WHERE user_id = ? ORDER BY name;")
 	err := h.SelectContext(ctx, &repos, query, userID)
 	return repos, err
 }
@@ -79,7 +79,7 @@ func (*Store) LockUserRepos(ctx context.Context, h db.Handler, userID int64) err
 func (*Store) GetRepoByName(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
 	var repo models.Repo
 	name = proto.SanitizeRepo(name)
-	query := h.Rebind("SELECT * FROM repos WHERE name = ?;")
+	query := h.Rebind("SELECT " + repoColumns + " FROM repos WHERE name = ?;")
 	err := h.GetContext(ctx, &repo, query, name)
 	return repo, err
 }
@@ -91,7 +91,7 @@ func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name st
 		CollabLevel sql.NullInt64 `db:"collab_access_level"`
 	}
 	name = proto.SanitizeRepo(name)
-	query := h.Rebind(`SELECT repos.*, collabs.access_level AS collab_access_level
+	query := h.Rebind(`SELECT ` + repoColumnsQualified + `, collabs.access_level AS collab_access_level
 		FROM repos LEFT JOIN collabs ON collabs.repo_id = repos.id AND collabs.user_id = ?
 		WHERE repos.name = ?;`)
 	if err := h.GetContext(ctx, &row, query, userID, name); err != nil {
@@ -103,7 +103,7 @@ func (*Store) GetRepoWithCollabByName(ctx context.Context, h db.Handler, name st
 // GetRepoByID implements store.Store.
 func (*Store) GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
 	var repo models.Repo
-	query := h.Rebind("SELECT * FROM repos WHERE id = ?;")
+	query := h.Rebind("SELECT " + repoColumns + " FROM repos WHERE id = ?;")
 	err := h.GetContext(ctx, &repo, query, id)
 	return repo, err
 }
@@ -111,9 +111,9 @@ func (*Store) GetRepoByID(ctx context.Context, h db.Handler, id int64) (models.R
 // GetRepoByIDForUpdate implements store.Store. See LockUserRepos for the
 // driver switch.
 func (*Store) GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.Repo, error) {
-	query := "SELECT * FROM repos WHERE id = ?;"
+	query := "SELECT " + repoColumns + " FROM repos WHERE id = ?;"
 	if h.DriverName() == "postgres" {
-		query = "SELECT * FROM repos WHERE id = $1 FOR UPDATE;"
+		query = "SELECT " + repoColumns + " FROM repos WHERE id = $1 FOR UPDATE;"
 	}
 	var repo models.Repo
 	err := h.GetContext(ctx, &repo, query, id)
@@ -123,9 +123,9 @@ func (*Store) GetRepoByIDForUpdate(ctx context.Context, h db.Handler, id int64) 
 // GetRepoByNameForUpdate implements store.Store. See LockUserRepos
 // for the driver switch.
 func (*Store) GetRepoByNameForUpdate(ctx context.Context, h db.Handler, name string) (models.Repo, error) {
-	query := "SELECT * FROM repos WHERE name = ?;"
+	query := "SELECT " + repoColumns + " FROM repos WHERE name = ?;"
 	if h.DriverName() == "postgres" {
-		query = "SELECT * FROM repos WHERE name = $1 FOR UPDATE;"
+		query = "SELECT " + repoColumns + " FROM repos WHERE name = $1 FOR UPDATE;"
 	}
 	var repo models.Repo
 	err := h.GetContext(ctx, &repo, query, proto.SanitizeRepo(name))

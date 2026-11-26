@@ -60,7 +60,7 @@ func (*Store) DeleteUserByUsername(ctx context.Context, h db.Handler, username s
 // GetUserByID implements store.Store.
 func (*Store) GetUserByID(ctx context.Context, h db.Handler, id int64) (models.User, error) {
 	var m models.User
-	query := h.Rebind(`SELECT * FROM users WHERE id = ?;`)
+	query := h.Rebind(`SELECT ` + userColumns + ` FROM users WHERE id = ?;`)
 	err := h.GetContext(ctx, &m, query, id)
 	return m, err
 }
@@ -68,7 +68,7 @@ func (*Store) GetUserByID(ctx context.Context, h db.Handler, id int64) (models.U
 // FindUserByPublicKey implements store.Store.
 func (*Store) FindUserByPublicKey(ctx context.Context, h db.Handler, pk ssh.PublicKey) (models.User, error) {
 	var m models.User
-	query := h.Rebind(`SELECT users.*
+	query := h.Rebind(`SELECT ` + userColumnsQualified + `
 			FROM users
 			INNER JOIN public_keys ON users.id = public_keys.user_id
 			WHERE public_keys.public_key = ?;`)
@@ -84,7 +84,7 @@ func (*Store) FindUserByUsername(ctx context.Context, h db.Handler, username str
 	}
 
 	var m models.User
-	query := h.Rebind(`SELECT * FROM users WHERE username = ?;`)
+	query := h.Rebind(`SELECT ` + userColumns + ` FROM users WHERE username = ?;`)
 	err := h.GetContext(ctx, &m, query, username)
 	return m, err
 }
@@ -97,9 +97,9 @@ func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, use
 		return models.User{}, err
 	}
 
-	query := `SELECT * FROM users WHERE username = ?;`
+	query := `SELECT ` + userColumns + ` FROM users WHERE username = ?;`
 	if h.DriverName() == "postgres" {
-		query = `SELECT * FROM users WHERE username = $1 FOR UPDATE;`
+		query = `SELECT ` + userColumns + ` FROM users WHERE username = $1 FOR UPDATE;`
 	}
 	var m models.User
 	err := h.GetContext(ctx, &m, query, username)
@@ -109,9 +109,9 @@ func (*Store) FindUserByUsernameForUpdate(ctx context.Context, h db.Handler, use
 // GetUserByIDForUpdate implements store.Store. See
 // FindUserByUsernameForUpdate.
 func (*Store) GetUserByIDForUpdate(ctx context.Context, h db.Handler, id int64) (models.User, error) {
-	query := `SELECT * FROM users WHERE id = ?;`
+	query := `SELECT ` + userColumns + ` FROM users WHERE id = ?;`
 	if h.DriverName() == "postgres" {
-		query = `SELECT * FROM users WHERE id = $1 FOR UPDATE;`
+		query = `SELECT ` + userColumns + ` FROM users WHERE id = $1 FOR UPDATE;`
 	}
 	var m models.User
 	err := h.GetContext(ctx, &m, query, id)
@@ -121,7 +121,7 @@ func (*Store) GetUserByIDForUpdate(ctx context.Context, h db.Handler, id int64) 
 // GetAllUsers implements store.Store.
 func (*Store) GetAllUsers(ctx context.Context, h db.Handler) ([]models.User, error) {
 	var ms []models.User
-	query := h.Rebind(`SELECT * FROM users ORDER BY username;`)
+	query := h.Rebind(`SELECT ` + userColumns + ` FROM users ORDER BY username;`)
 	err := h.SelectContext(ctx, &ms, query)
 	return ms, err
 }
