@@ -25,6 +25,21 @@ tasks:
       - go test -race ./... {{.CLI_ARGS}}
       - go test -race -tags webhooktest ./cmd/soft/serve ./pkg/webhook {{.CLI_ARGS}}
 
+  test:postgres:
+    desc: Run the tests on a throwaway Postgres reached over a unix socket only
+    # The server listens on no TCP address: over TCP loopback, a full run's
+    # database connections make macOS stall connects machine-wide until
+    # they time out (KNOWN_ISSUES item 309). Needs initdb and pg_ctl on PATH.
+    cmds:
+      - |
+        set -eu
+        dir=$(mktemp -d /tmp/softpg.XXXXXX)
+        trap 'pg_ctl -D "$dir/data" -m fast stop >/dev/null 2>&1 || true; rm -rf "$dir"' EXIT
+        initdb -U postgres -A trust -D "$dir/data" >/dev/null
+        pg_ctl -D "$dir/data" -w -l "$dir/log" -o "-c listen_addresses='' -k $dir -c max_connections=300" start >/dev/null
+        SOFT_SERVE_DB_DRIVER=postgres SOFT_SERVE_DB_DATA_SOURCE="host=$dir port=5432 user=postgres sslmode=disable" \
+          go test ./... {{.CLI_ARGS}}
+
   tidy:
     desc: Run go mod tidy
     cmds:

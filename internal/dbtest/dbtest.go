@@ -29,6 +29,13 @@ func OpenSqlite(ctx context.Context, tb testing.TB) (*db.DB, error) {
 // server named by SOFT_SERVE_DB_DATA_SOURCE (a postgres:// URL or a key=value
 // connection string), and SQLite otherwise. The
 // database is removed when the test is done.
+//
+// Locally, point the data source at the server's unix socket, such as
+// "host=/path/to/socketdir port=5432 user=postgres sslmode=disable" (task
+// test:postgres does): a full run opens thousands of database connections,
+// and over TCP loopback on macOS that churn makes the kernel stall connects
+// machine-wide until they fail with "operation timed out" (KNOWN_ISSUES
+// item 309), the database's and the servers' under test alike.
 func Open(ctx context.Context, tb testing.TB) (*db.DB, error) {
 	dbx, _, err := OpenSource(ctx, tb)
 	return dbx, err
