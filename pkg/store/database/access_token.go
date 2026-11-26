@@ -11,9 +11,9 @@ import (
 // CreateAccessToken implements store.Store.
 func (*Store) CreateAccessToken(ctx context.Context, h db.Handler, name string, userID int64, token string, expiresAt time.Time) (models.AccessToken, error) {
 	queryWithoutExpires := `INSERT INTO access_tokens (name, user_id, token, created_at, updated_at)
-	VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *`
+	VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING ` + accessTokenColumns
 	queryWithExpires := `INSERT INTO access_tokens (name, user_id, token, expires_at, created_at, updated_at)
-	VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *`
+	VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING ` + accessTokenColumns
 
 	query := queryWithoutExpires
 	values := []interface{}{name, userID, token}
@@ -35,7 +35,7 @@ func (*Store) DeleteAccessTokenForUser(ctx context.Context, h db.Handler, userID
 
 // GetAccessTokensByUserID implements store.Store.
 func (*Store) GetAccessTokensByUserID(ctx context.Context, h db.Handler, userID int64) ([]models.AccessToken, error) {
-	query := h.Rebind(`SELECT * FROM access_tokens WHERE user_id = ? ORDER BY id`)
+	query := h.Rebind(`SELECT ` + accessTokenColumns + ` FROM access_tokens WHERE user_id = ? ORDER BY id`)
 	var m []models.AccessToken
 	err := h.SelectContext(ctx, &m, query, userID)
 	return m, err
@@ -43,7 +43,7 @@ func (*Store) GetAccessTokensByUserID(ctx context.Context, h db.Handler, userID 
 
 // GetAccessTokenByToken implements store.Store.
 func (*Store) GetAccessTokenByToken(ctx context.Context, h db.Handler, token string) (models.AccessToken, error) {
-	query := h.Rebind(`SELECT * FROM access_tokens WHERE token = ?`)
+	query := h.Rebind(`SELECT ` + accessTokenColumns + ` FROM access_tokens WHERE token = ?`)
 	var m models.AccessToken
 	err := h.GetContext(ctx, &m, query, token)
 	return m, err

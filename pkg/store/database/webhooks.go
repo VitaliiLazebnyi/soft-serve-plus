@@ -110,7 +110,7 @@ func (*Store) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhook
 
 // GetWebhookByID implements store.Store.
 func (*Store) GetWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.Webhook, error) {
-	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? AND id = CAST(? AS BIGINT);`)
+	query := h.Rebind(`SELECT ` + webhookColumns + ` FROM webhooks WHERE repo_id = ? AND id = CAST(? AS BIGINT);`)
 	var wh models.Webhook
 	err := h.GetContext(ctx, &wh, query, repoID, id)
 	return wh, err
@@ -124,7 +124,7 @@ const maxListedWebhookDeliveries = 100
 
 // GetWebhookDeliveryByID implements store.Store.
 func (*Store) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) (models.WebhookDelivery, error) {
-	query := h.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = CAST(? AS BIGINT) AND id = ?;`)
+	query := h.Rebind(`SELECT ` + webhookDeliveryColumns + ` FROM webhook_deliveries WHERE webhook_id = CAST(? AS BIGINT) AND id = ?;`)
 	var whd models.WebhookDelivery
 	err := h.GetContext(ctx, &whd, query, webhookID, id)
 	return whd, err
@@ -132,7 +132,7 @@ func (*Store) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookI
 
 // GetWebhookEventsByWebhookID implements store.Store.
 func (*Store) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error) {
-	query := h.Rebind(`SELECT * FROM webhook_events WHERE webhook_id = CAST(? AS BIGINT) ORDER BY id;`)
+	query := h.Rebind(`SELECT ` + webhookEventColumns + ` FROM webhook_events WHERE webhook_id = CAST(? AS BIGINT) ORDER BY id;`)
 	var whes []models.WebhookEvent
 	err := h.SelectContext(ctx, &whes, query, webhookID)
 	return whes, err
@@ -140,7 +140,7 @@ func (*Store) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, web
 
 // GetWebhooksByRepoID implements store.Store.
 func (*Store) GetWebhooksByRepoID(ctx context.Context, h db.Handler, repoID int64) ([]models.Webhook, error) {
-	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? ORDER BY id;`)
+	query := h.Rebind(`SELECT ` + webhookColumns + ` FROM webhooks WHERE repo_id = ? ORDER BY id;`)
 	var whs []models.Webhook
 	err := h.SelectContext(ctx, &whs, query, repoID)
 	return whs, err
@@ -185,7 +185,7 @@ func (*Store) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, r
 	}
 	// EXISTS rather than a join, so a webhook subscribed to several of the
 	// events is returned once.
-	query := h.Rebind(`SELECT webhooks.*
+	query := h.Rebind(`SELECT ` + webhookColumnsQualified + `
 			FROM webhooks
 			WHERE webhooks.repo_id = ? AND webhooks.active = ? AND EXISTS (
 				SELECT 1 FROM webhook_events
@@ -200,7 +200,7 @@ func (*Store) GetWebhooksByRepoIDWhereEvent(ctx context.Context, h db.Handler, r
 
 // GetActiveWebhookByIDWhereEvent implements store.Store.
 func (*Store) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, repoID int64, id int64, event int) (models.Webhook, error) {
-	query := h.Rebind(`SELECT webhooks.*
+	query := h.Rebind(`SELECT ` + webhookColumnsQualified + `
 			FROM webhooks
 			INNER JOIN webhook_events ON webhooks.id = webhook_events.webhook_id
 			WHERE webhooks.repo_id = ? AND webhooks.id = CAST(? AS BIGINT) AND webhooks.active = ? AND webhook_events.event = ?;`)
@@ -213,7 +213,7 @@ func (*Store) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, 
 // Deliveries are returned oldest first, in the order they were recorded,
 // limited to the most recent maxListedWebhookDeliveries.
 func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
-	query := h.Rebind(`SELECT * FROM (
+	query := h.Rebind(`SELECT id, response_status, event, created_at, seq FROM (
 		SELECT id, response_status, event, created_at, seq FROM webhook_deliveries WHERE webhook_id = CAST(? AS BIGINT) ORDER BY seq DESC LIMIT ?
 	) AS d ORDER BY seq;`)
 	var whds []models.WebhookDelivery
